@@ -1,0 +1,7 @@
+{
+    "product": "Case Management System",
+    "latest": "3.0.15",
+    "released": "2026-10-11",
+    "notes": "Privacy fix: the evaluation report is no longer emailed to a counselor address from the public referral form until staff confirm it, matching progress reports. No new database migration for sites on 3.0.13 or later. Earlier installations must apply mig_3.0.8.sql, mig_3.0.9.sql, mig_3.0.10.sql and mig_3.0.12.sql in order before updating. Companion iOS remains 3.0.13.",
+    "contact": "Contact Example Agency for the update package."
+}

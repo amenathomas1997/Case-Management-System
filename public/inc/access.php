@@ -1,0 +1,224 @@
+<?php
+declare(strict_types=1);
+
+const DEVICE_FOLLOWUP_DAYS = [30, 60, 90];
+
+/** Password hashes are already durable credential versions; no schema upgrade is needed. */
+function credential_version(array $row): string {
+    return hash('sha256', (string)$row['password_hash']);
+}
+
+function session_matches_user(array $session, array $row): bool {
+    return !empty($row['is_active']) && ($session['otp_verified'] ?? false) === true
+        && (int)($session['user_id'] ?? 0) === (int)$row['id']
+        && isset($session['credential_version'])
+        && hash_equals(credential_version($row), (string)$session['credential_version']);
+}
+
+/** Every loan mutation locks the equipment row first, including returns.
+ *  $scheduleFollowups is false for a temporary loaner (an AT repair loaner): it
+ *  comes back when the repair ends, so it gets no "still in use?" checks. */
+function loan_equipment(int $equipmentId, int $clientId, ?string $due, ?string $notes, int $actor, bool $scheduleFollowups = true): int {
+    $db = db();
+    $ownsTransaction = !$db->inTransaction();
+    if ($ownsTransaction) $db->beginTransaction();
+    try {
+        $item = $db->prepare('SELECT status FROM equipment WHERE id = ? FOR UPDATE');
+        $item->execute([$equipmentId]);
+        if ($item->fetchColumn() !== 'Available') throw new DomainException('That item is no longer available.');
+        try {
+            $blocked = $db->prepare("SELECT id FROM at_records WHERE equipment_id=? AND ((kind='repair' AND status NOT IN ('Resolved','Cancelled')) OR (kind='reuse' AND status IN ('Intake','Refurbishing'))) LIMIT 1 FOR UPDATE");
+            $blocked->execute([$equipmentId]);
+            if ($blocked->fetchColumn()) throw new DomainException('Complete the equipment repair or reuse checks before lending this item.');
+        } catch (PDOException $e) {
+            if ((string)$e->getCode() !== '42S02') throw $e;
+        }
+        $open = $db->prepare('SELECT id FROM equipment_loans WHERE equipment_id = ? AND returned_at IS NULL LIMIT 1 FOR UPDATE');
+        $open->execute([$equipmentId]);
+        if ($open->fetchColumn()) throw new DomainException('That item already has an open loan.');
+        $db->prepare('INSERT INTO equipment_loans (equipment_id, client_id, loaned_at, due_date, notes, created_by) VALUES (?,?,CURDATE(),?,?,?)')
+            ->execute([$equipmentId, $clientId, $due, $notes, $actor]);
+        // Capture the insert ID before another statement resets it.
+        $loanId = (int)$db->lastInsertId();
+        $db->prepare("UPDATE equipment SET status = 'On Loan' WHERE id = ?")->execute([$equipmentId]);
+        // Auto-schedule device-retention follow-ups so provisioned AT doesn't
+        // quietly go unused (abandonment). Staff can complete or skip each.
+        if ($scheduleFollowups) {
+            $fu = $db->prepare('INSERT INTO equipment_followups (loan_id, client_id, equipment_id, interval_days, due_date) VALUES (?,?,?,?, DATE_ADD(CURDATE(), INTERVAL ? DAY))');
+            foreach (DEVICE_FOLLOWUP_DAYS as $d) {
+                $fu->execute([$loanId, $clientId, $equipmentId, $d, $d]);
+            }
+        }
+        // Reservation bookkeeping for every loan path (web, app, voice): the
+        // borrower's own hold or waitlist entry is fulfilled, and any other
+        // client's hold drops back to the waitlist — the item is out now, so a
+        // 'Reserved' row must not keep claiming it. That client's instructor (and
+        // whoever made the hold) is told, so the client is not left expecting the device.
+        try {
+            $db->prepare("UPDATE equipment_reservations SET status = 'Fulfilled' WHERE equipment_id = ? AND client_id = ? AND status IN ('Reserved','Waitlist')")
+                ->execute([$equipmentId, $clientId]);
+            $held = $db->prepare("SELECT client_id, reserved_by FROM equipment_reservations WHERE equipment_id = ? AND client_id <> ? AND status = 'Reserved' FOR UPDATE");
+            $held->execute([$equipmentId, $clientId]);
+            $holds = $held->fetchAll();
+            $db->prepare("UPDATE equipment_reservations SET status = 'Waitlist' WHERE equipment_id = ? AND client_id <> ? AND status = 'Reserved'")
+                ->execute([$equipmentId, $clientId]);
+            notify_hold_change($equipmentId, $holds, $actor, 'reservation hold', 'was moved to the waitlist because the item was loaned to another client');
+        } catch (PDOException $e) {
+            if ((string)$e->getCode() !== '42S02') throw $e; // Older schema without reservations.
+        }
+        if ($ownsTransaction) $db->commit();
+        return $loanId;
+    } catch (Throwable $e) {
+        if ($ownsTransaction && $db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+
+/** Returns the equipment ID. Scope must be checked before entering this helper. */
+function return_equipment(int $loanId): int {
+    $db = db();
+    $lookup = $db->prepare('SELECT equipment_id FROM equipment_loans WHERE id = ?');
+    $lookup->execute([$loanId]);
+    $equipmentId = (int)$lookup->fetchColumn();
+    if (!$equipmentId) throw new DomainException('Loan not found.');
+    $ownsTransaction = !$db->inTransaction();
+    if ($ownsTransaction) $db->beginTransaction();
+    try {
+        $lock = $db->prepare('SELECT status FROM equipment WHERE id = ? FOR UPDATE');
+        $lock->execute([$equipmentId]);
+        $currentStatus = $lock->fetchColumn();
+        $claim = $db->prepare('UPDATE equipment_loans SET returned_at = CURDATE() WHERE id = ? AND returned_at IS NULL');
+        $claim->execute([$loanId]);
+        if ($claim->rowCount() !== 1) throw new DomainException('That loan has already been returned.');
+        // The device is back, so its remaining "still in use?" checks no longer
+        // apply; close them rather than ask about a device the client no longer has.
+        $db->prepare("UPDATE equipment_followups SET status = 'Skipped', completed_at = NOW(), notes = 'Device returned' WHERE loan_id = ? AND status = 'Pending'")
+            ->execute([$loanId]);
+        // Preserve On Loan if older data contains duplicate open loans.
+        $open = $db->prepare('SELECT id FROM equipment_loans WHERE equipment_id = ? AND returned_at IS NULL LIMIT 1 FOR UPDATE');
+        $open->execute([$equipmentId]);
+        if (!$open->fetchColumn()) {
+            $status = in_array($currentStatus, ['Repair','Retired'], true) ? $currentStatus : 'Available';
+            try {
+                $pending = $db->prepare("SELECT id FROM at_records WHERE equipment_id=? AND ((kind='repair' AND status NOT IN ('Resolved','Cancelled')) OR (kind='reuse' AND status IN ('Intake','Refurbishing'))) LIMIT 1 FOR UPDATE");
+                $pending->execute([$equipmentId]);
+                if ($pending->fetchColumn()) $status = 'Repair';
+            } catch (PDOException $e) {
+                if ((string)$e->getCode() !== '42S02') throw $e; // Older schema before the AT migration.
+            }
+            $db->prepare('UPDATE equipment SET status = ? WHERE id = ?')->execute([$status, $equipmentId]);
+        }
+        if ($ownsTransaction) $db->commit();
+        return $equipmentId;
+    } catch (Throwable $e) {
+        if ($ownsTransaction && $db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+
+/** A retired item never returns to service, so its holds and waitlist entries could
+ *  never be met: they are cancelled with the retirement. Call inside the transaction
+ *  that already holds the equipment row lock; after the commit, tell the returned
+ *  holders with notify_retired_holders(). Returns ['count' => int, 'holders' => the
+ *  cancelled holds, each ['client_id' => …, 'reserved_by' => …]]. */
+function cancel_retired_holds(PDO $db, int $equipmentId): array {
+    $hq = $db->prepare("SELECT client_id, reserved_by FROM equipment_reservations WHERE equipment_id = ? AND status IN ('Reserved','Waitlist') FOR UPDATE");
+    $hq->execute([$equipmentId]);
+    $holders = $hq->fetchAll();
+    $cx = $db->prepare("UPDATE equipment_reservations SET status = 'Cancelled' WHERE equipment_id = ? AND status IN ('Reserved','Waitlist')");
+    $cx->execute([$equipmentId]);
+    return ['count' => $cx->rowCount(), 'holders' => $holders];
+}
+
+/** Tells the people behind each cancelled hold (see notify_hold_change()). */
+function notify_retired_holders(int $equipmentId, array $holders, int $actor, string $reason = 'retired'): void {
+    notify_hold_change($equipmentId, $holders, $actor, 'reservation or waitlist entry', 'was cancelled because the item was ' . $reason);
+}
+
+/** A client's hold on an item changed. The client's assigned instructor is told, by
+ *  client name, while their account is active (otherwise the administrators, as the
+ *  portal tells a case's owner): they run the case, and the hold may have been placed
+ *  by someone else, or before the client was reassigned. Whoever placed the hold is
+ *  also told, without the client's name (they may no longer have that client), when
+ *  that is another active account. The person making the change is never told.
+ *  $holds: rows with client_id and reserved_by. */
+function notify_hold_change(int $equipmentId, array $holds, int $actor, string $what, string $outcome): void {
+    if (!$holds) return;
+    $nm = db()->prepare('SELECT name FROM equipment WHERE id = ?');
+    $nm->execute([$equipmentId]);
+    $itemName = (string)$nm->fetchColumn();
+    $owner = db()->prepare('SELECT c.name, au.id AS active_owner FROM clients c LEFT JOIN users au ON au.id = c.assigned_to AND au.is_active = 1 WHERE c.id = ?');
+    $active = db()->prepare('SELECT id FROM users WHERE id = ? AND is_active = 1');
+    $told = [];
+    foreach ($holds as $hold) {
+        $cid = (int)$hold['client_id'];
+        $owner->execute([$cid]);
+        $client = $owner->fetch();
+        if (!$client) continue;
+        $ownerId = (int)($client['active_owner'] ?? 0);
+        $named = 'The ' . $what . ' for ' . $client['name'] . ' on "' . $itemName . '" ' . $outcome . '.';
+        $recipients = $ownerId ? [$ownerId] : effective_admin_user_ids();
+        foreach ($recipients as $uid) {
+            if ((int)$uid === $actor || isset($told[$uid . ':' . $cid])) continue;
+            $told[$uid . ':' . $cid] = true;
+            notify_user((int)$uid, $named, 'client.php?id=' . $cid);
+        }
+        $placer = (int)($hold['reserved_by'] ?? 0);
+        if ($placer && $placer !== $actor && !isset($told[$placer . ':' . $cid]) && !isset($told['placer:' . $placer])) {
+            $active->execute([$placer]);
+            if ($active->fetchColumn()) {
+                $told['placer:' . $placer] = true;
+                notify_user($placer, 'Your ' . $what . ' on "' . $itemName . '" ' . $outcome . '.', 'equipment.php');
+            }
+        }
+    }
+}
+
+/** Lock all user rows in ID order to serialize access changes and last-admin checks.
+ * The callback writes only after the proposed effective permissions are validated.
+ */
+function change_user_access(int $id, int $actor, array $changes, callable $write): void {
+    $db = db();
+    $db->beginTransaction();
+    try {
+        $users = $db->query('SELECT * FROM users ORDER BY id FOR UPDATE')->fetchAll();
+        $groups = $db->query('SELECT id, perms FROM `groups` ORDER BY id FOR UPDATE')->fetchAll(PDO::FETCH_KEY_PAIR);
+        $isAdmin = static function (array $u) use ($groups): bool {
+            if (empty($u['is_active'])) return false;
+            return !empty($u['group_id']) && isset($groups[$u['group_id']])
+                ? in_array('admin', array_map('trim', explode(';', $groups[$u['group_id']])), true)
+                : $u['role'] === 'admin';
+        };
+        $byId = array_column($users, null, 'id');
+        if (!isset($byId[$id])) throw new DomainException('User not found.');
+        if (!isset($byId[$actor]) || !$isAdmin($byId[$actor])) throw new DomainException('Administrator access is required.');
+        $after = array_replace($byId[$id], $changes);
+        if (!empty($after['group_id']) && !isset($groups[$after['group_id']])) throw new DomainException('Choose an existing permission group.');
+        if ($actor === $id && !$isAdmin($after)) throw new DomainException('You cannot deactivate or demote your own account. Ask another administrator.');
+        $byId[$id] = $after;
+        if (!array_filter($byId, $isAdmin)) throw new DomainException('That change would leave no active administrator.');
+        $write($db);
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        throw $e;
+    }
+}
+
+/**
+ * Scoped read source for aggregate reports. Returns the bare table for unrestricted
+ * users, or a caseload-filtered derived table for caseload_scoped() users.
+ * IMPORTANT: the scoped form is a `(SELECT ...)` subquery, so the CALLER MUST follow
+ * it with a SQL alias (e.g. `FROM {$rt} t`) — a missing alias is a syntax error on the
+ * scoped path even though the admin path (bare table name) would still parse.
+ */
+function report_table(string $table, int $actor): string {
+    $columns = ['clients'=>'id', 'training_tracks'=>'client_id', 'client_status_history'=>'client_id',
+        'surveys'=>'client_id', 'equipment_followups'=>'client_id', 'client_scored_assessments'=>'client_id',
+        'smart_goals'=>'track_id', 'invoices'=>'track_id', 'scheduled_sessions'=>'client_id'];
+    if (!isset($columns[$table])) throw new InvalidArgumentException('Unsupported report table.');
+    if (!caseload_scoped()) return $table;
+    $ids = 'SELECT id FROM clients WHERE assigned_to='.(int)$actor;
+    if ($columns[$table] === 'track_id') $ids = 'SELECT id FROM training_tracks WHERE client_id IN ('.$ids.')';
+    return '(SELECT * FROM '.$table.' WHERE '.$columns[$table].' IN ('.$ids.'))';
+}

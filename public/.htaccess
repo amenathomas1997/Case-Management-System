@@ -1,0 +1,58 @@
+# Force HTTPS — but NEVER redirect the ACME challenge path, or Let's Encrypt /
+# cPanel AutoSSL can't validate the domain over http and the certificate fails
+# to renew (which is exactly how this subdomain's cert lapsed).
+RewriteEngine On
+RewriteCond %{HTTPS} !=on
+RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/ [NC]
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# Pass Authorization header through to PHP (for the mobile API)
+RewriteCond %{HTTP:Authorization} .
+RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+# Canonical host: strip the www. prefix, whatever domain this copy is served on
+# (the ACME challenge path is left alone, as above). A site whose real address
+# is the www. name should remove these three lines.
+RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/ [NC]
+RewriteCond %{HTTP_HOST} ^www\.(.+)$ [NC]
+RewriteRule ^ https://%1%{REQUEST_URI} [L,R=301]
+
+# Block include directory from direct access
+RewriteRule ^inc/ - [F,L]
+
+# Never serve SQL/schema dumps, config, lock files, or the one-time installer
+<FilesMatch "\.(sql|cnf|lock|sh|enabled)$">
+  Require all denied
+</FilesMatch>
+# Nor PHP's own extensionless error_log (some hosts write it next to the
+# script), logs, editor/backup leftovers, notes, or dot-files such as
+# .DS_Store and .env. The ACME challenge folder is left reachable.
+<FilesMatch "(?i)(^error_log$|^\.(?!well-known$)|\.(log|bak|old|orig|swp|ini|env|md|ya?ml|dist)$)">
+  Require all denied
+</FilesMatch>
+# A hosting administrator must explicitly enable a fresh installation.
+# The marker is never distributed and cannot be fetched over HTTP.
+RewriteCond %{REQUEST_FILENAME}.enabled !-f
+RewriteRule ^install\.php$ - [F,L]
+
+# Sensible defaults
+Options -Indexes
+AddDefaultCharset UTF-8
+AddType application/manifest+json .webmanifest
+
+<IfModule mod_headers.c>
+  # Kept to a 1-day window (not the usual year) on purpose: this subdomain's
+  # cert lapsed because AutoSSL didn't renew in time, and a long HSTS pin turns
+  # an expired cert into an un-bypassable lockout. Raise to 31536000 once
+  # renewals are proven reliable over a full cycle.
+  Header always set Strict-Transport-Security "max-age=86400" env=HTTPS
+  Header always set X-Frame-Options "DENY"
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "same-origin"
+  # Scripts and styles change with each release and must match the pages
+  # that use them, so the browser revalidates them every time (a quick 304
+  # when unchanged) instead of reusing an old copy after an update.
+  <FilesMatch "\.(js|css)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>

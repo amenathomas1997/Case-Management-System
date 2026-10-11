@@ -1,0 +1,57 @@
+-- Feature expansion v3: reminders, amendments, payments, surveys, audit, portal
+SET NAMES utf8mb4;
+
+ALTER TABLE scheduled_sessions ADD COLUMN reminder_sent TINYINT(1) NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS auth_amendments (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  track_id INT UNSIGNED NOT NULL,
+  old_hours DECIMAL(7,2) NULL,
+  new_hours DECIMAL(7,2) NULL,
+  old_rate DECIMAL(8,2) NULL,
+  new_rate DECIMAL(8,2) NULL,
+  old_expiration DATE NULL,
+  new_expiration DATE NULL,
+  reason VARCHAR(255) NULL,
+  changed_by INT UNSIGNED NULL,
+  changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (track_id) REFERENCES training_tracks(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+ALTER TABLE invoices
+  ADD COLUMN payment_ref VARCHAR(80) NULL,
+  ADD COLUMN paid_amount DECIMAL(10,2) NULL;
+
+CREATE TABLE IF NOT EXISTS surveys (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  client_id INT UNSIGNED NOT NULL,
+  token CHAR(48) NOT NULL UNIQUE,
+  sent_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME NULL,
+  satisfaction TINYINT NULL,
+  goals_met TINYINT NULL,
+  comments TEXT NULL,
+  FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id INT UNSIGNED NULL,
+  action VARCHAR(60) NOT NULL,
+  entity VARCHAR(40) NULL,
+  entity_id INT UNSIGNED NULL,
+  detail VARCHAR(255) NULL,
+  ip VARCHAR(45) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_created (created_at),
+  KEY idx_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS portal_tokens (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  client_id INT UNSIGNED NOT NULL UNIQUE,
+  token CHAR(48) NOT NULL UNIQUE,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_used_at DATETIME NULL,
+  FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

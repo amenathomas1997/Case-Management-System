@@ -1,0 +1,13 @@
+private/config.php
+.DS_Store
+ios/DerivedData/
+ios/*.xcodeproj/xcuserdata/
+dist/cms_dist.tar.gz
+dist/cms_dist/
+cron/cron_config.php
+cron/backup.conf
+.claude/settings.local.json
+.audit_work/
+ios/*.xcodeproj/project.xcworkspace/xcuserdata/
+tests/__pycache__/
+public/inc/config_path.php

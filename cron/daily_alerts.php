@@ -1,0 +1,279 @@
+<?php
+declare(strict_types=1);
+// Daily authorization alerts: expiration approaching (30/14/7 days) and 80% of hours or funds used.
+// Cron: 0 7 * * *  — each alert sends once per track per threshold (sent_alerts table).
+if (PHP_SAPI !== 'cli') exit('CLI only.');
+
+// Where the application's inc/ directory is: an optional cron_config.php beside
+// this script (it returns the path) wins, then the production path, then the
+// repository layout. Nothing needs editing here for a different install.
+foreach ([
+    is_file(__DIR__ . '/cron_config.php') ? (string)(require __DIR__ . '/cron_config.php') : '',
+    '/home/cmsuser/public_html/casemanagement/inc',
+    dirname(__DIR__) . '/public/inc',
+] as $inc) {
+    $inc = rtrim($inc, '/');
+    if ($inc !== '' && is_file($inc . '/core.php')) { require $inc . '/core.php'; break; }
+}
+if (!function_exists('db')) {
+    fwrite(STDERR, "CMS cron: the application's inc/core.php was not found. Create cron_config.php beside this script containing: <?php return '/full/path/to/your/web/docroot/inc';\n");
+    exit(1);
+}
+
+$alerts = [];          // ['text' => ..., 'assigned_to' => user id or null]
+
+// The overdue-task and overdue-loan lists are a standing digest rather than
+// one-off alerts, so they go out at most once per calendar day: a second run
+// on the same day (manual, or a retried cron) must not mail the list again.
+// The date is recorded only after the email is actually sent.
+$digestKey = 'daily_alerts_digest_date';
+$digestDue = setting($digestKey) !== date('Y-m-d');
+
+// A closed or archived client's track that was left Active raises no alerts.
+$tracks = db()->query("SELECT t.*, c.name AS client_name, c.assigned_to,
+        DATEDIFF(t.expiration_date, CURDATE()) AS days_left
+    FROM training_tracks t JOIN clients c ON c.id = t.client_id
+    WHERE t.status = 'Active' AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%'")->fetchAll();
+
+$already = [];
+foreach (db()->query('SELECT track_id, alert_key FROM sent_alerts') as $row) {
+    $already[$row['track_id'] . ':' . $row['alert_key']] = true;
+}
+
+// Each alert carries the sent_alerts marks it settles; they are recorded only
+// after every recipient of that alert was actually emailed.
+$mark = db()->prepare('INSERT IGNORE INTO sent_alerts (track_id, alert_key) VALUES (?,?)');
+$unmark = db()->prepare('DELETE FROM sent_alerts WHERE track_id = ? AND alert_key = ?');
+
+foreach ($tracks as $t) {
+    $id = (int)$t['id'];
+    $days = $t['days_left'];
+    $label = "{$t['client_name']} — {$t['title']} (Auth {$t['auth_number']})";
+
+    if ($days !== null && $days >= 0) {
+        foreach ([7, 14, 30] as $threshold) {
+            $key = 'exp' . $threshold;
+            if ($days <= $threshold && empty($already["$id:$key"])) {
+                // Mark every threshold this alert already covers, so a track first
+                // noticed at 5 days doesn't fire the 14- and 30-day alerts too.
+                $marks = [];
+                foreach ([7, 14, 30] as $t2) {
+                    if ($days <= $t2) $marks[] = [$id, 'exp' . $t2];
+                }
+                $alerts[] = ['text' => "EXPIRING in {$days} day(s) — {$label}, expires " . fmt_date($t['expiration_date']),
+                             'assigned_to' => $t['assigned_to'] ? (int)$t['assigned_to'] : null, 'marks' => $marks];
+                break;
+            }
+        }
+    }
+
+    // 80% of the authorization used: by hours, or by money, since mileage and
+    // expenses spend the authorized funds without adding hours. When both are
+    // reached on the same run they go out as one alert and both are marked.
+    $r = track_rollup($id);
+    $hoursLow = $r['authorized_hours'] > 0 && $r['pct_used'] >= 80;
+    $fundsLow = $r['authorized_funds'] > 0 && $r['funds_remaining'] <= 0.2 * $r['authorized_funds'];
+    $parts = [];
+    $marks = [];
+    if ($hoursLow && empty($already["$id:pct80"])) {
+        $parts[] = "HOURS at {$r['pct_used']}% — {$label}: " . fmt_hours($r['hours_worked'])
+            . ' of ' . fmt_hours($r['authorized_hours']) . ' used, ' . fmt_hours($r['hours_remaining']) . ' remaining';
+    }
+    if ($fundsLow && empty($already["$id:funds80"])) {
+        $parts[] = ($parts ? 'FUNDS' : "FUNDS LOW — {$label}") . ': ' . fmt_money($r['funds_remaining'])
+            . ' of ' . fmt_money($r['authorized_funds']) . ' remaining after hours, mileage and expenses';
+    }
+    if ($parts) {
+        if ($hoursLow) $marks[] = [$id, 'pct80'];
+        if ($fundsLow) $marks[] = [$id, 'funds80'];
+        $alerts[] = ['text' => implode('; ', $parts),
+            'assigned_to' => $t['assigned_to'] ? (int)$t['assigned_to'] : null, 'marks' => $marks];
+    }
+    // A mark follows the track's current state, not every writer: once usage
+    // falls clearly back below the line (a trashed or corrected log, expense or
+    // rate), the mark is cleared so the next real crossing alerts again. The
+    // five-point margin keeps a track hovering at the line from re-alerting daily.
+    $hoursClear = $r['authorized_hours'] <= 0 || $r['pct_used'] < 75;
+    $fundsClear = $r['authorized_funds'] <= 0 || $r['funds_remaining'] > 0.25 * $r['authorized_funds'];
+    if ($hoursClear && isset($already["$id:pct80"])) $unmark->execute([$id, 'pct80']);
+    if ($fundsClear && isset($already["$id:funds80"])) $unmark->execute([$id, 'funds80']);
+}
+
+// Waitlist check-ins: nobody waits silently — every ~3 weeks an open task
+// reminds staff to check in with each waitlisted client.
+foreach (db()->query("SELECT id, name, assigned_to FROM clients WHERE status = 'Waitlist' AND archived_at IS NULL")->fetchAll() as $wc) {
+    $open = db()->prepare("SELECT COUNT(*) FROM tasks WHERE client_id = ? AND auto_key LIKE 'wait-%' AND status = 'Open'");
+    $open->execute([(int)$wc['id']]);
+    if ((int)$open->fetchColumn() > 0) continue;
+    $last = db()->prepare("SELECT MAX(done_at) FROM tasks WHERE client_id = ? AND auto_key LIKE 'wait-%'");
+    $last->execute([(int)$wc['id']]);
+    $lastDone = $last->fetchColumn();
+    if ($lastDone !== null && strtotime((string)$lastDone) > time() - 21 * 86400) continue;
+    add_task('Waitlist check-in: ' . $wc['name'],
+        'This client is waiting for services — check in, update them, and move them off the waitlist if a slot opened.',
+        (int)$wc['id'], null, business_days_from(3),
+        $wc['assigned_to'] ? (int)$wc['assigned_to'] : null, null, 'wait-' . (int)$wc['id'] . '-' . date('Ymd'));
+}
+
+// Equipment maintenance: open a task when a scheduled item is due (or overdue)
+// for service. One open task per item at a time (idempotent via auto_key/day).
+// A task is closed here once it no longer applies: a service was logged after the
+// task opened (on the Equipment page or in the app, even one dated earlier, such
+// as a service done last week and logged today), the service date was moved on to
+// or past the day the task opened, or the item was retired or taken off its
+// schedule. Otherwise a serviced item's task would stay open and appear in the
+// overdue digest every day.
+db()->exec("UPDATE tasks t JOIN equipment e ON t.auto_key LIKE CONCAT('equip-maint-', e.id, '-%')
+    SET t.status = 'Done', t.done_at = NOW()
+    WHERE t.status = 'Open'
+      AND (e.status = 'Retired' OR e.maintenance_interval_days IS NULL OR e.maintenance_interval_days <= 0
+           OR (e.last_service_date IS NOT NULL AND e.last_service_date >= DATE(t.created_at))
+           OR EXISTS (SELECT 1 FROM equipment_maintenance m WHERE m.equipment_id = e.id AND m.created_at >= t.created_at))");
+foreach (db()->query("SELECT id, name, last_service_date, maintenance_interval_days
+        FROM equipment WHERE status <> 'Retired' AND maintenance_interval_days IS NOT NULL AND maintenance_interval_days > 0")->fetchAll() as $eq) {
+    $due = $eq['last_service_date']
+        ? date('Y-m-d', strtotime($eq['last_service_date'] . ' +' . (int)$eq['maintenance_interval_days'] . ' days'))
+        : date('Y-m-d');
+    if ($due > date('Y-m-d', strtotime('+7 days'))) continue;   // not due within a week
+    $open = db()->prepare("SELECT COUNT(*) FROM tasks WHERE auto_key LIKE ? AND status = 'Open'");
+    $open->execute(['equip-maint-' . (int)$eq['id'] . '-%']);
+    if ((int)$open->fetchColumn() > 0) continue;
+    add_task('Equipment service due: ' . $eq['name'],
+        'This item is scheduled for maintenance/calibration' . ($eq['last_service_date'] ? ' (last serviced ' . fmt_date($eq['last_service_date']) . ', due ' . fmt_date($due) . ')' : ' (never serviced)') . '. Log the service on the Equipment page.',
+        null, null, business_days_from(3), null, null,
+        'equip-maint-' . (int)$eq['id'] . '-' . date('Ymd'));
+}
+
+// Record retention: auto-archive clients closed longer than the configured
+// number of years (0 or unset = off). Archived clients disappear from the
+// day-to-day lists but stay intact until an admin exports and purges them.
+$retYears = (int)(setting('retention_years') ?? '0');
+if ($retYears > 0) {
+    $arch = db()->prepare("UPDATE clients c SET c.archived_at = NOW()
+        WHERE c.archived_at IS NULL AND c.status LIKE 'Closed%'
+          AND (SELECT MAX(h.changed_at) FROM client_status_history h WHERE h.client_id = c.id) < DATE_SUB(NOW(), INTERVAL ? YEAR)");
+    $arch->execute([$retYears]);
+    if ($arch->rowCount() > 0) {
+        notify_admin_users($arch->rowCount() . ' closed client record(s) reached the ' . $retYears . '-year retention mark and were archived', 'clients.php?archived=1');
+    }
+}
+
+// Overdue follow-up tasks — listed daily while open
+$overdueTasks = !$digestDue ? [] : db()->query("SELECT t.title, t.due_date, t.assigned_to, u.name AS assignee, c.name AS client_name
+    FROM tasks t LEFT JOIN users u ON u.id = t.assigned_to LEFT JOIN clients c ON c.id = t.client_id
+    WHERE t.status = 'Open' AND t.due_date IS NOT NULL AND t.due_date < CURDATE()")->fetchAll();
+foreach ($overdueTasks as $ot) {
+    $alerts[] = ['text' => "TASK OVERDUE since " . fmt_date($ot['due_date']) . " — {$ot['title']}"
+        . ($ot['client_name'] ? " ({$ot['client_name']})" : '')
+        . ($ot['assignee'] ? " — assigned to {$ot['assignee']}" : ''),
+        'assigned_to' => $ot['assigned_to'] ? (int)$ot['assigned_to'] : null, 'marks' => []];
+}
+
+// Purge trash entries older than 30 days (deleting stored files for documents).
+// One entry that cannot be purged (a row locked by a restore in progress, a
+// damaged payload) is retried tomorrow and never stops the alerts below.
+foreach (db()->query("SELECT id FROM trash WHERE deleted_at < DATE_SUB(NOW(), INTERVAL 30 DAY)")->fetchAll() as $tr) {
+    try {
+        purge_trash((int)$tr['id'], true);
+    } catch (Throwable $e) {
+        error_log('daily_alerts: could not purge a trash entry (' . get_class($e) . ' ' . $e->getCode() . ')');
+    }
+}
+
+// Housekeeping: login_attempts is also the rate-limit ledger (portal, AI, voice,
+// password reset …). Limiter rows are written with success = 1 under a key that
+// holds no "@", and no limiter looks back more than 24 hours (the daily caps on
+// counselor-portal codes, "vrc-send-<id>", and portal uploads, "portal-up-<id>"),
+// so they are dead weight after 30 days. Real sign-in rows (password attempts and
+// "verify:<email>" code failures, with their IP addresses) are the only record of
+// failed sign-ins that Audit log shows, so they are kept. The one limiter written
+// with success = 0, "vrc-fail-<id>" (a wrong counselor-portal code), is kept the
+// same way on purpose: it appears in that list as a failed code attempt. A
+// failure here must never stop the alerts below from going out.
+try {
+    db()->exec("DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 30 DAY) AND success = 1 AND email NOT LIKE '%@%'");
+} catch (Throwable $e) {
+    error_log('daily_alerts: could not prune login_attempts (' . get_class($e) . ' ' . $e->getCode() . ')');
+}
+
+// Overdue equipment loans — listed daily while outstanding (these need chasing)
+$overdueLoans = !$digestDue ? [] : db()->query("SELECT e.name, e.serial, c.name AS client_name, l.due_date
+    FROM equipment_loans l JOIN equipment e ON e.id = l.equipment_id JOIN clients c ON c.id = l.client_id
+    WHERE l.returned_at IS NULL AND l.due_date IS NOT NULL AND l.due_date < CURDATE()")->fetchAll();
+foreach ($overdueLoans as $ol) {
+    $alerts[] = ['text' => "EQUIPMENT OVERDUE — {$ol['name']}" . ($ol['serial'] ? " (SN {$ol['serial']})" : '')
+        . " with {$ol['client_name']}, due back " . fmt_date($ol['due_date']), 'assigned_to' => null, 'marks' => []];
+}
+
+if ($alerts) {
+    $header = "Authorization alerts for " . date('F j, Y') . ":\n\n- ";
+    $footer = "\n\nReview your caseload: " . cfg('base_url') . "/index.php\n";
+    // Administrators receive everything; the case worker assigned to a client also
+    // receives that client's alerts. An alert is marked as sent once the
+    // administrators (at least one of them) and its case worker were emailed, so a
+    // mail outage (or a failed case worker mailbox) retries it on the next run
+    // instead of swallowing it. Each administrator is emailed separately: one whose
+    // email failed while another's went through is not sent the whole list again
+    // tomorrow alongside the others, but is told in the app instead, and the run
+    // exits non-zero. A failure on one side never stops the other side from being sent.
+    $allText = implode("\n- ", array_column($alerts, 'text'));
+    $adminSubject = 'Authorization alerts: ' . count($alerts) . ' item(s) need attention';
+    $adminSent = false; $adminFailed = [];
+    $adminList = effective_admin_user_ids();
+    if ($adminList) {
+        $q = db()->prepare('SELECT id, email FROM users WHERE id IN (' . implode(',', array_fill(0, count($adminList), '?')) . ')');
+        $q->execute($adminList);
+        foreach ($q->fetchAll() as $adm) {
+            if (send_app_mail((string)$adm['email'], $adminSubject, $header . $allText . $footer)) $adminSent = true;
+            else $adminFailed[] = (int)$adm['id'];
+        }
+    }
+    if (!$adminSent) echo "The administrators' alert email failed to send — those alerts will retry on the next run.\n";
+    elseif ($adminFailed) {
+        foreach ($adminFailed as $aid) {
+            notify_user($aid, 'The authorization alerts email for ' . date('F j, Y') . ' (' . count($alerts)
+                . ' item(s)) could not be delivered to you. Review expiring authorizations and usage on the Compliance page.', 'compliance.php');
+        }
+        echo count($adminFailed) . " administrator alert email(s) failed to send; those administrators were notified in the app.\n";
+    }
+
+    // Assigned case workers receive only their clients' alerts. Effective
+    // administrators (by role or by permission group, the same rule as
+    // everywhere else) already have the full list, so they are skipped.
+    $adminIds = function_exists('effective_admin_user_ids') ? array_map('intval', effective_admin_user_ids()) : null;
+    $byInstructor = [];
+    foreach ($alerts as $i => $a) {
+        if ($a['assigned_to']) $byInstructor[$a['assigned_to']][] = $i;
+    }
+    $missed = [];          // alert index => true when one of its recipients was not emailed
+    $instructorFailures = 0;
+    $u = db()->prepare('SELECT id, email, role, group_id FROM users WHERE id = ? AND is_active = 1');
+    foreach ($byInstructor as $uid => $indexes) {
+        $u->execute([$uid]);
+        $row = $u->fetch();
+        if (!$row || (string)$row['email'] === '') continue;   // nobody else to tell; the administrators have it
+        $isAdmin = $adminIds !== null ? in_array((int)$uid, $adminIds, true) : in_array('admin', resolve_perms($row)['perms'], true);
+        if ($isAdmin) continue;
+        $texts = array_map(fn(int $i): string => $alerts[$i]['text'], $indexes);
+        if (!send_app_mail((string)$row['email'], 'Authorization alerts for your clients: ' . count($texts) . ' item(s)',
+                $header . implode("\n- ", $texts) . $footer)) {
+            $instructorFailures++;
+            foreach ($indexes as $i) $missed[$i] = true;
+        }
+    }
+
+    if ($adminSent) {
+        foreach ($alerts as $i => $a) {
+            if (empty($missed[$i])) foreach ($a['marks'] as [$mid, $mkey]) $mark->execute([$mid, $mkey]);
+        }
+        if ($digestDue) {
+            try { set_setting($digestKey, date('Y-m-d')); }
+            catch (Throwable $e) { error_log('daily_alerts: could not record the digest date (' . get_class($e) . ' ' . $e->getCode() . ')'); }
+        }
+        echo count($alerts) . " alert(s) sent to the administrators.\n";
+    }
+    if ($instructorFailures) echo "{$instructorFailures} case worker alert email(s) failed to send — those alerts will retry on the next run.\n";
+    if (!$adminSent || $adminFailed || $instructorFailures) exit(1);
+} else {
+    echo "No new alerts.\n";
+}

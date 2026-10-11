@@ -1,0 +1,25 @@
+-- v2.45.0 — Device (AT) provision follow-ups for abandonment/retention tracking.
+CREATE TABLE IF NOT EXISTS `equipment_followups` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `loan_id` int(10) unsigned NOT NULL,
+  `client_id` int(10) unsigned NOT NULL,
+  `equipment_id` int(10) unsigned NOT NULL,
+  `interval_days` smallint(5) unsigned NOT NULL,
+  `due_date` date NOT NULL,
+  `status` enum('Pending','Completed','Skipped') NOT NULL DEFAULT 'Pending',
+  `in_use` tinyint(1) DEFAULT NULL,
+  `satisfaction` tinyint(3) unsigned DEFAULT NULL,
+  `barriers` varchar(255) DEFAULT NULL,
+  `notes` text DEFAULT NULL,
+  `completed_at` datetime DEFAULT NULL,
+  `completed_by` int(10) unsigned DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_due` (`status`,`due_date`),
+  KEY `idx_loan` (`loan_id`),
+  KEY `idx_client` (`client_id`),
+  KEY `idx_equip` (`equipment_id`),
+  CONSTRAINT `fk_ef_loan` FOREIGN KEY (`loan_id`) REFERENCES `equipment_loans` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_ef_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_ef_equip` FOREIGN KEY (`equipment_id`) REFERENCES `equipment` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

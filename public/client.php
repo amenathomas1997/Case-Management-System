@@ -1,0 +1,1356 @@
+<?php
+require __DIR__ . '/inc/bootstrap.php';
+require __DIR__ . '/inc/layout.php';
+csrf_check();
+$user = require_login();
+require_perm('clients');
+
+$id = (int)($_GET['id'] ?? 0);
+$stmt = db()->prepare('SELECT * FROM clients WHERE id = ?');
+$stmt->execute([$id]);
+$client = $stmt->fetch();
+if (!$client) { flash('Client not found.', 'error'); redirect('clients.php'); }
+scope_check_client($client, $user);
+
+$tab = $_GET['tab'] ?? 'overview';
+if (!in_array($tab, ['overview','notes','assessments','tracks','documents','history'], true)) $tab = 'overview';
+
+/* ---- POST: purge an ARCHIVED record permanently (admin; export first) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['purge_client'])) {
+    if (!can('admin') || $client['archived_at'] === null) {
+        flash('Only archived records can be purged, and only by an administrator.', 'error');
+        redirect("client.php?id=$id");
+    }
+    $pdo = db();
+    $purgeFiles = [];
+    $returnedEquipment = [];
+    $purgeCounts = ['referrals' => 0, 'incidents' => 0, 'trash' => 0, 'notifications' => 0];
+    $redactedIncidents = [];
+    $closedRepairs = [];
+    $pdo->beginTransaction();
+    try {
+        // List the stored files (documents, assessment attachments, signatures)
+        // now, but remove them only after the commit below: a purge that fails
+        // and rolls back must not leave rows pointing at files already deleted.
+        $fq = $pdo->prepare('SELECT path AS p FROM client_documents WHERE client_id = ?
+            UNION ALL SELECT attachment_path FROM tech_assessments WHERE client_id = ? AND attachment_path IS NOT NULL
+            UNION ALL SELECT w.signature_path FROM work_logs w JOIN training_tracks t ON t.id = w.track_id WHERE t.client_id = ? AND w.signature_path IS NOT NULL');
+        $fq->execute([$id, $id, $id]);
+        $purgeFiles = $fq->fetchAll(PDO::FETCH_COLUMN);
+        // Trashed documents, notes, work logs and expenses of this client are part
+        // of the record too: their trash entries (and stored files) go with it.
+        $tq = $pdo->prepare('SELECT id FROM training_tracks WHERE client_id = ?');
+        $tq->execute([$id]);
+        $purgeTrackIds = array_map('intval', $tq->fetchAll(PDO::FETCH_COLUMN));
+        $purgeTrashIds = [];
+        foreach ($pdo->query("SELECT id, entity, payload FROM trash WHERE entity IN ('client_documents','client_notes','work_logs','track_expenses')") as $tr) {
+            $pl = json_decode((string)$tr['payload'], true);
+            if (!is_array($pl)) continue;
+            $mine = in_array($tr['entity'], ['work_logs', 'track_expenses'], true)
+                ? in_array((int)($pl['track_id'] ?? 0), $purgeTrackIds, true)
+                : (int)($pl['client_id'] ?? 0) === $id;
+            if (!$mine) continue;
+            $purgeTrashIds[] = (int)$tr['id'];
+            if ($tr['entity'] === 'client_documents' && !empty($pl['path'])) $purgeFiles[] = (string)$pl['path'];
+            if ($tr['entity'] === 'work_logs' && !empty($pl['signature_path'])) $purgeFiles[] = (string)$pl['signature_path'];
+        }
+        // Loaned equipment comes back first: deleting an open loan would leave
+        // the item stuck 'On Loan' with no loan left to return. Same lock order
+        // and status rules as return_equipment() (which runs its own transaction).
+        $ol = $pdo->prepare('SELECT id, equipment_id FROM equipment_loans WHERE client_id = ? AND returned_at IS NULL ORDER BY equipment_id, id');
+        $ol->execute([$id]);
+        foreach ($ol->fetchAll() as $loan) {
+            $eqId = (int)$loan['equipment_id'];
+            $lock = $pdo->prepare('SELECT status FROM equipment WHERE id = ? FOR UPDATE');
+            $lock->execute([$eqId]);
+            $eqStatus = $lock->fetchColumn();
+            $pdo->prepare("UPDATE equipment_loans SET returned_at = CURDATE(), notes = 'Returned on client purge' WHERE id = ? AND returned_at IS NULL")
+                ->execute([(int)$loan['id']]);
+            $pdo->prepare("UPDATE equipment_followups SET status = 'Skipped' WHERE loan_id = ? AND status = 'Pending'")
+                ->execute([(int)$loan['id']]);
+            $stillOut = $pdo->prepare('SELECT id FROM equipment_loans WHERE equipment_id = ? AND returned_at IS NULL LIMIT 1 FOR UPDATE');
+            $stillOut->execute([$eqId]);
+            if ($eqStatus === false || $stillOut->fetchColumn()) continue;
+            $newStatus = in_array($eqStatus, ['Repair', 'Retired'], true) ? $eqStatus : 'Available';
+            try {
+                $pending = $pdo->prepare("SELECT id FROM at_records WHERE equipment_id=? AND ((kind='repair' AND status NOT IN ('Resolved','Cancelled')) OR (kind='reuse' AND status IN ('Intake','Refurbishing'))) LIMIT 1 FOR UPDATE");
+                $pending->execute([$eqId]);
+                if ($pending->fetchColumn()) $newStatus = 'Repair';
+            } catch (PDOException $e) {
+                if ((string)$e->getCode() !== '42S02') throw $e; // Older schema before the AT migration.
+            }
+            $pdo->prepare('UPDATE equipment SET status = ? WHERE id = ?')->execute([$newStatus, $eqId]);
+            $returnedEquipment[$eqId] = $newStatus;
+        }
+        // Organisation equipment workflows outlive the client. A redeployed device's
+        // reuse intake (donor, inspection, sanitisation and data-wipe evidence) is
+        // kept, detached from the client, instead of cascading away with it. An open
+        // repair goes with the record, so the device is put back as cancelling the
+        // repair would (its status from before the repair, when that is known) rather
+        // than left in Repair with no workflow to explain it; each one is audited.
+        try {
+            $pdo->prepare("UPDATE at_records SET client_id = NULL, version = version + 1 WHERE client_id = ? AND kind = 'reuse'")->execute([$id]);
+            $or = $pdo->prepare("SELECT id, equipment_id, details FROM at_records WHERE client_id = ? AND kind = 'repair'
+                AND status NOT IN ('Resolved','Cancelled') AND equipment_id IS NOT NULL ORDER BY equipment_id, id");
+            $or->execute([$id]);
+            foreach ($or->fetchAll() as $rep) {
+                $eqId = (int)$rep['equipment_id'];
+                $lock = $pdo->prepare('SELECT status FROM equipment WHERE id = ? FOR UPDATE');
+                $lock->execute([$eqId]);
+                $eqStatus = $lock->fetchColumn();
+                $newStatus = $eqStatus;
+                // Only a device the repair holds in Repair is changed; one on loan
+                // elsewhere, retired or set by hand since is left as it is.
+                if ($eqStatus === 'Repair') {
+                    $out = $pdo->prepare('SELECT id FROM equipment_loans WHERE equipment_id = ? AND returned_at IS NULL LIMIT 1 FOR UPDATE');
+                    $out->execute([$eqId]);
+                    $other = $pdo->prepare("SELECT id FROM at_records WHERE equipment_id = ? AND NOT (kind = 'repair' AND client_id = ?)
+                        AND ((kind='repair' AND status NOT IN ('Resolved','Cancelled')) OR (kind='reuse' AND status IN ('Intake','Refurbishing'))) LIMIT 1 FOR UPDATE");
+                    $other->execute([$eqId, $id]);
+                    $prior = (json_decode((string)$rep['details'], true) ?: [])['prior_status'] ?? null;
+                    if ($out->fetchColumn()) $newStatus = 'On Loan';
+                    elseif (!$other->fetchColumn() && in_array($prior, ['Available', 'Repair'], true)) $newStatus = $prior;
+                    if ($newStatus !== $eqStatus) $pdo->prepare('UPDATE equipment SET status = ? WHERE id = ?')->execute([$newStatus, $eqId]);
+                }
+                $closedRepairs[(int)$rep['id']] = [$eqId, $eqStatus === false ? null : (string)$newStatus];
+            }
+        } catch (PDOException $e) {
+            if ((string)$e->getCode() !== '42S02') throw $e; // Older schema before the AT migration.
+        }
+        // Track children first, then client children, then the client.
+        $pdo->prepare('DELETE w FROM work_logs w JOIN training_tracks t ON t.id = w.track_id WHERE t.client_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE g FROM smart_goals g JOIN training_tracks t ON t.id = g.track_id WHERE t.client_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE hw FROM homework hw JOIN training_tracks t ON t.id = hw.track_id WHERE t.client_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE e FROM track_expenses e JOIN training_tracks t ON t.id = e.track_id WHERE t.client_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE i FROM invoices i JOIN training_tracks t ON t.id = i.track_id WHERE t.client_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE a FROM auth_amendments a JOIN training_tracks t ON t.id = a.track_id WHERE t.client_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE ra FROM report_acks ra WHERE ra.client_id = ?')->execute([$id]);
+        foreach (['scheduled_sessions','training_tracks','client_notes','tech_assessments','client_documents',
+                  'consent_forms','surveys','equipment_loans','client_status_history','portal_tokens','tasks'] as $tbl) {
+            $pdo->prepare("DELETE FROM {$tbl} WHERE client_id = ?")->execute([$id]);
+        }
+        // The referral rows carry their own copy of the client's details (name,
+        // date of birth, contact, free-text narrative), so they are removed with
+        // the record rather than detached from it.
+        $pdo->prepare('DELETE FROM tasks WHERE referral_id IN (SELECT id FROM referrals WHERE client_id = ?)')->execute([$id]);
+        // Staff notifications quote the client's name (survey scores, consent,
+        // referral assignment, portal requests, AT due dates) and link to the
+        // record, its referrals, its portal requests or its AT records: they go
+        // too. Links are matched whole, so client 12 never removes client 120's.
+        $rq = $pdo->prepare('SELECT id FROM referrals WHERE client_id = ?');
+        $rq->execute([$id]);
+        $noteLinks = ['client.php?id=' . $id, 'messages.php?client=' . $id, 'portal_requests.php?client=' . $id];
+        foreach ($rq->fetchAll(PDO::FETCH_COLUMN) as $rid) $noteLinks[] = 'referrals.php?view=' . (int)$rid;
+        // AT records still tied to the client cascade away with it (reuse intakes
+        // were detached above and keep their reminders).
+        try {
+            $aq = $pdo->prepare('SELECT id FROM at_records WHERE client_id = ?');
+            $aq->execute([$id]);
+            foreach ($aq->fetchAll(PDO::FETCH_COLUMN) as $aid) $noteLinks[] = 'at_services.php?id=' . (int)$aid;
+        } catch (PDOException $e) {
+            if ((string)$e->getCode() !== '42S02') throw $e; // Older schema before the AT migration.
+        }
+        $nParams = [];
+        foreach ($noteLinks as $nl) array_push($nParams, $nl, $nl . '&%', $nl . '#%');
+        $nWhere = implode(' OR ', array_fill(0, count($noteLinks), '(link = ? OR link LIKE ? OR link LIKE ?)'));
+        // Portal-request alerts written before the link named the client read
+        // '<name> sent a ...' under the bare queue link: matched by the exact name,
+        // and only when no other client shares it (that client's alerts stay).
+        $sameName = $pdo->prepare('SELECT 1 FROM clients WHERE name = ? AND id <> ? LIMIT 1');
+        $sameName->execute([(string)$client['name'], $id]);
+        if (trim((string)$client['name']) !== '' && !$sameName->fetchColumn()) {
+            $nWhere .= " OR (link = 'portal_requests.php' AND message LIKE ?)";
+            $nParams[] = addcslashes((string)$client['name'], '\\%_') . ' sent a %';
+        }
+        $nd = $pdo->prepare('DELETE FROM notifications WHERE ' . $nWhere);
+        $nd->execute($nParams);
+        $purgeCounts['notifications'] = $nd->rowCount();
+        $del = $pdo->prepare('DELETE FROM referrals WHERE client_id = ?');
+        $del->execute([$id]);
+        $purgeCounts['referrals'] = $del->rowCount();
+        // Incident reports are the organisation's own safety record, so they are
+        // kept: detached from the client, with the free text that can name or
+        // describe the client (narrative, action taken, location) replaced.
+        $iq = $pdo->prepare('SELECT id FROM incidents WHERE client_id = ? FOR UPDATE');
+        $iq->execute([$id]);
+        $redactedIncidents = array_map('intval', $iq->fetchAll(PDO::FETCH_COLUMN));
+        if ($redactedIncidents) {
+            $removed = '[Removed when the client record was purged]';
+            $pdo->prepare("UPDATE incidents SET client_id = NULL, description = ?,
+                action_taken = CASE WHEN action_taken IS NULL OR action_taken = '' THEN action_taken ELSE ? END,
+                location = CASE WHEN location IS NULL OR location = '' THEN location ELSE ? END
+                WHERE id IN (" . implode(',', array_fill(0, count($redactedIncidents), '?')) . ')')
+                ->execute(array_merge([$removed, $removed, $removed], $redactedIncidents));
+        }
+        $purgeCounts['incidents'] = count($redactedIncidents);
+        if ($purgeTrashIds) {
+            $pdo->prepare('DELETE FROM trash WHERE id IN (' . implode(',', array_fill(0, count($purgeTrashIds), '?')) . ')')->execute($purgeTrashIds);
+            $purgeCounts['trash'] = count($purgeTrashIds);
+        }
+        $pdo->prepare('DELETE FROM clients WHERE id = ?')->execute([$id]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('Client purge failed: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
+        flash('Purge failed and nothing was removed. Please try again; if it keeps failing, contact support.', 'error');
+        redirect("client.php?id=$id");
+    }
+    // The rows are gone for good now, so the stored files can follow.
+    foreach ($purgeFiles as $purgePath) {
+        if (!empty($purgePath)) @unlink(cfg('upload_dir') . '/' . basename((string)$purgePath));
+    }
+    foreach ($returnedEquipment as $eqId => $eqStatus) {
+        audit($user['id'], 'equipment.return', 'equipment', (int)$eqId, 'returned on client purge (now ' . $eqStatus . ')');
+    }
+    foreach ($closedRepairs as $repId => [$eqId, $eqStatus]) {
+        audit($user['id'], 'equipment.repair_removed', 'equipment', $eqId, 'open repair #' . $repId . ' removed with the purged client record'
+            . ($eqStatus !== null ? ' (device now ' . $eqStatus . ')' : ''));
+    }
+    foreach ($redactedIncidents as $incId) {
+        audit($user['id'], 'incident.redact', 'incident', $incId, 'detached from client #' . $id . ' and its details removed on retention purge');
+    }
+    audit($user['id'], 'client.purge', 'client', $id, 'Retention purge (' . $purgeCounts['referrals'] . ' referral(s), '
+        . $purgeCounts['trash'] . ' trashed item(s) removed; ' . $purgeCounts['incidents'] . ' incident(s) kept but detached and redacted; '
+        . count($returnedEquipment) . ' loaned item(s) returned; ' . count($closedRepairs) . ' open repair(s) removed; '
+        . $purgeCounts['notifications'] . ' staff notification(s) removed): ' . $client['name']);
+    flash('The record for ' . $client['name'] . ' was permanently purged, including '
+        . $purgeCounts['referrals'] . ' referral(s) and ' . $purgeCounts['trash'] . ' item(s) in the trash.'
+        . ($purgeCounts['incidents'] ? ' ' . $purgeCounts['incidents'] . ' incident report(s) were kept, unlinked from the client, with their description, action taken and location removed.' : '')
+        . ($returnedEquipment ? ' ' . count($returnedEquipment) . ' loaned equipment item(s) still out with this client were marked returned — check them on the Equipment page.' : '')
+        . ($closedRepairs ? ' ' . count($closedRepairs) . ' open repair(s) for this client were removed — check the device(s) on the Equipment page.' : ''));
+    redirect('clients.php?archived=1');
+}
+
+/* ---- Note edit permission: author or admin ---- */
+function can_edit_note(array $note, array $user): bool {
+    return can('admin') || (int)($note['author_id'] ?? 0) === (int)$user['id'];
+}
+
+/* The note generator's homework rows as the form posts them back (same as
+   track.php's), so they stay in the form after a failed save or an AI button. */
+if (!function_exists('posted_note_homework')) {
+    function posted_note_homework(array $post): array {
+        if (!is_array($post['hw_title'] ?? null)) return [];
+        $text = fn($a, $k) => (is_array($a) && is_string($a[$k] ?? null)) ? $a[$k] : '';
+        $rows = [];
+        foreach ($post['hw_title'] as $k => $title) {
+            if (!is_string($title)) continue;
+            $rows[] = ['title' => $title, 'instructions' => $text($post['hw_instructions'] ?? null, $k),
+                'due' => $text($post['hw_due'] ?? null, $k), 'include' => is_array($post['hw_include'] ?? null) && !empty($post['hw_include'][$k])];
+        }
+        return array_slice($rows, 0, 10);
+    }
+}
+
+/* ---- POST: add or update note ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
+    $subject = trim($_POST['subject'] ?? '');
+    $type = in_array($_POST['note_type'] ?? '', NOTE_TYPES, true) ? $_POST['note_type'] : 'Case Note';
+    $noteId = (int)($_POST['note_id'] ?? 0);
+    // Structured formats (BIRP / PAIP / SOAP): four positional section slots,
+    // labelled by the chosen format. When sections are filled the body is
+    // assembled from them, and any text still in the narrative box is kept as a
+    // final 'Narrative' section rather than dropped. 'free' = plain narrative.
+    $noteFormat = isset(NOTE_FORMATS[$_POST['note_format'] ?? '']) ? $_POST['note_format'] : 'free';
+    $sections = [trim($_POST['sec1'] ?? ''), trim($_POST['sec2'] ?? ''), trim($_POST['sec3'] ?? ''), trim($_POST['sec4'] ?? '')];
+    $hasSections = $noteFormat !== 'free' && implode('', $sections) !== '';
+    $body = trim($_POST['body'] ?? '');
+    if ($hasSections) {
+        $labels = NOTE_FORMATS[$noteFormat];
+        $parts = [];
+        foreach ($sections as $i => $v) if ($v !== '') $parts[] = $labels[$i] . ":\n" . $v;
+        if ($body !== '') $parts[] = "Narrative:\n" . $body;
+        $body = implode("\n\n", $parts);
+    } else {
+        $noteFormat = 'free';
+    }
+    $birpCols = $hasSections ? [$sections[0] ?: null, $sections[1] ?: null, $sections[2] ?: null, $sections[3] ?: null] : [null, null, null, null];
+    $noteErrs = [];
+    if ($subject === '') $noteErrs['subject'] = 'A subject is required.';
+    elseif (mb_strlen($subject) > 255) $noteErrs['subject'] = 'Keep the subject to 255 characters or fewer.';
+    if ($body === '') $noteErrs['note_content'] = 'Add a note, or fill in the structured sections.';
+    else {
+        // Each section and the assembled note are TEXT columns (65,535 bytes).
+        $tooLong = [];
+        if ($hasSections) foreach ($sections as $i => $v) if (strlen($v) > 65535) $tooLong[] = NOTE_FORMATS[$noteFormat][$i];
+        if ($tooLong || strlen($body) > 65535) {
+            $noteErrs['note_content'] = 'The note is too long to save'
+                . ($tooLong ? ' (the ' . implode(', ', $tooLong) . ' section' . (count($tooLong) === 1 ? ' is' : 's are') . ' over the limit)' : '')
+                . '. A note can hold 65,535 bytes, and accented letters and symbols count as 2 to 4 bytes each. Shorten it, or split it into two notes.';
+        }
+    }
+    if ($noteErrs) {
+        keep_input();
+        // Generated homework rows are arrays, which keep_input() leaves out: hold
+        // them for the next page so they stay in the form until the note is saved.
+        if ($hwRows = posted_note_homework($_POST)) $_SESSION['client_note_homework'] = ['client' => $id, 'rows' => $hwRows];
+        keep_field_errors($noteErrs);
+        redirect("client.php?id=$id&tab=notes" . ($noteId > 0 ? '&edit_note=' . $noteId : '') . '#addnote-h');
+    } elseif ($noteId > 0) {
+        $n = db()->prepare('SELECT * FROM client_notes WHERE id = ? AND client_id = ?');
+        $n->execute([$noteId, $id]);
+        $note = $n->fetch();
+        if (!$note || !can_edit_note($note, $user)) {
+            flash('Only the note author or an admin can edit a note.', 'error');
+        } else {
+            db()->prepare('UPDATE client_notes SET note_type = ?, note_format = ?, subject = ?, body = ?, birp_behavior = ?, birp_intervention = ?, birp_response = ?, birp_plan = ?, updated_at = NOW(), updated_by = ? WHERE id = ?')
+                ->execute([$type, $noteFormat, $subject, $body, $birpCols[0], $birpCols[1], $birpCols[2], $birpCols[3], $user['id'], $noteId]);
+            audit($user['id'], 'note.edit', 'client', $id, $subject);
+            // The generator can run on a note being edited too: its checked
+            // homework is created the same way as for a new note.
+            $added = save_note_homework($id, (int)($_POST['hw_track'] ?? 0), $_POST, (int)$user['id']);
+            flash('Note updated.' . ($added ? ' ' . $added . ' homework item' . ($added === 1 ? '' : 's') . ' added to the client portal.' : ''));
+        }
+    } else {
+        db()->prepare('INSERT INTO client_notes (client_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id) VALUES (?,?,?,?,?,?,?,?,?,?)')
+            ->execute([$id, $type, $noteFormat, $subject, $body, $birpCols[0], $birpCols[1], $birpCols[2], $birpCols[3], $user['id']]);
+        audit($user['id'], 'note.add', 'client', $id, $subject);
+        // Homework captured by the note generator: create each checked item on the
+        // chosen training track so it appears in the client's portal automatically.
+        $added = save_note_homework($id, (int)($_POST['hw_track'] ?? 0), $_POST, (int)$user['id']);
+        flash('Note added.' . ($added ? ' ' . $added . ' homework item' . ($added === 1 ? '' : 's') . ' added to the client portal.' : ''));
+    }
+    redirect("client.php?id=$id&tab=notes");
+}
+
+/* ---- Uploads: shared checks for the assessment attachment and documents ---- */
+// Display copy of an uploaded file's name: anything outside a plain set becomes
+// one underscore per character (/u keeps a multibyte letter to one).
+$safeFileName = fn(string $n): string => preg_replace('/[^A-Za-z0-9._ -]/u', '_', $n) ?? preg_replace('/[^A-Za-z0-9._ -]/', '_', $n);
+// Why a chosen file did not arrive, in words the person can act on.
+$uploadProblem = fn(int $err): string => in_array($err, [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)
+    ? 'The file is too large for this server to accept. Choose a smaller file, or ask an administrator to raise the upload limit.'
+    : 'The file did not arrive completely. Choose it again and resend the form.';
+
+/* ---- POST: add tech assessment (optional attachment) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assessment'])) {
+    $date = trim((string)($_POST['assessment_date'] ?? ''));
+    $tech = in_array($_POST['primary_tech'] ?? '', TECH_TYPES, true) ? $_POST['primary_tech'] : 'Screen Reader';
+    // Everything is checked before the attachment is stored, so a refused form
+    // never leaves a client file on disk (limits are the tech_assessments columns).
+    $aErrs = [];
+    if ($date === '') $aErrs['assessment_date'] = 'Assessment date is required.';
+    elseif (!valid_date($date, 2000, (int)date('Y'))) $aErrs['assessment_date'] = 'Enter the assessment date as a valid date (YYYY-MM-DD) from the year 2000 onwards.';
+    // The newest assessment is read as the client's current one everywhere
+    // (RSA-911, recommendations), and none can be edited later: no future dates.
+    elseif ($date > date('Y-m-d')) $aErrs['assessment_date'] = 'The assessment date cannot be in the future. Check the year.';
+    foreach (['primary_disability' => [190, 'Primary disability / needs'], 'hardware_details' => [255, 'Hardware details'],
+              'software_version' => [190, 'Software & version']] as $k => [$max, $label]) {
+        $n = mb_strlen(trim((string)($_POST[$k] ?? '')));
+        if ($n > $max) $aErrs[$k] = "{$label} is {$n} characters; shorten it to {$max} or fewer (more detail can go in the summary).";
+    }
+    if (strlen(trim((string)($_POST['summary'] ?? ''))) > 65535) {
+        $aErrs['summary'] = 'Assessment summary is too long (65,535 bytes maximum; accented letters and symbols count as 2 to 4 bytes each).';
+    }
+    $att = is_array($_FILES['attachment'] ?? null) ? $_FILES['attachment'] : [];
+    $attErr = (int)($att['error'] ?? UPLOAD_ERR_NO_FILE);
+    $attOrig = is_string($att['name'] ?? null) ? $att['name'] : '';
+    $attPath = null; $attName = null; $attExt = '';
+    if ($attErr !== UPLOAD_ERR_NO_FILE) {
+        // A file was chosen: a failed upload is reported, never saved as "no attachment".
+        if ($attErr !== UPLOAD_ERR_OK) {
+            $aErrs['attachment'] = $uploadProblem($attErr);
+        } else {
+            $attExt = strtolower(pathinfo($attOrig, PATHINFO_EXTENSION));
+            $attName = $safeFileName($attOrig);
+            if (!in_array($attExt, ['pdf','doc','docx','txt','rtf','png','jpg','jpeg'], true)) {
+                $aErrs['attachment'] = 'Attachment type not allowed. Use PDF, Word, text, or image files.';
+            } elseif ((int)($att['size'] ?? 0) > 15 * 1024 * 1024) {
+                $aErrs['attachment'] = 'Attachment is too large (15 MB maximum).';
+            } elseif (mb_strlen($attName) > 190) {
+                $aErrs['attachment'] = "The attachment's file name is too long (190 characters maximum). Rename the file and choose it again.";
+            } elseif ($aErrs) {
+                $aErrs['attachment'] = 'Choose the attachment again — a browser cannot keep a chosen file when the form is sent back.';
+            }
+        }
+    }
+    if ($aErrs) {
+        keep_input();
+        keep_field_errors($aErrs);
+        redirect("client.php?id=$id&tab=assessments");
+    }
+    if ($attName !== null) {
+        $dir = cfg('upload_dir');
+        if (!is_dir($dir)) mkdir($dir, 0750, true);
+        $attPath = bin2hex(random_bytes(16)) . '.' . $attExt;
+        if (!move_uploaded_file($att['tmp_name'], $dir . '/' . $attPath)) {
+            keep_input();
+            keep_field_errors(['attachment' => 'The attachment could not be saved. Choose it again and resend the form.']);
+            redirect("client.php?id=$id&tab=assessments");
+        }
+    }
+    try {
+        db()->prepare('INSERT INTO tech_assessments (client_id, assessment_date, primary_disability, primary_tech, hardware_details, software_version, summary, attachment_path, attachment_name, created_by)
+            VALUES (?,?,?,?,?,?,?,?,?,?)')->execute([
+            $id, $date,
+            trim((string)($_POST['primary_disability'] ?? '')) ?: null, $tech,
+            trim((string)($_POST['hardware_details'] ?? '')) ?: null,
+            trim((string)($_POST['software_version'] ?? '')) ?: null,
+            trim((string)($_POST['summary'] ?? '')) ?: null,
+            $attPath, $attName, $user['id'],
+        ]);
+    } catch (Throwable $e) {
+        // Never leave a client file on disk with no record pointing at it.
+        if ($attPath !== null) @unlink(cfg('upload_dir') . '/' . $attPath);
+        error_log('Assessment save failed: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
+        keep_input();
+        flash('The assessment could not be saved, and nothing was stored. What you typed is still in the form; please try again.', 'error');
+        redirect("client.php?id=$id&tab=assessments");
+    }
+    complete_task_by_key('assess-' . $id, (int)$user['id']);
+    audit($user['id'], 'assessment.add', 'client', $id);
+    flash('Tech assessment saved.');
+    redirect("client.php?id=$id&tab=assessments");
+}
+
+/* ---- POST: upload client document ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_document'])) {
+    $title = trim((string)($_POST['title'] ?? ''));
+    $category = in_array($_POST['category'] ?? '', DOC_CATEGORIES, true) ? $_POST['category'] : 'Other';
+    // Checked before the file is stored (title and orig_name are 190 characters).
+    $docFile = is_array($_FILES['document'] ?? null) ? $_FILES['document'] : [];
+    $docErr = (int)($docFile['error'] ?? UPLOAD_ERR_NO_FILE);
+    $orig = is_string($docFile['name'] ?? null) ? $docFile['name'] : '';
+    $origName = $safeFileName($orig);
+    $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+    $dErrs = [];
+    if (mb_strlen($title) > 190) $dErrs['title'] = 'Title is too long (190 characters maximum).';
+    if ($docErr === UPLOAD_ERR_NO_FILE || $orig === '') {
+        $dErrs['document'] = 'Choose a file to upload.';
+    } elseif ($docErr !== UPLOAD_ERR_OK) {
+        $dErrs['document'] = $uploadProblem($docErr);
+    } elseif (!in_array($ext, ['pdf','doc','docx','xls','xlsx','ppt','pptx','txt','rtf','csv','png','jpg','jpeg'], true)) {
+        $dErrs['document'] = 'That file type is not allowed. Use PDF, Office, text, or image files.';
+    } elseif ((int)($docFile['size'] ?? 0) > 25 * 1024 * 1024) {
+        $dErrs['document'] = 'File is too large (25 MB maximum).';
+    } elseif (mb_strlen($origName) > 190) {
+        $dErrs['document'] = 'The file name is too long (190 characters maximum). Rename the file and choose it again.';
+    } elseif ($dErrs) {
+        $dErrs['document'] = 'Choose the file again — a browser cannot keep a chosen file when the form is sent back.';
+    }
+    if ($dErrs) {
+        keep_input();
+        keep_field_errors($dErrs);
+        redirect("client.php?id=$id&tab=documents");
+    }
+    // The title defaults to the file name as typed (invalid byte sequences replaced).
+    $docTitle = $title !== '' ? $title : mb_scrub($orig, 'UTF-8');
+    $dir = cfg('upload_dir');
+    if (!is_dir($dir)) mkdir($dir, 0750, true);
+    $stored = bin2hex(random_bytes(16)) . '.' . $ext;
+    if (!move_uploaded_file($docFile['tmp_name'], $dir . '/' . $stored)) {
+        keep_input();
+        keep_field_errors(['document' => 'The file could not be saved. Choose it again and resend the form.']);
+        redirect("client.php?id=$id&tab=documents");
+    }
+    try {
+        db()->prepare('INSERT INTO client_documents (client_id, category, title, orig_name, path, uploaded_by) VALUES (?,?,?,?,?,?)')
+            ->execute([$id, $category, $docTitle, $origName, $stored, $user['id']]);
+    } catch (Throwable $e) {
+        // Never leave a client file on disk with no record pointing at it.
+        @unlink($dir . '/' . $stored);
+        error_log('Document upload failed: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
+        keep_input();
+        flash('The document could not be saved, and nothing was stored. Choose the file again and resend the form.', 'error');
+        redirect("client.php?id=$id&tab=documents");
+    }
+    audit($user['id'], 'document.upload', 'client', $id, $docTitle);
+    flash('Document uploaded.');
+    redirect("client.php?id=$id&tab=documents");
+}
+
+/* ---- POST: delete client document (goes to the 30-day trash; the stored
+        file stays on disk until the trash entry is restored or purged) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_document'])) {
+    $d = db()->prepare('SELECT id, title FROM client_documents WHERE id = ? AND client_id = ?');
+    $d->execute([(int)$_POST['doc_id'], $id]);
+    if ($doc = $d->fetch()) {
+        trash_row('client_documents', (int)$doc['id'], (int)$user['id'], 'Document: ' . $doc['title'] . ' (' . $client['name'] . ')');
+        audit($user['id'], 'document.delete', 'client', $id, 'doc #' . (int)$doc['id'] . ' (to trash)');
+        flash('Document moved to the trash — an administrator can restore it for 30 days.');
+    }
+    redirect("client.php?id=$id&tab=documents");
+}
+
+/* ---- POST: send (or resend) client portal link ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_portal'])) {
+    // The portal refuses archived records, so a link sent now would not open.
+    if ($client['archived_at'] !== null) {
+        flash('This client\'s record is archived, so a portal link would not open. Restore the record first.', 'error');
+        redirect("client.php?id=$id");
+    }
+    if (!filter_var($client['email'] ?? '', FILTER_VALIDATE_EMAIL)) {
+        flash('Add an email address to the client profile first.', 'error');
+        redirect("client.php?id=$id");
+    }
+    $token = bin2hex(random_bytes(24));
+    [$subj, $body] = email_template('portal_link', ['name' => $client['name'], 'link' => cfg('base_url') . '/portal.php?t=' . $token]);
+    // The new link replaces the old one only once it has been sent, so a mail
+    // outage never leaves the client with a dead link and no new one.
+    if (!send_app_mail($client['email'], $subj, $body)) {
+        flash('The portal email could not be sent, so nothing was changed — any link the client already has still works. Please try again later.', 'error');
+        redirect("client.php?id=$id");
+    }
+    // Portal links expire after 180 days; resending issues a fresh window.
+    db()->prepare('INSERT INTO portal_tokens (client_id, token, expires_at) VALUES (?,?, DATE_ADD(NOW(), INTERVAL 180 DAY))
+        ON DUPLICATE KEY UPDATE token = VALUES(token), created_at = NOW(), expires_at = DATE_ADD(NOW(), INTERVAL 180 DAY)')
+        ->execute([$id, $token]);
+    audit($user['id'], 'portal.send', 'client', $id);
+    flash('Portal link emailed to the client at ' . $client['email'] . '. Any previous link no longer works.');
+    redirect("client.php?id=$id");
+}
+
+/* ---- POST: turn off the client's portal link (e.g. someone else has it) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['revoke_portal'])) {
+    $del = db()->prepare('DELETE FROM portal_tokens WHERE client_id = ?');
+    $del->execute([$id]);
+    if ($del->rowCount() > 0) {
+        audit($user['id'], 'portal.revoke', 'client', $id);
+        flash('Portal link turned off. No link sent before now works any more; send a new link when the client needs access again.');
+    } else {
+        flash('This client has no portal link to turn off.', 'error');
+    }
+    redirect("client.php?id=$id");
+}
+
+/* ---- POST: request guardian consent ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_consent'])) {
+    $gName = trim($_POST['guardian_name'] ?? '');
+    $gEmail = strtolower(trim($_POST['guardian_email'] ?? ''));
+    // Each problem is tied to its own field (aria-invalid + inline text) and
+    // listed in the form's error summary; what was typed stays in the form.
+    $cErrs = [];
+    if ($gName === '') $cErrs['guardian_name'] = 'Enter the guardian\'s name.';
+    elseif (mb_strlen($gName) > 120) $cErrs['guardian_name'] = 'Keep the guardian name to 120 characters or fewer.';
+    if ($gEmail === '') $cErrs['guardian_email'] = 'Enter the guardian\'s email address.';
+    elseif (!filter_var($gEmail, FILTER_VALIDATE_EMAIL)) $cErrs['guardian_email'] = 'Enter the guardian\'s email address in the form name@example.com.';
+    elseif (strlen($gEmail) > 190) $cErrs['guardian_email'] = 'Keep the guardian email to 190 characters or fewer.';
+    if ($cErrs) {
+        keep_input();
+        keep_field_errors($cErrs);
+        redirect("client.php?id=$id#consent-form");
+    }
+    $token = bin2hex(random_bytes(24));
+    db()->prepare('INSERT INTO consent_forms (client_id, guardian_name, guardian_email, token) VALUES (?,?,?,?)')
+        ->execute([$id, $gName, $gEmail, $token]);
+    $newFormId = (int)db()->lastInsertId();
+    [$subj, $body] = email_template('consent_request', ['name' => $gName, 'client' => $client['name'], 'link' => cfg('base_url') . '/consent.php?t=' . $token]);
+    if (!send_app_mail($gEmail, $subj, $body)) {
+        // Nothing was delivered: drop the new link and leave any earlier one working.
+        db()->prepare('DELETE FROM consent_forms WHERE id = ?')->execute([$newFormId]);
+        keep_input();
+        flash('The consent email could not be sent, so nothing was changed — any consent link sent earlier still works. What you typed is still in the form; please try again later.', 'error');
+        redirect("client.php?id=$id");
+    }
+    // Sent: this request replaces earlier unsigned ones, so a link sent to a
+    // mistyped address can no longer be signed, and the guardian is recorded.
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare('DELETE FROM consent_forms WHERE client_id = ? AND signed_at IS NULL AND id <> ?')->execute([$id, $newFormId]);
+        $pdo->prepare('UPDATE clients SET guardian_name = ?, guardian_email = ? WHERE id = ?')->execute([$gName, $gEmail, $id]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+    audit($user['id'], 'consent.request', 'client', $id, 'to ' . $gEmail);
+    flash("Consent form emailed to {$gName}.");
+    redirect("client.php?id=$id");
+}
+
+/* ---- POST: record that the guardian withdrew their signed consent ----
+   Only the client's latest signed consent, and only the one shown when the
+   page was loaded: a stale page never withdraws a consent signed since. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['withdraw_consent'])) {
+    $ls = db()->prepare('SELECT id, withdrawn_at FROM consent_forms WHERE client_id = ? AND signed_at IS NOT NULL ORDER BY signed_at DESC, id DESC LIMIT 1');
+    $ls->execute([$id]);
+    $latest = $ls->fetch();
+    if (!$latest || (int)$latest['id'] !== (int)($_POST['consent_id'] ?? 0)) {
+        flash('The guardian consent on this record has changed since the page was loaded, so nothing was withdrawn. Check the consent shown below and try again.', 'error');
+        redirect("client.php?id=$id#demo-h");
+    }
+    $wd = db()->prepare('UPDATE consent_forms SET withdrawn_at = NOW(), withdrawn_by = ? WHERE id = ? AND client_id = ? AND withdrawn_at IS NULL');
+    $wd->execute([(int)$user['id'], (int)$latest['id'], $id]);
+    if ($wd->rowCount() === 0) {
+        flash('That consent was already recorded as withdrawn.', 'error');
+        redirect("client.php?id=$id#demo-h");
+    }
+    audit($user['id'], 'consent.withdraw', 'client', $id, 'consent #' . (int)$latest['id']);
+    flash('Guardian consent recorded as withdrawn. Request a new consent below when the guardian agrees again.');
+    redirect("client.php?id=$id#demo-h");
+}
+
+/* ---- Data for tabs ---- */
+// Notes filter: 'all' (default) or 'general' (hide notes tied to a track).
+$noteFilter = ($_GET['nf'] ?? '') === 'general' ? 'general' : 'all';
+$notes = db()->prepare('SELECT n.*, u.name AS author, e.name AS editor, tt.title AS track_title FROM client_notes n
+    LEFT JOIN users u ON u.id = n.author_id LEFT JOIN users e ON e.id = n.updated_by
+    LEFT JOIN training_tracks tt ON tt.id = n.track_id
+    WHERE n.client_id = ?' . ($noteFilter === 'general' ? ' AND n.track_id IS NULL' : '') . ' ORDER BY n.created_at DESC');
+$notes->execute([$id]); $notes = $notes->fetchAll();
+// Count of track-attached notes, so the toggle can show how many are hidden.
+$tnc = db()->prepare('SELECT COUNT(*) FROM client_notes WHERE client_id = ? AND track_id IS NOT NULL');
+$tnc->execute([$id]); $trackNoteCount = (int)$tnc->fetchColumn();
+
+$editNote = null;
+if (!empty($_GET['edit_note'])) {
+    foreach ($notes as $n) {
+        if ((int)$n['id'] === (int)$_GET['edit_note'] && can_edit_note($n, $user)) { $editNote = $n; break; }
+    }
+}
+// The note form refills from what was just typed: from this POST when an AI
+// button re-renders the page (no redirect, so old_in() is empty), or from the
+// kept input after a save error. A note being edited stays in edit mode, so an
+// AI failure loses nothing and Save never turns an edit into a second note.
+$noteSrc = null;
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($_POST['ai_do'] ?? '', ['generate', 'format', 'note'], true)) {
+    $noteSrc = $_POST;
+    $postedNoteId = (int)($_POST['note_id'] ?? 0);
+    if ($postedNoteId > 0) {
+        foreach ($notes as $n) {
+            if ((int)$n['id'] === $postedNoteId && can_edit_note($n, $user)) { $editNote = $n; break; }
+        }
+    }
+} elseif (isset($GLOBALS['OLD_INPUT']['subject']) || isset($GLOBALS['OLD_INPUT']['body'])) {
+    $noteSrc = $GLOBALS['OLD_INPUT'];
+    // Kept input (an error redirect, or a save resumed after signing in again)
+    // can carry the id of the note being edited: stay in edit mode for it.
+    $keptNoteId = (int)(is_string($noteSrc['note_id'] ?? null) ? $noteSrc['note_id'] : 0);
+    if ($editNote === null && $keptNoteId > 0) {
+        foreach ($notes as $n) {
+            if ((int)$n['id'] === $keptNoteId && can_edit_note($n, $user)) { $editNote = $n; break; }
+        }
+    }
+}
+$noteIn = fn(string $k): string => is_string($noteSrc[$k] ?? null) ? $noteSrc[$k] : '';
+
+$assessments = db()->prepare('SELECT a.*, u.name AS author FROM tech_assessments a LEFT JOIN users u ON u.id = a.created_by WHERE a.client_id = ? ORDER BY a.assessment_date DESC');
+$assessments->execute([$id]); $assessments = $assessments->fetchAll();
+
+// Structured scored assessments (repeatable instruments) + available instruments.
+$scored = db()->prepare('SELECT sa.*, i.name AS instrument, u.name AS assessor FROM client_scored_assessments sa
+    JOIN assessment_instruments i ON i.id = sa.instrument_id LEFT JOIN users u ON u.id = sa.assessor_id
+    WHERE sa.client_id = ? ORDER BY sa.assessed_on DESC, sa.id DESC');
+$scored->execute([$id]); $scored = $scored->fetchAll();
+$instruments = db()->query('SELECT id, name FROM assessment_instruments WHERE active = 1 ORDER BY name')->fetchAll();
+
+$tracks = db()->prepare('SELECT * FROM training_tracks WHERE client_id = ? ORDER BY status = "Active" DESC, created_at DESC');
+$tracks->execute([$id]); $tracks = $tracks->fetchAll();
+
+$history = db()->prepare('SELECT h.*, u.name AS changed_by_name FROM client_status_history h LEFT JOIN users u ON u.id = h.changed_by WHERE h.client_id = ? ORDER BY h.changed_at DESC');
+$history->execute([$id]); $history = $history->fetchAll();
+
+$tabUrl = fn(string $t) => 'client.php?id=' . $id . '&tab=' . $t;
+
+/* ---- AI drafts (shown for review, never auto-saved; each use is audited) ---- */
+$aiNoteDraft = $aiCaseDraft = $aiGoalsDraft = null; $aiGoalsFor = 0;
+$aiSections = null; $aiSectionFormat = 'BIRP'; // 4 section strings when AI formats a note
+$aiQuestions = null; $aiHomework = null; // generator: clarifying questions + extracted homework
+// Homework rows held over from a note save that failed validation (see add_note),
+// or already in the form when an AI button re-renders it: they stay until saved.
+if (($_SESSION['client_note_homework']['client'] ?? null) === $id) $aiHomework = $_SESSION['client_note_homework']['rows'];
+unset($_SESSION['client_note_homework']);
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ai_do'])) $aiHomework = posted_note_homework($_POST) ?: $aiHomework;
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ai_do']) && !ai_enabled()) {
+    flash('The AI assistant is turned off, so nothing was drafted.' . ($noteSrc !== null ? ' What you typed is still in the form.' : ''), 'error');
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ai_enabled() && isset($_POST['ai_do'])) {
+    $what = (string)$_POST['ai_do'];
+    if ($what === 'generate') {
+        // Paste messy session notes -> clean structured note + questions + homework.
+        $fmt = (isset(NOTE_FORMATS[$_POST['note_format'] ?? '']) && $_POST['note_format'] !== 'free') ? $_POST['note_format'] : 'BIRP';
+        $raw = trim((string)($_POST['body'] ?? ''));
+        foreach (['sec1', 'sec2', 'sec3', 'sec4'] as $sf) { $v = trim((string)($_POST[$sf] ?? '')); if ($v !== '') $raw .= "\n" . $v; }
+        if ($raw === '') { flash('Paste your messy session notes in the box first, then Generate.', 'error'); }
+        else {
+            $g = ai_generate_case_note($raw, $fmt, $client, (int)$user['id']);
+            if ($g['ok']) {
+                $aiSectionFormat = $fmt; $aiSections = $g['sections']; $aiQuestions = $g['questions'];
+                $aiHomework = array_map(fn($hw) => $hw + ['include' => true], $g['homework']);
+                // A section the AI left empty keeps whatever was typed in it.
+                for ($i = 0; $i < 4; $i++) if (($aiSections[$i] ?? '') === '') $aiSections[$i] = trim($noteIn('sec' . ($i + 1)));
+                flash('Generated a ' . $fmt . ' note from your notes — review the sections'
+                    . ($aiQuestions ? ', answer the check questions' : '')
+                    . ($aiHomework ? ', confirm the homework' : '') . ', then Save note.'
+                    . ' Your pasted notes are still in the narrative box and are saved after the sections under "Narrative" — clear that box if the sections already cover them.');
+            } else flash($g['error'], 'error');
+            audit($user['id'], 'ai.draft', 'client', $id, 'case-note generate (' . $fmt . ')');
+        }
+        $tab = 'notes';
+    } elseif ($what === 'note') {
+        $raw = trim((string)($_POST['body'] ?? ''));
+        if ($raw === '') { flash('Type the raw note first, then Draft with AI.', 'error'); }
+        else {
+            $res = ai_run('draft', ai_system_base() . ' Rewrite the following raw session note into a clear, professional client-note entry. Keep every fact; fix grammar and structure; do not add facts or opinions.',
+                "Raw note:\n\n" . $raw, 900, $client, (int)$user['id']);
+            if ($res['ok']) { $aiNoteDraft = $res['text']; flash('Draft note created — review and edit it below, then save.'); }
+            else flash($res['error'], 'error');
+            audit($user['id'], 'ai.draft', 'client', $id, 'session note cleanup');
+        }
+        $tab = 'notes';
+    } elseif ($what === 'format') {
+        // Format rough notes into the chosen structured format (BIRP/PAIP/SOAP).
+        $fmt = isset(NOTE_FORMATS[$_POST['note_format'] ?? '']) && $_POST['note_format'] !== 'free' ? $_POST['note_format'] : 'BIRP';
+        $aiSectionFormat = $fmt;
+        $labels = NOTE_FORMATS[$fmt];
+        $raw = trim((string)($_POST['body'] ?? ''));
+        foreach (['sec1', 'sec2', 'sec3', 'sec4'] as $sf) { $v = trim((string)($_POST[$sf] ?? '')); if ($v !== '') $raw .= "\n" . $v; }
+        if (trim($raw) === '') { flash('Type the session notes first, then format them.', 'error'); }
+        else {
+            $sys = ai_system_base() . ' Rewrite the following assistive-technology session notes into ' . $fmt . ' format ('
+                . implode(', ', $labels) . '). Return exactly four tagged sections and nothing else: '
+                . '[S1]' . $labels[0] . '[/S1][S2]' . $labels[1] . '[/S2][S3]' . $labels[2] . '[/S3][S4]' . $labels[3] . '[/S4]. '
+                . 'Keep every fact; do not invent anything.';
+            $res = ai_run('draft', $sys, "Session notes:\n\n" . $raw, 1200, $client, (int)$user['id']);
+            if ($res['ok']) {
+                $found = [];
+                foreach (['S1', 'S2', 'S3', 'S4'] as $i => $tag) {
+                    if (preg_match('/\[' . $tag . '\](.*?)\[\/' . $tag . '\]/s', $res['text'], $m)) $found[$i] = trim($m[1]);
+                }
+                if (!$found) {
+                    // Untagged output must not blank the sections that were typed.
+                    flash('The AI reply could not be split into ' . $fmt . ' sections, so nothing was changed. Try again, or use "Generate structured note".', 'error');
+                } else {
+                    $aiSections = [];
+                    for ($i = 0; $i < 4; $i++) $aiSections[$i] = ($found[$i] ?? '') !== '' ? $found[$i] : trim($noteIn('sec' . ($i + 1)));
+                    flash('Formatted as ' . $fmt . ' — review each section, then save. Text left in the narrative box is saved after the sections under "Narrative" — clear that box if the sections already cover it.');
+                }
+            } else flash($res['error'], 'error');
+            audit($user['id'], 'ai.draft', 'client', $id, $fmt . ' formatting');
+        }
+        $tab = 'notes';
+    } elseif ($what === 'case') {
+        $trackIds = array_map(fn($t) => (int)$t['id'], $tracks);
+        $goalsByTrack = [];
+        if ($trackIds) {
+            $gq = db()->prepare('SELECT track_id, specific_goal, status, progress_pct FROM smart_goals WHERE track_id IN (' . implode(',', array_fill(0, count($trackIds), '?')) . ')');
+            $gq->execute($trackIds);
+            foreach ($gq->fetchAll() as $gr) $goalsByTrack[(int)$gr['track_id']][] = $gr;
+        }
+        $ctx = "Client: {$client['name']} — status {$client['status']}" . (!empty($client['client_type']) ? " ({$client['client_type']})" : '') . "\n";
+        foreach ($tracks as $t) {
+            $ctx .= "\nTraining track: {$t['title']} (status {$t['status']}, authorization {$t['auth_number']})\n";
+            foreach (($goalsByTrack[(int)$t['id']] ?? []) as $g) $ctx .= "  - Goal: {$g['specific_goal']} [{$g['status']}, {$g['progress_pct']}%]\n";
+        }
+        if ($assessments) { $ctx .= "\nAssessments:\n"; foreach (array_slice($assessments, 0, 5) as $as) $ctx .= "  - " . fmt_date($as['assessment_date']) . ": {$as['primary_tech']} — " . mb_strimwidth((string)$as['summary'], 0, 300, '…') . "\n"; }
+        // Portal contact-change notes hold the client's previous phone, email and
+        // address verbatim, so they never go to the AI provider.
+        $ctxNotes = array_values(array_filter($notes, fn($n) => !($n['author_id'] === null && $n['subject'] === 'Contact details / access needs changed by client (portal)')));
+        if ($ctxNotes) { $ctx .= "\nRecent notes:\n"; foreach (array_slice($ctxNotes, 0, 10) as $n) $ctx .= "  - " . fmt_date($n['created_at']) . " [{$n['note_type']}] {$n['subject']}: " . mb_strimwidth((string)$n['body'], 0, 300, '…') . "\n"; }
+        $res = ai_run('draft', ai_system_base() . ' Write a concise case summary covering background, services provided, current progress, and recommended next steps. Use short paragraphs. Write plain text only, with no Markdown: no # heading marks, no asterisks or underscores for emphasis, no tables. Start a section with a plain label and a colon on its own line, and write lists as numbered lines.',
+            "Summarize this case:\n\n" . $ctx, 1500, $client, (int)$user['id']);
+        if ($res['ok']) { $aiCaseDraft = $res['text']; flash('Case summary drafted — review it, then save it as a note if useful.'); }
+        else flash($res['error'], 'error');
+        audit($user['id'], 'ai.draft', 'client', $id, 'case summary');
+        $tab = 'overview';
+    } elseif ($what === 'goals') {
+        $aid = (int)($_POST['assessment_id'] ?? 0);
+        $as = null; foreach ($assessments as $row) if ((int)$row['id'] === $aid) { $as = $row; break; }
+        if (!$as) { flash('Assessment not found.', 'error'); }
+        else {
+            $actx = "Client disability: " . ($as['primary_disability'] ?: '[not recorded]') . "\n"
+                . "Primary technology: " . ($as['primary_tech'] ?: '[not recorded]') . "\n"
+                . ($as['hardware_details'] ? "Hardware: {$as['hardware_details']}\n" : '')
+                . ($as['software_version'] ? "Software: {$as['software_version']}\n" : '')
+                . "Assessment summary: " . ($as['summary'] ?: '[none]');
+            $res = ai_run('draft', ai_system_base() . ' Suggest 3 to 5 SMART training goals for this client. For each, give the specific objective and a measurable criterion on its own line, numbered. Keep them realistic and tied to the technology and disability described.',
+                "Suggest SMART goals based on this assessment:\n\n" . $actx, 1200, $client, (int)$user['id']);
+            if ($res['ok']) { $aiGoalsDraft = $res['text']; $aiGoalsFor = $aid; flash('Goal suggestions drafted — copy any you want into a training track.'); }
+            else flash($res['error'], 'error');
+            audit($user['id'], 'ai.draft', 'client', $id, 'goal suggestions');
+        }
+        $tab = 'assessments';
+    }
+}
+
+// The title names the open tab as well as the client, so each view is distinct.
+$tabLabels = ['overview' => 'Overview', 'notes' => 'Client Notes', 'assessments' => 'Tech Assessments', 'tracks' => 'Training Tracks', 'documents' => 'Documents', 'history' => 'Status History'];
+page_header($tabLabels[$tab] . ' — ' . $client['name'], $user, 'clients');
+?>
+<h1><?= h($client['name']) ?> <?= status_badge($client['status']) ?></h1>
+<?php if ($client['archived_at'] !== null): ?>
+<div class="alert alert-error" role="status">
+  <p><strong>Archived record</strong> — closed past the retention period (archived <?= fmt_date($client['archived_at']) ?>). It is hidden from day-to-day lists.</p>
+  <?php if (can('admin')): ?>
+  <p>To dispose of it: <a href="client_export.php?id=<?= $id ?>">export the full file (ZIP)</a> for off-system storage, then purge.</p>
+  <form method="post" action="client.php?id=<?= $id ?>" class="inline-form"><?= csrf_field() ?>
+    <button type="submit" name="purge_client" value="1" class="btn btn-danger"
+      onclick="return confirm('Permanently purge every record and file for <?= h(json_encode($client['name'], JSON_HEX_APOS | JSON_HEX_QUOT)) ?>, including its referrals and items in the trash? Incident reports are kept, but unlinked from the client and with their description, action taken and location removed. Any loaned equipment still out is marked returned. Export the ZIP first. This cannot be undone.') && confirm('Really purge? This is the final confirmation.');">Purge this record permanently</button>
+  </form>
+  <?php endif; ?>
+</div>
+<?php endif; ?>
+<div class="page-actions">
+  <a class="btn btn-secondary" href="at_services.php?client_id=<?= $id ?>">AT services and learning</a>
+  <a class="btn btn-secondary" href="client_edit.php?id=<?= $id ?>">Edit profile / status</a>
+  <a class="btn btn-secondary" href="track_edit.php?client_id=<?= $id ?>">Add training track</a>
+  <form method="post" action="client.php?id=<?= $id ?>" class="inline-form"><?= csrf_field() ?>
+    <button type="submit" name="send_portal" value="1" class="btn btn-secondary"
+      onclick="return confirm(<?= h(json_encode('Email ' . $client['name'] . ' a private portal link' . (filter_var($client['email'] ?? '', FILTER_VALIDATE_EMAIL) ? ' at ' . $client['email'] : '') . '? Any previous link will stop working.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">
+      Send portal link</button>
+  </form>
+  <?php $pt = db()->prepare('SELECT expires_at FROM portal_tokens WHERE client_id = ?'); $pt->execute([$id]);
+  if (($portalExpires = $pt->fetchColumn()) !== false): ?>
+  <form method="post" action="client.php?id=<?= $id ?>" class="inline-form"><?= csrf_field() ?>
+    <button type="submit" name="revoke_portal" value="1" class="btn btn-secondary"
+      onclick="return confirm(<?= h(json_encode('Turn off ' . $client['name'] . "'s portal link? Every link already sent stops working.", JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">
+      Turn off portal link</button>
+    <span class="hint"><?= $client['archived_at'] !== null ? 'The record is archived, so the portal link does not open.' : ($portalExpires && $portalExpires < date('Y-m-d H:i:s') ? 'The portal link expired on ' . fmt_date($portalExpires) . '.' : 'A portal link is active' . ($portalExpires ? ' until ' . fmt_date($portalExpires) : '') . '.') ?></span>
+  </form>
+  <?php endif; ?>
+  <a class="btn btn-secondary" href="messages.php?client=<?= $id ?>&amp;channel=client">Messages with client</a>
+  <a class="btn btn-secondary" href="messages.php?client=<?= $id ?>&amp;channel=counselor">Messages with counselor</a>
+  <a class="btn btn-secondary" href="client_export.php?id=<?= $id ?>">Export full file (ZIP)</a>
+</div>
+
+<nav aria-label="Client record sections">
+  <ul class="tab-nav">
+    <?php foreach ($tabLabels as $key => $label): ?>
+    <li><a href="<?= $tabUrl($key) ?>" <?= $tab === $key ? 'aria-current="page"' : '' ?>><?= $label ?></a></li>
+    <?php endforeach; ?>
+  </ul>
+</nav>
+
+<?php if ($tab === 'overview'): ?>
+<?php
+$hasA11y = !empty($client['a11y_screen_reader']) || !empty($client['a11y_format']) || !empty($client['a11y_primary_tech']) || !empty($client['a11y_contact']) || !empty($client['a11y_notes']);
+if ($hasA11y): ?>
+<section class="card" aria-labelledby="a11y-h" style="border-left:5px solid var(--brand)">
+  <h2 id="a11y-h">Access needs</h2>
+  <dl class="props">
+    <?php if (!empty($client['a11y_screen_reader'])): ?><dt>Screen reader</dt><dd>Uses a screen reader</dd><?php endif; ?>
+    <?php if (!empty($client['a11y_format'])): ?><dt>Preferred format</dt><dd><?= h($client['a11y_format']) ?></dd><?php endif; ?>
+    <?php if (!empty($client['a11y_primary_tech'])): ?><dt>Primary AT</dt><dd><?= h($client['a11y_primary_tech']) ?></dd><?php endif; ?>
+    <?php if (!empty($client['a11y_contact'])): ?><dt>Preferred contact</dt><dd><?= h($client['a11y_contact']) ?></dd><?php endif; ?>
+    <?php if (!empty($client['a11y_notes'])): ?><dt>Notes</dt><dd style="white-space:pre-wrap"><?= h($client['a11y_notes']) ?></dd><?php endif; ?>
+  </dl>
+</section>
+<?php endif; ?>
+<?php if (ai_enabled()): ?>
+<div class="page-actions">
+  <?php if (ai_feature_enabled('draft')): ?>
+  <form method="post" action="<?= $tabUrl('overview') ?>" class="inline-form">
+    <?= csrf_field() ?>
+    <button type="submit" name="ai_do" value="case" class="btn btn-secondary btn-sm">Draft case summary with AI</button>
+    <span class="hint">Summarizes tracks, goals, progress, assessments, and recent notes.</span>
+  </form>
+  <?php endif; ?>
+  <?php if (ai_feature_enabled('progress')): ?><a class="btn btn-secondary btn-sm" href="progress_review.php?client=<?= $id ?>">AI progress review</a><?php endif; ?>
+</div>
+<?php endif; ?>
+<?php if ($aiCaseDraft !== null): ?>
+<section class="card" aria-labelledby="aicase-h">
+  <h2 id="aicase-h">AI case summary (draft)</h2>
+  <p class="muted">Review and edit before saving. This was generated by AI from the client's record.</p>
+  <form method="post" action="<?= $tabUrl('notes') ?>" class="stacked">
+    <?= csrf_field() ?>
+    <input type="hidden" name="note_type" value="Case Note">
+    <input type="hidden" name="subject" value="Case summary (<?= h(date('M j, Y')) ?>)">
+    <label for="aicase-body" class="visually-hidden">Case summary draft</label>
+    <textarea id="aicase-body" name="body" rows="12"><?= h($aiCaseDraft) ?></textarea>
+    <button type="submit" name="add_note" value="1" class="btn btn-primary">Save as client note</button>
+  </form>
+</section>
+<?php endif; ?>
+<div class="grid grid-2">
+  <section class="card" aria-labelledby="demo-h">
+    <h2 id="demo-h">Demographics</h2>
+    <dl class="props">
+      <dt>Client type</dt><dd><?= h($client['client_type'] ?? 'VR') ?><?= ($client['client_type'] ?? '') === 'Pre-ETS' && !empty($client['school']) ? ' · ' . h($client['school']) : '' ?></dd>
+      <dt>Date of birth</dt><dd><?= fmt_date($client['dob']) ?></dd>
+      <?php // Only one valid address becomes a link: a stored list or '?bcc=' text must not add recipients. ?>
+      <dt>Email</dt><dd><?= $client['email'] ? (filter_var($client['email'], FILTER_VALIDATE_EMAIL) ? '<a href="mailto:' . h($client['email']) . '">' . h($client['email']) . '</a>' : h($client['email']) . ' (not a valid address)') : '—' ?></dd>
+      <dt>Phone</dt><dd><?= h($client['phone'] ?? '—') ?></dd>
+      <dt>Address</dt><dd><?= h($client['address'] ?? '—') ?></dd>
+      <dt>Client since</dt><dd><?= fmt_date($client['created_at']) ?></dd>
+      <?php
+      $consents = db()->prepare('SELECT * FROM consent_forms WHERE client_id = ? ORDER BY sent_at DESC');
+      $consents->execute([$id]);
+      $consents = $consents->fetchAll();
+      // A signed consent is current for consent_validity_days (the setting the
+      // Compliance page uses). A new request can be sent when none is current,
+      // or from 30 days before it expires (when Compliance lists it to renew).
+      $consentDays = (int)(setting('consent_validity_days') ?: 365);
+      $latestSigned = null; $pendingConsent = null;
+      foreach ($consents as $f) {
+          if ($f['signed_at'] && ($latestSigned === null || $f['signed_at'] > $latestSigned['signed_at'])) $latestSigned = $f;
+          if (!$f['signed_at'] && $pendingConsent === null) $pendingConsent = $f; // newest unsigned request
+      }
+      $consentExpires = $latestSigned ? date('Y-m-d', strtotime($latestSigned['signed_at'] . ' +' . $consentDays . ' days')) : null;
+      $consentExpired = $consentExpires !== null && $consentExpires < date('Y-m-d');
+      // A consent the guardian has withdrawn is not current, however recently it was signed.
+      $consentWithdrawn = $latestSigned !== null && !empty($latestSigned['withdrawn_at']);
+      // A pending request can always be sent again (Compliance links here to resend one).
+      $canRequestConsent = $consentWithdrawn || $consentExpires === null || $consentExpires <= date('Y-m-d', strtotime('+30 days')) || $pendingConsent !== null;
+      ?>
+      <dt>Guardian consent</dt>
+      <dd><?php if ($latestSigned): ?>
+            <?php if ($consentWithdrawn): ?>
+            <span class="badge badge-hold">Withdrawn</span> <?= fmt_date($latestSigned['withdrawn_at']) ?> (signed by <?= h($latestSigned['signed_name']) ?> on <?= fmt_datetime($latestSigned['signed_at']) ?>)
+            <?php elseif ($consentExpired): ?>
+            <span class="badge badge-hold">Expired</span> on <?= fmt_date($consentExpires) ?> (signed by <?= h($latestSigned['signed_name']) ?> on <?= fmt_datetime($latestSigned['signed_at']) ?>)
+            <?php else: ?>
+            <span class="badge badge-closed">Signed</span> by <?= h($latestSigned['signed_name']) ?> on <?= fmt_datetime($latestSigned['signed_at']) ?> — valid until <?= fmt_date($consentExpires) ?>
+            <?php endif; ?>
+          <?php endif; ?>
+          <?php if ($pendingConsent): ?>
+            <?= $latestSigned ? '<br>' : '' ?><span class="badge badge-pending">Requested</span> <?= fmt_datetime($pendingConsent['sent_at']) ?> — awaiting signature
+          <?php endif; ?>
+          <?php if (!$latestSigned && !$pendingConsent): ?>—<?php endif; ?></dd>
+    </dl>
+    <?php if ($latestSigned && !$consentWithdrawn): ?>
+    <form method="post" action="client.php?id=<?= $id ?>" class="inline-form"><?= csrf_field() ?>
+      <input type="hidden" name="consent_id" value="<?= (int)$latestSigned['id'] ?>">
+      <button type="submit" name="withdraw_consent" value="1" class="btn btn-secondary btn-sm"
+        onclick="return confirm(<?= h(json_encode('Record that ' . $latestSigned['signed_name'] . ' has withdrawn the guardian consent signed on ' . fmt_date($latestSigned['signed_at']) . '? The consent stops counting as current, and a new one can then be requested.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">Record consent withdrawn</button>
+    </form>
+    <?php endif; ?>
+    <?php if ($canRequestConsent): ?>
+    <?php // Compliance links to client.php?id=N#consent-request (or ?consent=1): the request opens ready to fill in. ?>
+    <details class="mt-1" id="consent-request"<?= isset($GLOBALS['OLD_INPUT']['guardian_email']) || ($_GET['consent'] ?? '') === '1' ? ' open' : '' ?>>
+      <summary><?= $pendingConsent ? 'Resend the guardian consent request by email' : ($latestSigned ? 'Request a new guardian consent by email' : 'Request guardian consent by email') ?></summary>
+      <form method="post" action="client.php?id=<?= $id ?>" class="stacked" id="consent-form" novalidate>
+        <?= csrf_field() ?>
+        <?= form_error_summary(['guardian_name' => 'Guardian name', 'guardian_email' => 'Guardian email'], ['guardian_name' => 'g_name', 'guardian_email' => 'g_email']) ?>
+        <div class="field"><label for="g_name">Guardian name <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+          <input type="text" id="g_name" name="guardian_name" required maxlength="120" value="<?= h(old_in('guardian_name', $client['guardian_name'] ?? '')) ?>" <?= field_aria('guardian_name') ?>>
+          <?= field_error('guardian_name') ?></div>
+        <div class="field"><label for="g_email">Guardian email <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+          <input type="email" id="g_email" name="guardian_email" required maxlength="190" value="<?= h(old_in('guardian_email', $client['guardian_email'] ?? '')) ?>" <?= field_aria('guardian_email') ?>>
+          <?= field_error('guardian_email') ?></div>
+        <button type="submit" name="request_consent" value="1" class="btn btn-secondary"
+          onclick="var e=this.form.elements.guardian_email.value.trim();return confirm('Email the consent form to '+(e||'this guardian')+'? Any earlier unsigned consent link stops working.');">Email consent form</button>
+      </form>
+    </details>
+    <script>
+    (function(){
+      var d = document.getElementById('consent-request');
+      function sync(){ if (location.hash === '#consent-request' || location.hash === '#consent-form' || location.hash === '#demo-h') d.open = true; }
+      window.addEventListener('hashchange', sync); sync();
+    })();
+    </script>
+    <?php endif; ?>
+  </section>
+  <section class="card" aria-labelledby="vr-h">
+    <h2 id="vr-h">VR counselor</h2>
+    <dl class="props">
+      <dt>Name</dt><dd><?= h($client['counselor_name'] ?? '—') ?></dd>
+      <dt>Agency</dt><dd><?= h($client['counselor_agency'] ?? '—') ?></dd>
+      <dt>Email</dt><dd><?= $client['counselor_email'] ? '<a href="mailto:' . h($client['counselor_email']) . '">' . h($client['counselor_email']) . '</a>' : '—' ?></dd>
+      <dt>Phone</dt><dd><?= h($client['counselor_phone'] ?? '—') ?></dd>
+    </dl>
+  </section>
+</div>
+<section class="card" aria-labelledby="tr-sum-h">
+  <h2 id="tr-sum-h">Training tracks summary</h2>
+  <?php if (!$tracks): ?><p class="muted">No training tracks yet. <a href="track_edit.php?client_id=<?= $id ?>">Add a training track</a>.</p>
+  <?php else: foreach ($tracks as $t): $r = track_rollup((int)$t['id']); ?>
+    <h3><a href="track.php?id=<?= (int)$t['id'] ?>"><?= h($t['title']) ?></a> <?= status_badge($t['status']) ?></h3>
+    <div class="progress-wrap">
+      <label for="prog-<?= (int)$t['id'] ?>" class="progress-caption">
+        <?= fmt_hours($r['hours_worked']) ?> of <?= fmt_hours($r['authorized_hours']) ?> authorized used
+        (<?= fmt_money($r['total_billed']) ?> logged work value<?= $r['mileage_amount'] > 0 ? ' incl. ' . fmt_money($r['mileage_amount']) . ' mileage' : '' ?>, <?= fmt_money($r['invoiced_amount']) ?> on invoices (incl. drafts), <?= fmt_money($r['submitted_amount'] ?? 0) ?> submitted to funder, <?= fmt_money($r['funds_remaining']) ?> of authorized funds remaining<?= $r['expenses_amount'] > 0 ? ' after ' . fmt_money($r['expenses_amount']) . ' expenses' : '' ?>)
+      </label>
+      <progress id="prog-<?= (int)$t['id'] ?>" class="hours" max="100" value="<?= $r['pct_used'] ?>"><?= $r['pct_used'] ?>%</progress>
+    </div>
+  <?php endforeach; endif; ?>
+</section>
+
+<?php elseif ($tab === 'notes'): ?>
+<section class="card" aria-labelledby="addnote-h">
+  <h2 id="addnote-h"><?= $editNote ? 'Edit note' : 'Add a client note' ?></h2>
+  <?php if ($editNote): ?>
+    <p class="muted">Editing “<?= h($editNote['subject']) ?>” — the note will be marked as edited. <a href="<?= $tabUrl('notes') ?>">Cancel and write a new note instead</a>.</p>
+  <?php else: ?>
+    <p class="muted">General progress notes live here at the client level — training-session logs belong on the specific training track.</p>
+  <?php endif; ?>
+  <form method="post" action="<?= $tabUrl('notes') ?>" class="stacked" novalidate>
+    <?= csrf_field() ?>
+    <?= form_error_summary(['subject' => 'Subject', 'note_content' => 'Note'], ['note_content' => 'body']) ?>
+    <?php if ($editNote): ?><input type="hidden" name="note_id" value="<?= (int)$editNote['id'] ?>"><?php endif; ?>
+    <div class="field">
+      <label for="note_type">Note type</label>
+      <select id="note_type" name="note_type"><?= select_options(NOTE_TYPES, $noteSrc !== null ? ($noteIn('note_type') ?: null) : ($editNote['note_type'] ?? null)) ?></select>
+    </div>
+    <div class="field">
+      <label for="subject">Subject <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+      <input type="text" id="subject" name="subject" required maxlength="255" value="<?= h($noteSrc !== null ? $noteIn('subject') : ($editNote['subject'] ?? '')) ?>" <?= field_aria('subject') ?>>
+      <?= field_error('subject') ?>
+    </div>
+    <?php
+    // Precedence: what the AI drafted, then what was just typed, then the saved note.
+    $curFormat = $aiSections !== null ? $aiSectionFormat : ($noteSrc !== null ? $noteIn('note_format') : ($editNote['note_format'] ?? 'free'));
+    if (!isset(NOTE_FORMATS[$curFormat])) $curFormat = 'free';
+    $editCols = [$editNote['birp_behavior'] ?? '', $editNote['birp_intervention'] ?? '', $editNote['birp_response'] ?? '', $editNote['birp_plan'] ?? ''];
+    $secVals = [];
+    for ($i = 0; $i < 4; $i++) $secVals[$i] = $aiSections[$i] ?? ($noteSrc !== null ? $noteIn('sec' . ($i + 1)) : ($editNote ? (string)$editCols[$i] : ''));
+    if ($aiNoteDraft !== null) $bodyVal = $aiNoteDraft;
+    elseif ($noteSrc !== null) $bodyVal = $noteIn('body');
+    elseif ($editNote && implode('', $editCols) !== '') {
+        // Structured: the sections hold the note. Only a 'Narrative' part saved
+        // after them comes back into the narrative box, so saving never drops it.
+        $bodyVal = '';
+        $editLabels = NOTE_FORMATS[$editNote['note_format'] ?? ''] ?? [];
+        if (count($editLabels) === 4) {
+            $editParts = [];
+            foreach ($editCols as $i => $v) if ((string)$v !== '') $editParts[] = $editLabels[$i] . ":\n" . $v;
+            $editPrefix = implode("\n\n", $editParts) . "\n\nNarrative:\n";
+            if (str_starts_with((string)$editNote['body'], $editPrefix)) $bodyVal = substr((string)$editNote['body'], strlen($editPrefix));
+        }
+    }
+    elseif ($editNote) $bodyVal = (string)$editNote['body'];
+    else $bodyVal = '';
+    $initLabels = NOTE_FORMATS[$curFormat === 'free' ? 'BIRP' : $curFormat];
+    ?>
+    <div class="field">
+      <label for="note_format">Note format</label>
+      <select id="note_format" name="note_format">
+        <?php foreach (NOTE_FORMATS as $fk => $labs): ?>
+        <option value="<?= h($fk) ?>" <?= $curFormat === $fk ? 'selected' : '' ?>><?= $fk === 'free' ? 'Free text' : $fk . ' (' . implode(', ', $labs) . ')' ?></option>
+        <?php endforeach; ?>
+      </select>
+    </div>
+    <fieldset id="struct-fields" <?= $curFormat === 'free' ? 'hidden' : '' ?>>
+      <legend class="legend-h"><span id="fmt-name"><?= h($curFormat === 'free' ? 'BIRP' : $curFormat) ?></span> <span class="hint">structured case-note sections</span></legend>
+      <?php for ($i = 0; $i < 4; $i++): $n = $i + 1; ?>
+      <div class="field"><label for="sec<?= $n ?>" id="lbl-sec<?= $n ?>"><?= h($initLabels[$i]) ?></label>
+        <textarea id="sec<?= $n ?>" name="sec<?= $n ?>" rows="2"><?= h($secVals[$i]) ?></textarea></div>
+      <?php endfor; ?>
+      <?php
+      // Format with AI / Generate replace the sections: what was typed in them
+      // stays here for reference (no name, so it is never submitted or saved).
+      $preAiSecs = [];
+      if ($aiSections !== null && $noteSrc !== null) {
+          for ($i = 0; $i < 4; $i++) { $pv = trim($noteIn('sec' . ($i + 1))); if ($pv !== '' && $pv !== trim((string)($aiSections[$i] ?? ''))) $preAiSecs[$i] = $pv; }
+      }
+      if ($preAiSecs): $preLabels = NOTE_FORMATS[$noteIn('note_format')] ?? []; if (count($preLabels) !== 4) $preLabels = $initLabels; ?>
+      <details class="mt-1">
+        <summary>Your sections before the AI changed them</summary>
+        <p class="hint">Kept for reference only — they are not saved. Copy anything the new sections left out.</p>
+        <?php foreach ($preAiSecs as $i => $pv): ?>
+        <label for="sec-orig<?= $i + 1 ?>"><?= h($preLabels[$i]) ?> (before AI)</label>
+        <textarea id="sec-orig<?= $i + 1 ?>" rows="3" readonly><?= h($pv) ?></textarea>
+        <?php endforeach; ?>
+      </details>
+      <?php endif; ?>
+    </fieldset>
+    <div class="field">
+      <label for="body">Narrative note / paste messy session notes here</label>
+      <span class="hint" id="body-hint">Type a free-text note, or paste your rough session notes and use "Generate structured note". When the structured sections are filled in, text left in this box is saved too, after them under "Narrative" — clear it if the sections already cover it.</span>
+      <textarea id="body" name="body" rows="<?= $aiNoteDraft ? 8 : 4 ?>" <?= field_aria('note_content', 'body-hint') ?>><?= h($bodyVal) ?></textarea>
+      <?= field_error('note_content') ?>
+    </div>
+    <?php if ($aiNoteDraft !== null && trim($noteIn('body')) !== ''): ?>
+    <details class="mt-1">
+      <summary>Your text before the AI clean-up</summary>
+      <label for="body-orig" class="hint">Kept for reference only — it is not saved. Copy anything the draft above left out.</label>
+      <textarea id="body-orig" rows="4" readonly><?= h($noteIn('body')) ?></textarea>
+    </details>
+    <?php endif; ?>
+    <?php if ($aiQuestions): ?>
+    <div class="alert alert-success" role="note">
+      <strong>Before you save — the generator suggests double-checking:</strong>
+      <ul style="margin:.3rem 0 0"><?php foreach ($aiQuestions as $q): ?><li><?= h($q) ?></li><?php endforeach; ?></ul>
+    </div>
+    <?php endif; ?>
+    <?php if ($aiHomework !== null): $activeTracks = array_values(array_filter($tracks, fn($t) => $t['status'] === 'Active')); ?>
+    <fieldset id="hw-fields">
+      <legend class="legend-h">Homework from this note <span class="hint">checked items are added to the client's portal when you save</span></legend>
+      <?php if (!$activeTracks): ?>
+        <p class="field-error">This client has no active training track, so homework can't be added here. Create or activate a track first (or add it from the track page).</p>
+      <?php elseif (!$aiHomework): ?>
+        <p class="muted">No homework was detected in the notes.</p>
+      <?php else: ?>
+        <div class="field"><label for="hw_track">Add homework to track</label>
+          <select id="hw_track" name="hw_track"><?php $hwTrackSel = (int)$noteIn('hw_track'); foreach ($activeTracks as $t): ?><option value="<?= (int)$t['id'] ?>"<?= (int)$t['id'] === $hwTrackSel ? ' selected' : '' ?>><?= h($t['title']) ?></option><?php endforeach; ?></select></div>
+        <?php $hwTotal = count($aiHomework); $hwNum = 0;
+        foreach ($aiHomework as $k => $hw): $hwNum++; $hwCtx = ' for homework ' . $hwNum . ' of ' . $hwTotal; ?>
+        <div class="field" style="border-top:1px solid var(--line);padding-top:.5rem;margin-top:.5rem">
+          <label><input type="checkbox" name="hw_include[<?= (int)$k ?>]" value="1"<?= !empty($hw['include']) ? ' checked' : '' ?>> Add this homework<span class="visually-hidden"> (<?= $hwNum ?> of <?= $hwTotal ?>): <?= h($hw['title']) ?></span></label>
+          <label for="hwt<?= (int)$k ?>">Title<span class="visually-hidden"><?= h($hwCtx) ?></span></label>
+          <input type="text" id="hwt<?= (int)$k ?>" name="hw_title[<?= (int)$k ?>]" maxlength="190" value="<?= h($hw['title']) ?>">
+          <label for="hwi<?= (int)$k ?>">Instructions<span class="visually-hidden"><?= h($hwCtx) ?></span></label>
+          <input type="text" id="hwi<?= (int)$k ?>" name="hw_instructions[<?= (int)$k ?>]" maxlength="1000" value="<?= h($hw['instructions']) ?>">
+          <label for="hwd<?= (int)$k ?>">Due date (optional)<span class="visually-hidden"><?= h($hwCtx) ?></span></label>
+          <input type="date" id="hwd<?= (int)$k ?>" name="hw_due[<?= (int)$k ?>]" value="<?= h($hw['due']) ?>">
+        </div>
+        <?php endforeach; ?>
+      <?php endif; ?>
+    </fieldset>
+    <?php endif; ?>
+    <button type="submit" name="add_note" value="1" class="btn btn-primary"><?= $editNote ? 'Save changes' : 'Save note' ?></button>
+    <?php if (ai_feature_enabled('draft')): ?>
+    <button type="submit" name="ai_do" value="generate" class="btn btn-secondary" formnovalidate>Generate structured note</button>
+    <button type="submit" name="ai_do" value="format" class="btn btn-secondary" formnovalidate>Format with AI</button>
+    <button type="submit" name="ai_do" value="note" class="btn btn-secondary" formnovalidate>Clean up with AI</button>
+    <span class="hint">Pick a format, paste your messy session notes in the box, then "Generate structured note" — it drafts the sections, flags anything missing, and pulls out homework for you to review before saving.</span>
+    <?php endif; ?>
+  </form>
+  <script>
+  (function(){
+    var FMT = <?= json_encode(NOTE_FORMATS, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    var sel = document.getElementById('note_format'), fs = document.getElementById('struct-fields'), nm = document.getElementById('fmt-name');
+    function sync(){
+      var f = sel.value, labels = FMT[f] && FMT[f].length ? FMT[f] : FMT.BIRP;
+      fs.hidden = (f === 'free');
+      if (nm) nm.textContent = (f === 'free' ? 'BIRP' : f);
+      for (var i = 0; i < 4; i++){ var l = document.getElementById('lbl-sec' + (i+1)); if (l) l.textContent = labels[i]; }
+    }
+    sel.addEventListener('change', sync); sync();
+  })();
+  </script>
+</section>
+<h2>Notes (<?= count($notes) ?>)</h2>
+<?php if ($trackNoteCount > 0): ?>
+<div class="page-actions" role="group" aria-label="Filter notes">
+  <a class="btn btn-sm <?= $noteFilter !== 'general' ? 'btn-primary' : 'btn-secondary' ?>" href="<?= $tabUrl('notes') ?>" <?= $noteFilter !== 'general' ? 'aria-current="true"' : '' ?>>All notes</a>
+  <a class="btn btn-sm <?= $noteFilter === 'general' ? 'btn-primary' : 'btn-secondary' ?>" href="<?= $tabUrl('notes') ?>&amp;nf=general" <?= $noteFilter === 'general' ? 'aria-current="true"' : '' ?>>General only <span>(hides <?= $trackNoteCount ?> track note<?= $trackNoteCount === 1 ? '' : 's' ?>)</span></a>
+</div>
+<?php endif; ?>
+<?php if (!$notes): ?><p class="muted"><?= $noteFilter === 'general' ? 'No general (non-track) notes — all notes here belong to a training track.' : 'No notes recorded yet.' ?></p><?php endif; ?>
+<?php foreach ($notes as $n): ?>
+  <article class="card">
+    <h3><?= h($n['subject']) ?></h3>
+    <?php
+    $nfmt = $n['note_format'] ?? 'free'; if (!isset(NOTE_FORMATS[$nfmt])) $nfmt = 'free';
+    $nCols = [$n['birp_behavior'] ?? '', $n['birp_intervention'] ?? '', $n['birp_response'] ?? '', $n['birp_plan'] ?? ''];
+    $isStruct = $nfmt !== 'free' && implode('', $nCols) !== '';
+    ?>
+    <p class="muted"><?= h($n['note_type']) ?> <span aria-hidden="true">·</span> <?= fmt_datetime($n['created_at']) ?> <span aria-hidden="true">·</span> by <?= h($n['author'] ?? 'System') ?>
+      <?= $isStruct ? ' <span aria-hidden="true">·</span> <span class="badge badge-active">' . h($nfmt) . '</span>' : '' ?>
+      <?= !empty($n['track_id']) ? ' <span aria-hidden="true">·</span> <a class="badge badge-pending" href="track.php?id=' . (int)$n['track_id'] . '#notes">Track: ' . h($n['track_title'] ?? 'training track') . '</a>' : '' ?>
+      <?= $n['updated_at'] ? ' <span aria-hidden="true">·</span> edited ' . fmt_datetime($n['updated_at']) . ' by ' . h($n['editor'] ?? '') : '' ?></p>
+    <?php if ($isStruct): $labels = NOTE_FORMATS[$nfmt]; ?>
+      <dl class="props">
+        <?php foreach ($nCols as $i => $v): if ($v === '') continue; ?>
+          <dt><?= h($labels[$i]) ?></dt><dd style="white-space:pre-wrap"><?= h($v) ?></dd>
+        <?php endforeach; ?>
+      </dl>
+    <?php else: ?>
+    <p style="white-space: pre-wrap;"><?= h($n['body']) ?></p>
+    <?php endif; ?>
+    <?php if (can_edit_note($n, $user)): ?>
+      <p><a class="btn btn-secondary btn-sm" href="<?= $tabUrl('notes') ?>&amp;edit_note=<?= (int)$n['id'] ?>#addnote-h">Edit<span class="visually-hidden"> note: <?= h($n['subject']) ?></span></a></p>
+    <?php endif; ?>
+  </article>
+<?php endforeach; ?>
+
+<?php elseif ($tab === 'assessments'): ?>
+<div class="page-actions"><a class="btn btn-secondary btn-sm" href="curriculum.php?client=<?= $id ?>">Curriculum &amp; competency tracking</a>
+<?php if (ai_feature_enabled('recommend')): ?><a class="btn btn-secondary btn-sm" href="recommend.php?client=<?= $id ?>">AI AT recommendations</a><?php endif; ?>
+<?php if (ai_feature_enabled('intake')): ?><a class="btn btn-secondary btn-sm" href="intake.php?client=<?= $id ?>">AI guided intake</a><?php endif; ?></div>
+<section class="card" aria-labelledby="scored-h">
+  <h2 id="scored-h">Scored assessments</h2>
+  <p class="muted">Structured, repeatable instruments. Re-administer over time to show measurable progress (baseline vs. outcome).</p>
+  <?php if ($instruments): ?>
+  <form method="get" action="score_assessment.php" class="inline-form">
+    <input type="hidden" name="client" value="<?= $id ?>">
+    <label for="new-instrument">Record a new one</label>
+    <select id="new-instrument" name="instrument">
+      <?php foreach ($instruments as $ins): ?><option value="<?= (int)$ins['id'] ?>"><?= h($ins['name']) ?></option><?php endforeach; ?>
+    </select>
+    <button type="submit" class="btn btn-primary btn-sm">Start assessment</button>
+  </form>
+  <?php else: ?><p class="muted">No instruments defined yet — an administrator can add them on the Templates page.</p><?php endif; ?>
+  <?php if ($scored): ?>
+  <?php // group by instrument to show a simple trend (oldest -> newest)
+        $byInstr = []; foreach ($scored as $sc) $byInstr[$sc['instrument']][] = $sc; ?>
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Scored assessments">
+  <table>
+    <thead><tr><th scope="col">Instrument</th><th scope="col">Date</th><th scope="col">Score</th><th scope="col">Trend</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+    <tbody>
+    <?php foreach ($scored as $sc): $pct = round((float)$sc['pct']);
+        $series = array_reverse($byInstr[$sc['instrument']]); // oldest first
+        $first = $series[0]; $firstPct = round((float)$first['pct']);
+        $delta = $pct - $firstPct; ?>
+      <tr>
+        <td><?= h($sc['instrument']) ?></td>
+        <td><?= fmt_date($sc['assessed_on']) ?><br><span class="muted"><?= h($sc['assessor'] ?? '') ?></span></td>
+        <td><?= (int)$sc['total_score'] ?>/<?= (int)$sc['max_score'] ?> (<?= $pct ?>%)
+          <div class="progress-wrap"><progress class="hours" max="100" value="<?= $pct ?>" aria-label="Score percentage"><?= $pct ?>%</progress></div></td>
+        <td><?= (int)$sc['id'] === (int)$first['id'] ? '<span class="muted">Baseline</span>' : ($delta > 0 ? '<span class="badge badge-active">+' . $delta . '% since baseline</span>' : ($delta < 0 ? '<span class="badge badge-hold">' . $delta . '% since baseline</span>' : 'No change since baseline')) ?></td>
+        <td><a class="btn btn-secondary btn-sm" href="score_assessment.php?client=<?= $id ?>&amp;scored=<?= (int)$sc['id'] ?>">View<span class="visually-hidden"> assessment <?= h($sc['instrument']) ?> on <?= h(fmt_date($sc['assessed_on'])) ?></span></a></td>
+      </tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table>
+  </div>
+  <?php endif; ?>
+</section>
+
+<section class="card" aria-labelledby="addassess-h">
+  <h2 id="addassess-h">Record a tech assessment</h2>
+  <?php
+  $assessTpl = null;
+  if (!empty($_GET['assess_tpl'])) {
+      $at = db()->prepare('SELECT * FROM assessment_templates WHERE id = ?');
+      $at->execute([(int)$_GET['assess_tpl']]);
+      $assessTpl = $at->fetch();
+  }
+  $assessTpls = db()->query('SELECT id, name FROM assessment_templates ORDER BY name')->fetchAll();
+  ?>
+  <?php if ($assessTpls): ?>
+  <form method="get" action="client.php" class="page-actions" aria-label="Start from an assessment template">
+    <input type="hidden" name="id" value="<?= $id ?>"><input type="hidden" name="tab" value="assessments">
+    <label for="assess_tpl">Start from a template</label>
+    <select id="assess_tpl" name="assess_tpl">
+      <?php foreach ($assessTpls as $a): ?>
+      <option value="<?= (int)$a['id'] ?>" <?= $assessTpl && (int)$assessTpl['id'] === (int)$a['id'] ? 'selected' : '' ?>><?= h($a['name']) ?></option>
+      <?php endforeach; ?>
+    </select>
+    <button type="submit" class="btn btn-secondary btn-sm">Prefill form</button>
+    <?php if (can('templates')): ?><a class="muted" href="templates.php">Manage templates</a><?php endif; ?>
+  </form>
+  <?php endif; ?>
+  <form method="post" action="<?= $tabUrl('assessments') ?>" enctype="multipart/form-data" class="stacked" novalidate>
+    <?= csrf_field() ?>
+    <?= form_error_summary(['assessment_date' => 'Assessment date', 'primary_disability' => 'Primary disability / needs', 'hardware_details' => 'Hardware details',
+        'software_version' => 'Software & version', 'summary' => 'Assessment summary', 'attachment' => 'Report attachment']) ?>
+    <div class="field"><label for="assessment_date">Assessment date *</label>
+      <input type="date" id="assessment_date" name="assessment_date" required max="<?= date('Y-m-d') ?>" value="<?= h(old_in('assessment_date', date('Y-m-d'))) ?>" <?= field_aria('assessment_date') ?>><?= field_error('assessment_date') ?></div>
+    <div class="field"><label for="primary_disability">Primary disability / needs</label>
+      <input type="text" id="primary_disability" name="primary_disability" maxlength="190" value="<?= h(old_in('primary_disability')) ?>" <?= field_aria('primary_disability') ?>><?= field_error('primary_disability') ?></div>
+    <div class="field"><label for="primary_tech">Primary focus / tech recommended</label>
+      <select id="primary_tech" name="primary_tech"><?= select_options(TECH_TYPES, old_in('primary_tech') ?: ($assessTpl['primary_tech'] ?? null)) ?></select></div>
+    <div class="field"><label for="hardware_details">Hardware details</label>
+      <input type="text" id="hardware_details" name="hardware_details" maxlength="255" value="<?= h(old_in('hardware_details', $assessTpl['hardware_details'] ?? '')) ?>" <?= field_aria('hardware_details') ?>><?= field_error('hardware_details') ?></div>
+    <div class="field"><label for="software_version">Software &amp; version</label>
+      <input type="text" id="software_version" name="software_version" maxlength="190" value="<?= h(old_in('software_version', $assessTpl['software_version'] ?? '')) ?>" <?= field_aria('software_version') ?>><?= field_error('software_version') ?></div>
+    <div class="field"><label for="summary">Assessment summary</label>
+      <textarea id="summary" name="summary" <?= field_aria('summary') ?>><?= h(old_in('summary', $assessTpl['summary'] ?? '')) ?></textarea><?= field_error('summary') ?></div>
+    <div class="field"><label for="attachment">Report attachment <span class="hint">PDF, Word, text, or image · 15 MB max</span></label>
+      <input type="file" id="attachment" name="attachment" accept=".pdf,.doc,.docx,.txt,.rtf,.png,.jpg,.jpeg" <?= field_aria('attachment') ?>><?= field_error('attachment') ?></div>
+    <button type="submit" name="add_assessment" value="1" class="btn btn-primary">Save assessment</button>
+  </form>
+</section>
+<h2>Assessments (<?= count($assessments) ?>)</h2>
+<?php if (!$assessments): ?><p class="muted">No assessments recorded yet.</p><?php endif; ?>
+<?php foreach ($assessments as $a): ?>
+  <article class="card">
+    <h3>Assessment — <?= fmt_date($a['assessment_date']) ?></h3>
+    <dl class="props">
+      <dt>Primary disability</dt><dd><?= h($a['primary_disability'] ?? '—') ?></dd>
+      <dt>Primary tech</dt><dd><?= h($a['primary_tech']) ?></dd>
+      <dt>Hardware</dt><dd><?= h($a['hardware_details'] ?? '—') ?></dd>
+      <dt>Software</dt><dd><?= h($a['software_version'] ?? '—') ?></dd>
+      <dt>Recorded by</dt><dd><?= h($a['author'] ?? 'Unknown') ?></dd>
+    </dl>
+    <?php if ($a['summary']): ?><p style="white-space: pre-wrap;"><?= h($a['summary']) ?></p><?php endif; ?>
+    <p>
+      <a class="btn btn-secondary btn-sm" href="eval_report.php?assessment=<?= (int)$a['id'] ?>">Build evaluation report<span class="visually-hidden"> for the assessment of <?= h(fmt_date($a['assessment_date'])) ?></span></a>
+      <?php if ($a['attachment_path']): ?>
+      <a class="btn btn-secondary btn-sm" href="download.php?assessment=<?= (int)$a['id'] ?>">Download attachment: <?= h($a['attachment_name']) ?></a>
+      <?php endif; ?>
+      <?php if (ai_feature_enabled('draft')): ?>
+      <form method="post" action="<?= $tabUrl('assessments') ?>" class="inline-form" style="display:inline">
+        <?= csrf_field() ?>
+        <input type="hidden" name="assessment_id" value="<?= (int)$a['id'] ?>">
+        <button type="submit" name="ai_do" value="goals" class="btn btn-secondary btn-sm">Suggest goals with AI<span class="visually-hidden"> for the assessment of <?= h(fmt_date($a['assessment_date'])) ?></span></button>
+      </form>
+      <?php endif; ?>
+    </p>
+    <?php if ($aiGoalsDraft !== null && $aiGoalsFor === (int)$a['id']): ?>
+    <div class="card" style="background:var(--surface-2,#f4f6fb)">
+      <h4>AI goal suggestions (draft)</h4>
+      <p class="muted">Copy any of these into a training track's goal form and edit as needed.</p>
+      <p style="white-space: pre-wrap;"><?= h($aiGoalsDraft) ?></p>
+    </div>
+    <?php endif; ?>
+  </article>
+<?php endforeach; ?>
+
+<?php elseif ($tab === 'tracks'): ?>
+<h2>Training tracks</h2>
+<div class="page-actions"><a class="btn btn-primary" href="track_edit.php?client_id=<?= $id ?>">Add training track</a></div>
+<?php if (!$tracks): ?><p class="muted">No training tracks yet.</p><?php endif; ?>
+<?php foreach ($tracks as $t): $r = track_rollup((int)$t['id']); ?>
+  <article class="card">
+    <h3><a href="track.php?id=<?= (int)$t['id'] ?>"><?= h($t['title']) ?></a> <?= status_badge($t['status']) ?></h3>
+    <dl class="props">
+      <dt>Authorization</dt><dd><?= h($t['auth_number']) ?> — <?= h($t['funding_agency']) ?></dd>
+      <dt>Period</dt><dd><?= fmt_date($t['start_date']) ?> to <?= fmt_date($t['expiration_date']) ?></dd>
+      <dt>Rate</dt><dd><?= fmt_money((float)$t['hourly_rate']) ?>/hr</dd>
+      <dt>Hours</dt><dd><?= fmt_hours($r['hours_worked']) ?> used · <?= fmt_hours($r['hours_remaining']) ?> remaining of <?= fmt_hours($r['authorized_hours']) ?></dd>
+      <dt>Billing</dt><dd><?= fmt_money($r['total_billed']) ?> logged work value<?= $r['mileage_amount'] > 0 ? ' (incl. ' . fmt_money($r['mileage_amount']) . ' mileage)' : '' ?> · <?= fmt_money($r['invoiced_amount']) ?> on invoices (incl. drafts) · <?= fmt_money($r['submitted_amount'] ?? 0) ?> submitted to funder · <?= fmt_money($r['funds_remaining']) ?> of authorized funds remaining<?= $r['expenses_amount'] > 0 ? ' (after ' . fmt_money($r['expenses_amount']) . ' expenses)' : '' ?></dd>
+    </dl>
+    <div class="progress-wrap">
+      <label for="tprog-<?= (int)$t['id'] ?>" class="progress-caption">Authorized hours used: <?= $r['pct_used'] ?>%</label>
+      <progress id="tprog-<?= (int)$t['id'] ?>" class="hours" max="100" value="<?= $r['pct_used'] ?>"><?= $r['pct_used'] ?>%</progress>
+    </div>
+  </article>
+<?php endforeach; ?>
+
+<?php elseif ($tab === 'documents'): ?>
+<?php
+$documents = db()->prepare('SELECT d.*, u.name AS uploader FROM client_documents d LEFT JOIN users u ON u.id = d.uploaded_by WHERE d.client_id = ? ORDER BY d.created_at DESC');
+$documents->execute([$id]);
+$documents = $documents->fetchAll();
+?>
+<section class="card" aria-labelledby="adddoc-h">
+  <h2 id="adddoc-h">Upload a document</h2>
+  <form method="post" action="<?= $tabUrl('documents') ?>" enctype="multipart/form-data" class="stacked" novalidate>
+    <?= csrf_field() ?>
+    <?= form_error_summary(['title' => 'Title', 'document' => 'File'], ['title' => 'doc_title']) ?>
+    <div class="field"><label for="doc_title">Title <span class="hint">Defaults to the file name</span></label>
+      <input type="text" id="doc_title" name="title" maxlength="190" value="<?= h(old_in('title')) ?>" <?= field_aria('title') ?>><?= field_error('title') ?></div>
+    <div class="field"><label for="doc_category">Category</label>
+      <select id="doc_category" name="category" aria-describedby="doc-category-hint"><?= select_options(DOC_CATEGORIES, old_in('category') ?: null) ?></select>
+      <p class="hint" id="doc-category-hint">Documents filed under Resource are shared on the client's portal, where the client can open and download them. Use another category for internal records.</p></div>
+    <div class="field"><label for="document">File * <span class="hint">PDF, Office, text, or image · 25 MB max</span></label>
+      <input type="file" id="document" name="document" required accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.rtf,.csv,.png,.jpg,.jpeg" <?= field_aria('document') ?>><?= field_error('document') ?></div>
+    <button type="submit" name="add_document" value="1" class="btn btn-primary">Upload</button>
+  </form>
+</section>
+<h2>Documents (<?= count($documents) ?>)</h2>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Client documents">
+<table>
+  <caption class="visually-hidden">Client documents</caption>
+  <thead><tr><th scope="col">Title</th><th scope="col">Category</th><th scope="col">Uploaded</th><th scope="col">By</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+  <tbody>
+  <?php if (!$documents): ?><tr><td colspan="5" class="muted">No documents yet.</td></tr><?php endif; ?>
+  <?php foreach ($documents as $doc): ?>
+    <tr>
+      <td><?= h($doc['title']) ?><br><span class="muted"><?= h($doc['orig_name']) ?></span></td>
+      <td><?= h($doc['category'] === 'Client Upload' ? 'Shared by client' : $doc['category']) ?><?= $doc['category'] === 'Resource' ? '<br><span class="muted">Shared on the client portal</span>' : '' ?></td>
+      <td><?= fmt_datetime($doc['created_at']) ?></td>
+      <td><?= h($doc['uploader'] ?? ($doc['category'] === 'Client Upload' ? 'The client, on the portal' : 'System')) ?></td>
+      <td>
+        <a class="btn btn-secondary btn-sm" href="download.php?doc=<?= (int)$doc['id'] ?>">Download<span class="visually-hidden"> <?= h($doc['title']) ?></span></a>
+        <form method="post" action="<?= $tabUrl('documents') ?>" class="inline-form"><?= csrf_field() ?>
+          <input type="hidden" name="doc_id" value="<?= (int)$doc['id'] ?>">
+          <button type="submit" name="del_document" value="1" class="btn btn-danger btn-sm"
+            onclick="return confirm('Move this document to the trash? An administrator can restore it for 30 days.');">Delete<span class="visually-hidden"> <?= h($doc['title']) ?></span></button>
+        </form>
+      </td>
+    </tr>
+  <?php endforeach; ?>
+  </tbody>
+</table>
+</div>
+
+<?php elseif ($tab === 'history'): ?>
+<h2>Case status history (audit trail)</h2>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Case status history">
+<table>
+  <caption class="visually-hidden">Status transitions with timestamps and users</caption>
+  <thead><tr>
+    <th scope="col">Date &amp; time</th><th scope="col">From</th><th scope="col">To</th>
+    <th scope="col">Changed by</th><th scope="col">Note</th>
+  </tr></thead>
+  <tbody>
+  <?php if (!$history): ?><tr><td colspan="5" class="muted">No status changes recorded.</td></tr><?php endif; ?>
+  <?php foreach ($history as $hrow): ?>
+    <tr>
+      <td><?= fmt_datetime($hrow['changed_at']) ?></td>
+      <td><?= $hrow['old_status'] ? status_badge($hrow['old_status']) : '<span class="muted">—</span>' ?></td>
+      <td><?= status_badge($hrow['new_status']) ?></td>
+      <td><?= h($hrow['changed_by_name'] ?? 'System') ?></td>
+      <td><?= h($hrow['note'] ?? '') ?></td>
+    </tr>
+  <?php endforeach; ?>
+  </tbody>
+</table>
+</div>
+<?php endif; ?>
+<?php page_footer();

@@ -1,0 +1,44 @@
+name: CaseManagement
+options:
+  bundleIdPrefix: com.cms
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  CaseManagement:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.example.cms
+        MARKETING_VERSION: "3.0.13"
+        CURRENT_PROJECT_VERSION: "28"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Adaptive navy / light-blue accent (Assets.xcassets/AccentColor) for system controls.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: CMS
+        # How VoiceOver and Siri say the app's name (the display name is an abbreviation).
+        CFBundleSpokenName: Case Management System
+        # The version and build come from the build settings above, so the binary
+        # always reports what MARKETING_VERSION / CURRENT_PROJECT_VERSION say.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSFaceIDUsageDescription: Face ID keeps your client records locked to you.
+        NSCameraUsageDescription: The camera scans documents (releases, authorizations) straight to a client's file.
+        NSMicrophoneUsageDescription: The microphone lets you run the app hands-free with the voice assistant.
+        NSSpeechRecognitionUsageDescription: Speech recognition turns what you say into case-management actions, hands-free. Your speech is recognized on this iPhone when it supports that; otherwise the audio is sent to Apple to be transcribed.
+        NSPhotoLibraryAddUsageDescription: Lets you save a client document image to your photo library when you choose Save Image while viewing it.
+        UILaunchScreen:
+          UIColorName: ""
+        # Not locked to portrait (WCAG 1.3.4): a phone on a fixed landscape mount must work too.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        ITSAppUsesNonExemptEncryption: false

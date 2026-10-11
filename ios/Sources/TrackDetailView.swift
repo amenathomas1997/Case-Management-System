@@ -1,0 +1,1090 @@
+import SwiftUI
+
+struct Goal: Decodable, Identifiable {
+    let id: Int
+    let specificGoal: String
+    let measurableMetric: String
+    let focusArea: String?
+    let status: String
+    let targetDate: String?
+    let progressPct: Int?
+    private enum CodingKeys: String, CodingKey { case id, specificGoal, measurableMetric, focusArea, status, targetDate, progressPct }
+    // Tolerant decode so one malformed goal can't blank the track's goal list.
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        specificGoal = (try? c.decode(String.self, forKey: .specificGoal)) ?? ""
+        measurableMetric = (try? c.decode(String.self, forKey: .measurableMetric)) ?? ""
+        focusArea = try? c.decodeIfPresent(String.self, forKey: .focusArea)
+        status = (try? c.decode(String.self, forKey: .status)) ?? "Not Started"
+        targetDate = try? c.decodeIfPresent(String.self, forKey: .targetDate)
+        progressPct = try? c.decodeIfPresent(Int.self, forKey: .progressPct)
+    }
+}
+
+struct GoalProgressEntry: Decodable, Identifiable {
+    var id: String { "\(createdAt)-\(progressPct)" }
+    let progressPct: Int
+    let status: String
+    let note: String?
+    let createdAt: String
+    let byName: String?
+}
+struct GoalProgressResponse: Decodable { let history: [GoalProgressEntry] }
+
+struct GoalsResponse: Decodable { let goals: [Goal] }
+
+struct GoalTemplate: Decodable, Identifiable {
+    let id: Int
+    let category: String
+    let specificGoal: String
+    let measurableMetric: String
+    let focusArea: String?
+}
+
+struct GoalTemplatesResponse: Decodable {
+    let templates: [GoalTemplate]
+    /// Set by a server that searches: further matches exist beyond the 50 sent.
+    let more: Bool?
+    /// Every template area, for the area picker (nil from a server that predates search).
+    let categories: [String]?
+}
+
+/// One expense logged on a track (GET expenses). Only an unbilled one can be deleted.
+struct TrackExpense: Decodable, Identifiable {
+    let id: Int
+    let expenseDate: String
+    let description: String
+    let amount: Double
+    let isBilled: Bool
+    private enum CodingKeys: String, CodingKey { case id, expenseDate, description, amount, isBilled }
+    // Tolerant decode so one odd row can't blank the expense list. A row whose billed flag
+    // can't be read counts as billed, so no Delete is offered that the server would refuse.
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        expenseDate = (try? c.decode(String.self, forKey: .expenseDate)) ?? ""
+        description = (try? c.decode(String.self, forKey: .description)) ?? ""
+        amount = (try? c.decode(Double.self, forKey: .amount))
+            ?? (try? c.decode(String.self, forKey: .amount)).flatMap { Double($0) } ?? 0
+        if let flag = try? c.decode(Bool.self, forKey: .isBilled) { isBilled = flag }
+        else if let number = try? c.decode(Int.self, forKey: .isBilled) { isBilled = number != 0 }
+        else { isBilled = true }
+    }
+}
+
+// Outside the Decodable struct: tests/ios_models.py compiles the app's models on their own.
+extension TrackExpense {
+    var amountText: String { String(format: "$%.2f", amount) }
+    /// Date, amount and description, so each row's Delete can be told apart.
+    var summary: String { "\(formatDate(expenseDate)), \(amountText), \(description)" }
+}
+
+struct TrackExpensesResponse: Decodable { let expenses: [TrackExpense] }
+
+/// A goal's objective cut to its first few words, so each goal's controls can be told apart
+/// without the whole paragraph being read again for every one of them.
+func shortGoalText(_ text: String) -> String {
+    guard text.count > 40 else { return text }
+    let cut = text.prefix(40)
+    if let space = cut.lastIndex(of: " ") { return String(cut[..<space]) + "…" }
+    return String(cut) + "…"
+}
+
+struct TrackDetailView: View {
+    @EnvironmentObject var api: API
+    let track: Track
+    let clientName: String
+
+    @State private var goals: [Goal] = []
+    @State private var error: String?
+    @State private var confirmation: String?
+    @State private var savingGoals: Set<Int> = []
+    @State private var showingAddGoal = false
+    @State private var showingExpense = false
+    @State private var showingReport = false
+    @State private var recordingGoal: Goal?
+    /// The status Record progress opens with when it was opened by the status control.
+    @State private var recordingStatus: String?
+    @State private var trackNotes: [Note] = []
+    /// All of the track's notes, from a server that reports it (nil otherwise).
+    @State private var trackNotesTotal: Int?
+    /// Set once each list has loaded, so "No goals yet." / "No notes" is never said before
+    /// the answer arrives (or after it failed).
+    @State private var goalsLoaded = false
+    @State private var notesLoaded = false
+    @State private var trackClientId: Int?
+    @State private var showingTrackNote = false
+    @State private var editingTrackNote: Note?
+    @State private var expenses: [TrackExpense] = []
+    @State private var expensesLoaded = false
+    /// The expense waiting for the person to confirm its deletion.
+    @State private var deletingExpense: TrackExpense?
+    @State private var deletingExpenseBusy = false
+    /// After a delete takes an expense row away, VoiceOver is put on the row that takes its
+    /// place (0: the "No expenses" line) rather than left wherever it lands.
+    @AccessibilityFocusState private var focusedExpense: Int?
+    /// The result of a sheet (goal, progress, note, expense, report), said once the sheet has
+    /// closed: closing it moves VoiceOver focus, which cut off a message said from inside it.
+    @State private var sheetResult: String?
+    /// A status picked on a goal's status control, waiting for the person to confirm it.
+    @State private var pendingGoalStatus: PendingGoalStatus?
+    /// Notes shown in full rather than as a six-line preview.
+    @State private var expandedNotes: Set<Int> = []
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    struct PendingGoalStatus {
+        let goal: Goal
+        let status: String
+    }
+
+    var body: some View {
+        List {
+            if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
+            if let confirmation {
+                Text(confirmation).font(.callout.weight(.medium)).foregroundStyle(Color.brandTeal)
+                    .listRowSeparator(.hidden)
+            }
+            Section("Authorization") {
+                LabeledContent("Service", value: track.serviceType ?? "Assistive Technology")
+                LabeledContent("Authorization number", value: track.authNumber)
+                LabeledContent("Status", value: track.status)
+                LabeledContent("Rate", value: String(format: "$%.2f per hour", track.hourlyRate))
+                if let expiration = track.expirationDate {
+                    LabeledContent("Expires", value: formatDate(expiration))
+                }
+                AuthProgressBar(hoursWorked: track.hoursWorked,
+                                authorizedHours: track.authorizedHours,
+                                hoursRemaining: track.hoursRemaining,
+                                pctUsed: track.pctUsed)
+            }
+            Section(goalsLoaded ? "SMART goals (\(goals.count))" : "SMART goals") {
+                if !goalsLoaded {
+                    if error == nil { ProgressView("Loading goals…") }
+                } else if goals.isEmpty {
+                    Text("No goals yet.").foregroundStyle(Color.secondaryText)
+                }
+                ForEach(goals) { goal in
+                    let short = shortGoalText(goal.specificGoal)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(goal.specificGoal).font(.body.weight(.medium))
+                        Text(goal.measurableMetric).font(.callout).foregroundStyle(Color.secondaryText)
+                        if let target = goal.targetDate {
+                            Text("Target: \(formatDate(target))").font(.caption).foregroundStyle(Color.secondaryText)
+                        }
+                        let pct = goal.progressPct ?? 0
+                        ProgressView(value: Double(pct), total: 100) {
+                            Text("\(pct)% · \(goal.status)").font(.caption).foregroundStyle(Color.secondaryText)
+                        }
+                        // Each control names its goal briefly: the full objective is the text just
+                        // above, and the Buttons rotor and Voice Control still tell goals apart.
+                        .accessibilityLabel("Progress, \(short)")
+                        .accessibilityValue("\(pct) percent, \(goal.status)")
+                        Picker("Status", selection: statusBinding(for: goal)) {
+                            ForEach(goalStatuses, id: \.self) { Text($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(savingGoals.contains(goal.id))
+                        .accessibilityLabel("Status, \(short)")
+                        .accessibilityHint("Asks before saving: a new status changes the recorded progress.")
+                        // Body-size text and 44-point targets (caption-size controls were about 16 points tall).
+                        HStack {
+                            Button { recordingStatus = nil; recordingGoal = goal } label: {
+                                Label("Record progress", systemImage: "chart.line.uptrend.xyaxis")
+                                    .frame(minHeight: 44).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Record progress, \(short)")
+                            .accessibilityInputLabels(["Record progress", "Record progress, \(short)"])
+                            Spacer()
+                            NavigationLink { GoalHistoryView(goalId: goal.id, goalText: goal.specificGoal) } label: {
+                                Text("History").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                            }
+                            .accessibilityLabel("History, \(short)")
+                            .accessibilityInputLabels(["History", "History, \(short)"])
+                        }
+                    }
+                    .padding(.vertical, 3)
+                }
+                Button { showingAddGoal = true } label: { Label("Add goal", systemImage: "plus") }
+            }
+            Section(notesHeader) {
+                if !notesLoaded {
+                    if error == nil { ProgressView("Loading notes…") }
+                } else if trackNotes.isEmpty {
+                    Text("No notes on this track yet.").foregroundStyle(Color.secondaryText)
+                }
+                ForEach(trackNotes) { note in
+                    let open = expandedNotes.contains(note.id)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(alignment: .top) {
+                            // The note's text is one element; Edit stays its own (as the expense
+                            // rows' Delete does), so the subject is not read twice.
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(note.subject).font(.body.weight(.semibold))
+                                HStack(spacing: 6) {
+                                    Text(note.noteType).font(.caption).foregroundStyle(Color.secondaryText)
+                                    if let fmt = note.noteFormat, fmt != "free" {
+                                        NoteFormatBadge(format: fmt)
+                                    }
+                                    Text(formatDateTime(note.createdAt)).font(.caption).foregroundStyle(Color.secondaryText)
+                                }
+                                // A preview that opens in full (VoiceOver reads the whole note either way).
+                                Text(note.body).font(.callout).lineLimit(open ? nil : 6)
+                            }
+                            .accessibilityElement(children: .combine)
+                            Spacer()
+                            if note.canEdit {
+                                Button { editingTrackNote = note } label: {
+                                    Image(systemName: "pencil")
+                                        .frame(minWidth: 44, minHeight: 44)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Edit note: \(note.subject)")
+                            }
+                        }
+                        if mayTruncate(note.body, lines: 6, accessibilitySize: typeSize.isAccessibilitySize) {
+                            NoteExpandButton(subject: note.subject, open: open) {
+                                if open { expandedNotes.remove(note.id) } else { expandedNotes.insert(note.id) }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                // The server sends the newest 50 notes on the track: say so rather than imply that
+                // is all of them.
+                if notesLoaded && notesCapped {
+                    Text(trackNotesTotal.map { "Showing the latest \(trackNotes.count) of \($0) notes on this track. The rest are on the website's track page." }
+                         ?? "Showing the latest \(trackNotes.count) notes on this track. Older ones are on the website's track page.")
+                        .font(.callout).foregroundStyle(Color.secondaryText)
+                }
+                if trackClientId != nil {
+                    Button { showingTrackNote = true } label: { Label("Add note on this track", systemImage: "square.and.pencil") }
+                }
+            }
+            Section(expensesLoaded ? "Billable expenses (\(expenses.count))" : "Billable expenses") {
+                if !expensesLoaded {
+                    if error == nil { ProgressView("Loading expenses…") }
+                } else if expenses.isEmpty {
+                    Text("No expenses logged on this track.").foregroundStyle(Color.secondaryText)
+                        .accessibilityFocused($focusedExpense, equals: 0)
+                }
+                ForEach(expenses) { expense in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(expense.amountText) · \(expense.description)").font(.body)
+                            // Billed or not is said in words, not shown by the Delete button alone.
+                            Text("\(formatDate(expense.expenseDate)) · \(expense.isBilled ? "On an invoice" : "Not yet billed")")
+                                .font(.caption).foregroundStyle(Color.secondaryText)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityFocused($focusedExpense, equals: expense.id)
+                        Spacer()
+                        // An expense already on an invoice stays (the invoice totals would no longer match).
+                        if !expense.isBilled {
+                            // The darker alert red (system red text was 3.5:1), on a 44-point target.
+                            Button(role: .destructive) { deletingExpense = expense } label: {
+                                Text("Delete").foregroundStyle(Color.alertRed)
+                                    .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(deletingExpenseBusy)
+                            .accessibilityLabel("Delete expense: \(expense.summary)")
+                            .accessibilityInputLabels(["Delete", "Delete expense"])
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            Section("Actions") {
+                // Sending the report needs the 'reports' permission (as on the website).
+                if api.can("reports") {
+                    Button { showingReport = true } label: {
+                        Label("Email progress report to the vocational rehabilitation (VR) counselor", systemImage: "paperplane")
+                    }
+                }
+                Button { showingExpense = true } label: {
+                    Label("Log billable expense", systemImage: "dollarsign.circle")
+                }
+                NavigationLink { AmendmentView(trackId: track.id) } label: {
+                    Label("Authorization burn-down & amendment", systemImage: "chart.line.downtrend.xyaxis")
+                }
+            }
+        }
+        .navigationTitle(track.title)
+        .confirmationDialog("Delete the expense \(deletingExpense?.summary ?? "")? It moves to the trash, where an administrator can restore it for 30 days.",
+                            isPresented: Binding(get: { deletingExpense != nil }, set: { if !$0 { deletingExpense = nil } }),
+                            titleVisibility: .visible, presenting: deletingExpense) { expense in
+            Button("Delete expense", role: .destructive) { Task { await deleteExpense(expense) } }
+            Button("Cancel", role: .cancel) {}
+        }
+        // A status change rewrites the goal's recorded percent (Achieved is 100%, Not Started 0%)
+        // and adds a history entry, so it is confirmed rather than saved by one stray tap; reopening
+        // an achieved goal opens Record progress only when the person asks for it here.
+        .confirmationDialog(goalStatusQuestion,
+                            isPresented: Binding(get: { pendingGoalStatus != nil }, set: { if !$0 { pendingGoalStatus = nil } }),
+                            titleVisibility: .visible, presenting: pendingGoalStatus) { pending in
+            if pending.goal.status == "Achieved" && pending.status == "In Progress" {
+                Button("Record progress") {
+                    recordingStatus = pending.status
+                    recordingGoal = pending.goal
+                }
+            } else {
+                Button("Mark \(pending.status)") { saveGoalStatus(pending.goal, pending.status) }
+            }
+            Button("Keep \(pending.goal.status)", role: .cancel) {}
+        }
+        .refreshable { await load() }
+        .task { await load() }
+        // Each sheet hands back what to tell the person: shown here, and said once it has closed.
+        .sheet(isPresented: $showingTrackNote, onDismiss: announceSheetResult) {
+            if let cid = trackClientId {
+                AddNoteSheet(clientId: cid, tracks: [track], initialTrackId: track.id, existing: nil) { message in
+                    sheetDone(message); Task { await load() }
+                }
+            }
+        }
+        .sheet(item: $editingTrackNote, onDismiss: announceSheetResult) { note in
+            if let cid = trackClientId {
+                AddNoteSheet(clientId: cid, tracks: [track], existing: note) { message in
+                    sheetDone(message); Task { await load() }
+                }
+            }
+        }
+        .sheet(isPresented: $showingAddGoal, onDismiss: announceSheetResult) {
+            AddGoalSheet(trackId: track.id) { sheetDone("Goal added."); Task { await load() } }
+        }
+        .sheet(isPresented: $showingExpense, onDismiss: announceSheetResult) {
+            ExpenseSheet(trackId: track.id) { message in sheetDone(message); Task { await loadExpenses() } }
+        }
+        .sheet(isPresented: $showingReport, onDismiss: announceSheetResult) {
+            SendReportSheet(trackId: track.id, clientName: clientName) { message in sheetDone(message) }
+        }
+        .sheet(item: $recordingGoal, onDismiss: announceSheetResult) { goal in
+            GoalProgressSheet(goal: goal, initialStatus: recordingStatus) { message in sheetDone(message); Task { await load() } }
+        }
+    }
+
+    /// track_notes sends at most the newest 50.
+    private var notesCapped: Bool {
+        if let total = trackNotesTotal { return total > trackNotes.count }
+        return trackNotes.count >= 50
+    }
+
+    private var notesHeader: String {
+        guard notesLoaded else { return "Case notes for this track" }
+        if notesCapped { return "Case notes for this track (latest \(trackNotes.count)\(trackNotesTotal.map { " of \($0)" } ?? ""))" }
+        return "Case notes for this track (\(trackNotes.count))"
+    }
+
+    private func sheetDone(_ message: String) {
+        confirmation = message
+        sheetResult = message
+    }
+
+    private func announceSheetResult() {
+        if let message = sheetResult { announceAfterDismiss(message) }
+        sheetResult = nil
+    }
+
+    private var goalStatusQuestion: String {
+        guard let pending = pendingGoalStatus else { return "" }
+        let short = shortGoalText(pending.goal.specificGoal)
+        let pct = pending.goal.progressPct ?? 0
+        switch pending.status {
+        case "Achieved": return "Mark “\(short)” achieved? Its progress is recorded as 100%."
+        case "Not Started": return "Mark “\(short)” Not Started? Its progress is reset from \(pct)% to 0%."
+        default:
+            return pending.goal.status == "Achieved"
+                ? "Reopen “\(short)”? Record progress opens so you can enter how complete it is now."
+                : "Mark “\(short)” In Progress? Its progress stays at \(pct)%."
+        }
+    }
+
+    /// The control shows the saved status; picking another asks first (see the dialog).
+    private func statusBinding(for goal: Goal) -> Binding<String> {
+        Binding(
+            get: { goal.status },
+            set: { newValue in
+                guard !savingGoals.contains(goal.id), newValue != goal.status else { return }
+                pendingGoalStatus = PendingGoalStatus(goal: goal, status: newValue)
+            }
+        )
+    }
+
+    private func saveGoalStatus(_ goal: Goal, _ newValue: String) {
+        guard !savingGoals.contains(goal.id) else { return }
+        savingGoals.insert(goal.id)
+        Task {
+            defer { savingGoals.remove(goal.id) }
+            confirmation = nil
+            error = nil
+            do {
+                let _: OKResponse = try await api.call("update_goal", body: ["id": goal.id, "status": newValue])
+                confirmation = newValue == "Achieved" ? "Goal marked achieved 🎉" : "Goal updated."
+                announce(confirmation!)
+                await load()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    private func load() async {
+        do {
+            error = nil
+            let response: GoalsResponse = try await api.call("goals", query: ["track_id": String(track.id)])
+            goals = response.goals
+            goalsLoaded = true
+        } catch {
+            self.error = error.localizedDescription
+        }
+        // Preserve already loaded notes while making a failed refresh visible.
+        do {
+            let r: TrackNotesResponse = try await api.call("track_notes", query: ["track_id": String(track.id)])
+            trackNotes = r.notes
+            trackNotesTotal = r.notesTotal
+            trackClientId = r.clientId
+            notesLoaded = true
+        } catch {
+            self.error = error.localizedDescription
+        }
+        await loadExpenses()
+    }
+
+    /// Leaves an error already on screen in place (a refused delete says more than a failed reload).
+    private func loadExpenses() async {
+        do {
+            let r: TrackExpensesResponse = try await api.call("expenses", query: ["track_id": String(track.id)])
+            expenses = r.expenses
+            expensesLoaded = true
+        } catch {
+            if self.error == nil { self.error = error.localizedDescription }
+        }
+    }
+
+    private func deleteExpense(_ expense: TrackExpense) async {
+        deletingExpenseBusy = true
+        defer { deletingExpenseBusy = false }
+        confirmation = nil
+        error = nil
+        // The row shown in its place: the next one, else the one before it.
+        let index = expenses.firstIndex(where: { $0.id == expense.id })
+        let rest = expenses.filter { $0.id != expense.id }
+        let next = index.flatMap { rest.isEmpty ? nil : rest[min($0, rest.count - 1)].id }
+        var message: String?
+        do {
+            let _: OKResponse = try await api.call("delete_expense", body: ["id": expense.id])
+            message = "Expense of \(expense.amountText) on \(formatDate(expense.expenseDate)) moved to the trash."
+            confirmation = message
+        } catch {
+            // The server says why: not found (already deleted), or already on an invoice.
+            self.error = error.localizedDescription
+        }
+        // Either way the list shows what the server now holds.
+        await loadExpenses()
+        // The deleted row took the Delete button VoiceOver was on with it: VoiceOver is put on
+        // the row in its place, then the result is said (said before, it was cut off).
+        guard let message else { return }
+        try? await Task.sleep(nanoseconds: 150_000_000)   // let the reloaded rows appear first
+        if let next, expenses.contains(where: { $0.id == next }) { focusedExpense = next }
+        else if expenses.isEmpty && expensesLoaded { focusedExpense = 0 }
+        announceAfterDismiss(message)
+    }
+}
+
+struct TrackNotesResponse: Decodable {
+    let clientId: Int
+    let notes: [Note]
+    /// All of the track's notes (`notes` holds the newest 50); nil from a server that does not report it.
+    var notesTotal: Int?
+}
+
+/// Authorization burn-down with a counselor amendment letter (web v2.52 parity).
+struct AmendmentView: View {
+    @EnvironmentObject var api: API
+    let trackId: Int
+    @State private var data: AmendmentResponse?
+    @State private var letter = ""
+    /// The letter as the server last supplied it, to tell whether the person has edited it.
+    @State private var serverLetter = ""
+    @State private var confirmingRedraft = false
+    @State private var error: String?
+    @State private var aiBusy = false
+
+    var body: some View {
+        List {
+            if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
+            if let d = data {
+                // When mileage and expenses use the funds up before the hours, the server's run-out
+                // date and the letter are about funds: the figures here say the same.
+                let byFunds = d.fundsLimit == true && d.suggestFunds != nil
+                Section("Burn-down") {
+                    LabeledContent("Hours used", value: String(format: "%.2f of %.2f hours (%d%%)", d.worked, d.authorized, d.pct))
+                    LabeledContent("Hours remaining", value: String(format: "%.2f hours", d.remaining))
+                    if let auth = d.fundsAuthorized, auth > 0, let used = d.fundsUsed, let left = d.fundsRemaining {
+                        LabeledContent("Funds used", value: "\(money(used)) of \(money(auth))" + (d.fundsPct.map { " (\($0)%)" } ?? ""))
+                        LabeledContent("Funds remaining", value: money(left))
+                    }
+                    if byFunds {
+                        Text("The authorized funds, not the hours, are the limit: mileage and expenses are using them up faster, so they run out before the hours do.")
+                            .font(.callout)
+                        if let spend = d.weeklySpend, spend > 0 { LabeledContent("Recent spending", value: "\(money(spend)) per week") }
+                    } else if d.weeklyRate > 0 {
+                        LabeledContent("Recent pace", value: String(format: "%.2f hours per week", d.weeklyRate))
+                    }
+                    if let r = d.runOut { LabeledContent(byFunds ? "Projected run-out of funds" : "Projected run-out of hours", value: r) }
+                    if let e = d.expiration { LabeledContent(d.expired == true ? "Expired on" : "Expires", value: e) }
+                    if d.expired == true { Text("The authorization has already expired, so no run-out date is projected.").font(.callout) }
+                    LabeledContent("Suggested top-up", value: byFunds
+                                   ? "\(money(d.suggestFunds ?? 0)) in additional authorized funds"
+                                   : "\(d.suggestAdd) hours")
+                }
+                Section("Amendment request letter") {
+                    if !d.aiNote.isEmpty { Text(d.aiNote).font(.caption).foregroundStyle(Color.secondaryText) }
+                    TextField("Letter", text: $letter, axis: .vertical).lineLimit(8...30)
+                    if api.aiHas("draft") {
+                        // A new draft from the track's facts (the server never sees this text),
+                        // so it replaces the letter: asked first when the person has edited it.
+                        Button {
+                            if letter != serverLetter { confirmingRedraft = true } else { Task { await draftAI() } }
+                        } label: {
+                            Label(aiBusy ? "Drafting…" : "Draft with AI", systemImage: "sparkles")
+                        }.disabled(aiBusy)
+                    }
+                    if let email = d.counselorEmail, !email.isEmpty {
+                        let subject = "Authorization amendment request — \(d.client)"
+                        if let url = mailto(email, subject: subject, body: letter) {
+                            Link(destination: url) { Label("Email counselor", systemImage: "paperplane") }
+                        }
+                    }
+                }
+            } else if error == nil { ProgressView() }
+        }
+        .navigationTitle("Burn-down")
+        .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("Replace the letter with a new AI draft? Your edits to it will be lost.",
+                            isPresented: $confirmingRedraft, titleVisibility: .visible) {
+            Button("Replace with a new draft", role: .destructive) { Task { await draftAI() } }
+            Button("Keep my letter", role: .cancel) {}
+        }
+        .task { await load() }
+    }
+
+    private func mailto(_ to: String, subject: String, body: String) -> URL? {
+        var c = URLComponents(); c.scheme = "mailto"; c.path = to
+        c.queryItems = [URLQueryItem(name: "subject", value: subject), URLQueryItem(name: "body", value: body)]
+        return c.url
+    }
+
+    private func load() async {
+        do {
+            error = nil
+            let d: AmendmentResponse = try await api.call("amendment", query: ["track": String(trackId)])
+            data = d; letter = d.letter; serverLetter = d.letter
+        } catch { self.error = error.localizedDescription }
+    }
+    private func draftAI() async {
+        aiBusy = true; error = nil
+        do {
+            let d: AmendmentResponse = try await api.call("amendment", body: ["track": trackId, "ai_draft": 1])
+            data = d; letter = d.letter; serverLetter = d.letter
+            announce(d.aiNote.isEmpty ? "Letter updated." : d.aiNote)
+        } catch { self.error = error.localizedDescription }
+        aiBusy = false
+    }
+}
+
+struct GoalProgressSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let goal: Goal
+    let onDone: (String) -> Void
+    @State private var status: String
+    @State private var pct: Double
+    /// The person moved the slider: from then on a status change leaves the percent alone.
+    @State private var pctEntered = false
+    @State private var note = ""
+    @State private var busy = false
+    @State private var error: String?
+    @State private var askingDiscard = false
+    /// The status the sheet opened with, to tell whether anything was changed.
+    private let startStatus: String
+
+    init(goal: Goal, initialStatus: String? = nil, onDone: @escaping (String) -> Void) {
+        self.goal = goal; self.onDone = onDone
+        let start = initialStatus ?? goal.status
+        startStatus = start
+        _status = State(initialValue: start)
+        _pct = State(initialValue: GoalProgressSheet.followingPct(status: start, goal: goal))
+    }
+
+    /// The percent a status change implies until one is entered, as on the website: Achieved is
+    /// 100%; Not Started (from another status) is 0%; otherwise the goal's current percent.
+    private static func followingPct(status: String, goal: Goal) -> Double {
+        if status == "Achieved" { return 100 }
+        if status == "Not Started" && goal.status != "Not Started" { return 0 }
+        return Double(goal.progressPct ?? 0)
+    }
+
+    /// Reopened from Achieved: its 100% no longer holds, so a percent must be entered first.
+    private var needsNewPct: Bool {
+        goal.status == "Achieved" && status == "In Progress" && !pctEntered
+    }
+    private static let reopenMessage = "This goal was 100% complete while Achieved. Set Progress percent to how complete it is now, then save."
+
+    private var hasChanges: Bool { !note.isEmpty || pctEntered || status != startStatus }
+
+    private var pctBinding: Binding<Double> {
+        Binding(get: { pct }, set: { pct = $0.rounded(); pctEntered = true })
+    }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(error: error) {
+                Text(goal.specificGoal).font(.callout)
+                Picker("Status", selection: $status) { ForEach(goalStatuses, id: \.self) { Text($0) } }
+                    // The slider follows the status until a percent is entered (Achieved is always
+                    // stored as 100%, so the slider says so too).
+                    .onChange(of: status) { newStatus in
+                        if newStatus == "Achieved" || !pctEntered {
+                            pct = GoalProgressSheet.followingPct(status: newStatus, goal: goal)
+                        }
+                        if needsNewPct { announce(Self.reopenMessage) }
+                    }
+                VStack(alignment: .leading) {
+                    // Any whole percent, as on the website: the slider for a quick setting, the
+                    // stepper to adjust it one percent at a time.
+                    Stepper(value: pctBinding, in: 0...100, step: 1) {
+                        Text("Progress: \(Int(pct))%")
+                    }
+                    .accessibilityLabel("Progress percent, in steps of 1")
+                    .accessibilityValue("\(Int(pct)) percent")
+                    Slider(value: pctBinding, in: 0...100, step: 1)
+                        .accessibilityLabel("Progress percent")
+                        .accessibilityValue("\(Int(pct)) percent")
+                    if needsNewPct {
+                        Text(Self.reopenMessage).font(.callout)
+                    }
+                }
+                CaptionedField(label: "Progress note (optional)", text: $note, lines: 2...5)
+            }
+            .navigationTitle("Record progress")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
+                ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await save() } }.disabled(busy || needsNewPct) }
+            }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this progress entry?",
+                                 asking: $askingDiscard) { dismiss() }
+            .onAppear { if needsNewPct { announce(Self.reopenMessage) } }
+        }
+    }
+    private func save() async {
+        busy = true; error = nil
+        do {
+            // The confirmation states the percent the server stored, which can differ from the
+            // slider (Achieved is always 100%).
+            struct Stored: Decodable {
+                let progressPct: Int?
+                private enum CodingKeys: String, CodingKey { case progressPct }
+                init(from d: Decoder) throws {
+                    progressPct = try? d.container(keyedBy: CodingKeys.self).decodeIfPresent(Int.self, forKey: .progressPct)
+                }
+            }
+            var body: [String: Any] = ["id": goal.id, "status": status, "progress_pct": Int(pct), "note": note]
+            // Reopening an achieved goal and deliberately setting 100% again keeps it there (the
+            // website's "Record again to keep it at 100%"); without this the server refuses it.
+            if goal.status == "Achieved" && status != "Achieved" && pctEntered && Int(pct) == 100 {
+                body["reopen_confirmed"] = 1
+            }
+            let stored: Stored = try await api.call("update_goal", body: body)
+            // Said by the track screen once this sheet has closed (closing it would cut it off).
+            onDone("Progress recorded — \(stored.progressPct ?? Int(pct))%."); dismiss()
+        } catch { self.error = error.localizedDescription; busy = false }
+    }
+}
+
+struct GoalHistoryView: View {
+    @EnvironmentObject var api: API
+    let goalId: Int
+    let goalText: String
+    @State private var history: [GoalProgressEntry] = []
+    @State private var loaded = false
+    @State private var error: String?
+
+    var body: some View {
+        List {
+            // Which goal this is: the title stays short, and goal text can be long.
+            Text(goalText).font(.callout.weight(.semibold))
+                .accessibilityLabel("Goal: \(goalText)")
+                .accessibilityAddTraits(.isHeader)
+            if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
+            if !loaded && error == nil {
+                ProgressView("Loading history…")
+            } else if loaded && history.isEmpty {
+                Text("No progress recorded yet.").foregroundStyle(Color.secondaryText)
+            }
+            ForEach(Array(history.enumerated()), id: \.offset) { _, h in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(h.progressPct)% · \(h.status)").font(.body.weight(.semibold))
+                    Text("\(formatDateTime(h.createdAt))\(h.byName != nil ? " · \(h.byName!)" : "")").font(.caption).foregroundStyle(Color.secondaryText)
+                    if let n = h.note, !n.isEmpty { Text(n).font(.callout) }
+                }.padding(.vertical, 2)
+            }
+        }
+        .navigationTitle("Progress history")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            do { error = nil; let r: GoalProgressResponse = try await api.call("goal_progress", query: ["goal": String(goalId)]); history = r.history; loaded = true }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
+struct AddGoalSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let trackId: Int
+    let onSaved: () -> Void
+
+    @State private var specific = ""
+    @State private var metric = ""
+    @State private var focus = ""
+    @State private var hasTarget = false
+    @State private var targetDate = Calendar.current.date(byAdding: .month, value: 2, to: Date()) ?? Date()
+    @State private var busy = false
+    @State private var error: String?
+    @State private var askingDiscard = false
+
+    private var hasChanges: Bool { !specific.isEmpty || !metric.isEmpty || !focus.isEmpty || hasTarget }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(error: error) {
+                // Thousands of templates: searched by area and keyword, 50 at a time, each shown
+                // in full — never one long menu.
+                NavigationLink {
+                    GoalTemplatePicker { template in
+                        specific = template.specificGoal
+                        metric = template.measurableMetric
+                        focus = template.focusArea ?? ""
+                        // Said once the picker has closed: the pop moves VoiceOver focus, which
+                        // cut off an announcement made as it closed.
+                        announceAfterDismiss("Template filled in. Review the goal before adding it.")
+                    }
+                } label: {
+                    Label("Start from a template…", systemImage: "text.badge.plus")
+                }
+                // Each name stays visible once a template fills the fields in.
+                CaptionedField(label: "Specific objective (required)", text: $specific, prompt: "Specific objective", lines: 2...5)
+                CaptionedField(label: "Measurable criteria (required)", text: $metric, prompt: "Measurable criteria", lines: 2...5)
+                CaptionedField(label: "Focus area", text: $focus)
+                Toggle("Target date", isOn: $hasTarget)
+                if hasTarget {
+                    DatePicker("Target", selection: $targetDate, displayedComponents: .date)
+                }
+            }
+            .navigationTitle("Add goal")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    // Not dimmed for a missing field: save() says which one is needed.
+                    Button("Add") { Task { await save() } }
+                        .disabled(busy)
+                }
+            }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this goal?",
+                                 asking: $askingDiscard) { dismiss() }
+        }
+    }
+
+    private func save() async {
+        if specific.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            showFormError("Specific objective: say what the client will be able to do.", in: &error)
+            return
+        }
+        if metric.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            showFormError("Measurable criteria: say how progress on this goal is measured.", in: &error)
+            return
+        }
+        busy = true; error = nil
+        do {
+            let _: OKResponse = try await api.call("add_goal", body: [
+                "track_id": trackId, "specific_goal": specific, "measurable_metric": metric,
+                "focus_area": focus, "target_date": hasTarget ? APIDate.day(targetDate) : "",
+            ])
+            // "Goal added." is said by the track screen once this sheet has closed.
+            onSaved()
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+            busy = false
+        }
+    }
+}
+
+/// Goal templates searched the way the website's picker works (track.php): an area plus words
+/// that must each match, at most 50 at a time, each template shown in full.
+struct GoalTemplatePicker: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let onPick: (GoalTemplate) -> Void
+
+    @State private var query = ""
+    @State private var category = ""
+    @State private var categories: [String] = []
+    @State private var results: [GoalTemplate] = []
+    @State private var more = false
+    @State private var loaded = false
+    @State private var error: String?
+    @State private var requestID = UUID()
+
+    var body: some View {
+        List {
+            if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
+            if !categories.isEmpty {
+                Picker("Area", selection: $category) {
+                    Text("All areas").tag("")
+                    ForEach(categories, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.navigationLink)
+            }
+            Section {
+                if !loaded && error == nil {
+                    ProgressView("Loading templates…")
+                } else if loaded && results.isEmpty {
+                    Text("No templates match. Try other words or another area.").foregroundStyle(Color.secondaryText)
+                }
+                ForEach(results) { template in
+                    Button {
+                        onPick(template)
+                        dismiss()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(template.specificGoal).foregroundStyle(.primary)
+                            Text(template.measurableMetric).font(.callout).foregroundStyle(Color.secondaryText)
+                            Text(template.category).font(.caption).foregroundStyle(Color.secondaryText)
+                        }
+                    }
+                    .accessibilityHint("Fills in the goal form with this template.")
+                }
+            } header: {
+                Text(loaded ? "Matching templates (\(results.count)\(more ? "+" : ""))" : "Matching templates")
+            } footer: {
+                if more { Text("Showing the first 50 matches. Add words or choose an area to narrow them.") }
+            }
+        }
+        .navigationTitle("Goal templates")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Tool, task or keyword")
+        .onSubmit(of: .search) { Task { await load(announceResult: true) } }
+        .onChange(of: query) { typed in
+            // Searches once typing pauses, not on every keystroke. The list updates without a
+            // word: a count spoken after each pause cut off VoiceOver's echo of the letter just
+            // typed. The count is said when the search is submitted or the area changes.
+            Task {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard typed == query else { return }
+                await load(announceResult: false)
+            }
+        }
+        .onChange(of: category) { _ in Task { await load(announceResult: true) } }
+        .task { if !loaded { await load(announceResult: false) } }
+    }
+
+    private func load(announceResult: Bool) async {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let area = category
+        let current = UUID()
+        requestID = current
+        do {
+            error = nil
+            var params: [String: String] = [:]
+            if !q.isEmpty { params["q"] = q }
+            if !area.isEmpty { params["category"] = area }
+            let response: GoalTemplatesResponse = try await api.call("goal_templates", query: params)
+            guard requestID == current else { return }   // a newer search replaced this one
+            var matching = response.templates
+            if response.more == nil {
+                // A server that predates search sends every template: filter and cap them here
+                // the same way (every word must match the objective, area or focus).
+                let words = q.split(whereSeparator: \.isWhitespace).prefix(6).map(String.init)
+                matching = matching.filter { t in
+                    (area.isEmpty || t.category == area) && words.allSatisfy { w in
+                        [t.specificGoal, t.category, t.focusArea ?? ""].contains {
+                            $0.range(of: w, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                        }
+                    }
+                }
+                if categories.isEmpty { categories = Array(Set(response.templates.map(\.category))).sorted() }
+            }
+            results = Array(matching.prefix(50))
+            more = (response.more ?? false) || matching.count > 50
+            if let list = response.categories { categories = list }
+            loaded = true
+            if announceResult {
+                announce(results.isEmpty ? "No templates match." : "\(results.count)\(more ? " or more" : "") templates.")
+            }
+        } catch {
+            guard requestID == current else { return }
+            self.error = error.localizedDescription
+        }
+    }
+}
+
+struct ExpenseSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let trackId: Int
+    let onDone: (String) -> Void
+
+    @State private var date = Date()
+    @State private var descriptionText = ""
+    @State private var amount = ""
+    @State private var busy = false
+    @State private var error: String?
+    @State private var askingDiscard = false
+
+    private var hasChanges: Bool { !descriptionText.isEmpty || !amount.isEmpty }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(error: error) {
+                // Up to today: the server refuses an expense dated in the future.
+                DatePicker("Date", selection: $date, in: ...Date(), displayedComponents: .date)
+                CaptionedField(label: "Description (required)", text: $descriptionText, prompt: "Description")
+                CaptionedField(label: "Amount in US dollars (required)", text: $amount, prompt: "12.50", keyboard: .decimalPad)
+                Text("Included on the next invoice generated for this authorization.")
+                    .font(.caption).foregroundStyle(Color.secondaryText)
+            }
+            .navigationTitle("Log expense")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    // Not dimmed for a missing or mistyped field: save() says what is wrong instead.
+                    Button("Log") { Task { await save() } }
+                        .disabled(busy)
+                }
+            }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this expense?",
+                                 asking: $askingDiscard) { dismiss() }
+        }
+    }
+
+    private func save() async {
+        if descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            showFormError("Description: say what the expense was for.", in: &error)
+            return
+        }
+        if amount.trimmingCharacters(in: .whitespaces).isEmpty {
+            showFormError("Amount: enter the amount in dollars, like 12.50.", in: &error)
+            return
+        }
+        // A billable amount: anything that isn't a plain number is reported, never sent as 0.
+        guard let amountText = checkedAmount(amount), let value = Double(amountText) else {
+            showFormError(amountFormatMessage("Amount"), in: &error)
+            return
+        }
+        busy = true; error = nil
+        do {
+            // Sent as the checked text, exactly as typed, rather than through a Double.
+            let _: OKResponse = try await api.call("add_expense", body: [
+                "track_id": trackId, "date": APIDate.day(date),
+                "description": descriptionText, "amount": amountText,
+            ])
+            // Said by the track screen once this sheet has closed (closing it would cut it off).
+            onDone(String(format: "Expense of $%.2f logged.", value))
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+            busy = false
+        }
+    }
+}
+
+struct SendReportSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let trackId: Int
+    let clientName: String
+    let onDone: (String) -> Void
+
+    @State private var intro = ""
+    @State private var signature = ""
+    @State private var busy = false
+    @State private var error: String?
+    @State private var askingDiscard = false
+
+    private var hasChanges: Bool { !intro.isEmpty || !signature.isEmpty }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(error: error) {
+                Text("Sends the full progress report for \(clientName) — authorization status, goals, and session log — to the VR counselor on file, with a receipt-confirmation link.")
+                    .font(.callout)
+                CaptionedField(label: "Personal message (optional)", text: $intro, lines: 2...5)
+                Section("Electronic signature") {
+                    TextField("Type your full name (\(api.userName))", text: $signature)
+                        .autocorrectionDisabled()
+                    Text("The signature and timestamp are included on the report and recorded on the client's file.")
+                        .font(.caption).foregroundStyle(Color.secondaryText)
+                }
+            }
+            .navigationTitle("Email report")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Send") { Task { await send() } }
+                        .disabled(busy || signature.isEmpty)
+                }
+            }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this report message and signature?",
+                                 asking: $askingDiscard) { dismiss() }
+        }
+    }
+
+    private func send() async {
+        busy = true; error = nil
+        do {
+            // Tolerant: the report has gone out once the server says ok; a missing address
+            // in the reply must not look like a failure (a retry would email it twice).
+            struct SendResult: Decodable {
+                let sentTo: String
+                private enum CodingKeys: String, CodingKey { case ok, sentTo }
+                init(from decoder: Decoder) throws {
+                    let c = try decoder.container(keyedBy: CodingKeys.self)
+                    guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
+                        throw DecodingError.dataCorruptedError(forKey: .ok, in: c, debugDescription: "not ok")
+                    }
+                    sentTo = (try? c.decode(String.self, forKey: .sentTo)) ?? ""
+                }
+            }
+            let result: SendResult = try await api.call("send_report", body: [
+                "track_id": trackId, "intro": intro, "signature": signature,
+            ])
+            // Said by the track screen once this sheet has closed: heard there, it is not sent twice.
+            onDone(result.sentTo.isEmpty ? "Report signed and emailed." : "Report signed and emailed to \(result.sentTo).")
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+            busy = false
+        }
+    }
+}

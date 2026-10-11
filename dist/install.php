@@ -1,0 +1,613 @@
+<?php
+/**
+ * White-label CMS installer.
+ *
+ * Requirements: PHP 8.1+ and MariaDB 10.4 or newer (MySQL is not supported —
+ * the schema and the upgrade scripts use MariaDB syntax).
+ *
+ * Usage: upload the app files + this installer + schema_full.sql to the web
+ * docroot, create an empty install.php.enabled file beside it, then browse
+ * to install.php and fill in the form. It checks the database server, imports
+ * the schema, creates the admin account, writes the private config OUTSIDE the
+ * docroot, generates brand icons, then locks itself.
+ *
+ * The app finds its config through inc/config_path.php, which the installer
+ * writes and which no bundle ships, so uploading a newer bundle's docroot/ over
+ * the site later keeps it. (An inc/core.php without that lookup, from an older
+ * bundle, is patched instead, as before.)
+ *
+ * Nothing outside the database is written until the schema import and the
+ * admin account have succeeded, so a failed run leaves the app untouched.
+ *
+ * Delete install.php and schema_full.sql after a successful install.
+ */
+declare(strict_types=1);
+error_reporting(E_ALL);
+
+$enableFile = __FILE__ . '.enabled';
+if (!is_file($enableFile)) {
+    http_response_code(403);
+    exit('Installer disabled. For a fresh installation, create install.php.enabled beside this file using your hosting file manager.');
+}
+$lockFile = __DIR__ . '/install.lock';
+if (is_file($lockFile)) {
+    exit('Installer is locked (already ran). Delete install.lock to re-run — only do this on a fresh install.');
+}
+
+function field(string $k, string $d = ''): string {
+    return trim($_POST[$k] ?? $d);
+}
+
+/** Folder names that web servers conventionally publish. */
+const WEB_DIR_NAMES = ['public_html', 'www', 'htdocs'];
+
+/** Dropped into the private directory so a misplaced one is still not served. */
+const PRIVATE_HTACCESS = "# Written by the CMS installer: nothing in this directory is ever served over HTTP.\n"
+    . "<IfModule mod_authz_core.c>\n  Require all denied\n</IfModule>\n"
+    . "<IfModule !mod_authz_core.c>\n  Order allow,deny\n  Deny from all\n</IfModule>\n";
+
+/** Absolute path with the part that already exists resolved through symlinks. */
+function resolve_path(string $path): string {
+    $cur = rtrim(str_replace('\\', '/', $path), '/');
+    $tail = '';
+    while ($cur !== '' && $cur !== '.' && !@file_exists($cur)) {
+        $tail = '/' . basename($cur) . $tail;
+        $cur = rtrim(str_replace('\\', '/', dirname($cur)), '/');
+    }
+    $real = $cur === '' ? '' : @realpath($cur);
+    return rtrim(str_replace('\\', '/', is_string($real) ? $real : $cur), '/') . $tail;
+}
+
+/** True when $path is $root itself or lies inside it (both already resolved). */
+function path_inside(string $path, string $root): bool {
+    return $root !== '' && ($path === $root || str_starts_with($path . '/', $root . '/'));
+}
+
+/** The first part of a path named like a web-published folder, or null. */
+function web_dir_component(string $path): ?string {
+    foreach (explode('/', $path) as $part) {
+        if (in_array(strtolower($part), WEB_DIR_NAMES, true)) return $part;
+    }
+    return null;
+}
+
+/** A php.ini size ("20M", "1G", "512K", "0") in bytes; 0 means no limit. */
+function ini_bytes(string $v): int {
+    $v = trim($v);
+    $n = (int)$v;
+    return match (strtolower(substr($v, -1))) { 'g' => $n * 1073741824, 'm' => $n * 1048576, 'k' => $n * 1024, default => $n };
+}
+
+/** Every directory this installer knows the web server publishes. */
+function docroots(): array {
+    $roots = [resolve_path(__DIR__)];
+    $serverRoot = (string)($_SERVER['DOCUMENT_ROOT'] ?? '');
+    if ($serverRoot !== '') $roots[] = resolve_path($serverRoot);
+    return array_values(array_unique(array_filter($roots, fn(string $r): bool => $r !== '')));
+}
+
+/**
+ * Suggested private directory: beside the outermost docroot and, whenever that
+ * location is writable, above any public_html / www / htdocs folder (cPanel
+ * puts subdomain docroots inside public_html, so "one level up" is not enough).
+ */
+function default_private_dir(): string {
+    $doc = resolve_path(__DIR__);
+    foreach (docroots() as $root) {
+        if (path_inside($doc, $root) && strlen($root) < strlen($doc)) $doc = $root;
+    }
+    $parts = explode('/', $doc);
+    foreach ($parts as $i => $name) {
+        if (in_array(strtolower($name), WEB_DIR_NAMES, true)) {
+            $above = implode('/', array_slice($parts, 0, $i));
+            if ($above !== '' && @is_dir($above) && @is_writable($above)) return $above . '/cms_private';
+            break;
+        }
+    }
+    return rtrim(str_replace('\\', '/', dirname($doc)), '/') . '/cms_private';
+}
+
+$errors = [];
+$done = false;
+$report = [];
+$notices = [];        // things the administrator must act on, shown prominently on the success page
+$leftovers = [];      // installer files that could not be removed
+$lockOk = false;
+$backupPassword = '';
+$cronDir = '';
+$cronConfig = '';
+$backupConf = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // ---- Gather ----
+    $privateDir = rtrim(field('private_dir', default_private_dir()), '/\\');
+    $baseUrl = rtrim(field('base_url'), '/');
+    $dbHost = field('db_host', 'localhost');
+    $dbName = field('db_name');
+    $dbUser = field('db_user');
+    $dbPass = $_POST['db_pass'] ?? '';
+    $brandName = field('brand_name');
+    $brandShort = field('brand_short');
+    $brandOrg = field('brand_org');
+    $brandTagline = field('brand_tagline');
+    $brandColor = field('brand_color', '#1e40af');
+    $brandDark = field('brand_color_dark', '#1e3a8a');
+    $brandAccent = field('brand_accent', '#0f766e');
+    $mailFrom = field('mail_from');
+    $supportEmail = strtolower(field('support_email'));
+    $adminName = field('admin_name');
+    $adminEmail = strtolower(field('admin_email'));
+    $adminPass = $_POST['admin_pass'] ?? '';
+    $tz = field('timezone', 'America/Chicago');
+
+    // ---- Validate ----
+    // PHP extensions the app calls without a fallback (PDF pages use iconv, the
+    // exports zip, mail and sign-in use curl and openssl), checked before
+    // anything is changed so a missing one is not found only once the site runs.
+    $missingExt = array_values(array_filter(['pdo_mysql', 'mbstring', 'iconv', 'curl', 'zip', 'openssl'], fn(string $x): bool => !extension_loaded($x)));
+    if ($missingExt) $errors[] = 'This server\'s PHP is missing the ' . implode(', ', $missingExt) . ' extension' . (count($missingExt) > 1 ? 's' : '') . ', which the app needs. Turn ' . (count($missingExt) > 1 ? 'them' : 'it') . ' on in your hosting panel\'s PHP settings (on cPanel: Select PHP Version, or EasyApache) and run the installer again. Nothing was changed.';
+    if (!preg_match('#^https://#', $baseUrl)) $errors[] = 'Base URL must start with https://';
+    foreach (['db_name' => $dbName, 'db_user' => $dbUser, 'brand_name' => $brandName, 'brand_short' => $brandShort, 'brand_org' => $brandOrg, 'admin_name' => $adminName] as $k => $v) {
+        if ($v === '') $errors[] = "Field '{$k}' is required.";
+    }
+    // The users table holds a name of up to 120 characters and an email of up to
+    // 190, but sign-in refuses an address over 183 characters (login.php), so the
+    // installer stops at 183; checked here, before the database is loaded.
+    $adminNameLength = function_exists('mb_strlen') ? mb_strlen($adminName, 'UTF-8') : strlen($adminName);
+    if ($adminNameLength > 120) $errors[] = "Administrator's name is {$adminNameLength} characters long; the most it can be is 120.";
+    if (!filter_var($adminEmail, FILTER_VALIDATE_EMAIL)) $errors[] = 'Admin email is invalid.';
+    elseif (strlen($adminEmail) > 183) $errors[] = "Administrator's email is " . strlen($adminEmail) . ' characters long; the most it can be is 183.';
+    if (!filter_var($mailFrom, FILTER_VALIDATE_EMAIL)) $errors[] = 'Mail-from address is invalid.';
+    if ($supportEmail !== '' && !filter_var($supportEmail, FILTER_VALIDATE_EMAIL)) $errors[] = 'Public contact email is invalid.';
+    if (strlen($adminPass) < 10) $errors[] = 'Admin password must be at least 10 characters.';
+    foreach ([$brandColor, $brandDark, $brandAccent] as $c) {
+        if (!preg_match('/^#[0-9a-fA-F]{6}$/', $c)) $errors[] = "Color '{$c}' must be a 6-digit hex value like #1e40af.";
+    }
+    if (!in_array($tz, timezone_identifiers_list(), true)) $errors[] = 'Unknown timezone.';
+    // The private directory holds the config, uploaded client documents and the
+    // nightly database dumps, so it must sit outside everything the web server
+    // publishes. Checked before the database is touched.
+    if ($privateDir === '') {
+        $errors[] = "Field 'private_dir' is required.";
+    } elseif (!preg_match('#^(/|[A-Za-z]:[\\\\/])#', $privateDir) || preg_match('#(^|[\\\\/])\.\.?([\\\\/]|$)#', $privateDir)) {
+        $errors[] = 'Private directory must be an absolute path with no "." or ".." parts.';
+    } else {
+        $privateReal = resolve_path($privateDir);
+        $blocked = false;
+        foreach (docroots() as $root) {
+            if (path_inside($privateReal, $root)) {
+                $errors[] = "Private directory {$privateDir} is inside the web docroot ({$root}). The config, uploads and database backups kept there could be downloaded — choose a directory outside the docroot.";
+                $blocked = true;
+                break;
+            }
+            if (path_inside($root, $privateReal)) {
+                $errors[] = "Private directory {$privateDir} contains the web docroot ({$root}). The installer denies all web access to the private directory, which would take the site offline — choose a separate directory.";
+                $blocked = true;
+                break;
+            }
+        }
+        $webDir = web_dir_component($privateReal);
+        if (!$blocked && $webDir !== null && empty($_POST['private_dir_confirm'])) {
+            $errors[] = "Private directory {$privateDir} is under a folder named \"{$webDir}\", which web servers normally publish. Choose a directory outside it, or tick the confirmation box under the Private directory field to continue anyway.";
+        }
+    }
+    // Accessibility guard, the same rule as public/inc/accessibility.php
+    // accessible_brand_color(): the brand colors are used for links, buttons and
+    // headings on every page surface (white, the grey page background, the green
+    // and red notice tints, the card tint), so Primary and Dark must reach WCAG AAA
+    // text contrast (7:1) against each of them and Accent must reach 4.5:1. Dark is
+    // also lightened a little for the header, which must stay 7:1 against white.
+    $luminance = function (string $hex): float {
+        [$r, $g, $b] = sscanf($hex, '#%02x%02x%02x');
+        $lin = fn(int $c) => ($c /= 255) <= 0.04045 ? $c / 12.92 : (($c + 0.055) / 1.055) ** 2.4;
+        return 0.2126 * $lin($r) + 0.7152 * $lin($g) + 0.0722 * $lin($b);
+    };
+    $contrast = fn(string $a, string $b): float => (max($luminance($a), $luminance($b)) + .05) / (min($luminance($a), $luminance($b)) + .05);
+    if (!$errors) {
+        $surfaces = ['#ffffff', '#eef1f6', '#ecfdf5', '#fef2f2', '#f4f6fb'];
+        foreach (['Primary' => [$brandColor, 7.0], 'Dark' => [$brandDark, 7.0], 'Accent' => [$brandAccent, 4.5]] as $label => [$c, $min]) {
+            foreach ($surfaces as $surface) {
+                $ratio = round($contrast($c, $surface), 2);
+                if ($ratio < $min) { $errors[] = "{$label} color {$c} is too light ({$ratio}:1 against {$surface}; {$min}:1 is needed). Pick a darker shade."; break; }
+            }
+        }
+        if (!$errors) {
+            [$r, $g, $b] = sscanf($brandDark, '#%02x%02x%02x');
+            $header = sprintf('#%02x%02x%02x', (int)round($r * .88 + 255 * .12), (int)round($g * .88 + 255 * .12), (int)round($b * .88 + 255 * .12));
+            $ratio = round($contrast($header, '#ffffff'), 2);
+            if ($ratio < 7.0) $errors[] = "Dark color {$brandDark} is too light for the page header ({$ratio}:1 against white once lightened; 7:1 is needed). Pick a darker shade.";
+        }
+    }
+
+    // ---- Database: reachable, MariaDB 10.4+, and empty ----
+    $pdo = null;
+    if (!$errors) {
+        try {
+            $pdo = new PDO("mysql:host={$dbHost};dbname={$dbName};charset=utf8mb4", $dbUser, $dbPass,
+                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+            $serverVersion = (string)$pdo->query('SELECT VERSION()')->fetchColumn();
+            // Some servers prefix the MariaDB version with a MySQL-compatible "5.5.5-".
+            $versionNumber = preg_replace('/^5\.5\.5-/', '', $serverVersion);
+            if (stripos($serverVersion, 'mariadb') === false
+                || !preg_match('/^(\d+)\.(\d+)/', (string)$versionNumber, $vm)
+                || version_compare($vm[1] . '.' . $vm[2], '10.4', '<')) {
+                $errors[] = "This application requires MariaDB 10.4 or newer, but the database server reports \"{$serverVersion}\". MySQL and older MariaDB releases are not supported. Nothing was changed — point the installer at a MariaDB 10.4+ database and run it again.";
+                $pdo = null;
+            } else {
+                // The database must be empty BEFORE anything is written anywhere —
+                // a failed run must never leave the app pointed at a foreign config.
+                $existing = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()")->fetchColumn();
+                if ($existing > 0) {
+                    $errors[] = "Database {$dbName} is not empty ({$existing} tables) — use a fresh database.";
+                    $pdo = null;
+                } else {
+                    // The app pins strict mode on each of its own connections (core.php db()),
+                    // so bad values are refused rather than silently stored. Say so when the
+                    // server's default is not strict: anything else writing here is not.
+                    $globalMode = strtoupper((string)$pdo->query('SELECT @@GLOBAL.sql_mode')->fetchColumn());
+                    if (strpos($globalMode, 'STRICT_TRANS_TABLES') === false && strpos($globalMode, 'STRICT_ALL_TABLES') === false) {
+                        $notices[] = "SQL mode: this database server's default sql_mode is not strict (neither STRICT_TRANS_TABLES nor STRICT_ALL_TABLES is set). "
+                            . "The app turns strict mode on for each of its own database connections, so it refuses invalid values instead of storing them silently. "
+                            . "Ask your host to make the server default strict as well, so that any other tool writing to this database is held to the same rules.";
+                    }
+                    // The app sets every database session to this timezone's offset, so its
+                    // SQL dates agree with PHP's. Say so when the server's own clock zone
+                    // differs: anything else reading this database sees the server's time.
+                    $dbOffset = (int)$pdo->query('SELECT TIMESTAMPDIFF(MINUTE, UTC_TIMESTAMP(), NOW())')->fetchColumn();
+                    $tzOffset = intdiv((new DateTime('now', new DateTimeZone($tz)))->getOffset(), 60);
+                    if (abs($dbOffset - $tzOffset) > 1) {
+                        $utc = fn(int $m): string => sprintf('UTC%s%02d:%02d', $m < 0 ? '-' : '+', intdiv(abs($m), 60), abs($m) % 60);
+                        $notices[] = "Time zone: the database server's clock runs at {$utc($dbOffset)}, but {$tz} is at {$utc($tzOffset)} right now. "
+                            . "The app sets each of its database connections to {$tz}, so dates and times inside the app are right. "
+                            . "Anything else that reads this database directly (a report or export run by hand) sees the server's clock instead. "
+                            . "If {$tz} is not your organisation's local time zone, correct 'timezone' in config.php now, before any records are entered.";
+                    }
+                }
+            }
+        } catch (PDOException $e) {
+            $errors[] = 'Database connection failed: ' . $e->getMessage();
+            $pdo = null;
+        }
+    }
+
+    // ---- Pre-flight: everything the later steps need, checked before any change ----
+    $core = __DIR__ . '/inc/core.php';
+    $pointerFile = __DIR__ . '/inc/config_path.php';
+    $schemaFile = __DIR__ . '/schema_full.sql';
+    $configFile = $privateDir . '/config.php';
+    $configPathsPattern = '#\$configPaths = \[[^\]]*\];#s';
+    $coreSrc = false;
+    $usesPointer = false;
+    $schemaSql = false;
+    if (!$errors && $pdo) {
+        $schemaSql = is_file($schemaFile) ? @file_get_contents($schemaFile) : false;
+        if ($schemaSql === false || trim($schemaSql) === '') {
+            $errors[] = 'schema_full.sql was not found (or could not be read) next to install.php. Nothing was changed.';
+        }
+        $coreSrc = is_file($core) ? @file_get_contents($core) : false;
+        // This release's inc/core.php reads inc/config_path.php first; an older one
+        // only has its built-in list, which is patched as before.
+        $usesPointer = is_string($coreSrc) && str_contains($coreSrc, 'config_path.php');
+        if ($coreSrc === false) {
+            $errors[] = 'inc/core.php could not be read — upload the complete docroot/ folder first. Nothing was changed.';
+        } elseif ($usesPointer) {
+            if (is_file($pointerFile) ? !is_writable($pointerFile) : !is_writable(dirname($pointerFile))) {
+                $errors[] = 'The inc folder is not writable by the web server, so the installer cannot write inc/config_path.php, which tells the app where its config is. Make the inc folder writable (or create an empty, writable inc/config_path.php) and run the installer again. Nothing was changed.';
+            }
+        } elseif (!preg_match($configPathsPattern, $coreSrc)) {
+            $errors[] = 'inc/core.php does not contain the expected $configPaths list, so the installer cannot point the app at its config. Upload an unmodified inc/core.php and run the installer again. Nothing was changed.';
+        } elseif (!is_writable($core)) {
+            $errors[] = 'inc/core.php is not writable by the web server, so the installer cannot point the app at its config. Make that one file writable and run the installer again. Nothing was changed.';
+        }
+        if (is_file($configFile)) {
+            $errors[] = "A config.php already exists in {$privateDir}. If it is left over from an earlier failed attempt, delete it and run the installer again; otherwise choose a different private directory so another installation is not overwritten. Nothing was changed.";
+        }
+    }
+
+    // ---- Private directory (created and locked down before the database is loaded) ----
+    if (!$errors && $pdo) {
+        if (!is_dir($privateDir) && !@mkdir($privateDir, 0700, true)) {
+            $errors[] = "Could not create private directory {$privateDir} — create it manually (chmod 700) and re-run. Nothing else was changed.";
+        } elseif (!is_writable($privateDir)) {
+            $errors[] = "Private directory {$privateDir} is not writable by the web server — fix its permissions (chmod 700, owned by the web user) and re-run. Nothing else was changed.";
+        } else {
+            $denyFile = $privateDir . '/.htaccess';
+            if (is_file($denyFile)) {
+                $report[] = "Existing {$denyFile} left as it is — make sure it denies all web access.";
+            } elseif (@file_put_contents($denyFile, PRIVATE_HTACCESS) === false) {
+                $errors[] = "Could not write {$denyFile}. Fix the permissions on {$privateDir} and re-run. Nothing else was changed.";
+            } else {
+                $report[] = "Web access to {$privateDir} denied with a .htaccess file (protects it on Apache-compatible servers even if the directory is ever published).";
+            }
+            @mkdir($privateDir . '/uploads', 0750);
+            @mkdir($privateDir . '/backups', 0700);
+        }
+    }
+
+    // ---- Schema + admin account. Until both succeed, no config is written and
+    // the app's files are untouched, so a failure here leaves the app as it was. ----
+    $dropHint = "Drop every table in database {$dbName} (or drop and re-create it as an empty database), then run the installer again.";
+    if (!$errors && $pdo) {
+        try {
+            $pdo->exec($schemaSql);
+            // exec() runs the whole dump as one batch; confirm every table really arrived.
+            $expected = (int)preg_match_all('/^CREATE TABLE /m', $schemaSql);
+            $tables = (int)$pdo->query("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()")->fetchColumn();
+            if ($tables < $expected) {
+                throw new RuntimeException("only {$tables} of {$expected} tables were created");
+            }
+            $report[] = "Schema imported: {$tables} tables (goal & assessment template libraries included).";
+
+            $adminGroup = (int)($pdo->query("SELECT id FROM `groups` WHERE name = 'Administrators'")->fetchColumn() ?: 0);
+            $pdo->prepare('INSERT INTO users (name, email, password_hash, role, group_id) VALUES (?,?,?,?,?)')
+                ->execute([$adminName, $adminEmail, password_hash($adminPass, PASSWORD_DEFAULT), 'admin', $adminGroup ?: null]);
+            $report[] = "Admin account created for {$adminEmail}.";
+        } catch (Throwable $e) {
+            $errors[] = 'Installation stopped while loading the database: ' . $e->getMessage()
+                . ". The database now holds a partial installation. {$dropHint}"
+                . " No config.php was written and the app's files were not modified; the private directory {$privateDir} can stay as it is.";
+        }
+    }
+
+    // ---- Config, then point the app at it (inc/config_path.php, or for an older
+    // inc/core.php its search path) ----
+    if (!$errors && $pdo) {
+        // Shown once on the success page: the emailed off-site backups cannot be
+        // opened without it, and config.php is lost with the server.
+        $backupPassword = bin2hex(random_bytes(12));
+        $config = "<?php\nreturn " . var_export([
+            'db' => ['dsn' => "mysql:host={$dbHost};dbname={$dbName};charset=utf8mb4", 'user' => $dbUser, 'pass' => $dbPass],
+            'brand' => [
+                'name' => $brandName, 'short' => $brandShort, 'org' => $brandOrg,
+                'tagline' => $brandTagline, 'color' => $brandColor,
+                'color_dark' => $brandDark, 'accent' => $brandAccent,
+            ],
+            // token_cache: where the Graph access token is cached, beside this config.
+            'graph' => ['tenant_id' => '', 'client_id' => '', 'client_secret' => '', 'sender' => $mailFrom,
+                'token_cache' => $privateDir . '/graph_token.json'],
+            // Optional Microsoft Entra ID single sign-on. Fill in and set enabled=true;
+            // the Entra app registration needs a Web redirect URI of {base_url}/sso.php.
+            'entra' => ['enabled' => false, 'tenant_id' => '', 'client_id' => '', 'client_secret' => '', 'auto_provision_group' => ''],
+            'app' => [
+                'name' => $brandName, 'base_url' => $baseUrl,
+                'mail_from' => $mailFrom, 'mail_from_name' => $brandName,
+                // Public contact address shown in the page footer for help requests.
+                // When empty, mail_from is shown instead: set this whenever mail_from is
+                // an unmonitored notifications mailbox. backup_email is for cron only.
+                'support_email' => $supportEmail,
+                'backup_email' => $adminEmail,
+                'session_timeout_minutes' => 30, 'otp_expiry_minutes' => 10,
+                'upload_dir' => $privateDir . '/uploads',
+                'timezone' => $tz,
+                // Password for the AES-encrypted weekly off-site backup ZIP.
+                'backup_password' => $backupPassword,
+            ],
+        ], true) . ";\n";
+        if (@file_put_contents($configFile, $config) === false) {
+            $errors[] = "Could not write {$configFile}, so the installation is incomplete. The database was already loaded: {$dropHint} Also check that {$privateDir} is writable.";
+        } else {
+            @chmod($configFile, 0600);
+            $report[] = "Config written to {$configFile}";
+            if ($usesPointer) {
+                $pointer = "<?php\n// Written by the installer: the private directory that holds config.php.\n"
+                    . "// No bundle ships this file; keep it when uploading newer application files.\nreturn " . var_export($privateDir, true) . ";\n";
+                if (@file_put_contents($pointerFile, $pointer) === false) {
+                    $errors[] = "Could not write inc/config_path.php, so the app cannot find its config yet. The database and {$configFile} are in place. "
+                        . "Either finish by hand — create inc/config_path.php containing <?php return " . var_export($privateDir, true) . "; then delete install.php, install.php.enabled and schema_full.sql — "
+                        . "or start over: delete {$configFile}, make the inc folder writable, and then: {$dropHint}";
+                } else {
+                    $report[] = 'inc/config_path.php now points the app at its config. Keep that file when you upload newer application files.';
+                }
+            } else {
+                // A callback keeps "$" and "\" in the path from being read as back-references.
+                $patched = preg_replace_callback($configPathsPattern,
+                    fn(array $m): string => "\$configPaths = [\n    " . var_export($configFile, true) . ",\n    dirname(__DIR__, 2) . '/private/config.php',\n];",
+                    $coreSrc, 1);
+                if (!is_string($patched) || @file_put_contents($core, $patched) === false) {
+                    $errors[] = "Could not update inc/core.php, so the app cannot find its config yet. The database and {$configFile} are in place. "
+                        . "Either finish by hand — edit inc/core.php so the first entry of \$configPaths is '{$configFile}', then delete install.php, install.php.enabled and schema_full.sql — "
+                        . "or start over: delete {$configFile}, make inc/core.php writable, and then: {$dropHint}";
+                } else {
+                    $report[] = 'inc/core.php now loads the new config path.';
+                }
+            }
+        }
+    }
+
+    if (!$errors && $pdo) {
+        // ---- Cron settings: where the scheduled jobs find the app and what backup.sh dumps ----
+        $shellQuote = fn(string $v): string => "'" . str_replace("'", "'\\''", $v) . "'";
+        $cronDir = $privateDir . '/cron';
+        $cronConfig = "<?php\n// Written by the installer: the application's inc/ directory, for the cron scripts.\nreturn " . var_export(__DIR__ . '/inc', true) . ";\n";
+        $backupConf = "# Written by the installer: settings for backup.sh (read as shell).\n"
+            . 'CMS_PRIVATE_DIR=' . $shellQuote($privateDir) . "\n"
+            . 'CMS_DB_NAME=' . $shellQuote($dbName) . "\n"
+            . 'CMS_DB_CNF=' . $shellQuote($privateDir . '/db.cnf') . "\n";
+        $cronWritten = (is_dir($cronDir) || @mkdir($cronDir, 0700))
+            && @file_put_contents($cronDir . '/cron_config.php', $cronConfig) !== false
+            && @file_put_contents($cronDir . '/backup.conf', $backupConf) !== false;
+        $report[] = $cronWritten
+            ? "Cron settings written to {$cronDir}/cron_config.php and {$cronDir}/backup.conf."
+            : "Could not write the cron settings into {$cronDir} — create the two files shown under the manual steps by hand.";
+
+        // ---- Brand icons (requires GD) ----
+        $defaultIcons = 'the default icons are still in place: replace assets/apple-touch-icon.png, icon-192.png, icon-512.png and icon-1024.png with your own.';
+        if (function_exists('imagecreatetruecolor')) {
+            [$r, $g, $b] = sscanf($brandDark, '#%02x%02x%02x');
+            [$ar, $ag, $ab] = sscanf($brandAccent, '#%02x%02x%02x');
+            $iconsOk = true;
+            foreach ([180 => 'apple-touch-icon.png', 192 => 'icon-192.png', 512 => 'icon-512.png', 1024 => 'icon-1024.png'] as $s => $file) {
+                $im = imagecreatetruecolor($s, $s);
+                imagefill($im, 0, 0, imagecolorallocate($im, $r, $g, $b));
+                $white = imagecolorallocate($im, 255, 255, 255);
+                $c = (int)($s / 2); $outer = (int)($s * 0.62); $thick = (int)($s * 0.09);
+                for ($i = 0; $i < $thick; $i++) {
+                    imageellipse($im, $c, $c, $outer - $i, $outer - $i, $white);
+                    imageellipse($im, $c, $c, $outer - $i - 1, $outer - $i, $white);
+                }
+                imagefilledellipse($im, $c, (int)($c - $outer / 2 + $thick / 2), (int)($s * 0.09), (int)($s * 0.09),
+                    imagecolorallocate($im, $ar, $ag, $ab));
+                $iconsOk = @imagepng($im, __DIR__ . '/assets/' . $file) && $iconsOk;
+            }
+            if ($iconsOk) $report[] = 'Brand icons generated in your colors.';
+            else $notices[] = 'Icons: the icons in your colors could not be written to the assets folder, so ' . $defaultIcons;
+        } else {
+            $notices[] = "Icons: PHP's GD extension is not available, so " . $defaultIcons;
+        }
+
+        // ---- Manifest ----
+        $manifestOk = @file_put_contents(__DIR__ . '/manifest.webmanifest', json_encode([
+            'name' => $brandName, 'short_name' => $brandShort,
+            'description' => 'Case management for ' . $brandOrg,
+            'start_url' => '/index.php', 'scope' => '/', 'display' => 'standalone',
+            'background_color' => $brandDark, 'theme_color' => $brandDark,
+            'icons' => [
+                ['src' => '/assets/icon-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
+                ['src' => '/assets/icon-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
+            ],
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)) !== false;
+        if ($manifestOk) $report[] = 'Web-app manifest written.';
+        else $notices[] = 'Web-app manifest: manifest.webmanifest could not be written, so the installable web app still shows the default name. Edit its name, short_name and colors by hand.';
+
+        // ---- Upload limits ----
+        // A client document can be up to 25 MB. PHP turns away a bigger file, or a
+        // bigger request, before the app sees it, so the app cannot say why. The
+        // mobile app sends a document base64-encoded inside its JSON request, which
+        // makes a 25 MB file about 35 MB: post_max_size needs 36M (as .user.ini sets).
+        $uploadMax = ini_bytes((string)ini_get('upload_max_filesize'));
+        $postMax = ini_bytes((string)ini_get('post_max_size'));
+        if (($uploadMax > 0 && $uploadMax < 25 * 1048576) || ($postMax > 0 && $postMax < 36 * 1048576)) {
+            $notices[] = 'Upload size: this server accepts files up to ' . ini_get('upload_max_filesize') . ' (upload_max_filesize) in a request of up to ' . ini_get('post_max_size') . ' (post_max_size). '
+                . 'Client documents can be up to 25 MB, and the mobile app sends a document base64-encoded, which makes a 25 MB file about 35 MB. Set upload_max_filesize to at least 25M and post_max_size to at least 36M, in the .user.ini file in this folder or in your hosting panel\'s PHP settings (on cPanel, the MultiPHP INI Editor). '
+                . 'Until then, a larger file is refused by the server before the app can say why.';
+        }
+
+        // ---- Lock ----
+        $lockOk = @file_put_contents($lockFile, date('c')) !== false;
+        @unlink($enableFile);
+        // Remove the installer and the schema dump so they can't be served afterward
+        // (don't rely on the admin remembering the manual step). .htaccess also denies them.
+        @unlink(__DIR__ . '/schema_full.sql');
+        @unlink(__FILE__);
+        // Whatever could not be removed is listed prominently on the success page.
+        clearstatcache();
+        $leftovers = array_values(array_filter([__FILE__, $enableFile, __DIR__ . '/schema_full.sql'], 'file_exists'));
+        if ($lockOk && !$leftovers) $report[] = 'The installer locked itself (install.lock) and removed install.php, install.php.enabled and schema_full.sql.';
+        $done = true;
+    }
+}
+
+// The Private directory field: its current value, and whether that sits under a
+// folder web servers normally publish (then a warning and a confirmation box show).
+$privateDirValue = field('private_dir', default_private_dir());
+$privateDirWebDir = $privateDirValue !== '' ? web_dir_component(resolve_path($privateDirValue)) : null;
+header('Cache-Control: no-store');   // the success page shows the off-site backup password once
+?><!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CMS Installer</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:44rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1a1a2e}
+h1{color:#1e3a8a} fieldset{border:1px solid #ccd;border-radius:8px;margin:0 0 1rem;padding:1rem}
+label{display:block;font-weight:600;margin:.6rem 0 .2rem} input{width:100%;padding:.5rem;border:2px solid #667;border-radius:6px;font-size:1rem}
+input[type=checkbox]{width:auto;margin-right:.5rem;transform:scale(1.3)}
+button{background:#1e40af;color:#fff;border:0;border-radius:8px;padding:.7rem 1.4rem;font-size:1rem;font-weight:600;cursor:pointer}
+.err{background:#fef2f2;border:2px solid #dc2626;color:#991b1b;padding:.7rem 1rem;border-radius:8px;margin-bottom:1rem}
+.ok{background:#ecfdf5;border:2px solid #059669;color:#065f46;padding:.7rem 1rem;border-radius:8px;margin-bottom:1rem}
+.warn{background:#fffbeb;border:2px solid #b45309;color:#78350f;padding:.7rem 1rem;border-radius:8px;margin:.6rem 0}
+.hint{font-weight:400;color:#556;font-size:.9rem} code{background:#eef;padding:.1rem .3rem;border-radius:4px}
+pre{background:#eef;padding:.6rem .8rem;border-radius:6px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
+</style></head><body>
+<h1>Case Management System — Installer</h1>
+
+<?php if ($done): ?>
+  <div class="ok"><strong>Installed successfully.</strong></div>
+  <?php if ($leftovers): ?>
+  <div class="err"><h2>Secure the installer now</h2>
+    <p>The web server was not allowed to delete <?= count($leftovers) === 1 ? 'this installer file' : 'these installer files' ?><?= !$lockOk ? ' or to create <code>install.lock</code>' : '' ?>. Until <?= count($leftovers) === 1 ? 'it is' : 'they are' ?> gone, the installer could be run again — taking over this site — or the database layout downloaded. Delete <?= count($leftovers) === 1 ? 'it' : 'them' ?> from the docroot now with your hosting file manager:</p>
+    <ul><?php foreach ($leftovers as $f) echo '<li><code>' . htmlspecialchars(basename($f)) . '</code></li>'; ?></ul>
+  </div>
+  <?php endif; ?>
+  <?php foreach ($notices as $n) echo '<div class="warn">' . htmlspecialchars($n) . '</div>'; ?>
+  <ul><?php foreach ($report as $r) echo '<li>' . htmlspecialchars($r) . '</li>'; ?></ul>
+  <h2>Off-site backup password — shown only once</h2>
+  <p>Every Monday the weekly off-site backup emails an encrypted ZIP of the database and uploaded documents. This is its password. <strong>Store it now in your organisation's password manager</strong>, somewhere other than this server: if the server is ever lost, the emailed backups cannot be opened without it, and this page will not show it again.</p>
+  <label for="backup_password">Off-site backup password</label>
+  <input id="backup_password" type="text" readonly autocomplete="off" spellcheck="false" value="<?= htmlspecialchars($backupPassword) ?>">
+  <h2>Finish up (manual steps)</h2>
+  <ol>
+    <li><strong>Confirm <code>install.php</code>, <code>install.php.enabled</code> and <code>schema_full.sql</code> are gone, and <code>install.lock</code> is present.</strong> The installer does this itself on success (and <code>.htaccess</code> denies them); if your host blocked it, fix it in the docroot now.</li>
+    <li>Sign in at <code><?= htmlspecialchars($baseUrl) ?>/login.php</code> — 2FA codes email via PHP mail() until Graph is configured; add Azure Graph credentials (tenant/client/secret; Mail.Send, plus Mail.ReadWrite for email filing and off-site backups over 2 MB) in <code>config.php</code> for reliable delivery.</li>
+    <li>Copy the files from the install bundle's <code>cron/</code> folder into <code><?= htmlspecialchars($cronDir) ?></code>. The scripts need no editing: they read the two small settings files the installer wrote there. Keep those files; if either is missing, create it with exactly this content.<br>
+      <code><?= htmlspecialchars($cronDir) ?>/cron_config.php</code> (tells the scripts where the app's <code>inc/</code> folder is):
+      <pre><?= htmlspecialchars($cronConfig) ?></pre>
+      <code><?= htmlspecialchars($cronDir) ?>/backup.conf</code> (tells <code>backup.sh</code> what to back up):
+      <pre><?= htmlspecialchars($backupConf) ?></pre></li>
+    <li>Create <code><?= htmlspecialchars($privateDir) ?>/db.cnf</code> (permissions 600) so the nightly backup can sign in to the database:
+      <pre>[client]
+user=<?= htmlspecialchars($dbUser) ?>
+
+password="YOUR DATABASE PASSWORD"
+host=<?= htmlspecialchars($dbHost) ?>
+</pre></li>
+    <li>Add cron jobs (adjust the PHP path as needed):<br>
+      <code>15 2 * * * <?= htmlspecialchars($cronDir) ?>/backup.sh</code> (make it executable: chmod 700)<br>
+      <code>0 7 * * * php <?= htmlspecialchars($cronDir) ?>/daily_alerts.php</code><br>
+      <code>15 7,17 * * * php <?= htmlspecialchars($cronDir) ?>/session_reminders.php</code> (morning and evening, so sessions booked during the day for tomorrow are reminded too)<br>
+      <code>30 7 * * * php <?= htmlspecialchars($cronDir) ?>/monthly_reports.php</code><br>
+      <code>0 8 * * * php <?= htmlspecialchars($cronDir) ?>/at_reminders.php</code><br>
+      <code>*/15 * * * * php <?= htmlspecialchars($cronDir) ?>/ingest_email.php</code> (needs Graph)<br>
+      <code>*/10 * * * * php <?= htmlspecialchars($cronDir) ?>/watchdog.php</code><br>
+      <code>45 2 * * 1 php <?= htmlspecialchars($cronDir) ?>/weekly_offsite.php</code></li>
+    <li>After the first night, confirm a <code>cms_*.sql.gz</code> file appeared in <code><?= htmlspecialchars($privateDir) ?>/backups</code>. The watchdog emails <code><?= htmlspecialchars($adminEmail) ?></code> if no backup is newer than 48 hours.</li>
+  </ol>
+<?php else: ?>
+  <?php if ($errors): ?>
+  <div class="err" role="alert"><h2>The installation could not continue</h2>
+    <ul><?php foreach ($errors as $e) echo '<li>' . htmlspecialchars($e) . '</li>'; ?></ul></div>
+  <?php endif; ?>
+  <p>Requires PHP 8.1+ and <strong>MariaDB 10.4 or newer</strong> (MySQL is not supported).</p>
+  <form method="post">
+    <fieldset><legend>Branding</legend>
+      <label for="brand_name">Business / app name <span class="hint">(titles, emails — e.g., “Riverbend Vision Services CMS”)</span></label>
+      <input id="brand_name" name="brand_name" required autocomplete="organization" value="<?= htmlspecialchars(field('brand_name')) ?>">
+      <label for="brand_short">Short brand <span class="hint">(header — e.g., “Riverbend Vision”)</span></label>
+      <input id="brand_short" name="brand_short" required autocomplete="off" value="<?= htmlspecialchars(field('brand_short')) ?>">
+      <label for="brand_org">Full organization name <span class="hint">(report letterheads)</span></label>
+      <input id="brand_org" name="brand_org" required autocomplete="organization" value="<?= htmlspecialchars(field('brand_org')) ?>">
+      <label for="brand_tagline">Tagline <span class="hint">(invoice letterhead subtitle)</span></label>
+      <input id="brand_tagline" name="brand_tagline" autocomplete="off" value="<?= htmlspecialchars(field('brand_tagline')) ?>">
+      <label for="brand_color">Primary color <span class="hint">(6-digit hex, e.g. #1e40af)</span></label><input id="brand_color" name="brand_color" autocomplete="off" value="<?= htmlspecialchars(field('brand_color', '#1e40af')) ?>">
+      <label for="brand_color_dark">Dark color <span class="hint">(header and PDFs, 6-digit hex)</span></label><input id="brand_color_dark" name="brand_color_dark" autocomplete="off" value="<?= htmlspecialchars(field('brand_color_dark', '#1e3a8a')) ?>">
+      <label for="brand_accent">Accent color <span class="hint">(6-digit hex)</span></label><input id="brand_accent" name="brand_accent" autocomplete="off" value="<?= htmlspecialchars(field('brand_accent', '#0f766e')) ?>">
+    </fieldset>
+    <fieldset><legend>Site</legend>
+      <label for="base_url">Base URL <span class="hint">(https://cms.example.com — no trailing slash)</span></label>
+      <input id="base_url" name="base_url" required autocomplete="url" value="<?= htmlspecialchars(field('base_url')) ?>">
+      <label for="private_dir">Private directory <span class="hint">(config, uploads and backups — must be outside the docroot; created if missing)</span></label>
+      <input id="private_dir" name="private_dir" autocomplete="off" value="<?= htmlspecialchars($privateDirValue) ?>">
+      <?php if ($privateDirWebDir !== null): ?>
+      <div class="warn" role="alert"><strong>Warning:</strong> this path is under a folder named “<?= htmlspecialchars($privateDirWebDir) ?>”, which web servers normally publish. The config, uploaded client documents and nightly database backups kept there could become downloadable. Use a directory outside “<?= htmlspecialchars($privateDirWebDir) ?>” if your hosting account has one. If it does not, tick the box below to continue: the installer writes a deny-all <code>.htaccess</code> into the directory, which protects it on Apache-compatible servers only.</div>
+      <label for="private_dir_confirm"><input type="checkbox" id="private_dir_confirm" name="private_dir_confirm" value="1"<?= !empty($_POST['private_dir_confirm']) ? ' checked' : '' ?>>I understand the risk and want to use this directory anyway</label>
+      <?php endif; ?>
+      <label for="mail_from">Mail-from address <span class="hint">(the mailbox the app sends email from)</span></label>
+      <input id="mail_from" name="mail_from" required autocomplete="off" value="<?= htmlspecialchars(field('mail_from')) ?>">
+      <label for="support_email">Public contact email <span class="hint">(optional — shown in the page footer for help requests; leave blank to show the mail-from address, but fill it in if that mailbox is not monitored)</span></label>
+      <input id="support_email" name="support_email" type="email" maxlength="190" autocomplete="off" value="<?= htmlspecialchars(field('support_email')) ?>">
+      <label for="timezone">Time zone <span class="hint">(your organisation's local time zone, e.g. America/Chicago — every date and time in the app uses it)</span></label>
+      <input id="timezone" name="timezone" autocomplete="off" value="<?= htmlspecialchars(field('timezone', 'America/Chicago')) ?>">
+    </fieldset>
+    <fieldset><legend>Database (empty MariaDB 10.4+ database)</legend>
+      <label for="db_host">Database host</label><input id="db_host" name="db_host" autocomplete="off" value="<?= htmlspecialchars(field('db_host', 'localhost')) ?>">
+      <label for="db_name">Database name</label><input id="db_name" name="db_name" required autocomplete="off" value="<?= htmlspecialchars(field('db_name')) ?>">
+      <label for="db_user">Database user</label><input id="db_user" name="db_user" required autocomplete="off" value="<?= htmlspecialchars(field('db_user')) ?>">
+      <label for="db_pass">Database password</label><input id="db_pass" name="db_pass" type="password" autocomplete="off">
+    </fieldset>
+    <fieldset><legend>Admin account</legend>
+      <label for="admin_name">Administrator's name</label><input id="admin_name" name="admin_name" required maxlength="120" autocomplete="name" value="<?= htmlspecialchars(field('admin_name')) ?>">
+      <label for="admin_email">Administrator's email <span class="hint">(used to sign in)</span></label><input id="admin_email" name="admin_email" type="email" required maxlength="183" autocomplete="email" value="<?= htmlspecialchars(field('admin_email')) ?>">
+      <label for="admin_pass">Administrator's password <span class="hint">(10+ characters)</span></label><input id="admin_pass" name="admin_pass" type="password" required minlength="10" autocomplete="new-password">
+    </fieldset>
+    <button type="submit">Install</button>
+  </form>
+<?php endif; ?>
+</body></html>

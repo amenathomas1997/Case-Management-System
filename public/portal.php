@@ -1,0 +1,857 @@
+<?php
+// Read-only client portal — accessed via a private tokenized link emailed to the client.
+require __DIR__ . '/inc/bootstrap.php';
+require __DIR__ . '/inc/layout.php';
+require_once __DIR__ . '/inc/at_services.php';
+enable_public_translation();
+// Copy used only on this page (its Spanish lives here, beside the English).
+register_translations([
+    'Send your instructor a request for a new time for this session?' => '¿Enviar a su instructor una solicitud de otro horario para esta sesión?',
+    'Choose OK to send the request, or Cancel to send nothing.' => 'Elija Aceptar para enviar la solicitud, o Cancelar para no enviar nada.',
+    'Send your instructor a request to cancel this session?' => '¿Enviar a su instructor una solicitud para cancelar esta sesión?',
+    'Choose OK to send the request. Choose Cancel to keep the session and send nothing.' => 'Elija Aceptar para enviar la solicitud. Elija Cancelar para mantener la sesión y no enviar nada.',
+    'Tell your instructor you finished this homework?' => '¿Avisar a su instructor que terminó esta tarea?',
+    'Tell your instructor you practiced this item?' => '¿Avisar a su instructor que practicó este tema?',
+    'Choose OK to tell your instructor, or Cancel to send nothing.' => 'Elija Aceptar para avisar a su instructor, o Cancelar para no enviar nada.',
+    '(required)' => '(obligatorio)',
+    '(optional)' => '(opcional)',
+    'Whole minutes, up to 600.' => 'Minutos enteros, hasta 600.',
+    'Enter the minutes as a whole number from 0 to 600, or leave it blank.' => 'Escriba los minutos como un número entero de 0 a 600, o déjelo en blanco.',
+    'Upload a document for your instructor — a form, an ID, or anything they asked for. PDF, Office, text or image files up to 15 megabytes (MB).' => 'Suba un documento para su instructor — un formulario, una identificación o cualquier cosa que le hayan pedido. Archivos PDF, de Office, de texto o de imagen de hasta 15 megabytes (MB).',
+    'No guides match. Clear the search to see all guides.' => 'Ninguna guía coincide. Borre la búsqueda para ver todas las guías.',
+    'Up to 2,000 characters.' => 'Hasta 2.000 caracteres.',
+    'Up to 5,000 characters.' => 'Hasta 5.000 caracteres.',
+    'Up to 16,000 characters.' => 'Hasta 16.000 caracteres.',
+    'Email on file:' => 'Correo electrónico registrado:',
+    'No email on file.' => 'No hay correo electrónico registrado.',
+    'Ask your instructor to change it.' => 'Pida a su instructor que lo cambie.',
+    'Your instructor updated your information while this page was open, so nothing was saved. The form now shows the latest details, with the changes you typed kept. Check it, then choose Save my information again.' => 'Su instructor actualizó su información mientras esta página estaba abierta, así que no se guardó nada. El formulario ahora muestra los datos más recientes, con los cambios que usted escribió. Revíselo y elija Guardar mi información otra vez.',
+    'You have reached today\'s limit for this. Please try again tomorrow, or contact your instructor.' => 'Llegó al límite de hoy para esto. Inténtelo de nuevo mañana o comuníquese con su instructor.',
+]);
+
+/** The contact details and access needs the portal form edits, as on file, in the
+ *  form they are compared in. (The email address is not edited here: a portal
+ *  link holder could otherwise redirect the next replacement link to themselves.) */
+function portal_profile_values(array $client): array {
+    return [
+        'phone' => trim((string)$client['phone']),
+        'address' => trim((string)$client['address']),
+        'a11y_screen_reader' => !empty($client['a11y_screen_reader']) ? '1' : '0',
+        'a11y_format' => trim((string)$client['a11y_format']),
+        'a11y_primary_tech' => trim((string)$client['a11y_primary_tech']),
+        'a11y_contact' => $client['a11y_contact'] === 'No preference' ? '' : trim((string)$client['a11y_contact']),
+        'a11y_notes' => str_replace("\r\n", "\n", trim((string)$client['a11y_notes'])),
+    ];
+}
+/** The form field that edits each profile value. */
+const PORTAL_PROFILE_FIELDS = ['phone' => 'p_phone', 'address' => 'p_address', 'a11y_screen_reader' => 'p_sr', 'a11y_format' => 'p_format',
+    'a11y_primary_tech' => 'p_tech', 'a11y_contact' => 'p_contact', 'a11y_notes' => 'p_notes'];
+
+/** Bytes in a php.ini size such as "8M" (0 when unset or unlimited). */
+function portal_ini_bytes(string $v): int {
+    $v = trim($v);
+    $n = (int)$v;
+    return match (strtolower(substr($v, -1))) { 'g' => $n * 1073741824, 'm' => $n * 1048576, 'k' => $n * 1024, default => $n };
+}
+/** The largest file this server accepts, in whole MB, never above the 15 MB the page offers. */
+function portal_upload_max_mb(): int {
+    $mb = [15];
+    foreach (['upload_max_filesize', 'post_max_size'] as $k) {
+        $b = portal_ini_bytes((string)ini_get($k));
+        if ($b > 0) $mb[] = max(1, intdiv($b, 1048576));
+    }
+    return min($mb);
+}
+/** Tell the client's instructor about portal activity, or every administrator when
+ *  nobody is assigned or the assigned account has been deactivated: an alert to a
+ *  deactivated account is never seen. $client carries active_owner from the lookup. */
+function portal_notify_owner(array $client, string $ownerMsg, string $link, ?string $adminMsg = null): void {
+    $owner = (int)($client['active_owner'] ?? 0);
+    if ($owner) notify_user($owner, $ownerMsg, $link);
+    else notify_admin_users($adminMsg ?? $ownerMsg, $link);
+}
+
+$rawToken = $_GET['t'] ?? '';
+$token = is_string($rawToken) ? preg_replace('/[^a-f0-9]/', '', $rawToken) : '';
+$client = null;
+if (strlen($token) === 48) {
+    // Expired links stop working; staff resend to issue a fresh one. So does every
+    // link of a retention-archived client: the record is out of day-to-day use.
+    // active_owner: the assigned instructor only while their account is active.
+    $stmt = db()->prepare('SELECT c.*, au.id AS active_owner FROM portal_tokens p JOIN clients c ON c.id = p.client_id
+        LEFT JOIN users au ON au.id = c.assigned_to AND au.is_active = 1
+        WHERE p.token = ? AND (p.expires_at IS NULL OR p.expires_at > NOW()) AND c.archived_at IS NULL');
+    $stmt->execute([$token]);
+    $client = $stmt->fetch();
+    if ($client) db()->prepare('UPDATE portal_tokens SET last_used_at = NOW() WHERE token = ?')->execute([$token]);
+}
+
+// Client interactions (homework self-report, message to the team). Token-scoped;
+// each action is verified against this client's own records.
+if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    // A body over post_max_size reaches PHP with $_POST and $_FILES emptied, the
+    // CSRF token included: say the file was too big, beside the file field, instead
+    // of the general notice csrf_check() would give. Nothing is changed.
+    $postMax = portal_ini_bytes((string)ini_get('post_max_size'));
+    if (!$_POST && !$_FILES && $postMax > 0 && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $postMax) {
+        keep_field_errors(['document' => 'That file is too large (' . portal_upload_max_mb() . ' MB maximum).']);
+        redirect('portal.php?t=' . $token);
+    }
+    // A stale form token (the session lapsed while the page sat open) brings the
+    // client back to this page with what was typed refilled: csrf_check() handles
+    // the public pages that way and never sends them to the staff sign-in page.
+    csrf_check();
+    /* A 24-hour ceiling per client on each kind of write, beside the short windows
+       below: one leaked link cannot fill the record with case notes, tasks and
+       alerts. Administrators are told once a day per action when a ceiling is hit. */
+    $overDailyCap = function (string $key, int $max, string $what) use ($client): bool {
+        $q = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)");
+        $q->execute([$key]);
+        if ((int)$q->fetchColumn() < $max) return false;
+        $q->execute(['portal-cap-' . $key]);
+        if ((int)$q->fetchColumn() === 0) {
+            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-cap-' . $key]);
+            notify_admin_users('Portal daily limit reached (' . $what . ') for ' . $client['name'] . '. If this was not the client, revoke the portal link.',
+                'client.php?id=' . (int)$client['id']);
+        }
+        return true;
+    };
+    $capMsg = 'You have reached today\'s limit for this. Please try again tomorrow, or contact your instructor.';
+    if (isset($_POST['at_learning_done']) && at_ready()) {
+        // Up to 5 updates a minute per client: enough to report several exercises in a row.
+        $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 SECOND)");
+        $rl->execute(['portal-learn-' . (int)$client['id']]);
+        if ((int)$rl->fetchColumn() >= 5) {
+            flash_ui('Please wait a moment, then press the button again.', 'error');
+        } else {
+            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-learn-' . (int)$client['id']]);
+            // Only the first transition changes a row; notify the instructor then (parity with hw_done).
+            if (at_portal_report((int)($_POST['at_learning_id'] ?? 0), (int)$client['id']) > 0) {
+                $fn = explode(' ', $client['name'])[0];
+                portal_notify_owner($client, $fn . ' reported practice on assigned learning', 'client.php?id=' . (int)$client['id'],
+                    $client['name'] . ' reported practice on assigned learning');
+                flash_ui('Your practice update was recorded for your instructor.');
+            } else {
+                flash_ui('Your instructor already has your practice update for this item.');
+            }
+        }
+        redirect('portal.php?t=' . $token);
+    }
+    if (isset($_POST['hw_done'])) {
+        $hid = (int)($_POST['homework_id'] ?? 0);
+        // Only homework on this client's own tracks can be marked.
+        // client_reported_at IS NULL so a replayed POST can't re-notify staff for an
+        // already-reported item (status stays 'Assigned' until staff verify it).
+        $hq = db()->prepare("SELECT h.id, h.title FROM homework h
+            JOIN training_tracks t ON t.id = h.track_id
+            WHERE h.id = ? AND t.client_id = ? AND h.status = 'Assigned' AND h.client_reported_at IS NULL");
+        $hq->execute([$hid, (int)$client['id']]);
+        if ($hw = $hq->fetch()) {
+            db()->prepare('UPDATE homework SET client_reported_at = NOW() WHERE id = ?')->execute([$hid]);
+            $fn = explode(' ', $client['name'])[0];
+            portal_notify_owner($client, $fn . ' marked homework done: ' . $hw['title'], 'client.php?id=' . (int)$client['id'],
+                $client['name'] . ' marked homework done: ' . $hw['title']);
+            flash_ui('Thanks — we let your instructor know.');
+        }
+        redirect('portal.php?t=' . $token);
+    }
+    if (isset($_POST['send_message'])) {
+        // Line breaks counted as the browser counts them (one character each).
+        $msg = str_replace("\r\n", "\n", trim(is_string($_POST['message'] ?? '') ? $_POST['message'] : ''));
+        // One message per minute per client (server-side, survives cookie clears).
+        $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 SECOND)");
+        $rl->execute(['portal-msg-' . (int)$client['id']]);
+        if ($msg === '') {
+            keep_field_errors(['message' => 'Please type a message first.']);
+        } elseif (mb_strlen($msg) > 5000) {
+            // Refused, never cut: the whole message comes back to shorten or split.
+            keep_input();
+            keep_field_errors(['message' => 'Your message is too long (5,000 characters maximum). Shorten it, or send it in two parts.']);
+        } elseif ((int)$rl->fetchColumn() > 0) {
+            keep_input(); // the message is refilled, not lost
+            flash_ui('Please wait a moment before sending another message.', 'error');
+        } elseif ($overDailyCap('portal-msg-' . (int)$client['id'], 50, 'messages')) {
+            keep_input();
+            flash_ui($capMsg, 'error');
+        } else {
+            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-msg-' . (int)$client['id']]);
+            post_message((int)$client['id'], 'client', 'client', null, $msg);
+            portal_notify_owner($client, 'Message from ' . $client['name'] . ' (portal)', 'messages.php?client=' . (int)$client['id'] . '&channel=client');
+            flash_ui('Message sent — your instructor will get back to you.');
+        }
+        redirect('portal.php?t=' . $token);
+    }
+    if (isset($_POST['new_request'])) {
+        $type = in_array($_POST['req_type'] ?? '', ['appointment', 'reschedule', 'cancel', 'device', 'other'], true) ? $_POST['req_type'] : 'other';
+        $sessionId = (int)($_POST['session_id'] ?? 0) ?: null;
+        $details = str_replace("\r\n", "\n", trim(is_string($_POST['details'] ?? null) ? $_POST['details'] : ''));
+        // Throttle: 5 requests / 5 minutes / client (server-side).
+        $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 5 MINUTE)");
+        $rl->execute(['portal-req-' . (int)$client['id']]);
+        $detailsField = $type === 'appointment' ? 'appt_details' : 'req_details';
+        if ($details === '' && !in_array($type, ['cancel', 'reschedule'], true)) {
+            keep_input();
+            keep_field_errors([$detailsField => 'Please add a little detail.']);
+        } elseif (mb_strlen($details) > 2000) {
+            keep_input(); // refused, never cut
+            keep_field_errors([$detailsField => 'That is too long (2,000 characters maximum).']);
+        } elseif ((int)$rl->fetchColumn() >= 5) {
+            keep_input(); // what was typed is refilled, not lost
+            flash_ui('Please wait a moment before sending more requests.', 'error');
+        } elseif ($overDailyCap('portal-req-' . (int)$client['id'], 30, 'requests')) {
+            keep_input();
+            flash_ui($capMsg, 'error');
+        } else {
+            // A referenced session must be this client's own.
+            if ($sessionId) {
+                $sc = db()->prepare('SELECT id FROM scheduled_sessions WHERE id = ? AND client_id = ?');
+                $sc->execute([$sessionId, (int)$client['id']]);
+                if (!$sc->fetchColumn()) $sessionId = null;
+            }
+            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-req-' . (int)$client['id']]);
+            db()->prepare('INSERT INTO portal_requests (client_id, type, session_id, details) VALUES (?,?,?,?)')
+                ->execute([(int)$client['id'], $type, $sessionId, $details !== '' ? $details : null]);
+            $reqId = (int)db()->lastInsertId();
+            $labels = ['appointment' => 'appointment request', 'reschedule' => 'reschedule request', 'cancel' => 'cancellation request', 'device' => 'device help request', 'other' => 'request'];
+            $label = $labels[$type] ?? 'request';
+            // The follow-up task goes to an active instructor (unassigned otherwise, where
+            // staff with client access see it); its key lets Client requests close it
+            // when the request is set to Done or Declined.
+            $aid = (int)($client['active_owner'] ?? 0);
+            add_task('Client ' . $label . ': ' . $client['name'], mb_substr($details, 0, 400), (int)$client['id'], null, business_days_from(2), $aid ?: null, null, 'preq-' . $reqId);
+            portal_notify_owner($client, $client['name'] . ' sent a ' . $label, 'portal_requests.php?client=' . (int)$client['id']);
+            flash_ui('Request sent — your instructor will follow up.');
+        }
+        redirect('portal.php?t=' . $token);
+    }
+    if (isset($_POST['upload_doc'])) {
+        // Anyone holding the link can upload, so legacy .doc/.xls (which can carry
+        // macros) are not accepted here; .docx/.xlsx/PDF cover the same documents.
+        $allowed = ['pdf', 'docx', 'xlsx', 'txt', 'rtf', 'png', 'jpg', 'jpeg'];
+        $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 MINUTE)");
+        $rl->execute(['portal-up-' . (int)$client['id']]);
+        $rlDay = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)");
+        $rlDay->execute(['portal-up-' . (int)$client['id']]);
+        keep_input(); // keeps the description; a file always has to be chosen again
+        $upErr = $_FILES['document']['error'] ?? UPLOAD_ERR_NO_FILE;
+        $docTitle = is_string($_POST['doc_title'] ?? null) ? trim($_POST['doc_title']) : '';
+        // Each upload failure gets its own message, not "choose a file".
+        if (empty($_FILES['document']['name']) || $upErr === UPLOAD_ERR_NO_FILE) {
+            keep_field_errors(['document' => 'Please choose a file to upload.']);
+        } elseif ($upErr === UPLOAD_ERR_INI_SIZE || $upErr === UPLOAD_ERR_FORM_SIZE) {
+            keep_field_errors(['document' => 'That file is too large (' . portal_upload_max_mb() . ' MB maximum).']);
+        } elseif ($upErr === UPLOAD_ERR_PARTIAL) {
+            keep_field_errors(['document' => 'The upload was interrupted. Please try again.']);
+        } elseif ($upErr !== UPLOAD_ERR_OK) {
+            flash_ui('The file could not be saved. Please try again.', 'error');
+        } elseif (mb_strlen($docTitle) > 190) {
+            keep_field_errors(['doc_title' => 'That description is too long (190 characters maximum).']);
+        } elseif ((int)$rl->fetchColumn() >= 10) {
+            flash_ui('Please wait a moment before uploading more.', 'error');
+        } elseif ((int)$rlDay->fetchColumn() >= 30) {
+            flash_ui('You have shared a lot of documents today. Please try again tomorrow, or contact your instructor.', 'error');
+        } else {
+            $orig = (string)$_FILES['document']['name'];
+            $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+            // Storage used by this client's own uploads: today, and in all. Caps keep
+            // a leaked link from filling the shared disk.
+            $used = db()->prepare("SELECT path, created_at >= ? AS today FROM client_documents WHERE client_id = ? AND category = 'Client Upload'");
+            $used->execute([date('Y-m-d 00:00:00'), (int)$client['id']]);
+            $dayBytes = 0;
+            $allBytes = 0;
+            foreach ($used->fetchAll() as $u) {
+                $f = cfg('upload_dir') . '/' . basename($u['path']);
+                $b = is_file($f) ? (int)filesize($f) : 0;
+                $allBytes += $b;
+                if ($u['today']) $dayBytes += $b;
+            }
+            $size = (int)$_FILES['document']['size'];
+            if ($ext === 'doc' || $ext === 'xls') {
+                keep_field_errors(['document' => 'Older Word (.doc) and Excel (.xls) files cannot be accepted. Save the file as .docx, .xlsx or PDF, then upload it again.']);
+            } elseif (!in_array($ext, $allowed, true)) {
+                keep_field_errors(['document' => 'That file type is not allowed. Use PDF, Office, text or image files.']);
+            } elseif ($size > 15 * 1024 * 1024) {
+                keep_field_errors(['document' => 'That file is too large (15 MB maximum).']);
+            } elseif ($dayBytes + $size > 100 * 1024 * 1024) {
+                flash_ui('You have shared a lot of documents today. Please try again tomorrow, or contact your instructor.', 'error');
+            } elseif ($allBytes + $size > 500 * 1024 * 1024) {
+                flash_ui('You have reached the storage limit for shared documents. Please contact your instructor.', 'error');
+            } else {
+                $dir = cfg('upload_dir'); if (!is_dir($dir)) mkdir($dir, 0750, true);
+                $stored = bin2hex(random_bytes(16)) . '.' . $ext;
+                if (move_uploaded_file($_FILES['document']['tmp_name'], $dir . '/' . $stored)) {
+                    db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-up-' . (int)$client['id']]);
+                    // The kept file name fits its column (190) and keeps its extension.
+                    $safeName = preg_replace('/[^A-Za-z0-9._ -]/', '_', $orig);
+                    if (strlen($safeName) > 190) $safeName = substr($safeName, 0, 189 - strlen($ext)) . '.' . $ext;
+                    try {
+                        db()->prepare('INSERT INTO client_documents (client_id, category, title, orig_name, path, uploaded_by) VALUES (?,?,?,?,?,NULL)')
+                            ->execute([(int)$client['id'], 'Client Upload', $docTitle !== '' ? $docTitle : mb_substr(mb_scrub($orig, 'UTF-8'), 0, 190),
+                                $safeName, $stored]);
+                        // A database without the 'Client Upload' category (mig_3.0.8 not run)
+                        // under a non-strict SQL mode stores a blank category instead of
+                        // refusing: such a row escapes the storage caps and never shows in
+                        // "Documents you shared", so it is removed and the upload refused.
+                        $docId = (int)db()->lastInsertId();
+                        $cat = db()->prepare('SELECT category FROM client_documents WHERE id = ?');
+                        $cat->execute([$docId]);
+                        if ($cat->fetchColumn() !== 'Client Upload') {
+                            db()->prepare('DELETE FROM client_documents WHERE id = ?')->execute([$docId]);
+                            throw new UnexpectedValueException('client upload category not stored');
+                        }
+                    } catch (Throwable $e) {
+                        // No file is left on disk for a document that was not recorded. The
+                        // log line names the error type only, never the client or the file.
+                        @unlink($dir . '/' . $stored);
+                        error_log('Portal upload not recorded: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
+                        flash_ui('The file could not be saved. Please try again.', 'error');
+                        redirect('portal.php?t=' . $token);
+                    }
+                    portal_notify_owner($client, $client['name'] . ' uploaded a document (portal)', 'client.php?id=' . (int)$client['id'] . '&tab=documents');
+                    unset($_SESSION['old_input']); // saved: nothing to refill
+                    flash_ui('Thanks — your document was uploaded.');
+                } else {
+                    flash_ui('The file could not be saved. Please try again.', 'error');
+                }
+            }
+        }
+        redirect('portal.php?t=' . $token);
+    }
+    if (isset($_POST['update_profile'])) {
+        $in = fn(string $k): string => is_string($_POST[$k] ?? null) ? trim($_POST[$k]) : '';
+        $nl = fn(?string $v): string => str_replace("\r\n", "\n", trim((string)$v));
+        $fmts = ['Standard print', 'Large print', 'Plain text', 'Braille-ready (BRF)', 'Audio', 'Accessible PDF'];
+        $contacts = ['Email', 'Phone', 'Client portal', 'Postal mail'];
+        // What is on file, and what was sent, compared field by field: only the
+        // fields the client actually changed are written. ("No preference" and a
+        // blank contact choice mean the same.) The email address is not edited from
+        // the portal (staff change it), so a posted one is ignored.
+        $old = portal_profile_values($client);
+        $new = [
+            'phone' => $in('p_phone'),
+            'address' => $in('p_address'),
+            'a11y_screen_reader' => !empty($_POST['p_sr']) ? '1' : '0',
+            'a11y_format' => $in('p_format'),
+            'a11y_primary_tech' => $in('p_tech'),
+            'a11y_contact' => $in('p_contact') === 'No preference' ? '' : $in('p_contact'),
+            'a11y_notes' => $nl($in('p_notes')),
+        ];
+        // A choice outside the lists (other than the value already on file) leaves the field as it is.
+        if ($new['a11y_format'] !== '' && !in_array($new['a11y_format'], $fmts, true)) $new['a11y_format'] = $old['a11y_format'];
+        if ($new['a11y_contact'] !== '' && !in_array($new['a11y_contact'], $contacts, true)) $new['a11y_contact'] = $old['a11y_contact'];
+        // The form carries a fingerprint of each value it showed. When staff changed
+        // any of them after the page was drawn, nothing is saved: the stale page would
+        // otherwise write its old values back over the correction, as the client's change.
+        $shown = is_array($_POST['p_shown'] ?? null) ? $_POST['p_shown'] : [];
+        $fp = fn(string $v): string => hash('sha256', $v);
+        $staleFields = array_filter(array_keys($old), fn($k) => !is_string($shown[$k] ?? null) || !hash_equals($fp($old[$k]), $shown[$k]));
+        if ($staleFields) {
+            // Only what the client typed differently from what they were shown is
+            // refilled; every other field comes back with the details now on file.
+            $edited = array_filter(array_keys($old), fn($k) => is_string($shown[$k] ?? null) ? !hash_equals($shown[$k], $fp($new[$k])) : $new[$k] !== $old[$k]);
+            keep_input();
+            $keep = array_map(fn($k) => PORTAL_PROFILE_FIELDS[$k], $edited);
+            $_SESSION['old_input'] = array_intersect_key($_SESSION['old_input'] ?? [], array_flip(array_merge($keep, ['update_profile'])));
+            $_SESSION['old_input']['update_profile'] = '1';
+            $_SESSION['old_input']['p_kept'] = ',' . implode(',', $keep) . ',';
+            flash_ui('Your instructor updated your information while this page was open, so nothing was saved. The form now shows the latest details, with the changes you typed kept. Check it, then choose Save my information again.', 'error');
+            redirect('portal.php?t=' . $token . '#info-h');
+        }
+        $changed = array_keys(array_filter($new, fn($v, $k) => $v !== $old[$k], ARRAY_FILTER_USE_BOTH));
+        // Only what the client changed is checked: a value already on file (staff may
+        // keep longer access notes) never blocks a save. Over-long entries are refused
+        // on their field (limits match the staff form), never cut.
+        $ch = fn(string $k): bool => in_array($k, $changed, true);
+        $errors = [];
+        if ($ch('phone') && mb_strlen($new['phone']) > 40) $errors['p_phone'] = 'Your phone is too long (40 characters maximum).';
+        if ($ch('address') && mb_strlen($new['address']) > 255) $errors['p_address'] = 'Your address is too long (255 characters maximum).';
+        if ($ch('a11y_primary_tech') && mb_strlen($new['a11y_primary_tech']) > 120) $errors['p_tech'] = 'That is too long (120 characters maximum).';
+        if ($ch('a11y_notes') && mb_strlen($new['a11y_notes']) > 16000) $errors['p_notes'] = 'That is too long (16,000 characters maximum).';
+        // Each save notifies the instructor and adds a case note: at most 5 per 10 minutes.
+        $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 10 MINUTE)");
+        $rl->execute(['portal-prof-' . (int)$client['id']]);
+        if ($errors) {
+            keep_input();
+            keep_field_errors($errors);
+        } elseif (!$changed) {
+            flash_ui('Your information is already up to date.');
+        } elseif ((int)$rl->fetchColumn() >= 5) {
+            keep_input(); // what was typed is refilled, not lost
+            flash_ui('Please wait a few minutes before saving your information again.', 'error');
+        } elseif ($overDailyCap('portal-prof-' . (int)$client['id'], 20, 'profile saves')) {
+            keep_input();
+            flash_ui($capMsg, 'error');
+        } else {
+            $labels = ['phone' => 'Phone', 'address' => 'Address', 'a11y_screen_reader' => 'Uses a screen reader',
+                'a11y_format' => 'Preferred format', 'a11y_primary_tech' => 'Assistive technology', 'a11y_contact' => 'Contact preference',
+                'a11y_notes' => 'Access notes'];
+            $show = fn(string $k, string $v): string => $k === 'a11y_screen_reader' ? ($v === '1' ? 'yes' : 'no') : ($v === '' ? '(blank)' : $v);
+            $sets = [];
+            $vals = [];
+            $lines = [];
+            foreach ($changed as $k) {
+                $sets[] = $k . ' = ?';
+                $vals[] = $k === 'a11y_screen_reader' ? (int)$new[$k] : ($new[$k] !== '' ? $new[$k] : null);
+                if ($k !== 'a11y_notes') $lines[] = $labels[$k] . ': ' . $show($k, $old[$k]) . ' → ' . $show($k, $new[$k]);
+            }
+            if (in_array('a11y_notes', $changed, true)) {
+                $prev = mb_strcut($old['a11y_notes'], 0, 60000, 'UTF-8');
+                $lines[] = "Access notes changed. The previous notes were:\n" . ($prev === '' ? '(blank)' : $prev)
+                    . ($prev !== $old['a11y_notes'] ? "\n[…the rest of the previous notes was too long to copy here]" : '');
+            }
+            $vals[] = (int)$client['id'];
+            // The change and the case note that records the old values commit together,
+            // so staff can always see what was replaced and put it back.
+            db()->beginTransaction();
+            try {
+                db()->prepare('UPDATE clients SET ' . implode(', ', $sets) . ' WHERE id = ?')->execute($vals);
+                db()->prepare("INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)")
+                    ->execute([(int)$client['id'], 'Case Note', 'Contact details / access needs changed by client (portal)',
+                        "The client changed these details on their portal (previous → new):\n\n" . implode("\n", $lines)]);
+                db()->commit();
+            } catch (Throwable $e) {
+                if (db()->inTransaction()) db()->rollBack();
+                throw $e;
+            }
+            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-prof-' . (int)$client['id']]);
+            audit(null, 'portal.profile_update', 'client', (int)$client['id'], 'changed: ' . implode(', ', $changed));
+            $what = $client['name'] . ' changed their ' . strtolower(implode(', ', array_map(fn($k) => $labels[$k], $changed))) . ' (portal)';
+            portal_notify_owner($client, $what, 'client.php?id=' . (int)$client['id'] . '&tab=notes');
+            flash_ui('Your information was updated. Thank you.');
+        }
+        redirect('portal.php?t=' . $token);
+    }
+    if (isset($_POST['log_practice'])) {
+        $what = str_replace("\r\n", "\n", trim(is_string($_POST['practice'] ?? null) ? $_POST['practice'] : ''));
+        // Minutes are optional, but what is entered is checked, never clamped or
+        // dropped: whole minutes from 0 to 600. (A number the browser could not
+        // read arrives blank with a minutes_bad marker from the page script.)
+        $minsIn = trim(is_string($_POST['minutes'] ?? null) ? $_POST['minutes'] : '');
+        $minsOk = empty($_POST['minutes_bad']) && ($minsIn === '' || (ctype_digit($minsIn) && (int)$minsIn <= 600));
+        $mins = $minsOk && $minsIn !== '' ? (int)$minsIn : 0;
+        $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 MINUTE)");
+        $rl->execute(['portal-prac-' . (int)$client['id']]);
+        $pracErrors = [];
+        if ($what === '') $pracErrors['practice'] = 'Tell us what you practiced.';
+        elseif (mb_strlen($what) > 2000) $pracErrors['practice'] = 'That is too long (2,000 characters maximum).'; // refused, never cut
+        if (!$minsOk) $pracErrors['minutes'] = 'Enter the minutes as a whole number from 0 to 600, or leave it blank.';
+        if ($pracErrors) {
+            keep_input();
+            keep_field_errors($pracErrors);
+        } elseif ((int)$rl->fetchColumn() >= 12) {
+            keep_input(); // what was typed is refilled, not lost
+            flash_ui('Please wait a moment before logging more.', 'error');
+        } elseif ($overDailyCap('portal-prac-' . (int)$client['id'], 50, 'practice logs')) {
+            keep_input();
+            flash_ui($capMsg, 'error');
+        } else {
+            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-prac-' . (int)$client['id']]);
+            $body = $what . ($mins ? "\n\n(" . $mins . ' minutes)' : '');
+            db()->prepare("INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)")
+                ->execute([(int)$client['id'], 'Case Note', 'Practice logged by client (portal)', $body]);
+            flash_ui('Thanks — your practice was logged.');
+        }
+        redirect('portal.php?t=' . $token);
+    }
+}
+
+// Resource download (token-scoped, Resource category only) — before any HTML output
+if ($client && !empty($_GET['download'])) {
+    $d = db()->prepare("SELECT * FROM client_documents WHERE id = ? AND client_id = ? AND category IN ('Resource','Client Upload')");
+    $d->execute([(int)$_GET['download'], (int)$client['id']]);
+    if ($doc = $d->fetch()) {
+        $path = cfg('upload_dir') . '/' . basename($doc['path']);
+        if (is_file($path)) {
+            // Release the session lock before streaming, so a slow download never
+            // holds up other portal pages opened in the same browser.
+            session_write_close();
+            header('Content-Type: application/octet-stream');
+            header('Content-Length: ' . filesize($path));
+            header('Content-Disposition: attachment; filename="' . str_replace('"', '', $doc['orig_name']) . '"');
+            header('X-Content-Type-Options: nosniff');
+            readfile($path);
+            exit;
+        }
+    }
+    http_response_code(404);
+    exit('File not found.');
+}
+
+page_header($client ? 'My training' : 'Portal');
+echo lang_toggle();
+if (!$client) {
+    echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>' . t('This portal link is invalid or has been replaced. Please contact your instructor for a new link.') . '</p></div>';
+    page_footer();
+    exit;
+}
+
+$sessions = db()->prepare("SELECT s.*, u.name AS staff_name FROM scheduled_sessions s LEFT JOIN users u ON u.id = s.user_id
+    WHERE s.client_id = ? AND s.status = 'Scheduled' AND s.end_at >= NOW() ORDER BY s.start_at LIMIT 20");
+$sessions->execute([(int)$client['id']]);
+$sessions = $sessions->fetchAll();
+
+$tracks = db()->prepare("SELECT * FROM training_tracks WHERE client_id = ? AND status = 'Active'");
+$tracks->execute([(int)$client['id']]);
+$tracks = $tracks->fetchAll();
+
+$resources = db()->prepare("SELECT * FROM client_documents WHERE client_id = ? AND category = 'Resource' ORDER BY created_at DESC");
+$resources->execute([(int)$client['id']]);
+$resources = $resources->fetchAll();
+
+// Public knowledge-base articles, shown to every client on their portal.
+$kb = [];
+try {
+    $kb = db()->query("SELECT title, category, body FROM kb_articles WHERE is_public = 1 ORDER BY category IS NULL, category, title LIMIT 100")->fetchAll();
+} catch (Throwable $e) { $kb = []; }
+
+// The client's own self-service requests and their status.
+$myRequests = [];
+try {
+    $mr = db()->prepare('SELECT * FROM portal_requests WHERE client_id = ? ORDER BY created_at DESC LIMIT 20');
+    $mr->execute([(int)$client['id']]);
+    $myRequests = $mr->fetchAll();
+} catch (Throwable $e) { $myRequests = []; }
+// Source strings only: they are translated with t() where they are printed.
+// (t() returns markup, so its result must never be stored here and escaped again.)
+$reqStatusLabel = ['New' => 'Received', 'In Progress' => 'In progress', 'Done' => 'Done', 'Declined' => 'Not possible'];
+
+// Documents the client has uploaded themselves.
+$myUploads = db()->prepare("SELECT id, title, created_at FROM client_documents WHERE client_id = ? AND category = 'Client Upload' ORDER BY created_at DESC LIMIT 20");
+$myUploads->execute([(int)$client['id']]);
+$myUploads = $myUploads->fetchAll();
+?>
+<h1><?= t('Welcome,') ?> <?= h(explode(' ', $client['name'])[0]) ?></h1>
+<p class="muted"><?= t('Your training with') ?> <?= h(brand('org')) ?>.</p>
+<?php /* Download links in lists get a 44px target (2.5.5), also where a date follows the link. */ ?>
+<style>.dl-list a{display:inline-flex;align-items:center;min-height:2.75rem;min-width:2.75rem}</style>
+<script>
+// A number the browser cannot read is sent blank; mark it so the server says so
+// on the field instead of treating it as left empty.
+document.addEventListener('submit', function (e) {
+  var f = e.target;
+  f.querySelectorAll('input[data-bad-marker]').forEach(function (m) { m.remove(); });
+  f.querySelectorAll('input[type=number],input[type=date]').forEach(function (i) {
+    if (i.name && i.validity && i.validity.badInput) {
+      var m = document.createElement('input');
+      m.type = 'hidden'; m.name = i.name + '_bad'; m.value = '1'; m.setAttribute('data-bad-marker', '');
+      f.appendChild(m);
+    }
+  });
+}, true);
+</script>
+
+<section class="card" aria-labelledby="sess-h">
+  <h2 id="sess-h"><?= t('Upcoming sessions') ?></h2>
+  <?php if (!$sessions): ?><p class="muted"><?= t('No sessions scheduled right now. Your instructor will be in touch.') ?></p>
+  <?php else: ?>
+  <ul>
+  <?php foreach ($sessions as $s):
+      // Every session offers the same actions, so each control also names its
+      // session (hidden text) — otherwise a list of them is indistinguishable.
+      $when = date('l, F j \a\t g:i A T', strtotime($s['start_at']));
+      $forSession = '<span class="visually-hidden"> — ' . en($when) . '</span>';
+      // Each request is confirmed first, naming the session; the question says what
+      // OK and Cancel do, since "Cancel" would otherwise read as cancelling the session.
+      $jsq = fn(string $q): string => h(json_encode($q, JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP));
+      $askNew = __('Send your instructor a request for a new time for this session?') . "\n" . $when . "\n" . __('Choose OK to send the request, or Cancel to send nothing.');
+      $askCancel = __('Send your instructor a request to cancel this session?') . "\n" . $when . "\n" . __('Choose OK to send the request. Choose Cancel to keep the session and send nothing.'); ?>
+    <li>
+      <strong><?= en($when) ?></strong> <?= h(__('to')) ?> <?= en(date('g:i A T', strtotime($s['end_at']))) ?>
+      <?= !empty($s['is_remote']) ? ' · <span class="badge badge-active">' . h(__('Remote')) . '</span>' : ($s['location'] ? ' · ' . en($s['location']) : '') ?>
+      <?= $s['staff_name'] ? ' · ' . t('with') . ' ' . h($s['staff_name']) : '' ?>
+      <?php if (!empty($s['is_remote']) && !empty($s['meeting_url'])): ?>
+        <div style="margin-top:.3rem"><a class="btn btn-primary btn-sm" href="<?= h($s['meeting_url']) ?>" target="_blank" rel="noopener"><?= t('Join online') ?><?= $forSession ?><span class="visually-hidden"> <?= h(__('(opens in a new tab)')) ?></span></a></div>
+      <?php endif; ?>
+      <div style="margin-top:.3rem">
+        <form method="post" action="portal.php?t=<?= h($token) ?>" class="inline-form" onsubmit="return confirm(<?= $jsq($askNew) ?>);"><?= csrf_field() ?>
+          <input type="hidden" name="session_id" value="<?= (int)$s['id'] ?>"><input type="hidden" name="req_type" value="reschedule">
+          <button type="submit" name="new_request" value="1" class="btn-link"><?= t('Request a new time') ?><?= $forSession ?></button>
+        </form>
+        ·
+        <form method="post" action="portal.php?t=<?= h($token) ?>" class="inline-form" onsubmit="return confirm(<?= $jsq($askCancel) ?>);"><?= csrf_field() ?>
+          <input type="hidden" name="session_id" value="<?= (int)$s['id'] ?>"><input type="hidden" name="req_type" value="cancel">
+          <button type="submit" name="new_request" value="1" class="btn-link"><?= t('Ask to cancel') ?><?= $forSession ?></button>
+        </form>
+      </div>
+    </li>
+  <?php endforeach; ?>
+  </ul>
+  <?php endif; ?>
+</section>
+
+<?php foreach ($tracks as $t):
+    $goals = db()->prepare('SELECT * FROM smart_goals WHERE track_id = ? ORDER BY status = "Achieved" DESC, target_date IS NULL, target_date');
+    $goals->execute([(int)$t['id']]);
+    $goals = $goals->fetchAll();
+    $achieved = count(array_filter($goals, fn($g) => $g['status'] === 'Achieved'));
+?>
+<section class="card" aria-labelledby="tr-<?= (int)$t['id'] ?>">
+  <?php // Staff write tracks, goals, homework, guides and resources in the English-only
+  // staff app, so that text is marked lang="en" on the Spanish page (en()). ?>
+  <h2 id="tr-<?= (int)$t['id'] ?>"><?= en((string)$t['title']) ?></h2>
+  <?php if ($goals): ?>
+  <p><?= $achieved ?> <?= h(__('of')) ?> <?= count($goals) ?> <?= t('goals achieved') ?></p>
+  <ul>
+  <?php foreach ($goals as $g): $gpct = (int)($g['progress_pct'] ?? 0); ?>
+    <li><?= status_badge($g['status']) ?> <?= en((string)$g['specific_goal']) ?>
+      <?= $g['target_date'] ? '<span class="muted"> · ' . t('target') . ' ' . en(fmt_date($g['target_date'])) . '</span>' : '' ?>
+      <div class="progress-wrap">
+        <label class="visually-hidden" for="pgoal-<?= (int)$g['id'] ?>"><?= t('Progress') ?>: <?= en((string)$g['specific_goal']) ?></label>
+        <progress id="pgoal-<?= (int)$g['id'] ?>" class="hours" max="100" value="<?= $gpct ?>"><?= $gpct ?>%</progress>
+        <span class="muted"><?= $gpct ?>%</span>
+      </div>
+    </li>
+  <?php endforeach; ?>
+  </ul>
+  <?php else: ?><p class="muted"><?= t('Goals will appear here as your plan takes shape.') ?></p><?php endif; ?>
+</section>
+<?php endforeach; ?>
+
+<?php
+$hwStmt = db()->prepare("SELECT h.*, t.title AS track_title FROM homework h JOIN training_tracks t ON t.id = h.track_id
+    WHERE t.client_id = ? AND h.status = 'Assigned' ORDER BY h.due_date IS NULL, h.due_date");
+$hwStmt->execute([(int)$client['id']]);
+$homework = $hwStmt->fetchAll();
+?>
+<?php if ($homework): ?>
+<section class="card" aria-labelledby="hw-h">
+  <h2 id="hw-h"><?= t('Practice & homework') ?></h2>
+  <ul>
+  <?php foreach ($homework as $h_): ?>
+    <li>
+      <strong><?= en((string)$h_['title']) ?></strong><?= $h_['due_date'] ? ' — ' . t('due') . ' ' . en(fmt_date($h_['due_date'])) : '' ?>
+      <?= $h_['instructions'] ? '<br>' . en((string)$h_['instructions']) : '' ?>
+      <?php if ($h_['client_reported_at']): ?>
+        <br><span class="badge badge-active"><?= t('You marked this done') ?></span>
+      <?php else: ?>
+      <?php // Confirmed first, naming the homework: telling the instructor cannot be taken back here. ?>
+      <form method="post" action="portal.php?t=<?= h($token) ?>" class="inline-form" style="margin-top:.3rem"
+        onsubmit="return confirm(<?= h(json_encode(__('Tell your instructor you finished this homework?') . "\n" . $h_['title'] . "\n" . __('Choose OK to tell your instructor, or Cancel to send nothing.'), JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">
+        <?= csrf_field() ?>
+        <input type="hidden" name="homework_id" value="<?= (int)$h_['id'] ?>">
+        <button type="submit" name="hw_done" value="1" class="btn btn-secondary btn-sm"><?= t('I\'ve done this') ?><span class="visually-hidden"> — <?= en((string)$h_['title']) ?></span></button>
+      </form>
+      <?php endif; ?>
+    </li>
+  <?php endforeach; ?>
+  </ul>
+</section>
+<?php endif; ?>
+
+<section class="card" aria-labelledby="prac-h">
+  <h2 id="prac-h"><?= t('Log practice') ?></h2>
+  <p class="muted"><?= t('Practiced on your own? Log it so your instructor can see your progress between sessions.') ?></p>
+  <?php $oldPrac = old_in('log_practice') !== ''; // refill only the form that was sent ?>
+  <form method="post" action="portal.php?t=<?= h($token) ?>" class="stacked" novalidate>
+    <?= csrf_field() ?>
+    <?= form_error_summary(['practice' => 'What did you practice?', 'minutes' => 'How long (minutes)']) ?>
+    <div class="grid grid-2">
+      <div class="field"><label for="practice"><?= t('What did you practice?') ?> <span class="hint"><?= t('(required)') ?></span></label><p class="hint" id="prac-hint"><?= t('Up to 2,000 characters.') ?></p><textarea id="practice" name="practice" rows="2" required <?= field_aria('practice', 'prac-hint') ?>><?= h($oldPrac ? old_in('practice') : '') ?></textarea><?= field_error('practice') ?></div>
+      <div class="field"><label for="minutes"><?= t('How long (minutes)') ?> <span class="hint"><?= t('(optional)') ?></span></label>
+        <p class="hint" id="min-hint"><?= t('Whole minutes, up to 600.') ?></p>
+        <input type="number" id="minutes" name="minutes" min="0" max="600" step="1" inputmode="numeric" value="<?= h($oldPrac ? old_in('minutes') : '') ?>" <?= field_aria('minutes', 'min-hint') ?>><?= field_error('minutes') ?></div>
+    </div>
+    <button type="submit" name="log_practice" value="1" class="btn btn-secondary"><?= t('Log practice') ?></button>
+  </form>
+</section>
+
+<section class="card" aria-labelledby="req-h">
+  <h2 id="req-h"><?= t('Requests & help') ?></h2>
+  <p class="muted"><?= t('Ask for an appointment, get help with a device, or send another request. Your instructor will follow up.') ?></p>
+  <?php // Both forms post a "details" field; refill (and flag) only the one that was sent.
+  $oldReq = old_in('new_request') !== '' ? old_in('req_type') : ''; ?>
+  <div class="grid grid-2">
+    <form method="post" action="portal.php?t=<?= h($token) ?>" class="stacked" novalidate><?= csrf_field() ?>
+      <input type="hidden" name="req_type" value="appointment">
+      <?= form_error_summary(['appt_details' => 'Preferred days/times and what you need'], ['appt_details' => 'appt']) ?>
+      <h3><?= t('Request an appointment') ?></h3>
+      <div class="field"><label for="appt"><?= t('Preferred days/times and what you need') ?> <span class="hint"><?= t('(required)') ?></span></label>
+        <p class="hint" id="appt-hint"><?= t('Up to 2,000 characters.') ?></p>
+        <textarea id="appt" name="details" rows="3" required <?= field_aria('appt_details', 'appt-hint') ?>><?= h($oldReq === 'appointment' ? old_in('details') : '') ?></textarea><?= field_error('appt_details') ?></div>
+      <button type="submit" name="new_request" value="1" class="btn btn-primary"><?= t('Send request') ?><span class="visually-hidden"> — <?= t('Request an appointment') ?></span></button>
+    </form>
+    <form method="post" action="portal.php?t=<?= h($token) ?>" class="stacked" novalidate><?= csrf_field() ?>
+      <?= form_error_summary(['req_details' => 'Tell us what you need'], ['req_details' => 'rdetails']) ?>
+      <h3><?= t('Device help or another request') ?></h3>
+      <div class="field"><label for="rtype"><?= t('Type') ?></label>
+        <select id="rtype" name="req_type">
+          <option value="device"><?= h(__('Help with a device')) ?></option>
+          <option value="other" <?= $oldReq === 'other' ? 'selected' : '' ?>><?= h(__('Something else')) ?></option>
+        </select></div>
+      <div class="field"><label for="rdetails"><?= t('Tell us what you need') ?> <span class="hint"><?= t('(required)') ?></span></label>
+        <p class="hint" id="rdetails-hint"><?= t('Up to 2,000 characters.') ?></p>
+        <textarea id="rdetails" name="details" rows="3" required <?= field_aria('req_details', 'rdetails-hint') ?>><?= h(in_array($oldReq, ['device', 'other'], true) ? old_in('details') : '') ?></textarea><?= field_error('req_details') ?></div>
+      <button type="submit" name="new_request" value="1" class="btn btn-secondary"><?= t('Send request') ?><span class="visually-hidden"> — <?= t('Device help or another request') ?></span></button>
+    </form>
+  </div>
+  <?php if ($myRequests): ?>
+  <h3><?= t('Your requests') ?></h3>
+  <ul>
+  <?php $typeLabels = ['appointment' => 'Appointment', 'reschedule' => 'Reschedule', 'cancel' => 'Cancellation', 'device' => 'Device help', 'other' => 'Request']; ?>
+  <?php foreach ($myRequests as $rq): ?>
+    <li><strong><?= t($typeLabels[$rq['type']] ?? 'Request') ?></strong>
+      · <span class="badge <?= $rq['status'] === 'Done' ? 'badge-closed' : ($rq['status'] === 'Declined' ? 'badge-hold' : 'badge-pending') ?>"><?= isset($reqStatusLabel[$rq['status']]) ? t($reqStatusLabel[$rq['status']]) : en((string)$rq['status']) ?></span>
+      <span class="muted">· <?= en(fmt_date($rq['created_at'])) ?></span>
+      <?php // The whole request, with its line breaks (a list of times stays a list). ?>
+      <?= $rq['details'] ? '<br>' . nl2br(h((string)$rq['details'])) : '' ?></li>
+  <?php endforeach; ?>
+  </ul>
+  <?php endif; ?>
+</section>
+
+<section class="card" aria-labelledby="up-h">
+  <h2 id="up-h"><?= t('Share a document') ?></h2>
+  <p class="muted" id="up-hint"><?= t('Upload a document for your instructor — a form, an ID, or anything they asked for. PDF, Office, text or image files up to 15 megabytes (MB).') ?></p>
+  <form method="post" action="portal.php?t=<?= h($token) ?>" class="stacked" enctype="multipart/form-data" novalidate>
+    <?= csrf_field() ?>
+    <?= form_error_summary(['doc_title' => 'What is this?', 'document' => 'Choose a file']) ?>
+    <div class="field"><label for="doc_title"><?= t('What is this?') ?> <span class="hint"><?= t('(optional)') ?></span></label><input type="text" id="doc_title" name="doc_title" maxlength="190" value="<?= h(old_in('upload_doc') !== '' ? old_in('doc_title') : '') ?>" <?= field_aria('doc_title') ?>><?= field_error('doc_title') ?></div>
+    <div class="field"><label for="document"><?= t('Choose a file') ?> <span class="hint"><?= t('(required)') ?></span></label><input type="file" id="document" name="document" accept=".pdf,.docx,.xlsx,.txt,.rtf,.png,.jpg,.jpeg" required <?= field_aria('document', 'up-hint') ?>><?= field_error('document') ?></div>
+    <button type="submit" name="upload_doc" value="1" class="btn btn-primary"><?= t('Upload') ?></button>
+  </form>
+  <?php if ($myUploads): ?>
+  <h3><?= t('Documents you shared') ?></h3>
+  <ul class="dl-list">
+  <?php foreach ($myUploads as $u): ?>
+    <li><a href="portal.php?t=<?= h($token) ?>&amp;download=<?= (int)$u['id'] ?>"><?= h($u['title']) ?><span class="visually-hidden"> <?= t('(downloads a file)') ?></span></a> <span class="muted">· <?= en(fmt_date($u['created_at'])) ?></span></li>
+  <?php endforeach; ?>
+  </ul>
+  <?php endif; ?>
+</section>
+
+<section class="card" aria-labelledby="msg-h">
+  <h2 id="msg-h"><?= t('Message your instructor') ?></h2>
+  <p class="muted"><?= t('Have a question or an update? Send a note and your instructor will get back to you.') ?></p>
+  <?php
+  $thread = db()->prepare("SELECT sender, body, created_at FROM messages WHERE client_id = ? AND channel = 'client' ORDER BY created_at DESC LIMIT 20");
+  $thread->execute([(int)$client['id']]);
+  $thread = array_reverse($thread->fetchAll());
+  if ($thread): ?>
+  <?php /* A list, with the sender named before each message for screen readers
+           (sighted readers get it from the side and colour, and the line below).
+           role="list" keeps the list semantics that list-style:none removes in Safari. */ ?>
+  <ul class="msg-thread" role="list">
+    <?php foreach ($thread as $m): $who = $m['sender'] === 'client' ? __('You') : __('Instructor'); ?>
+      <li class="msg <?= $m['sender'] === 'client' ? 'out' : 'in' ?>">
+        <span class="visually-hidden"><?= h($who) ?>:</span>
+        <div class="msg-body"><?= nl2br(h($m['body'])) ?></div>
+        <div class="msg-meta"><span aria-hidden="true"><?= h($who) ?> · </span><?= en(date('M j, g:i A', strtotime($m['created_at']))) ?></div>
+      </li>
+    <?php endforeach; ?>
+  </ul>
+  <?php /* Sent messages use a fixed navy, not the configurable brand colour: white
+           text 10.4:1 and the time line 8.8:1 (AAA). Text lines stay near 70 characters. */ ?>
+  <style>.msg-thread{display:flex;flex-direction:column;gap:.5rem;margin:0 0 .8rem;padding:0;list-style:none}.msg{max-width:85%;padding:.5rem .7rem;border-radius:var(--radius)}.msg-body{max-width:70ch}.msg.in{align-self:flex-start;background:var(--bg);border:1px solid var(--line)}.msg.out{align-self:flex-end;background:#1e3a8a;color:#fff}.msg-meta{font-size:.875rem;color:var(--ink-soft);margin-top:.25rem}.msg.out .msg-meta{color:#e5ecff}</style>
+  <?php endif; ?>
+  <form method="post" action="portal.php?t=<?= h($token) ?>" class="stacked" novalidate>
+    <?= csrf_field() ?>
+    <?= form_error_summary(['message' => 'Your message']) ?>
+    <div class="field">
+      <label for="message"><?= t('Your message') ?> <span class="hint"><?= t('(required)') ?></span></label>
+      <p class="hint" id="message-hint"><?= t('Up to 5,000 characters.') ?></p>
+      <textarea id="message" name="message" rows="4" required <?= field_aria('message', 'message-hint') ?>><?= h(old_in('send_message') !== '' ? old_in('message') : '') ?></textarea>
+      <?= field_error('message') ?>
+    </div>
+    <button type="submit" name="send_message" value="1" class="btn btn-primary"><?= t('Send message') ?></button>
+  </form>
+</section>
+
+<section class="card" aria-labelledby="info-h">
+  <h2 id="info-h"><?= t('My information') ?></h2>
+  <p class="muted"><?= t('Keep your contact details and access needs up to date. Your instructor is notified of changes.') ?></p>
+  <?php // After a rejected save, show what was typed rather than the stored values.
+  // After a save refused because staff changed the details meanwhile (p_kept), only
+  // the fields the client had changed are refilled; the rest show what is on file.
+  $oldInfo = old_in('update_profile') !== '';
+  $keptInfo = old_in('p_kept');
+  $refill = fn(string $k): bool => $oldInfo && ($keptInfo === '' || str_contains($keptInfo, ',' . $k . ','));
+  $pv = fn(string $k, $saved): string => $refill($k) ? old_in($k) : (string)($saved ?? ''); ?>
+  <form method="post" action="portal.php?t=<?= h($token) ?>" class="stacked" novalidate>
+    <?= csrf_field() ?>
+    <?php // A fingerprint of each value shown, so a save from a page drawn before
+    // staff changed the details is refused instead of writing old values back. ?>
+    <?php foreach (portal_profile_values($client) as $pk => $pval): ?><input type="hidden" name="p_shown[<?= h($pk) ?>]" value="<?= h(hash('sha256', $pval)) ?>"><?php endforeach; ?>
+    <?= form_error_summary(['p_phone' => 'Phone', 'p_address' => 'Address', 'p_tech' => 'Assistive technology you use', 'p_notes' => 'Anything else we should know']) ?>
+    <div class="grid grid-2">
+      <div class="field"><label for="p_phone"><?= t('Phone') ?></label><input type="tel" id="p_phone" name="p_phone" maxlength="40" autocomplete="tel" value="<?= h($pv('p_phone', $client['phone'] ?? '')) ?>" <?= field_aria('p_phone') ?>><?= field_error('p_phone') ?></div>
+      <?php // The email address is shown, not edited: the next portal link is sent to it. ?>
+      <div class="field"><p><strong><?= t('Email on file:') ?></strong> <?= trim((string)($client['email'] ?? '')) !== '' ? en((string)$client['email']) : t('No email on file.') ?>
+        <?= t('Ask your instructor to change it.') ?></p></div>
+    </div>
+    <div class="field"><label for="p_address"><?= t('Address') ?></label><input type="text" id="p_address" name="p_address" maxlength="255" autocomplete="street-address" value="<?= h($pv('p_address', $client['address'] ?? '')) ?>" <?= field_aria('p_address') ?>><?= field_error('p_address') ?></div>
+    <fieldset>
+      <legend><?= t('Access needs') ?></legend>
+      <div class="field"><label><input type="checkbox" name="p_sr" value="1" <?= ($refill('p_sr') ? old_in('p_sr') !== '' : !empty($client['a11y_screen_reader'])) ? 'checked' : '' ?>> <?= t('I use a screen reader') ?></label></div>
+      <?php // select_options() translates each label, or marks it lang="en" when it has no translation. ?>
+      <?php // A value staff saved that is not in the list is offered too, so saving this form never clears it.
+      $fmtOpts = ['Standard print', 'Large print', 'Plain text', 'Braille-ready (BRF)', 'Audio', 'Accessible PDF'];
+      $curFmt = (string)($client['a11y_format'] ?? '');
+      if ($curFmt !== '' && !in_array($curFmt, $fmtOpts, true)) $fmtOpts[] = $curFmt; ?>
+      <div class="field"><label for="p_format"><?= t('Preferred document format') ?></label>
+        <select id="p_format" name="p_format">
+          <option value=""><?= h(__('No preference')) ?></option>
+          <?= select_options($fmtOpts, $pv('p_format', $client['a11y_format'] ?? '')) ?>
+        </select></div>
+      <div class="field"><label for="p_tech"><?= t('Assistive technology you use') ?></label><input type="text" id="p_tech" name="p_tech" maxlength="120" value="<?= h($pv('p_tech', $client['a11y_primary_tech'] ?? '')) ?>" <?= field_aria('p_tech') ?>><?= field_error('p_tech') ?></div>
+      <?php $contactOpts = ['Email', 'Phone', 'Client portal', 'Postal mail'];
+      $curContact = (string)($client['a11y_contact'] ?? '');
+      if ($curContact !== '' && $curContact !== 'No preference' && !in_array($curContact, $contactOpts, true)) $contactOpts[] = $curContact; ?>
+      <div class="field"><label for="p_contact"><?= t('How should we contact you?') ?></label>
+        <select id="p_contact" name="p_contact">
+          <option value=""><?= h(__('No preference')) ?></option>
+          <?= select_options($contactOpts, $pv('p_contact', $client['a11y_contact'] ?? '')) ?>
+        </select></div>
+      <div class="field"><label for="p_notes"><?= t('Anything else we should know') ?></label><p class="hint" id="p-notes-hint"><?= t('Up to 16,000 characters.') ?></p><textarea id="p_notes" name="p_notes" rows="2" <?= field_aria('p_notes', 'p-notes-hint') ?>><?= h($pv('p_notes', $client['a11y_notes'] ?? '')) ?></textarea><?= field_error('p_notes') ?></div>
+    </fieldset>
+    <button type="submit" name="update_profile" value="1" class="btn btn-primary"><?= t('Save my information') ?></button>
+  </form>
+</section>
+
+<?php if ($kb): ?>
+<section class="card" aria-labelledby="kb-h">
+  <h2 id="kb-h"><?= t('Helpful guides') ?></h2>
+  <?php // A visible label, and a visible count that also says when nothing matches. ?>
+  <div class="field"><label for="kbfilter"><?= t('Search guides') ?></label>
+    <input type="search" id="kbfilter"></div>
+  <p id="kb-count" class="hint" role="status" data-label="<?= h(__('guides shown')) ?>" data-none="<?= h(__('No guides match. Clear the search to see all guides.')) ?>"></p>
+  <script>
+  // Filter the guides as the visitor types, then say how many are left (after a
+  // short pause, so a screen reader is not interrupted on every keystroke).
+  (function () {
+    var box = document.getElementById('kbfilter'), count = document.getElementById('kb-count'), timer;
+    box.addEventListener('input', function () {
+      var q = box.value.toLowerCase(), shown = 0;
+      document.querySelectorAll('[data-kb]').forEach(function (d) {
+        var hit = d.getAttribute('data-kb').toLowerCase().indexOf(q) >= 0;
+        d.style.display = hit ? '' : 'none';
+        if (hit) shown++;
+      });
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        count.textContent = q === '' ? '' : (shown === 0 ? count.getAttribute('data-none') : shown + ' ' + count.getAttribute('data-label'));
+      }, 600);
+    });
+  })();
+  </script>
+  <?php foreach ($kb as $art): ?>
+  <details class="goal-history" data-kb="<?= h($art['title'] . ' ' . ($art['category'] ?? '') . ' ' . mb_substr((string)$art['body'], 0, 400)) ?>">
+    <summary><?= en((string)$art['title']) ?><?= $art['category'] ? ' <span class="muted">· ' . en((string)$art['category']) . '</span>' : '' ?></summary>
+    <?php /* Staff author '## ' headings and '- ' lists: they come through as structure (escaped). */ ?>
+    <div style="max-width:75ch"<?= page_lang() === 'en' ? '' : ' lang="en"' ?>><?= plain_text_html((string)$art['body'], 3, false) ?></div>
+  </details>
+  <?php endforeach; ?>
+</section>
+<?php endif; ?>
+
+<?php if ($resources): ?>
+<section class="card" aria-labelledby="res-h">
+  <h2 id="res-h"><?= t('Resources from your instructor') ?></h2>
+  <ul class="dl-list">
+  <?php foreach ($resources as $doc): ?>
+    <li><a href="portal.php?t=<?= h($token) ?>&amp;download=<?= (int)$doc['id'] ?>"><?= en((string)$doc['title']) ?><span class="visually-hidden"> <?= t('(downloads a file)') ?></span></a></li>
+  <?php endforeach; ?>
+  </ul>
+</section>
+<?php endif; ?>
+<?php require __DIR__ . '/inc/at_portal.php';
+page_footer();
