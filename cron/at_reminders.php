@@ -7,9 +7,14 @@ if(!function_exists('db')){fwrite(STDERR,"CMS cron: the application's inc/core.p
 require_once $inc.'/at_services.php';
 if(!at_ready()){echo "AT migration has not been installed.\n";exit(1);}
 // In-app reminders only; no email or external messages. One reminder per due date/user.
-$rows=db()->query("SELECT r.*,c.assigned_to FROM at_records r LEFT JOIN clients c ON c.id=r.client_id
- WHERE r.kind IN ('outcome','funding','repair','learning','license') AND r.due_date<=DATE_ADD(CURDATE(),INTERVAL 7 DAY)
- AND r.status NOT IN ('Completed','Skipped','Paid','Resolved','Cancelled','Expired')")->fetchAll();
+$rows=db()->query("SELECT r.*,c.assigned_to,
+ CASE WHEN r.kind='funding' AND r.status IN ('Denied','Appeal')
+ THEN COALESCE(NULLIF(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(r.details,'$.appeal_deadline')),''),'null'),r.due_date)
+ ELSE r.due_date END AS reminder_due
+ FROM at_records r LEFT JOIN clients c ON c.id=r.client_id
+ WHERE r.kind IN ('outcome','funding','repair','learning','license')
+ AND r.status NOT IN ('Completed','Skipped','Paid','Resolved','Cancelled','Expired')
+ HAVING reminder_due<=DATE_ADD(CURDATE(),INTERVAL 7 DAY)")->fetchAll();
 $users=db()->query('SELECT * FROM users WHERE is_active=1')->fetchAll();$sent=0;
 $access=[];foreach($users as $u)$access[(int)$u['id']]=resolve_perms($u);
 foreach($rows as $r){
@@ -27,8 +32,8 @@ foreach($rows as $r){
     foreach($recipients as $uid){
         db()->beginTransaction();
         try{
-            $q=db()->prepare('INSERT IGNORE INTO at_reminders(record_id,due_date,user_id) VALUES (?,?,?)');$q->execute([$r['id'],$r['due_date'],$uid]);
-            if($q->rowCount()) {db()->prepare('INSERT INTO notifications(user_id,message,link) VALUES (?,?,?)')->execute([$uid,mb_substr('AT due '.$r['due_date'].': '.$r['title'],0,190),'at_services.php?id='.(int)$r['id']]);$sent++;}
+            $q=db()->prepare('INSERT IGNORE INTO at_reminders(record_id,due_date,user_id) VALUES (?,?,?)');$q->execute([$r['id'],$r['reminder_due'],$uid]);
+            if($q->rowCount()) {db()->prepare('INSERT INTO notifications(user_id,message,link) VALUES (?,?,?)')->execute([$uid,mb_substr('AT due '.$r['reminder_due'].': '.$r['title'],0,190),'at_services.php?id='.(int)$r['id']]);$sent++;}
             db()->commit();
         }catch(Throwable $e){if(db()->inTransaction())db()->rollBack();throw $e;}
     }

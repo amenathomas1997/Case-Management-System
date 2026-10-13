@@ -1,6 +1,8 @@
 <?php
 // Read-only client portal — accessed via a private tokenized link emailed to the client.
 require __DIR__ . '/inc/bootstrap.php';
+require_once __DIR__.'/inc/workflows.php';
+$homeworkExplanation=null;
 require __DIR__ . '/inc/layout.php';
 require_once __DIR__ . '/inc/at_services.php';
 enable_public_translation();
@@ -101,6 +103,20 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
     // client back to this page with what was typed refilled: csrf_check() handles
     // the public pages that way and never sends them to the staff sign-in page.
     csrf_check();
+    if ((isset($_POST['hw_practice']) || isset($_POST['hw_explain'])) && workflows_ready()) {
+        try {
+            foreach ($_POST as $value) if (!is_scalar($value)) throw new DomainException('Invalid homework request.');
+            if (isset($_POST['hw_practice'])) {
+                workflow_practice($_POST,$client);
+                flash_ui('Your practice update was recorded for your instructor.');
+                redirect('portal.php?t='.$token);
+            }
+            $homeworkExplanation=workflow_homework_explain((int)($_POST['homework_id']??0),$client,(string)($_POST['homework_question']??''),page_lang());
+            if (!$homeworkExplanation['ok']) throw new DomainException($homeworkExplanation['error']);
+        } catch (DomainException $e) { flash_ui($e->getMessage(),'error'); }
+        catch (Throwable $e) { error_log('Homework support failed: '.get_class($e));flash_ui('Could not complete the request. Please try again.','error'); }
+    }
+
     /* A 24-hour ceiling per client on each kind of write, beside the short windows
        below: one leaked link cannot fill the record with case notes, tasks and
        alerts. Administrators are told once a day per action when a ceiling is hit. */
@@ -478,6 +494,12 @@ if ($client && !empty($_GET['download'])) {
 }
 
 page_header($client ? 'My training' : 'Portal');
+if ($homeworkExplanation && $homeworkExplanation['ok']) {
+    echo '<section class="card" aria-labelledby="homework-ai-title"><h2 id="homework-ai-title" lang="en">AI explanation — check with your instructor</h2>';
+    if (!empty($homeworkExplanation['truncated'])) echo '<p role="alert" lang="en">This explanation was cut off. Ask your instructor before using it.</p>';
+    echo plain_text_html($homeworkExplanation['text']).'</section>';
+}
+
 echo lang_toggle();
 if (!$client) {
     echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>' . t('This portal link is invalid or has been replaced. Please contact your instructor for a new link.') . '</p></div>';
@@ -632,6 +654,7 @@ $homework = $hwStmt->fetchAll();
         <button type="submit" name="hw_done" value="1" class="btn btn-secondary btn-sm"><?= t('I\'ve done this') ?><span class="visually-hidden"> — <?= en((string)$h_['title']) ?></span></button>
       </form>
       <?php endif; ?>
+      <?php if($h_['status']==='Assigned' && workflows_ready()) require __DIR__.'/inc/homework_support_ui.php'; ?>
     </li>
   <?php endforeach; ?>
   </ul>

@@ -2,6 +2,13 @@
 // Spanish translations for the public-facing pages (referral form, consent,
 // survey, client portal). Keys are the exact English source strings.
 return [
+    'Assistive technology for daily living' => 'Tecnología de asistencia para la vida diaria',
+    'Other assistive technology needs' => 'Otras necesidades de tecnología de asistencia',
+    'Request assistive technology assessment, training, demonstrations, or recommendations for devices, apps, and software.' => 'Solicite evaluación, capacitación, demostraciones o recomendaciones de tecnología de asistencia para dispositivos, aplicaciones y software.',
+    'Tell us which tasks they want technology to help with, the devices or software they use, and any accessibility barriers.' => 'Indique en qué tareas desean ayuda de la tecnología, qué dispositivos o software utilizan y qué barreras de accesibilidad encuentran.',
+    'Tell us which tasks you want technology to help with, the devices or software you use, and any accessibility barriers.' => 'Indique en qué tareas desea ayuda de la tecnología, qué dispositivos o software utiliza y qué barreras de accesibilidad encuentra.',
+    'This form accepts assistive technology referrals only. Please review the current service choices and submit again.' => 'Este formulario solo acepta referencias para tecnología de asistencia. Revise las opciones de servicio actuales y vuelva a enviarlo.',
+
     'Other' => 'Otro',
     "What help is needed?" => "¿Qué ayuda se necesita?",
     "Referral purpose" => "Motivo de la referencia",

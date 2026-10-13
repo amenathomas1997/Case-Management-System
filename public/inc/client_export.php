@@ -31,6 +31,8 @@ function client_export_records(PDO $pdo, int $clientId): array {
         $result[$table] = $rows;
     }
     foreach ([
+        'homework_practice' => 'SELECT r.id,r.homework_id,r.minutes,r.difficulty,r.notes,r.created_at FROM homework_practice r JOIN homework h ON h.id=r.homework_id JOIN training_tracks t ON t.id=h.track_id WHERE t.client_id=? ORDER BY r.id',
+        'documentation_reviews' => 'SELECT r.* FROM documentation_reviews r JOIN client_notes n ON n.id=r.note_id WHERE n.client_id=? ORDER BY r.note_id',
         'goal_progress' => 'SELECT r.* FROM goal_progress r JOIN smart_goals g ON g.id=r.goal_id JOIN training_tracks t ON t.id=g.track_id WHERE t.client_id=? ORDER BY r.id',
         'client_scored_assessment_items' => 'SELECT r.*, i.label FROM client_scored_assessment_items r JOIN client_scored_assessments a ON a.id=r.scored_id JOIN assessment_instrument_items i ON i.id=r.item_id WHERE a.client_id=? ORDER BY r.id',
         'device_request_quotes' => 'SELECT r.* FROM device_request_quotes r JOIN device_requests d ON d.id=r.request_id WHERE d.client_id=? ORDER BY r.id',

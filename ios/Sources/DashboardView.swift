@@ -117,6 +117,7 @@ struct DashboardView: View {
                                 .onDisappear { offlineEntriesOpen = false }
                         }
                     }
+                    MoreToolLink(title: "Action center", subtitle: "Priorities and AI case briefings", systemImage: "checklist") { WorkflowActionsView() }
                     // AT services offers only modules the user holds a permission for, so the link
                     // is shown only when at least one of them is available.
                     if api.can("clients") || api.can("equipment") || api.can("schedule") || api.can("admin") || api.can("billing") {
@@ -428,5 +429,100 @@ struct GlossaryView: View {
             }
         }
         .navigationTitle("Help and glossary")
+    }
+}
+
+// Workflow navigation shares the same permission-filtered API as the website.
+private struct WorkflowActionResponse: Decodable { let items: [WorkflowAction] }
+private struct WorkflowAction: Decodable { let kind: String; let title: String; let due: String?; let url: String }
+private func workflowURL(_ path: String) -> URL? {
+    guard let url = URL(string: path, relativeTo: API.base)?.absoluteURL,
+          url.scheme == "https", url.host == API.base.host else { return nil }
+    return url
+}
+struct WorkflowActionsView: View {
+    @EnvironmentObject var api: API
+    @State private var items: [WorkflowAction] = []
+    @State private var loaded = false
+    @State private var error: String?
+    var body: some View {
+        List {
+            if let error { ErrorBanner(message: error) }
+            if api.can("clients") { NavigationLink("AI case briefing") { WorkflowBriefingView() } }
+            if let url = workflowURL("workflows.php") { Link("All workflow tools on the website", destination: url) }
+            Text("Record links open the website, where you may need to sign in.").font(.caption).foregroundStyle(Color.secondaryText)
+            if !loaded && error == nil { ProgressView("Loading action items…") }
+            if loaded && items.isEmpty { Text("No action items found.") }
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                if let url = workflowURL(item.url) {
+                    Link(destination: url) {
+                        VStack(alignment: .leading) {
+                            Text(item.title)
+                            Text(item.kind + (item.due.map { " · " + formatDate($0) } ?? ""))
+                                .font(.caption).foregroundStyle(Color.secondaryText)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Action center")
+        .task { await load() }
+        .refreshable { await load() }
+    }
+    private func load() async {
+        do { error = nil; let r: WorkflowActionResponse = try await api.call("workflow_actions"); items = r.items; loaded = true }
+        catch { self.error = error.localizedDescription }
+    }
+}
+private struct BriefClient: Decodable, Identifiable { let id: Int; let name: String }
+private struct BriefClients: Decodable { let clients: [BriefClient] }
+private struct BriefSource: Decodable { let label: String; let url: String }
+private struct BriefItem: Decodable { let text: String; let type: String; let sources: [String: BriefSource] }
+private struct BriefResponse: Decodable { let items: [BriefItem] }
+struct WorkflowBriefingView: View {
+    @EnvironmentObject var api: API
+    @State private var clients: [BriefClient] = []
+    @State private var selected = 0
+    @State private var adapt = false
+    @State private var busy = false
+    @State private var error: String?
+    @State private var items: [BriefItem] = []
+    var body: some View {
+        Form {
+            if let error { ErrorBanner(message: error) }
+            Picker("Client", selection: $selected) {
+                Text("Choose a client").tag(0)
+                ForEach(clients) { Text($0.name).tag($0.id) }
+            }.disabled(busy).onChange(of: selected) { _ in items = [] }
+            Toggle("Suggest homework adaptations", isOn: $adapt).disabled(busy)
+            Button(busy ? "Drafting…" : "Generate briefing") { Task { await generate() } }
+                .disabled(selected == 0 || busy)
+            Text("AI output is a draft. Verify each claim using the linked records. Nothing is saved or assigned by generating a briefing.")
+                .font(.callout)
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                Section(item.type == "fact" ? "Record summary" : "Proposed next step") {
+                    Text(item.text).textSelection(.enabled)
+                    ForEach(item.sources.keys.sorted(), id: \.self) { key in
+                        if let source = item.sources[key], let url = workflowURL(source.url) {
+                            Link(source.label, destination: url)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("AI case briefing")
+        .task {
+            do { let r: BriefClients = try await api.call("clients"); clients = r.clients }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    private func generate() async {
+        guard !busy else { return }
+        busy = true; error = nil; items = []
+        defer { busy = false }
+        do {
+            let r: BriefResponse = try await api.call("workflow_briefing", body: ["client_id": selected, "adapt": adapt])
+            items = r.items; announce("Briefing ready. Verify its claims against the linked records.")
+        } catch { self.error = error.localizedDescription }
     }
 }

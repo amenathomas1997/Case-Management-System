@@ -1,6 +1,5 @@
 <?php
-// Public community referral form — one page for every non-VR-counselor referral
-// source: schools/TVIs (Pre-ETS), medical providers, family, agencies, employers.
+// Public assistive-technology referral form for all referral sources.
 require __DIR__ . '/inc/bootstrap.php';
 require __DIR__ . '/inc/layout.php';
 enable_public_translation();
@@ -25,22 +24,6 @@ const INCOME_BRACKETS = [
     'below_2000' => 'Below $2,000 per month',
     'above_2000' => '$2,000 per month or more',
 ];
-const PREETS_SERVICE_OPTIONS = [
-    'Job exploration counseling',
-    'Work-based learning experiences',
-    'Counseling on postsecondary opportunities',
-    'Workplace readiness training',
-    'Instruction in self-advocacy',
-];
-// Plain-language hints shown next to the statutory service names.
-const PREETS_SERVICE_HINTS = [
-    'Job exploration counseling' => 'talking through what kinds of jobs might fit',
-    'Work-based learning experiences' => 'trying real work, like job shadowing or internships',
-    'Counseling on postsecondary opportunities' => 'college or job training after high school',
-    'Workplace readiness training' => 'skills for any job, like being on time and working with others',
-    'Instruction in self-advocacy' => 'learning to speak up for what you need',
-];
-
 // Preserve the multi-select and structured fields for explicit validation; drop other arrays so a
 // crafted request (e.g. role[]=x) can't cause type errors.
 foreach ($_POST as $k => $v) {
@@ -168,16 +151,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($structured) $errors = array_merge($errors, $request['errors']);
+    // Refuse retired services from stale forms as well as crafted submissions.
+    // Do not silently file a request for a service the business does not offer.
+    if (!empty($_POST['preets']) || (!$structured && isset($_POST['note_type']) && !in_array($_POST['note_type'], REFERRAL_AT_NOTE_TYPES, true))) {
+        $errors['form'] = 'This form accepts assistive technology referrals only. Please review the current service choices and submit again.';
+    }
     if (!$errors) {
-        $services = array_values(array_intersect((array)($_POST['preets'] ?? []), PREETS_SERVICE_OPTIONS));
         // A form opened before this release still posts its original note_type.
         $noteType = $structured ? referral_request_note_type($request['purpose'], $request['service']) : match (true) {
-            $role === 'school' => 'Pre-ETS Request',
-            $role === 'counselor' && in_array($_POST['note_type'] ?? '', REFERRAL_NOTE_TYPES, true) => $_POST['note_type'],
+            $role === 'counselor' && in_array($_POST['note_type'] ?? '', REFERRAL_AT_NOTE_TYPES, true) => $_POST['note_type'],
             default => 'Initial Intake',
         };
         $requestFields = [
-            'referral_purpose' => $structured ? $request['purpose'] : null,
+            'referral_purpose' => $structured ? $request['purpose'] : ($role === 'school' ? 'New referral' : null),
             'requested_service' => $structured && $request['service'] !== '' ? $request['service'] : null,
             'specific_needs' => $structured && $request['needs'] ? implode('; ', $request['needs']) : null,
         ];
@@ -219,7 +205,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             mb_substr(trim($_POST['relationship'] ?? ''), 0, 80) ?: null,
             in_array($_POST['contact_first'] ?? '', ['client','referrer'], true) ? $_POST['contact_first'] : null,
             $consent ? 1 : 0,
-            $services ? implode('; ', $services) : null,
+            null, // Historical Pre-ETS data remains readable; new AT referrals never populate it.
             $role === 'self' ? INCOME_BRACKETS[$income] : null,
             $fee, $requestFields['referral_purpose'], $requestFields['requested_service'], $requestFields['specific_needs'],
         ]);
@@ -258,7 +244,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             . 'Referred as: ' . REFERRER_ROLES[$role] . "\n"
             . ($structured ? referral_request_summary($requestFields) . "\n" : '')
             . ($fee !== null ? 'Fee determination: ' . ($fee > 0 ? '$' . number_format($fee, 2) . '/hour' : 'Free') . "\n" : '')
-            . ($role === 'school' && $services ? 'Pre-ETS services requested: ' . implode('; ', $services) . "\n" : '')
             . "\nThe referrer's and the person's details are on the referrals page. Review it here: " . cfg('base_url') . '/referrals.php?view=' . $refId . "\n");
         redirect('community_referral.php?submitted=1' . ($fee !== null ? '&fee=' . ($fee > 0 ? 'paid' : 'free') : ''));
     }
@@ -288,6 +273,7 @@ echo lang_toggle();
   <p><a class="btn btn-secondary" href="community_referral.php"><?= t('Submit another referral') ?></a></p>
 <?php else: ?>
 <h1><?= t('Refer someone to') ?> <?= h(brand('org')) ?></h1>
+<p><?= t('Request assistive technology assessment, training, demonstrations, or recommendations for devices, apps, and software.') ?></p>
 <p><?= t('Use this form to refer yourself or someone else. First, tell us who you are. Then we\'ll show only the questions you need to answer. Fields marked with an asterisk (') ?><span aria-hidden="true">*</span><span class="visually-hidden"><?= t('asterisk') ?></span><?= t(') are required.') ?></p>
 <?php $helpContact = (string)(cfg('support_email') ?: cfg('mail_from')); // the same contact as the shared footer ?>
 <p><strong><?= t('Need help with this form, or unsure which choice fits?') ?></strong> <?php if ($helpContact !== ''): ?><?= t('Email us at') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a> <?= t('and a person will help you.') ?> <?php endif; ?><?= t('After you send the referral, we will contact you within 3 business days.') ?></p>
@@ -451,24 +437,13 @@ if ($errors): ?>
     </div>
   </fieldset>
 
-  <fieldset data-role="school">
-    <legend><h2 class="legend-h"><?= t('Pre-employment transition services needed') ?></h2></legend>
-    <p class="hint"><?= t('For students with disabilities — check all that apply.') ?></p>
-    <?php foreach (PREETS_SERVICE_OPTIONS as $svc): ?>
-    <div class="field">
-      <label><input type="checkbox" name="preets[]" value="<?= h($svc) ?>" <?= in_array($svc, (array)($_POST['preets'] ?? []), true) ? 'checked' : '' ?>> <?= t($svc) ?>
-        <span class="hint">(<?= t(PREETS_SERVICE_HINTS[$svc] ?? '') ?>)</span></label>
-    </div>
-    <?php endforeach; ?>
-  </fieldset>
-
   <?php // The visible question is the textarea's label (it sits in the section
   // heading). Someone referring themselves is asked in the second person; the
   // page script shows the wording for the chosen role, and a hidden wording is
   // left out of the label and the description. ?>
   <div class="field" id="need-section">
     <h2 class="legend-h"><label for="body"><span data-other-text<?= $role === 'self' ? ' hidden' : '' ?>><?= t('What does this person need help with?') ?></span><span data-self-text<?= $role === 'self' ? '' : ' hidden' ?>><?= t('What do you need help with?') ?></span> <span aria-hidden="true">*</span></label></h2>
-    <p class="hint" id="body-hint"><span data-other-text<?= $role === 'self' ? ' hidden' : '' ?>><?= t('Tell us about their vision, their goals, and what kind of help you think they need.') ?></span><span data-self-text<?= $role === 'self' ? '' : ' hidden' ?>><?= t('Tell us about your vision, your goals, and what help you want.') ?></span></p>
+    <p class="hint" id="body-hint"><span data-other-text<?= $role === 'self' ? ' hidden' : '' ?>><?= t('Tell us which tasks they want technology to help with, the devices or software they use, and any accessibility barriers.') ?></span><span data-self-text<?= $role === 'self' ? '' : ' hidden' ?>><?= t('Tell us which tasks you want technology to help with, the devices or software you use, and any accessibility barriers.') ?></span></p>
     <textarea id="body" name="body" required
       aria-describedby="body-hint<?= isset($errors['body']) ? ' err-body' : '' ?>" <?= isset($errors['body']) ? 'aria-invalid="true"' : '' ?>><?= $old('body') ?></textarea>
     <?= $err('body') ?>

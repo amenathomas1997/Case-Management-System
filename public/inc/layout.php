@@ -68,6 +68,7 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
         $items = [
             ['index.php', 'Dashboard', 'dashboard', null],
             ['tasks.php', 'Tasks', 'tasks', null],
+            ['workflows.php', 'Action center', 'workflows', null],
             ['at_services.php', 'AT services', 'at_services', null],
             ['clients.php', 'Clients', 'clients', 'clients'],
             ['referrals.php', 'Referrals', 'referrals', 'referrals'],
@@ -271,9 +272,8 @@ function page_footer(): void {
     // The footer is shown before sign-in (login, portal, referral form), so it
     // names the public contact address, never backup_email (where off-site
     // backups and alerts go; the installer sets it to the administrator's
-    // sign-in email), and gives the version only to a signed-in account.
+    // sign-in email). Always use APP_VERSION so the footer follows each release.
     $contact = (string)(cfg('support_email') ?: cfg('mail_from'));
-    $signedIn = !empty($_SESSION['user_id']) && ($_SESSION['otp_verified'] ?? false) === true;
     ?>
 </main>
 <script>
@@ -302,7 +302,8 @@ function page_footer(): void {
     <p><?= h(cfg('name')) ?> <span aria-hidden="true">&middot;</span> <a href="community_referral.php"><?= t('Referral Form') ?></a>
        <span aria-hidden="true">&middot;</span> <?= $helpLink ?>
        <?php if ($contact !== ''): ?><span aria-hidden="true">&middot;</span> <?= t('Questions? Email') ?> <a href="mailto:<?= h($contact) ?>"><?= h($contact) ?></a><?php endif; ?>
-       <?php if ($signedIn): ?><span aria-hidden="true">&middot;</span> <span class="muted">v<?= h(APP_VERSION) ?></span><?php endif; ?></p>
+    </p>
+    <p class="site-version"><?= page_lang() === 'es' ? 'Versión' : 'Version' ?> <?= h(APP_VERSION) ?></p>
   </div>
 </footer>
 </body>

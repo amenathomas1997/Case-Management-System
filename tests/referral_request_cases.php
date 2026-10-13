@@ -7,6 +7,8 @@ $publicForm = function (array $query, ?array $post = null) use ($renderPage): ar
     try { return $renderPage('community_referral', $query, $post); } finally { putenv('CMS_TEST_ANON'); }
 };
 $baseReferral = ['role'=>'counselor','referrer_name'=>'Synthetic Referrer','referrer_phone'=>'555-0100','referrer_email'=>'referrer@example.invalid','organization'=>'Test agency','client_name'=>'Structured Referral Test','body'=>'Synthetic referral workflow test.','referral_purpose'=>'Additional service','requested_services'=>['Assistive technology training'],'specific_needs'=>['Screen readers','Braille devices','Screen readers']];
+[$code,$out,$err]=$publicForm(['role'=>'school']);
+check($code===0&&$err===''&&!str_contains($out,'name="preets[]"')&&!str_contains($out,'Pre-employment transition services needed')&&!str_contains($out,'Job exploration counseling')&&!str_contains($out,'value="Braille literacy"')&&!str_contains($out,'value="Independent living skills"')&&str_contains($out,'Assistive technology for daily living'),'School referral form offers only technology services and needs');
 $before = (int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn();
 [$code,$out,$err] = $publicForm([], $baseReferral);
 $ref = $db->query('SELECT * FROM referrals ORDER BY id DESC LIMIT 1')->fetch();
@@ -31,6 +33,16 @@ foreach ([['referral_purpose'=>['New referral']],['requested_services'=>['Forged
     [$code,$out,$err]=$publicForm([],array_replace($baseReferral,$bad));
     check($code===0 && $err==='' && str_contains($out,'Please choose') && (int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn()===$before,'Malformed structured referral input is rejected without saving or PHP errors');
 }
+// Retired non-AT services cannot be submitted from an old or crafted form.
+foreach (['Counseling Request','Pre-ETS Request','Rehab Teaching Request','Independent Living Skills Request'] as $retired) {
+    $old=$baseReferral;unset($old['referral_purpose'],$old['requested_services'],$old['specific_needs']);$old['note_type']=$retired;
+    $before=(int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn();
+    [$code,$out,$err]=$publicForm([],$old);
+    check($code===0&&$err===''&&str_contains($out,'assistive technology referrals only')&&(int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn()===$before,'Retired non-AT referral is refused: '.$retired);
+}
+$before=(int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn();
+[$code,$out,$err]=$publicForm([],array_replace($baseReferral,['role'=>'school','guardian_name'=>'Guardian','guardian_phone'=>'555-0101','preets'=>['Job exploration counseling']]));
+check($code===0&&$err===''&&str_contains($out,'assistive technology referrals only')&&(int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn()===$before,'A stale school Pre-ETS selection is refused rather than silently filed as AT');
 // A service withdrawn while the form was open is unticked and named in the message; the valid tick stays.
 $before=(int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn();
 [$code,$out,$err]=$publicForm([],array_replace($baseReferral,['requested_services'=>['Assessment','Withdrawn synthetic service']]));
@@ -46,19 +58,19 @@ $legacyRow=$db->query('SELECT * FROM referrals ORDER BY id DESC LIMIT 1')->fetch
 check($code===0 && $legacyRow['referral_purpose']===null && $legacyRow['note_type']==='Magnification Training Request','A referral form opened before the upgrade retains its original type');
 [$code,$out,$err]=$renderPage('referrals',['view'=>$legacyRow['id']]);
 check($code===0 && str_contains($out,'Original referral type') && str_contains($out,'Magnification Training Request'),'Historic referrals display their original type without guessing a purpose');
-// Pre-ETS must survive a plan-amendment purpose, on both web and mobile conversion.
+// A school referral for AT does not automatically become a Pre-ETS client.
 $db->exec("DELETE FROM login_attempts WHERE email='referral-portal'");
 [$code,$out,$err]=$publicForm([],array_replace($baseReferral,['role'=>'school','guardian_name'=>'Synthetic Guardian','guardian_phone'=>'555-0101','referral_purpose'=>'Plan amendment','requested_services'=>['Assessment'],'specific_needs'=>[]]));
 $pre=(int)$db->query('SELECT MAX(id) FROM referrals')->fetchColumn();
 [$code,$out,$err]=$renderPage('referrals',['view'=>$pre],['id'=>(string)$pre,'convert'=>'1']);
 $preRow=$db->query("SELECT c.client_type,c.id FROM clients c JOIN referrals r ON r.client_id=c.id WHERE r.id=$pre")->fetch();
-check($code===0 && ($preRow['client_type']??'')==='Pre-ETS','Web conversion recognizes Pre-ETS even for a plan amendment');
+check($code===0 && ($preRow['client_type']??'')==='VR','Web conversion keeps school AT referrals out of the Pre-ETS workflow');
 check(str_contains((string)$db->query('SELECT body FROM client_notes WHERE client_id='.(int)$preRow['id'].' ORDER BY id DESC LIMIT 1')->fetchColumn(),'Referral purpose: Plan amendment'),'Web conversion preserves structured request details');
 $multi=$baseReferral;$multi['requested_services']=['Recommendation','Assessment','Demonstration'];
 [$code,$out,$err]=$publicForm([],$multi);
 $multiRow=$db->query('SELECT * FROM referrals ORDER BY id DESC LIMIT 1')->fetch();
 check($code===0 && $err==='' && $multiRow['requested_service']==='Assessment; Demonstration; Recommendation' && $multiRow['note_type']==='Rehab Technology','A VR counselor can ask for several technology services; they are stored in catalog order as a Rehab Technology referral');
-check(referral_is_preets(['referral_source'=>'school','note_type'=>'Initial Intake']) && referral_is_preets(['referral_source'=>'school','referral_purpose'=>'New referral','requested_service'=>'Assistive technology training']) && !referral_is_preets(['referral_source'=>'counselor','referral_purpose'=>'New referral','requested_service'=>'Assessment']),'School referrals are Pre-ETS whether historic or structured; a counselor technology request is not');
+check(referral_is_preets(['referral_source'=>'school','note_type'=>'Initial Intake']) && !referral_is_preets(['referral_source'=>'school','referral_purpose'=>'New referral','requested_service'=>'Assistive technology training']) && !referral_is_preets(['referral_source'=>'counselor','referral_purpose'=>'New referral','requested_service'=>'Assessment']),'Historical school referrals retain their classification; new school and counselor AT requests are not Pre-ETS');
 $db->exec("DELETE FROM login_attempts WHERE email='referral-portal'");
 
 // Records submitted by the earlier structured form retain an explicit Pre-ETS choice.

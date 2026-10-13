@@ -45,7 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_ai'])) {
         // What changed, for the audit trail (an endpoint move or redaction switch must not look like a routine save).
         $featChanges = [];
         foreach (array_keys(ai_features()) as $fk) {
-            $was = (setting('ai_feat_' . $fk) ?? '1') !== '0'; $now = !empty($_POST['feat'][$fk]);
+            $was = (setting('ai_feat_' . $fk) ?? ($fk === 'portal_homework' ? '0' : '1')) !== '0'; $now = !empty($_POST['feat'][$fk]);
             if ($was !== $now) $featChanges[] = $fk . ($now ? ' on' : ' off');
         }
         $redactNow = !empty($_POST['ai_redact']);
@@ -85,7 +85,7 @@ if ($refused) {
     if (!isset($providers[$provider])) $provider = 'anthropic';
     $model = trim((string)(setting('ai_model') ?? ''));
     $baseUrl = trim((string)(setting('ai_base_url') ?? ''));
-    $featOn = fn(string $fk): bool => (setting('ai_feat_' . $fk) ?? '1') !== '0';
+    $featOn = fn(string $fk): bool => (setting('ai_feat_' . $fk) ?? ($fk === 'portal_homework' ? '0' : '1')) !== '0';
     $redactOn = ai_redaction_on();
     $baaOn = (setting('ai_baa_confirmed') ?? '') === '1';
 }

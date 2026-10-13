@@ -68,7 +68,7 @@ try {
     $db->exec(file_get_contents($root . '/dist/schema_full.sql'));
     // Synthetic secrets: no page, API response or export may ever show them.
     $secrets = ['entra'=>'synthetic-entra-client-secret-5b2c', 'ai'=>'synthetic-ai-provider-key-9d41'];
-    $config = ['db'=>['dsn'=>$dsn,'user'=>getenv('CMS_TEST_USER') ?: 'root','pass'=>getenv('CMS_TEST_PASSWORD') ?: ''], 'app'=>['timezone'=>'America/Chicago','upload_dir'=>$tmp,'base_url'=>'https://example.invalid','name'=>'Test CMS','session_timeout_minutes'=>30],
+    $config = ['db'=>['dsn'=>$dsn,'user'=>getenv('CMS_TEST_USER') ?: 'root','pass'=>getenv('CMS_TEST_PASSWORD') ?: ''], 'app'=>['timezone'=>'America/Chicago','upload_dir'=>$tmp,'base_url'=>'https://example.invalid','name'=>'Test CMS','mail_from'=>'noreply@example.invalid','session_timeout_minutes'=>30],
         'entra'=>['enabled'=>false,'tenant_id'=>'','client_id'=>'','client_secret'=>$secrets['entra'],'auto_provision_group'=>'']];
     $core = file_get_contents($root . '/public/inc/core.php');
     $start = strpos($core, '$configPaths =');
@@ -90,7 +90,7 @@ try {
     foreach (['equipment','worksite_assessments','device_requests','cohorts','contracts','access_bookings'] as $table) $db->exec("ALTER TABLE `$table` AUTO_INCREMENT=1");
     $call = function(string $action, array $input=[], array $query=[], bool $expectOk=true) use ($tmp): array {
         putenv('CMS_TEST_INPUT=' . json_encode($input));
-        $p = proc_open([PHP_BINARY, __FILE__, 'api', $tmp . '/api.php', json_encode(['action'=>$action]+$query)], [1=>['pipe','w'],2=>['pipe','w']], $pipes);
+        $p = proc_open([PHP_BINARY, '-d', 'sendmail_path=/usr/bin/true', __FILE__, 'api', $tmp . '/api.php', json_encode(['action'=>$action]+$query)], [1=>['pipe','w'],2=>['pipe','w']], $pipes);
         $output=stream_get_contents($pipes[1]); $errors=stream_get_contents($pipes[2]);
         fclose($pipes[1]); fclose($pipes[2]); $code=proc_close($p);
         $data=json_decode($output,true);
@@ -671,6 +671,7 @@ try {
 
     require __DIR__.'/post_claude_cases.php';
     require __DIR__.'/public_token_cases.php';
+    require __DIR__.'/workflow_cases.php';
 
     // Upgrade path: mig_3.0.8.sql applied to a database still in the 3.0.7 shape
     // must give exactly the columns, indexes and foreign keys schema_full.sql
@@ -723,8 +724,8 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
     $db->exec("INSERT INTO clients (id,name,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL),(3,'Upgraded client with a blank counselor','')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
-    check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10 and mig_3.0.12 has exactly the fresh-install schema, defaults included');
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12 and mig_3.0.16 has exactly the fresh-install schema, defaults included');
     check((int)$db->query('SELECT counselor_verified FROM clients WHERE id=1')->fetchColumn()===1,'The upgrade keeps an existing client\'s counselor email confirmed');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE id IN (2,3) AND counselor_verified=0')->fetchColumn()===2,'The upgrade leaves a client with no counselor email unconfirmed, so a later merge cannot fill in a confirmed address');
     $db->exec("UPDATE clients SET counselor_verified=0 WHERE id=1");

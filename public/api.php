@@ -459,6 +459,16 @@ if (str_starts_with($action, 'at_')) {
 }
 
 switch ($action) {
+    case 'workflow_actions':
+        require_once __DIR__.'/inc/workflows.php';
+        if(!workflows_ready())fail('Apply migration 3.0.16 to enable workflows.',503);
+        out(['ok'=>true,'items'=>workflow_action_items(['id'=>$userId])]);
+    case 'workflow_briefing':
+        if($_SERVER['REQUEST_METHOD']!=='POST')fail('Use POST.',405);
+        require_once __DIR__.'/inc/workflows.php';
+        if(!workflows_ready())fail('Apply migration 3.0.16 to enable workflows.',503);
+        try{out(['ok'=>true]+workflow_briefing((int)($input['client_id']??0),$userId,!empty($input['adapt'])));}
+        catch(DomainException $e){fail($e->getMessage(),422);}
     case 'logout':
         db()->prepare('DELETE FROM api_tokens WHERE id = ?')->execute([$tok['id']]);
         out(['ok' => true]);
@@ -1503,6 +1513,7 @@ switch ($action) {
              'server_version' => APP_VERSION]);
 
     case 'schedule_session':
+        require_once __DIR__.'/inc/workflows.php';
         $clientId = (int)($input['client_id'] ?? 0);
         $trackId = (int)($input['track_id'] ?? 0) ?: null;
         $staffId = (int)($input['staff_id'] ?? 0) ?: $userId;
@@ -1548,6 +1559,11 @@ switch ($action) {
         // A remote session has no place to meet: the app hides the location field then,
         // so a location an older build still sends is not kept where nobody can see it.
         if ($isRemote) $location = '';
+        $warnings=[];
+        if ($trackId) {
+            $warnings=workflow_authorization($trackId,$startTs,$endTs,$repeatWeeks);
+            if ($warnings && !in_array($input['authorization_ack']??null,[true,1,'1'],true)) fail('Authorization review: '.implode(' ',$warnings).' Review the track and explicitly approve the warning before booking.',422);
+        }
         $ins = db()->prepare('INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, notes, is_remote, meeting_url) VALUES (?,?,?,?,?,?,?,?,?)');
         $firstId = 0;
         $occurrences = [];
@@ -1590,7 +1606,7 @@ switch ($action) {
                 . "\n\nOpen the attached invite to add it to your calendar.\n",
                 [['name' => 'invite.ics', 'mime' => 'text/calendar; method=REQUEST', 'bytes' => $ics]]);
         }
-        audit($userId, 'session.schedule', 'client', $clientId, ($repeatWeeks > 1 ? "series of {$repeatWeeks} (mobile)" : 'single session (mobile)'));
+        audit($userId, 'session.schedule', 'client', $clientId, ($repeatWeeks > 1 ? "series of {$repeatWeeks} (mobile)" : 'single session (mobile)').($warnings?' — authorization warnings explicitly acknowledged':''));
         out(['ok' => true, 'invite_sent' => $inviteSent, 'sessions_created' => $repeatWeeks]);
 
     case 'equipment':

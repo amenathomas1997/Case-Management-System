@@ -326,6 +326,8 @@ function plain_text_html(string $text, int $topLevel = 3, bool $stripEmphasis = 
 /** AI feature keys → labels. Each is individually switchable on the AI settings page. */
 function ai_features(): array {
     return [
+        'briefing' => 'Source-linked case briefings and homework adaptations',
+        'portal_homework' => 'Client portal homework explanations (opt in)',
         'draft' => 'Drafting assistant (notes, reports, summaries, goals)',
         'recommend' => 'AT recommendation engine',
         'intake' => 'AI-guided assessment intake',
@@ -391,7 +393,7 @@ function ai_speak(string $text, string $voice = 'nova', ?int $actorId = null): a
 /** A feature is available only when AI is configured AND the feature isn't switched off. */
 function ai_feature_enabled(string $key): bool {
     if (!ai_enabled()) return false;
-    return (setting('ai_feat_' . $key) ?? '1') !== '0';
+    return (setting('ai_feat_' . $key) ?? ($key === 'portal_homework' ? '0' : '1')) !== '0';
 }
 
 // Name parts that are also everyday English words: redacted on their own only
@@ -503,8 +505,9 @@ function ai_run(string $feature, string $system, string $prompt, int $maxTokens 
     if ($actorId !== null && !ai_rate_limit((int)$actorId)) return ['ok' => false, 'text' => '', 'error' => 'You have reached the AI usage limit for now. Please wait a few minutes and try again.'];
     $redacted = ai_redaction_on();
     $sent = $redacted ? ai_redact($prompt, $redactClient) : $prompt;
+    $started = microtime(true);
     $res = ai_generate($system, $sent, $maxTokens);
-    ai_log_usage($feature, mb_strlen($sent), $res['ok'] ? mb_strlen($res['text']) : 0, $redacted, $actorId);
+    $res['usage_id'] = ai_log_usage($feature, mb_strlen($sent), $res['ok'] ? mb_strlen($res['text']) : 0, $redacted, $actorId, (bool)$res['ok'], (int)round((microtime(true)-$started)*1000), !empty($res['truncated']));
     return $res;
 }
 
@@ -567,12 +570,13 @@ function ai_generate_case_note(string $messy, string $fmt, ?array $client, int $
     return ['ok' => true, 'error' => '', 'sections' => $sections, 'questions' => array_slice($questions, 0, 8), 'homework' => array_slice($homework, 0, 10)];
 }
 
-function ai_log_usage(string $feature, int $charsIn, int $charsOut, bool $redacted, ?int $actorId = null): void {
+function ai_log_usage(string $feature, int $charsIn, int $charsOut, bool $redacted, ?int $actorId = null, ?bool $succeeded = null, ?int $durationMs = null, bool $truncated = false): int {
     $cfg = ai_cfg();
     try {
-        db()->prepare('INSERT INTO ai_usage (user_id, feature, provider, model, chars_in, chars_out, redacted) VALUES (?,?,?,?,?,?,?)')
-            ->execute([$actorId, $feature, $cfg['provider'] ?? '', $cfg['model'] ?? '', $charsIn, $charsOut, $redacted ? 1 : 0]);
-    } catch (Throwable $e) { /* usage logging is best-effort */ }
+        db()->prepare('INSERT INTO ai_usage (user_id, feature, provider, model, chars_in, chars_out, redacted, succeeded, duration_ms, truncated) VALUES (?,?,?,?,?,?,?,?,?,?)')
+            ->execute([$actorId, $feature, $cfg['provider'] ?? '', $cfg['model'] ?? '', $charsIn, $charsOut, $redacted ? 1 : 0, $succeeded === null ? null : (int)$succeeded, $durationMs, (int)$truncated]);
+        return (int)db()->lastInsertId();
+    } catch (Throwable $e) { /* usage logging is best-effort */ return 0; }
 }
 
 /** Shared guardrails prepended to every drafting prompt. */

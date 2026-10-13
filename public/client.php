@@ -769,6 +769,7 @@ $tabLabels = ['overview' => 'Overview', 'notes' => 'Client Notes', 'assessments'
 page_header($tabLabels[$tab] . ' — ' . $client['name'], $user, 'clients');
 ?>
 <h1><?= h($client['name']) ?> <?= status_badge($client['status']) ?></h1>
+<p class="page-actions"><a href="workflows.php?view=briefing&amp;client_id=<?= (int)$client['id'] ?>">AI case briefing</a><a href="workflows.php?view=homework&amp;client_id=<?= (int)$client['id'] ?>">Homework support</a></p>
 <?php if ($client['archived_at'] !== null): ?>
 <div class="alert alert-error" role="status">
   <p><strong>Archived record</strong> — closed past the retention period (archived <?= fmt_date($client['archived_at']) ?>). It is hidden from day-to-day lists.</p>

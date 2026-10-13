@@ -401,6 +401,12 @@ function voice_execute(string $do, array $in, array $user): array {
                 if (!$tq->fetchColumn()) return ['ok' => false, 'error' => 'That training track is no longer active. Nothing was scheduled.'];
             }
             $end = $start + $dur * 60;
+            if ($trackId) {
+                require_once __DIR__.'/workflows.php';
+                $warnings=workflow_authorization($trackId,$start,$end);
+                if($warnings)return ['ok'=>false,'error'=>'Authorization review: '.implode(' ',$warnings).' Open Schedule to review funding and explicitly approve any exception. Nothing was booked.'];
+            }
+
             $location = mb_substr(trim((string)($in['location'] ?? '')), 0, 190);
             db()->prepare("INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, status) VALUES (?,?,?,?,?,?, 'Scheduled')")
                 ->execute([$cid, $trackId, $uid, date('Y-m-d H:i:s', $start), date('Y-m-d H:i:s', $end), $location ?: null]);

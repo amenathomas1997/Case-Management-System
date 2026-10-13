@@ -1,5 +1,6 @@
 <?php
 require __DIR__ . '/inc/bootstrap.php';
+require_once __DIR__.'/inc/workflows.php';
 require __DIR__ . '/inc/layout.php';
 csrf_check();
 $user = require_login();
@@ -116,6 +117,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
             $trackIds[$cid] = (int)$newest->fetchColumn() ?: null;
         }
     }
+    if (!$errors) foreach ($trackIds as $tid) if ($tid) {
+        $warnings=workflow_authorization($tid,$f['start'],$f['end']);
+        if ($warnings && ($_POST['authorization_ack']??'')!=='1') $errors['g_clients']='Authorization review: '.implode(' ',$warnings).' Review the track, then explicitly approve the warning below if this booking is appropriate.';
+    }
     if ($errors) {
         keep_input();
         // The ticked clients are an array, which keep_input() does not keep.
@@ -151,7 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
         'Group session scheduled — ' . date('D, M j g:i A T', $startTs),
         "A group session with " . count($clientIds) . " clients has been scheduled.\nOpen the attached invite to add it to your calendar.\n",
         [['name' => 'invite.ics', 'mime' => 'text/calendar; method=REQUEST', 'bytes' => $ics]]);
-    audit($user['id'], 'session.schedule', 'group', null, 'group of ' . count($clientIds));
+    audit($user['id'], 'session.schedule', 'group', null, 'group of ' . count($clientIds).(($_POST['authorization_ack']??'')==='1'?' — authorization exception approved':''));
     $noTrack = [];
     foreach ($clientIds as $cid) if ($trackIds[$cid] === null) $noTrack[] = $members[$cid]['name'];
     flash('Group session scheduled for ' . count($clientIds) . ' clients. Completing it logs hours to each client\'s training track.'
@@ -251,6 +256,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
             $errors['track_id'] = 'That training track belongs to a different client. Pick the client\'s own track.';
         }
     }
+    if (!$errors && $trackId) {
+        $warnings=workflow_authorization($trackId,$f['start'],$f['end'],$repeatWeeks);
+        if ($warnings && ($_POST['authorization_ack']??'')!=='1') $errors['track_id']='Authorization review: '.implode(' ',$warnings).' Review the track, then explicitly approve the warning below if this booking is appropriate.';
+    }
     if ($errors) {
         keep_input();
         keep_field_errors($errors);
@@ -283,7 +292,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         if (db()->inTransaction()) db()->rollBack();
         throw $e;
     }
-    audit($user['id'], 'session.schedule', 'client', $clientId, $repeatWeeks > 1 ? "series of {$repeatWeeks} weekly sessions" : 'single session');
+    audit($user['id'], 'session.schedule', 'client', $clientId, ($repeatWeeks > 1 ? "series of {$repeatWeeks} weekly sessions" : 'single session').(($_POST['authorization_ack']??'')==='1'?' — authorization exception approved':''));
 
     // Calendar invite to the instructor (renders as an Outlook meeting request)
     $clientName = (string)$client['name'];
@@ -528,6 +537,7 @@ function session_row(array $s, string $csrf): void {
     <div class="field" id="meeting_url_wrap">
       <label for="meeting_url">Meeting link <span class="hint">the video/phone link clients and you will join (https://…); tick Remote above to use it</span></label>
       <input type="url" id="meeting_url" name="meeting_url" maxlength="500" placeholder="https://" value="<?= h(old_in('meeting_url')) ?>" <?= field_aria('meeting_url') ?>><?= field_error('meeting_url') ?></div>
+    <label><input type="checkbox" name="authorization_ack" value="1"> I reviewed any authorization warnings and approve booking despite them.</label>
     <button type="submit" name="add_session" value="1" class="btn btn-primary"
       onclick="var w=parseInt(document.getElementById('repeat_weeks').value||'1',10);return w<=1||confirm('Schedule '+w+' weekly sessions? Each must be cancelled individually if plans change.');">Schedule &amp; send calendar invite</button>
   </form>
@@ -581,6 +591,7 @@ function session_row(array $s, string $csrf): void {
     <div class="field"><label><input type="checkbox" id="g_is_remote" name="g_is_remote" value="1" <?= old_in('g_is_remote') ? 'checked' : '' ?>> Remote / telepractice session</label></div>
     <div class="field"><label for="g_meeting_url">Meeting link <span class="hint">https://…; tick Remote above to use it</span></label>
       <input type="url" id="g_meeting_url" name="g_meeting_url" maxlength="500" placeholder="https://" value="<?= h(old_in('g_meeting_url')) ?>" <?= field_aria('g_meeting_url') ?>><?= field_error('g_meeting_url') ?></div>
+    <label><input type="checkbox" name="authorization_ack" value="1"> I reviewed any authorization warnings and approve booking despite them.</label>
     <button type="submit" name="add_group_session" value="1" class="btn btn-primary">Schedule group session</button>
   </form>
 </section>

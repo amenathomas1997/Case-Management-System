@@ -17,6 +17,8 @@ const REFERRAL_PURPOSES = ['New referral', 'Additional service', 'Plan amendment
 const REFERRAL_SERVICES = ['Not sure', 'Assessment', 'Rehab Technology', 'Assistive technology training', 'Rehab teaching', 'Counseling', 'Pre-ETS', 'Device assistance', 'Other'];
 // Every referral source asks for assistive-technology services only, one or
 // more at a time. REFERRAL_SERVICES is kept so older stored values still display.
+// Current public submissions; the broader catalog remains for historical records.
+const REFERRAL_AT_NOTE_TYPES = ['Initial Intake','Tech Assessment Request','Rehab Technology','Assistive Technology Training Request','Low Vision Device Request','Screen Reader Training Request','Magnification Training Request','Workplace Assessment Request','Device Trial / Loan Request','Device Setup Request','Device Repair / Support Request','Device Funding Assistance Request','Plan Amendment','Other'];
 const REFERRAL_TECH_SERVICES = ['Assessment', 'Assistive technology training', 'Demonstration', 'Recommendation'];
 // Plain-language explanation shown after each built-in service (and after an
 // administrator's in-place rename of one), so a family member can tell them apart.
@@ -33,7 +35,7 @@ const REFERRAL_TECH_SERVICE_HINTS = [
 const REFERRAL_PURPOSE_MAX = 40;
 const REFERRAL_SERVICES_MAX = 80;
 const REFERRAL_NEEDS_MAX_BYTES = 65535;
-const REFERRAL_NEEDS = ['Screen readers', 'Magnification', 'Braille literacy', 'Braille devices', 'Independent living skills', 'Low vision devices', 'Workplace assessment', 'Device trial / loan', 'Device setup', 'Device repair / technical support', 'Device funding assistance', 'Other'];
+const REFERRAL_NEEDS = ['Screen readers', 'Magnification', 'Braille devices', 'Assistive technology for daily living', 'Low vision devices', 'Workplace assessment', 'Device trial / loan', 'Device setup', 'Device repair / technical support', 'Device funding assistance', 'Other assistive technology needs'];
 
 /* ---------- Administrator-configurable form (Referral form settings) ----------
  * Stored as JSON in settings.referral_form. Any missing or malformed part falls
@@ -188,15 +190,12 @@ function referral_request_note_type(string $purpose, string $service): string {
 }
 
 function referral_is_preets(array $ref): bool {
-    // Structured (3.0.10+) referrals only ask for technology services, whose
-    // labels the administrator can rename. School is the default Pre-ETS source;
-    // explicit Pre-ETS selections in older records must also retain their meaning.
-    // Earlier structured forms offered Pre-ETS to counselors too. Preserve that
-    // explicit choice, including plan amendments whose note_type is not Pre-ETS.
-    if (!empty($ref['referral_purpose'])) return ($ref['referral_source'] ?? '') === 'school'
-        || ($ref['requested_service'] ?? '') === 'Pre-ETS'
-        || ($ref['note_type'] ?? '') === 'Pre-ETS Request';
-    return ($ref['note_type'] ?? '') === 'Pre-ETS Request' || ($ref['referral_source'] ?? '') === 'school';
+    // Historical explicit Pre-ETS requests keep their meaning. A school is a
+    // referral source, not a service selection for a new AT referral.
+    if (($ref['requested_service'] ?? '') === 'Pre-ETS'
+        || ($ref['note_type'] ?? '') === 'Pre-ETS Request'
+        || !empty($ref['preets_services'])) return true;
+    return empty($ref['referral_purpose']) && ($ref['referral_source'] ?? '') === 'school';
 }
 
 /** Plain text for intake notes, notifications and older mobile clients. */

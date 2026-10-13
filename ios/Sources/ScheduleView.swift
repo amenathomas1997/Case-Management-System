@@ -399,6 +399,7 @@ struct NewSessionSheet: View {
     @State private var date = Date()
     @State private var duration = 1.5
     @State private var repeatWeeks = 1
+    @State private var authorizationAcknowledged = false
     @State private var location = ""
     @State private var notes = ""
     @State private var isRemote = false
@@ -413,7 +414,7 @@ struct NewSessionSheet: View {
     /// Anything chosen or typed that closing the sheet would throw away.
     private var hasChanges: Bool {
         selectedClient != nil || selectedTrack != nil || repeatWeeks != 1 || isRemote
-            || !location.isEmpty || !notes.isEmpty || !meetingUrl.isEmpty
+            || !location.isEmpty || !notes.isEmpty || !meetingUrl.isEmpty || authorizationAcknowledged
     }
 
     private var clientTracks: [TrackOption] {
@@ -476,6 +477,7 @@ struct NewSessionSheet: View {
                 } else {
                     CaptionedField(label: "Location (optional)", text: $location)
                 }
+                Toggle("I reviewed authorization warnings and approve booking despite them", isOn: $authorizationAcknowledged)
                 CaptionedField(label: "Notes (optional)", text: $notes)
             }
             .navigationTitle("New session")
@@ -588,6 +590,7 @@ struct NewSessionSheet: View {
                 "time": APIDate.timeCentral(date),
                 "duration": duration,
                 "repeat_weeks": repeatWeeks,
+                "authorization_ack": authorizationAcknowledged,
                 // Hidden while Remote is on: a location typed before switching is not sent.
                 "location": isRemote ? "" : location,
                 "notes": notes,

@@ -93,7 +93,7 @@ function at_fields(string $kind,int $actor,int $client=0,?array $record=null): a
 }
 /** Dates on which something was done; any other date (a due, renewal, warranty or
  *  effective date) may lie further ahead. */
-const AT_DONE_DATES=['tested_on','delivered_on','completed_on','installed_on','received_on','spent_on'];
+const AT_DONE_DATES=['tested_on','delivered_on','completed_on','installed_on','received_on','spent_on','submitted_on','decision_on'];
 function at_validate_field(array $f,mixed $raw,int $actor,int $client,string $kind=''): string {
     if (!is_scalar($raw) && $raw!==null) throw new DomainException($f['label'].': invalid value.');
     $v=trim((string)$raw);
