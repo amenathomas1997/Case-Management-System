@@ -81,11 +81,12 @@ if ($keepalive) {
 
 /* Verified portal sessions time out after 60 minutes of inactivity (the caseload
    page warns 5 minutes ahead and offers to stay; see the dialog below). */
+$draftKept = false;
 if (!empty($_SESSION[$sessionKey])) {
     if (time() - (int)($_SESSION[$sessionKey . '_at'] ?? 0) > 3600) {
         unset($_SESSION[$sessionKey], $_SESSION[$sessionKey . '_at']);
         // A message typed before the timeout survives re-verification.
-        if (isset($_POST['send_message']) && $keepDraft()) {
+        if (isset($_POST['send_message']) && ($draftKept = $keepDraft())) {
             flash('Your portal session timed out. Verify again to continue — the message you typed, and the client it is about, were kept and will reappear in the form.', 'error');
         } else {
             flash('Your portal session timed out. Verify again to continue.', 'error');
@@ -97,6 +98,14 @@ if (!empty($_SESSION[$sessionKey])) {
 
 /* Access code verification (per browser session) */
 if (empty($_SESSION[$sessionKey])) {
+    // A message sent after the session had already ended (in another tab, say) is
+    // kept for after verifying, as the page promised, and never dropped unseen.
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message']) && !$draftKept) {
+        flash($keepDraft()
+            ? 'Your portal session had ended, so your message was not sent yet. Verify again to continue — the message you typed, and the client it is about, were kept and will reappear in the form.'
+            : 'Your portal session had ended. Verify again to continue.', 'error');
+        redirect('vrc.php?t=' . $token);
+    }
     // Server-side limits per portal link, which no new browser session resets:
     // at most 10 codes a day (each allows 5 tries), and after 10 wrong codes in
     // 15 minutes the link refuses codes until that window passes (admins are told).
@@ -168,6 +177,9 @@ if (empty($_SESSION[$sessionKey])) {
             $_SESSION[$sessionKey . '_at'] = time();
             unset($_SESSION[$codeKey]);
             db()->prepare('UPDATE vrc_tokens SET last_used_at = NOW() WHERE id = ?')->execute([(int)$vrc['id']]);
+            // Each opening of this external caseload view is kept in the audit trail
+            // (last_used_at holds only the latest).
+            audit(null, 'vrcportal.open', 'counselor', (int)$vrc['id'], $vrc['counselor_email']);
         } else {
             if (isset($_SESSION[$codeKey])) $_SESSION[$codeKey]['tries'] = (int)($_SESSION[$codeKey]['tries'] ?? 0) + 1;
             // Only a real guess (a live code was checked) counts toward the lockout,
@@ -241,12 +253,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
         keep_field_errors(['message' => 'Your message is too long (5,000 characters maximum). Shorten it, or send it in two parts — what you typed is still in the box.']);
         redirect('vrc.php?t=' . $token);
     }
+    // The same message posted again within the minute (a double press of Send) was
+    // already sent: it is not sent twice, refilled, or reported as an error.
+    $sentKey = 'vrc_sent_' . (int)$vrc['id'];
+    $sentPrint = hash('sha256', (int)$msgClientId . "\n" . $msg);
+    $lastSent = $_SESSION[$sentKey] ?? null;
+    if (is_array($lastSent) && hash_equals((string)($lastSent['fp'] ?? ''), $sentPrint) && time() - (int)($lastSent['at'] ?? 0) < 60) {
+        unset($_SESSION[$draftKey]);
+        flash('That message was already sent a moment ago, so it was not sent again.', 'info');
+        redirect('vrc.php?t=' . $token);
+    }
     // One message per minute per portal link.
     $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 SECOND)");
     $rl->execute(['vrc-msg-' . (int)$vrc['id']]);
     if ((int)$rl->fetchColumn() > 0) {
         keep_input();
         flash('Please wait a minute between messages.', 'error');
+        redirect('vrc.php?t=' . $token);
+    }
+    // At most 50 messages a day per portal link, as on the client portal: each one opens
+    // a task and alerts and emails every administrator. Administrators are told once a
+    // day when the ceiling is reached.
+    $day = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)");
+    $day->execute(['vrc-msg-' . (int)$vrc['id']]);
+    if ((int)$day->fetchColumn() >= 50) {
+        $day->execute(['vrc-msg-cap-' . (int)$vrc['id']]);
+        if ((int)$day->fetchColumn() === 0) {
+            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")
+                ->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'vrc-msg-cap-' . (int)$vrc['id']]);
+            notify_admin_users('Counselor portal daily message limit reached for ' . $vrc['counselor_name'] . '. If this was not the counselor, turn off their portal link.', 'counselors.php');
+        }
+        keep_input();
+        flash('You have reached today\'s limit of 50 messages through the portal, so this one was not sent. It is still in the box: email ' . brand('short') . ' instead, or send it tomorrow.', 'error');
         redirect('vrc.php?t=' . $token);
     }
     db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")
@@ -269,6 +307,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
         . ($clientName ? "\nRegarding: {$clientName}" : '')
         . "\n\n{$msg}\n\nThis is also on your task list: " . cfg('base_url') . "/tasks.php\n");
     unset($_SESSION[$draftKey]);
+    $_SESSION[$sentKey] = ['fp' => $sentPrint, 'at' => time()];
     flash('Message sent — the ' . brand('short') . ' team will get back to you.');
     redirect('vrc.php?t=' . $token);
 }
@@ -350,11 +389,13 @@ if ($convo): ?>
   <?php /* One list per client, under a heading naming the client, with the sender
            named before each message for screen readers; role="list" keeps the list
            semantics that list-style:none removes in Safari. */ ?>
+  <?php // A counselor's messages are stored without saying which counselor sent them, and a
+  // client can change counselor, so they are labelled "Counselor", never "You". ?>
   <?php foreach ($convo as $thread): $first = $thread[0]; $shown = count($thread); $total = (int)$first['total']; ?>
   <h3 id="conv-<?= (int)$first['client_id'] ?>">About <?= h($first['client_name']) ?></h3>
   <?php if ($total > $shown): ?><p class="muted">Showing the <?= $shown ?> most recent of <?= $total ?> messages about <?= h($first['client_name']) ?>. Ask the <?= h(brand('short')) ?> team if you need an earlier one.</p><?php endif; ?>
   <ol class="msg-thread" role="list" aria-labelledby="conv-<?= (int)$first['client_id'] ?>">
-    <?php foreach ($thread as $m): $who = $m['sender'] === 'counselor' ? 'You' : brand('short'); ?>
+    <?php foreach ($thread as $m): $who = $m['sender'] === 'counselor' ? 'Counselor' : brand('short'); ?>
       <li class="msg <?= $m['sender'] === 'counselor' ? 'out' : 'in' ?>">
         <span class="visually-hidden"><?= h($who) ?>:</span>
         <div class="msg-body"><?= nl2br(h($m['body'])) ?></div>
@@ -426,7 +467,11 @@ if ($convo): ?>
   }
   function hide() {
     d.hidden = true;
-    if (lastFocus && lastFocus.isConnected) lastFocus.focus();
+    // A screen-reader user reading in browse mode often has nothing focused (the
+    // body): return them to the main content rather than losing their place.
+    var back = lastFocus && lastFocus.isConnected && lastFocus !== document.body && lastFocus !== document.documentElement
+      ? lastFocus : document.getElementById('main');
+    if (back) back.focus();
   }
   function end() {
     ended = true;
@@ -452,7 +497,19 @@ if ($convo): ?>
   }
   stay.addEventListener('click', function () { live.textContent = ''; ping(true); });
   closeBtn.addEventListener('click', hide);
-  d.addEventListener('keydown', function (e) { if (e.key === 'Escape') hide(); });
+  // A modal dialog keeps keyboard focus inside it while open: Tab and Shift+Tab wrap
+  // between its buttons, and focus that leaves it (a click behind it) is brought back.
+  document.addEventListener('keydown', function (e) {
+    if (d.hidden) return;
+    if (e.key === 'Escape') { e.preventDefault(); hide(); return; }
+    if (e.key !== 'Tab') return;
+    var controls = Array.prototype.filter.call(d.querySelectorAll('button'), function (el) { return !el.disabled && !el.hidden; });
+    if (!controls.length) return;
+    var firstC = controls[0], lastC = controls[controls.length - 1];
+    if (e.shiftKey && (document.activeElement === firstC || !d.contains(document.activeElement))) { e.preventDefault(); lastC.focus(); }
+    else if (!e.shiftKey && (document.activeElement === lastC || !d.contains(document.activeElement))) { e.preventDefault(); firstC.focus(); }
+  });
+  document.addEventListener('focusin', function (e) { if (!d.hidden && !d.contains(e.target)) closeBtn.focus(); });
   // Typing is activity: at most one keepalive every 5 minutes while the dialog is closed.
   document.addEventListener('input', function () { if (!ended && d.hidden && Date.now() - last > 300000) ping(false); });
   arm();

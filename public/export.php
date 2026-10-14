@@ -27,6 +27,8 @@ $r = track_rollup($trackId);
 // default layout below stays as it is for state VR submission.
 $asTable = ($_GET['layout'] ?? '') === 'table';
 $filename = 'invoice_' . preg_replace('/[^A-Za-z0-9]+/', '_', $track['client_name']) . '_' . preg_replace('/[^A-Za-z0-9]+/', '_', $track['auth_number']) . '_' . date('Ymd') . ($asTable ? '_table' : '') . '.csv';
+// A download of the client's billing record is listed in their audit history.
+audit((int)$user['id'], 'track.export', 'track', $trackId, $asTable ? 'billing CSV (one table)' : 'billing CSV');
 
 header('Content-Type: text/csv; charset=UTF-8');
 header('Content-Disposition: attachment; filename="' . $filename . '"');

@@ -4,7 +4,7 @@ $durationCohort=(int)$call('add_cohort',['name'=>'Duration validation test'])['i
 foreach ([null,0,-1,1.5,1441,'invalid'] as $duration) {
     $input=['cohort_id'=>$durationCohort,'session_date'=>'2026-10-01','activity'=>'Other'];
     if ($duration!==null) $input['duration_min']=$duration;
-    $call('log_cohort_session',$input,[],false);
+    $call('log_cohort_session',$input,[],false,$duration==='invalid'?'Duration must be a number':'whole minutes');
 }
 check((int)$db->query("SELECT COUNT(*) FROM cohort_sessions WHERE cohort_id=$durationCohort")->fetchColumn()===0,
     'Mobile group logging refuses missing, zero, negative, fractional and oversized durations without saving');

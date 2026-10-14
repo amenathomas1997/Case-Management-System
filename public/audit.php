@@ -36,6 +36,7 @@ if ($userFilter) { $where[] = 'a.user_id = ?'; $params[] = $userFilter; }
 // invoices, sessions, AT service records, referrals, tasks, incidents, device
 // requests, worksite assessments, access bookings and restored trash items.
 // Each child is matched through the table that still ties it to the client.
+$mergedIds = [];
 if ($clientFilter) {
     $byTrack = fn(string $table): string => "SELECT x.id FROM {$table} x JOIN training_tracks t ON t.id = x.track_id WHERE t.client_id = ?";
     $byClient = fn(string $table): string => "SELECT id FROM {$table} WHERE client_id = ?";
@@ -47,9 +48,23 @@ if ($clientFilter) {
         'access_booking' => $byClient('access_bookings'), 'work_logs' => $byTrack('work_logs'),
         'track_expenses' => $byTrack('track_expenses'), 'client_documents' => $byClient('client_documents'),
         'client_notes' => $byClient('client_notes'),
+        // Documentation reviews (inc/workflows.php) are logged against one note as 'client_note'.
+        'client_note' => $byClient('client_notes'),
     ];
-    $or = ["(a.entity = 'client' AND a.entity_id = ?)"];
-    $params[] = $clientFilter;
+    // A duplicate merged into this client was deleted, but what was done under
+    // its own id stays logged there; the merge entry ("merged #N ...") names
+    // it, and a merged record may itself have absorbed earlier duplicates.
+    $clientIds = [$clientFilter];
+    $mergeQ = db()->prepare("SELECT detail FROM audit_log WHERE action = 'client.merge' AND entity = 'client' AND entity_id = ?");
+    for ($i = 0; $i < count($clientIds) && $i < 200; $i++) {
+        $mergeQ->execute([$clientIds[$i]]);
+        foreach ($mergeQ->fetchAll(PDO::FETCH_COLUMN) as $mergeDetail) {
+            if (preg_match('/^merged #(\d+)/', (string)$mergeDetail, $m) && !in_array((int)$m[1], $clientIds, true)) $clientIds[] = (int)$m[1];
+        }
+    }
+    $mergedIds = array_slice($clientIds, 1);
+    $or = ['(a.entity = \'client\' AND a.entity_id IN (' . implode(',', array_fill(0, count($clientIds), '?')) . '))'];
+    array_push($params, ...$clientIds);
     foreach ($clientChildren as $entity => $sql) {
         $or[] = "(a.entity = '{$entity}' AND a.entity_id IN ({$sql}))";
         $params[] = $clientFilter;
@@ -126,7 +141,8 @@ function audit_action_label(string $code): string {
         'assessment_template' => 'Assessment template', 'auth' => 'Authorization', 'booking' => 'Booking',
         'bundle' => 'Service bundle', 'calfeed' => 'Calendar subscription', 'client' => 'Client', 'cohort' => 'Cohort',
         'competency' => 'Competency', 'consent' => 'Consent form', 'contract' => 'Contract', 'curriculum' => 'Curriculum',
-        'device' => 'Device procurement', 'document' => 'Document', 'email_template' => 'Email template',
+        'device' => 'Device procurement', 'document' => 'Document', 'documentation' => 'Documentation',
+        'email_template' => 'Email template',
         'equipment' => 'Equipment', 'evalreport' => 'Evaluation report', 'expense' => 'Expense',
         'federation' => 'Microsoft sign-in settings', 'followup' => 'Follow-up', 'goal' => 'Goal',
         'goal_template' => 'Goal template', 'group' => 'Permission group', 'homework' => 'Homework', 'hours' => 'Hours',
@@ -147,7 +163,7 @@ function audit_action_label(string $code): string {
         'lockout' => 'locked after repeated failures', 'sso_fail' => 'Microsoft sign-in failed',
         'passkey_replay' => 'passkey response refused as a possible replay', 'revoke' => 'access revoked',
         'revoke_app' => 'mobile app signed out', 'reset' => 'reset', 'reset_link' => 'reset link sent',
-        'clear_lockout' => 'lockout cleared', 'sso_bind' => 'linked to a Microsoft account', 'provision' => 'created by Microsoft sign-in',
+        'clear_lockout' => 'lockout cleared', 'calfeed_clear' => 'calendar subscription address turned off', 'sso_bind' => 'linked to a Microsoft account', 'provision' => 'created by Microsoft sign-in',
         'transfer' => 'caseload transferred', 'group' => 'permission group changed', 'hours' => 'weekly hours changed',
         'change' => 'changed', 'test' => 'connection tested', 'log' => 'logged', 'complete' => 'completed', 'done' => 'completed',
         'assign' => 'assigned', 'reassign' => 'reassigned', 'convert' => 'converted to a client', 'review' => 'reviewed',
@@ -155,6 +171,7 @@ function audit_action_label(string $code): string {
         'archive' => 'archived', 'unarchive' => 'returned from the archive', 'export' => 'exported', 'merge' => 'merged',
         'amend' => 'amended', 'scored' => 'scored', 'loan' => 'loaned', 'reserve' => 'reserved', 'redact' => 'redacted',
         'schedule' => 'scheduled', 'snooze' => 'snoozed', 'skip' => 'skipped', 'request' => 'requested',
+        'open' => 'opened',
     ];
     $dot = strpos($code, '.');
     if ($dot === false || !isset($subjects[substr($code, 0, $dot)])) return $code;
@@ -191,7 +208,7 @@ page_header('Audit log', $user, 'account');
   </div>
   <div class="field">
     <label for="client">Client record</label>
-    <p class="hint" id="client-hint">Views of their documents, signatures and reports, and changes to their file and to its linked records: tracks, hours, goals, homework, invoices, sessions, AT services, referrals, tasks, incidents, device requests and bookings. Entries for a linked record that has since been deleted (such as a voided draft invoice) are not matched.</p>
+    <p class="hint" id="client-hint">Views of their documents, signatures and reports, and changes to their file and to its linked records: tracks, hours, goals, homework, invoices, sessions, AT services, referrals, tasks, incidents, device requests, bookings and documentation reviews of their notes. Entries made under a duplicate record later merged into this one are included. Entries for a linked record that has since been deleted (such as a voided draft invoice) are not matched.</p>
     <select id="client" name="client" aria-describedby="client-hint">
       <option value="0">Any record</option>
       <?php foreach ($clientList as $c): ?>
@@ -220,7 +237,8 @@ page_header('Audit log', $user, 'account');
   <h2 id="act-h">Activity</h2>
   <p id="act-count"><?= $total
       ? 'Showing entries ' . (($page - 1) * $perPage + 1) . ' to ' . (($page - 1) * $perPage + count($entries)) . ' of ' . $total . ', newest first' . ($filterQs ? ', matching the filters' : '') . '.'
-      : ($filterQs ? 'No activity matches these filters.' : 'No activity recorded yet.') ?></p>
+      : ($filterQs ? 'No activity matches these filters.' : 'No activity recorded yet.') ?>
+     <?= $mergedIds ? ' Includes entries made under the merged duplicate record' . (count($mergedIds) === 1 ? ' #' : 's #') . implode(', #', $mergedIds) . '.' : '' ?></p>
   <?php if ($entries): ?>
   <div class="table-scroll" tabindex="0" role="region" aria-labelledby="act-cap">
   <table>

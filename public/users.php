@@ -112,6 +112,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $db->prepare('UPDATE users SET name = ?, email = ?, role = ?, group_id = ?, weekly_hours = ?, is_active = ?'
                 . ($emailChanged ? ', entra_oid = NULL' : '') . ' WHERE id = ?')
                 ->execute([$name, $email, $role, $gid, $hours, $active, $uid]);
+            // A reset link or sign-in code already emailed (to the old address, or
+            // to someone being deactivated) must not outlive the change.
+            if ($emailChanged || !$active) {
+                $db->prepare('UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0')->execute([$uid]);
+                $db->prepare('UPDATE login_otps SET consumed = 1 WHERE user_id = ? AND consumed = 0')->execute([$uid]);
+            }
                 });
         } catch (DomainException $e) {
             keep_input();
@@ -131,13 +137,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         audit($user['id'], 'user.update', 'user', $uid,
             "{$name} <{$email}> role={$role} group=" . ($gid ?? 'legacy') . ' active=' . $active
-            . ($emailChanged ? ' (email changed; Microsoft sign-in link reset)' : ''));
+            . ($emailChanged ? ' (email changed; Microsoft sign-in link reset)' : '')
+            . ($emailChanged || !$active ? '; unused reset links and sign-in codes cancelled' : ''));
         // A Microsoft account is never linked again automatically: the person
         // signs in with a password, then links it from My Account.
         flash('User updated.' . ($emailChanged && !empty($target['entra_oid'])
                 ? ' The email changed, so their Microsoft sign-in link was removed. "Sign in with Microsoft" will not work for them until they sign in with their password'
                   . ' (if they have none, use "Email password reset link" below) and choose "Link Microsoft account" under My Account.'
                 : '')
+            . ($emailChanged ? ' Any password reset link or sign-in code sent to the old address no longer works.' : '')
             . (!$active ? ' They were signed out of the mobile app.' : ''));
         redirect('users.php?id=' . $uid);
     }
@@ -158,15 +166,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (isset($_POST['reset_2fa'])) {
-        db()->prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_last_step = NULL WHERE id = ?')->execute([$uid]);
-        $pk = db()->prepare('DELETE FROM passkeys WHERE user_id = ?');
-        $pk->execute([$uid]);
+        // A reset usually answers a lost or stolen device, so the mobile app
+        // sessions go too (an app sign-in can have used the authenticator code).
+        // They apply together.
+        db()->beginTransaction();
+        try {
+            db()->prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_last_step = NULL WHERE id = ?')->execute([$uid]);
+            $pk = db()->prepare('DELETE FROM passkeys WHERE user_id = ?');
+            $pk->execute([$uid]);
+            $app = db()->prepare('DELETE FROM api_tokens WHERE user_id = ?');
+            $app->execute([$uid]);
+            db()->commit();
+        } catch (Throwable $e) {
+            if (db()->inTransaction()) db()->rollBack();
+            error_log('users.php reset_2fa failed: ' . get_class($e) . ' ' . $e->getCode());
+            flash('The sign-in methods could not be reset; nothing was changed. Please try again.', 'error');
+            redirect('users.php?id=' . $uid);
+        }
         send_app_mail($target['email'], 'Your sign-in methods were reset',
-            "Hello {$target['name']},\n\nAn administrator reset your authenticator app and passkeys for " . cfg('name') . ".\n"
+            "Hello {$target['name']},\n\nAn administrator reset your authenticator app and passkeys for " . cfg('name') . ", and signed you out of the mobile app.\n"
             . "You can sign in with your password and an emailed code, then set them up again under My Account.\n"
             . "If you did not expect this, contact your administrator.\n");
-        audit($user['id'], 'user.reset_2fa', 'user', $uid, 'TOTP cleared, ' . $pk->rowCount() . ' passkey(s) removed');
-        flash("Authenticator app and passkeys were reset for {$target['name']}. Email sign-in codes still work.");
+        audit($user['id'], 'user.reset_2fa', 'user', $uid, 'TOTP cleared, ' . $pk->rowCount() . ' passkey(s) removed, ' . $app->rowCount() . ' app session(s) signed out');
+        // Browser sessions are tied to the password, so only a new password ends them.
+        flash("Authenticator app and passkeys were reset for {$target['name']}, and they were signed out of the mobile app ({$app->rowCount()} session(s)). Email sign-in codes still work."
+            . ' A browser where they are already signed in stays signed in until it times out; to end those too, use "Email password reset link" so they set a new password.');
+        redirect('users.php?id=' . $uid);
+    }
+
+    if (isset($_POST['clear_calfeed'])) {
+        // Stops a leaked or unwanted calendar address without deactivating the
+        // account; the person can create a new one under My Account.
+        $d = db()->prepare('UPDATE users SET cal_token = NULL WHERE id = ? AND cal_token IS NOT NULL');
+        $d->execute([$uid]);
+        if ($d->rowCount() !== 1) {
+            flash($target['name'] . ' has no calendar subscription address, so nothing changed.', 'error');
+            redirect('users.php?id=' . $uid);
+        }
+        audit($user['id'], 'user.calfeed_clear', 'user', $uid, 'calendar subscription address turned off');
+        if ((int)$target['is_active'] === 1) {
+            send_app_mail($target['email'], 'Your calendar subscription address was turned off',
+                "Hello {$target['name']},\n\nAn administrator turned off the private calendar subscription address for your " . cfg('name') . " account, so calendars subscribed to it no longer receive your sessions.\n"
+                . "You can create a new address under My Account, then subscribe your calendar to it again.\n"
+                . "If you did not expect this, contact your administrator.\n");
+        }
+        flash('The calendar subscription address for ' . $target['name'] . ' was turned off. Calendars subscribed to it stop receiving sessions.'
+            . ((int)$target['is_active'] === 1 ? ' They were emailed, and can create a new address under My Account.' : ''));
         redirect('users.php?id=' . $uid);
     }
 
@@ -190,36 +235,132 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (isset($_POST['transfer_caseload'])) {
         $toId = (int)($_POST['to_user'] ?? 0);
-        $to = db()->prepare('SELECT id, name, role, group_id FROM users WHERE id = ? AND is_active = 1');
+        $to = db()->prepare('SELECT id, name, email, role, group_id FROM users WHERE id = ? AND is_active = 1');
         $to->execute([$toId]);
         $toUser = $to->fetch();
+        $toAccess = $toUser ? resolve_perms($toUser) : ['perms' => [], 'scoped' => false];
         // The new owner must be able to open the clients they receive; a user
         // without the Clients permission would hold records nobody can work.
-        if (!$toUser || $toId === $uid || !in_array('clients', resolve_perms($toUser)['perms'], true)) {
+        if (!$toUser || $toId === $uid || !in_array('clients', $toAccess['perms'], true)) {
             flash('Choose a different, active user who has the Clients permission to transfer the caseload to.', 'error');
             redirect('users.php?id=' . $uid);
         }
-        // All four reassignments must apply together — a partial transfer would
+        // Open referrals go only to someone who can open them (the referral page
+        // and the app refuse any other assignee); otherwise they, and the tasks
+        // about them, go back to the unassigned referral queue.
+        $toReferrals = in_array('referrals', $toAccess['perms'], true);
+        // Someone limited to their own caseload receives only the sessions for
+        // clients now on it: the Schedule page, the app and the calendar feed hide
+        // the others from them and they could not complete them, so those stay
+        // here, listed for the administrator to rebook.
+        $toScoped = (bool)$toAccess['scoped'];
+        $movedSessions = [];
+        $leftSessions = [];
+        $refsMoved = 0;
+        $refsQueued = 0;
+        $tasksQueued = 0;
+        // All the reassignments must apply together — a partial transfer would
         // strand records (e.g. clients moved but their open sessions left behind).
         db()->beginTransaction();
         try {
             $c = db()->prepare('UPDATE clients SET assigned_to = ? WHERE assigned_to = ?');
             $c->execute([$toId, $uid]);
             $moved = $c->rowCount();
-            // Open referrals move; a converted one follows its client's owner (the
-            // clients just moved), so scoped access to it goes with the client.
-            db()->prepare("UPDATE referrals SET assigned_to = ? WHERE assigned_to = ?
-                AND (status <> 'Converted' OR client_id IN (SELECT id FROM clients WHERE assigned_to = ?))")->execute([$toId, $uid, $toId]);
+            if ($toReferrals) {
+                // Open referrals move; a converted one follows its client's owner (the
+                // clients just moved), so scoped access to it goes with the client.
+                $r = db()->prepare("UPDATE referrals SET assigned_to = ? WHERE assigned_to = ?
+                    AND (status <> 'Converted' OR client_id IN (SELECT id FROM clients WHERE assigned_to = ?))");
+                $r->execute([$toId, $uid, $toId]);
+                $refsMoved = $r->rowCount();
+            } else {
+                $tq = db()->prepare("UPDATE tasks SET assigned_to = NULL WHERE assigned_to = ? AND status = 'Open'
+                    AND referral_id IN (SELECT id FROM referrals WHERE status <> 'Converted')");
+                $tq->execute([$uid]);
+                $tasksQueued = $tq->rowCount();
+                $r = db()->prepare("UPDATE referrals SET assigned_to = NULL WHERE assigned_to = ? AND status <> 'Converted'");
+                $r->execute([$uid]);
+                $refsQueued = $r->rowCount();
+                $r = db()->prepare("UPDATE referrals SET assigned_to = ? WHERE assigned_to = ?
+                    AND status = 'Converted' AND client_id IN (SELECT id FROM clients WHERE assigned_to = ?)");
+                $r->execute([$toId, $uid, $toId]);
+                $refsMoved = $r->rowCount();
+            }
             db()->prepare("UPDATE tasks SET assigned_to = ? WHERE assigned_to = ? AND status = 'Open'")->execute([$toId, $uid]);
-            db()->prepare("UPDATE scheduled_sessions SET user_id = ? WHERE user_id = ? AND status = 'Scheduled' AND start_at >= NOW()")->execute([$toId, $uid]);
+            $sq = db()->prepare("SELECT s.id, s.start_at, s.end_at, c.name AS client_name, c.assigned_to AS client_owner
+                FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
+                WHERE s.user_id = ? AND s.status = 'Scheduled' AND s.start_at >= NOW()
+                ORDER BY s.start_at, s.id FOR UPDATE");
+            $sq->execute([$uid]);
+            foreach ($sq->fetchAll() as $s) {
+                if ($toScoped && (int)$s['client_owner'] !== $toId) $leftSessions[] = $s;
+                else $movedSessions[] = $s;
+            }
+            if ($movedSessions) {
+                $ids = array_map(fn($s) => (int)$s['id'], $movedSessions);
+                // reminder_sent goes back to 0, so the new instructor still gets the
+                // day-before reminder when the old one had already been sent it.
+                db()->prepare('UPDATE scheduled_sessions SET user_id = ?, reminder_sent = 0 WHERE id IN ('
+                    . implode(',', array_fill(0, count($ids), '?')) . ')')->execute(array_merge([$toId], $ids));
+            }
             db()->commit();
         } catch (Throwable $e) {
-            db()->rollBack();
+            if (db()->inTransaction()) db()->rollBack();
+            error_log('users.php transfer_caseload failed: ' . get_class($e) . ' ' . $e->getCode());
             flash('The caseload transfer could not be completed; no changes were made. Please try again.', 'error');
             redirect('users.php?id=' . $uid);
         }
-        audit($user['id'], 'user.transfer', 'user', $uid, "caseload -> {$toUser['name']} ({$moved} client(s))");
-        flash("Moved {$moved} client(s), open referrals, open tasks, and upcoming sessions from {$target['name']} to {$toUser['name']}.");
+        audit($user['id'], 'user.transfer', 'user', $uid, "caseload -> {$toUser['name']} ({$moved} client(s), {$refsMoved} referral(s)"
+            . ($refsQueued || $tasksQueued ? ", {$refsQueued} open referral(s) and {$tasksQueued} task(s) about them returned to the queue" : '')
+            . ', ' . count($movedSessions) . ' upcoming session(s) moved'
+            . ($leftSessions ? ', ' . count($leftSessions) . ' left to rebook' : '') . ')');
+
+        // Calendar invitations went to the old instructor, and no invitation id is
+        // kept to withdraw or re-issue them, so both people are told in plain text
+        // (date, time and the client's first name only).
+        $when = fn(array $s): string => date('D, M j, Y g:i A', strtotime((string)$s['start_at'])) . ' to ' . date('g:i A', strtotime((string)$s['end_at']));
+        $listed = function (array $sessions, bool $withClient) use ($when): string {
+            $lines = [];
+            foreach (array_slice($sessions, 0, 50) as $s) {
+                $lines[] = '- ' . $when($s) . ($withClient ? ', ' . explode(' ', trim((string)$s['client_name']))[0] : '');
+            }
+            if (count($sessions) > 50) $lines[] = '- and ' . (count($sessions) - 50) . ' more on the Schedule page';
+            return implode("\n", $lines);
+        };
+        $sentNew = $sentOld = false;
+        if ($movedSessions) {
+            $n = count($movedSessions);
+            $sentNew = send_app_mail($toUser['email'], 'Upcoming sessions were moved to you',
+                "Hello {$toUser['name']},\n\nAn administrator moved {$n} upcoming session" . ($n === 1 ? '' : 's') . " from {$target['name']} to you in " . cfg('name') . ":\n\n"
+                . $listed($movedSessions, true) . "\n\n"
+                . "The full details are on your Schedule page: " . cfg('base_url') . "/schedule.php\n"
+                . "Calendar invitations for these sessions went to {$target['name']}, so they are not in your calendar yet: add them, or subscribe to your calendar address under My Account.\n");
+            notify_user($toId, $n . ' upcoming session' . ($n === 1 ? ' was' : 's were') . ' moved to you from ' . $target['name'] . '.', 'schedule.php');
+            $sentOld = send_app_mail($target['email'], 'Your upcoming sessions were moved to another instructor',
+                "Hello {$target['name']},\n\nAn administrator moved {$n} of your upcoming session" . ($n === 1 ? '' : 's') . " to {$toUser['name']} in " . cfg('name') . ".\n"
+                . "Remove them from your calendar if they are there; {$toUser['name']} now has them:\n\n"
+                . $listed($movedSessions, false) . "\n");
+        }
+
+        $msg = "Moved {$moved} client(s), "
+            . ($toReferrals ? 'open referrals, ' : '')
+            . 'open tasks, and ' . count($movedSessions) . " upcoming session(s) from {$target['name']} to {$toUser['name']}.";
+        if ($refsQueued || $tasksQueued) {
+            $msg .= " Because {$toUser['name']} has no access to referrals, {$refsQueued} open referral(s) and {$tasksQueued} task(s) about open referrals went back to the unassigned queue instead.";
+        }
+        if ($movedSessions) {
+            $msg .= $sentNew ? " {$toUser['name']} was emailed the list of sessions they received."
+                : " The email listing the sessions could not be sent to {$toUser['name']}: tell them, and point them to their Schedule page.";
+            $msg .= $sentOld ? " {$target['name']} was emailed a notice that they were moved." : " The notice to {$target['name']} could not be emailed.";
+        }
+        flash($msg);
+        if ($leftSessions) {
+            // The transfer worked; this is what is still to do, so it is not an error.
+            $shown = array_map(fn($s) => $when($s) . ' (' . $s['client_name'] . ')', array_slice($leftSessions, 0, 10));
+            flash(count($leftSessions) . " upcoming session(s) stayed with {$target['name']}, because {$toUser['name']} sees only their own caseload and those clients are not on it."
+                . ' Rebook them on the Schedule page with someone who can see the client: ' . implode('; ', $shown)
+                . (count($leftSessions) > 10 ? '; and ' . (count($leftSessions) - 10) . ' more.' : '.'), 'info');
+        }
         redirect('users.php?id=' . $uid);
     }
 
@@ -286,7 +427,8 @@ page_header('Users', $user, 'account');
     Caseload: <?= (int)$edit['caseload'] ?> client(s) ·
     App sessions: <?= (int)$edit['app_sessions'] ?> ·
     Passkeys: <?= (int)$edit['passkey_count'] ?> ·
-    Authenticator app: <?= $edit['totp_enabled'] ? 'on' : 'off' ?>
+    Authenticator app: <?= $edit['totp_enabled'] ? 'on' : 'off' ?> ·
+    Calendar subscription address: <?= (string)$edit['cal_token'] !== '' ? 'on' : 'off' ?>
     <?= $lockedOut ? ' · <span class="field-error"><strong>Locked out by failed attempts: ' . h(implode(', ', $lockedOut)) . '</strong></span>' : '' ?>
   </p>
 
@@ -328,27 +470,35 @@ page_header('Users', $user, 'account');
     <button type="submit" name="send_reset" value="1" class="btn btn-secondary"
       onclick="return confirm(<?= h(json_encode('Email ' . $edit['email'] . ' a password reset link?', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">Email password reset link</button>
     <button type="submit" name="reset_2fa" value="1" class="btn btn-secondary"
-      onclick="return confirm('Reset their authenticator app and remove all passkeys? They will be emailed, and email codes keep working.');">Reset authenticator &amp; passkeys</button>
+      onclick="return confirm('Reset their authenticator app, remove all passkeys and sign them out of the mobile app? They will be emailed, and email codes keep working.');">Reset authenticator &amp; passkeys</button>
     <button type="submit" name="revoke_app" value="1" class="btn btn-secondary"
       onclick="return confirm('Sign this user out of the mobile app on every device?');">Sign out of mobile app</button>
+    <?php if ((string)$edit['cal_token'] !== ''): ?>
+    <button type="submit" name="clear_calfeed" value="1" class="btn btn-secondary"
+      onclick="return confirm('Turn off their calendar subscription address? Calendars subscribed to it stop receiving sessions; they can create a new one under My Account.');">Turn off calendar address</button>
+    <?php endif; ?>
     <?php if ($lockout > 0): ?>
     <button type="submit" name="clear_lockout" value="1" class="btn btn-secondary">Clear sign-in lockout</button>
     <?php endif; ?>
   </form>
 
   <h3>Caseload transfer</h3>
+  <p class="hint" id="to_user-hint">Open referrals go only to someone with access to referrals; otherwise they return to the unassigned referral queue. Someone limited to their own caseload receives only the sessions for clients they receive; any others stay here and are listed for you to rebook. Both people are emailed about the sessions that move.</p>
   <form method="post" action="users.php" class="inline-form"><?= csrf_field() ?>
     <input type="hidden" name="uid" value="<?= (int)$edit['id'] ?>">
     <label for="to_user">Move their <?= (int)$edit['caseload'] ?> client(s), open referrals, open tasks, and upcoming sessions to</label>
-    <select id="to_user" name="to_user">
+    <select id="to_user" name="to_user" aria-describedby="to_user-hint">
       <option value="">— Choose a user —</option>
-      <?php foreach ($rows as $r): if ((int)$r['id'] === (int)$edit['id'] || !$r['is_active'] || !in_array('clients', resolve_perms($r)['perms'], true)) continue; ?>
-      <option value="<?= (int)$r['id'] ?>"><?= h($r['name']) ?></option>
+      <?php foreach ($rows as $r): if ((int)$r['id'] === (int)$edit['id'] || !$r['is_active']) continue;
+        $rAccess = resolve_perms($r);
+        if (!in_array('clients', $rAccess['perms'], true)) continue; ?>
+      <option value="<?= (int)$r['id'] ?>"<?= in_array('referrals', $rAccess['perms'], true) ? '' : ' data-noref="1"' ?><?= $rAccess['scoped'] ? ' data-scoped="1"' : '' ?>><?= h($r['name']) ?></option>
       <?php endforeach; ?>
     </select>
-    <?php // The confirmation names both people, read from the list as it is now. ?>
+    <?php // The confirmation names both people, read from the list as it is now, and
+          // says what the chosen person's access means for referrals and sessions. ?>
     <button type="submit" name="transfer_caseload" value="1" class="btn btn-secondary"
-      onclick="var s=document.getElementById('to_user');if(!s.value)return true;var to=s.options[s.selectedIndex].text;return confirm(<?= h(json_encode('Move ' . (int)$edit['caseload'] . ' client(s), open referrals, open tasks and upcoming sessions from ' . $edit['name'] . ' to ', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>+to+'?\n\nThis cannot be undone in one step: moving them back later would also move '+to+'\'s own caseload.');">Transfer<span class="visually-hidden"> <?= h($edit['name']) ?>'s caseload</span></button>
+      onclick="var s=document.getElementById('to_user');if(!s.value)return true;var o=s.options[s.selectedIndex],to=o.text;return confirm(<?= h(json_encode('Move ' . (int)$edit['caseload'] . ' client(s), open referrals, open tasks and upcoming sessions from ' . $edit['name'] . ' to ', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>+to+'?'+(o.getAttribute('data-noref')?'\n\n'+to+' has no access to referrals, so open referrals go back to the unassigned referral queue instead.':'')+(o.getAttribute('data-scoped')?'\n\n'+to+' sees only their own caseload, so sessions for clients not on it stay here, to be rebooked.':'')+'\n\nThis cannot be undone in one step: moving them back later would also move '+to+'\'s own caseload.');">Transfer<span class="visually-hidden"> <?= h($edit['name']) ?>'s caseload</span></button>
   </form>
 
   <h3>Delete</h3>

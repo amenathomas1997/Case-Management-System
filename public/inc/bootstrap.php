@@ -2,6 +2,14 @@
 declare(strict_types=1);
 // Web bootstrap: core functions + session, CSRF, auth. CLI cron scripts use core.php directly.
 
+// Never print a PHP warning or error into a page, whatever the host's php.ini
+// (Apache mod_php ignores .user.ini, and a dotfile can be lost in an upload):
+// it would show server paths to the visitor. Logged instead.
+if (PHP_SAPI !== 'cli') {
+    ini_set('display_errors', '0');
+    ini_set('log_errors', '1');
+}
+
 require __DIR__ . '/core.php';
 
 /* ---------- Last-resort handler for uncaught exceptions ----------
@@ -105,6 +113,8 @@ ini_set('session.gc_maxlifetime', (string)(48 * 3600));
 session_start();
 
 header('Cache-Control: no-store');
+// The PHP version banner (expose_php) helps only someone matching known flaws.
+header_remove('X-Powered-By');
 header('X-Frame-Options: DENY');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: same-origin');
@@ -272,6 +282,20 @@ function take_resume_url(): string {
     // lives in the app's top folder, so the last path segment is the page.
     [$path, $query] = array_pad(explode('?', safe_resume_url($r['url']), 2), 2, null);
     return basename($path) . ($query !== null ? '?' . $query : '');
+}
+
+/**
+ * take_resume_url() for a completed sign-in. When a draft was put back into
+ * the form, the page says so (with the welcome), so nobody leaves it thinking
+ * it was already saved. Not every form refills every field, so the message
+ * asks for a check rather than promising the whole draft.
+ */
+function resume_url_after_sign_in(): string {
+    $url = take_resume_url();
+    if (!empty($_SESSION['old_input']) || !empty($_SESSION['old_input_lists'])) {
+        flash_ui('What you had typed before signing in was put back into the form, but nothing has been saved yet. Check each field, type again anything missing or showing the saved version, then submit.', 'info');
+    }
+    return $url;
 }
 
 /* ---------- Preserve form input across an error redirect (WCAG 3.3.7) ---------- */

@@ -42,7 +42,8 @@ $h1 = function (string $t) use ($pdf, $tx, $doc) {
     $pdf->Ln(4);
     $pdf->SetFont('Helvetica', 'B', 13);
     $pdf->SetTextColor(30, 58, 138);
-    $pdf->Cell(0, 8, $tx($t), 0, 1);
+    // MultiCell wraps: a long track title (up to 190 characters) stays on the page.
+    $pdf->MultiCell(0, 8, $tx($t));
     $pdf->SetTextColor(0, 0, 0);
 };
 // $pp writes to the PDF only (for entries the HTML twin shows as a table).
@@ -63,10 +64,10 @@ $h3 = function (string $t) use ($pp, $doc) {
 
 $pdf->SetFont('Helvetica', 'B', 17);
 $pdf->SetTextColor(30, 58, 138);
-$pdf->Cell(0, 9, $tx(brand('org')), 0, 1);
+$pdf->MultiCell(0, 9, $tx(brand('org')));
 $pdf->SetFont('Helvetica', '', 11);
 $pdf->SetTextColor(60, 60, 60);
-$pdf->Cell(0, 6, $tx('Complete Client File — generated ' . date('F j, Y g:i A') . ' by ' . $user['name']), 0, 1);
+$pdf->MultiCell(0, 6, $tx('Complete Client File — generated ' . date('F j, Y g:i A') . ' by ' . $user['name']));
 $pdf->SetTextColor(0, 0, 0);
 
 $h1('Client');
@@ -189,7 +190,15 @@ $pdfBytes = $pdf->Output('S');
 
 // Assemble the ZIP
 $safe = preg_replace('/[^A-Za-z0-9]+/', '_', $client['name']);
-$tmp = tempnam(sys_get_temp_dir(), 'cxp');
+// The unencrypted ZIP is built in the private directory beside the uploads
+// (never a shared temp folder), the place the backups use; the system temp
+// folder only if neither private folder can be written to.
+$tmpDir = sys_get_temp_dir();
+foreach ([dirname((string)cfg('upload_dir')), (string)cfg('upload_dir')] as $privDir) {
+    if ((string)cfg('upload_dir') !== '' && is_dir($privDir) && is_writable($privDir)) { $tmpDir = $privDir; break; }
+}
+$tmp = tempnam($tmpDir, '.cxp_');
+if ($tmp !== false) @chmod($tmp, 0600);
 if ($tmp === false) $exportFailed(500, 'Export not ready', 'Could not prepare the export. Please try again.', 'client.php?id=' . $id, 'Back to ' . $client['name']);
 // The ZIP holds the whole client file: remove it even when the download is cut
 // off (a dropped connection or a time limit ends the script without `finally`).

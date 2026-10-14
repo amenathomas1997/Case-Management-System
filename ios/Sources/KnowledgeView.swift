@@ -120,7 +120,7 @@ struct KnowledgeView: View {
             }
         } catch {
             guard mine == loadSeq else { return }
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }
@@ -224,8 +224,9 @@ struct KBEditSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            // The error banner is the form's first row; it is scrolled into view and given
+            // VoiceOver focus when a problem is reported (see ErrorFocusForm).
+            ErrorFocusForm(error: error) {
                 // Visible names that stay once the fields are filled (as they are when editing).
                 CaptionedField(label: "Title (required)", text: $title)
                 CaptionedField(label: "Category", text: $category)
@@ -289,12 +290,12 @@ struct KBEditSheet: View {
         var b: [String: Any] = ["title": title, "category": category, "body": body_, "is_public": isPublic ? 1 : 0]
         if let a = article { b["id"] = a.id }
         do { let _: OKResponse = try await api.call("save_kb", body: b); onDone(false); dismiss() }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
     private func delete(_ id: Int) async {
         busy = true; error = nil
         do { let _: OKResponse = try await api.call("delete_kb", body: ["id": id]); onDone(true); dismiss() }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 

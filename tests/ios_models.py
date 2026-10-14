@@ -27,6 +27,14 @@ models.append(r'''
             _ = try decoder.decode(type, from: data)
             print("PASS: iOS decodes populated " + name + " response")
         }
+        // A captured response whose decoded values must also be right: the tolerant
+        // decoders turn a renamed or retyped key into a default instead of an error.
+        func values<T: Decodable>(_ type: T.Type, _ name: String, _ label: String, _ ok: (T) -> Bool) throws {
+            let data = try JSONSerialization.data(withJSONObject: fixtures[name]!)
+            let value = try decoder.decode(type, from: data)
+            guard ok(value) else { fatalError("Decoded values are wrong: " + label) }
+            print("PASS: iOS decodes " + label)
+        }
         // Replies to writes, shaped as public/api.php sends them, and a device
         // request with every date filled in. These need no database.
         func literal<T: Decodable>(_ type: T.Type, _ json: String, _ label: String, _ ok: (T) -> Bool) throws {
@@ -69,11 +77,17 @@ models.append(r'''
         try verify(MeResponse.self, "me")
         // The home screen (its own tolerant decoder) and the other list screens.
         try verify(DashboardData.self, "dashboard")
-        try verify(FollowupsResponse.self, "followups")
-        try verify(IncidentsResponse.self, "incidents")
+        try values(FollowupsResponse.self, "followups", "a device follow-up that is due, with its date, interval and device") {
+            $0.due.contains { !$0.dueDate.isEmpty && $0.intervalDays > 0 && !$0.equipmentName.isEmpty && !$0.clientName.isEmpty }
+        }
+        try values(IncidentsResponse.self, "incidents", "an incident the signed-in administrator can edit, with its date and severity") {
+            $0.incidents.contains { $0.canEdit && !$0.incidentDate.isEmpty && !$0.severity.isEmpty }
+        }
         try verify(UtilizationResponse.self, "utilization")
         try verify(ComplianceResponse.self, "compliance")
-        try verify(CounselorsResponse.self, "counselors")
+        try values(CounselorsResponse.self, "counselors", "a confirmed counselor whose portal link is active") {
+            $0.counselors.contains { $0.portalActive && !$0.portalExpired && $0.clients >= 1 }
+        }
         try verify(WorksiteRowsResponse.self, "worksite_assessments")
         try verify(TrackExpensesResponse.self, "expenses")
         if fixtures["at_list"] != nil {
@@ -84,6 +98,17 @@ models.append(r'''
             try verify(ATProfitResponse.self, "at_profitability")
             try verify(ATIssueChoices.self, "at_issue_choices")
             try verify(HomeworkResponse.self, "homework")
+        }
+        // The Action center and the AI case briefing (tests/workflow_cases.php).
+        if fixtures["workflow_actions"] != nil {
+            try values(WorkflowActionResponse.self, "workflow_actions", "the action center's items") {
+                !$0.items.isEmpty && $0.items.allSatisfy { !$0.title.isEmpty && !$0.url.isEmpty && !$0.kind.isEmpty }
+            }
+        }
+        if fixtures["workflow_briefing"] != nil {
+            try values(BriefResponse.self, "workflow_briefing", "an AI case briefing whose every item cites a linked source") {
+                !$0.items.isEmpty && $0.items.allSatisfy { !$0.sources.isEmpty && $0.sources.values.allSatisfy { !$0.url.isEmpty } }
+            }
         }
     }
 }

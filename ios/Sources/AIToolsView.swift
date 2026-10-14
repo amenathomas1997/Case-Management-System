@@ -47,6 +47,7 @@ struct AIResultCard: View {
     /// VoiceOver onto the result once and clears it, so the row scrolling back into view
     /// later never pulls focus or repeats the announcement.
     @Binding var reveal: Bool
+    @EnvironmentObject var api: API
     @Environment(\.layoutDirection) private var appDirection
     private enum Spot: Hashable { case notice, result }
     @AccessibilityFocusState private var focus: Spot?
@@ -81,11 +82,13 @@ struct AIResultCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .environment(\.layoutDirection, rightToLeft ? .rightToLeft : appDirection)
             if let footer { Text(footer).font(.caption) }
-            // Text selection works block by block, so the whole result can still be copied in
-            // one go. Kept on this device (no Handoff to other devices): it may name a client.
+            // The one way to copy the result (the blocks are not selectable: a system Copy would
+            // go to other devices and never expire). It may name a client, so the copy stays on
+            // this device, is cleared from the clipboard after 10 minutes, and is cleared at
+            // sign-out while it is still the clipboard's latest item (API.copyProtected).
             Button {
-                UIPasteboard.general.setItems([["public.utf8-plain-text": text]], options: [.localOnly: true])
-                announce("Result copied.")
+                api.copyProtected(text)
+                announce("Result copied. The copy is cleared from the clipboard in 10 minutes.")
             } label: { Label("Copy result", systemImage: "doc.on.doc").frame(minHeight: 44).contentShape(Rectangle()) }
                 .buttonStyle(.borderless)
         }
@@ -104,16 +107,16 @@ struct AIResultCard: View {
     @ViewBuilder private func blockView(_ block: AIResultBlock) -> some View {
         switch block.kind {
         case .heading:
-            Text(block.text).font(.callout.weight(.bold)).textSelection(.enabled)
+            Text(block.text).font(.callout.weight(.bold))
                 .accessibilityAddTraits(.isHeader)
         case .item(let marker):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(marker).font(.callout)
-                Text(block.text).font(.callout).textSelection(.enabled)
+                Text(block.text).font(.callout)
             }
             .accessibilityElement(children: .combine)
         case .paragraph:
-            Text(block.text).font(.callout).textSelection(.enabled)
+            Text(block.text).font(.callout)
         }
     }
 }
@@ -281,8 +284,9 @@ struct RemediateView: View {
     private let modes = [("plain", "Plain language"), ("simplify", "Simplify"), ("summary", "Summarize"), ("largeprint", "Large print format"), ("alt", "Alt text")]
 
     var body: some View {
-        Form {
-            if let error { ErrorBanner(message: error) }
+        // ErrorFocusForm: Transform sits below a long text box, so a failure is scrolled to and
+        // given VoiceOver focus rather than left in a banner row that is off screen.
+        ErrorFocusForm(error: error) {
             // Inputs are locked while a request runs, and a result is cleared when they change,
             // so the result on screen always matches the choice and text shown above it.
             Picker("What to do", selection: $mode) { ForEach(modes, id: \.0) { Text($0.1).tag($0.0) } }
@@ -310,7 +314,7 @@ struct RemediateView: View {
             resultIncomplete = r.truncated
             resultCaption = "\(label) result" + (r.truncated ? " (incomplete)" : ""); result = r.text; revealAIResult(&reveal)
         }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
 }
@@ -335,14 +339,17 @@ struct TranslateView: View {
     ]
 
     var body: some View {
-        Form {
-            if let error { ErrorBanner(message: error) }
+        // ErrorFocusForm: Translate sits below a long text box, so a failure is scrolled to and
+        // given VoiceOver focus rather than left in a banner row that is off screen.
+        ErrorFocusForm(error: error) {
             // Locked while translating, and a change clears the result, so a translation is
             // never shown under a language it was not made in.
             Picker("Into", selection: $lang) { ForEach(langs, id: \.name) { Text($0.name).tag($0.name) } }
                 .disabled(busy)
             Section("Content") { TextEditor(text: $content).frame(minHeight: 160).accessibilityLabel("Content to translate").disabled(busy) }
-            Text("Pasted text is sent to the provider as-is. Review before sending to a client.").font(.caption)
+            // The server refuses more than 6,000 characters at once (ai_translate), so the limit
+            // is stated up front and checked here before anything is sent.
+            Text("Pasted text is sent to the provider as-is. Review before sending to a client. Up to 6,000 characters at a time; split longer text into parts.").font(.caption)
             Button { Task { await run() } } label: { Label(busy ? "Translating…" : "Translate", systemImage: "character.bubble") }
                 .accessibilityValue(busy ? "In progress" : "").disabled(busy || content.isEmpty)
             if let result {
@@ -355,6 +362,11 @@ struct TranslateView: View {
         .navigationTitle("Translate").navigationBarTitleDisplayMode(.inline)
     }
     private func run() async {
+        let length = content.count
+        guard length <= 6000 else {
+            showFormError("The content is too long to translate at once (maximum 6,000 characters; it has \(length)). Split it into parts and translate each one.", in: &error)
+            return
+        }
         busy = true; error = nil; result = nil
         announceAIWork("Translating")
         let requested = lang
@@ -366,7 +378,7 @@ struct TranslateView: View {
             resultIncomplete = r.truncated
             resultCaption = "\(requested) translation" + (r.truncated ? " (incomplete)" : ""); result = r.text; revealAIResult(&reveal)
         }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
 }
@@ -403,7 +415,7 @@ struct CurriculumGenView: View {
         busy = true; error = nil; result = nil
         announceAIWork("Drafting skills")
         do { let r: AITextResponse = try await api.call("ai_curriculum", body: ["tech": tech, "level": level, "focus": focus]); result = r.text; revealAIResult(&reveal) }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
 }
@@ -434,7 +446,7 @@ struct AskCaseloadView: View {
         busy = true; error = nil; result = nil
         announceAIWork("Thinking")
         do { let r: AITextResponse = try await api.call("ai_ask", body: ["question": question]); result = r.text; revealAIResult(&reveal) }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
 }
@@ -465,7 +477,7 @@ struct KBAskView: View {
         busy = true; error = nil; result = nil; sources = []
         announceAIWork("Searching")
         do { let r: AIKBResponse = try await api.call("ai_kb", body: ["question": question]); result = r.text; sources = r.sources; revealAIResult(&reveal) }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
 }
@@ -505,7 +517,7 @@ struct RiskView: View {
             }
             result = r.text; revealAIResult(&reveal)
         }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
 }
@@ -534,7 +546,7 @@ struct AIRecommendView: View {
         busy = true; error = nil; result = nil
         announceAIWork("Thinking")
         do { let r: AITextResponse = try await api.call("ai_recommend", body: ["client_id": clientId]); result = r.text; revealAIResult(&reveal) }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
 }
@@ -561,7 +573,7 @@ struct AIProgressReviewView: View {
         busy = true; error = nil; result = nil
         announceAIWork("Reviewing")
         do { let r: AITextResponse = try await api.call("ai_progress", body: ["client_id": clientId]); result = r.text; revealAIResult(&reveal) }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
 }
@@ -593,8 +605,10 @@ struct AIIntakeView: View {
     }
 
     var body: some View {
-        Form {
-            if let error { ErrorBanner(message: error) }
+        // ErrorFocusForm: Save assessment is at the bottom of a long draft, so a refused save
+        // (an AI-drafted field over its length limit, say) is scrolled to and given VoiceOver
+        // focus rather than left in a banner row that is off screen and never heard.
+        ErrorFocusForm(error: error) {
             if !generated {
                 Section("Intake") {
                     AILabeledField(label: "What does the client want to accomplish?", text: $goals, lines: 1...3)
@@ -629,7 +643,8 @@ struct AIIntakeView: View {
                         }
                         .accessibilityFocused($focus, equals: .saved)
                     } else {
-                        Button { Task { await save() } } label: { Label("Save assessment", systemImage: "checkmark.circle") }.disabled(busy)
+                        Button { Task { await save() } } label: { Label(busy ? "Saving…" : "Save assessment", systemImage: "checkmark.circle") }
+                            .accessibilityValue(busy ? "In progress" : "").disabled(busy)
                     }
                 } header: {
                     // The heading carries the instruction, and is where VoiceOver is put when the
@@ -661,7 +676,7 @@ struct AIIntakeView: View {
             // The whole form is replaced by the draft, including the button VoiceOver was on:
             // put VoiceOver on the draft's heading once it is on screen.
             moveFocus(to: .draft)
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
     private func moveFocus(to spot: Spot) {
@@ -683,6 +698,6 @@ struct AIIntakeView: View {
             // which speaks it (an announcement here would be cut off by the focus change).
             moveFocus(to: .saved)
             onSaved()
-        } catch { self.error = error.localizedDescription; busy = false }
+        } catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
     }
 }

@@ -11,6 +11,14 @@ $uid = (int)$user['id'];
 $scopeCond = $scoped ? ' AND c.assigned_to = ?' : '';
 $scopeArg = $scoped ? [$uid] : [];
 
+/** Cents in a typed amount ("1250.00", "$1,250", "125.5"), or null when it is not
+ *  dollars and cents. A leading $ and thousands commas are accepted as typed. */
+function invoice_amount_cents(string $raw): ?int {
+    $amt = preg_replace('/^\$\s*/', '', trim($raw));
+    if (preg_match('/^\d{1,3}(,\d{3})+(\.\d{1,2})?$/D', $amt)) $amt = str_replace(',', '', $amt);
+    return preg_match('/^\d{1,7}(\.\d{1,2})?$/D', $amt) ? (int)round((float)$amt * 100) : null;
+}
+
 /* Batch: generate invoices for every active track with unbilled work */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['batch_generate'])) {
     // Tracks with unbilled work logs OR unbilled expenses (expense-only tracks
@@ -35,8 +43,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['batch_generate'])) {
     redirect('invoices.php');
 }
 
-/* Status transitions and voiding a draft share the caseload check */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['set_status']) || isset($_POST['void_draft']))) {
+/* Status transitions, voiding a draft and payments on a Paid invoice share the caseload check */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['set_status']) || isset($_POST['void_draft'])
+        || isset($_POST['add_payment']) || isset($_POST['correct_payment']))) {
     $id = (int)($_POST['id'] ?? 0);
     // Caseload scope the WRITE (the list/export are scoped, this was not): the
     // invoice's client must be on the caseload or a scoped user could transition
@@ -95,6 +104,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['void_draft'])) {
         . ' are unbilled again, so they can be corrected on the track and invoiced again.'
         . ($repriced ? ' ' . $repriced . ' of those work log entr' . ($repriced === 1 ? 'y was' : 'ies were') . ' re-priced to the track\'s current rates.' : ''));
     redirect('invoices.php');
+}
+
+/* A Paid invoice: record a further payment toward a short-paid balance, or correct
+   the amount paid (a mistyped figure). Never more than the invoice total. The
+   latest payment's reference (and, for a further payment, its date) is stored, and
+   every change is audited with the amounts. A write-off is not offered here. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['add_payment']) || isset($_POST['correct_payment']))) {
+    $adding = isset($_POST['add_payment']);
+    $pfx = $adding ? 'add_' : 'fix_';
+    $ref = is_string($_POST['payment_ref'] ?? null) ? trim($_POST['payment_ref']) : '';
+    $amtRaw = is_string($_POST['paid_amount'] ?? null) ? trim($_POST['paid_amount']) : '';
+    $listBack = $_POST['list_status'] ?? '';
+    $listUrl = 'invoices.php' . (in_array($listBack, ['Draft','Submitted','Paid'], true) ? '?status=' . $listBack : '') . '#inv-' . $id;
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $lk = $pdo->prepare('SELECT status, total_amount, paid_amount, payment_ref FROM invoices WHERE id = ? FOR UPDATE');
+        $lk->execute([$id]);
+        $locked = $lk->fetch();
+        if (!$locked || $locked['status'] !== 'Paid') {
+            $pdo->rollBack();
+            flash('Invoice ' . $num . ' was not changed: ' . ($locked ? 'it is ' . $locked['status'] . ', and payments are added or corrected here only once it is marked paid.' : 'it no longer exists.'), 'error');
+            redirect('invoices.php');
+        }
+        $totalCents = (int)round((float)$locked['total_amount'] * 100);
+        // An older Paid invoice with no amount recorded was paid in full.
+        $paidCents = $locked['paid_amount'] !== null ? (int)round((float)$locked['paid_amount'] * 100) : $totalCents;
+        $owedCents = max(0, $totalCents - $paidCents);
+        $amtCents = $amtRaw === '' ? null : invoice_amount_cents($amtRaw);
+        $errs = [];
+        $amtKey = $pfx . 'paid_amount_' . $id;
+        if (mb_strlen($ref) > 80) $errs[$pfx . 'payment_ref_' . $id] = 'Keep the check or EFT reference to 80 characters or fewer.';
+        if ($amtRaw === '') {
+            $errs[$amtKey] = $adding ? 'Enter the amount of this payment, up to the ' . fmt_money($owedCents / 100) . ' still owed.'
+                : 'Enter the total amount paid on this invoice so far, up to its total of ' . fmt_money($totalCents / 100) . '.';
+        } elseif ($amtCents === null) {
+            $errs[$amtKey] = '"' . mb_substr($amtRaw, 0, 30) . '" is not an amount. Enter it in dollars and cents, such as 250.00.';
+        } elseif ($amtCents <= 0) {
+            $errs[$amtKey] = 'The amount must be more than $0.00.';
+        } elseif ($adding && $amtCents > $owedCents) {
+            $errs[$amtKey] = 'This payment (' . fmt_money($amtCents / 100) . ') is more than the ' . fmt_money($owedCents / 100) . ' still owed on this invoice. Check the amount, or correct the amount paid instead.';
+        } elseif (!$adding && $amtCents > $totalCents) {
+            $errs[$amtKey] = 'The amount paid (' . fmt_money($amtCents / 100) . ') is more than the invoice total of ' . fmt_money($totalCents / 100) . '. Check the amount.';
+        }
+        if ($errs) {
+            $pdo->rollBack();
+            keep_input();
+            keep_field_errors($errs);
+            redirect($listUrl);
+        }
+        $newCents = $adding ? $paidCents + $amtCents : $amtCents;
+        $newRef = $ref !== '' ? $ref : $locked['payment_ref'];
+        if (!$adding && $newCents === $paidCents && $newRef === $locked['payment_ref']) {
+            $pdo->rollBack();
+            flash('Invoice ' . $num . ' already shows ' . fmt_money($paidCents / 100) . ' paid, so nothing was changed.', 'info');
+            redirect($listUrl);
+        }
+        $newPaid = number_format($newCents / 100, 2, '.', '');
+        $pdo->prepare('UPDATE invoices SET paid_amount = ?, payment_ref = ?' . ($adding ? ', paid_at = CURDATE()' : '') . " WHERE id = ? AND status = 'Paid'")
+            ->execute([$newPaid, $newRef, $id]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+    $ofTotal = ' of ' . fmt_money($totalCents / 100);
+    audit($user['id'], $adding ? 'invoice.payment_add' : 'invoice.payment_correct', 'invoice', $id,
+        ($adding ? '+' . fmt_money($amtCents / 100) . ', now ' . fmt_money($newCents / 100) : 'paid ' . fmt_money($paidCents / 100) . ' -> ' . fmt_money($newCents / 100))
+        . $ofTotal . ($ref !== '' ? '; ref ' . $ref : ''));
+    $stillOwed = $totalCents - $newCents;
+    flash(($adding ? 'Payment of ' . fmt_money($amtCents / 100) . ' recorded on invoice ' . $num . ': '
+            : 'Invoice ' . $num . ' corrected: ')
+        . fmt_money($newCents / 100) . $ofTotal . ' paid. '
+        . ($stillOwed > 0 ? fmt_money($stillOwed / 100) . ' is still owed.' : 'It is paid in full.'));
+    redirect($listUrl);
 }
 
 /* Status transitions */
@@ -167,6 +251,8 @@ if (isset($_GET['export'])) {
         WHERE 1=1" . $scopeCond . " ORDER BY i.created_at");
     $ex->execute($scopeArg);
     $rows = $ex->fetchAll();
+    // A download of every client's billing is listed in the audit trail.
+    audit($user['id'], 'invoice.export', 'invoice', null, 'QuickBooks CSV (' . count($rows) . ' invoices)');
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="invoices_quickbooks_' . date('Ymd') . '.csv"');
     $out = fopen('php://output', 'w');
@@ -192,28 +278,44 @@ if (isset($_GET['export'])) {
 }
 
 $statusFilter = $_GET['status'] ?? '';
+$listFrom = " FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id
+    WHERE 1=1" . $scopeCond;
 $listSql = "SELECT i.*, t.title AS track_title, COALESCE(i.auth_number, t.auth_number) AS auth_number,
         COALESCE(i.funding_agency, t.funding_agency) AS funding_agency, c.name AS client_name, c.id AS client_id,
-        DATEDIFF(CURDATE(), i.submitted_at) AS days_outstanding
-    FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id
-    WHERE 1=1" . $scopeCond;
-$sql = $listSql;
+        DATEDIFF(CURDATE(), i.submitted_at) AS days_outstanding" . $listFrom;
+$filter = '';
 $params = $scopeArg;
 // ?id=N (search results link here) lists just that invoice, whatever its status
 // or age, under the same billing permission and caseload scope as the list.
 $onlyId = ctype_digit((string)($_GET['id'] ?? '')) ? (int)$_GET['id'] : 0;
-if ($onlyId > 0) { $sql .= ' AND i.id = ?'; $params[] = $onlyId; $statusFilter = ''; }
-elseif (in_array($statusFilter, ['Draft','Submitted','Paid'], true)) { $sql .= ' AND i.status = ?'; $params[] = $statusFilter; }
-$sql .= " ORDER BY i.created_at DESC LIMIT 300";
-$stmt = db()->prepare($sql);
+if ($onlyId > 0) { $filter = ' AND i.id = ?'; $params[] = $onlyId; $statusFilter = ''; }
+elseif (in_array($statusFilter, ['Draft','Submitted','Paid'], true)) { $filter = ' AND i.status = ?'; $params[] = $statusFilter; }
+else $statusFilter = '';
+// 300 invoices to a page, newest first; the page says how many there are in all
+// and links to the older ones, so none is silently left off.
+$perPage = 300;
+$cq = db()->prepare('SELECT COUNT(*)' . $listFrom . $filter);
+$cq->execute($params);
+$invTotal = (int)$cq->fetchColumn();
+$pages = max(1, (int)ceil($invTotal / $perPage));
+$page = is_string($_GET['page'] ?? null) && ctype_digit($_GET['page']) ? min(max(1, (int)$_GET['page']), $pages) : 1;
+$stmt = db()->prepare($listSql . $filter . ' ORDER BY i.created_at DESC, i.id DESC LIMIT ' . $perPage . ' OFFSET ' . (($page - 1) * $perPage));
 $stmt->execute($params);
 $invoices = $stmt->fetchAll();
-// A refused "Mark paid" on an invoice outside the 300 newest (or outside the
-// filter) is listed first, so its error summary, field error and refill show.
+$firstShown = $invoices ? ($page - 1) * $perPage + 1 : 0;
+$lastShown = ($page - 1) * $perPage + count($invoices);
+$pageUrl = function (int $p) use ($statusFilter): string {
+    $q = http_build_query(array_filter(['status' => $statusFilter, 'page' => $p > 1 ? $p : null]));
+    return 'invoices.php' . ($q !== '' ? '?' . $q : '');
+};
+// A refused payment entry (Mark paid, another payment or a corrected amount) on an
+// invoice outside this page (or the filter) is listed first, so its error summary,
+// field error and refill show.
 $refusedId = (int)old_in('id');
-if ($refusedId > 0 && (has_field_error('paid_amount_' . $refusedId) || has_field_error('payment_ref_' . $refusedId))
+$refusedKeys = array_map(fn($k) => $k . $refusedId, ['paid_amount_', 'payment_ref_', 'add_paid_amount_', 'add_payment_ref_', 'fix_paid_amount_', 'fix_payment_ref_']);
+if ($refusedId > 0 && array_filter($refusedKeys, 'has_field_error')
     && !in_array($refusedId, array_map('intval', array_column($invoices, 'id')), true)) {
-    $rs = db()->prepare($listSql . " AND i.id = ? AND i.status = 'Submitted'");
+    $rs = db()->prepare($listSql . " AND i.id = ? AND i.status IN ('Submitted','Paid')");
     $rs->execute(array_merge($scopeArg, [$refusedId]));
     if ($row = $rs->fetch()) array_unshift($invoices, $row);
 }
@@ -280,21 +382,42 @@ page_header('Invoices', $user, 'invoices');
 
 <p class="muted">Found a mistake after generating? Void the Draft invoice: its work and expenses become unbilled again, so you can correct them on the track and invoice again. Only a Draft can be voided — once an invoice is marked submitted or paid it has gone to the funder and cannot be voided here.</p>
 <?php
-// A refused "Mark paid" names its field; the summary links to that row's field.
+// A refused payment entry names its field; the summary links to that row's field.
 $payLabels = []; $payAnchors = [];
 foreach ($invoices as $i) {
-    if ($i['status'] !== 'Submitted') continue;
-    $payLabels['payment_ref_' . $i['id']] = 'Check or EFT reference';
-    $payLabels['paid_amount_' . $i['id']] = 'Amount paid';
-    $payAnchors['payment_ref_' . $i['id']] = 'ref-' . $i['id'];
-    $payAnchors['paid_amount_' . $i['id']] = 'amt-' . $i['id'];
+    if ($i['status'] === 'Submitted') {
+        $payLabels['payment_ref_' . $i['id']] = 'Check or EFT reference';
+        $payLabels['paid_amount_' . $i['id']] = 'Amount paid';
+        $payAnchors['payment_ref_' . $i['id']] = 'ref-' . $i['id'];
+        $payAnchors['paid_amount_' . $i['id']] = 'amt-' . $i['id'];
+    } elseif ($i['status'] === 'Paid') {
+        $payLabels['add_payment_ref_' . $i['id']] = 'Check or EFT reference for this payment';
+        $payLabels['add_paid_amount_' . $i['id']] = 'Amount of this payment';
+        $payLabels['fix_paid_amount_' . $i['id']] = 'Total amount paid';
+        $payLabels['fix_payment_ref_' . $i['id']] = 'Check or EFT reference';
+        $payAnchors['add_payment_ref_' . $i['id']] = 'addref-' . $i['id'];
+        $payAnchors['add_paid_amount_' . $i['id']] = 'addamt-' . $i['id'];
+        $payAnchors['fix_paid_amount_' . $i['id']] = 'fixamt-' . $i['id'];
+        $payAnchors['fix_payment_ref_' . $i['id']] = 'fixref-' . $i['id'];
+    }
 }
 if ($payLabels) echo form_error_summary($payLabels, $payAnchors);
 $payDraftId = old_in('id');
+$listStatus = h($statusFilter);
+// More invoices than one page: say which are shown, and link to the others.
+$pageNote = $invTotal > $perPage && $onlyId === 0
+    ? 'Showing invoices ' . $firstShown . ' to ' . $lastShown . ' of ' . $invTotal . ', newest first.' : '';
 ?>
+<?php if ($pageNote !== ''): ?>
+<nav aria-label="Invoice pages" class="page-actions">
+  <p><?= h($pageNote) ?></p>
+  <?php if ($page > 1): ?><a href="<?= h($pageUrl($page - 1)) ?>">Newer invoices<span class="visually-hidden"> (page <?= $page - 1 ?> of <?= $pages ?>)</span></a><?php endif; ?>
+  <?php if ($page < $pages): ?><a href="<?= h($pageUrl($page + 1)) ?>">Older invoices<span class="visually-hidden"> (page <?= $page + 1 ?> of <?= $pages ?>)</span></a><?php endif; ?>
+</nav>
+<?php endif; ?>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Invoices list">
 <table>
-  <caption class="visually-hidden"><?= $onlyId > 0 ? 'The requested invoice' : 'Invoices, newest first' ?></caption>
+  <caption class="visually-hidden"><?= $onlyId > 0 ? 'The requested invoice' : ($pageNote !== '' ? 'Invoices ' . $firstShown . ' to ' . $lastShown . ' of ' . $invTotal . ', newest first' : 'Invoices, newest first') ?></caption>
   <thead><tr>
     <th scope="col">Invoice #</th><th scope="col">Client / Track</th><th scope="col">Agency</th>
     <th scope="col" class="num">Amount</th><th scope="col">Status</th><th scope="col">Dates</th>
@@ -305,7 +428,8 @@ $payDraftId = old_in('id');
   <?php foreach ($invoices as $i): $refill = $payDraftId === (string)$i['id']; // refill only the row that was refused ?>
     <tr id="inv-<?= (int)$i['id'] ?>">
       <td><?= h($i['invoice_number']) ?></td>
-      <td><a href="client.php?id=<?= (int)$i['client_id'] ?>"><?= h($i['client_name']) ?></a><br>
+      <?php // A billing-only group cannot open client records, so the name is not a link for it. ?>
+      <td><?= can('clients') ? '<a href="client.php?id=' . (int)$i['client_id'] . '">' . h($i['client_name']) . '</a>' : h($i['client_name']) ?><br>
           <span class="muted"><?= h($i['track_title']) ?> · Authorization <?= h($i['auth_number']) ?></span></td>
       <td><?= h($i['funding_agency']) ?></td>
       <td class="num"><?= fmt_money((float)$i['total_amount']) ?><br><span class="muted"><?= fmt_hours((float)$i['hours']) ?></span></td>
@@ -346,11 +470,42 @@ $payDraftId = old_in('id');
           <label><input type="checkbox" id="full-<?= (int)$i['id'] ?>" name="paid_full" value="1"<?= $refill && old_in('paid_full') === '1' ? ' checked' : '' ?>>
             Paid in full<span class="visually-hidden"> — invoice <?= h($i['invoice_number']) ?>, <?= fmt_money((float)$i['total_amount']) ?></span></label>
           <button type="submit" name="set_status" value="1" class="btn btn-secondary btn-sm"
-            onclick="return confirm('Mark invoice <?= h($i['invoice_number']) ?> as paid? This cannot be undone.');">Mark paid<span class="visually-hidden"> — invoice <?= h($i['invoice_number']) ?></span></button>
+            onclick="return confirm('Mark invoice <?= h($i['invoice_number']) ?> as paid? It cannot be returned to Submitted; the amount paid can be corrected afterwards.');">Mark paid<span class="visually-hidden"> — invoice <?= h($i['invoice_number']) ?></span></button>
         </form>
-        <?php elseif ($i['status'] === 'Paid'): ?>
+        <?php elseif ($i['status'] === 'Paid'):
+          // An older Paid invoice with no amount recorded was paid in full.
+          $paidAmt = $i['paid_amount'] !== null ? (float)$i['paid_amount'] : (float)$i['total_amount'];
+          $owed = round((float)$i['total_amount'] - $paidAmt, 2);
+          $iid = (int)$i['id']; $invName = '<span class="visually-hidden"> — invoice ' . h($i['invoice_number']) . '</span>';
+          $refillAdd = $refill && old_in('add_payment') === '1';
+          $refillFix = $refill && old_in('correct_payment') === '1';
+          $fixOpen = $refillFix || has_field_error('fix_paid_amount_' . $iid) || has_field_error('fix_payment_ref_' . $iid); ?>
           <span class="muted"><?= h($i['payment_ref'] ? 'Ref ' . $i['payment_ref'] : '') ?>
           <?= $i['paid_amount'] !== null && (float)$i['paid_amount'] !== (float)$i['total_amount'] ? ' · paid ' . fmt_money((float)$i['paid_amount']) : '' ?></span>
+          <?php if ($owed > 0): ?>
+          <form method="post" action="invoices.php" class="stacked" novalidate><?= csrf_field() ?>
+            <input type="hidden" name="id" value="<?= $iid ?>"><input type="hidden" name="list_status" value="<?= $listStatus ?>">
+            <label for="addref-<?= $iid ?>">Check or <abbr title="electronic funds transfer">EFT</abbr> reference for this payment<?= $invName ?></label>
+            <input type="text" id="addref-<?= $iid ?>" name="payment_ref" size="10" maxlength="80" value="<?= $refillAdd ? h(old_in('payment_ref')) : '' ?>" <?= field_aria('add_payment_ref_' . $iid) ?>><?= field_error('add_payment_ref_' . $iid) ?>
+            <label for="addamt-<?= $iid ?>">Amount of this payment (<span aria-hidden="true">$</span><span class="visually-hidden">in dollars</span>)<?= $invName ?></label>
+            <span class="hint" id="addamt-hint-<?= $iid ?>">Up to the <?= fmt_money($owed) ?> still owed, e.g., <?= number_format($owed, 2, '.', '') ?>.</span>
+            <input type="text" inputmode="decimal" autocomplete="off" id="addamt-<?= $iid ?>" name="paid_amount" size="10" maxlength="20" value="<?= $refillAdd ? h(old_in('paid_amount')) : '' ?>" <?= field_aria('add_paid_amount_' . $iid, 'addamt-hint-' . $iid) ?>><?= field_error('add_paid_amount_' . $iid) ?>
+            <button type="submit" name="add_payment" value="1" class="btn btn-secondary btn-sm">Record another payment<?= $invName ?></button>
+          </form>
+          <?php endif; ?>
+          <details<?= $fixOpen ? ' open' : '' ?>>
+            <summary>Correct the amount paid<?= $invName ?></summary>
+            <form method="post" action="invoices.php" class="stacked" novalidate><?= csrf_field() ?>
+              <input type="hidden" name="id" value="<?= $iid ?>"><input type="hidden" name="list_status" value="<?= $listStatus ?>">
+              <label for="fixamt-<?= $iid ?>">Total amount paid so far (<span aria-hidden="true">$</span><span class="visually-hidden">in dollars</span>)<?= $invName ?></label>
+              <span class="hint" id="fixamt-hint-<?= $iid ?>">Now <?= fmt_money($paidAmt) ?> of <?= fmt_money((float)$i['total_amount']) ?>. Enter the correct total paid, up to the invoice total.</span>
+              <input type="text" inputmode="decimal" autocomplete="off" id="fixamt-<?= $iid ?>" name="paid_amount" size="10" maxlength="20" value="<?= $refillFix ? h(old_in('paid_amount')) : '' ?>" <?= field_aria('fix_paid_amount_' . $iid, 'fixamt-hint-' . $iid) ?>><?= field_error('fix_paid_amount_' . $iid) ?>
+              <label for="fixref-<?= $iid ?>">Check or <abbr title="electronic funds transfer">EFT</abbr> reference<?= $invName ?></label>
+              <span class="hint" id="fixref-hint-<?= $iid ?>">Leave blank to keep the reference already recorded.</span>
+              <input type="text" id="fixref-<?= $iid ?>" name="payment_ref" size="10" maxlength="80" value="<?= $refillFix ? h(old_in('payment_ref')) : '' ?>" <?= field_aria('fix_payment_ref_' . $iid, 'fixref-hint-' . $iid) ?>><?= field_error('fix_payment_ref_' . $iid) ?>
+              <button type="submit" name="correct_payment" value="1" class="btn btn-secondary btn-sm">Save corrected amount<?= $invName ?></button>
+            </form>
+          </details>
         <?php endif; ?>
       </td>
     </tr>

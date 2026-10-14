@@ -1,4 +1,5 @@
 import SwiftUI
+import SafariServices
 
 struct DashboardView: View {
     @EnvironmentObject var api: API
@@ -27,8 +28,11 @@ struct DashboardView: View {
                                 StatTile(number: "\(data.newReferrals)", label: "New referrals")
                             }
                             if api.can("billing") {
+                                // As on the website: the amount also counts unbilled mileage and
+                                // expenses, and covers only the caseload of a caseload-scoped account.
                                 StatTile(number: String(format: "%.2f", data.unbilledHours),
-                                         label: String(format: "Unbilled hours ($%.2f)", data.unbilledAmount))
+                                         label: String(format: "Unbilled hours %@ ($%.2f with mileage and expenses)",
+                                                       api.scoped ? "on your caseload" : "across all tracks", data.unbilledAmount))
                             }
                         }
 
@@ -117,7 +121,9 @@ struct DashboardView: View {
                                 .onDisappear { offlineEntriesOpen = false }
                         }
                     }
-                    MoreToolLink(title: "Action center", subtitle: "Priorities and AI case briefings", systemImage: "checklist") { WorkflowActionsView() }
+                    MoreToolLink(title: "Action center",
+                                 subtitle: api.can("clients") && api.aiHas("briefing") ? "Priorities and AI case briefings" : "Priorities",
+                                 systemImage: "checklist") { WorkflowActionsView() }
                     // AT services offers only modules the user holds a permission for, so the link
                     // is shown only when at least one of them is available.
                     if api.can("clients") || api.can("equipment") || api.can("schedule") || api.can("admin") || api.can("billing") {
@@ -292,8 +298,9 @@ struct OfflineEntriesView: View {
                         }
                     }
                     .accessibilityElement(children: .combine)
+                    // Not selectable: the system Copy would put the client record on the clipboard
+                    // with no expiry and offer it to other devices. Copy text below is the way.
                     Text(entry.readableText)
-                        .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                     Button { copy(entry) } label: {
                         Label("Copy text", systemImage: "doc.on.doc")
@@ -328,8 +335,27 @@ struct OfflineEntriesView: View {
             Text("“\(entry.label)” has not reached the server. Discarding deletes it from this phone and it cannot be recovered. Copy the text first if you still need it.")
         }
         .task { load() }
-        .onChange(of: api.pendingSync) { _ in load() }
-        .onChange(of: api.syncError) { _ in load() }
+        .onChange(of: api.pendingSync) { _ in refreshAfterSync() }
+        .onChange(of: api.syncError) { _ in refreshAfterSync() }
+    }
+
+    /// The queue changed outside Retry now (an upload started by returning to the app): the list
+    /// is reloaded, and a status said earlier is brought up to date instead of left stale.
+    private func refreshAfterSync() {
+        load()
+        if status != nil && !busy { status = outcome() }
+    }
+
+    /// What the list holds after an upload.
+    private func outcome() -> String {
+        let refused = entries.filter { $0.lastError != nil }.count
+        if entries.isEmpty {
+            return "All offline entries uploaded."
+        } else if refused > 0 {
+            return "\(entries.count) still on this phone; the server did not accept \(refused). The reason is under each one."
+        } else {
+            return "\(entries.count) still on this phone; they could not upload yet. Check your connection and try again."
+        }
     }
 
     private func load() {
@@ -345,31 +371,26 @@ struct OfflineEntriesView: View {
     private func retry() async {
         busy = true
         status = nil
+        // Waits for an upload that is already running (returning to the app starts one), so
+        // this reports how that went.
         await api.flushQueue()
         load()
         busy = false
-        let refused = entries.filter { $0.lastError != nil }.count
-        let message: String
-        if entries.isEmpty {
-            message = "All offline entries uploaded."
-        } else if refused > 0 {
-            message = "\(entries.count) still on this phone; the server did not accept \(refused). The reason is under each one."
-        } else {
-            message = "\(entries.count) still on this phone; they could not upload yet. Check your connection and try again."
-        }
+        let message = outcome()
         status = message
         announce(message)
     }
 
     /// The copy stays on this phone (not Handoff) and is cleared from the clipboard after
-    /// 10 minutes: it is a client record.
+    /// 10 minutes, or at sign-out: it is a client record.
     private func copy(_ entry: API.PendingCall) {
-        UIPasteboard.general.setItems([["public.utf8-plain-text": entry.readableText]],
-                                      options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(600)])
+        api.copyProtected(entry.readableText)
         announce("Copied “\(entry.label)”. The copy is cleared from the clipboard in 10 minutes.")
     }
 
     private func discard(_ entry: API.PendingCall) {
+        // An earlier upload status no longer applies (an emptied list was discarded, not uploaded).
+        status = nil
         do {
             try api.discardQueued(entry.id)
             load()
@@ -401,7 +422,7 @@ struct GlossaryView: View {
         ("SMART goal", "A goal that is specific, measurable, achievable, relevant, and time-bound."),
         ("SOAP note", "A note format in four parts: Subjective, Objective, Assessment, Plan."),
         ("Telepractice", "A session provided remotely, such as through a video call."),
-        ("Unbilled hours", "Hours logged on a track that are not on an invoice yet."),
+        ("Unbilled hours", "Hours logged on a track that are not on an invoice yet. The Dashboard's dollar amount beside them also counts mileage and expenses not invoiced yet."),
         ("VR — vocational rehabilitation", "Services intended to help people with disabilities prepare for, find, or keep work."),
         ("VRC — vocational rehabilitation counselor", "A counselor who helps plan and coordinate vocational rehabilitation services."),
     ]
@@ -440,25 +461,80 @@ private func workflowURL(_ path: String) -> URL? {
           url.scheme == "https", url.host == API.base.host else { return nil }
     return url
 }
+
+/// A website page opened from a record link. It is shown inside the app, not in Safari: it stays
+/// under the app lock and the app-switcher cover, closes with sign-out, is not kept in Safari's
+/// history, and its website data is cleared whenever the account changes (RootView).
+private struct WebPage: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
+private struct InAppWebView: UIViewControllerRepresentable {
+    let url: URL
+    let onDone: @MainActor () -> Void
+
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        let page = SFSafariViewController(url: url)
+        page.delegate = context.coordinator
+        return page
+    }
+
+    func updateUIViewController(_ page: SFSafariViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onDone: onDone) }
+
+    final class Coordinator: NSObject, SFSafariViewControllerDelegate {
+        let onDone: @MainActor () -> Void
+        init(onDone: @escaping @MainActor () -> Void) { self.onDone = onDone }
+        /// Its Done button: the sheet that holds it closes too.
+        func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
+            MainActor.assumeIsolated { onDone() }
+        }
+    }
+}
+
+/// A record link: opens the page in InAppWebView and is announced as a link.
+private struct WebPageLink<Content: View>: View {
+    let url: URL
+    @Binding var page: WebPage?
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        Button { page = WebPage(url: url) } label: { content() }
+            .accessibilityRemoveTraits(.isButton)
+            .accessibilityAddTraits(.isLink)
+    }
+}
+
+/// As on the website: a date before today (the server's day) is past due.
+private func isOverdue(_ due: String) -> Bool {
+    String(due.prefix(10)) < APIDate.dayCentral(Date())
+}
+
 struct WorkflowActionsView: View {
     @EnvironmentObject var api: API
     @State private var items: [WorkflowAction] = []
     @State private var loaded = false
     @State private var error: String?
+    @State private var webPage: WebPage?
     var body: some View {
         List {
             if let error { ErrorBanner(message: error) }
-            if api.can("clients") { NavigationLink("AI case briefing") { WorkflowBriefingView() } }
-            if let url = workflowURL("workflows.php") { Link("All workflow tools on the website", destination: url) }
-            Text("Record links open the website, where you may need to sign in.").font(.caption).foregroundStyle(Color.secondaryText)
+            // Only where the briefing AI feature is on: otherwise every step would end in "turned off".
+            if api.can("clients") && api.aiHas("briefing") { NavigationLink("AI case briefing") { WorkflowBriefingView() } }
+            if let url = workflowURL("workflows.php") {
+                WebPageLink(url: url, page: $webPage) { Text("All workflow tools on the website") }
+            }
+            Text("Record links open the website inside the app, where you may need to sign in.").font(.caption).foregroundStyle(Color.secondaryText)
             if !loaded && error == nil { ProgressView("Loading action items…") }
             if loaded && items.isEmpty { Text("No action items found.") }
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                 if let url = workflowURL(item.url) {
-                    Link(destination: url) {
+                    WebPageLink(url: url, page: $webPage) {
                         VStack(alignment: .leading) {
                             Text(item.title)
-                            Text(item.kind + (item.due.map { " · " + formatDate($0) } ?? ""))
+                            // Past due is said in words, as on the website.
+                            Text(item.kind + (item.due.map { " · " + formatDate($0) + (isOverdue($0) ? " (overdue)" : "") } ?? ""))
                                 .font(.caption).foregroundStyle(Color.secondaryText)
                         }
                     }
@@ -468,61 +544,75 @@ struct WorkflowActionsView: View {
         .navigationTitle("Action center")
         .task { await load() }
         .refreshable { await load() }
+        .sheet(item: $webPage) { page in
+            InAppWebView(url: page.url) { webPage = nil }.ignoresSafeArea()
+        }
     }
     private func load() async {
         do { error = nil; let r: WorkflowActionResponse = try await api.call("workflow_actions"); items = r.items; loaded = true }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
-private struct BriefClient: Decodable, Identifiable { let id: Int; let name: String }
-private struct BriefClients: Decodable { let clients: [BriefClient] }
 private struct BriefSource: Decodable { let label: String; let url: String }
 private struct BriefItem: Decodable { let text: String; let type: String; let sources: [String: BriefSource] }
 private struct BriefResponse: Decodable { let items: [BriefItem] }
 struct WorkflowBriefingView: View {
     @EnvironmentObject var api: API
-    @State private var clients: [BriefClient] = []
-    @State private var selected = 0
+    @State private var selected: Int?
     @State private var adapt = false
     @State private var busy = false
     @State private var error: String?
     @State private var items: [BriefItem] = []
+    @State private var webPage: WebPage?
     var body: some View {
         Form {
             if let error { ErrorBanner(message: error) }
-            Picker("Client", selection: $selected) {
-                Text("Choose a client").tag(0)
-                ForEach(clients) { Text($0.name).tag($0.id) }
-            }.disabled(busy).onChange(of: selected) { _ in items = [] }
+            // A searchable list of every client the account may choose (closed ones too, as on
+            // the website), not a menu of the first 200 names.
+            NewRecordClientPicker(title: "Client", noneLabel: "Choose a client", includeClosed: true, selection: $selected)
+                .disabled(busy)
             Toggle("Suggest homework adaptations", isOn: $adapt).disabled(busy)
             Button(busy ? "Drafting…" : "Generate briefing") { Task { await generate() } }
-                .disabled(selected == 0 || busy)
+                .disabled(selected == nil || busy)
             Text("AI output is a draft. Verify each claim using the linked records. Nothing is saved or assigned by generating a briefing.")
                 .font(.callout)
-            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                Section(item.type == "fact" ? "Record summary" : "Proposed next step") {
-                    Text(item.text).textSelection(.enabled)
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                let kind = item.type == "fact" ? "Record summary" : "Proposed next step"
+                Section(kind) {
+                    // Not selectable: the system Copy would keep these client facts on the
+                    // clipboard with no expiry and offer them to other devices.
+                    Text(item.text)
+                    Button { copy(item.text, what: "\(kind.lowercased()) \(index + 1)") } label: {
+                        Label("Copy text", systemImage: "doc.on.doc")
+                    }
+                    .accessibilityLabel("Copy text of \(kind.lowercased()) \(index + 1)")
                     ForEach(item.sources.keys.sorted(), id: \.self) { key in
                         if let source = item.sources[key], let url = workflowURL(source.url) {
-                            Link(source.label, destination: url)
+                            WebPageLink(url: url, page: $webPage) { Text(source.label) }
                         }
                     }
                 }
             }
         }
         .navigationTitle("AI case briefing")
-        .task {
-            do { let r: BriefClients = try await api.call("clients"); clients = r.clients }
-            catch { self.error = error.localizedDescription }
+        .onChange(of: selected) { _ in items = [] }
+        .sheet(item: $webPage) { page in
+            InAppWebView(url: page.url) { webPage = nil }.ignoresSafeArea()
         }
     }
     private func generate() async {
-        guard !busy else { return }
+        guard !busy, let selected else { return }
         busy = true; error = nil; items = []
         defer { busy = false }
         do {
             let r: BriefResponse = try await api.call("workflow_briefing", body: ["client_id": selected, "adapt": adapt])
             items = r.items; announce("Briefing ready. Verify its claims against the linked records.")
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
+    /// The copy stays on this phone (not Handoff) and is cleared from the clipboard after
+    /// 10 minutes, or at sign-out: it is about a client.
+    private func copy(_ text: String, what: String) {
+        api.copyProtected(text)
+        announce("Copied the \(what). The copy is cleared from the clipboard in 10 minutes.")
     }
 }

@@ -25,6 +25,10 @@ register_translations([
     'The name typed does not match the guardian name on this form.' => 'El nombre escrito no coincide con el nombre del padre, madre o tutor en este formulario.',
     'To sign, type:' => 'Para firmar, escriba:',
     'This page was open for a long time, so your signature was not sent yet. Your typed name is still in the box. Please check it and choose Sign and submit again.' => 'Esta página estuvo abierta por mucho tiempo, así que su firma todavía no se envió. El nombre que escribió sigue en el cuadro. Revíselo y elija Firmar y enviar otra vez.',
+    'Consent withdrawn' => 'Consentimiento retirado',
+    'This consent was withdrawn on' => 'Este consentimiento se retiró el',
+    'It had been signed by' => 'Lo había firmado',
+    'If you received a newer consent request, please use the link in that email. Otherwise, contact' => 'Si recibió una solicitud de consentimiento más reciente, use el enlace de ese correo. Si no, comuníquese con',
 ]);
 // A public visitor has no account to sign back into. When the form's token no
 // longer matches (the session lapsed while the page sat open), nothing is
@@ -40,8 +44,10 @@ $token = is_string($rawToken) ? preg_replace('/[^a-f0-9]/', '', $rawToken) : '';
 $form = null;
 if (strlen($token) === 48) {
     // Unsigned links expire after 60 days; signed ones stay viewable as a receipt.
+    // Nothing is greeted by name or written into a retention-archived record, as on
+    // the portal and the survey: its links all read as not recognized.
     $stmt = db()->prepare('SELECT f.*, c.name AS client_name FROM consent_forms f JOIN clients c ON c.id = f.client_id
-        WHERE f.token = ? AND (f.signed_at IS NOT NULL OR f.sent_at > DATE_SUB(NOW(), INTERVAL 60 DAY))');
+        WHERE f.token = ? AND (f.signed_at IS NOT NULL OR f.sent_at > DATE_SUB(NOW(), INTERVAL 60 DAY)) AND c.archived_at IS NULL');
     $stmt->execute([$token]);
     $form = $stmt->fetch();
 }
@@ -118,12 +124,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$form['signed_at']) {
     }
 }
 
-// The title names the result: a receipt, a form with an error, or the form.
-page_header($form['signed_at'] ? 'Consent recorded' : (form_errors() || $staleSig !== null ? 'Error — Consent to services' : 'Consent to services'));
+// The title names the result: a withdrawn consent, a receipt, a form with an error,
+// or the form. A withdrawn one never says that nothing more is needed: staff may
+// have sent a newer request to sign.
+$withdrawn = $form['signed_at'] && !empty($form['withdrawn_at']);
+page_header($withdrawn ? 'Consent withdrawn' : ($form['signed_at'] ? 'Consent recorded' : (form_errors() || $staleSig !== null ? 'Error — Consent to services' : 'Consent to services')));
 echo lang_toggle();
 ?>
 <div class="card" style="max-width: 40rem; margin: 2rem auto;">
-<?php if ($form['signed_at']): ?>
+<?php if ($withdrawn): ?>
+  <h1><?= t('Consent withdrawn') ?></h1>
+  <p><?= t('This consent was withdrawn on') ?> <?= en(fmt_date($form['withdrawn_at'])) ?>. <?= t('It had been signed by') ?> <strong><?= h($form['signed_name']) ?></strong> <?= h(__('on')) ?> <?= en(fmt_date($form['signed_at'])) ?>.</p>
+  <p><?= t('If you received a newer consent request, please use the link in that email. Otherwise, contact') ?> <?= h(brand('short')) ?>.</p>
+<?php elseif ($form['signed_at']): ?>
   <h1><?= t('Consent recorded — thank you') ?></h1>
   <p><?= t('Signed by') ?> <strong><?= h($form['signed_name']) ?></strong> <?= h(__('on')) ?> <?= en(fmt_datetime($form['signed_at'])) ?><?= t('. A record has been placed in') ?> <?= h($form['client_name']) ?><?= t('\'s file. No further action is needed.') ?></p>
 <?php else: ?>
@@ -146,7 +159,8 @@ echo lang_toggle();
   <div class="alert alert-error" id="form-errors" tabindex="-1"><span class="visually-hidden"><?= t('Error:') ?> </span><?= t('This page was open for a long time, so your signature was not sent yet. Your typed name is still in the box. Please check it and choose Sign and submit again.') ?></div>
   <script>document.addEventListener("DOMContentLoaded",function(){var e=document.getElementById("form-errors");if(e)e.focus();});</script>
   <?php endif; ?>
-  <form method="post" action="consent.php?t=<?= h($token) ?>" class="stacked" novalidate>
+  <?php // The page language rides the form, so the reply keeps it even if the session lapsed. ?>
+  <form method="post" action="consent.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['signature' => '']) ?>
     <div class="field">

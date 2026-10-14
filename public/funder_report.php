@@ -43,6 +43,14 @@ function funder_metrics(string $agency, string $from, string $to): array {
         FROM {$logs} WHERE {$agencyExpr} = ? AND w.work_date BETWEEN ? AND ?");
     $tot->execute([$agency, $from, $to]); $totals = $tot->fetch();
 
+    // Track expenses are billed on the same invoices as the hours and mileage
+    // (generate_invoice), so they are reported beside them — by expense date, under the
+    // agency snapshotted on their invoice — and the total matches the agency billing
+    // summary for the same agency and dates.
+    $exp = db()->prepare("SELECT COALESCE(SUM(e.amount),0) FROM track_expenses e JOIN {$rt} t ON t.id = e.track_id
+        LEFT JOIN invoices i ON i.id = e.invoice_id WHERE {$agencyExpr} = ? AND e.expense_date BETWEEN ? AND ?");
+    $exp->execute([$agency, $from, $to]); $expenses = (float)$exp->fetchColumn();
+
     // Same value expression as the headline total (hours + mileage, each line rounded
     // to the cent as the invoices round it), so the category values add up to it.
     $byCat = db()->prepare("SELECT COALESCE(w.rsa_category, t.rsa_category, 'Uncategorized') cat, COUNT(DISTINCT t.client_id) clients,
@@ -95,7 +103,7 @@ function funder_metrics(string $agency, string $from, string $to): array {
     $closedTotal = (int)array_sum(array_column($closures, 'n'));
     $rehab = 0; foreach ($closures as $c) if ($c['new_status'] === 'Closed - Rehabilitated') $rehab = (int)$c['n'];
 
-    return compact('servedTotal', 'totals', 'byCat', 'goals', 'ret', 'avgGain', 'closures', 'closedTotal', 'rehab');
+    return compact('servedTotal', 'totals', 'expenses', 'byCat', 'goals', 'ret', 'avgGain', 'closures', 'closedTotal', 'rehab');
 }
 
 $m = $agency !== '' ? funder_metrics($agency, $from, $to) : null;
@@ -108,7 +116,9 @@ function funder_stat_rows(string $agency, string $from, string $to, array $m, ?i
         ['Funding agency', $agency],
         ['Period', fmt_date($from) . ' to ' . fmt_date($to)],
         ['Clients served', (string)$m['servedTotal']],
-        ['Service hours', number_format((float)$m['totals']['hrs'], 2) . ' (' . fmt_money((float)$m['totals']['val']) . ')'],
+        ['Service hours', number_format((float)$m['totals']['hrs'], 2) . ' (' . fmt_money((float)$m['totals']['val']) . ' for hours and mileage)'],
+        ['Track expenses', fmt_money($m['expenses'])],
+        ['Total billable value', fmt_money(round((float)$m['totals']['val'] + $m['expenses'], 2)) . ' (hours, mileage and expenses)'],
         ['Goals achieved', $goalPct === null ? 'n/a' : $goalPct . '% (' . (int)$m['goals']['achieved'] . ' of ' . (int)$m['goals']['total'] . ', avg progress ' . round((float)$m['goals']['avgpct']) . '%)'],
         ['Device retention (still in use)', $retentionPct === null ? 'n/a' : $retentionPct . '% of ' . (int)$m['ret']['done'] . ' follow-ups'],
         // A signed number with the unit in the label: "+3" stays a number in the CSV
@@ -195,7 +205,12 @@ if ($m && isset($_GET['pdf'])) {
     }
     $pdf->Ln(4); $pdf->SetFont('Helvetica', 'I', 8); $pdf->SetTextColor(60, 60, 60);
     $pdf->Cell(0, 5, $tx('Prepared ' . date('F j, Y') . ' by ' . $user['name'] . ' — ' . cfg('name')), 0, 1);
-    $pdf->Output('D', 'funder_report_' . $from . '_' . $to . '.pdf');
+    // Built as a string and sent with this page's own headers: FPDF's download output
+    // replaces the app's Cache-Control: no-store with a cacheable one.
+    $bytes = $pdf->Output('S');
+    header('Content-Type: application/pdf');
+    header('Content-Disposition: attachment; filename="funder_report_' . $from . '_' . $to . '.pdf"');
+    echo $bytes;
     exit;
 }
 
@@ -226,9 +241,9 @@ page_header('Funder report', $user, 'analytics');
 <?php elseif ($m): ?>
 <div class="grid grid-4">
   <div class="card stat"><span class="stat-num"><?= (int)$m['servedTotal'] ?></span><span class="stat-label">Clients served</span></div>
-  <div class="card stat"><span class="stat-num"><?= fmt_hours((float)$m['totals']['hrs']) ?></span><span class="stat-label">Service hours (<?= fmt_money((float)$m['totals']['val']) ?>)</span></div>
-  <div class="card stat"><span class="stat-num"><?= $goalPct === null ? '—' : $goalPct . '%' ?></span><span class="stat-label">Goals achieved</span></div>
-  <div class="card stat"><span class="stat-num"><?= $retentionPct === null ? '—' : $retentionPct . '%' ?></span><span class="stat-label">Device still in use</span></div>
+  <div class="card stat"><span class="stat-num"><?= fmt_hours((float)$m['totals']['hrs']) ?></span><span class="stat-label">Service hours (<?= fmt_money((float)$m['totals']['val']) ?> for hours and mileage)</span></div>
+  <div class="card stat"><span class="stat-num"><?= $goalPct === null ? '<span aria-hidden="true">—</span><span class="visually-hidden">Not applicable (no goals set in this period)</span>' : $goalPct . '%' ?></span><span class="stat-label">Goals achieved</span></div>
+  <div class="card stat"><span class="stat-num"><?= $retentionPct === null ? '<span aria-hidden="true">—</span><span class="visually-hidden">Not applicable (no follow-up checks answered in this period)</span>' : $retentionPct . '%' ?></span><span class="stat-label">Device still in use</span></div>
 </div>
 
 <section class="card" aria-labelledby="fr-sum">

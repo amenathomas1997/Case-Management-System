@@ -9,11 +9,15 @@ catch(DomainException $e){http_response_code(403);page_header('Error — Edit ho
 // The page names whose assignment this is, since homework titles repeat across clients.
 $q=db()->prepare('SELECT t.title AS track_title,c.name AS client_name FROM training_tracks t JOIN clients c ON c.id=t.client_id WHERE t.id=?');$q->execute([(int)$homework['track_id']]);
 $owner=$q->fetch()?:['track_title'=>'','client_name'=>''];
-$formToken=at_homework_token($homework);
+// The version the form was opened on is posted as edit_version (a name a sign-in draft
+// keeps, unlike *_token), so a draft put back after signing in again is still checked
+// against changes made meanwhile. Forms opened before this change post edit_token.
+$formToken=old_in('edit_version',at_homework_token($homework));
 if($_SERVER['REQUEST_METHOD']==='POST'){
     // After an edit conflict the user can choose to save their version over the saved
     // one: that box carries the saved version's token, so a later change is still refused.
     $input=$_POST;
+    if(isset($_POST['edit_version'])&&is_string($_POST['edit_version']))$input['edit_token']=$_POST['edit_version'];
     if(isset($_POST['replace_token'])&&is_string($_POST['replace_token']))$input['edit_token']=$_POST['replace_token'];
     $formToken=is_scalar($input['edit_token']??null)?(string)$input['edit_token']:'';
     try{at_homework_update($id,$input,(int)$user['id']);flash('Homework updated.');redirect('track.php?id='.(int)$homework['track_id'].'#homework');}
@@ -27,7 +31,7 @@ $conflict=$error==='This assignment changed. Reload it before saving.';
 // to that control and the message is read with it. The validator reports title
 // and instructions together, so the posted values say which one it means.
 $fieldErrors=[];
-if($error==='Use a valid due date.')$fieldErrors['due_date']=$error;
+if($error!==null&&str_starts_with($error,'Use a valid due date'))$fieldErrors['due_date']=$error;
 elseif($error==='Use a title up to 190 characters and instructions up to 65,535 bytes (about 65,000 plain characters).'){
     $postedTitle=trim((string)($_POST['title']??''));
     if($postedTitle===''||mb_strlen($postedTitle)>190)$fieldErrors['title']=$postedTitle===''?'Enter a title.':'Use a title of up to 190 characters.';
@@ -55,9 +59,10 @@ To keep your version, tick “Save my version over the saved one” at the end o
 <?php }
 elseif($error)echo error_notice($error);?>
 <form method="post" class="stacked"><?=csrf_field()?>
-<input type="hidden" name="edit_token" value="<?=h($formToken)?>">
+<input type="hidden" name="edit_version" value="<?=h($formToken)?>">
 <?php // Limits are stated up front; an over-long title is refused on its field, not cut short.
-foreach(['title'=>['Title','Up to 190 characters.'],'instructions'=>['Instructions','Up to 65,535 bytes, about 65,000 plain characters.'],'due_date'=>['Due date','']] as $key=>[$label,$hint]):$value=(string)($_POST[$key]??$homework[$key]??'');$hintId=$hint!==''?'hw-'.$key.'-hint':'';?><label for="hw-<?=$key?>"><?=$label?><?=$key==='title'?' (required)':''?></label><?php if($hint!==''):?><span class="hint" id="<?=$hintId?>"><?=$hint?></span><?php endif;?><?php if($key==='instructions'):?><textarea id="hw-<?=$key?>" name="<?=$key?>" rows="8" <?=field_aria($key,$hintId)?>><?=h($value)?></textarea><?php else:?><input id="hw-<?=$key?>" name="<?=$key?>" type="<?=$key==='due_date'?'date':'text'?>" value="<?=h($value)?>" <?=$key==='title'?'required':''?> <?=field_aria($key,$hintId)?>><?php endif;?><?=field_error($key)?><?php endforeach;?>
+// What was posted, else a draft put back after signing in again, else the saved value.
+foreach(['title'=>['Title','Up to 190 characters.'],'instructions'=>['Instructions','Up to 65,535 bytes, about 65,000 plain characters.'],'due_date'=>['Due date','']] as $key=>[$label,$hint]):$value=is_string($_POST[$key]??null)?$_POST[$key]:old_in($key,(string)($homework[$key]??''));$hintId=$hint!==''?'hw-'.$key.'-hint':'';?><label for="hw-<?=$key?>"><?=$label?><?=$key==='title'?' (required)':''?></label><?php if($hint!==''):?><span class="hint" id="<?=$hintId?>"><?=$hint?></span><?php endif;?><?php if($key==='instructions'):?><textarea id="hw-<?=$key?>" name="<?=$key?>" rows="8" <?=field_aria($key,$hintId)?>><?=h($value)?></textarea><?php else:?><input id="hw-<?=$key?>" name="<?=$key?>" type="<?=$key==='due_date'?'date':'text'?>" value="<?=h($value)?>" <?=$key==='title'?'required':''?> <?=field_aria($key,$hintId)?>><?php endif;?><?=field_error($key)?><?php endforeach;?>
 <?php at_ai_controls('homework',[at_field('instructions','Instructions','textarea'),at_field('title','Title')],['track_id'=>(string)$homework['track_id']]);?>
 <?php if($conflict):?><label><input type="checkbox" name="replace_token" value="<?=h(at_homework_token($homework))?>"> Save my version over the saved one<?=$homework['client_reported_at']?' (a changed title or instructions also clears the client’s report that it is done)':''?></label><?php endif;?>
 <div class="page-actions"><button class="btn btn-primary">Save reviewed changes</button> <a class="btn btn-secondary" href="<?=h($back)?>">Cancel<span class="visually-hidden"> and return to <?=h($owner['track_title'])?></span></a></div></form>

@@ -50,16 +50,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_ai'])) {
         }
         $redactNow = !empty($_POST['ai_redact']);
         $redactWas = ai_redaction_on();
-        set_setting('ai_enabled', $enabled);
-        set_setting('ai_provider', $provider);
-        set_setting('ai_model', $model);
-        set_setting('ai_base_url', $baseUrl);
-        if ($key !== '') set_setting('ai_api_key', $key);
-        if (isset($_POST['clear_key'])) set_setting('ai_api_key', '');
-        // Per-feature toggles + governance.
-        foreach (array_keys(ai_features()) as $fk) set_setting('ai_feat_' . $fk, !empty($_POST['feat'][$fk]) ? '1' : '0');
-        set_setting('ai_redact', $redactNow ? '1' : '0');
-        set_setting('ai_baa_confirmed', !empty($_POST['ai_baa_confirmed']) ? '1' : '0');
+        // All settings are saved together or not at all, the key first: a failure
+        // part-way must never leave the old key paired with a new provider or address.
+        db()->beginTransaction();
+        try {
+            if ($key !== '') set_setting('ai_api_key', $key);
+            if (isset($_POST['clear_key'])) set_setting('ai_api_key', '');
+            set_setting('ai_enabled', $enabled);
+            set_setting('ai_provider', $provider);
+            set_setting('ai_model', $model);
+            set_setting('ai_base_url', $baseUrl);
+            // Per-feature toggles + governance.
+            foreach (array_keys(ai_features()) as $fk) set_setting('ai_feat_' . $fk, !empty($_POST['feat'][$fk]) ? '1' : '0');
+            set_setting('ai_redact', $redactNow ? '1' : '0');
+            set_setting('ai_baa_confirmed', !empty($_POST['ai_baa_confirmed']) ? '1' : '0');
+            db()->commit();
+        } catch (Throwable $e) {
+            if (db()->inTransaction()) db()->rollBack();
+            throw $e;
+        }
         audit($user['id'], 'ai.config', 'setting', null,
             'enabled=' . $enabled . ' provider=' . $provider . ' host=' . ($host($newEndpoint) ?: '(none)')
             . ($host($newEndpoint) !== $host($oldEndpoint) ? ' (host changed)' : '')
@@ -168,8 +177,8 @@ page_header('AI assistant', $user, 'account');
     <fieldset>
       <legend>Privacy &amp; governance</legend>
       <div class="field">
-        <label><input type="checkbox" name="ai_redact" value="1" <?= $redactOn ? 'checked' : '' ?>> Redact direct identifiers before sending to the provider</label>
-        <p class="hint">Removes names, emails, phone numbers, addresses, dates of birth and SSNs from the context, keeping the functional description. Strongly recommended.</p>
+        <label><input type="checkbox" name="ai_redact" value="1" aria-describedby="redact-hint" <?= $redactOn ? 'checked' : '' ?>> Redact direct identifiers before sending to the provider</label>
+        <p class="hint" id="redact-hint">Removes names, emails, phone numbers, addresses, dates of birth and SSNs from the context, keeping the functional description. Strongly recommended. Voice assistant requests are sent as spoken, except that client names said in full are replaced and emails, phone numbers and SSNs are removed; a first name said alone and dictated note text are sent as said.</p>
       </div>
       <div class="field">
         <label><input type="checkbox" name="ai_baa_confirmed" value="1" <?= $baaOn ? 'checked' : '' ?>> I have a data-handling agreement (e.g. BAA) with this provider, or send no PHI</label>
@@ -205,7 +214,7 @@ $total = array_sum(array_map(fn($r) => (int)$r['n'], $usage));
     <?php $labels = ai_features(); foreach ($usage as $u): ?>
       <tr><td><?= h($labels[$u['feature']] ?? $u['feature']) ?></td>
         <td class="num"><?= (int)$u['n'] ?></td>
-        <td class="num"><?= (int)$u['redacted_n'] ?>/<?= (int)$u['n'] ?></td>
+        <td class="num"><?= (int)$u['redacted_n'] ?>/<?= (int)$u['n'] ?><?= $u['feature'] === 'voice' && (int)$u['redacted_n'] > 0 ? ' (partial)' : '' ?></td>
         <td><?= fmt_datetime($u['last_used']) ?></td></tr>
     <?php endforeach; ?>
     </tbody>

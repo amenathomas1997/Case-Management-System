@@ -56,11 +56,15 @@ struct EquipmentView: View {
     @State private var sheetResult: String?
     /// The loan whose return is waiting for confirmation: a return cannot be undone.
     @State private var pendingReturn: EquipmentItem?
-    /// After a return, VoiceOver is put back on the item, whose Mark returned button is gone
+    /// After a return or a loan, VoiceOver is put back on the item, whose button is gone
     /// (errorFocus: the error banner, after a failure).
     @AccessibilityFocusState private var focusedItem: Int?
     private let errorFocus = -1
     private let errorRow = "equipmentError"
+    /// The row to scroll into view before VoiceOver is put on it (see reveal).
+    @State private var scrollTarget: String?
+    /// The item just loaned out, put back under VoiceOver once its sheet has gone.
+    @State private var loanedItem: Int?
 
     var body: some View {
         NavigationStack {
@@ -104,8 +108,12 @@ struct EquipmentView: View {
                                     .foregroundStyle(item.status == "Available" ? Color.brandTeal : Color.brand)
                             }
                             // Detail lines in the 7:1 secondary-text colour (system secondary is about 3.4:1).
-                            if let serial = item.serial, !serial.isEmpty {
-                                Text("Serial \(serial) · Condition: \(item.itemCondition)").font(.caption).foregroundStyle(Color.secondaryText)
+                            // The condition is shown with or without a serial, so an item that needs
+                            // repair never looks ready to lend.
+                            let details = [item.serial.flatMap { $0.isEmpty ? nil : "Serial \($0)" },
+                                           item.itemCondition.isEmpty ? nil : "Condition: \(item.itemCondition)"].compactMap { $0 }
+                            if !details.isEmpty {
+                                Text(details.joined(separator: " · ")).font(.caption).foregroundStyle(Color.secondaryText)
                             }
                             if item.held && item.status == "Available" {
                                 Label("Held by a reservation", systemImage: "calendar.badge.clock")
@@ -163,6 +171,7 @@ struct EquipmentView: View {
                         }
                         .padding(.vertical, 4)
                         .accessibilityElement(children: .contain)
+                        .id(entry.key)
                     }
                 }
                 // The banner is the list's first row: a failed return from an item further down
@@ -176,17 +185,22 @@ struct EquipmentView: View {
                         focusedItem = errorFocus
                     }
                 }
+                .onChange(of: scrollTarget) { key in
+                    guard let key else { return }
+                    scrollTarget = nil
+                    DispatchQueue.main.async { withAnimation { proxy.scrollTo(key, anchor: .center) } }
+                }
             }
             .navigationTitle("Equipment")
             .refreshable { confirmation = nil; await load() }
             .task { await load() }
             .toolbar { ToolbarItem(placement: .primaryAction) { Button { showingAdd = true } label: { Image(systemName: "plus") }.accessibilityLabel("Add equipment") } }
-            .sheet(item: $loaningItem, onDismiss: announceSheetResult) { item in
+            .sheet(item: $loaningItem, onDismiss: afterLoan) { item in
                 LoanSheet(item: item) { message in
                     error = nil
                     confirmation = message
                     sheetResult = message
-                    Task { await load() }
+                    loanedItem = item.id
                 }
             }
             .sheet(isPresented: $showingAdd, onDismiss: announceSheetResult) {
@@ -230,6 +244,31 @@ struct EquipmentView: View {
         sheetResult = nil
     }
 
+    /// The loan sheet has gone: reload, then put VoiceOver on the item (its Loan out button is
+    /// gone, and the row has moved up among the items on loan) and say the result.
+    private func afterLoan() {
+        guard let itemId = loanedItem, let message = sheetResult else { announceSheetResult(); return }
+        loanedItem = nil; sheetResult = nil
+        Task {
+            await load()
+            await reveal(itemId, saying: message)
+        }
+    }
+
+    /// After a return or a loan has rebuilt the item's row, puts VoiceOver back on it, then says
+    /// the result (after the focus move, so it is not cut off). The row has usually moved (items
+    /// on loan are listed first), and a List never draws an off-screen row, which then cannot
+    /// take focus: it is scrolled into view first. After a failed reload the error banner has
+    /// focus instead.
+    private func reveal(_ itemId: Int, saying message: String) async {
+        if error == nil, let key = keyedItems.first(where: { $0.item.id == itemId })?.key {
+            scrollTarget = key
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            focusedItem = itemId
+        }
+        announceAfterDismiss(message)
+    }
+
     private func load() async {
         do {
             error = nil
@@ -237,7 +276,7 @@ struct EquipmentView: View {
             items = response.equipment
             loaded = true
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 
@@ -258,12 +297,10 @@ struct EquipmentView: View {
             let message = "\(item.name) marked returned."
             confirmation = message
             await load()
-            // Back on the item once its row has been rebuilt, then the result, so the focus move
-            // does not cut the announcement off.
-            focusedItem = item.id
-            announceAfterDismiss(message)
+            // Back on the item once its row has been rebuilt, then the result.
+            await reveal(item.id, saying: message)
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }
@@ -275,15 +312,34 @@ struct LoanSheet: View {
     let onDone: (String) -> Void
 
     @State private var selectedClient: Int?
-    @State private var dueDate = Calendar.current.date(byAdding: .day, value: 60, to: Date()) ?? Date()
+    @State private var dueDate = LoanSheet.defaultDue
     @State private var notes = ""
     @State private var busy = false
     @State private var error: String?
+    @State private var askingDiscard = false
+
+    /// The return date the sheet starts with.
+    private static var defaultDue: Date { Calendar.current.date(byAdding: .day, value: 60, to: Date()) ?? Date() }
+    /// Today through 31 December five years on: the website refuses a return date before today
+    /// (the loan would be overdue at once), and the server refuses a year more than five ahead.
+    private static var dueRange: ClosedRange<Date> {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let year = calendar.component(.year, from: today) + 5
+        let last = calendar.date(from: DateComponents(year: year, month: 12, day: 31)) ?? today
+        return today...max(today, last)
+    }
+
+    private var hasChanges: Bool {
+        selectedClient != nil || !Calendar.current.isDate(dueDate, inSameDayAs: Self.defaultDue)
+            || !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            // The error banner is the form's first row; it is scrolled into view and given
+            // VoiceOver focus when a problem is reported (see ErrorFocusForm).
+            ErrorFocusForm(error: error) {
                 LabeledContent("Item", value: item.name)
                 if item.held {
                     // As on the website's scan page; the reserved client is not named here.
@@ -291,19 +347,26 @@ struct LoanSheet: View {
                         .font(.callout)
                 }
                 NewRecordClientPicker(title: "Client (required)", selection: $selectedClient)
-                DatePicker("Return due", selection: $dueDate, displayedComponents: .date)
-                TextField("Notes (optional)", text: $notes)
+                DatePicker("Return due", selection: $dueDate, in: Self.dueRange, displayedComponents: .date)
+                // A visible name that stays once the field holds text.
+                CaptionedField(label: "Notes (optional)", text: $notes)
             }
             .navigationTitle("Loan out")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                // Not while saving: the loan would still be made, with no word of it here.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Loan") { Task { await submit() } }
                         .disabled(busy || selectedClient == nil)
                         .accessibilityHint(selectedClient == nil ? "Choose a client first." : "")
                 }
             }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this loan?",
+                                 asking: $askingDiscard) { dismiss() }
         }
     }
 
@@ -318,8 +381,8 @@ struct LoanSheet: View {
             onDone("\(item.name) loaned out.")
             dismiss()
         } catch {
-            self.error = error.localizedDescription
             busy = false
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }
@@ -374,7 +437,13 @@ struct EquipmentDetailView: View {
 
     var body: some View {
         List {
-            if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
+            if let error {
+                ErrorBanner(message: error).listRowSeparator(.hidden)
+                // A button as well as pull-to-refresh, which needs a drag.
+                if data == nil {
+                    Button { Task { await load() } } label: { Label("Try loading details again", systemImage: "arrow.clockwise") }
+                }
+            }
             if data == nil && error == nil { ProgressView("Loading details…") }
             if let d = data {
                 Section {
@@ -431,6 +500,7 @@ struct EquipmentDetailView: View {
         }
         .navigationTitle(itemName)
         .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await load() }
         .task { await load() }
         .sheet(isPresented: $logging, onDismiss: announceSheetResult) { LogServiceSheet(itemId: itemId) { message in sheetResult = message; Task { await load() } } }
         .sheet(isPresented: $reserving, onDismiss: announceSheetResult) { ReservationSheet(fixedItemId: itemId) { message in sheetResult = message; Task { await load() } } }
@@ -449,7 +519,7 @@ struct EquipmentDetailView: View {
             if savedIntervalText == nil || intervalText == savedIntervalText { intervalText = server }
             savedIntervalText = server
         }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
     private func saveInterval() async {
         // Each refusal is spoken once, here (the line beside the field does not announce itself).
@@ -478,10 +548,16 @@ struct LogServiceSheet: View {
     let itemId: Int; let onDone: (String) -> Void
     @State private var type = "Maintenance"; @State private var date = Date(); @State private var notes = ""; @State private var cost = ""
     @State private var busy = false; @State private var error: String?
+    @State private var askingDiscard = false
+    private var hasChanges: Bool {
+        type != "Maintenance" || !Calendar.current.isDateInToday(date)
+            || [notes, cost].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            // The error banner is the form's first row; it is scrolled into view and given
+            // VoiceOver focus when a problem is reported (see ErrorFocusForm).
+            ErrorFocusForm(error: error) {
                 Picker("Type", selection: $type) { ForEach(maintenanceTypes, id: \.self) { Text($0) } }
                 // A service cannot be logged in the future: a later date would push "last
                 // serviced" ahead and hide the item from the service-due list.
@@ -492,16 +568,22 @@ struct LogServiceSheet: View {
             }
             .navigationTitle("Log service").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                // Not while saving: the service would still be logged, with no word of it here.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await submit() } }.disabled(busy) }
             }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this service entry?",
+                                 asking: $askingDiscard) { dismiss() }
         }
     }
     private func submit() async {
         guard let costText = checkedAmount(cost) else { showFormError(amountFormatMessage("Cost"), in: &error); return }
         busy = true; error = nil
         do { let _: OKResponse = try await api.call("equipment_service", body: ["equipment_id": itemId, "service_type": type, "service_date": APIDate.day(date), "notes": notes, "cost": costText]); onDone("Service logged."); dismiss() }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -606,7 +688,7 @@ struct ReservationsView: View {
     }
     private func load() async {
         do { error = nil; let r: ReservationsResponse = try await api.call("reservations"); reservations = r.reservations; loaded = true }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
     private func cancel(_ id: Int) async {
         let index = reservations.firstIndex(where: { $0.id == id }) ?? 0
@@ -621,7 +703,7 @@ struct ReservationsView: View {
             }
             announceAfterDismiss("Reservation cancelled.")
         }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -637,11 +719,18 @@ struct ReservationSheet: View {
     @State private var selectedClient: Int?
     @State private var hasFrom = false; @State private var from = Date()
     @State private var notes = ""; @State private var busy = false; @State private var error: String?
+    @State private var askingDiscard = false
+
+    private var hasChanges: Bool {
+        (fixedItemId == nil && selectedItem != nil) || selectedClient != nil || hasFrom
+            || !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            // The error banner is the form's first row; it is scrolled into view and given
+            // VoiceOver focus when a problem is reported (see ErrorFocusForm).
+            ErrorFocusForm(error: error) {
                 if fixedItemId == nil {
                     Picker("Item", selection: $selectedItem) {
                         Text("Choose…").tag(nil as Int?)
@@ -655,11 +744,16 @@ struct ReservationSheet: View {
                 NewRecordClientPicker(title: "Client (required)", selection: $selectedClient)
                 Toggle("Needed from", isOn: $hasFrom)
                 if hasFrom { DatePicker("From", selection: $from, displayedComponents: .date) }
-                TextField("Notes", text: $notes)
+                // A visible name that stays once the field holds text.
+                CaptionedField(label: "Notes", text: $notes)
             }
             .navigationTitle("Reserve item").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                // Not while saving: the reservation would still be made, with no word of it here.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Reserve") { Task { await submit() } }
                         .disabled(busy || selectedClient == nil || (fixedItemId == nil && selectedItem == nil))
@@ -667,6 +761,8 @@ struct ReservationSheet: View {
                             : (selectedClient == nil ? "Choose a client first." : ""))
                 }
             }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this reservation?",
+                                 asking: $askingDiscard) { dismiss() }
             .task { if fixedItemId == nil && items.isEmpty { await loadItems() } }
         }
     }
@@ -677,7 +773,7 @@ struct ReservationSheet: View {
     }
     private func loadItems() async {
         do { itemsError = nil; let e: EquipmentResponse = try await api.call("equipment"); items = e.equipment }
-        catch { itemsError = "Could not load the equipment list. \(error.localizedDescription)" }
+        catch { showFormError("Could not load the equipment list. \(error.localizedDescription)", in: &itemsError) }
     }
     private func submit() async {
         guard let cid = selectedClient else { return }
@@ -693,7 +789,7 @@ struct ReservationSheet: View {
                 : (r.status == "Reserved" ? "Item reserved." : "Reservation saved."))
             dismiss()
         }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -716,10 +812,16 @@ struct AddEquipmentSheet: View {
     @State private var name = ""; @State private var category = "Other"; @State private var serial = ""
     @State private var condition = "Good"; @State private var value = ""; @State private var interval = ""; @State private var notes = ""
     @State private var busy = false; @State private var error: String?
+    @State private var askingDiscard = false
+    private var hasChanges: Bool {
+        category != "Other" || condition != "Good"
+            || [name, serial, value, interval, notes].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            // The error banner is the form's first row; it is scrolled into view and given
+            // VoiceOver focus when a problem is reported (see ErrorFocusForm).
+            ErrorFocusForm(error: error) {
                 // Visible names that stay once a field holds text.
                 CaptionedField(label: "Item name (required)", text: $name)
                 Picker("Category", selection: $category) { ForEach(equipmentCategoriesApp, id: \.self) { Text($0) } }
@@ -735,10 +837,16 @@ struct AddEquipmentSheet: View {
             }
             .navigationTitle("Add equipment").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                // Not while saving: the item would still be added, with no word of it here.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
                 // Left enabled: a missing name is explained by the error banner, not a dimmed button.
                 ToolbarItem(placement: .confirmationAction) { Button("Add") { Task { await submit() } }.disabled(busy) }
             }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this new item?",
+                                 asking: $askingDiscard) { dismiss() }
         }
     }
     private func submit() async {
@@ -753,6 +861,6 @@ struct AddEquipmentSheet: View {
         busy = true; error = nil
         do { let _: OKResponse = try await api.call("add_equipment", body: ["name": name, "category": category, "serial": serial, "condition": condition, "value": valueText, "maintenance_interval_days": intervalDays, "notes": notes]); onDone(); dismiss() }
         // (confirmation + VoiceOver announce, after the sheet has gone, handled by the parent's AddEquipmentSheet closure)
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

@@ -94,7 +94,7 @@ page_header('Capacity', $user, 'schedule');
         $unscheduled = max(0, $remaining - (float)$t['upcoming']);
     ?>
       <tr>
-        <th scope="row"><a href="client.php?id=<?= (int)$t['cid'] ?>"><?= h($t['client_name']) ?></a><br><span class="muted"><?= h($t['title']) ?></span></th>
+        <th scope="row"><?= can('clients') ? '<a href="client.php?id=' . (int)$t['cid'] . '">' . h($t['client_name']) . '</a>' : h($t['client_name']) ?><br><span class="muted"><?= h($t['title']) ?></span></th>
         <td class="num"><?= number_format($remaining, 1) ?></td>
         <td class="num"><?= number_format((float)$t['upcoming'], 1) ?></td>
         <td class="num"><?= $unscheduled > 0 ? '<strong>' . number_format($unscheduled, 1) . '</strong>' : number_format($unscheduled, 1) ?></td>

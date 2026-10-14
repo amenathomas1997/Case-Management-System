@@ -101,6 +101,9 @@ $outcome = function (?array $cl): string {
 
 /* ---- CSV export ---- */
 if (isset($_GET['export'])) {
+    // The file names every client served in the period, with age and disability, so the
+    // download is audited (as audit.php's own export is).
+    audit($user['id'], 'report.export', 'client', null, 'RSA-911 CSV ' . $from . ' to ' . $to . ' (' . count($rows) . ' clients)');
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="rsa911_case_service_' . $from . '_' . $to . '.csv"');
     $out = fopen('php://output', 'w');
@@ -116,7 +119,9 @@ if (isset($_GET['export'])) {
         write_csv_row($out, [
             (int)$r['id'], csv_cell($r['name']), $ageOn($r['dob']), csv_cell($r['client_type'] ?? 'VR'),
             csv_cell($r['disability'] ?? ''), csv_cell($r['agencies'] ?? ''), csv_cell($r['auths'] ?? ''),
-            csv_cell($r['cats'] ?? ''), number_format((float)$r['hrs'], 2), number_format((float)$r['val'], 2),
+            // Plain numbers (no thousands separator), as agency_report.php writes them, so
+            // the state system's import and spreadsheets read them as numbers.
+            csv_cell($r['cats'] ?? ''), number_format((float)$r['hrs'], 2, '.', ''), number_format((float)$r['val'], 2, '.', ''),
             $r['first_service'], $r['last_service'], csv_cell($r['status']),
             $c ? csv_cell($c['new_status']) : '', $c ? date('Y-m-d', strtotime($c['closed_at'])) : '',
             $c && $c['new_status'] === 'Closed - Rehabilitated' ? 'Y' : '',
@@ -189,7 +194,8 @@ page_header('RSA-911 export', $user, 'analytics');
       <td><?= h($r['agencies'] ?? '—') ?><?= $r['auths'] ? '<br><span class="muted">Authorization ' . h($r['auths']) . '</span>' : '' ?></td>
       <td class="num"><?= number_format((float)$r['hrs'], 2) ?></td>
       <td><?= h($r['cats'] ?? '—') ?></td>
-      <td><?= $c ? h($outcome($c)) : '<span class="muted">open</span>' ?></td>
+      <?php // No closure in the period does not mean the case is open: the current status says which (as the CSV's Current Status column does). ?>
+      <td><?= $c ? h($outcome($c)) : '<span class="muted">No closure in this period (now ' . h((string)$r['status']) . ')</span>' ?></td>
     </tr>
   <?php endforeach; ?>
   </tbody>

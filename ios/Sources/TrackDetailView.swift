@@ -124,6 +124,9 @@ struct TrackDetailView: View {
     /// After a delete takes an expense row away, VoiceOver is put on the row that takes its
     /// place (0: the "No expenses" line) rather than left wherever it lands.
     @AccessibilityFocusState private var focusedExpense: Int?
+    /// After a failure, VoiceOver is put on the error banner (see the list's onChange).
+    @AccessibilityFocusState private var errorFocused: Bool
+    private static let errorRow = "trackError"
     /// The result of a sheet (goal, progress, note, expense, report), said once the sheet has
     /// closed: closing it moves VoiceOver focus, which cut off a message said from inside it.
     @State private var sheetResult: String?
@@ -139,176 +142,193 @@ struct TrackDetailView: View {
     }
 
     var body: some View {
-        List {
-            if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
-            if let confirmation {
-                Text(confirmation).font(.callout.weight(.medium)).foregroundStyle(Color.brandTeal)
-                    .listRowSeparator(.hidden)
-            }
-            Section("Authorization") {
-                LabeledContent("Service", value: track.serviceType ?? "Assistive Technology")
-                LabeledContent("Authorization number", value: track.authNumber)
-                LabeledContent("Status", value: track.status)
-                LabeledContent("Rate", value: String(format: "$%.2f per hour", track.hourlyRate))
-                if let expiration = track.expirationDate {
-                    LabeledContent("Expires", value: formatDate(expiration))
+        ScrollViewReader { proxy in
+            List {
+                if let error {
+                    ErrorBanner(message: error).listRowSeparator(.hidden)
+                        .id(Self.errorRow)
+                        .accessibilityFocused($errorFocused)
                 }
-                AuthProgressBar(hoursWorked: track.hoursWorked,
-                                authorizedHours: track.authorizedHours,
-                                hoursRemaining: track.hoursRemaining,
-                                pctUsed: track.pctUsed)
-            }
-            Section(goalsLoaded ? "SMART goals (\(goals.count))" : "SMART goals") {
-                if !goalsLoaded {
-                    if error == nil { ProgressView("Loading goals…") }
-                } else if goals.isEmpty {
-                    Text("No goals yet.").foregroundStyle(Color.secondaryText)
+                if let confirmation {
+                    Text(confirmation).font(.callout.weight(.medium)).foregroundStyle(Color.brandTeal)
+                        .listRowSeparator(.hidden)
                 }
-                ForEach(goals) { goal in
-                    let short = shortGoalText(goal.specificGoal)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(goal.specificGoal).font(.body.weight(.medium))
-                        Text(goal.measurableMetric).font(.callout).foregroundStyle(Color.secondaryText)
-                        if let target = goal.targetDate {
-                            Text("Target: \(formatDate(target))").font(.caption).foregroundStyle(Color.secondaryText)
-                        }
-                        let pct = goal.progressPct ?? 0
-                        ProgressView(value: Double(pct), total: 100) {
-                            Text("\(pct)% · \(goal.status)").font(.caption).foregroundStyle(Color.secondaryText)
-                        }
-                        // Each control names its goal briefly: the full objective is the text just
-                        // above, and the Buttons rotor and Voice Control still tell goals apart.
-                        .accessibilityLabel("Progress, \(short)")
-                        .accessibilityValue("\(pct) percent, \(goal.status)")
-                        Picker("Status", selection: statusBinding(for: goal)) {
-                            ForEach(goalStatuses, id: \.self) { Text($0) }
-                        }
-                        .pickerStyle(.segmented)
-                        .disabled(savingGoals.contains(goal.id))
-                        .accessibilityLabel("Status, \(short)")
-                        .accessibilityHint("Asks before saving: a new status changes the recorded progress.")
-                        // Body-size text and 44-point targets (caption-size controls were about 16 points tall).
-                        HStack {
-                            Button { recordingStatus = nil; recordingGoal = goal } label: {
-                                Label("Record progress", systemImage: "chart.line.uptrend.xyaxis")
-                                    .frame(minHeight: 44).contentShape(Rectangle())
-                            }
-                            .buttonStyle(.borderless)
-                            .accessibilityLabel("Record progress, \(short)")
-                            .accessibilityInputLabels(["Record progress", "Record progress, \(short)"])
-                            Spacer()
-                            NavigationLink { GoalHistoryView(goalId: goal.id, goalText: goal.specificGoal) } label: {
-                                Text("History").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
-                            }
-                            .accessibilityLabel("History, \(short)")
-                            .accessibilityInputLabels(["History", "History, \(short)"])
-                        }
+                Section("Authorization") {
+                    LabeledContent("Service", value: track.serviceType ?? "Assistive Technology")
+                    LabeledContent("Authorization number", value: track.authNumber)
+                    LabeledContent("Status", value: track.status)
+                    LabeledContent("Rate", value: String(format: "$%.2f per hour", track.hourlyRate))
+                    if let expiration = track.expirationDate {
+                        LabeledContent("Expires", value: formatDate(expiration))
                     }
-                    .padding(.vertical, 3)
+                    AuthProgressBar(hoursWorked: track.hoursWorked,
+                                    authorizedHours: track.authorizedHours,
+                                    hoursRemaining: track.hoursRemaining,
+                                    pctUsed: track.pctUsed)
                 }
-                Button { showingAddGoal = true } label: { Label("Add goal", systemImage: "plus") }
-            }
-            Section(notesHeader) {
-                if !notesLoaded {
-                    if error == nil { ProgressView("Loading notes…") }
-                } else if trackNotes.isEmpty {
-                    Text("No notes on this track yet.").foregroundStyle(Color.secondaryText)
-                }
-                ForEach(trackNotes) { note in
-                    let open = expandedNotes.contains(note.id)
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(alignment: .top) {
-                            // The note's text is one element; Edit stays its own (as the expense
-                            // rows' Delete does), so the subject is not read twice.
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(note.subject).font(.body.weight(.semibold))
-                                HStack(spacing: 6) {
-                                    Text(note.noteType).font(.caption).foregroundStyle(Color.secondaryText)
-                                    if let fmt = note.noteFormat, fmt != "free" {
-                                        NoteFormatBadge(format: fmt)
-                                    }
-                                    Text(formatDateTime(note.createdAt)).font(.caption).foregroundStyle(Color.secondaryText)
-                                }
-                                // A preview that opens in full (VoiceOver reads the whole note either way).
-                                Text(note.body).font(.callout).lineLimit(open ? nil : 6)
+                Section(goalsLoaded ? "SMART goals (\(goals.count))" : "SMART goals") {
+                    if !goalsLoaded {
+                        if error == nil { ProgressView("Loading goals…") }
+                    } else if goals.isEmpty {
+                        Text("No goals yet.").foregroundStyle(Color.secondaryText)
+                    }
+                    ForEach(goals) { goal in
+                        let short = shortGoalText(goal.specificGoal)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(goal.specificGoal).font(.body.weight(.medium))
+                            Text(goal.measurableMetric).font(.callout).foregroundStyle(Color.secondaryText)
+                            if let target = goal.targetDate {
+                                Text("Target: \(formatDate(target))").font(.caption).foregroundStyle(Color.secondaryText)
                             }
-                            .accessibilityElement(children: .combine)
-                            Spacer()
-                            if note.canEdit {
-                                Button { editingTrackNote = note } label: {
-                                    Image(systemName: "pencil")
-                                        .frame(minWidth: 44, minHeight: 44)
-                                        .contentShape(Rectangle())
+                            let pct = goal.progressPct ?? 0
+                            ProgressView(value: Double(pct), total: 100) {
+                                Text("\(pct)% · \(goal.status)").font(.caption).foregroundStyle(Color.secondaryText)
+                            }
+                            // Each control names its goal briefly: the full objective is the text just
+                            // above, and the Buttons rotor and Voice Control still tell goals apart.
+                            .accessibilityLabel("Progress, \(short)")
+                            .accessibilityValue("\(pct) percent, \(goal.status)")
+                            Picker("Status", selection: statusBinding(for: goal)) {
+                                ForEach(goalStatuses, id: \.self) { Text($0) }
+                            }
+                            .pickerStyle(.segmented)
+                            .disabled(savingGoals.contains(goal.id))
+                            .accessibilityLabel("Status, \(short)")
+                            .accessibilityHint("Asks before saving: a new status changes the recorded progress.")
+                            // Body-size text and 44-point targets (caption-size controls were about 16 points tall).
+                            HStack {
+                                Button { recordingStatus = nil; recordingGoal = goal } label: {
+                                    Label("Record progress", systemImage: "chart.line.uptrend.xyaxis")
+                                        .frame(minHeight: 44).contentShape(Rectangle())
                                 }
                                 .buttonStyle(.borderless)
-                                .accessibilityLabel("Edit note: \(note.subject)")
+                                .accessibilityLabel("Record progress, \(short)")
+                                .accessibilityInputLabels(["Record progress", "Record progress, \(short)"])
+                                Spacer()
+                                NavigationLink { GoalHistoryView(goalId: goal.id, goalText: goal.specificGoal) } label: {
+                                    Text("History").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                                }
+                                .accessibilityLabel("History, \(short)")
+                                .accessibilityInputLabels(["History", "History, \(short)"])
                             }
                         }
-                        if mayTruncate(note.body, lines: 6, accessibilitySize: typeSize.isAccessibilitySize) {
-                            NoteExpandButton(subject: note.subject, open: open) {
-                                if open { expandedNotes.remove(note.id) } else { expandedNotes.insert(note.id) }
+                        .padding(.vertical, 3)
+                    }
+                    Button { showingAddGoal = true } label: { Label("Add goal", systemImage: "plus") }
+                }
+                Section(notesHeader) {
+                    if !notesLoaded {
+                        if error == nil { ProgressView("Loading notes…") }
+                    } else if trackNotes.isEmpty {
+                        Text("No notes on this track yet.").foregroundStyle(Color.secondaryText)
+                    }
+                    ForEach(trackNotes) { note in
+                        let open = expandedNotes.contains(note.id)
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(alignment: .top) {
+                                // The note's text is one element; Edit stays its own (as the expense
+                                // rows' Delete does), so the subject is not read twice.
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(note.subject).font(.body.weight(.semibold))
+                                    HStack(spacing: 6) {
+                                        Text(note.noteType).font(.caption).foregroundStyle(Color.secondaryText)
+                                        if let fmt = note.noteFormat, fmt != "free" {
+                                            NoteFormatBadge(format: fmt)
+                                        }
+                                        Text(formatDateTime(note.createdAt)).font(.caption).foregroundStyle(Color.secondaryText)
+                                    }
+                                    // A preview that opens in full (VoiceOver reads the whole note either way).
+                                    Text(note.body).font(.callout).lineLimit(open ? nil : 6)
+                                }
+                                .accessibilityElement(children: .combine)
+                                Spacer()
+                                if note.canEdit {
+                                    Button { editingTrackNote = note } label: {
+                                        Image(systemName: "pencil")
+                                            .frame(minWidth: 44, minHeight: 44)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .accessibilityLabel("Edit note: \(note.subject)")
+                                }
                             }
+                            if mayTruncate(note.body, lines: 6, accessibilitySize: typeSize.isAccessibilitySize) {
+                                NoteExpandButton(subject: note.subject, open: open) {
+                                    if open { expandedNotes.remove(note.id) } else { expandedNotes.insert(note.id) }
+                                }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    // The server sends the newest 50 notes on the track: say so rather than imply that
+                    // is all of them.
+                    if notesLoaded && notesCapped {
+                        Text(trackNotesTotal.map { "Showing the latest \(trackNotes.count) of \($0) notes on this track. The rest are on the website's track page." }
+                             ?? "Showing the latest \(trackNotes.count) notes on this track. Older ones are on the website's track page.")
+                            .font(.callout).foregroundStyle(Color.secondaryText)
+                    }
+                    if trackClientId != nil {
+                        Button { showingTrackNote = true } label: { Label("Add note on this track", systemImage: "square.and.pencil") }
+                    }
+                }
+                Section(expensesLoaded ? "Billable expenses (\(expenses.count))" : "Billable expenses") {
+                    if !expensesLoaded {
+                        if error == nil { ProgressView("Loading expenses…") }
+                    } else if expenses.isEmpty {
+                        Text("No expenses logged on this track.").foregroundStyle(Color.secondaryText)
+                            .accessibilityFocused($focusedExpense, equals: 0)
+                    }
+                    ForEach(expenses) { expense in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(expense.amountText) · \(expense.description)").font(.body)
+                                // Billed or not is said in words, not shown by the Delete button alone.
+                                Text("\(formatDate(expense.expenseDate)) · \(expense.isBilled ? "On an invoice" : "Not yet billed")")
+                                    .font(.caption).foregroundStyle(Color.secondaryText)
+                            }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityFocused($focusedExpense, equals: expense.id)
+                            Spacer()
+                            // An expense already on an invoice stays (the invoice totals would no longer match).
+                            if !expense.isBilled {
+                                // The darker alert red (system red text was 3.5:1), on a 44-point target.
+                                Button(role: .destructive) { deletingExpense = expense } label: {
+                                    Text("Delete").foregroundStyle(Color.alertRed)
+                                        .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(deletingExpenseBusy)
+                                .accessibilityLabel("Delete expense: \(expense.summary)")
+                                .accessibilityInputLabels(["Delete", "Delete expense"])
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                Section("Actions") {
+                    // Sending the report needs the 'reports' permission (as on the website).
+                    if api.can("reports") {
+                        Button { showingReport = true } label: {
+                            Label("Email progress report to the vocational rehabilitation (VR) counselor", systemImage: "paperplane")
                         }
                     }
-                    .padding(.vertical, 2)
-                }
-                // The server sends the newest 50 notes on the track: say so rather than imply that
-                // is all of them.
-                if notesLoaded && notesCapped {
-                    Text(trackNotesTotal.map { "Showing the latest \(trackNotes.count) of \($0) notes on this track. The rest are on the website's track page." }
-                         ?? "Showing the latest \(trackNotes.count) notes on this track. Older ones are on the website's track page.")
-                        .font(.callout).foregroundStyle(Color.secondaryText)
-                }
-                if trackClientId != nil {
-                    Button { showingTrackNote = true } label: { Label("Add note on this track", systemImage: "square.and.pencil") }
+                    Button { showingExpense = true } label: {
+                        Label("Log billable expense", systemImage: "dollarsign.circle")
+                    }
+                    NavigationLink { AmendmentView(trackId: track.id) } label: {
+                        Label("Authorization burn-down & amendment", systemImage: "chart.line.downtrend.xyaxis")
+                    }
                 }
             }
-            Section(expensesLoaded ? "Billable expenses (\(expenses.count))" : "Billable expenses") {
-                if !expensesLoaded {
-                    if error == nil { ProgressView("Loading expenses…") }
-                } else if expenses.isEmpty {
-                    Text("No expenses logged on this track.").foregroundStyle(Color.secondaryText)
-                        .accessibilityFocused($focusedExpense, equals: 0)
-                }
-                ForEach(expenses) { expense in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(expense.amountText) · \(expense.description)").font(.body)
-                            // Billed or not is said in words, not shown by the Delete button alone.
-                            Text("\(formatDate(expense.expenseDate)) · \(expense.isBilled ? "On an invoice" : "Not yet billed")")
-                                .font(.caption).foregroundStyle(Color.secondaryText)
-                        }
-                        .accessibilityElement(children: .combine)
-                        .accessibilityFocused($focusedExpense, equals: expense.id)
-                        Spacer()
-                        // An expense already on an invoice stays (the invoice totals would no longer match).
-                        if !expense.isBilled {
-                            // The darker alert red (system red text was 3.5:1), on a 44-point target.
-                            Button(role: .destructive) { deletingExpense = expense } label: {
-                                Text("Delete").foregroundStyle(Color.alertRed)
-                                    .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(deletingExpenseBusy)
-                            .accessibilityLabel("Delete expense: \(expense.summary)")
-                            .accessibilityInputLabels(["Delete", "Delete expense"])
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-            }
-            Section("Actions") {
-                // Sending the report needs the 'reports' permission (as on the website).
-                if api.can("reports") {
-                    Button { showingReport = true } label: {
-                        Label("Email progress report to the vocational rehabilitation (VR) counselor", systemImage: "paperplane")
-                    }
-                }
-                Button { showingExpense = true } label: {
-                    Label("Log billable expense", systemImage: "dollarsign.circle")
-                }
-                NavigationLink { AmendmentView(trackId: track.id) } label: {
-                    Label("Authorization burn-down & amendment", systemImage: "chart.line.downtrend.xyaxis")
+            // The banner is the list's first row: a failed goal status, expense delete or reload from
+            // further down would otherwise leave it off screen, where a List never draws it (or says
+            // it). Scrolled into view once it exists, then VoiceOver is put on it.
+            .onChange(of: error) { message in
+                guard message != nil else { return }
+                DispatchQueue.main.async { withAnimation { proxy.scrollTo(Self.errorRow, anchor: .top) } }
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    errorFocused = true
                 }
             }
         }
@@ -426,7 +446,7 @@ struct TrackDetailView: View {
                 announce(confirmation!)
                 await load()
             } catch {
-                self.error = error.localizedDescription
+                showFormError(error.localizedDescription, in: &self.error)
             }
         }
     }
@@ -438,7 +458,7 @@ struct TrackDetailView: View {
             goals = response.goals
             goalsLoaded = true
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
         // Preserve already loaded notes while making a failed refresh visible.
         do {
@@ -448,7 +468,8 @@ struct TrackDetailView: View {
             trackClientId = r.clientId
             notesLoaded = true
         } catch {
-            self.error = error.localizedDescription
+            // The same failure as the goals' (no connection, say) is not said twice.
+            if self.error != error.localizedDescription { showFormError(error.localizedDescription, in: &self.error) }
         }
         await loadExpenses()
     }
@@ -460,7 +481,7 @@ struct TrackDetailView: View {
             expenses = r.expenses
             expensesLoaded = true
         } catch {
-            if self.error == nil { self.error = error.localizedDescription }
+            if self.error == nil { showFormError(error.localizedDescription, in: &self.error) }
         }
     }
 
@@ -480,7 +501,7 @@ struct TrackDetailView: View {
             confirmation = message
         } catch {
             // The server says why: not found (already deleted), or already on an invoice.
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
         // Either way the list shows what the server now holds.
         await loadExpenses()
@@ -506,61 +527,99 @@ struct AmendmentView: View {
     @EnvironmentObject var api: API
     let trackId: Int
     @State private var data: AmendmentResponse?
+    /// The counselor email on file waits for staff to confirm it on the client's record, so the
+    /// letter is not offered for emailing to it (see AmendmentReply).
+    @State private var counselorUnconfirmed = false
     @State private var letter = ""
     /// The letter as the server last supplied it, to tell whether the person has edited it.
     @State private var serverLetter = ""
     @State private var confirmingRedraft = false
     @State private var error: String?
     @State private var aiBusy = false
+    /// After a failure, VoiceOver is put on the error banner (see the list's onChange).
+    @AccessibilityFocusState private var errorFocused: Bool
+    private static let errorRow = "amendmentError"
 
     var body: some View {
-        List {
-            if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
-            if let d = data {
-                // When mileage and expenses use the funds up before the hours, the server's run-out
-                // date and the letter are about funds: the figures here say the same.
-                let byFunds = d.fundsLimit == true && d.suggestFunds != nil
-                Section("Burn-down") {
-                    LabeledContent("Hours used", value: String(format: "%.2f of %.2f hours (%d%%)", d.worked, d.authorized, d.pct))
-                    LabeledContent("Hours remaining", value: String(format: "%.2f hours", d.remaining))
-                    if let auth = d.fundsAuthorized, auth > 0, let used = d.fundsUsed, let left = d.fundsRemaining {
-                        LabeledContent("Funds used", value: "\(money(used)) of \(money(auth))" + (d.fundsPct.map { " (\($0)%)" } ?? ""))
-                        LabeledContent("Funds remaining", value: money(left))
-                    }
-                    if byFunds {
-                        Text("The authorized funds, not the hours, are the limit: mileage and expenses are using them up faster, so they run out before the hours do.")
-                            .font(.callout)
-                        if let spend = d.weeklySpend, spend > 0 { LabeledContent("Recent spending", value: "\(money(spend)) per week") }
-                    } else if d.weeklyRate > 0 {
-                        LabeledContent("Recent pace", value: String(format: "%.2f hours per week", d.weeklyRate))
-                    }
-                    if let r = d.runOut { LabeledContent(byFunds ? "Projected run-out of funds" : "Projected run-out of hours", value: r) }
-                    if let e = d.expiration { LabeledContent(d.expired == true ? "Expired on" : "Expires", value: e) }
-                    if d.expired == true { Text("The authorization has already expired, so no run-out date is projected.").font(.callout) }
-                    LabeledContent("Suggested top-up", value: byFunds
-                                   ? "\(money(d.suggestFunds ?? 0)) in additional authorized funds"
-                                   : "\(d.suggestAdd) hours")
+        ScrollViewReader { proxy in
+            List {
+                if let error {
+                    ErrorBanner(message: error).listRowSeparator(.hidden)
+                        .id(Self.errorRow)
+                        .accessibilityFocused($errorFocused)
                 }
-                Section("Amendment request letter") {
-                    if !d.aiNote.isEmpty { Text(d.aiNote).font(.caption).foregroundStyle(Color.secondaryText) }
-                    TextField("Letter", text: $letter, axis: .vertical).lineLimit(8...30)
-                    if api.aiHas("draft") {
-                        // A new draft from the track's facts (the server never sees this text),
-                        // so it replaces the letter: asked first when the person has edited it.
-                        Button {
-                            if letter != serverLetter { confirmingRedraft = true } else { Task { await draftAI() } }
-                        } label: {
-                            Label(aiBusy ? "Drafting…" : "Draft with AI", systemImage: "sparkles")
-                        }.disabled(aiBusy)
-                    }
-                    if let email = d.counselorEmail, !email.isEmpty {
-                        let subject = "Authorization amendment request — \(d.client)"
-                        if let url = mailto(email, subject: subject, body: letter) {
-                            Link(destination: url) { Label("Email counselor", systemImage: "paperplane") }
+                if let d = data {
+                    // When mileage and expenses use the funds up before the hours, the server's run-out
+                    // date and the letter are about funds: the figures here say the same.
+                    let byFunds = d.fundsLimit == true && d.suggestFunds != nil
+                    Section("Burn-down") {
+                        LabeledContent("Hours used", value: String(format: "%.2f of %.2f hours (%d%%)", d.worked, d.authorized, d.pct))
+                        LabeledContent("Hours remaining", value: String(format: "%.2f hours", d.remaining))
+                        if let auth = d.fundsAuthorized, auth > 0, let used = d.fundsUsed, let left = d.fundsRemaining {
+                            LabeledContent("Funds used", value: "\(money(used)) of \(money(auth))" + (d.fundsPct.map { " (\($0)%)" } ?? ""))
+                            LabeledContent("Funds remaining", value: money(left))
                         }
+                        if byFunds {
+                            Text("The authorized funds, not the hours, are the limit: mileage and expenses are using them up faster, so they run out before the hours do.")
+                                .font(.callout)
+                            if let spend = d.weeklySpend, spend > 0 { LabeledContent("Recent spending", value: "\(money(spend)) per week") }
+                        } else if d.weeklyRate > 0 {
+                            LabeledContent("Recent pace", value: String(format: "%.2f hours per week", d.weeklyRate))
+                        }
+                        if let r = d.runOut { LabeledContent(byFunds ? "Projected run-out of funds" : "Projected run-out of hours", value: r) }
+                        if let e = d.expiration { LabeledContent(d.expired == true ? "Expired on" : "Expires", value: e) }
+                        if d.expired == true { Text("The authorization has already expired, so no run-out date is projected.").font(.callout) }
+                        LabeledContent("Suggested top-up", value: byFunds
+                                       ? "\(money(d.suggestFunds ?? 0)) in additional authorized funds"
+                                       : "\(d.suggestAdd) hours")
                     }
+                    Section("Amendment request letter") {
+                        if !d.aiNote.isEmpty { Text(d.aiNote).font(.caption).foregroundStyle(Color.secondaryText) }
+                        TextField("Letter", text: $letter, axis: .vertical).lineLimit(8...30)
+                        if api.aiHas("draft") {
+                            // A new draft from the track's facts (the server never sees this text),
+                            // so it replaces the letter: asked first when the person has edited it.
+                            Button {
+                                if letter != serverLetter { confirmingRedraft = true } else { Task { await draftAI() } }
+                            } label: {
+                                Label(aiBusy ? "Drafting…" : "Draft with AI", systemImage: "sparkles")
+                            }.disabled(aiBusy)
+                        }
+                        // Only to a counselor email staff have confirmed: one typed into the public
+                        // referral form may not be the counselor's, and the letter names the client.
+                        if counselorUnconfirmed {
+                            Text("Counselor email not confirmed — confirm it on the client's profile before emailing this letter.")
+                                .font(.callout)
+                        } else if let email = d.counselorEmail, !email.isEmpty {
+                            let subject = "Authorization amendment request — \(d.client)"
+                            if let url = mailto(email, subject: subject, body: letter) {
+                                Link(destination: url) { Label("Email counselor", systemImage: "paperplane") }
+                            }
+                        }
+                        // The letter names the client: the copy stays on this phone (not Handoff)
+                        // and is cleared from the clipboard after 10 minutes.
+                        Button {
+                            UIPasteboard.general.setItems([["public.utf8-plain-text": letter]],
+                                                          options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(600)])
+                            announce("Letter copied. The copy is cleared from the clipboard in 10 minutes.")
+                        } label: {
+                            Label("Copy letter", systemImage: "doc.on.doc")
+                        }
+                        .disabled(letter.isEmpty)
+                    }
+                } else if error == nil { ProgressView() }
+            }
+            // The banner is the list's first row: a failed AI draft, asked for from the letter further
+            // down, would otherwise leave it off screen, where a List never draws it (or says it).
+            // Scrolled into view once it exists, then VoiceOver is put on it.
+            .onChange(of: error) { message in
+                guard message != nil else { return }
+                DispatchQueue.main.async { withAnimation { proxy.scrollTo(Self.errorRow, anchor: .top) } }
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    errorFocused = true
                 }
-            } else if error == nil { ProgressView() }
+            }
         }
         .navigationTitle("Burn-down")
         .navigationBarTitleDisplayMode(.inline)
@@ -572,27 +631,63 @@ struct AmendmentView: View {
         .task { await load() }
     }
 
+    /// Everything but ASCII letters, digits and -._~ is percent-encoded (the address keeps its
+    /// @): URLComponents.path left "&" and "," in an address as they were, so a stored address
+    /// holding them could add recipients or headers to the email.
     private func mailto(_ to: String, subject: String, body: String) -> URL? {
-        var c = URLComponents(); c.scheme = "mailto"; c.path = to
-        c.queryItems = [URLQueryItem(name: "subject", value: subject), URLQueryItem(name: "body", value: body)]
-        return c.url
+        let plain = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        guard let address = to.trimmingCharacters(in: .whitespacesAndNewlines)
+                .addingPercentEncoding(withAllowedCharacters: plain.union(CharacterSet(charactersIn: "@"))),
+              !address.isEmpty,
+              let subjectText = subject.addingPercentEncoding(withAllowedCharacters: plain),
+              let bodyText = body.addingPercentEncoding(withAllowedCharacters: plain) else { return nil }
+        return URL(string: "mailto:\(address)?subject=\(subjectText)&body=\(bodyText)")
+    }
+
+    private func show(_ reply: AmendmentReply) {
+        data = reply.data; letter = reply.data.letter; serverLetter = reply.data.letter
+        counselorUnconfirmed = reply.counselorUnconfirmed
     }
 
     private func load() async {
         do {
             error = nil
-            let d: AmendmentResponse = try await api.call("amendment", query: ["track": String(trackId)])
-            data = d; letter = d.letter; serverLetter = d.letter
-        } catch { self.error = error.localizedDescription }
+            let reply: AmendmentReply = try await api.call("amendment", query: ["track": String(trackId)])
+            show(reply)
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
     private func draftAI() async {
         aiBusy = true; error = nil
         do {
-            let d: AmendmentResponse = try await api.call("amendment", body: ["track": trackId, "ai_draft": 1])
-            data = d; letter = d.letter; serverLetter = d.letter
-            announce(d.aiNote.isEmpty ? "Letter updated." : d.aiNote)
-        } catch { self.error = error.localizedDescription }
+            let reply: AmendmentReply = try await api.call("amendment", body: ["track": trackId, "ai_draft": 1])
+            show(reply)
+            announce(reply.data.aiNote.isEmpty ? "Letter updated." : reply.data.aiNote)
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
         aiBusy = false
+    }
+}
+
+/// The amendment reply, with whether its counselor email waits for staff to confirm it: 3.0.21
+/// servers leave an unconfirmed address out of counselor_email and say so with
+/// counselor_email_unconfirmed; a server that sends the address with counselor_verified false
+/// is treated the same. Neither flag (an older server) leaves the address as sent.
+private struct AmendmentReply: Decodable {
+    let data: AmendmentResponse
+    let counselorUnconfirmed: Bool
+    private enum Keys: String, CodingKey { case counselorEmailUnconfirmed, counselorVerified }
+    init(from d: Decoder) throws {
+        let reply = try AmendmentResponse(from: d)
+        data = reply
+        let c = try? d.container(keyedBy: Keys.self)
+        // A flag as a boolean or as 0/1, depending on how the server writes it.
+        func flag(_ key: Keys) -> Bool? {
+            if let value = try? c?.decodeIfPresent(Bool.self, forKey: key) { return value }
+            if let number = try? c?.decodeIfPresent(Int.self, forKey: key) { return number != 0 }
+            return nil
+        }
+        let hasAddress = !(reply.counselorEmail ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        counselorUnconfirmed = flag(.counselorEmailUnconfirmed) == true
+            || (flag(.counselorVerified) == false && hasAddress)
     }
 }
 
@@ -705,7 +800,7 @@ struct GoalProgressSheet: View {
             let stored: Stored = try await api.call("update_goal", body: body)
             // Said by the track screen once this sheet has closed (closing it would cut it off).
             onDone("Progress recorded — \(stored.progressPct ?? Int(pct))%."); dismiss()
-        } catch { self.error = error.localizedDescription; busy = false }
+        } catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
     }
 }
 
@@ -741,7 +836,7 @@ struct GoalHistoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             do { error = nil; let r: GoalProgressResponse = try await api.call("goal_progress", query: ["goal": String(goalId)]); history = r.history; loaded = true }
-            catch { self.error = error.localizedDescription }
+            catch { showFormError(error.localizedDescription, in: &self.error) }
         }
     }
 }
@@ -826,7 +921,7 @@ struct AddGoalSheet: View {
             onSaved()
             dismiss()
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
     }
@@ -847,6 +942,9 @@ struct GoalTemplatePicker: View {
     @State private var loaded = false
     @State private var error: String?
     @State private var requestID = UUID()
+    /// The search that waits for typing to pause. Submitting cancels it: firing after the
+    /// submitted search started, it replaced that search, whose result count was then not said.
+    @State private var debounce: Task<Void, Never>?
 
     var body: some View {
         List {
@@ -886,14 +984,18 @@ struct GoalTemplatePicker: View {
         .navigationTitle("Goal templates")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Tool, task or keyword")
-        .onSubmit(of: .search) { Task { await load(announceResult: true) } }
+        .onSubmit(of: .search) {
+            debounce?.cancel()
+            Task { await load(announceResult: true) }
+        }
         .onChange(of: query) { typed in
             // Searches once typing pauses, not on every keystroke. The list updates without a
             // word: a count spoken after each pause cut off VoiceOver's echo of the letter just
             // typed. The count is said when the search is submitted or the area changes.
-            Task {
+            debounce?.cancel()
+            debounce = Task {
                 try? await Task.sleep(nanoseconds: 400_000_000)
-                guard typed == query else { return }
+                guard !Task.isCancelled, typed == query else { return }
                 await load(announceResult: false)
             }
         }
@@ -936,7 +1038,7 @@ struct GoalTemplatePicker: View {
             }
         } catch {
             guard requestID == current else { return }
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }
@@ -953,12 +1055,31 @@ struct ExpenseSheet: View {
     @State private var busy = false
     @State private var error: String?
     @State private var askingDiscard = false
+    /// One key for this expense, sent on every try (see save).
+    @State private var idemKey = UUID().uuidString
+    /// The server's authorization problem with this expense (expired, not yet started, or the
+    /// track not Active), shown with the switch that logs it anyway, as Log hours does. Offered
+    /// only after the server named it, and withdrawn when the date changes.
+    @State private var authorizationIssue: String?
+    @State private var authorizationAck = false
 
     private var hasChanges: Bool { !descriptionText.isEmpty || !amount.isEmpty }
+
+    /// The end of add_expense's refusal of an expense outside the authorization (3.0.21
+    /// servers): the app answers it with the "Log it anyway" switch instead.
+    private static let authorizationConfirmSuffix = "Log it on the website to confirm."
 
     var body: some View {
         NavigationStack {
             ErrorFocusForm(error: error) {
+                // Just after the error banner (the next thing VoiceOver reaches from it), with the
+                // problem it answers next to it, as the website's expense form offers it.
+                if let authorizationIssue {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(authorizationIssue).font(.callout)
+                        Toggle("Log it anyway (the authorization is being renewed or amended)", isOn: $authorizationAck)
+                    }
+                }
                 // Up to today: the server refuses an expense dated in the future.
                 DatePicker("Date", selection: $date, in: ...Date(), displayedComponents: .date)
                 CaptionedField(label: "Description (required)", text: $descriptionText, prompt: "Description")
@@ -981,7 +1102,16 @@ struct ExpenseSheet: View {
             }
             .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this expense?",
                                  asking: $askingDiscard) { dismiss() }
+            // The authorization problem was for the date it was sent with.
+            .onChange(of: date) { _ in clearAuthorizationIssue() }
         }
+    }
+
+    private func clearAuthorizationIssue() {
+        // The banner telling the person to use the switch goes with it.
+        if let issue = authorizationIssue, error?.hasPrefix(issue) == true { error = nil }
+        authorizationIssue = nil
+        authorizationAck = false
     }
 
     private func save() async {
@@ -998,18 +1128,43 @@ struct ExpenseSheet: View {
             showFormError(amountFormatMessage("Amount"), in: &error)
             return
         }
+        // The server refuses $0.00 with a message about required fields; said here instead.
+        guard value > 0 else {
+            showFormError("Amount: enter more than $0.00.", in: &error)
+            return
+        }
         busy = true; error = nil
         do {
-            // Sent as the checked text, exactly as typed, rather than through a Double.
-            let _: OKResponse = try await api.call("add_expense", body: [
+            // Sent as the checked text, exactly as typed, rather than through a Double. The same
+            // key on every try of this expense, so a server that keeps it (3.0.21 and later)
+            // recognises a retry after a lost reply instead of billing the expense twice.
+            var body: [String: Any] = [
                 "track_id": trackId, "date": APIDate.day(date),
                 "description": descriptionText, "amount": amountText,
-            ])
+                "idem_key": idemKey,
+            ]
+            // Only once the person turned it on, in answer to the server's authorization problem.
+            if authorizationIssue != nil && authorizationAck { body["authorization_ack"] = true }
+            let result: SaveAck = try await api.call("add_expense", body: body)
             // Said by the track screen once this sheet has closed (closing it would cut it off).
-            onDone(String(format: "Expense of $%.2f logged.", value))
+            onDone(result.deduplicated == true
+                   ? "This expense was already logged from an earlier try, so it was not logged twice."
+                   : String(format: "Expense of $%.2f logged.", value))
             dismiss()
+        } catch APIError.network {
+            // The request may have arrived: it isn't known whether the expense was logged.
+            showFormError("The connection dropped before the server answered, so it isn't known whether this expense was logged. Check Billable expenses on the track before logging it again.", in: &self.error)
+            busy = false
+        } catch APIError.server(let message) where message.hasSuffix(Self.authorizationConfirmSuffix) {
+            // Outside the authorization (expired, not yet started, or the track not Active): the
+            // server names the problem, and the expense is logged only once the person says to.
+            let problem = message.dropLast(Self.authorizationConfirmSuffix.count).trimmingCharacters(in: .whitespaces)
+            authorizationIssue = problem
+            authorizationAck = false
+            showFormError(problem + " To log this expense anyway (the authorization is being renewed or amended), turn on “Log it anyway” just below this message, then tap Log again.", in: &self.error)
+            busy = false
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
     }
@@ -1037,7 +1192,10 @@ struct SendReportSheet: View {
                     .font(.callout)
                 CaptionedField(label: "Personal message (optional)", text: $intro, lines: 2...5)
                 Section("Electronic signature") {
-                    TextField("Type your full name (\(api.userName))", text: $signature)
+                    // The exact name the server requires stays visible above the field once
+                    // typing starts (a placeholder alone disappeared).
+                    CaptionedField(label: "Signature: type your full name (\(api.userName))", text: $signature,
+                                   prompt: api.userName)
                         .autocorrectionDisabled()
                     Text("The signature and timestamp are included on the report and recorded on the client's file.")
                         .font(.caption).foregroundStyle(Color.secondaryText)
@@ -1082,8 +1240,13 @@ struct SendReportSheet: View {
             // Said by the track screen once this sheet has closed: heard there, it is not sent twice.
             onDone(result.sentTo.isEmpty ? "Report signed and emailed." : "Report signed and emailed to \(result.sentTo).")
             dismiss()
+        } catch APIError.network {
+            // The request may have arrived and the email gone (the server sends it before it
+            // answers): sending again could email the counselor twice.
+            showFormError("The connection dropped before the server answered, so it isn't known whether the report was sent. Check the client's notes for “Training report emailed to VRC” before sending it again.", in: &self.error)
+            busy = false
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
     }

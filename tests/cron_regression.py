@@ -1,10 +1,13 @@
-"""Exercise backup failure handling and reminder delivery using local test doubles."""
+"""Exercise backup failure handling, reminder delivery, email filing, the off-site
+backup and the watchdog using local test doubles (no database, mail or network)."""
 from pathlib import Path
 import gzip
+import hashlib
 import json
 import os
 import subprocess
 import tempfile
+import time
 
 root = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix='cms-cron-test-') as tmp:
@@ -64,41 +67,62 @@ with tempfile.TemporaryDirectory(prefix='cms-cron-test-') as tmp:
     source = source[:start] + "require __DIR__ . '/mail_fixture.php';\n" + source[end:]
     (path / 'reminders.php').write_text(source)
     (path / 'mail_fixture.php').write_text(r'''<?php
-$marks=0; $calls=0; $admin=[]; $notices=[]; $to=[];
+$marks=0; $calls=0; $admin=[]; $notices=[]; $links=[]; $to=[]; $mails=[];
 class FakeResult {
     function fetchAll() {
+        // One session row as the reminder query returns it.
+        $base=['id'=>1,'client_id'=>5,'user_id'=>2,'active_staff_id'=>2,'staff_sees_client'=>1,'client_name'=>'Synthetic client',
+            'client_email'=>getenv('CLIENT_EMAIL') ?: 'client@example.invalid','client_email_verified'=>1,'client_current'=>1,
+            'staff_email'=>'staff@example.invalid','staff_name'=>'Synthetic staff','assignee_name'=>'Synthetic staff','assignee_email'=>'staff@example.invalid',
+            'start_at'=>'2026-01-01 09:00:00','location'=>null,'is_remote'=>0,'meeting_url'=>null];
         // OWNER_INACTIVE: the session's owner was deactivated, so the active-staff join found nobody.
         // REASSIGNED: the owner is active but limited to their own caseload, and the
         // client now belongs to someone else (ASSIGNEE_EMAIL, or nobody when empty).
         if (getenv('OWNER_INACTIVE'))
-            return [['id'=>1,'user_id'=>2,'active_staff_id'=>null,'staff_sees_client'=>0,'client_name'=>'Synthetic client','client_email'=>'client@example.invalid','staff_email'=>null,'staff_name'=>null,'assignee_name'=>null,'assignee_email'=>null,'start_at'=>'2026-01-01 09:00:00','location'=>null]];
+            return [array_replace($base,['active_staff_id'=>null,'staff_sees_client'=>0,'client_email'=>'client@example.invalid','staff_email'=>null,'staff_name'=>null,'assignee_name'=>null,'assignee_email'=>null])];
         if (getenv('REASSIGNED'))
-            return [['id'=>1,'user_id'=>2,'active_staff_id'=>2,'staff_sees_client'=>0,'client_name'=>'Synthetic client','client_email'=>'client@example.invalid','staff_email'=>'former@example.invalid','staff_name'=>'Former staff','assignee_name'=>'Current staff','assignee_email'=>getenv('ASSIGNEE_EMAIL') ?: null,'start_at'=>'2026-01-01 09:00:00','location'=>'Synthetic home address']];
-        return [['id'=>1,'user_id'=>2,'active_staff_id'=>2,'staff_sees_client'=>1,'client_name'=>'Synthetic client','client_email'=>getenv('CLIENT_EMAIL') ?: 'client@example.invalid','staff_email'=>'staff@example.invalid','staff_name'=>'Synthetic staff','assignee_name'=>'Synthetic staff','assignee_email'=>'staff@example.invalid','start_at'=>'2026-01-01 09:00:00','location'=>null]];
+            return [array_replace($base,['staff_sees_client'=>0,'client_email'=>'client@example.invalid','staff_email'=>'former@example.invalid','staff_name'=>'Former staff','assignee_name'=>'Current staff','assignee_email'=>getenv('ASSIGNEE_EMAIL') ?: null,'location'=>'Synthetic home address'])];
+        switch (getenv('SCENARIO')) {
+            // A client closed or archived since the session was booked.
+            case 'closed': return [array_replace($base,['client_current'=>0])];
+            // Remote sessions: one with an https join link, one whose link has another scheme.
+            case 'remote': return [array_replace($base,['is_remote'=>1,'meeting_url'=>'https://example.invalid/m','client_email'=>'remote1@example.invalid']),
+                array_replace($base,['id'=>2,'client_id'=>6,'is_remote'=>1,'meeting_url'=>'javascript:alert(1)','client_email'=>'remote2@example.invalid'])];
+            // A client email copied from the public referral form and not yet confirmed.
+            case 'unconfirmed': return [array_replace($base,['client_email_verified'=>0])];
+            // A session later today: booked after the last run, or moved to this instructor.
+            case 'today': return [array_replace($base,['start_at'=>date('Y-m-d').' 23:59:00'])];
+        }
+        return [$base];
     }
     function execute($args) { $GLOBALS['marks']++; }
 }
 class FakeDB { function query($sql) { return new FakeResult; } function prepare($sql) { return new FakeResult; } }
 function db() { return new FakeDB; }
 function cfg($key) { return 'https://example.invalid'; }
-function email_template($name,$args) { return ['test','synthetic reminder']; }
+// The built-in wording says "tomorrow"; {day} and the other placeholders are shown so the test can read them.
+function email_template($name,$args) { return ['Reminder: your session tomorrow', "Hello {$args['name']}, see you tomorrow.\nWhen: {$args['when']}{$args['where']}\nDay: {$args['day']}\nJoin: {$args['join_link']}\n"]; }
 function brand($key) { return 'Test'; }
-function send_app_mail($to,$subject,$body) { $GLOBALS['to'][]=$to; $results=json_decode(getenv('MAIL_RESULTS'),true); return $results[$GLOBALS['calls']++]; }
+function send_app_mail($to,$subject,$body) { $GLOBALS['to'][]=$to; $GLOBALS['mails'][]=['to'=>$to,'subject'=>$subject,'body'=>$body]; $results=json_decode(getenv('MAIL_RESULTS'),true); return $results[$GLOBALS['calls']++]; }
 function notify_admins($subject,$body) { $GLOBALS['admin'][]=$subject; $results=json_decode(getenv('MAIL_RESULTS'),true); return $results[$GLOBALS['calls']++]; }
-function notify_admin_users($message,$link=null) { $GLOBALS['notices'][]=$message; }
-register_shutdown_function(function() { echo json_encode(['marks'=>$GLOBALS['marks'],'calls'=>$GLOBALS['calls'],'admin'=>$GLOBALS['admin'],'notices'=>$GLOBALS['notices'],'to'=>$GLOBALS['to']]); });
+function notify_admin_users($message,$link=null) { $GLOBALS['notices'][]=$message; $GLOBALS['links'][]=$link; }
+register_shutdown_function(function() { echo json_encode(['marks'=>$GLOBALS['marks'],'calls'=>$GLOBALS['calls'],'admin'=>$GLOBALS['admin'],'notices'=>$GLOBALS['notices'],'links'=>$GLOBALS['links'],'to'=>$GLOBALS['to'],'mails'=>$GLOBALS['mails']]); });
 ''')
-    def reminders(results, owner_inactive=False, reassigned=False, assignee='', client_email=''):
+    def reminders(results, owner_inactive=False, reassigned=False, assignee='', client_email='', scenario=''):
         env = {**os.environ, 'MAIL_RESULTS': json.dumps(results), 'OWNER_INACTIVE': '1' if owner_inactive else '',
-               'REASSIGNED': '1' if reassigned else '', 'ASSIGNEE_EMAIL': assignee, 'CLIENT_EMAIL': client_email}
+               'REASSIGNED': '1' if reassigned else '', 'ASSIGNEE_EMAIL': assignee, 'CLIENT_EMAIL': client_email, 'SCENARIO': scenario}
         run = subprocess.run(['php', str(path / 'reminders.php')], env=env, capture_output=True, text=True)
+        assert run.stderr == '', run.stderr
         return run.returncode, json.loads(run.stdout[run.stdout.index('{'):])
     for results in ([False, True], [True, False], [False, False], [True, True]):
         code, state = reminders(results)
         assert state['calls'] == 2 and state['marks'] == int(all(results)) and state['admin'] == []
         assert (code == 0) == all(results)
         assert len(state['notices']) == (0 if all(results) else 1)
-    print('PASS: Both reminder recipients are attempted; a failed reminder is left unmarked, reported to administrators and exits non-zero')
+        # The alert names the client, so it links to that client's record, which the
+        # retention purge matches (never the bare Schedule page, which it does not).
+        assert state['links'] == ([] if all(results) else ['client.php?id=5'])
+    print('PASS: Both reminder recipients are attempted; a failed reminder is left unmarked, reported to administrators against the client\'s record and exits non-zero')
     for results in ([True, True], [True, False]):
         code, state = reminders(results, owner_inactive=True)
         assert state['calls'] == 2 and len(state['admin']) == 1 and 'deactivated' in state['admin'][0]
@@ -112,8 +136,29 @@ register_shutdown_function(function() { echo json_encode(['marks'=>$GLOBALS['mar
     print('PASS: After a reassignment the former caseload-limited instructor is not emailed; the current case worker (or the administrators) is')
     code, state = reminders([True], client_email='not an address')
     assert state['to'] == ['staff@example.invalid'] and state['marks'] == 0 and code != 0
-    assert len(state['notices']) == 1 and 'not valid' in state['notices'][0]
+    assert len(state['notices']) == 1 and 'not valid' in state['notices'][0] and state['links'] == ['client.php?id=5']
     print('PASS: An invalid client address is skipped, the instructor is still reminded, and the session is left unmarked and reported')
+    code, state = reminders([True], scenario='closed')
+    assert code == 0 and state['marks'] == 1 and state['to'] == ['staff@example.invalid']
+    assert 'closed or archived' in state['mails'][0]['body'] and state['notices'] == []
+    print('PASS: A client closed or archived since the booking is not emailed; the instructor is still reminded and told why')
+    code, state = reminders([True] * 4, scenario='remote')
+    sent_to = {m['to']: m['body'] for m in state['mails']}
+    assert code == 0 and state['marks'] == 2 and set(sent_to) == {'remote1@example.invalid', 'remote2@example.invalid', 'staff@example.invalid'}
+    assert 'Join link: https://example.invalid/m' in sent_to['remote1@example.invalid'] and 'Join: https://example.invalid/m' in sent_to['remote1@example.invalid']
+    assert 'Where: online' in sent_to['remote2@example.invalid'] and not any('javascript:' in m['body'] for m in state['mails'])
+    print('PASS: A remote session reminder carries its https join link; a link with any other scheme is never sent')
+    code, state = reminders([True], scenario='unconfirmed')
+    assert code == 0 and state['marks'] == 1 and state['to'] == ['staff@example.invalid']
+    assert 'has not been confirmed' in state['mails'][0]['body']
+    assert len(state['notices']) == 1 and 'not confirmed' in state['notices'][0] and state['links'] == ['client.php?id=5']
+    print('PASS: A client email from the public referral form that staff have not confirmed is not emailed; the instructor and the administrators are told')
+    code, state = reminders([True, True], scenario='today')
+    client_mail, staff_mail = state['mails']
+    assert code == 0 and state['marks'] == 1 and client_mail['to'] == 'client@example.invalid'
+    assert 'today' in client_mail['subject'] and 'tomorrow' not in (client_mail['subject'] + client_mail['body']).lower() and 'Day: today' in client_mail['body']
+    assert staff_mail['subject'].startswith('Today: ')
+    print("PASS: A session later today (booked after the last run) is reminded as today's, never called tomorrow's")
 
     source = (root / 'cron/ingest_email.php').read_text()
     start = source.index('foreach ([')
@@ -175,9 +220,10 @@ function graph_api($method,$url,$body=null,$headers=[]) {
             'shared_counselor' => ['subject'=>'Re: progress','from'=>'counselor@example.invalid','headers'=>$passed,'body'=>['contentType'=>'text','content'=>'Synthetic Client is doing well.']],
             'unconfirmed_counselor' => ['subject'=>'Referred Person progress','from'=>'unconfirmed@example.invalid','headers'=>$passed,'body'=>['contentType'=>'text','content'=>'Referred Person is doing well.']],
             'long' => ['subject'=>'Synthetic Client long thread','from'=>'staff@example.invalid','headers'=>$internal,'body'=>['contentType'=>'text','content'=>str_repeat("\u{2019}ab",30000)]],
+            'attachment' => ['subject'=>'Synthetic Client authorization','from'=>'staff@example.invalid','headers'=>$internal,'body'=>['contentType'=>'text','content'=>'Please see the attached letter.'],'attachments'=>true],
         };
         return [200,['value'=>[['id'=>'stable-message','subject'=>$message['subject'],'receivedDateTime'=>'2026-10-09T23:40:00Z','from'=>['emailAddress'=>['address'=>$message['from'],'name'=>'Synthetic sender']],
-            'internetMessageHeaders'=>$message['headers'],'body'=>$message['body']]]]];
+            'internetMessageHeaders'=>$message['headers'],'body'=>$message['body'],'hasAttachments'=>$message['attachments'] ?? false]]]];
     }
     return [200,['value'=>[['id'=>'folder','displayName'=>'Filed to CMS']]]];
 }
@@ -237,3 +283,120 @@ register_shutdown_function(function() { echo "\nEVENTS:" . json_encode($GLOBALS[
     result, events = ingest('unconfirmed_counselor', MOVE_CODE='200')
     assert events == [['move', 'review-folder'], ['notify', 'admins']] and result.returncode == 0
     print('PASS: Mail from a counselor address staff have not confirmed is never filed; it goes to review')
+    result, events = ingest('attachment', MOVE_CODE='200')
+    assert [e[0] for e in events] == ['insert', 'move'] and 'had attachments' in events[0][3] and events[0][3].endswith('"Filed to CMS" mailbox folder.]')
+    result, events = ingest('staff', MOVE_CODE='200')
+    assert 'attachments' not in events[0][3]
+    print('PASS: A filed email that had attachments says so in its note, and where they are; one without says nothing')
+
+    # Weekly off-site backup: settings from the environment, mail recorded (never sent).
+    # Each attachment is opened here as the backup contact would: it must be an
+    # AES-256 ZIP that cannot be read without the password.
+    source = (root / 'cron/weekly_offsite.php').read_text()
+    start = source.index('foreach ([')
+    end = source.index('$dir = dirname(', start)
+    (path / 'offsite.php').write_text(source[:start] + "require __DIR__ . '/offsite_fixture.php';\n" + source[end:])
+    (path / 'offsite_fixture.php').write_text(r'''<?php
+$sent=[];
+function cfg($key) { return ['upload_dir'=>getenv('OFFSITE_UPLOADS'),'backup_email'=>'backup@example.invalid','backup_password'=>getenv('OFFSITE_PASSWORD') ?: null][$key] ?? null; }
+function send_app_mail($to,$subject,$body) { $GLOBALS['sent'][]=['to'=>$to,'subject'=>$subject,'attachments'=>[]]; return getenv('NOTICE_FAILS') !== '1'; }
+function send_app_mail_attach($to,$subject,$body,$attachments) {
+    static $call=0;
+    $record=['to'=>$to,'subject'=>$subject,'attachments'=>[]];
+    foreach ($attachments as $a) {
+        $file=tempnam(sys_get_temp_dir(),'cms-offsite-check-'); file_put_contents($file,$a['bytes']);
+        $zip=new ZipArchive(); $info=['name'=>$a['name'],'entries'=>[]];
+        if ($zip->open($file)===true) {
+            for ($i=0;$i<$zip->numFiles;$i++) { $st=$zip->statIndex($i); $info['entries'][]=['name'=>$st['name'],'aes256'=>($st['encryption_method'] ?? 0)===ZipArchive::EM_AES_256]; }
+            $info['readable_without_password']=@$zip->getFromIndex(0)!==false;
+            $zip->setPassword((string)getenv('OFFSITE_PASSWORD'));
+            $info['dump_sha1']=sha1((string)$zip->getFromIndex(0));
+            $zip->close();
+        }
+        unlink($file); $record['attachments'][]=$info;
+    }
+    $GLOBALS['sent'][]=$record;
+    $results=json_decode(getenv('ATTACH_RESULTS') ?: '[true]',true);
+    return $results[$call++] ?? true;
+}
+function notify_admins($subject,$body) { $GLOBALS['sent'][]=['to'=>'administrators','subject'=>$subject,'attachments'=>[]]; return true; }
+function graph_cfg() { return null; }
+register_shutdown_function(function() { echo "\nSENT:" . json_encode($GLOBALS['sent']); });
+''')
+    private = path / 'offsite_private'
+    (private / 'uploads').mkdir(parents=True)
+    (private / 'backups').mkdir()
+    (private / 'uploads' / 'synthetic-document.txt').write_text('Synthetic uploaded document')
+    dump = private / 'backups' / 'cms_20260101_021500.sql.gz'
+    dump.write_bytes(gzip.compress(b'synthetic SQL dump'))
+    def offsite(password, **extra):
+        env = {**os.environ, 'OFFSITE_UPLOADS': str(private / 'uploads'), 'OFFSITE_PASSWORD': password, 'NOTICE_FAILS': '', 'ATTACH_RESULTS': '', **extra}
+        run = subprocess.run(['php', str(path / 'offsite.php')], env=env, capture_output=True, text=True)
+        output, sent = run.stdout.split('SENT:')
+        return run.returncode, output, json.loads(sent)
+    code, output, sent = offsite('')
+    assert code == 1 and 'Notice sent.' in output and len(sent) == 1 and sent[0]['attachments'] == [] and 'NOT sent' in sent[0]['subject']
+    code, output, sent = offsite('', NOTICE_FAILS='1')
+    assert code == 1 and 'Notice sent' not in output and 'could NOT be emailed' in output
+    print('PASS: Without a backup password only a notice is sent, never the dump, and the run says whether the notice itself went out')
+    code, output, sent = offsite('synthetic-backup-pass')
+    attached = [a for m in sent for a in m['attachments']]
+    assert code == 0 and len(attached) == 1 and attached[0]['name'].endswith('_with_uploads.zip')
+    assert attached[0]['entries'] and all(e['aes256'] for e in attached[0]['entries']) and not attached[0]['readable_without_password']
+    assert attached[0]['dump_sha1'] == hashlib.sha1(dump.read_bytes()).hexdigest()
+    assert {e['name'] for e in attached[0]['entries']} == {dump.name, 'uploads/synthetic-document.txt'}
+    assert sorted(p.name for p in (private / 'backups').iterdir()) == [dump.name]
+    print('PASS: The off-site backup is one AES-256 ZIP of the database and the uploads, unreadable without the password, and leaves no temporary archive')
+    code, output, sent = offsite('synthetic-backup-pass', ATTACH_RESULTS='[false, true]')
+    attached = [a for m in sent for a in m['attachments']]
+    assert code == 0 and [a['name'] for a in attached] == ['cms_20260101_021500_with_uploads.zip', dump.name + '.zip']
+    assert [e['name'] for e in attached[1]['entries']] == [dump.name] and all(e['aes256'] for e in attached[1]['entries'])
+    assert any(m['to'] == 'administrators' and 'not included' in m['subject'] for m in sent)
+    print('PASS: When the archive with the uploads cannot be sent, the encrypted database goes on its own and the administrators are warned')
+    # The newest "dump" cannot be read into an archive, so encryption fails both
+    # times: only the notice goes out, never a plaintext attachment.
+    unreadable = private / 'backups' / 'cms_20991231_021500.sql.gz'
+    unreadable.mkdir()
+    code, output, sent = offsite('synthetic-backup-pass')
+    unreadable.rmdir()
+    assert code == 1 and 'encryption failed' in output and 'Notice sent.' in output
+    assert all(m['attachments'] == [] for m in sent) and any('could not be encrypted' in m['subject'] for m in sent)
+    assert sorted(p.name for p in (private / 'backups').iterdir()) == [dump.name]
+    print('PASS: When the archive cannot be encrypted nothing is attached; only the notice is sent and the run fails')
+
+    # Watchdog: the site check fails here (a file:// address, so nothing leaves the
+    # machine); the checks below follow the backup alert.
+    source = (root / 'cron/watchdog.php').read_text()
+    start = source.index('foreach ([')
+    end = source.index('$privateDir =', start)
+    (path / 'watchdog.php').write_text(source[:start] + "require __DIR__ . '/watchdog_fixture.php';\n" + source[end:])
+    (path / 'watchdog_fixture.php').write_text(r'''<?php
+$sent=[];
+function cfg($key) { return ['upload_dir'=>getenv('WATCH_UPLOADS'),'base_url'=>'file:///nonexistent-cms-watchdog','backup_email'=>'backup@example.invalid'][$key] ?? null; }
+class FakeWatchDB { function query($sql) { if (getenv('DB_DOWN')) throw new RuntimeException('Database connection failed (2002)'); return true; } }
+function db() { return new FakeWatchDB; }
+function send_app_mail($to,$subject,$body) { $GLOBALS['sent'][]=$subject; return true; }
+register_shutdown_function(function() { echo "\nSENT:" . json_encode($GLOBALS['sent']); });
+''')
+    watch = path / 'watch_private'
+    (watch / 'uploads').mkdir(parents=True)
+    (watch / 'backups').mkdir()
+    old_dump = watch / 'backups' / 'cms_20260101_021500.sql.gz'
+    old_dump.write_bytes(gzip.compress(b'synthetic SQL dump'))
+    stale = time.time() - 72 * 3600
+    os.utime(old_dump, (stale, stale))
+    def watchdog(**extra):
+        env = {**os.environ, 'WATCH_UPLOADS': str(watch / 'uploads'), 'DB_DOWN': '', **extra}
+        run = subprocess.run(['php', str(path / 'watchdog.php')], env=env, capture_output=True, text=True)
+        output, sent = run.stdout.split('SENT:')
+        return output, json.loads(sent), json.loads((watch / 'watchdog_state.json').read_text())
+    output, sent, state = watchdog()
+    assert 'CMS health alert: backup' in sent and 'backup' in state
+    output, sent, state = watchdog()
+    assert 'CMS health alert: backup' not in sent and 'backup' in state
+    os.utime(old_dump, None)
+    output, sent, state = watchdog()
+    assert 'backup' not in state and 'No database backup' not in output
+    output, sent, state = watchdog(DB_DOWN='1')
+    assert 'CMS health alert: db' in sent
+    print('PASS: The watchdog alerts once about a stale backup (not again within six hours), clears it when a fresh one appears, and reports an unreachable database')

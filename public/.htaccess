@@ -49,6 +49,10 @@ AddType application/manifest+json .webmanifest
   Header always set X-Frame-Options "DENY"
   Header always set X-Content-Type-Options "nosniff"
   Header always set Referrer-Policy "same-origin"
+  # No PHP version banner (expose_php) on any response, including the pages
+  # that do not load inc/bootstrap.php (api.php, calfeed.php).
+  Header always unset X-Powered-By
+  Header unset X-Powered-By
   # Scripts and styles change with each release and must match the pages
   # that use them, so the browser revalidates them every time (a quick 304
   # when unchanged) instead of reusing an old copy after an update.

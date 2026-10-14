@@ -21,14 +21,28 @@ register_translations([
     'Enter the minutes as a whole number from 0 to 600, or leave it blank.' => 'Escriba los minutos como un número entero de 0 a 600, o déjelo en blanco.',
     'Upload a document for your instructor — a form, an ID, or anything they asked for. PDF, Office, text or image files up to 15 megabytes (MB).' => 'Suba un documento para su instructor — un formulario, una identificación o cualquier cosa que le hayan pedido. Archivos PDF, de Office, de texto o de imagen de hasta 15 megabytes (MB).',
     'No guides match. Clear the search to see all guides.' => 'Ninguna guía coincide. Borre la búsqueda para ver todas las guías.',
-    'Up to 2,000 characters.' => 'Hasta 2.000 caracteres.',
-    'Up to 5,000 characters.' => 'Hasta 5.000 caracteres.',
-    'Up to 16,000 characters.' => 'Hasta 16.000 caracteres.',
+    // Comma grouping, as in the matching field errors and the rest of the US Spanish copy.
+    'Up to 2,000 characters.' => 'Hasta 2,000 caracteres.',
+    'Up to 5,000 characters.' => 'Hasta 5,000 caracteres.',
+    'Up to 16,000 characters.' => 'Hasta 16,000 caracteres.',
     'Email on file:' => 'Correo electrónico registrado:',
     'No email on file.' => 'No hay correo electrónico registrado.',
     'Ask your instructor to change it.' => 'Pida a su instructor que lo cambie.',
     'Your instructor updated your information while this page was open, so nothing was saved. The form now shows the latest details, with the changes you typed kept. Check it, then choose Save my information again.' => 'Su instructor actualizó su información mientras esta página estaba abierta, así que no se guardó nada. El formulario ahora muestra los datos más recientes, con los cambios que usted escribió. Revíselo y elija Guardar mi información otra vez.',
     'You have reached today\'s limit for this. Please try again tomorrow, or contact your instructor.' => 'Llegó al límite de hoy para esto. Inténtelo de nuevo mañana o comuníquese con su instructor.',
+    'Your training has ended. You can still read this page, but it can no longer send messages, requests, updates or files. To start training again, contact your instructor.' => 'Su capacitación terminó. Todavía puede leer esta página, pero ya no puede enviar mensajes, solicitudes, cambios ni archivos. Para empezar de nuevo, comuníquese con su instructor.',
+    'Your instructor already knows about this homework, or it is no longer assigned to you.' => 'Su instructor ya sabe de esta tarea, o ya no está asignada a usted.',
+    'Your message was already sent, so it was not sent again.' => 'Su mensaje ya se había enviado, así que no se envió otra vez.',
+    'Your request was already sent, so it was not sent again. Your instructor will follow up.' => 'Su solicitud ya se había enviado, así que no se envió otra vez. Su instructor le dará seguimiento.',
+    'That document was already uploaded, so it was not uploaded again.' => 'Ese documento ya se había subido, así que no se subió otra vez.',
+    'Your practice was already logged, so it was not logged again.' => 'Su práctica ya estaba registrada, así que no se registró otra vez.',
+    'That file is no longer available. Your instructor may have removed it.' => 'Ese archivo ya no está disponible. Es posible que su instructor lo haya quitado.',
+    'The explanation is not available right now. Ask your instructor.' => 'La explicación no está disponible en este momento. Pregunte a su instructor.',
+    'Your explanation is ready below.' => 'Su explicación está lista abajo.',
+    'Your explanation is ready below. It was cut off, so ask your instructor before using it.' => 'Su explicación está lista abajo. Quedó incompleta, así que pregunte a su instructor antes de usarla.',
+    'AI explanation — check with your instructor' => 'Explicación de IA — consulte con su instructor',
+    'This explanation was cut off. Ask your instructor before using it.' => 'Esta explicación quedó incompleta. Pregunte a su instructor antes de usarla.',
+    'Your question:' => 'Su pregunta:',
 ]);
 
 /** The contact details and access needs the portal form edits, as on file, in the
@@ -64,6 +78,14 @@ function portal_upload_max_mb(): int {
     }
     return min($mb);
 }
+/** A session's day and time in Spanish, for the Spanish confirm dialogs: a native
+ *  dialog cannot mark an English date lang="en", so the voice would misread it. */
+function portal_when_es(int $ts): string {
+    $days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+    $months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    return $days[(int)date('w', $ts)] . ', ' . (int)date('j', $ts) . ' de ' . $months[(int)date('n', $ts) - 1]
+        . ' a las ' . date('g:i', $ts) . (date('A', $ts) === 'AM' ? ' a. m. ' : ' p. m. ') . date('T', $ts);
+}
 /** Tell the client's instructor about portal activity, or every administrator when
  *  nobody is assigned or the assigned account has been deactivated: an alert to a
  *  deactivated account is never seen. $client carries active_owner from the lookup. */
@@ -87,9 +109,15 @@ if (strlen($token) === 48) {
     $client = $stmt->fetch();
     if ($client) db()->prepare('UPDATE portal_tokens SET last_used_at = NOW() WHERE token = ?')->execute([$token]);
 }
+// A closed case keeps its portal readable (history, messages, resources) but sends
+// nothing more: no messages, requests, updates, files or AI explanations.
+$caseClosed = $client && str_starts_with((string)$client['status'], 'Closed');
+$closedMsg = 'Your training has ended. You can still read this page, but it can no longer send messages, requests, updates or files. To start training again, contact your instructor.';
+$hwError = null;
 
 // Client interactions (homework self-report, message to the team). Token-scoped;
-// each action is verified against this client's own records.
+// each action is verified against this client's own records. Every form and every
+// redirect carries the page language (lang=), so a lapsed session keeps it.
 if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
     // A body over post_max_size reaches PHP with $_POST and $_FILES emptied, the
     // CSRF token included: say the file was too big, beside the file field, instead
@@ -97,24 +125,48 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $postMax = portal_ini_bytes((string)ini_get('post_max_size'));
     if (!$_POST && !$_FILES && $postMax > 0 && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $postMax) {
         keep_field_errors(['document' => 'That file is too large (' . portal_upload_max_mb() . ' MB maximum).']);
-        redirect('portal.php?t=' . $token);
+        redirect('portal.php?t=' . $token . '&lang=' . page_lang());
     }
     // A stale form token (the session lapsed while the page sat open) brings the
     // client back to this page with what was typed refilled: csrf_check() handles
     // the public pages that way and never sends them to the staff sign-in page.
     csrf_check();
+    if ($caseClosed) {
+        flash_ui($closedMsg, 'error');
+        redirect('portal.php?t=' . $token . '&lang=' . page_lang());
+    }
     if ((isset($_POST['hw_practice']) || isset($_POST['hw_explain'])) && workflows_ready()) {
+        $hwId = (int)($_POST['homework_id'] ?? 0);
         try {
             foreach ($_POST as $value) if (!is_scalar($value)) throw new DomainException('Invalid homework request.');
             if (isset($_POST['hw_practice'])) {
                 workflow_practice($_POST,$client);
                 flash_ui('Your practice update was recorded for your instructor.');
-                redirect('portal.php?t='.$token);
+                redirect('portal.php?t='.$token.'&lang='.page_lang());
             }
-            $homeworkExplanation=workflow_homework_explain((int)($_POST['homework_id']??0),$client,(string)($_POST['homework_question']??''),page_lang());
-            if (!$homeworkExplanation['ok']) throw new DomainException($homeworkExplanation['error']);
-        } catch (DomainException $e) { flash_ui($e->getMessage(),'error'); }
-        catch (Throwable $e) { error_log('Homework support failed: '.get_class($e));flash_ui('Could not complete the request. Please try again.','error'); }
+            $question = (string)($_POST['homework_question'] ?? '');
+            $res = workflow_homework_explain($hwId, $client, $question, page_lang());
+            // The AI service's own error (a rejected key, a used-up quota) is for staff:
+            // the client is told plainly that the explanation is not available.
+            if (!$res['ok']) throw new DomainException('The explanation is not available right now. Ask your instructor.');
+            // Post/redirect/get: a refresh or Back never sends the question again (each
+            // one is a paid request and uses one of the day's ten). The answer is shown
+            // once, inside the homework it answers, and the message says it is there.
+            $_SESSION['hw_explanation'] = ['token' => $token, 'homework_id' => $hwId, 'question' => trim($question),
+                'text' => (string)$res['text'], 'truncated' => !empty($res['truncated'])];
+            flash_ui(!empty($res['truncated']) ? 'Your explanation is ready below. It was cut off, so ask your instructor before using it.' : 'Your explanation is ready below.');
+            redirect('portal.php?t=' . $token . '&lang=' . page_lang() . '#hw-' . $hwId);
+        } catch (DomainException $e) { $hwError = $e->getMessage(); }
+        catch (Throwable $e) { error_log('Homework support failed: '.get_class($e)); $hwError = 'Could not complete the request. Please try again.'; }
+        if ($hwError !== null) {
+            // Said inside the homework it is about, beside its form (filled in again),
+            // unless that homework is no longer listed: then at the top of the page.
+            $hq = db()->prepare("SELECT 1 FROM homework h JOIN training_tracks t ON t.id = h.track_id WHERE h.id = ? AND t.client_id = ? AND h.status = 'Assigned'");
+            $hq->execute([$hwId, (int)$client['id']]);
+            if (!$hq->fetchColumn()) { flash_ui($hwError, 'error'); redirect('portal.php?t=' . $token . '&lang=' . page_lang()); }
+            $hwError = ['id' => $hwId, 'msg' => $hwError, 'field' => (isset($_POST['hw_practice']) ? 'hw-min-' : 'hw-question-') . $hwId];
+            set_form_errors(['hw_error' => $hwError['msg']]);
+        }
     }
 
     /* A 24-hour ceiling per client on each kind of write, beside the short windows
@@ -151,7 +203,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 flash_ui('Your instructor already has your practice update for this item.');
             }
         }
-        redirect('portal.php?t=' . $token);
+        redirect('portal.php?t=' . $token . '&lang=' . page_lang());
     }
     if (isset($_POST['hw_done'])) {
         $hid = (int)($_POST['homework_id'] ?? 0);
@@ -168,8 +220,11 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             portal_notify_owner($client, $fn . ' marked homework done: ' . $hw['title'], 'client.php?id=' . (int)$client['id'],
                 $client['name'] . ' marked homework done: ' . $hw['title']);
             flash_ui('Thanks — we let your instructor know.');
+        } else {
+            // Already reported, or staff completed or removed it meanwhile: said, never silent.
+            flash_ui('Your instructor already knows about this homework, or it is no longer assigned to you.', 'info');
         }
-        redirect('portal.php?t=' . $token);
+        redirect('portal.php?t=' . $token . '&lang=' . page_lang());
     }
     if (isset($_POST['send_message'])) {
         // Line breaks counted as the browser counts them (one character each).
@@ -177,12 +232,18 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         // One message per minute per client (server-side, survives cookie clears).
         $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 SECOND)");
         $rl->execute(['portal-msg-' . (int)$client['id']]);
+        // The same message again within the minute (a double press of Send) was already
+        // sent: it is not sent twice, refilled, or reported as an error.
+        $dupMsg = db()->prepare("SELECT 1 FROM messages WHERE client_id = ? AND channel = 'client' AND sender = 'client' AND body = ? AND created_at > DATE_SUB(NOW(), INTERVAL 60 SECOND) LIMIT 1");
+        $dupMsg->execute([(int)$client['id'], $msg]);
         if ($msg === '') {
             keep_field_errors(['message' => 'Please type a message first.']);
         } elseif (mb_strlen($msg) > 5000) {
             // Refused, never cut: the whole message comes back to shorten or split.
             keep_input();
             keep_field_errors(['message' => 'Your message is too long (5,000 characters maximum). Shorten it, or send it in two parts.']);
+        } elseif ($dupMsg->fetchColumn()) {
+            flash_ui('Your message was already sent, so it was not sent again.', 'info');
         } elseif ((int)$rl->fetchColumn() > 0) {
             keep_input(); // the message is refilled, not lost
             flash_ui('Please wait a moment before sending another message.', 'error');
@@ -195,7 +256,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             portal_notify_owner($client, 'Message from ' . $client['name'] . ' (portal)', 'messages.php?client=' . (int)$client['id'] . '&channel=client');
             flash_ui('Message sent — your instructor will get back to you.');
         }
-        redirect('portal.php?t=' . $token);
+        redirect('portal.php?t=' . $token . '&lang=' . page_lang());
     }
     if (isset($_POST['new_request'])) {
         $type = in_array($_POST['req_type'] ?? '', ['appointment', 'reschedule', 'cancel', 'device', 'other'], true) ? $_POST['req_type'] : 'other';
@@ -205,12 +266,25 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 5 MINUTE)");
         $rl->execute(['portal-req-' . (int)$client['id']]);
         $detailsField = $type === 'appointment' ? 'appt_details' : 'req_details';
+        // A referenced session must be this client's own.
+        if ($sessionId) {
+            $sc = db()->prepare('SELECT id FROM scheduled_sessions WHERE id = ? AND client_id = ?');
+            $sc->execute([$sessionId, (int)$client['id']]);
+            if (!$sc->fetchColumn()) $sessionId = null;
+        }
+        // The same request again (Send pressed twice) is not added twice: it would make a
+        // second task and alert for staff.
+        $dupReq = db()->prepare("SELECT 1 FROM portal_requests WHERE client_id = ? AND type = ? AND session_id <=> ? AND details <=> ? AND status = 'New'
+            AND created_at > DATE_SUB(NOW(), INTERVAL 10 MINUTE) LIMIT 1");
+        $dupReq->execute([(int)$client['id'], $type, $sessionId, $details !== '' ? $details : null]);
         if ($details === '' && !in_array($type, ['cancel', 'reschedule'], true)) {
             keep_input();
             keep_field_errors([$detailsField => 'Please add a little detail.']);
         } elseif (mb_strlen($details) > 2000) {
             keep_input(); // refused, never cut
             keep_field_errors([$detailsField => 'That is too long (2,000 characters maximum).']);
+        } elseif ($dupReq->fetchColumn()) {
+            flash_ui('Your request was already sent, so it was not sent again. Your instructor will follow up.', 'info');
         } elseif ((int)$rl->fetchColumn() >= 5) {
             keep_input(); // what was typed is refilled, not lost
             flash_ui('Please wait a moment before sending more requests.', 'error');
@@ -218,12 +292,6 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             keep_input();
             flash_ui($capMsg, 'error');
         } else {
-            // A referenced session must be this client's own.
-            if ($sessionId) {
-                $sc = db()->prepare('SELECT id FROM scheduled_sessions WHERE id = ? AND client_id = ?');
-                $sc->execute([$sessionId, (int)$client['id']]);
-                if (!$sc->fetchColumn()) $sessionId = null;
-            }
             db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-req-' . (int)$client['id']]);
             db()->prepare('INSERT INTO portal_requests (client_id, type, session_id, details) VALUES (?,?,?,?)')
                 ->execute([(int)$client['id'], $type, $sessionId, $details !== '' ? $details : null]);
@@ -238,7 +306,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             portal_notify_owner($client, $client['name'] . ' sent a ' . $label, 'portal_requests.php?client=' . (int)$client['id']);
             flash_ui('Request sent — your instructor will follow up.');
         }
-        redirect('portal.php?t=' . $token);
+        redirect('portal.php?t=' . $token . '&lang=' . page_lang());
     }
     if (isset($_POST['upload_doc'])) {
         // Anyone holding the link can upload, so legacy .doc/.xls (which can carry
@@ -282,12 +350,27 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($u['today']) $dayBytes += $b;
             }
             $size = (int)$_FILES['document']['size'];
+            // The kept file name fits its column (190) and keeps its extension.
+            $safeName = preg_replace('/[^A-Za-z0-9._ -]/', '_', $orig);
+            if (strlen($safeName) > 190) $safeName = substr($safeName, 0, 189 - strlen($ext)) . '.' . $ext;
+            // The same file again within a few minutes (Upload pressed twice) is not
+            // stored twice: same name and size as one this client just shared.
+            $dupDoc = db()->prepare("SELECT path FROM client_documents WHERE client_id = ? AND category = 'Client Upload' AND orig_name = ? AND created_at > DATE_SUB(NOW(), INTERVAL 10 MINUTE)");
+            $dupDoc->execute([(int)$client['id'], $safeName]);
+            $isDupDoc = false;
+            foreach ($dupDoc->fetchAll(PDO::FETCH_COLUMN) as $dp) {
+                $df = cfg('upload_dir') . '/' . basename((string)$dp);
+                if (is_file($df) && (int)filesize($df) === $size) { $isDupDoc = true; break; }
+            }
             if ($ext === 'doc' || $ext === 'xls') {
                 keep_field_errors(['document' => 'Older Word (.doc) and Excel (.xls) files cannot be accepted. Save the file as .docx, .xlsx or PDF, then upload it again.']);
             } elseif (!in_array($ext, $allowed, true)) {
                 keep_field_errors(['document' => 'That file type is not allowed. Use PDF, Office, text or image files.']);
             } elseif ($size > 15 * 1024 * 1024) {
                 keep_field_errors(['document' => 'That file is too large (15 MB maximum).']);
+            } elseif ($isDupDoc) {
+                unset($_SESSION['old_input']); // already saved: nothing to refill
+                flash_ui('That document was already uploaded, so it was not uploaded again.', 'info');
             } elseif ($dayBytes + $size > 100 * 1024 * 1024) {
                 flash_ui('You have shared a lot of documents today. Please try again tomorrow, or contact your instructor.', 'error');
             } elseif ($allBytes + $size > 500 * 1024 * 1024) {
@@ -297,9 +380,6 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stored = bin2hex(random_bytes(16)) . '.' . $ext;
                 if (move_uploaded_file($_FILES['document']['tmp_name'], $dir . '/' . $stored)) {
                     db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-up-' . (int)$client['id']]);
-                    // The kept file name fits its column (190) and keeps its extension.
-                    $safeName = preg_replace('/[^A-Za-z0-9._ -]/', '_', $orig);
-                    if (strlen($safeName) > 190) $safeName = substr($safeName, 0, 189 - strlen($ext)) . '.' . $ext;
                     try {
                         db()->prepare('INSERT INTO client_documents (client_id, category, title, orig_name, path, uploaded_by) VALUES (?,?,?,?,?,NULL)')
                             ->execute([(int)$client['id'], 'Client Upload', $docTitle !== '' ? $docTitle : mb_substr(mb_scrub($orig, 'UTF-8'), 0, 190),
@@ -321,7 +401,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
                         @unlink($dir . '/' . $stored);
                         error_log('Portal upload not recorded: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
                         flash_ui('The file could not be saved. Please try again.', 'error');
-                        redirect('portal.php?t=' . $token);
+                        redirect('portal.php?t=' . $token . '&lang=' . page_lang());
                     }
                     portal_notify_owner($client, $client['name'] . ' uploaded a document (portal)', 'client.php?id=' . (int)$client['id'] . '&tab=documents');
                     unset($_SESSION['old_input']); // saved: nothing to refill
@@ -331,7 +411,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
         }
-        redirect('portal.php?t=' . $token);
+        redirect('portal.php?t=' . $token . '&lang=' . page_lang());
     }
     if (isset($_POST['update_profile'])) {
         $in = fn(string $k): string => is_string($_POST[$k] ?? null) ? trim($_POST[$k]) : '';
@@ -358,9 +438,15 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         // The form carries a fingerprint of each value it showed. When staff changed
         // any of them after the page was drawn, nothing is saved: the stale page would
         // otherwise write its old values back over the correction, as the client's change.
-        $shown = is_array($_POST['p_shown'] ?? null) ? $_POST['p_shown'] : [];
+        // The fingerprints come as one field (p_shown_json), which a refilled form keeps
+        // with the values it refills; a page drawn before 3.0.21 sends p_shown[...].
+        $shownJson = is_string($_POST['p_shown_json'] ?? null) ? json_decode($_POST['p_shown_json'], true) : null;
+        $shown = is_array($shownJson) ? $shownJson : (is_array($_POST['p_shown'] ?? null) ? $_POST['p_shown'] : []);
         $fp = fn(string $v): string => hash('sha256', $v);
         $staleFields = array_filter(array_keys($old), fn($k) => !is_string($shown[$k] ?? null) || !hash_equals($fp($old[$k]), $shown[$k]));
+        // Changed since the page was drawn, but to exactly what this save sends (the same
+        // save sent twice, or the same correction made by staff): nothing conflicts.
+        if ($staleFields && !array_filter($staleFields, fn($k) => $new[$k] !== $old[$k])) $staleFields = [];
         if ($staleFields) {
             // Only what the client typed differently from what they were shown is
             // refilled; every other field comes back with the details now on file.
@@ -371,7 +457,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['old_input']['update_profile'] = '1';
             $_SESSION['old_input']['p_kept'] = ',' . implode(',', $keep) . ',';
             flash_ui('Your instructor updated your information while this page was open, so nothing was saved. The form now shows the latest details, with the changes you typed kept. Check it, then choose Save my information again.', 'error');
-            redirect('portal.php?t=' . $token . '#info-h');
+            redirect('portal.php?t=' . $token . '&lang=' . page_lang() . '#info-h');
         }
         $changed = array_keys(array_filter($new, fn($v, $k) => $v !== $old[$k], ARRAY_FILTER_USE_BOTH));
         // Only what the client changed is checked: a value already on file (staff may
@@ -435,7 +521,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             portal_notify_owner($client, $what, 'client.php?id=' . (int)$client['id'] . '&tab=notes');
             flash_ui('Your information was updated. Thank you.');
         }
-        redirect('portal.php?t=' . $token);
+        redirect('portal.php?t=' . $token . '&lang=' . page_lang());
     }
     if (isset($_POST['log_practice'])) {
         $what = str_replace("\r\n", "\n", trim(is_string($_POST['practice'] ?? null) ? $_POST['practice'] : ''));
@@ -447,6 +533,12 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $mins = $minsOk && $minsIn !== '' ? (int)$minsIn : 0;
         $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 MINUTE)");
         $rl->execute(['portal-prac-' . (int)$client['id']]);
+        $body = $what . ($mins ? "\n\n(" . $mins . ' minutes)' : '');
+        // The same practice again within a few minutes (Log practice pressed twice) is
+        // not logged twice.
+        $dupPrac = db()->prepare("SELECT 1 FROM client_notes WHERE client_id = ? AND author_id IS NULL AND subject = 'Practice logged by client (portal)' AND body = ?
+            AND created_at > DATE_SUB(NOW(), INTERVAL 10 MINUTE) LIMIT 1");
+        $dupPrac->execute([(int)$client['id'], $body]);
         $pracErrors = [];
         if ($what === '') $pracErrors['practice'] = 'Tell us what you practiced.';
         elseif (mb_strlen($what) > 2000) $pracErrors['practice'] = 'That is too long (2,000 characters maximum).'; // refused, never cut
@@ -454,6 +546,8 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($pracErrors) {
             keep_input();
             keep_field_errors($pracErrors);
+        } elseif ($dupPrac->fetchColumn()) {
+            flash_ui('Your practice was already logged, so it was not logged again.', 'info');
         } elseif ((int)$rl->fetchColumn() >= 12) {
             keep_input(); // what was typed is refilled, not lost
             flash_ui('Please wait a moment before logging more.', 'error');
@@ -462,12 +556,11 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             flash_ui($capMsg, 'error');
         } else {
             db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-prac-' . (int)$client['id']]);
-            $body = $what . ($mins ? "\n\n(" . $mins . ' minutes)' : '');
             db()->prepare("INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)")
                 ->execute([(int)$client['id'], 'Case Note', 'Practice logged by client (portal)', $body]);
             flash_ui('Thanks — your practice was logged.');
         }
-        redirect('portal.php?t=' . $token);
+        redirect('portal.php?t=' . $token . '&lang=' . page_lang());
     }
 }
 
@@ -489,16 +582,18 @@ if ($client && !empty($_GET['download'])) {
             exit;
         }
     }
-    http_response_code(404);
-    exit('File not found.');
+    // The file was removed (or is not this client's): back to the portal, said in the
+    // page's language, rather than a bare English page with no way back.
+    flash_ui('That file is no longer available. Your instructor may have removed it.', 'error');
+    redirect('portal.php?t=' . $token . '&lang=' . page_lang());
 }
 
-page_header($client ? 'My training' : 'Portal');
-if ($homeworkExplanation && $homeworkExplanation['ok']) {
-    echo '<section class="card" aria-labelledby="homework-ai-title"><h2 id="homework-ai-title" lang="en">AI explanation — check with your instructor</h2>';
-    if (!empty($homeworkExplanation['truncated'])) echo '<p role="alert" lang="en">This explanation was cut off. Ask your instructor before using it.</p>';
-    echo plain_text_html($homeworkExplanation['text']).'</section>';
+// An AI explanation asked for on the previous request, shown once inside its homework.
+if ($client && is_array($_SESSION['hw_explanation'] ?? null) && ($_SESSION['hw_explanation']['token'] ?? '') === $token) {
+    $homeworkExplanation = $_SESSION['hw_explanation'];
 }
+unset($_SESSION['hw_explanation']);
+page_header($client ? 'My training' : 'Portal');
 
 echo lang_toggle();
 if (!$client) {
@@ -544,6 +639,9 @@ $myUploads = $myUploads->fetchAll();
 ?>
 <h1><?= t('Welcome,') ?> <?= h(explode(' ', $client['name'])[0]) ?></h1>
 <p class="muted"><?= t('Your training with') ?> <?= h(brand('org')) ?>.</p>
+<?php if ($caseClosed): // Said first: the forms that send things are not offered. ?>
+<p class="alert alert-info"><?= t($closedMsg) ?></p>
+<?php endif; ?>
 <?php /* Download links in lists get a 44px target (2.5.5), also where a date follows the link. */ ?>
 <style>.dl-list a{display:inline-flex;align-items:center;min-height:2.75rem;min-width:2.75rem}</style>
 <script>
@@ -575,8 +673,10 @@ document.addEventListener('submit', function (e) {
       // Each request is confirmed first, naming the session; the question says what
       // OK and Cancel do, since "Cancel" would otherwise read as cancelling the session.
       $jsq = fn(string $q): string => h(json_encode($q, JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP));
-      $askNew = __('Send your instructor a request for a new time for this session?') . "\n" . $when . "\n" . __('Choose OK to send the request, or Cancel to send nothing.');
-      $askCancel = __('Send your instructor a request to cancel this session?') . "\n" . $when . "\n" . __('Choose OK to send the request. Choose Cancel to keep the session and send nothing.'); ?>
+      // A native dialog cannot mark an English date lang="en", so in Spanish it gets a Spanish date.
+      $askWhen = page_lang() === 'es' ? portal_when_es(strtotime($s['start_at'])) : $when;
+      $askNew = __('Send your instructor a request for a new time for this session?') . "\n" . $askWhen . "\n" . __('Choose OK to send the request, or Cancel to send nothing.');
+      $askCancel = __('Send your instructor a request to cancel this session?') . "\n" . $askWhen . "\n" . __('Choose OK to send the request. Choose Cancel to keep the session and send nothing.'); ?>
     <li>
       <strong><?= en($when) ?></strong> <?= h(__('to')) ?> <?= en(date('g:i A T', strtotime($s['end_at']))) ?>
       <?= !empty($s['is_remote']) ? ' · <span class="badge badge-active">' . h(__('Remote')) . '</span>' : ($s['location'] ? ' · ' . en($s['location']) : '') ?>
@@ -584,17 +684,19 @@ document.addEventListener('submit', function (e) {
       <?php if (!empty($s['is_remote']) && !empty($s['meeting_url'])): ?>
         <div style="margin-top:.3rem"><a class="btn btn-primary btn-sm" href="<?= h($s['meeting_url']) ?>" target="_blank" rel="noopener"><?= t('Join online') ?><?= $forSession ?><span class="visually-hidden"> <?= h(__('(opens in a new tab)')) ?></span></a></div>
       <?php endif; ?>
+      <?php if (!$caseClosed): ?>
       <div style="margin-top:.3rem">
-        <form method="post" action="portal.php?t=<?= h($token) ?>" class="inline-form" onsubmit="return confirm(<?= $jsq($askNew) ?>);"><?= csrf_field() ?>
+        <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="inline-form" onsubmit="return confirm(<?= $jsq($askNew) ?>);"><?= csrf_field() ?>
           <input type="hidden" name="session_id" value="<?= (int)$s['id'] ?>"><input type="hidden" name="req_type" value="reschedule">
           <button type="submit" name="new_request" value="1" class="btn-link"><?= t('Request a new time') ?><?= $forSession ?></button>
         </form>
         ·
-        <form method="post" action="portal.php?t=<?= h($token) ?>" class="inline-form" onsubmit="return confirm(<?= $jsq($askCancel) ?>);"><?= csrf_field() ?>
+        <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="inline-form" onsubmit="return confirm(<?= $jsq($askCancel) ?>);"><?= csrf_field() ?>
           <input type="hidden" name="session_id" value="<?= (int)$s['id'] ?>"><input type="hidden" name="req_type" value="cancel">
           <button type="submit" name="new_request" value="1" class="btn-link"><?= t('Ask to cancel') ?><?= $forSession ?></button>
         </form>
       </div>
+      <?php endif; ?>
     </li>
   <?php endforeach; ?>
   </ul>
@@ -639,33 +741,52 @@ $homework = $hwStmt->fetchAll();
 <section class="card" aria-labelledby="hw-h">
   <h2 id="hw-h"><?= t('Practice & homework') ?></h2>
   <ul>
-  <?php foreach ($homework as $h_): ?>
-    <li>
+  <?php foreach ($homework as $h_): $hwOwnError = $hwError && $hwError['id'] === (int)$h_['id']; ?>
+    <?php // The id brings the client back to this homework (with the message focused) after asking for an explanation. ?>
+    <li id="hw-<?= (int)$h_['id'] ?>">
       <strong><?= en((string)$h_['title']) ?></strong><?= $h_['due_date'] ? ' — ' . t('due') . ' ' . en(fmt_date($h_['due_date'])) : '' ?>
-      <?= $h_['instructions'] ? '<br>' . en((string)$h_['instructions']) : '' ?>
+      <?php // Line breaks kept: instructions are often numbered steps, one to a line. ?>
+      <?= $h_['instructions'] ? '<br>' . nl2br(en((string)$h_['instructions'])) : '' ?>
+      <?php // A refused practice update or question is said here, in the homework it is about,
+      // linked to its field; the form below comes back filled in and opened. ?>
+      <?php if ($hwOwnError): ?><?= form_error_summary(['hw_error' => ''], ['hw_error' => $hwError['field']]) ?><?php endif; ?>
       <?php if ($h_['client_reported_at']): ?>
         <br><span class="badge badge-active"><?= t('You marked this done') ?></span>
-      <?php else: ?>
+      <?php elseif (!$caseClosed): ?>
       <?php // Confirmed first, naming the homework: telling the instructor cannot be taken back here. ?>
-      <form method="post" action="portal.php?t=<?= h($token) ?>" class="inline-form" style="margin-top:.3rem"
+      <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="inline-form" style="margin-top:.3rem"
         onsubmit="return confirm(<?= h(json_encode(__('Tell your instructor you finished this homework?') . "\n" . $h_['title'] . "\n" . __('Choose OK to tell your instructor, or Cancel to send nothing.'), JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">
         <?= csrf_field() ?>
         <input type="hidden" name="homework_id" value="<?= (int)$h_['id'] ?>">
         <button type="submit" name="hw_done" value="1" class="btn btn-secondary btn-sm"><?= t('I\'ve done this') ?><span class="visually-hidden"> — <?= en((string)$h_['title']) ?></span></button>
       </form>
       <?php endif; ?>
-      <?php if($h_['status']==='Assigned' && workflows_ready()) require __DIR__.'/inc/homework_support_ui.php'; ?>
+      <?php if($h_['status']==='Assigned' && workflows_ready() && !$caseClosed) require __DIR__.'/inc/homework_support_ui.php'; ?>
+      <?php if ($hwOwnError): ?>
+      <script>document.addEventListener('DOMContentLoaded', function () { var f = document.getElementById(<?= json_encode($hwError['field'], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>), d = f && f.closest('details'); if (d) d.open = true; });</script>
+      <?php endif; ?>
+      <?php // The AI explanation asked for this homework, under its own heading, naming the
+      // homework and the question; it is in the language it was asked in. ?>
+      <?php if ($homeworkExplanation && (int)$homeworkExplanation['homework_id'] === (int)$h_['id']): ?>
+      <section class="card" aria-labelledby="hw-ai-<?= (int)$h_['id'] ?>">
+        <h3 id="hw-ai-<?= (int)$h_['id'] ?>"><?= t('AI explanation — check with your instructor') ?>: <?= en((string)$h_['title']) ?></h3>
+        <?php if ((string)$homeworkExplanation['question'] !== ''): ?><p><strong><?= t('Your question:') ?></strong> <?= nl2br(h((string)$homeworkExplanation['question'])) ?></p><?php endif; ?>
+        <?php if (!empty($homeworkExplanation['truncated'])): ?><p><strong><?= t('This explanation was cut off. Ask your instructor before using it.') ?></strong></p><?php endif; ?>
+        <?= plain_text_html((string)$homeworkExplanation['text'], 4) ?>
+      </section>
+      <?php endif; ?>
     </li>
   <?php endforeach; ?>
   </ul>
 </section>
 <?php endif; ?>
 
+<?php if (!$caseClosed): ?>
 <section class="card" aria-labelledby="prac-h">
   <h2 id="prac-h"><?= t('Log practice') ?></h2>
   <p class="muted"><?= t('Practiced on your own? Log it so your instructor can see your progress between sessions.') ?></p>
   <?php $oldPrac = old_in('log_practice') !== ''; // refill only the form that was sent ?>
-  <form method="post" action="portal.php?t=<?= h($token) ?>" class="stacked" novalidate>
+  <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['practice' => 'What did you practice?', 'minutes' => 'How long (minutes)']) ?>
     <div class="grid grid-2">
@@ -677,14 +798,18 @@ $homework = $hwStmt->fetchAll();
     <button type="submit" name="log_practice" value="1" class="btn btn-secondary"><?= t('Log practice') ?></button>
   </form>
 </section>
+<?php endif; ?>
 
+<?php // A closed case shows only what was sent before (each section's history, if any). ?>
+<?php if (!$caseClosed || $myRequests): ?>
 <section class="card" aria-labelledby="req-h">
   <h2 id="req-h"><?= t('Requests & help') ?></h2>
-  <p class="muted"><?= t('Ask for an appointment, get help with a device, or send another request. Your instructor will follow up.') ?></p>
   <?php // Both forms post a "details" field; refill (and flag) only the one that was sent.
   $oldReq = old_in('new_request') !== '' ? old_in('req_type') : ''; ?>
+  <?php if (!$caseClosed): ?>
+  <p class="muted"><?= t('Ask for an appointment, get help with a device, or send another request. Your instructor will follow up.') ?></p>
   <div class="grid grid-2">
-    <form method="post" action="portal.php?t=<?= h($token) ?>" class="stacked" novalidate><?= csrf_field() ?>
+    <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate><?= csrf_field() ?>
       <input type="hidden" name="req_type" value="appointment">
       <?= form_error_summary(['appt_details' => 'Preferred days/times and what you need'], ['appt_details' => 'appt']) ?>
       <h3><?= t('Request an appointment') ?></h3>
@@ -693,7 +818,7 @@ $homework = $hwStmt->fetchAll();
         <textarea id="appt" name="details" rows="3" required <?= field_aria('appt_details', 'appt-hint') ?>><?= h($oldReq === 'appointment' ? old_in('details') : '') ?></textarea><?= field_error('appt_details') ?></div>
       <button type="submit" name="new_request" value="1" class="btn btn-primary"><?= t('Send request') ?><span class="visually-hidden"> — <?= t('Request an appointment') ?></span></button>
     </form>
-    <form method="post" action="portal.php?t=<?= h($token) ?>" class="stacked" novalidate><?= csrf_field() ?>
+    <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate><?= csrf_field() ?>
       <?= form_error_summary(['req_details' => 'Tell us what you need'], ['req_details' => 'rdetails']) ?>
       <h3><?= t('Device help or another request') ?></h3>
       <div class="field"><label for="rtype"><?= t('Type') ?></label>
@@ -707,6 +832,7 @@ $homework = $hwStmt->fetchAll();
       <button type="submit" name="new_request" value="1" class="btn btn-secondary"><?= t('Send request') ?><span class="visually-hidden"> — <?= t('Device help or another request') ?></span></button>
     </form>
   </div>
+  <?php endif; ?>
   <?php if ($myRequests): ?>
   <h3><?= t('Your requests') ?></h3>
   <ul>
@@ -721,17 +847,21 @@ $homework = $hwStmt->fetchAll();
   </ul>
   <?php endif; ?>
 </section>
+<?php endif; ?>
 
+<?php if (!$caseClosed || $myUploads): ?>
 <section class="card" aria-labelledby="up-h">
   <h2 id="up-h"><?= t('Share a document') ?></h2>
+  <?php if (!$caseClosed): ?>
   <p class="muted" id="up-hint"><?= t('Upload a document for your instructor — a form, an ID, or anything they asked for. PDF, Office, text or image files up to 15 megabytes (MB).') ?></p>
-  <form method="post" action="portal.php?t=<?= h($token) ?>" class="stacked" enctype="multipart/form-data" novalidate>
+  <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" enctype="multipart/form-data" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['doc_title' => 'What is this?', 'document' => 'Choose a file']) ?>
     <div class="field"><label for="doc_title"><?= t('What is this?') ?> <span class="hint"><?= t('(optional)') ?></span></label><input type="text" id="doc_title" name="doc_title" maxlength="190" value="<?= h(old_in('upload_doc') !== '' ? old_in('doc_title') : '') ?>" <?= field_aria('doc_title') ?>><?= field_error('doc_title') ?></div>
     <div class="field"><label for="document"><?= t('Choose a file') ?> <span class="hint"><?= t('(required)') ?></span></label><input type="file" id="document" name="document" accept=".pdf,.docx,.xlsx,.txt,.rtf,.png,.jpg,.jpeg" required <?= field_aria('document', 'up-hint') ?>><?= field_error('document') ?></div>
     <button type="submit" name="upload_doc" value="1" class="btn btn-primary"><?= t('Upload') ?></button>
   </form>
+  <?php endif; ?>
   <?php if ($myUploads): ?>
   <h3><?= t('Documents you shared') ?></h3>
   <ul class="dl-list">
@@ -741,15 +871,17 @@ $homework = $hwStmt->fetchAll();
   </ul>
   <?php endif; ?>
 </section>
+<?php endif; ?>
 
+<?php
+$thread = db()->prepare("SELECT sender, body, created_at FROM messages WHERE client_id = ? AND channel = 'client' ORDER BY created_at DESC LIMIT 20");
+$thread->execute([(int)$client['id']]);
+$thread = array_reverse($thread->fetchAll());
+if (!$caseClosed || $thread): ?>
 <section class="card" aria-labelledby="msg-h">
   <h2 id="msg-h"><?= t('Message your instructor') ?></h2>
-  <p class="muted"><?= t('Have a question or an update? Send a note and your instructor will get back to you.') ?></p>
-  <?php
-  $thread = db()->prepare("SELECT sender, body, created_at FROM messages WHERE client_id = ? AND channel = 'client' ORDER BY created_at DESC LIMIT 20");
-  $thread->execute([(int)$client['id']]);
-  $thread = array_reverse($thread->fetchAll());
-  if ($thread): ?>
+  <?php if (!$caseClosed): ?><p class="muted"><?= t('Have a question or an update? Send a note and your instructor will get back to you.') ?></p><?php endif; ?>
+  <?php if ($thread): ?>
   <?php /* A list, with the sender named before each message for screen readers
            (sighted readers get it from the side and colour, and the line below).
            role="list" keeps the list semantics that list-style:none removes in Safari. */ ?>
@@ -766,7 +898,8 @@ $homework = $hwStmt->fetchAll();
            text 10.4:1 and the time line 8.8:1 (AAA). Text lines stay near 70 characters. */ ?>
   <style>.msg-thread{display:flex;flex-direction:column;gap:.5rem;margin:0 0 .8rem;padding:0;list-style:none}.msg{max-width:85%;padding:.5rem .7rem;border-radius:var(--radius)}.msg-body{max-width:70ch}.msg.in{align-self:flex-start;background:var(--bg);border:1px solid var(--line)}.msg.out{align-self:flex-end;background:#1e3a8a;color:#fff}.msg-meta{font-size:.875rem;color:var(--ink-soft);margin-top:.25rem}.msg.out .msg-meta{color:#e5ecff}</style>
   <?php endif; ?>
-  <form method="post" action="portal.php?t=<?= h($token) ?>" class="stacked" novalidate>
+  <?php if (!$caseClosed): ?>
+  <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['message' => 'Your message']) ?>
     <div class="field">
@@ -777,8 +910,11 @@ $homework = $hwStmt->fetchAll();
     </div>
     <button type="submit" name="send_message" value="1" class="btn btn-primary"><?= t('Send message') ?></button>
   </form>
+  <?php endif; ?>
 </section>
+<?php endif; ?>
 
+<?php if (!$caseClosed): ?>
 <section class="card" aria-labelledby="info-h">
   <h2 id="info-h"><?= t('My information') ?></h2>
   <p class="muted"><?= t('Keep your contact details and access needs up to date. Your instructor is notified of changes.') ?></p>
@@ -789,11 +925,17 @@ $homework = $hwStmt->fetchAll();
   $keptInfo = old_in('p_kept');
   $refill = fn(string $k): bool => $oldInfo && ($keptInfo === '' || str_contains($keptInfo, ',' . $k . ','));
   $pv = fn(string $k, $saved): string => $refill($k) ? old_in($k) : (string)($saved ?? ''); ?>
-  <form method="post" action="portal.php?t=<?= h($token) ?>" class="stacked" novalidate>
+  <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?php // A fingerprint of each value shown, so a save from a page drawn before
-    // staff changed the details is refused instead of writing old values back. ?>
-    <?php foreach (portal_profile_values($client) as $pk => $pval): ?><input type="hidden" name="p_shown[<?= h($pk) ?>]" value="<?= h(hash('sha256', $pval)) ?>"><?php endforeach; ?>
+    // staff changed the details is refused instead of writing old values back. A form
+    // refilled from an earlier page (after a lapsed session) carries that page's
+    // fingerprints with its values. The field is not type="hidden" on purpose: the
+    // language switch restores every other field it keeps, so it restores this one
+    // with them (it is hidden from view and from assistive technology all the same).
+    $shownNow = json_encode(array_map(fn($v) => hash('sha256', $v), portal_profile_values($client)));
+    $shownJson = ($oldInfo && $keptInfo === '' && old_in('p_shown_json') !== '') ? old_in('p_shown_json') : $shownNow; ?>
+    <input type="text" name="p_shown_json" value="<?= h($shownJson) ?>" hidden aria-hidden="true" tabindex="-1" autocomplete="off">
     <?= form_error_summary(['p_phone' => 'Phone', 'p_address' => 'Address', 'p_tech' => 'Assistive technology you use', 'p_notes' => 'Anything else we should know']) ?>
     <div class="grid grid-2">
       <div class="field"><label for="p_phone"><?= t('Phone') ?></label><input type="tel" id="p_phone" name="p_phone" maxlength="40" autocomplete="tel" value="<?= h($pv('p_phone', $client['phone'] ?? '')) ?>" <?= field_aria('p_phone') ?>><?= field_error('p_phone') ?></div>
@@ -829,6 +971,7 @@ $homework = $hwStmt->fetchAll();
     <button type="submit" name="update_profile" value="1" class="btn btn-primary"><?= t('Save my information') ?></button>
   </form>
 </section>
+<?php endif; ?>
 
 <?php if ($kb): ?>
 <section class="card" aria-labelledby="kb-h">

@@ -11,16 +11,26 @@ $user = require_login();
 require_perm('clients');
 
 $trackId = (int)($_GET['track'] ?? $_POST['track'] ?? 0);
-$tq = db()->prepare('SELECT t.*, c.id AS cid, c.name AS client, c.counselor_name, c.counselor_email, c.counselor_agency
+$tq = db()->prepare('SELECT t.*, c.id AS cid, c.name AS client, c.counselor_name, c.counselor_email, c.counselor_agency, c.counselor_verified
     FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.id = ?');
 $tq->execute([$trackId]);
 $track = $tq->fetch();
 if (!$track) { flash('Training track not found.', 'error'); redirect('compliance.php'); }
 scope_check_client_id((int)$track['cid'], $user);
+// The letter (client name, authorization, hours or funds) is addressed for the user
+// only to a counselor email staff have confirmed: one typed into the public referral
+// form may be anyone's (eval_report.php and report.php refuse to send to it too).
+$counselorEmail = trim((string)($track['counselor_email'] ?? ''));
+$counselorConfirmed = $counselorEmail !== '' && (int)($track['counselor_verified'] ?? 0) === 1;
 
 $r = track_rollup($trackId);
 $worked = (float)$r['hours_worked']; $auth = (float)$r['authorized_hours'];
-$remaining = (float)$r['hours_remaining']; $pct = $auth > 0 ? round($worked / $auth * 100) : 0;
+$remaining = (float)$r['hours_remaining'];
+// Whole percent rounded DOWN, in exact hundredths of an hour, as compliance.php:
+// rounding to nearest says "100%" while hours remain, and the comparison with the
+// funds percentage below must use the same rule on both sides.
+$authC = (int)round($auth * 100);
+$pct = $authC > 0 ? intdiv((int)round($worked * 100) * 100, $authC) : 0;
 // Authorized funds are also used up by mileage and expenses (track_rollup's
 // funds_remaining), so a track can run out of money before its hours; Compliance
 // lists it then too. Same whole-percent-rounded-down rule as compliance.php, in
@@ -130,6 +140,10 @@ $aiFailed = false;
 $postedLetter = is_string($_POST['letter'] ?? null) ? str_replace("\r\n", "\n", $_POST['letter']) : '';
 $letterEdited = trim($postedLetter) !== '' && trim($postedLetter) !== trim($draft);
 $aiAlt = null;
+// After a sign-in (session timeout) or a stale-token redirect, the letter as it was
+// typed comes back as old input on a GET: it is shown instead of the standard letter.
+$keptLetter = $_SERVER['REQUEST_METHOD'] !== 'POST' ? str_replace("\r\n", "\n", old_in('letter')) : '';
+if (trim($keptLetter) !== '') $draft = $keptLetter;
 
 // Optional AI polish. The prompt carries only facts and uses [CLIENT],
 // [COUNSELOR] and [STAFF] as placeholders, which are substituted back locally —
@@ -215,6 +229,9 @@ page_header('Amendment request', $user, 'clients');
     <?= $track['counselor_email'] ? ' &lt;' . h($track['counselor_email']) . '&gt;' : '' ?>
     <?= $track['counselor_agency'] ? ' · ' . h($track['counselor_agency']) : '' ?>
   </p>
+  <?php if ($counselorEmail !== '' && !$counselorConfirmed): ?>
+  <p class="hint"><strong>Counselor email not confirmed:</strong> <?= h($counselorEmail) ?> has not been checked (an address from the public referral form, for example, may not be the counselor's), so this page does not open the letter in email addressed to it. <a href="client_edit.php?id=<?= (int)$track['cid'] ?>">Confirm the counselor email on <?= h($track['client']) ?>'s profile</a>, or copy the letter and send it to an address you have checked.</p>
+  <?php endif; ?>
   <?php if ($aiNote): ?><p class="<?= $aiFailed ? 'field-error' : 'muted' ?>"><?= h($aiNote) ?></p><?php endif; ?>
   <label for="letter" class="visually-hidden">Amendment request letter</label>
   <?php /* Sent with "Draft the letter with AI" (form attribute), so edits are kept. */ ?>
@@ -230,7 +247,7 @@ page_header('Amendment request', $user, 'clients');
   <div class="page-actions" style="margin-top:.5rem">
     <button type="button" class="btn btn-secondary btn-sm" id="copy-letter">Copy letter</button>
     <span id="copy-status" role="status" class="muted"></span>
-    <?php if ($track['counselor_email']): ?>
+    <?php if ($counselorConfirmed): ?>
     <a class="btn btn-primary btn-sm" id="mailbtn" href="#">Open in email to <?= h($track['counselor_name'] ?: 'counselor') ?></a>
     <?php endif; ?>
     <?php if (ai_feature_enabled('draft')): ?>
@@ -274,13 +291,17 @@ document.getElementById('copy-letter').addEventListener('click', function () {
 })();
 <?php endif; ?>
 </script>
-<?php if ($track['counselor_email']): ?>
+<?php if ($counselorConfirmed): ?>
 <script>
 document.getElementById('mailbtn').addEventListener('click', function (e) {
   e.preventDefault();
   var body = encodeURIComponent(document.getElementById('letter').value);
   var subj = encodeURIComponent('Authorization amendment request — ' + <?= json_encode($track['auth_number'] ?: $track['title'], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>);
-  window.location.href = 'mailto:' + <?= json_encode($track['counselor_email'], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?> + '?subject=' + subj + '&body=' + body;
+  // Both halves of the address are URL-encoded, so a "?", "&" or "," in it can never
+  // add a recipient or a header to the letter's email.
+  var to = <?= json_encode($counselorEmail, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>, at = to.lastIndexOf('@');
+  var addr = at > 0 ? encodeURIComponent(to.slice(0, at)) + '@' + encodeURIComponent(to.slice(at + 1)) : '';
+  window.location.href = 'mailto:' + addr + '?subject=' + subj + '&body=' + body;
 });
 </script>
 <?php endif; ?>

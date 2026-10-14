@@ -21,6 +21,7 @@
     const token = () => (typeof window !== 'undefined' && window.__csrf) || form.elements.namedItem('csrf')?.value || '';
     const SESSION_CHANGED = 'Your session has changed or ended, so no draft was made and your form is unchanged. Copy your work, sign in again in a new tab if asked, then reload this page and try again.';
     const CONNECTION = 'We could not reach the server, so no draft was made and your form is unchanged. Check your connection and try again.';
+    const SERVER_TROUBLE = 'The server had a problem, so no draft was made and your form is unchanged. Try again in a moment.';
     generate.addEventListener('click', async () => {
       if (busy) return;
       const values = {...JSON.parse(panel.dataset.context || '{}')};
@@ -34,15 +35,17 @@
         try {
           response = await fetch('at_ai.php', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token()}, body: JSON.stringify({kind: panel.dataset.kind, field: generatedFor, values, id: values.id || 0, instruction: panel.querySelector('[data-ai-request]').value})});
         } catch (error) { throw new Error(CONNECTION); }
+        const toLogin = !!response.redirected && /\/login\.php(?:[?#]|$)/.test(String(response.url || ''));
         // A signed-in request kept the session alive on the server; tell the
         // inactivity warning (session-timeout.js) so it does not interrupt.
-        if (response.ok) { try { document.dispatchEvent(new Event('cms:activity')); } catch (error) {} }
-        // An ended session (401), a refused stale token (403, plain text) or a sign-in
-        // page in place of JSON means the session changed, not that the connection failed.
-        if (response.status !== 401 && response.status !== 403) {
-          try { result = await response.json(); } catch (error) { throw new Error(error && error.name === 'SyntaxError' ? SESSION_CHANGED : CONNECTION); }
-        }
-        if (!result || typeof result !== 'object') throw new Error(SESSION_CHANGED);
+        if (response.ok && !toLogin) { try { document.dispatchEvent(new Event('cms:activity')); } catch (error) {} }
+        // An ended session (401), a refused stale token (403, plain text) or the sign-in
+        // page means the session changed, not that the connection failed. Any other
+        // reply that is not JSON (a host's 502, 504 or 508 page, or an empty body after
+        // a server error) is a server problem and the session is fine, as voice.js says.
+        if (response.status === 401 || response.status === 403 || toLogin) throw new Error(SESSION_CHANGED);
+        try { result = await response.json(); } catch (error) { throw new Error(error && error.name === 'SyntaxError' ? SERVER_TROUBLE : CONNECTION); }
+        if (!result || typeof result !== 'object') throw new Error(SERVER_TROUBLE);
         if (!response.ok || !result.ok) throw new Error(result.error || 'Drafting failed.');
         draft.value = result.text; panel.querySelector('[data-ai-review]').hidden = false;
         // A draft cut off at the length limit is marked in its label and said so

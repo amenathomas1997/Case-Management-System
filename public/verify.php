@@ -129,7 +129,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 establish_user_session($totpUser);
                 audit((int)$totpUser['id'], 'login', 'user', (int)$totpUser['id'], '2FA verified (authenticator app)');
                 flash('Welcome back, ' . $totpUser['name'] . '.');
-                redirect(take_resume_url());
+                redirect(resume_url_after_sign_in());
             }
         }
     }
@@ -159,11 +159,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         establish_user_session($user);
         audit((int)$user['id'], 'login', 'user', (int)$user['id'], '2FA verified');
         flash('Welcome back, ' . $user['name'] . '.');
-        redirect(take_resume_url());
+        redirect(resume_url_after_sign_in());
     }
 }
 
-page_header('Enter verification code');
+// A refused code puts 'Error — ' in the title too, so it is the first thing heard.
+page_header(($error ? 'Error — ' : '') . 'Enter verification code');
 ?>
 <div class="card auth-card">
   <h1>Enter your verification code</h1>

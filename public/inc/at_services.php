@@ -51,14 +51,18 @@ function at_list(string $kind,int $actor,int $client=0): array {
 }
 /** Choices are permission-filtered and client-bound. Server validation repeats every check.
  *  $kind is the record kind the choice is for: a licence's renewal contact is chosen by
- *  whoever holds the licence module's own permission (equipment). */
-function at_choices(string $type,int $actor,int $client=0,string $kind=''): array {
+ *  whoever holds the licence module's own permission (equipment). $recordId is the record
+ *  being edited (0 for a new one): a comparison's recommended option is chosen only from
+ *  that comparison's own options. */
+function at_choices(string $type,int $actor,int $client=0,string $kind='',int $recordId=0): array {
     $scope=caseload_scoped()?' AND c.assigned_to='.(int)$actor:'';
     if ($client) { at_client($client,$actor); $scope.=' AND c.id='.(int)$client; }
     $sql=match($type) {
         'client'=>'SELECT c.id,c.name AS label FROM clients c WHERE 1=1'.$scope.' ORDER BY c.name',
         'track'=>'SELECT t.id,CONCAT(c.name,\' — \',t.title) AS label FROM training_tracks t JOIN clients c ON c.id=t.client_id WHERE 1=1'.$scope.' ORDER BY c.name,t.title',
-        'equipment'=>at_can('equipment')?'SELECT id,name AS label FROM equipment ORDER BY name':null,
+        // Item names repeat (two units of one model), so each is told apart by its serial
+        // number and current status, as the Equipment page's own loan picker does.
+        'equipment'=>at_can('equipment')?"SELECT id,CONCAT(name,IF(serial IS NULL OR serial='','',CONCAT(' (serial number ',serial,')')),' — ',status) AS label FROM equipment ORDER BY name,serial,id":null,
         'staff'=>at_can('schedule')||at_can('admin')||($kind==='license'&&at_can('equipment'))?'SELECT id,name AS label FROM users WHERE is_active=1 ORDER BY name':null,
         'document'=>'SELECT d.id,CONCAT(c.name,\' — \',d.title) AS label FROM client_documents d JOIN clients c ON c.id=d.client_id WHERE 1=1'.$scope,
         'invoice'=>at_can('billing')?'SELECT i.id,i.invoice_number AS label FROM invoices i JOIN training_tracks t ON t.id=i.track_id JOIN clients c ON c.id=t.client_id WHERE 1=1'.$scope:null,
@@ -70,15 +74,18 @@ function at_choices(string $type,int $actor,int $client=0,string $kind=''): arra
     if ($sql) return array_map(fn($r)=>['value'=>(string)$r['id'],'label'=>$r['label']],db()->query($sql)->fetchAll());
     $kind=$type==='option'?'trial_option':$type;
     if (!isset(at_catalog()[$kind]) || !at_can(at_catalog()[$kind]['perm'])) return [];
-    $q=db()->prepare('SELECT r.id,r.title,r.status FROM at_records r WHERE r.kind=?'.at_scope($actor).($client && !in_array($kind,['resource','license','staff_profile'],true)?' AND r.client_id='.(int)$client:'').' ORDER BY r.title');$q->execute([$kind]);
+    // Listed across clients (no client chosen yet), a client's record (a comparison, a
+    // device setup) is named with its client, since titles such as "iPhone setup" repeat.
+    $named=!$client&&$type!=='option'&&!empty(at_catalog()[$kind]['client']);
+    $q=db()->prepare('SELECT r.id,r.title,r.status'.($named?',c.name AS client_name FROM at_records r LEFT JOIN clients c ON c.id=r.client_id':' FROM at_records r').' WHERE r.kind=?'.at_scope($actor).($client && !in_array($kind,['resource','license','staff_profile'],true)?' AND r.client_id='.(int)$client:'').($type==='option'?' AND r.parent_id='.(int)$recordId:'').' ORDER BY '.($named?'c.name,':'').'r.title');$q->execute([$kind]);
     $rows=$q->fetchAll();
-    return array_values(array_map(fn($r)=>['value'=>(string)$r['id'],'label'=>$r['title'].' ('.$r['status'].')'],array_filter($rows,fn($r)=>$kind!=='resource'||$r['status']==='Published')));
+    return array_values(array_map(fn($r)=>['value'=>(string)$r['id'],'label'=>(($r['client_name']??'')!==''?$r['client_name'].' — ':'').$r['title'].' ('.$r['status'].')'],array_filter($rows,fn($r)=>$kind!=='resource'||$r['status']==='Published')));
 }
 function at_fields(string $kind,int $actor,int $client=0,?array $record=null): array {
     $def=at_definition($kind);$result=[];
     foreach($def['fields'] as $f){
         if(!in_array($f['type'],['text','textarea','url','date','money','score','integer','select'],true)){
-            $f['options']=at_choices($f['type'],$actor,$client,$kind);
+            $f['options']=at_choices($f['type'],$actor,$client,$kind,(int)($record['id']??0));
             // Existing assignments retain their parent even after library archival.
             if($kind==='learning' && $f['key']==='parent_id' && !empty($record['parent_id'])){
                 $parent=at_record((int)$record['parent_id'],$actor);
@@ -94,7 +101,7 @@ function at_fields(string $kind,int $actor,int $client=0,?array $record=null): a
 /** Dates on which something was done; any other date (a due, renewal, warranty or
  *  effective date) may lie further ahead. */
 const AT_DONE_DATES=['tested_on','delivered_on','completed_on','installed_on','received_on','spent_on','submitted_on','decision_on'];
-function at_validate_field(array $f,mixed $raw,int $actor,int $client,string $kind=''): string {
+function at_validate_field(array $f,mixed $raw,int $actor,int $client,string $kind='',int $recordId=0): string {
     if (!is_scalar($raw) && $raw!==null) throw new DomainException($f['label'].': invalid value.');
     $v=trim((string)$raw);
     if ($v==='') { if($f['required'])throw new DomainException($f['label'].' is required.'); return ''; }
@@ -115,7 +122,7 @@ function at_validate_field(array $f,mixed $raw,int $actor,int $client,string $ki
         case 'integer': if(!ctype_digit($v)||(int)$v<1||(int)$v>100000)throw new DomainException($f['label'].': enter a whole number from 1 to 100000.');break;
         case 'select': if(!in_array($v,$f['options'],true))throw new DomainException($f['label'].': choose a listed value.');break;
         case 'text': case 'textarea': break;
-        default: if(!in_array($v,array_column(at_choices($f['type'],$actor,$client,$kind),'value'),true)){
+        default: if(!in_array($v,array_column(at_choices($f['type'],$actor,$client,$kind,$recordId),'value'),true)){
             // A library resource the editor can see but that is not Published gets a message saying so.
             if($f['type']==='resource'&&ctype_digit($v)&&at_can(at_catalog()['resource']['perm'])){
                 $q=db()->prepare("SELECT r.status FROM at_records r WHERE r.id=? AND r.kind='resource'".at_scope($actor));$q->execute([(int)$v]);$rs=$q->fetchColumn();
@@ -166,7 +173,7 @@ function at_save(string $kind,array $input,int $actor): int {
                 // and type are checked below under the parent lock. Only a changed
                 // reference is validated against the editor's choices.
                 $values[$f['key']]=$stored[$f['key']];
-            }else $values[$f['key']]=at_validate_field($f,$raw,$actor,$client,$kind);
+            }else $values[$f['key']]=at_validate_field($f,$raw,$actor,$client,$kind,$id);
         }
         $parent=(int)($values['parent_id']??0);
         if($old && (int)$old['parent_id']!==$parent)throw new DomainException('The parent record cannot be changed after creation.');
@@ -177,6 +184,13 @@ function at_save(string $kind,array $input,int $actor): int {
         if($kind==='trial_option' && $parent){
             if(!$old && in_array($pr['status'],['Completed','Cancelled'],true))throw new DomainException('Comparison: it is '.$pr['status'].'; set it back to In progress before adding an option.');
             if($old && $pr['status']==='Completed' && (string)($pr['details']['preferred_option']??'')===(string)$id && $status!=='Trialled')throw new DomainException('This option is the recommended option of a completed comparison, so its status stays Trialled. Set the comparison back to In progress before changing it.');
+        }
+        // The recommended option is one of this comparison's own options whatever the
+        // status (at_choices() lists only those), so another comparison's option is never
+        // saved here, including one kept from before this check.
+        if($kind==='trial' && $values['preferred_option']!==''){
+            $q=$pdo->prepare("SELECT parent_id FROM at_records WHERE id=? AND kind='trial_option'");$q->execute([(int)$values['preferred_option']]);
+            if($id===0||(int)$q->fetchColumn()!==$id)throw new DomainException('Recommended trial option: choose an option from this comparison.');
         }
         if($kind==='trial' && $status==='Completed'){
             // Each message starts with the field's label, so the form ties it to that control.
@@ -231,14 +245,14 @@ function at_save(string $kind,array $input,int $actor): int {
             $q=$pdo->prepare('SELECT id FROM at_records WHERE source_key=? AND id<>?');$q->execute([$source,$id]);if($q->fetchColumn())throw new DomainException('A record already exists for this instructor and effective date. Edit that record instead.');
         }
         $retired=['count'=>0,'holders'=>[]];
-        if($kind==='reuse')$retired=at_validate_reuse($old,$values,$status,$id);
+        if($kind==='reuse')$retired=at_validate_reuse($old,$values,$status,$id,$actor);
         // The device's inventory status follows the repair only when the repair is
         // created, closed or reopened. Editing an open repair, or the notes of a
         // closed one, leaves alone a status staff have since changed by hand.
         if($kind==='repair'&&!empty($values['equipment_id'])){
             $closed=['Resolved','Cancelled'];
             if(!$old||in_array($old['status'],$closed,true)!==in_array($status,$closed,true)){
-                $before=at_repair_inventory((int)$values['equipment_id'],$client,$status,$id,$values['prior_status']??null);
+                $before=at_repair_inventory((int)$values['equipment_id'],$client,$status,$id,$values['prior_status']??null,$actor);
                 // Remember the device's status before the repair, so cancelling restores it.
                 if(!in_array($status,$closed,true))$values['prior_status']=$before;
             }
@@ -247,6 +261,15 @@ function at_save(string $kind,array $input,int $actor): int {
         $payload=json_encode($values,JSON_THROW_ON_ERROR);
         if($id){$q=$pdo->prepare('UPDATE at_records SET title=?,status=?,client_id=?,track_id=?,equipment_id=?,staff_id=?,parent_id=?,due_date=?,details=?,source_key=COALESCE(?,source_key),version=version+1 WHERE id=?');$q->execute([$title,$status,...array_values($columns),$payload,$source,$id]);}
         else{$q=$pdo->prepare('INSERT INTO at_records(kind,title,status,client_id,track_id,equipment_id,staff_id,parent_id,due_date,details,source_key,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');$q->execute([$kind,$title,$status,...array_values($columns),$payload,$source,$actor]);$id=(int)$pdo->lastInsertId();}
+        // A setup made Active again resumes the checks that were closed automatically when
+        // it was retired or superseded (below): they are Scheduled again, without the
+        // generated "Not checked" reason, and dated afresh just after. A check staff
+        // skipped themselves, with their own reason, stays skipped.
+        $resumed=0;
+        if($kind==='setup'&&$old&&$status==='Active'&&$old['status']!=='Active'){
+            $q=$pdo->prepare("UPDATE at_records SET status='Scheduled',details=JSON_REMOVE(details,'$.barriers'),version=version+1 WHERE parent_id=? AND kind='outcome' AND status='Skipped' AND JSON_UNQUOTE(JSON_EXTRACT(details,'$.barriers')) LIKE 'Not checked: the device setup was marked %'");
+            $q->execute([$id]);$resumed=$q->rowCount();
+        }
         // Only when an active setup gets or changes its delivery date: a new record, the
         // move into Active, or a delivery date added to or corrected on a setup that was
         // already Active (only checks still Scheduled move). Re-saving with the same date
@@ -254,12 +277,13 @@ function at_save(string $kind,array $input,int $actor): int {
         if($kind==='setup'&&$status==='Active'&&!empty($values['delivered_on'])&&(!$old||$old['status']!=='Active'||(string)($old['details']['delivered_on']??'')!==$values['delivered_on']))at_schedule_outcomes($id,$columns,$values['delivered_on'],$title,$actor);
         // A setup that is retired or superseded is no longer followed up: its checks still
         // Scheduled are closed as Skipped, with the reason, so no reminder keeps coming.
+        // This holds on any move into Retired or Superseded, from Draft as well as Active.
         $skipped=0;
-        if($kind==='setup'&&$old&&$old['status']==='Active'&&in_array($status,['Retired','Superseded'],true)){
+        if($kind==='setup'&&$old&&in_array($status,['Retired','Superseded'],true)&&!in_array($old['status'],['Retired','Superseded'],true)){
             $q=$pdo->prepare("UPDATE at_records SET status='Skipped',details=IF(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details,'$.barriers')),'')='',JSON_SET(details,'$.barriers',?),details),version=version+1 WHERE parent_id=? AND kind='outcome' AND status='Scheduled'");
             $q->execute(['Not checked: the device setup was marked '.$status.' on '.date('Y-m-d').'.',$id]);$skipped=$q->rowCount();
         }
-        audit($actor,'at.save','at_record',$id,$kind.' '.$status.($retired['count']?'; '.$retired['count'].' equipment reservation'.($retired['count']===1?'':'s').' cancelled':'').($skipped?'; '.$skipped.' scheduled outcome check'.($skipped===1?'':'s').' skipped':''));
+        audit($actor,'at.save','at_record',$id,$kind.' '.$status.($retired['count']?'; '.$retired['count'].' equipment reservation'.($retired['count']===1?'':'s').' cancelled':'').($skipped?'; '.$skipped.' scheduled outcome check'.($skipped===1?'':'s').' skipped':'').($resumed?'; '.$resumed.' skipped outcome check'.($resumed===1?'':'s').' resumed':''));
         $pdo->commit();
         if($retired['holders'])notify_retired_holders((int)$columns['equipment_id'],$retired['holders'],$actor,'recycled');
         return $id;
@@ -272,8 +296,10 @@ function at_schedule_outcomes(int $id,array $columns,string $date,string $title,
             ->execute([$columns['client_id'],$columns['track_id'],$columns['equipment_id'],$id,mb_substr($days.'-day check: '.$title,0,190),$due,'setup:'.$id.':'.$days,$actor]);
     }
 }
-/** Returns the holds cancelled when the device is recycled (see cancel_retired_holds()). */
-function at_validate_reuse(?array $old,array $v,string $status,int $id): array {
+/** Returns the holds cancelled when the device is recycled (see cancel_retired_holds()).
+ *  A device made Ready is Available again, so the client who has waited longest for it
+ *  gets the hold (promote_equipment_waitlist(); $actor is not notified). */
+function at_validate_reuse(?array $old,array $v,string $status,int $id,int $actor=0): array {
     if(($old && $old['status']==='Redeployed')||$status==='Redeployed')throw new DomainException('Use the redeploy action to issue equipment. Redeployed intake records are retained as history.');
     if($old && (int)$old['equipment_id']!==(int)$v['equipment_id'])throw new DomainException('The inventory device cannot change after intake.');
     // A recycled record kept as Recycled is history: editing its notes or donor reference
@@ -293,6 +319,7 @@ function at_validate_reuse(?array $old,array $v,string $status,int $id): array {
     // or its status changes, as with repairs: re-saving leaves the device alone.
     if($old && $old['status']===$status)return ['count'=>0,'holders'=>[]];
     db()->prepare('UPDATE equipment SET status=? WHERE id=?')->execute([$status==='Ready'?'Available':($status==='Recycled'?'Retired':'Repair'),(int)$v['equipment_id']]);
+    if($status==='Ready')promote_equipment_waitlist((int)$v['equipment_id'],$actor);
     // A recycled device is retired, so its holds and waitlist could never be met: cancelled
     // under the equipment lock taken above, as retiring it from the Equipment page does.
     return $status==='Recycled'?cancel_retired_holds(db(),(int)$v['equipment_id']):['count'=>0,'holders'=>[]];
@@ -302,7 +329,10 @@ function at_validate_reuse(?array $old,array $v,string $status,int $id): array {
 function at_issue(int $id,int $equipment,int $client,?string $due,int $actor): int {
     if(!at_can('equipment'))throw new DomainException('Equipment access is required.');
     at_client($client,$actor);
-    if($due!==null&&!valid_date($due))throw new DomainException('Use a valid loan return date.');
+    // Checked as the Equipment page checks a loan's return date: a mistyped year (0026,
+    // 2099) or a date already past would make the loan overdue at once or never due.
+    if($due!==null&&!valid_date($due,2000,(int)date('Y')+5))throw new DomainException('Use a valid loan return date with a year from 2000 to '.((int)date('Y')+5).'.');
+    if($due!==null&&$due<date('Y-m-d'))throw new DomainException('The loan return date cannot be before today.');
     $pdo=db();$pdo->beginTransaction();
     try{
         // Inventory row before the workflow record, the order loan_equipment() and
@@ -342,7 +372,7 @@ function at_return(int $id,int $actor): void {
     if(!at_can('equipment'))throw new DomainException('Equipment access is required.');
     $r=at_record($id,$actor);if(!in_array($r['kind'],['repair','reuse'],true)||empty($r['details']['loan_id']))throw new DomainException('No linked loan.');
     if($r['client_id'])at_client((int)$r['client_id'],$actor);
-    return_equipment((int)$r['details']['loan_id']);audit($actor,'at.return','at_record',$id);
+    return_equipment((int)$r['details']['loan_id'],$actor);audit($actor,'at.return','at_record',$id);
 }
 function at_tokens(string $value): array {
     return array_values(array_unique(array_filter(array_map(fn($v)=>mb_strtolower(trim($v)),explode(',',$value)))));
@@ -355,7 +385,8 @@ function at_matches(array $need,int $actor): array {
     foreach($rows as $r){
         if($r['status']!=='Available')continue;$v=(array)$r['values'];$matched=[];$missing=[];$score=0;
         foreach(['expertise','languages','areas'] as $key){foreach(at_tokens((string)($need[$key]??'')) as $term){if(in_array($term,at_tokens($v[$key]??''),true)){$matched[]=$term;$score++;}else $missing[]=$term;}}
-        if(!empty($need['modality'])&&($v['modality']??'')!=='Both'&&($v['modality']??'')!==$need['modality'])$missing[]=$need['modality'];
+        // A need of 'Both' (the waitlist's default) accepts either mode, so it is no constraint.
+        if(!empty($need['modality'])&&$need['modality']!=='Both'&&($v['modality']??'')!=='Both'&&($v['modality']??'')!==$need['modality'])$missing[]=$need['modality'];
         $q=db()->prepare('SELECT name,weekly_hours FROM users WHERE id=? AND is_active=1');$q->execute([(int)$v['staff_id']]);$staff=$q->fetch();if(!$staff)continue;
         // Booked time is counted as capacity.php counts it: a group session (one row per
         // participant, same start and group_uid) is one sitting, and sessions already
@@ -421,8 +452,9 @@ function at_portal_report(int $id,int $client): int {
 }
 
 /** The inventory row serializes repair/intake/loan mutations. Returns the device's
- *  inventory status as it was before this change. */
-function at_repair_inventory(int $equipment,int $client,string $status,int $id,?string $prior=null): string {
+ *  inventory status as it was before this change. A device that becomes Available goes
+ *  to the client who has waited longest for it (promote_equipment_waitlist()). */
+function at_repair_inventory(int $equipment,int $client,string $status,int $id,?string $prior=null,int $actor=0): string {
     $q=db()->prepare('SELECT status FROM equipment WHERE id=? FOR UPDATE');$q->execute([$equipment]);$current=(string)$q->fetchColumn();
     if($current==='Retired')throw new DomainException('Retired equipment must go through reuse inspection first.');
     $q=db()->prepare('SELECT client_id FROM equipment_loans WHERE equipment_id=? AND returned_at IS NULL FOR UPDATE');$q->execute([$equipment]);$borrower=$q->fetchColumn();
@@ -440,6 +472,7 @@ function at_repair_inventory(int $equipment,int $client,string $status,int $id,?
         default=>'Repair',
     };
     db()->prepare('UPDATE equipment SET status=? WHERE id=?')->execute([$state,$equipment]);
+    if($state==='Available'&&$current!=='Available')promote_equipment_waitlist($equipment,$actor);
     return $current;
 }
 function at_profit_groups(array $rows,string $key): array {

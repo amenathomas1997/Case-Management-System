@@ -1,6 +1,6 @@
 // Keep the live form (including files and multi-value fields) during re-authentication.
 (function () {
-  var ready = new WeakSet(), pending = new WeakSet();
+  var ready = new WeakSet(), pending = new WeakSet(), sending = new Map(), resent = null;
   // The account that rendered this page (layout.php marks it on the timeout dialog).
   var shell = document.getElementById && document.getElementById('timeout-warn');
   var pageUser = shell ? shell.getAttribute('data-uid') : null;
@@ -9,6 +9,33 @@
   // moving focus to it, and a focused live region is read twice.
   var live = document.getElementById && document.getElementById('session-check-live');
   function progress(text) { if (live) live.textContent = text; }
+  // Once a checked form has really been sent, the server may still be working on
+  // it (sending an email can take most of a minute), and a second press would post
+  // it again. The form is held: its button is marked unavailable, the live region
+  // says it is sending, and further submits are refused until the page is shown
+  // again (Back) or a minute has passed, so a form that only downloads a file is
+  // not left stuck.
+  var SENDING = 'Sending, please wait…', STILL = 'Still sending, please wait…';
+  function hold(form, button) {
+    var held = {button: button && typeof button.setAttribute === 'function' ? button : null, had: null};
+    if (held.button) { held.had = held.button.getAttribute('aria-disabled'); held.button.setAttribute('aria-disabled', 'true'); }
+    held.timer = setTimeout(function () { release(form); }, 60000);
+    sending.set(form, held);
+    progress(SENDING);
+  }
+  function release(form) {
+    var held = sending.get(form);
+    if (!held) return;
+    sending.delete(form);
+    clearTimeout(held.timer);
+    if (held.button) {
+      if (held.had === null) held.button.removeAttribute('aria-disabled'); else held.button.setAttribute('aria-disabled', held.had);
+    }
+    if (live && (live.textContent === SENDING || live.textContent === STILL)) progress('');
+  }
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('pageshow', function () { Array.from(sending.keys()).forEach(release); });
+  }
   // A date or time only partly typed (for example no year, or no AM/PM) is posted
   // blank, which the server cannot tell from an empty field, so it would be lost
   // without a word. Stop the submission, say so on each such field and move focus
@@ -52,8 +79,9 @@
   document.addEventListener('submit', function (event) {
     var form = event.target;
     if (form.method.toLowerCase() !== 'post' || !form.querySelector('[name="csrf"]') || /(?:^|\/)logout\.php(?:\?|$)/.test(form.action)) return;
-    if (ready.has(form)) { ready.delete(form); return; }
+    if (ready.has(form)) { ready.delete(form); resent = event; return; }
     if (event.defaultPrevented) return; // A page-specific handler owns this submission.
+    if (sending.has(form)) { event.preventDefault(); progress(STILL); return; }
     // Only forms that skip the browser's own checks (novalidate) can be sent with a
     // half-typed date; this runs before the session check, and with or without it.
     if (form.noValidate && typeof form.querySelectorAll === 'function' && partialDates(form)) { event.preventDefault(); return; }
@@ -95,8 +123,12 @@
           // submission, so it is set aside for the re-send, not asked twice.
           var inline = form.onsubmit;
           form.onsubmit = null;
+          resent = null;
           try { form.requestSubmit(submitter || undefined); }
           finally { ready.delete(form); form.onsubmit = inline; }
+          // Held only if the re-sent submission went ahead (no later handler stopped it).
+          if (resent && !resent.defaultPrevented) hold(form, submitter);
+          resent = null;
         } else if (response.status === 401) {
           // Tells voice.js to forget this session's conversation.
           if (document.dispatchEvent) { try { document.dispatchEvent(new Event('cms:session-ended')); } catch (e) {} }
@@ -113,6 +145,6 @@
         message.textContent = 'We could not check your session. Your entries are still here. Check your connection and submit again. Nothing was sent from this form.';
         message.focus();
       })
-      .finally(function () { clearTimeout(deadline); pending.delete(form); progress(''); });
+      .finally(function () { clearTimeout(deadline); pending.delete(form); if (!sending.has(form)) progress(''); });
   });
 })();

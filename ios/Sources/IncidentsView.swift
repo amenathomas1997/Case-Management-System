@@ -14,75 +14,95 @@ struct IncidentsView: View {
     /// Incidents whose whole description is shown.
     @State private var expanded: Set<Int> = []
     /// After a status change, VoiceOver is put on that incident, or on the one that took its
-    /// place when it left the list (-1: the empty-list text).
+    /// place when it left the list (-1: the empty-list text; errorFocus: the error banner,
+    /// after a failure).
     @AccessibilityFocusState private var focusedIncident: Int?
+    private let errorFocus = -2
+    private let errorRow = "incidentsError"
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        List {
-            if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
-            if let d = data {
-                if d.incidents.isEmpty {
-                    Text(showClosed ? "No incidents." : "No open incidents.").foregroundStyle(Color.secondaryText)
-                        .accessibilityFocused($focusedIncident, equals: -1)
+        ScrollViewReader { proxy in
+            List {
+                if let error {
+                    ErrorBanner(message: error).listRowSeparator(.hidden)
+                        .id(errorRow)
+                        .accessibilityFocused($focusedIncident, equals: errorFocus)
                 }
-                ForEach(d.incidents) { inc in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(inc.type).font(.body.weight(.semibold))
-                                .accessibilityFocused($focusedIncident, equals: inc.id)
-                            severityBadge(inc.severity)
-                            Spacer()
-                            Text(inc.status).font(.caption).foregroundStyle(Color.secondaryText)
-                        }
-                        Text("\(formatDate(inc.incidentDate))\(inc.clientName != nil ? " · \(inc.clientName!)" : "")\(inc.location != nil && !inc.location!.isEmpty ? " · \(inc.location!)" : "")")
-                            .font(.caption).foregroundStyle(Color.secondaryText)
-                        // Shown in full at the accessibility text sizes; otherwise a long description
-                        // is cut to 5 lines with a button that shows the rest.
-                        let whole = typeSize.isAccessibilitySize || expanded.contains(inc.id)
-                        Text(inc.description).font(.callout).lineLimit(whole ? nil : 5)
-                        if !typeSize.isAccessibilitySize && isLong(inc.description) {
-                            let open = expanded.contains(inc.id)
-                            Button(open ? "Show less" : "Show full description") {
-                                if open { expanded.remove(inc.id) } else { expanded.insert(inc.id) }
+                if let d = data {
+                    if d.incidents.isEmpty {
+                        Text(showClosed ? "No incidents." : "No open incidents.").foregroundStyle(Color.secondaryText)
+                            .accessibilityFocused($focusedIncident, equals: -1)
+                    }
+                    ForEach(d.incidents) { inc in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(inc.type).font(.body.weight(.semibold))
+                                    .accessibilityFocused($focusedIncident, equals: inc.id)
+                                severityBadge(inc.severity)
+                                Spacer()
+                                Text(inc.status).font(.caption).foregroundStyle(Color.secondaryText)
                             }
-                            .buttonStyle(.borderless)
-                            .font(.callout)
-                            .frame(minHeight: 44, alignment: .leading)
-                            .accessibilityLabel(open ? "Show less of the \(inc.type) description" : "Show full description of \(inc.type) on \(formatDate(inc.incidentDate))")
-                            .accessibilityInputLabels([open ? "Show less" : "Show full description"])
-                        }
-                        if let a = inc.actionTaken, !a.isEmpty {
-                            Text("Action: \(a)").font(.caption).foregroundStyle(Color.secondaryText)
-                        }
-                        if inc.canEdit {
-                            // A menu of explicit choices (as on the bookings screen); closing an
-                            // incident, which takes it off the open list, is confirmed first.
-                            Menu {
-                                ForEach(d.statuses, id: \.self) { s in
-                                    Button {
-                                        if s == inc.status { return }
-                                        if s == "Closed" && !showClosed { pendingClose = inc } else { Task { await setStatus(inc, s) } }
-                                    } label: {
-                                        if s == inc.status { Label(s, systemImage: "checkmark") } else { Text(s) }
-                                    }
+                            Text("\(formatDate(inc.incidentDate))\(inc.clientName != nil ? " · \(inc.clientName!)" : "")\(inc.location != nil && !inc.location!.isEmpty ? " · \(inc.location!)" : "")")
+                                .font(.caption).foregroundStyle(Color.secondaryText)
+                            // Shown in full at the accessibility text sizes; otherwise a long description
+                            // is cut to 5 lines with a button that shows the rest.
+                            let whole = typeSize.isAccessibilitySize || expanded.contains(inc.id)
+                            Text(inc.description).font(.callout).lineLimit(whole ? nil : 5)
+                            if !typeSize.isAccessibilitySize && isLong(inc.description) {
+                                let open = expanded.contains(inc.id)
+                                Button(open ? "Show less" : "Show full description") {
+                                    if open { expanded.remove(inc.id) } else { expanded.insert(inc.id) }
                                 }
-                            } label: {
-                                // Body-size text in a 44-point-tall target.
-                                Label("Status: \(inc.status)", systemImage: "chevron.up.chevron.down")
-                                    .frame(minHeight: 44, alignment: .leading)
-                                    .contentShape(Rectangle())
+                                .buttonStyle(.borderless)
+                                .font(.callout)
+                                .frame(minHeight: 44, alignment: .leading)
+                                .accessibilityLabel(open ? "Show less of the \(inc.type) description" : "Show full description of \(inc.type) on \(formatDate(inc.incidentDate))")
+                                .accessibilityInputLabels([open ? "Show less" : "Show full description"])
                             }
-                            // Names the incident, so the Form Controls rotor and Voice Control
-                            // can tell one row's status from another's; "Status" stays speakable.
-                            .accessibilityLabel("Status for \(inc.type) on \(formatDate(inc.incidentDate))\(inc.clientName.map { " for \($0)" } ?? "")")
-                            .accessibilityValue(inc.status)
-                            .accessibilityHint("Opens a menu to change the status.")
-                            .accessibilityInputLabels(["Status", "Status for \(inc.type)"])
-                        }
-                    }.padding(.vertical, 2)
+                            if let a = inc.actionTaken, !a.isEmpty {
+                                Text("Action: \(a)").font(.caption).foregroundStyle(Color.secondaryText)
+                            }
+                            if inc.canEdit {
+                                // A menu of explicit choices (as on the bookings screen); closing an
+                                // incident, which takes it off the open list, is confirmed first.
+                                Menu {
+                                    ForEach(d.statuses, id: \.self) { s in
+                                        Button {
+                                            if s == inc.status { return }
+                                            if s == "Closed" && !showClosed { pendingClose = inc } else { Task { await setStatus(inc, s) } }
+                                        } label: {
+                                            if s == inc.status { Label(s, systemImage: "checkmark") } else { Text(s) }
+                                        }
+                                    }
+                                } label: {
+                                    // Body-size text in a 44-point-tall target.
+                                    Label("Status: \(inc.status)", systemImage: "chevron.up.chevron.down")
+                                        .frame(minHeight: 44, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                }
+                                // Names the incident, so the Form Controls rotor and Voice Control
+                                // can tell one row's status from another's; "Status" stays speakable.
+                                .accessibilityLabel("Status for \(inc.type) on \(formatDate(inc.incidentDate))\(inc.clientName.map { " for \($0)" } ?? "")")
+                                .accessibilityValue(inc.status)
+                                .accessibilityHint("Opens a menu to change the status.")
+                                .accessibilityInputLabels(["Status", "Status for \(inc.type)"])
+                            }
+                        }.padding(.vertical, 2)
+                    }
+                } else if error == nil { ProgressView() }
+            }
+            // The banner is the list's first row: a failed status change on an incident further
+            // down would otherwise leave it off screen, where a List never draws it, so it was
+            // neither seen nor heard. Scroll it into view once it exists, then put VoiceOver on it.
+            .onChange(of: error) { message in
+                guard message != nil else { return }
+                DispatchQueue.main.async { withAnimation { proxy.scrollTo(errorRow, anchor: .top) } }
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    focusedIncident = errorFocus
                 }
-            } else if error == nil { ProgressView() }
+            }
         }
         .confirmationDialog(
             "Close this incident? It moves to the closed incidents, shown with Show closed.",
@@ -138,6 +158,8 @@ struct IncidentsView: View {
     private func setStatus(_ inc: Incident, _ to: String) async {
         guard to != inc.status else { return }
         let index = data?.incidents.firstIndex(where: { $0.id == inc.id }) ?? 0
+        // Cleared first so a repeat of the same failure is shown (and announced) again.
+        error = nil
         do {
             let _: OKResponse = try await api.call("incident_update", body: ["id": inc.id, "to": to])
             await load()
@@ -149,7 +171,7 @@ struct IncidentsView: View {
                 else { focusedIncident = -1 }
             }
             announceAfterDismiss("Incident marked \(to).")
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 
     private func load(announceView: Bool = false) async {
@@ -163,7 +185,7 @@ struct IncidentsView: View {
             if announceView { announce(wantsClosed ? "Showing all incidents, including closed." : "Showing open incidents only.") }
         } catch {
             guard wantsClosed == showClosed else { return }
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }
@@ -203,11 +225,13 @@ struct AddIncidentSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            // The error banner is the form's first row; it is scrolled into view and given
+            // VoiceOver focus when a problem is reported (see ErrorFocusForm).
+            ErrorFocusForm(error: error) {
                 Section {
                     // A date picker, not typed text: a mistyped date used to be saved as today.
-                    DatePicker("Incident date", selection: $date, displayedComponents: .date)
+                    // Up to today, as on the website: an incident has already happened.
+                    DatePicker("Incident date", selection: $date, in: ...Date(), displayedComponents: .date)
                     Picker("Type", selection: $type) { ForEach(types, id: \.self) { Text($0) } }
                     Picker("Severity", selection: $severity) { ForEach(severities, id: \.self) { Text($0) } }
                     NewRecordClientPicker(title: "Client (optional)", noneLabel: "None", includeClosed: true, selection: $clientId)
@@ -264,6 +288,6 @@ struct AddIncidentSheet: View {
             let _: OKResponse = try await api.call("add_incident", body: body)
             // The list announces the result once this sheet has gone.
             onSaved(); dismiss()
-        } catch { self.error = error.localizedDescription; busy = false }
+        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

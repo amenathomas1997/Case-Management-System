@@ -15,14 +15,18 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script src="assets/low-vision.js?v=<?= h(APP_VERSION) ?>"></script>
-<title lang="<?= page_lang() === 'es' && __($title) === $title ? 'en' : h(page_lang()) ?>"><?= h($titleText) ?> — <?= h($app) ?></title>
+<title lang="<?= page_lang() === 'es' && !isset(translations()[$title]) ? 'en' : h(page_lang()) ?>"><?= h($titleText) ?> — <?= h($app) ?></title>
 <link rel="stylesheet" href="assets/styles.css?v=<?= h(APP_VERSION) ?>">
-<link rel="manifest" href="/manifest.webmanifest">
-<style>:root{--brand:<?= h(accessible_brand_color(brand('color'), '#1e40af')) ?>;--brand-dark:<?= h(accessible_brand_color(brand('color_dark'), '#1e3a8a', true)) ?>;--accent:<?= h(accessible_brand_color(brand('accent'), '#134e4a', false, 4.5)) ?>;}</style>
+<?php /* Relative, as the stylesheet is: a site installed in a folder (https://example.org/cms)
+         uses its own manifest and icon, not the domain root's. */ ?>
+<link rel="manifest" href="manifest.webmanifest">
+<?php $brandDark = accessible_brand_color(brand('color_dark'), '#1e3a8a', true); ?>
+<style>:root{--brand:<?= h(accessible_brand_color(brand('color'), '#1e40af')) ?>;--brand-dark:<?= h($brandDark) ?>;--accent:<?= h(accessible_brand_color(brand('accent'), '#134e4a', false, 4.5)) ?>;}</style>
 <?php /* --brand and --brand-dark colour links, buttons and the header, so they need 7:1;
          --accent is not used as text by styles.css, so the default teal (5.5:1) is kept. */ ?>
-<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-<meta name="theme-color" content="#1e3a8a">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<?php /* The browser toolbar matches the header (the installed brand), not the vendor navy. */ ?>
+<meta name="theme-color" content="<?= h($brandDark) ?>">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="<?= h(brand('short')) ?>">
@@ -182,8 +186,10 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
 <?php /* session-forms.js says "Checking your session…" here: a polite region already in
          the page, so it is announced; its failure messages are announced by focus instead. */ ?>
 <div id="session-check-live" class="visually-hidden" role="status"></div>
-<?php /* data-uid: session-forms.js refuses to resubmit under a different signed-in account. */ ?>
-<div id="timeout-warn" role="alertdialog" aria-modal="true" aria-labelledby="tw-title" aria-describedby="tw-desc" hidden class="timeout-dialog" data-warn-ms="<?= ($totalSecs - $leadSecs) * 1000 ?>" data-uid="<?= (int)$user['id'] ?>">
+<?php /* data-uid: session-forms.js refuses to resubmit under a different signed-in account.
+         data-timeout-ms: the server's own limit (as ping.php applies it), after which
+         session-timeout.js switches the dialog to "You were signed out". */ ?>
+<div id="timeout-warn" role="alertdialog" aria-modal="true" aria-labelledby="tw-title" aria-describedby="tw-desc" hidden class="timeout-dialog" data-warn-ms="<?= ($totalSecs - $leadSecs) * 1000 ?>" data-timeout-ms="<?= max(0, (int)cfg('session_timeout_minutes')) * 60000 ?>" data-uid="<?= (int)$user['id'] ?>">
   <h2 id="tw-title">Are you still there?</h2>
   <p id="tw-desc">You've been inactive and will be signed out in about <?= (int)ceil($leadSecs / 60) ?> minute<?= $leadSecs > 90 ? 's' : '' ?>. Keep this page open to retain your work. File uploads may need to be selected again.</p>
   <button type="button" class="btn btn-primary" id="tw-stay">Stay signed in</button>
@@ -344,7 +350,9 @@ function select_options(array $options, ?string $selected): string {
     $out = '';
     foreach ($options as $o) {
         $sel = $o === $selected ? ' selected' : '';
-        $lang = page_lang() === 'es' && __($o) === $o ? ' lang="en"' : '';
+        // English only when the dictionary has no entry: 'Audio' and 'Portal' are
+        // translated even though the Spanish is spelled the same.
+        $lang = page_lang() === 'es' && !isset(translations()[$o]) ? ' lang="en"' : '';
         $out .= '<option value="' . h($o) . '"' . $sel . $lang . '>' . h(__($o)) . '</option>';
     }
     return $out;

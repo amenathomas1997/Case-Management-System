@@ -14,10 +14,38 @@
   }
   // Short configured sessions need activity keepalives before their warning.
   var activityInterval = Math.max(1000, Math.min(60000, Number(dialog.dataset.warnMs) / 2));
-  var timer, lastFocus = null, lastPing = Date.now(), pending = false;
+  // The configured session length (layout.php). Once it passes with no activity the
+  // server has seen, the session has ended there; this is known from the clock
+  // alone, because asking ping.php would extend the session.
+  var timeoutMs = Number(dialog.dataset.timeoutMs) || 0;
+  var timer, endTimer, lastFocus = null, lastPing = Date.now(), pending = false, ended = false;
+  // Every tab of this site shares one session. Each records when the server last
+  // saw it in use, so a tab left idle does not say "signed out" while another kept
+  // the session alive. Storage can be unavailable; the clock in this tab is then used.
+  function shared(at) {
+    try {
+      if (at) localStorage.setItem('cms-session-active', String(at));
+      return Number(localStorage.getItem('cms-session-active')) || 0;
+    } catch (e) { return 0; }
+  }
+  function armEnd(from) {
+    if (!(timeoutMs > 0)) return;
+    clearTimeout(endTimer);
+    // A few seconds' grace, so the notice never comes before the server has ended it
+    // (and never past the longest delay a timer accepts, which would fire at once).
+    endTimer = setTimeout(ending, Math.min(2147483647, Math.max(0, from + timeoutMs + 5000 - Date.now())));
+  }
+  function ending() {
+    var seen = shared();
+    if (seen && Date.now() - seen < timeoutMs) { armEnd(seen); return; }
+    expire();
+  }
   function arm() {
+    ended = false;
     clearTimeout(timer);
     timer = setTimeout(show, Number(dialog.dataset.warnMs));
+    shared(Date.now());
+    armEnd(Date.now());
   }
   function show() {
     if (!dialog.hidden) return;
@@ -44,11 +72,35 @@
       ? lastFocus : document.getElementById('main');
     if (back) back.focus();
   }
-  // Activity keepalive: re-arms the warning once the server confirms the session.
+  // The session has ended (the server refused a keepalive, or the configured time
+  // passed): the dialog switches to its signed-out message, spoken through the live
+  // region, and opens if it was closed, so nobody keeps typing believing they are
+  // still signed in. Once said, it is not repeated until the session is confirmed
+  // again, so the dialog can still be closed to copy unsaved text.
+  function expire() {
+    if (ended) return;
+    ended = true;
+    clearTimeout(timer); clearTimeout(endTimer);
+    // Tells voice.js to forget this session's conversation.
+    if (document.dispatchEvent) { try { document.dispatchEvent(new Event('cms:session-ended')); } catch (e) {} }
+    error.hidden = true;
+    document.getElementById('tw-desc').hidden = true;
+    stayButton.hidden = true;
+    var expired = document.getElementById('tw-expired');
+    dialog.setAttribute('aria-describedby', 'tw-expired');
+    if (dialog.hidden) { lastFocus = document.activeElement; dialog.hidden = false; }
+    announce(expired);
+    expired.querySelector('a').focus();
+  }
+  // Activity keepalive: re-arms the warning once the server confirms the session,
+  // and says at once when the server reports it has already ended.
   function keepalive() {
     lastPing = Date.now();
     fetch('ping.php', {credentials: 'same-origin'})
-      .then(function (response) { if (response.ok) arm(); }).catch(function () {});
+      .then(function (response) {
+        if (response.ok) arm();
+        else if (response.status === 401) expire();
+      }).catch(function () {});
   }
   // "Return to my work" and Escape close at once (never waiting on the network)
   // and count as activity, so the session is extended and a later warning is set.
@@ -69,14 +121,7 @@
           lastPing = Date.now();
           arm();
         } else if (response.status === 401) {
-          // Tells voice.js to forget this session's conversation.
-          if (document.dispatchEvent) { try { document.dispatchEvent(new Event('cms:session-ended')); } catch (e) {} }
-          document.getElementById('tw-desc').hidden = true;
-          stayButton.hidden = true;
-          var expired = document.getElementById('tw-expired');
-          announce(expired);
-          dialog.setAttribute('aria-describedby', 'tw-expired');
-          if (!dialog.hidden) expired.querySelector('a').focus();
+          expire();
         } else {
           throw new Error('Keepalive failed');
         }

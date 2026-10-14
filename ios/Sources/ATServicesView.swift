@@ -133,7 +133,7 @@ struct ATServicesView: View {
     }
     private func load() async {
         do { let response: ATCatalogResponse = try await api.call("at_catalog"); modules = response.modules; error = nil; loaded = true }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -154,7 +154,16 @@ struct ATModuleView: View {
             if let error { ErrorBanner(message: error) }
             if let data {
                 let shown = matching(data.records)
+                // The date column means different things by kind (a rate's "Effective from", a
+                // license's "Renewal date"), so it is named with this kind's own field label.
+                let dateLabel = data.fields.first(where: { $0.key == "due_date" })?.label ?? "Due / effective date"
                 Section { Text(data.description).font(.callout) }
+                if module.id == "trial_option" {
+                    // As on the website: a trial option is added from its comparison, which fills
+                    // in the client and the comparison (a list of every client's comparisons
+                    // could not tell same-named ones apart).
+                    Text("To add a trial option, open its device trial comparison and choose Add trial option under Related records.").font(.callout)
+                }
                 if module.id == "staff_profile" { NavigationLink("Find instructor matches") { ATMatchingView() } }
                 if module.id == "cost" && (api.can("admin") || api.can("billing")) { NavigationLink("View profitability") { ATProfitabilityView() } }
                 ForEach(shown) { record in
@@ -163,7 +172,7 @@ struct ATModuleView: View {
                             Text(record.title)
                             // Primary, not secondary (grey caption text is about 3.4:1), and the
                             // date is named and written out rather than left as yyyy-MM-dd.
-                            Text(record.status + (record.values["due_date"].flatMap { $0.isEmpty ? nil : " · Due " + formatDate($0) } ?? "")).font(.caption)
+                            Text(record.status + (record.values["due_date"].flatMap { $0.isEmpty ? nil : " · \(dateLabel): " + formatDate($0) } ?? "")).font(.caption)
                         }
                     }
                 }
@@ -174,7 +183,7 @@ struct ATModuleView: View {
         .navigationTitle(module.label).searchable(text: $search)
         .onChange(of: search) { _ in Task { await searchChanged() } }
         .toolbar {
-            if data != nil && (module.id != "resource" || (api.can("templates") || api.can("billing"))) {
+            if data != nil && module.id != "trial_option" && (module.id != "resource" || (api.can("templates") || api.can("billing"))) {
                 Button { adding = true } label: { Label("Add \(atRecordNoun(module.id))", systemImage: "plus") }
             }
         }
@@ -184,7 +193,9 @@ struct ATModuleView: View {
         }
     }
     private func announceSheetResult() {
-        if let message = sheetResult { announceAfterDismiss(message) }
+        // Closed without a confirmation (Cancel): reloaded anyway, so a new record whose reply
+        // was lost to a dropped connection is in the list before anyone saves it again.
+        if let message = sheetResult { announceAfterDismiss(message) } else { Task { await load() } }
         sheetResult = nil
     }
     /// The list filters as you type, which VoiceOver does not hear: once typing pauses, say
@@ -198,7 +209,7 @@ struct ATModuleView: View {
     }
     private func load() async {
         do { data = try await api.call("at_list", query: ["kind": module.id]); error = nil }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -216,6 +227,9 @@ struct ATRecordView: View {
     @State private var sheetResult: String?
     /// Set once a linked loan's return is recorded; the notice replaces the return button.
     @State private var returnRecorded = false
+    /// The comparison report as the server writes it (at_report, which also records that
+    /// the report was produced); nil until it arrives, when the local text stands in.
+    @State private var serverReport: String?
     @AccessibilityFocusState private var returnNoticeFocused: Bool
     private var canEdit: Bool {
         guard let r = data?.record else { return false }
@@ -234,6 +248,8 @@ struct ATRecordView: View {
                             // The caption is hidden from VoiceOver and its name is spoken with the
                             // value instead, so each field is one swipe that says what it is.
                             // A date is written out ("Oct 15, 2026"), not read as digits and dashes.
+                            // Not selectable: these are client records, and a system Copy would go
+                            // to the person's other devices and stay on the clipboard indefinitely.
                             let shown = field.options.first(where: { $0.value == value })?.label
                                 ?? (field.type == "date" && APIDate.strictDay(value) != nil ? formatDate(value) : value)
                             VStack(alignment: .leading, spacing: 4) {
@@ -241,7 +257,7 @@ struct ATRecordView: View {
                                 if field.type == "url", let url = URL(string: value), url.scheme == "https" {
                                     Link(value, destination: url).accessibilityLabel("\(field.label): \(value)")
                                 }
-                                else { Text(shown).textSelection(.enabled).accessibilityLabel("\(field.label): \(shown)") }
+                                else { Text(shown).accessibilityLabel("\(field.label): \(shown)") }
                             }
                         }
                     }
@@ -249,14 +265,17 @@ struct ATRecordView: View {
                 if !data.summary.isEmpty {
                     Section("Current totals / equipment") {
                         ForEach(data.summary.keys.sorted(), id: \.self) { key in
-                            VStack(alignment: .leading) { Text(key).font(.caption); Text(data.summary[key] ?? "") }
+                            // A date ("Return due", "Returned", "Expires") is written out, as in the
+                            // Record section, not read as digits and dashes.
+                            let value = data.summary[key] ?? ""
+                            VStack(alignment: .leading) { Text(key).font(.caption); Text(APIDate.strictDay(value) != nil ? formatDate(value) : value) }
                                 .accessibilityElement(children: .combine)
                         }
                     }
                 }
                 if data.record.kind == "trial" {
                     Section("Comparison report") {
-                        ShareLink(item: comparisonText(data)) { Label("Share comparison and recommendation", systemImage: "square.and.arrow.up") }
+                        ShareLink(item: serverReport ?? comparisonText(data)) { Label("Share comparison and recommendation", systemImage: "square.and.arrow.up") }
                     }
                 }
                 if let kind = childKind(data.record.kind) {
@@ -310,6 +329,17 @@ struct ATRecordView: View {
             Button("Record return") { Task { await returnEquipment() } }
         }
     }
+    /// The reply to at_report: the comparison report's title and text as the website writes them.
+    struct ATReportResponse: Decodable { let ok: Bool; let title: String?; let text: String? }
+    /// A trial option's fields as the web report (at_report.php) lists them, with the form's
+    /// labels from inc/at_catalog.php: each score's label carries its scale.
+    private static let trialOptionLines: [(key: String, label: String)] = [
+        ("device", "Device / software and version"), ("tested_on", "Trial date"),
+        ("task_results", "Results against each comparison goal"),
+        ("independence", "Independence (1 = needs full support, 5 = fully independent)"),
+        ("ease", "Ease of use (1 = very difficult, 5 = very easy)"), ("preference", "Client preference"),
+        ("cost", "Estimated total cost"), ("barriers", "Barriers and support required"),
+    ]
     private func comparisonText(_ data: ATDetailResponse) -> String {
         var lines = [data.record.title, "Status: " + data.record.status, "Goals: " + (data.record.values["goals"] ?? ""), "Context: " + (data.record.values["context"] ?? "")]
         // As on the web report: the recommended option is named in its own heading line and at
@@ -319,22 +349,42 @@ struct ATRecordView: View {
             let isPreferred = data.record.values["preferred_option"] == String(child.id)
             if isPreferred { preferredTitle = child.title }
             lines.append("\n" + child.title + " — " + child.status + (isPreferred ? " (recommended)" : ""))
-            for key in ["device", "task_results", "independence", "ease", "preference", "cost", "barriers"] { lines.append(key.replacingOccurrences(of: "_", with: " ").capitalized + ": " + (child.values[key] ?? "")) }
+            for (key, label) in Self.trialOptionLines {
+                // As on the web report: a blank is "Not recorded", the trial date is written out
+                // and the cost is shown as money.
+                let value = (child.values[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let shown: String
+                if value.isEmpty { shown = "Not recorded" }
+                else if key == "tested_on", APIDate.strictDay(value) != nil { shown = formatDate(value) }
+                else if key == "cost", let amount = Double(value) { shown = money(amount) }
+                else { shown = value }
+                lines.append(label + ": " + shown)
+            }
         }
         lines.append("\nRecommendation rationale:")
         if let preferredTitle { lines.append("Recommended option: " + preferredTitle) }
         let rationale = (data.record.values["rationale"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         lines.append(rationale.isEmpty ? "No recommendation finalized." : rationale)
+        lines.append("\nScores are recorded staff observations, not a validated clinical assessment.")
         return lines.joined(separator: "\n")
     }
     private func announceSheetResult() {
-        if let message = sheetResult { announceAfterDismiss(message) }
+        // Closed without a confirmation (Cancel): reloaded anyway, so a related record whose
+        // reply was lost to a dropped connection is listed before anyone saves it again.
+        if let message = sheetResult { announceAfterDismiss(message) } else { Task { await load() } }
         sheetResult = nil
     }
     private func childKind(_ kind: String) -> String? { ["trial": "trial_option", "setup": "outcome", "resource": "learning", "license": "license_seat"][kind] }
     private func load() async {
         do { data = try await api.call("at_detail", query: ["id": String(id)]); error = nil }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
+        // The server's own report for a device comparison, so sharing matches the website's
+        // report and is recorded there. A failure is not an error here: the local text is shared.
+        if data?.record.kind == "trial" {
+            if let r: ATReportResponse = try? await api.call("at_report", body: ["id": id]), r.ok, let text = r.text, !text.isEmpty {
+                serverReport = text
+            }
+        }
     }
     private func prepareChild(_ kind: String, parent: ATRecord) async {
         // Cleared first so the same error coming back is shown (and announced) again.
@@ -346,7 +396,7 @@ struct ATRecordView: View {
             if !parentClient.isEmpty && parentClient != "0" { query["client_id"] = parentClient }
             let response: ATListResponse = try await api.call("at_list", query: query)
             child = ATChildDraft(kind: kind, data: response, defaults: ["parent_id": String(parent.id), "client_id": parentClient])
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
     private func returnEquipment() async {
         working = true; error = nil; returnRecorded = false; defer { working = false }
@@ -361,7 +411,7 @@ struct ATRecordView: View {
                 returnNoticeFocused = true
             }
         }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 /// What one record of an AT service is called, for button and sheet titles ("Add trial
@@ -413,8 +463,9 @@ struct ATEditSheet: View {
     @State private var busy = false
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            // ErrorFocusForm: Save is in the toolbar and the form is long, so a refused save is
+            // scrolled to and given VoiceOver focus rather than left in a banner row off screen.
+            ErrorFocusForm(error: error) {
                 // A caption that stays visible once the title is filled in (a placeholder alone
                 // disappears); the field carries the same name for VoiceOver.
                 VStack(alignment: .leading) {
@@ -522,7 +573,12 @@ struct ATEditSheet: View {
             // which would cut off an announcement made here.
             let noun = atRecordNoun(kind)
             onSave(String(noun.prefix(1)).uppercased() + String(noun.dropFirst()) + " saved."); dismiss()
-        } catch { self.error = error.localizedDescription }
+        } catch APIError.network where record == nil {
+            // The connection can drop after the server has stored a new record, and at_save has
+            // no duplicate check for one, so a second Save could store it twice. (An edit is safe
+            // to retry: the version check refuses a repeat.)
+            showFormError("The connection dropped before the server answered, so this \(atRecordNoun(kind)) may have been saved. Choose Cancel, then check the list (it reloads when this form closes) before saving it again.", in: &self.error)
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -548,7 +604,16 @@ struct ATIssueSheet: View {
                     if choices.clients.isEmpty { Text("No client can receive this equipment right now.") }
                     Picker("Equipment (required)", selection: $equipment) { Text("Choose…").tag(""); ForEach(choices.equipment) { Text($0.label).tag($0.value) } }
                     if choices.equipment.isEmpty { Text(record.kind == "repair" ? "No loaner is available right now." : "No equipment is available to issue right now.") }
-                    OptionalDayField(title: "Return date", text: $due)
+                    // A switch and a date picker, as OptionalDayField, but held to the days the
+                    // server accepts: today through five years ahead.
+                    let dueDay = APIDate.strictDay(due)
+                    Toggle("Set return date", isOn: Binding(get: { dueDay != nil }, set: { due = $0 ? APIDate.day(Date()) : "" }))
+                        .accessibilityHint(dueDay != nil ? "Turning this off clears the date." : "Turning this on sets the date to today, then you can change it.")
+                    if let dueDay {
+                        DatePicker("Return date", selection: Binding(get: { dueDay }, set: { due = APIDate.day($0) }),
+                                   in: returnDateRange, displayedComponents: .date)
+                            .accessibilityHint("From today to five years ahead.")
+                    }
                 }
             }.navigationTitle("Issue equipment")
                 .toolbar {
@@ -564,15 +629,21 @@ struct ATIssueSheet: View {
                     do {
                         // Nothing is preselected: both are chosen on purpose, and Issue stays off until they are.
                         choices = try await api.call("at_issue_choices", query: ["id": String(record.id)])
-                    } catch { self.error = error.localizedDescription }
+                    } catch { showFormError(error.localizedDescription, in: &self.error) }
                 }
         }
+    }
+    /// Today through five years ahead: the server refuses a loan return date already past, or
+    /// in a year more than five years from now.
+    private var returnDateRange: ClosedRange<Date> {
+        let today = Calendar.current.startOfDay(for: Date())
+        return today...(Calendar.current.date(byAdding: .year, value: 5, to: Date()) ?? today)
     }
     private func issue() async {
         // Cleared first so the same error coming back is shown (and announced) again.
         busy = true; error = nil; defer { busy = false }
         do { let _: ATSaveResponse = try await api.call("at_issue", body: ["id": record.id, "client_id": Int(client) ?? 0, "equipment_id": Int(equipment) ?? 0, "due_date": due]); onSave("Equipment issued."); dismiss() }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -617,7 +688,7 @@ struct ATMatchingView: View {
             let r: ATMatchesResponse = try await api.call("at_matches", query: ["expertise": expertise, "languages": languages, "areas": areas, "modality": modality]); matches = r.matches; error = nil
             announce(matches.isEmpty ? "No instructor matches found." : "\(matches.count) instructor match\(matches.count == 1 ? "" : "es") found.")
         }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 struct ATProfitabilityView: View {
@@ -665,7 +736,7 @@ struct ATProfitabilityView: View {
             if !loaded { announce(rows.isEmpty ? "No invoiced tracks to report yet." : "Profitability loaded for \(rows.count) track\(rows.count == 1 ? "" : "s").") }
             loaded = true
         }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -674,7 +745,19 @@ struct ATDraftTarget: Identifiable {
     let label: String
     var id: String { key }
 }
-struct ATAIDraftResponse: Decodable { let text: String }
+struct ATAIDraftResponse: Decodable {
+    let text: String
+    /// The provider stopped at its output limit, so the draft ends before it was finished
+    /// (false when an older server does not say).
+    let truncated: Bool
+    private enum CodingKeys: String, CodingKey { case text, truncated }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        text = try c.decode(String.self, forKey: .text)
+        truncated = (try? c.decodeIfPresent(Bool.self, forKey: .truncated))
+            ?? (try? c.decodeIfPresent(Int.self, forKey: .truncated)).map { $0 != 0 } ?? false
+    }
+}
 struct ATAIDraftPanel: View {
     @EnvironmentObject var api: API
     let kind: String
@@ -686,9 +769,14 @@ struct ATAIDraftPanel: View {
     @State private var instruction = ""
     @State private var draft = ""
     @State private var draftField = ""
-    /// Each field's text from before a draft was first placed in it, kept until the sheet
+    /// The draft stops before the end (the AI reached its output limit).
+    @State private var draftIncomplete = false
+    /// Each field's own text from before a draft was placed in it, kept until the sheet
     /// closes, so "Restore" always gives back the person's own text (not an earlier draft).
     @State private var previous: [String: String] = [:]
+    /// The draft last placed in each field: when the field no longer holds it, the person has
+    /// edited it since, and that text is what a later Restore must give back.
+    @State private var applied: [String: String] = [:]
     @State private var busy = false
     @State private var error: String?
     @AccessibilityFocusState private var draftFocused: Bool
@@ -706,16 +794,30 @@ struct ATAIDraftPanel: View {
             if !draftField.isEmpty {
                 // The field the draft is for is named, since the picker above may have moved on.
                 let target = label(draftField)
+                let heading = "AI draft for \(target)\(draftIncomplete ? " (incomplete)" : "") — review and edit"
                 // Hidden from VoiceOver: the editor below carries the same words, and VoiceOver
                 // is moved onto it when the draft arrives.
-                Text("AI draft for \(target) — review and edit").font(.headline).accessibilityHidden(true)
-                TextEditor(text: $draft).frame(minHeight: 140).accessibilityLabel("AI draft for \(target) — review and edit").accessibilityFocused($draftFocused)
+                Text(heading).font(.headline).accessibilityHidden(true)
+                if draftIncomplete {
+                    // In words with an icon, not colour alone, as on the website.
+                    Label("The AI stopped before finishing. Check the end, or ask for a shorter draft.", systemImage: "exclamationmark.triangle")
+                        .font(.callout.weight(.semibold))
+                }
+                TextEditor(text: $draft).frame(minHeight: 140).accessibilityLabel(heading).accessibilityFocused($draftFocused)
                 Button("Use this draft for \(target)") {
-                    if previous[draftField] == nil { previous[draftField] = context[draftField] ?? "" }
-                    apply(draftField, draft); announce("Draft placed in \(target).")
+                    // As on the website: the field's text is kept for Restore on the first draft,
+                    // and again whenever it was changed by hand since the last draft went in, so
+                    // Restore never throws away the person's own corrections.
+                    let current = context[draftField] ?? ""
+                    if previous[draftField] == nil || current != applied[draftField] { previous[draftField] = current }
+                    apply(draftField, draft); applied[draftField] = draft
+                    announce("Draft placed in \(target).")
                 }.disabled(busy)
                 if let original = previous[draftField] {
-                    Button("Restore previous \(target) text") { apply(draftField, original); previous[draftField] = nil; announce("Previous \(target) text restored.") }.disabled(busy)
+                    Button("Restore previous \(target) text") {
+                        apply(draftField, original); previous[draftField] = nil; applied[draftField] = nil
+                        announce("Previous \(target) text restored.")
+                    }.disabled(busy)
                 }
             }
         }.onAppear { if field.isEmpty { field = targets.first?.key ?? "" } }
@@ -726,11 +828,13 @@ struct ATAIDraftPanel: View {
         let selected = field
         do {
             let result: ATAIDraftResponse = try await api.call("at_ai_draft", body: ["kind": kind, "field": selected, "values": context, "instruction": instruction, "id": recordId])
-            draft = result.text; draftField = selected
+            draft = result.text; draftField = selected; draftIncomplete = result.truncated
             // The draft appears below the button with no focus move: say so, then put
             // VoiceOver on it.
-            announce("AI draft ready. Review it before using it.")
+            announce(result.truncated
+                     ? "AI draft ready, but it is incomplete: the AI stopped before finishing. Check the end, or ask for a shorter draft."
+                     : "AI draft ready. Review it before using it.")
             Task { try? await Task.sleep(nanoseconds: 900_000_000); draftFocused = true }
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }

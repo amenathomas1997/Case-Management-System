@@ -67,14 +67,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_booking'])) {
     }
     if ($errors) { keep_input(); keep_field_errors($errors); redirect('access_bookings.php'); }
     $serviceType = in_array($_POST['service_type'] ?? '', BOOKING_TYPES, true) ? $_POST['service_type'] : 'Other';
+    $provider = $in('provider') !== '' ? $in('provider') : null;
+    $location = $in('location') !== '' ? $in('location') : null;
+    $notes = $in('notes') !== '' ? $in('notes') : null;
+    $duration = $durIn !== '' ? (int)$durIn : 0;
+    $cost = $costIn !== '' ? $costIn : null;
+    // A repeated submit (Create booking pressed again while the first was still
+    // saving) finds the booking it already made and adds nothing: the same booking,
+    // field for field, made by this user in the last 10 minutes and not cancelled.
+    $dup = db()->prepare("SELECT id FROM access_bookings WHERE client_id = ? AND service_type = ? AND needed_at <=> ? AND duration_min = ?
+        AND provider <=> ? AND location <=> ? AND cost <=> ? AND notes <=> ? AND created_by = ? AND status <> 'Cancelled'
+        AND created_at > DATE_SUB(NOW(), INTERVAL 10 MINUTE) LIMIT 1");
+    $dup->execute([$cid, $serviceType, $neededAt, $duration, $provider, $location, $cost, $notes, $user['id']]);
+    if ($dup->fetchColumn()) {
+        flash('That ' . (BOOKING_TYPE_LABELS[$serviceType] ?? $serviceType) . ' booking for ' . $clientName . ' (' . booking_when($neededAt)
+            . ') was already created a moment ago, so it was not added again. To book a second one for the same time, add a note that tells them apart.', 'info');
+        redirect('access_bookings.php');
+    }
     db()->prepare('INSERT INTO access_bookings (client_id, service_type, provider, needed_at, duration_min, location, status, cost, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)')
-        ->execute([$cid,
-            $serviceType,
-            $in('provider') !== '' ? $in('provider') : null, $neededAt,
-            $durIn !== '' ? (int)$durIn : 0,
-            $in('location') !== '' ? $in('location') : null, 'Requested',
-            $costIn !== '' ? $costIn : null,
-            $in('notes') !== '' ? $in('notes') : null, $user['id']]);
+        ->execute([$cid, $serviceType, $provider, $neededAt, $duration, $location, 'Requested', $cost, $notes, $user['id']]);
     // The stored (validated) type: a malformed post can never make the audit call
     // throw after the booking was written.
     audit($user['id'], 'booking.add', 'access_booking', (int)db()->lastInsertId(), $serviceType);
@@ -200,7 +211,7 @@ page_header('Accommodation bookings', $user, 'schedule');
 <div class="table-scroll" tabindex="0" role="region" aria-label="Accommodation bookings">
 <table>
   <caption class="visually-hidden"><?= ['upcoming' => 'Upcoming accommodation bookings', 'past' => 'Accommodation bookings, including past ones', 'cancelled' => 'Cancelled accommodation bookings'][$view] ?></caption>
-  <thead><tr><th scope="col">When</th><th scope="col">Client</th><th scope="col">Service</th><th scope="col">Provider</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+  <thead><tr><th scope="col">When</th><th scope="col">Client</th><th scope="col">Service, location and notes</th><th scope="col">Provider</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
   <tbody>
   <?php if (!$rows): ?><tr><td colspan="6" class="muted">No <?= ['upcoming' => 'upcoming ', 'past' => '', 'cancelled' => 'cancelled '][$view] ?>bookings.</td></tr><?php endif; ?>
   <?php foreach ($rows as $r):
@@ -209,8 +220,10 @@ page_header('Accommodation bookings', $user, 'schedule');
     $which = h($r['client_name']) . ', ' . h($r['service_type']) . ', ' . h(booking_when($r['needed_at'])); ?>
     <tr>
       <td><?= $r['needed_at'] ? h(booking_when($r['needed_at'])) : '<span class="muted">—</span>' ?><?= $r['duration_min'] ? '<br><span class="muted">' . (int)$r['duration_min'] . ' min</span>' : '' ?></td>
-      <td><a href="client.php?id=<?= (int)$r['cid'] ?>"><?= h($r['client_name']) ?></a></td>
-      <td><?= h(BOOKING_TYPE_LABELS[$r['service_type']] ?? $r['service_type']) ?><?= $r['location'] ? '<br><span class="muted">' . h($r['location']) . '</span>' : '' ?></td>
+      <?php // The client links to their record only for staff who can open it (this page needs only scheduling). ?>
+      <td><?php if (can('clients')): ?><a href="client.php?id=<?= (int)$r['cid'] ?>"><?= h($r['client_name']) ?></a><?php else: ?><?= h($r['client_name']) ?><?php endif; ?></td>
+      <?php // The booking's notes (access needs, where to meet) are shown with it, line breaks kept. ?>
+      <td><?= h(BOOKING_TYPE_LABELS[$r['service_type']] ?? $r['service_type']) ?><?= $r['location'] ? '<br><span class="muted">' . h($r['location']) . '</span>' : '' ?><?= ($r['notes'] ?? '') !== '' ? '<br>Notes: ' . nl2br(h($r['notes'])) : '' ?></td>
       <td><?= h($r['provider'] ?? '—') ?><?= $r['cost'] !== null ? '<br><span class="muted">' . fmt_money((float)$r['cost']) . '</span>' : '' ?></td>
       <td><?= booking_badge($r['status']) ?></td>
       <td><form method="post" action="access_bookings.php" class="inline-form"><?= csrf_field() ?>

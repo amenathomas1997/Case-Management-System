@@ -7,7 +7,6 @@ require __DIR__ . '/inc/webauthn.php';
 
 header('Content-Type: application/json; charset=UTF-8');
 $action = $_GET['action'] ?? '';
-$input = json_decode((string)file_get_contents('php://input'), true) ?: [];
 
 function jout(array $d, int $status = 200): never {
     http_response_code($status);
@@ -16,6 +15,17 @@ function jout(array $d, int $status = 200): never {
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') jout(['ok' => false, 'error' => 'POST only.'], 405);
+
+// A passkey step sends a few kilobytes at most. Anything larger is refused
+// before it is decoded: this endpoint is open to signed-out visitors, and
+// decoding a body up to post_max_size could exhaust the worker's memory.
+const PASSKEY_MAX_BODY = 65536;
+$tooLarge = ['ok' => false, 'error' => 'The passkey request was too large, so it was refused. Reload the page and try again.'];
+if ((int)($_SERVER['CONTENT_LENGTH'] ?? 0) > PASSKEY_MAX_BODY) jout($tooLarge, 413);
+$raw = (string)file_get_contents('php://input', false, null, 0, PASSKEY_MAX_BODY + 1);
+if (strlen($raw) > PASSKEY_MAX_BODY) jout($tooLarge, 413);
+$input = json_decode($raw, true);
+if (!is_array($input)) $input = [];
 
 /**
  * Same session validation as require_login(), returning JSON instead of a
@@ -210,7 +220,7 @@ if ($action === 'login_finish') {
             'email' => $pk['user_email'], 'role' => $pk['user_role'], 'password_hash' => $pk['password_hash']]);
         audit((int)$pk['user_id'], 'login', 'user', (int)$pk['user_id'], 'passkey (' . $pk['name'] . ')');
         flash('Welcome back, ' . $pk['user_name'] . '.');
-        jout(['ok' => true, 'redirect' => take_resume_url()]);
+        jout(['ok' => true, 'redirect' => resume_url_after_sign_in()]);
     } catch (PDOException $e) {
         // A database fault (connection limit, missing table) must never reach a
         // signed-out visitor: its text names the database user and schema.

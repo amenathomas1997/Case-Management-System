@@ -43,6 +43,9 @@ struct ScheduleView: View {
     @State private var resultAfterUnlock: String?
     /// The row VoiceOver moves to after an outcome removes the row it was on.
     @AccessibilityFocusState private var focusedSession: Int?
+    /// After a failure, VoiceOver is put on the error banner (see the list's onChange).
+    @AccessibilityFocusState private var errorFocused: Bool
+    private static let errorRow = "scheduleError"
 
     /// The session an outcome applies to, and the status it would get.
     struct SessionOutcome {
@@ -52,44 +55,61 @@ struct ScheduleView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
-                if let confirmation {
-                    Text(confirmation)
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(Color.brandTeal)
-                        .listRowSeparator(.hidden)
-                }
-                if !loaded && error == nil {
-                    ProgressView("Loading schedule…")
-                } else if loaded && sessions.isEmpty && error == nil {
-                    Text("Nothing scheduled. Use New session to add one.")
-                        .foregroundStyle(Color.secondaryText)
-                }
-                // Sessions that have ended but are still Scheduled come first (the server sends
-                // every one of them): each needs an outcome, so its hours are logged or it is closed.
-                let ended = sessions.filter { $0.overdue == true }
-                let upcoming = sessions.filter { $0.overdue != true }
-                if !ended.isEmpty {
-                    Section {
-                        ForEach(ended) { session in sessionRow(session) }
-                    } header: {
-                        Text("Ended — awaiting an outcome (\(ended.count))")
-                    } footer: {
-                        Text("Mark each one completed, cancelled or a no-show.")
+            ScrollViewReader { proxy in
+                List {
+                    if let error {
+                        ErrorBanner(message: error).listRowSeparator(.hidden)
+                            .id(Self.errorRow)
+                            .accessibilityFocused($errorFocused)
+                    }
+                    if let confirmation {
+                        Text(confirmation)
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(Color.brandTeal)
+                            .listRowSeparator(.hidden)
+                    }
+                    if !loaded && error == nil {
+                        ProgressView("Loading schedule…")
+                    } else if loaded && sessions.isEmpty && error == nil {
+                        Text("Nothing scheduled. Use New session to add one.")
+                            .foregroundStyle(Color.secondaryText)
+                    }
+                    // Sessions that have ended but are still Scheduled come first (the server sends
+                    // every one of them): each needs an outcome, so its hours are logged or it is closed.
+                    let ended = sessions.filter { $0.overdue == true }
+                    let upcoming = sessions.filter { $0.overdue != true }
+                    if !ended.isEmpty {
+                        Section {
+                            ForEach(ended) { session in sessionRow(session) }
+                        } header: {
+                            Text("Ended — awaiting an outcome (\(ended.count))")
+                        } footer: {
+                            Text("Mark each one completed, cancelled or a no-show.")
+                        }
+                    }
+                    if !upcoming.isEmpty {
+                        Section {
+                            ForEach(upcoming) { session in sessionRow(session) }
+                        } header: {
+                            if !ended.isEmpty { Text("Upcoming") }
+                        } footer: {
+                            // Only the next upcomingLimit are sent: said, so the list is not taken
+                            // for every booked session.
+                            if let total = upcomingTotal, let limit = upcomingLimit, total > limit {
+                                Text("Showing the next \(limit) of \(total) upcoming sessions; the rest are on the website's Schedule.")
+                            }
+                        }
                     }
                 }
-                if !upcoming.isEmpty {
-                    Section {
-                        ForEach(upcoming) { session in sessionRow(session) }
-                    } header: {
-                        if !ended.isEmpty { Text("Upcoming") }
-                    } footer: {
-                        // Only the next upcomingLimit are sent: said, so the list is not taken
-                        // for every booked session.
-                        if let total = upcomingTotal, let limit = upcomingLimit, total > limit {
-                            Text("Showing the next \(limit) of \(total) upcoming sessions; the rest are on the website's Schedule.")
-                        }
+                // The banner is the list's first row: a failed outcome (cancel, no-show, completed)
+                // from a row further down would otherwise leave it off screen, where a List never
+                // draws it (or says it). Scrolled into view once it exists, then VoiceOver is put on it.
+                .onChange(of: error) { message in
+                    guard message != nil else { return }
+                    DispatchQueue.main.async { withAnimation { proxy.scrollTo(Self.errorRow, anchor: .top) } }
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 400_000_000)
+                        errorFocused = true
                     }
                 }
             }
@@ -200,6 +220,13 @@ struct ScheduleView: View {
         }
     }
 
+    /// Whether the session's start (server time, America/Chicago) has come. A start that can't
+    /// be read leaves the choice to the server.
+    private func hasStarted(_ session: Session, at now: Date) -> Bool {
+        guard let start = APIDate.parseDateTimeCentral(session.startAt) else { return true }
+        return start <= now
+    }
+
     @ViewBuilder
     private func sessionRow(_ session: Session) -> some View {
         let instructor = (session.instructor ?? "").isEmpty ? nil : session.instructor
@@ -236,21 +263,32 @@ struct ScheduleView: View {
                 Text("Completing logs hours automatically")
                     .font(.caption).foregroundStyle(Color.secondaryText)
             }
-            Button {
-                // Sessions with a track bill hours — offer the client-signature
-                // step first (it can be completed without one, or cancelled). Without a track,
-                // completing closes the session for good, so it asks first, as the other outcomes do.
-                if session.trackId != nil { signingSession = session }
-                else { pendingOutcome = SessionOutcome(session: session, to: "Completed") }
-            } label: {
-                Label("Mark completed", systemImage: "checkmark.circle")
+            // As on the website, Completed is offered once the session has started: the server
+            // refuses it before then, after the client may already have signed for it. Checked
+            // each minute, so it appears at the start time with the screen left open.
+            TimelineView(.everyMinute) { context in
+                if hasStarted(session, at: context.date) {
+                    Button {
+                        // Sessions with a track bill hours — offer the client-signature
+                        // step first (it can be completed without one, or cancelled). Without a track,
+                        // completing closes the session for good, so it asks first, as the other outcomes do.
+                        if session.trackId != nil { signingSession = session }
+                        else { pendingOutcome = SessionOutcome(session: session, to: "Completed") }
+                    } label: {
+                        Label("Mark completed", systemImage: "checkmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)        // 44-point targets (the regular size is about 34)
+                    .padding(.top, 4)
+                    .disabled(completing.contains(session.id))
+                    .accessibilityLabel("Mark \(name) completed")
+                    .accessibilityInputLabels(["Mark completed", "Mark \(name) completed"])
+                } else {
+                    Text("Can be marked completed once it has started.")
+                        .font(.caption).foregroundStyle(Color.secondaryText)
+                        .padding(.top, 4)
+                }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.large)        // 44-point targets (the regular size is about 34)
-            .padding(.top, 4)
-            .disabled(completing.contains(session.id))
-            .accessibilityLabel("Mark \(name) completed")
-            .accessibilityInputLabels(["Mark completed", "Mark \(name) completed"])
             // The other outcomes close the session without logging hours: each asks first.
             // Stacked at the accessibility text sizes, where side by side they broke mid-word.
             let outcomeLayout = typeSize.isAccessibilitySize
@@ -299,19 +337,21 @@ struct ScheduleView: View {
             refocus(after: session, next: next, saying: message)
         } catch {
             let message = error.localizedDescription
-            await load()
+            await load(reportsFailure: false)
             if loaded && self.error == nil && !sessions.contains(where: { $0.id == session.id }) {
                 // The reply was lost but the session is no longer scheduled: say so, so a retry
                 // ("Session not found or already closed") doesn't look like a second failure.
-                self.error = message + " The session is no longer listed as scheduled, so it may already have been closed. Check before trying again."
+                showFormError(message + " The session is no longer listed as scheduled, so it may already have been closed. Check before trying again.", in: &self.error)
             } else {
                 // Also keeps a failed refresh's reason, when there is one.
-                self.error = [message, self.error].compactMap { $0 }.joined(separator: " ")
+                showFormError([message, self.error].compactMap { $0 }.joined(separator: " "), in: &self.error)
             }
         }
     }
 
-    private func load() async {
+    /// `reportsFailure`: false when the caller says a failure itself, with its own (the refresh
+    /// after a failed outcome).
+    private func load(reportsFailure: Bool = true) async {
         do {
             error = nil
             let response: ScheduleListResponse = try await api.call("schedule")
@@ -320,7 +360,8 @@ struct ScheduleView: View {
             upcomingLimit = response.upcomingLimit
             loaded = true
         } catch {
-            self.error = error.localizedDescription
+            if reportsFailure { showFormError(error.localizedDescription, in: &self.error) }
+            else { self.error = error.localizedDescription }
         }
     }
 
@@ -331,7 +372,7 @@ struct ScheduleView: View {
             try await complete(session)
             refocus(after: session, next: next, saying: confirmation)
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 
@@ -350,22 +391,31 @@ struct ScheduleView: View {
             // (and billed) session into an error the user would retry.
             struct CompleteResult: Decodable {
                 let hoursLogged: Double
-                private enum CodingKeys: String, CodingKey { case ok, hoursLogged }
+                /// The hours were logged outside the track's authorization (expired, not yet
+                /// started, or the track not Active): the server's sentence saying so (3.0.21).
+                let warning: String?
+                private enum CodingKeys: String, CodingKey { case ok, hoursLogged, warning }
                 init(from decoder: Decoder) throws {
                     let c = try decoder.container(keyedBy: CodingKeys.self)
                     guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
                         throw DecodingError.dataCorruptedError(forKey: .ok, in: c, debugDescription: "not ok")
                     }
                     hoursLogged = (try? c.decode(Double.self, forKey: .hoursLogged)) ?? 0
+                    let text = (try? c.decodeIfPresent(String.self, forKey: .warning))?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    warning = (text?.isEmpty ?? true) ? nil : text
                 }
             }
             var body: [String: Any] = ["session_id": session.id]
             if let signature { body["signature_b64"] = signature }
             if let signedName { body["signed_name"] = signedName }
             let result: CompleteResult = try await api.call("complete_session", body: body)
-            confirmation = result.hoursLogged > 0
+            let done: String = result.hoursLogged > 0
                 ? String(format: "Completed — %.2f hours logged for %@.", result.hoursLogged, session.client)
                 : "Session marked completed."
+            // Logged outside the authorization: said with it (the hours are logged either way).
+            let warning: String = result.warning.map { " " + $0 } ?? ""
+            confirmation = done + warning
             if let c = confirmation {
                 // From the signature sheet, said once it has closed; from the list, said by
                 // completeFromList after the reload. Either way it would be cut off now.
@@ -373,7 +423,8 @@ struct ScheduleView: View {
             }
             await load()
         } catch {
-            await load()
+            // Quietly: the failure is said with the completion's own message.
+            await load(reportsFailure: false)
             if loaded && self.error == nil && !sessions.contains(where: { $0.id == session.id }) {
                 // The reply was lost but the session is no longer scheduled: say so, so a retry
                 // ("Session not found or already closed") doesn't look like a second failure.
@@ -399,6 +450,11 @@ struct NewSessionSheet: View {
     @State private var date = Date()
     @State private var duration = 1.5
     @State private var repeatWeeks = 1
+    /// The authorization warnings the server returned for this booking ("Authorization review:"),
+    /// shown with the approval switch. Cleared, with the approval, whenever the client, track,
+    /// start, duration or series changes, so an approval only ever covers warnings seen for
+    /// the booking as it is sent.
+    @State private var authorizationWarning: String?
     @State private var authorizationAcknowledged = false
     @State private var location = ""
     @State private var notes = ""
@@ -440,6 +496,14 @@ struct NewSessionSheet: View {
                         Label("Try loading training tracks again", systemImage: "arrow.clockwise")
                     }
                 }
+                // Offered only after the server has named the warnings, next to them, and just
+                // after the error banner (the next thing VoiceOver reaches from it).
+                if let authorizationWarning {
+                    Section("Authorization review") {
+                        Text(authorizationWarning).font(.callout)
+                        Toggle("I reviewed these authorization warnings and approve booking despite them", isOn: $authorizationAcknowledged)
+                    }
+                }
                 Picker("Client (required)", selection: $selectedClient) {
                     Text("Choose…").tag(nil as Int?)
                     ForEach(clients) { client in
@@ -477,7 +541,6 @@ struct NewSessionSheet: View {
                 } else {
                     CaptionedField(label: "Location (optional)", text: $location)
                 }
-                Toggle("I reviewed authorization warnings and approve booking despite them", isOn: $authorizationAcknowledged)
                 CaptionedField(label: "Notes (optional)", text: $notes)
             }
             .navigationTitle("New session")
@@ -499,9 +562,24 @@ struct NewSessionSheet: View {
             .task { await loadPickers() }
             // Switching client must clear a track chosen for the previous client,
             // or a completed session would auto-log hours against the wrong client.
-            .onChange(of: selectedClient) { _ in selectedTrack = nil }
+            .onChange(of: selectedClient) { _ in selectedTrack = nil; clearAuthorizationReview() }
+            // The warnings were for the booking as it was: any change that can alter them
+            // withdraws the approval (the server is asked again on the next Schedule).
+            .onChange(of: selectedTrack) { _ in clearAuthorizationReview() }
+            .onChange(of: date) { _ in clearAuthorizationReview() }
+            .onChange(of: duration) { _ in clearAuthorizationReview() }
+            .onChange(of: repeatWeeks) { _ in clearAuthorizationReview() }
         }
     }
+
+    private func clearAuthorizationReview() {
+        authorizationWarning = nil
+        authorizationAcknowledged = false
+    }
+
+    /// The server's refusal when a booking needs the authorization warnings approved
+    /// (api.php schedule_session).
+    private static let authorizationReviewPrefix = "Authorization review:"
 
     private func loadPickers() async {
         // client_choices is open to scheduling groups without the clients permission (such as
@@ -510,8 +588,9 @@ struct NewSessionSheet: View {
         do {
             clients = try await api.clientPickerChoices()
         } catch {
-            clientProblem = "Could not load the client list. \(error.localizedDescription)"
-            self.error = clientProblem
+            let problem = "Could not load the client list. \(error.localizedDescription)"
+            clientProblem = problem
+            showFormError(problem, in: &self.error)
         }
         await loadTracks()
         do {
@@ -522,7 +601,7 @@ struct NewSessionSheet: View {
             myId = me.id
             selectedStaff = staff.first(where: { $0.id == me.id })?.id ?? staff.first?.id
         } catch {
-            self.error = [clientProblem, error.localizedDescription].compactMap { $0 }.joined(separator: " ")
+            showFormError([clientProblem, error.localizedDescription].compactMap { $0 }.joined(separator: " "), in: &self.error)
         }
     }
 
@@ -535,7 +614,7 @@ struct NewSessionSheet: View {
             let trackResponse: TracksResponse = try await api.call("tracks")
             tracks = trackResponse.tracks
         } catch {
-            tracksError = "Could not load training tracks, so a session scheduled now can't be linked to one and won't log hours automatically. \(error.localizedDescription)"
+            showFormError("Could not load training tracks, so a session scheduled now can't be linked to one and won't log hours automatically. \(error.localizedDescription)", in: &tracksError)
         }
     }
 
@@ -602,8 +681,24 @@ struct NewSessionSheet: View {
             // Said by the schedule once this sheet has closed (closing it would cut it off).
             onDone(msg)
             dismiss()
+        } catch APIError.server(let message) where message.hasPrefix(Self.authorizationReviewPrefix) {
+            // The warnings are shown with the approval switch, which is offered only now.
+            var warnings = message.dropFirst(Self.authorizationReviewPrefix.count).trimmingCharacters(in: .whitespaces)
+            if let instruction = warnings.range(of: " Review the track and explicitly approve", options: .backwards) {
+                warnings = String(warnings[..<instruction.lowerBound])
+            }
+            authorizationWarning = warnings
+            authorizationAcknowledged = false
+            showFormError(message + " To book it anyway, turn on the approval just below this message, then tap Schedule again.", in: &self.error)
+            busy = false
+        } catch APIError.network {
+            // The request may have reached the server: the session (or the whole series) may be
+            // booked and the invite sent, and scheduling it again would book it twice.
+            let who = clients.first(where: { $0.id == clientId })?.name ?? "this client"
+            showFormError("The connection dropped before the server answered, so it isn't known whether this was scheduled. Check the Schedule for \(who) on \(date.formatted(date: .abbreviated, time: .shortened)) before scheduling it again.", in: &self.error)
+            busy = false
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
     }

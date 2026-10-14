@@ -63,9 +63,10 @@ if (isset($_GET['error'])) {
     redirect('login.php');
 }
 
-$code = $_GET['code'] ?? '';
-$state = $_GET['state'] ?? '';
-if ($code === '' || $state === '' || !hash_equals($_SESSION['sso_state'] ?? '', $state)) {
+// Text only: anything else (code[]=…) is treated as missing, as the error branch above does.
+$code = is_string($_GET['code'] ?? null) ? $_GET['code'] : '';
+$state = is_string($_GET['state'] ?? null) ? $_GET['state'] : '';
+if ($code === '' || $state === '' || !hash_equals((string)($_SESSION['sso_state'] ?? ''), $state)) {
     flash('Sign-in session did not match — please try again.', 'error');
     redirect('login.php');
 }
@@ -97,15 +98,18 @@ if (empty($tokens['id_token'])) {
 
 /* Validate the ID token claims. The token came directly from Microsoft's token
    endpoint over TLS using our client secret, so source authenticity is
-   established; we still verify issuer, audience, tenant, expiry, and nonce. */
+   established; we still verify issuer, audience, tenant, expiry, and nonce.
+   GUIDs are compared without regard to letter case: Microsoft issues them in
+   lower case, and a tenant or client ID saved in capitals (before 3.0.21
+   federation.php kept it as typed) would otherwise fail every sign-in. */
 $parts = explode('.', $tokens['id_token']);
 $claims = count($parts) === 3 ? json_decode(base64_decode(strtr($parts[1], '-_', '+/')), true) : null;
 $nonce = $_SESSION['sso_nonce'] ?? '';
 unset($_SESSION['sso_nonce']);
 if (!$claims
-    || ($claims['iss'] ?? '') !== "https://login.microsoftonline.com/{$tenant}/v2.0"
-    || ($claims['aud'] ?? '') !== $entra['client_id']
-    || ($claims['tid'] ?? '') !== $tenant
+    || strtolower((string)($claims['iss'] ?? '')) !== strtolower("https://login.microsoftonline.com/{$tenant}/v2.0")
+    || strtolower((string)($claims['aud'] ?? '')) !== strtolower((string)$entra['client_id'])
+    || strtolower((string)($claims['tid'] ?? '')) !== strtolower((string)$tenant)
     || (int)($claims['exp'] ?? 0) < time()
     || $nonce === '' || !hash_equals($nonce, (string)($claims['nonce'] ?? ''))) {
     audit(null, 'login.sso_fail', 'user', null, 'ID token validation failed');
@@ -212,4 +216,4 @@ if ($linkId) {
 establish_user_session($user);
 audit((int)$user['id'], 'login', 'user', (int)$user['id'], 'Entra ID SSO');
 flash('Welcome back, ' . $user['name'] . '.');
-redirect(take_resume_url());
+redirect(resume_url_after_sign_in());

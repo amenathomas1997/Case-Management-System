@@ -62,12 +62,31 @@ function assert_isolated_page(string $file): void {
         exit(1);
     }
 }
+/**
+ * With CMS_TEST_HTML_DIR set, keep a page rendered by $renderPage or $anon for the
+ * browser accessibility checks (tests/accessibility_browser.js), named by page,
+ * view and request in the lowercase form that script serves. Only full pages
+ * with the text-size options it opens are kept; redirects, downloads and plain
+ * refusals have nothing to check.
+ */
+function snapshot_html(string $page, array $query, ?array $post, string $html): void {
+    $dir = getenv('CMS_TEST_HTML_DIR');
+    if (!$dir || !str_contains($html, '<html') || !str_contains($html, 'vision-options')) return;
+    if (!is_dir($dir)) mkdir($dir, 0700, true);
+    $view = is_string($query['view'] ?? null) ? '-' . $query['view'] : '';
+    $name = strtolower((string)preg_replace('/[^A-Za-z0-9_-]/', '', $page . $view . ($post === null ? '' : '-post')));
+    file_put_contents($dir . '/' . $name . '-' . substr(sha1((string)json_encode([$query, $post])), 0, 8) . '.html', $html);
+}
 $tmp = sys_get_temp_dir() . '/cms-integration-' . bin2hex(random_bytes(6));
 mkdir($tmp, 0700);
 try {
     $db->exec(file_get_contents($root . '/dist/schema_full.sql'));
     // Synthetic secrets: no page, API response or export may ever show them.
     $secrets = ['entra'=>'synthetic-entra-client-secret-5b2c', 'ai'=>'synthetic-ai-provider-key-9d41'];
+    // Every API response and page the helpers below render, anywhere in the suite, is checked.
+    $noSecret = function(string $what, string $output) use ($secrets): void {
+        if (str_contains($output, $secrets['ai']) || str_contains($output, $secrets['entra'])) throw new RuntimeException("$what showed a stored secret.");
+    };
     $config = ['db'=>['dsn'=>$dsn,'user'=>getenv('CMS_TEST_USER') ?: 'root','pass'=>getenv('CMS_TEST_PASSWORD') ?: ''], 'app'=>['timezone'=>'America/Chicago','upload_dir'=>$tmp,'base_url'=>'https://example.invalid','name'=>'Test CMS','mail_from'=>'noreply@example.invalid','session_timeout_minutes'=>30],
         'entra'=>['enabled'=>false,'tenant_id'=>'','client_id'=>'','client_secret'=>$secrets['entra'],'auto_provision_group'=>'']];
     $core = file_get_contents($root . '/public/inc/core.php');
@@ -88,13 +107,19 @@ try {
     $db->exec("INSERT INTO training_tracks (id,client_id,title,auth_number,funding_agency,hourly_rate) VALUES (1,1,'Synthetic track','TEST','State VR',95)");
     $db->exec("ALTER TABLE audit_log AUTO_INCREMENT=1000");
     foreach (['equipment','worksite_assessments','device_requests','cohorts','contracts','access_bookings'] as $table) $db->exec("ALTER TABLE `$table` AUTO_INCREMENT=1");
-    $call = function(string $action, array $input=[], array $query=[], bool $expectOk=true) use ($tmp): array {
+    // $expectError: for a refusal, text its message must contain. A refusal is never
+    // the server-fault answer api_exception_out() gives an uncaught exception (an
+    // unknown column, a type error deep in a handler): that is a crash, not a refusal.
+    $call = function(string $action, array $input=[], array $query=[], bool $expectOk=true, ?string $expectError=null) use ($tmp, $noSecret): array {
         putenv('CMS_TEST_INPUT=' . json_encode($input));
         $p = proc_open([PHP_BINARY, '-d', 'sendmail_path=/usr/bin/true', __FILE__, 'api', $tmp . '/api.php', json_encode(['action'=>$action]+$query)], [1=>['pipe','w'],2=>['pipe','w']], $pipes);
         $output=stream_get_contents($pipes[1]); $errors=stream_get_contents($pipes[2]);
         fclose($pipes[1]); fclose($pipes[2]); $code=proc_close($p);
         $data=json_decode($output,true);
-        if ($code!==0 || !is_array($data) || (bool)($data['ok'] ?? false) !== $expectOk) throw new RuntimeException("$action failed: $errors $output");
+        $error = is_array($data) && is_string($data['error'] ?? null) ? $data['error'] : '';
+        $wrongRefusal = !$expectOk && ($error === 'Something went wrong on the server. Nothing was saved.' || ($expectError !== null && !str_contains($error, $expectError)));
+        if ($code!==0 || !is_array($data) || (bool)($data['ok'] ?? false) !== $expectOk || $wrongRefusal) throw new RuntimeException("$action failed: $errors $output");
+        $noSecret("API $action", $output . $errors);
         return $data;
     };
     foreach ([
@@ -169,7 +194,19 @@ try {
     // screens, read now that notes, hours and a worksite assessment exist. One
     // expense is added for the track's expense list and removed again, so the
     // invoices below bill exactly what they did before.
+    // One incident, one follow-up due on a device loan and one confirmed counselor with
+    // a live portal link, so tests/ios_models.py checks those screens' values, not only
+    // that an empty list decodes. They are removed again once captured.
+    $db->exec("INSERT INTO incidents (client_id,reported_by,incident_date,type,severity,description) VALUES (1,1,'2026-01-03','Other','Low','Synthetic fixture incident')"); $fixtureIncident=(int)$db->lastInsertId();
+    $db->exec("INSERT INTO equipment_loans (equipment_id,client_id,loaned_at) VALUES (1,1,'2026-01-01')"); $fixtureLoan=(int)$db->lastInsertId();
+    $db->exec("INSERT INTO equipment_followups (loan_id,client_id,equipment_id,interval_days,due_date) VALUES ($fixtureLoan,1,1,30,'2026-01-31')");
+    $db->exec("UPDATE clients SET counselor_name='Fixture counselor', counselor_email='fixture-counselor@example.invalid', counselor_verified=1 WHERE id=2");
+    $db->prepare("INSERT INTO vrc_tokens (counselor_email,counselor_name,token,expires_at) VALUES ('fixture-counselor@example.invalid','Fixture counselor',?,DATE_ADD(NOW(), INTERVAL 30 DAY))")->execute([str_repeat('f',48)]); $fixtureVrc=(int)$db->lastInsertId();
     foreach (['dashboard','followups','incidents','utilization','compliance','counselors','worksite_assessments'] as $action) $fixtures[$action]=$call($action);
+    check(count($fixtures['incidents']['incidents'])===1 && count($fixtures['followups']['due'])===1 && count($fixtures['counselors']['counselors'])===1,
+        'The incident, follow-up and counselor fixtures hold populated rows');
+    $db->exec("DELETE FROM incidents WHERE id=$fixtureIncident; DELETE FROM equipment_loans WHERE id=$fixtureLoan; DELETE FROM vrc_tokens WHERE id=$fixtureVrc");
+    $db->exec("UPDATE clients SET counselor_name=NULL, counselor_email=NULL, counselor_verified=0 WHERE id=2");
     $db->exec("INSERT INTO track_expenses (track_id,expense_date,description,amount) VALUES (1,'2026-01-02','Synthetic fixture expense',4.50)"); $fixtureExpense=(int)$db->lastInsertId();
     $fixtures['expenses']=$call('expenses',[],['track_id'=>1]);
     $db->exec("DELETE FROM track_expenses WHERE id=$fixtureExpense");
@@ -272,7 +309,7 @@ try {
         'ack'=>'Confirmation link','portal'=>'Portal','vrc'=>'Portal link not recognized','login'=>'redirect','forgot'=>'Forgot password','reset'=>'Reset password',
         'verify'=>'redirect','ai'=>'AI assistant','intake'=>'Guided intake','recommend'=>'AT recommendations','amendment_request'=>'Amendment request',
         'progress_review'=>'Progress review','translate'=>'Translate','remediate'=>'Remediation','ask'=>'Ask your caseload','kb_ask'=>'Ask the knowledge base',
-        'curriculum_ai'=>'Curriculum generator'];
+        'curriculum_ai'=>'Curriculum generator','workflows'=>'Daily action center'];
     $showsOwnContent=function(string $page,string $html)use($pageMarkers):bool{
         $marker=$pageMarkers[$page]??null;
         if($marker===null)return false;
@@ -282,7 +319,7 @@ try {
         if(!preg_match('~<title[^>]*>(.*?)</title>~s',$html,$m))return false;
         return $marker[0]==='~'?preg_match($marker,$m[1])===1:str_contains($m[1],$marker);
     };
-    foreach (['index','clients','client','client_edit','track','track_edit','tasks','referrals','pipeline','schedule','capacity','access_bookings','equipment','followups','procurement','programs','contracts','invoices','analytics','outcomes','compliance','incidents','messages','curriculum','templates','score_assessment','accommodations','users','account','audit','trash','client_merge','counselors','portal_requests','email_templates','referral_settings','kb','search','utilization','agency_report','funder_report','rsa_report','doc_audit','risk','ai_tools','help','federation','report','eval_report','invoice_pdf','client_export','equipment_import','equipment_labels','notifications','community_referral','consent','survey','ack','portal','vrc','login','forgot','reset','verify','ai','intake','recommend','amendment_request','progress_review','translate','remediate','ask','kb_ask','curriculum_ai'] as $page) {
+    foreach (['index','clients','client','client_edit','track','track_edit','tasks','referrals','pipeline','schedule','capacity','access_bookings','equipment','followups','procurement','programs','contracts','invoices','analytics','outcomes','compliance','incidents','messages','curriculum','templates','score_assessment','accommodations','users','account','audit','trash','client_merge','counselors','portal_requests','email_templates','referral_settings','kb','search','utilization','agency_report','funder_report','rsa_report','doc_audit','risk','ai_tools','help','federation','report','eval_report','invoice_pdf','client_export','equipment_import','equipment_labels','notifications','community_referral','consent','survey','ack','portal','vrc','login','forgot','reset','verify','ai','intake','recommend','amendment_request','progress_review','translate','remediate','ask','kb_ask','curriculum_ai','workflows'] as $page) {
         $source=file_get_contents($root . '/public/' . $page . '.php');
         $source=swap_required("require __DIR__ . '/inc/bootstrap.php';", 'require ' . var_export($tmp . '/bootstrap.php',true) . ';', $source, "public/$page.php");
         $source=str_replace('__DIR__',var_export($root . '/public',true),$source);
@@ -333,9 +370,9 @@ try {
     $db->exec("INSERT INTO cohort_attendance (session_id,client_id,present) VALUES (1,1,0),(1,2,1)");
     $db->exec("INSERT INTO groups (id,name,perms,own_caseload_only) VALUES (999,'Synthetic scoped staff','programs;clients',1)");
     $db->exec("UPDATE users SET group_id=999 WHERE id=1; UPDATE clients SET assigned_to=id, client_type='Pre-ETS'");
-    $call('cohort',[],['id'=>1],false);
-    $call('cohort_member',['cohort_id'=>1,'client_id'=>1,'op'=>'remove'],[],false);
-    $call('log_cohort_session',['cohort_id'=>1],[],false);
+    $call('cohort',[],['id'=>1],false,'unrestricted caseload access is required');
+    $call('cohort_member',['cohort_id'=>1,'client_id'=>1,'op'=>'remove'],[],false,'unrestricted caseload access is required');
+    $call('log_cohort_session',['cohort_id'=>1],[],false,'unrestricted caseload access is required');
     check($call('cohorts')['cohorts']===[], 'Restricted staff cannot list, read, or modify mixed-caseload groups');
     $db->exec('UPDATE clients SET assigned_to=1');
     check(count($call('cohort',[],['id'=>1])['members'])===2,'Restricted staff can access a group entirely on their caseload');
@@ -370,6 +407,17 @@ try {
     check(empty($noRate['ok']) && empty($noAuth['ok']) && $voiceLogs()===0 && !db()->inTransaction(),'Voice refuses to log hours on a track with no hourly rate or a TBD authorization number, and logs nothing');
     $db->exec("UPDATE training_tracks SET auth_number='VOICE-1' WHERE id=$voiceTrack");
     check(!empty(voice_execute('log_hours',$voiceHours,$voiceUser)['ok']) && $voiceLogs()===1,'Voice logs hours once the track has its authorization number, hours and rate');
+    // Hours dated after the authorization ended are logged only once the read-back said
+    // so and the user said yes to it (authorization_ack, set by voice_interpret()).
+    $db->prepare("UPDATE training_tracks SET expiration_date=? WHERE id=?")->execute([date('Y-m-d',strtotime('-8 days')),$voiceTrack]);
+    $expiredVoice=voice_execute('log_hours',$voiceHours,$voiceUser);
+    check(empty($expiredVoice['ok']) && str_starts_with((string)($expiredVoice['error']??''),'This authorization expired on') && $voiceLogs()===1 && !db()->inTransaction(),
+        'Voice refuses hours dated after the authorization ended unless the user agreed to it, and logs nothing');
+    $ackedVoice=voice_execute('log_hours',$voiceHours+['authorization_ack'=>1],$voiceUser);
+    check(!empty($ackedVoice['ok']) && $voiceLogs()===2 && !db()->inTransaction()
+        && (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action='hours.log' AND entity_id=$voiceTrack AND detail LIKE '%authorization exception approved%'")->fetchColumn()===1,
+        'Voice logs those hours once the user agreed, and the audit log records the approved exception');
+    $db->exec("UPDATE training_tracks SET expiration_date=NULL WHERE id=$voiceTrack");
     $db->exec("INSERT INTO equipment(name,status) VALUES('Voice synthetic device','Available')"); $voiceItem=(int)$db->lastInsertId();
     $db->prepare("INSERT INTO equipment_reservations(equipment_id,client_id,reserved_by,status) VALUES(?,?,2,'Reserved')")->execute([$voiceItem,$holdClient]); $voiceHold=(int)$db->lastInsertId();
     $loaned=voice_execute('check_out_device',['client_id'=>$voiceClient,'equipment_id'=>$voiceItem],$voiceUser);
@@ -404,6 +452,20 @@ try {
         && (int)$db->query("SELECT COUNT(*) FROM work_logs WHERE track_id=$noRateTrack")->fetchColumn()===0,
         'Voice refuses to complete a session on a track with no hourly rate, leaves it open and leaves no transaction open');
     $db->exec("UPDATE scheduled_sessions SET status='Cancelled' WHERE id=$noRateSession; UPDATE training_tracks SET status='Cancelled' WHERE id=$noRateTrack");
+    // A session is completed once it has started, never ahead of time.
+    $db->prepare("INSERT INTO scheduled_sessions(client_id,track_id,user_id,start_at,end_at,status) VALUES(?,?,1,?,?,'Scheduled')")->execute([$voiceClient,$voiceTrack,date('Y-m-d H:i:s',time()+7200),date('Y-m-d H:i:s',time()+10800)]); $laterSession=(int)$db->lastInsertId();
+    $earlyDone=voice_execute('complete_session',['session_id'=>$laterSession],$voiceUser);
+    check(empty($earlyDone['ok']) && str_contains((string)($earlyDone['error']??''),'has not started yet') && !db()->inTransaction()
+        && $db->query("SELECT status FROM scheduled_sessions WHERE id=$laterSession")->fetchColumn()==='Scheduled' && $voiceLogs()===2,
+        'Voice refuses to complete a session that has not started yet, leaves it open and logs nothing');
+    $db->exec("UPDATE scheduled_sessions SET status='Cancelled' WHERE id=$laterSession");
+    // A client created by voice gets its first status-history entry with the record.
+    $createdVoice=voice_execute('add_client',['name'=>'Voice created synthetic client'],$voiceUser);
+    $createdId=(int)$db->query("SELECT id FROM clients WHERE name='Voice created synthetic client'")->fetchColumn();
+    check(!empty($createdVoice['ok']) && $createdId>0 && !db()->inTransaction()
+        && $db->query("SELECT CONCAT(new_status,'|',note) FROM client_status_history WHERE client_id=$createdId")->fetchColumn()==='Pending Assessment|Client created (voice)'
+        && (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action='client.create' AND entity_id=$createdId")->fetchColumn()===1,
+        'A client created by voice is saved with its first status-history entry and audited');
     // A referral made by voice is a staff member's new referral, named as theirs.
     $voiceReferral=voice_execute('create_referral',['name'=>'Voice referral synthetic person','reason'=>'Synthetic reason'],$voiceUser);
     $refRow=$db->query("SELECT referral_source,referral_purpose,counselor_name FROM referrals WHERE client_name='Voice referral synthetic person'")->fetch();
@@ -450,9 +512,9 @@ try {
     $db->prepare("INSERT INTO training_tracks(client_id,title,auth_number,funding_agency,hourly_rate) VALUES(?,'Scope check outside track','SCOPE-OUT','Scope agency',50)")->execute([$scopeOutside]); $scopeTrack=(int)$db->lastInsertId();
     $db->exec("UPDATE groups SET perms='clients;schedule',own_caseload_only=1 WHERE id=999; UPDATE users SET group_id=999 WHERE id=1; UPDATE clients SET assigned_to=1 WHERE id=1");
     $notes=(int)$db->query('SELECT COUNT(*) FROM client_notes')->fetchColumn(); $logs=(int)$db->query('SELECT COUNT(*) FROM work_logs')->fetchColumn();
-    $read=$call('client',[],['id'=>$scopeOutside],false);
-    $call('add_note',['client_id'=>$scopeOutside,'subject'=>'Out of scope','body'=>'Must be refused'],[],false);
-    $call('log_hours',['track_id'=>$scopeTrack,'hours'=>1,'description'=>'Must be refused'],[],false);
+    $read=$call('client',[],['id'=>$scopeOutside],false,'not on your caseload');
+    $call('add_note',['client_id'=>$scopeOutside,'subject'=>'Out of scope','body'=>'Must be refused'],[],false,'not on your caseload');
+    $call('log_hours',['track_id'=>$scopeTrack,'hours'=>1,'description'=>'Must be refused'],[],false,'not on your caseload');
     check(!isset($read['client']) && (int)$db->query('SELECT COUNT(*) FROM client_notes')->fetchColumn()===$notes && (int)$db->query('SELECT COUNT(*) FROM work_logs')->fetchColumn()===$logs,
         'Caseload-scoped staff cannot read, note or log hours on another caseload\'s client through the API');
     $call('add_note',['client_id'=>1,'subject'=>'In scope','body'=>'Allowed']);
@@ -467,13 +529,16 @@ try {
         putenv('CMS_TEST_TOKEN');
         check(!isset($refused['id']),"An $label API token is refused");
     }
-    $renderPage=function(string $name,array $query,?array $post=null)use($root,$tmp):array{
+    $renderPage=function(string $name,array $query,?array $post=null)use($root,$tmp,$noSecret):array{
         $source=swap_required("require __DIR__ . '/inc/bootstrap.php';",'require '.var_export($tmp.'/bootstrap.php',true).';',file_get_contents($root.'/public/'.$name.'.php'),"public/$name.php");
         file_put_contents($tmp.'/'.$name.'.php',str_replace('__DIR__',var_export($root.'/public',true),$source));
         $args=[PHP_BINARY,'-d','display_errors=stderr','-d','sendmail_path=/usr/bin/true',__FILE__,$post===null?'page':'page_post',$tmp.'/'.$name.'.php',json_encode($query)];
         if($post!==null)$args[]=json_encode($post);
         $p=proc_open($args,[1=>['pipe','w'],2=>['pipe','w']],$pipes);
-        $out=stream_get_contents($pipes[1]);$err=stream_get_contents($pipes[2]);fclose($pipes[1]);fclose($pipes[2]);return [proc_close($p),$out,$err];
+        $out=stream_get_contents($pipes[1]);$err=stream_get_contents($pipes[2]);fclose($pipes[1]);fclose($pipes[2]);$code=proc_close($p);
+        $noSecret("$name.php",$out.$err);
+        snapshot_html($name,$query,$post,$out);
+        return [$code,$out,$err];
     };
     [$code,$out,$err]=$renderPage('client',['id'=>$scopeOutside]);
     check($code===0 && $err==='' && !str_contains($out,'Scope check outside client'),'Caseload-scoped staff cannot open another caseload\'s client page');
@@ -582,13 +647,27 @@ try {
     check((int)$referralRow($convertedReferral)['client_id']===$mergeOwnKeep && (int)$referralRow($convertedReferral)['assigned_to']===2
         && (int)$referralRow($openReferral)['assigned_to']===3 && $audited('referral.reassign')===1,
         'A merge moves the duplicate\'s converted referral to the kept client\'s instructor, and audits it; an unconverted referral keeps its assignee');
+    // The duplicate's portal link moves to a kept record that has none (the client keeps
+    // using it), and staff alerts that link to the duplicate open the kept record; a
+    // link to another record whose number only starts the same is left alone.
+    $portalKeep=$mergeClient('Merge portal kept synthetic'); $portalDupe=$mergeClient('Merge portal duplicate synthetic');
+    $db->prepare("INSERT INTO portal_tokens(client_id,token,expires_at) VALUES(?,?,DATE_ADD(NOW(),INTERVAL 30 DAY))")->execute([$portalDupe,str_repeat('d',48)]);
+    $db->prepare("INSERT INTO notifications(user_id,message,link) VALUES(1,'Merge synthetic alert',?),(1,'Merge synthetic alert',?),(1,'Merge synthetic alert',?)")
+        ->execute(['client.php?id='.$portalDupe,'client.php?id='.$portalDupe.'#notes','client.php?id='.$portalDupe.'0']);
+    [$code,$out,$err]=$renderPage('client_merge',['keep'=>$portalKeep,'merge'=>$portalDupe],['do_merge'=>'1']);
+    $alertLinks=$db->query("SELECT link FROM notifications WHERE message='Merge synthetic alert' ORDER BY id")->fetchAll(PDO::FETCH_COLUMN);
+    check($code===0 && $err==='' && (int)$db->query("SELECT client_id FROM portal_tokens WHERE token='".str_repeat('d',48)."'")->fetchColumn()===$portalKeep
+        && $alertLinks===['client.php?id='.$portalKeep,'client.php?id='.$portalKeep.'#notes','client.php?id='.$portalDupe.'0'],
+        'A merge moves the duplicate\'s portal link to a kept record that has none, and re-points the alerts that link to the duplicate' . ($err ? ": $err" : ''));
     // Retention purge of an archived client: a device still on loan comes back,
     // referrals and trashed items go with the record, and an incident report is
     // kept, detached from the client, with its free text removed.
     $db->exec("INSERT INTO clients(name,assigned_to,archived_at) VALUES('Purge synthetic client',1,NOW())"); $purged=(int)$db->lastInsertId();
     $db->exec("INSERT INTO equipment(name,status) VALUES('Purge synthetic loaner','On Loan')"); $purgeItem=(int)$db->lastInsertId();
     $db->exec("INSERT INTO equipment_loans(equipment_id,client_id,loaned_at) VALUES($purgeItem,$purged,'2026-01-01')");
-    $db->exec("INSERT INTO referrals(reason,subject,body,counselor_name,counselor_agency,counselor_email,counselor_phone,client_name,client_id) VALUES('Synthetic','Synthetic','Synthetic','Synthetic counselor','Synthetic agency','counselor@example.invalid','555-0100','Purge synthetic client',$purged)");
+    $db->exec("INSERT INTO referrals(reason,subject,body,counselor_name,counselor_agency,counselor_email,counselor_phone,client_name,client_id) VALUES('Synthetic','Synthetic','Synthetic','Synthetic counselor','Synthetic agency','counselor@example.invalid','555-0100','Purge synthetic client',$purged)"); $purgeReferral=(int)$db->lastInsertId();
+    // Earlier audit entries about the client and about one of its records, quoting the name.
+    $db->prepare("INSERT INTO audit_log(user_id,action,entity,entity_id,detail) VALUES(1,'client.update','client',?,'Purge synthetic client renamed'),(1,'referral.review','referral',?,'Purge synthetic client referral reviewed')")->execute([$purged,$purgeReferral]);
     $db->exec("INSERT INTO incidents(client_id,incident_date,location,description,action_taken) VALUES($purged,'2026-01-02','Purge synthetic home','Purge synthetic client fell','Called the guardian of Purge synthetic client')"); $incident=(int)$db->lastInsertId();
     $db->prepare("INSERT INTO trash(entity,entity_id,label,payload,deleted_by) VALUES('client_notes',999999,'Synthetic purged note',?,1)")->execute([json_encode(['id'=>999999,'client_id'=>$purged,'subject'=>'Synthetic'])]); $purgeTrash=(int)$db->lastInsertId();
     [$code,$out,$err]=$renderPage('client',['id'=>$purged],['purge_client'=>'1']);
@@ -600,6 +679,32 @@ try {
     $kept=$db->query("SELECT client_id,description,action_taken,location FROM incidents WHERE id=$incident")->fetch();
     check($kept && $kept['client_id']===null && $kept['description']==='[Removed when the client record was purged]' && $kept['action_taken']===$kept['description'] && $kept['location']===$kept['description'],
         'A purged client\'s incident report is kept, detached from the client, with its description, action taken and location removed');
+    $purgeAudit=array_column($db->query("SELECT action,detail FROM audit_log WHERE (entity='client' AND entity_id=$purged) OR (entity='referral' AND entity_id=$purgeReferral) ORDER BY id")->fetchAll(),'detail','action');
+    check(($purgeAudit['client.update']??null)==='[Removed on retention purge]' && ($purgeAudit['referral.review']??null)==='[Removed on retention purge]'
+        && isset($purgeAudit['client.purge']) && !str_contains((string)$purgeAudit['client.purge'],'Purge synthetic'),
+        'A purge removes the details of earlier audit entries about the client and its records, and its own entry does not name the client');
+    // A record restored while its purge waited for it is not purged: the purge reads the
+    // record again under its row lock and stops. This connection holds that lock while
+    // the purge starts, restores the record, then lets the purge go on.
+    $db->exec("INSERT INTO clients(name,archived_at) VALUES('Restored synthetic client',NOW())"); $restored=(int)$db->lastInsertId();
+    $db->prepare("INSERT INTO client_notes(client_id,subject,body) VALUES(?,'Restored synthetic note','Kept')")->execute([$restored]);
+    $db->beginTransaction();
+    $db->query("SELECT id FROM clients WHERE id=$restored FOR UPDATE")->fetchAll();
+    $purging=proc_open([PHP_BINARY,'-d','display_errors=stderr','-d','sendmail_path=/usr/bin/true',__FILE__,'page_post',$tmp.'/client.php',json_encode(['id'=>$restored]),json_encode(['purge_client'=>'1'])],[1=>['pipe','w'],2=>['pipe','w']],$purgePipes);
+    $deadline=microtime(true)+10;
+    do {
+        usleep(50000);
+        try { $waiting=(int)$db->query("SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_state='LOCK WAIT'")->fetchColumn(); }
+        catch (PDOException $e) { $waiting=-1; usleep(1000000); } // no PROCESS privilege: a fixed pause instead
+    } while ($waiting===0 && microtime(true)<$deadline);
+    $db->exec("UPDATE clients SET archived_at=NULL WHERE id=$restored");
+    $db->commit();
+    stream_get_contents($purgePipes[1]); $purgeErr=stream_get_contents($purgePipes[2]); fclose($purgePipes[1]); fclose($purgePipes[2]); $purgeCode=proc_close($purging);
+    check($purgeCode===0 && !preg_match('/Fatal error|Warning|Notice|Uncaught|Deprecated/',$purgeErr)
+        && (int)$db->query("SELECT COUNT(*) FROM clients WHERE id=$restored")->fetchColumn()===1
+        && (int)$db->query("SELECT COUNT(*) FROM client_notes WHERE client_id=$restored")->fetchColumn()===1
+        && (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action='client.purge' AND entity_id=$restored")->fetchColumn()===0,
+        'A record restored while its purge waited is not purged, and nothing of it is removed' . ($purgeErr ? ": $purgeErr" : ''));
 
     // The scheduled jobs against this database. There are no Graph settings here,
     // so mail goes through PHP's mail() to a capture script: nothing leaves the machine.
@@ -672,6 +777,7 @@ try {
     require __DIR__.'/post_claude_cases.php';
     require __DIR__.'/public_token_cases.php';
     require __DIR__.'/workflow_cases.php';
+    require __DIR__.'/release_3021_cases.php';
 
     // Upgrade path: mig_3.0.8.sql applied to a database still in the 3.0.7 shape
     // must give exactly the columns, indexes and foreign keys schema_full.sql
@@ -723,9 +829,14 @@ try {
     foreach ($db->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN) as $table) $db->exec('DROP TABLE `' . str_replace('`','``',$table) . '`');
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
-    $db->exec("INSERT INTO clients (id,name,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL),(3,'Upgraded client with a blank counselor','')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
-    check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12 and mig_3.0.16 has exactly the fresh-install schema, defaults included');
+    $db->exec("INSERT INTO clients (id,name,email,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-client@example.invalid','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL,NULL),(3,'Upgraded client with a blank counselor',NULL,'')");
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12, mig_3.0.16 and mig_3.0.21 has exactly the fresh-install schema, defaults included');
+    check((int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=1')->fetchColumn()===3,'The 3.0.21 upgrade keeps every existing client\'s email confirmed');
+    $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");
+    $migrate($root.'/dist/migrations/mig_3.0.21.sql');
+    check($shape()===$installed && (int)$db->query('SELECT email_verified FROM clients WHERE id=1')->fetchColumn()===0,
+        'Running mig_3.0.21 again changes nothing: the schema stays the same and a client email waiting for confirmation stays unconfirmed');
     check((int)$db->query('SELECT counselor_verified FROM clients WHERE id=1')->fetchColumn()===1,'The upgrade keeps an existing client\'s counselor email confirmed');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE id IN (2,3) AND counselor_verified=0')->fetchColumn()===2,'The upgrade leaves a client with no counselor email unconfirmed, so a later merge cannot fill in a confirmed address');
     $db->exec("UPDATE clients SET counselor_verified=0 WHERE id=1");

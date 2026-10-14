@@ -88,12 +88,31 @@ let testSession: URLSession = {
     return URLSession(configuration: config)
 }()
 '''
+# The voice assistant's reading of a spoken answer to "shall I save this?", taken
+# unchanged from VoiceAssistant.swift into a stand-in type (the real one needs the
+# speech and audio frameworks), so it is checked as the app ships it.
+voice = (root / 'ios/Sources/VoiceAssistant.swift').read_text()
+c = voice.index('    nonisolated static func confirmAnswer(_ utterance: String) -> ConfirmAnswer {')
+d = voice.index('\n    }\n', c) + len('\n    }\n')
+prefix += ('enum SpeechController {\n    enum ConfirmAnswer: Equatable { case yes, no, unclear }\n'
+           + voice[c:d].replace('nonisolated static func', 'static func', 1) + '}\n')
 suffix = r'''
 @main struct QueueTests {
     @MainActor static func main() async throws {
         func check(_ ok: Bool, _ label: String) {
             guard ok else { fatalError(label) }
             print("PASS: " + label)
+        }
+        // A spoken answer counts as yes only when it is a short yes and nothing else: a
+        // correction, a question, or our own question heard back is asked again.
+        for said in ["OK, make it three", "Correct the time", "Yes, Tuesday instead", "You said: Yes", "Say yes to save", "Is it okay?"] {
+            check(SpeechController.confirmAnswer(said) == .unclear, "\"\(said)\" is not taken as a yes to save")
+        }
+        for said in ["Yes please", "Okay, go ahead", "That's correct"] {
+            check(SpeechController.confirmAnswer(said) == .yes, "\"\(said)\" confirms the save")
+        }
+        for said in ["No, don't save it", "That's not correct"] {
+            check(SpeechController.confirmAnswer(said) == .no, "\"\(said)\" cancels the save")
         }
         let api = API()
         let body: [String: Any] = ["idem_key": UUID().uuidString, "client_id": 1, "subject": "Synthetic test"]
@@ -131,10 +150,23 @@ suffix = r'''
         try Data("broken queue".utf8).write(to: testQueueURL)
         do { try api.enqueue("add_note", body: body, label: "Test"); fatalError("Corrupt queue overwritten") }
         catch { check(try String(contentsOf: testQueueURL, encoding: .utf8) == "broken queue", "Corrupt queue is preserved instead of silently replaced") }
-        try FileManager.default.removeItem(at: testQueueURL)
-        try FileManager.default.createDirectory(at: testQueueURL, withIntermediateDirectories: false)
-        do { try api.enqueue("add_note", body: body, label: "Test"); fatalError("Failed write acknowledged") }
-        catch { check(true, "Storage failure is returned to the form") }
+        // A write that fails (the queue's folder is read-only, so the atomic write cannot
+        // create its file) is returned to the form, and the stored queue is left as it was.
+        // The queue reads back fine, so only the write can fail here.
+        try Data("[]".utf8).write(to: testQueueURL)
+        let queueFolder = testQueueURL.deletingLastPathComponent().path
+        let pendingBeforeWrite = api.pendingSync
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: queueFolder)
+        var writeRefused = false
+        do { try api.enqueue("add_note", body: body, label: "Test") } catch { writeRefused = true }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: queueFolder)
+        let storedAfterWrite = try String(contentsOf: testQueueURL, encoding: .utf8)
+        if getuid() == 0 {
+            print("SKIPPED: a failed queue write cannot be simulated as root")
+        } else {
+            check(writeRefused && storedAfterWrite == "[]" && api.pendingSync == pendingBeforeWrite,
+                  "A failed queue write is returned to the form and leaves the stored queue unchanged")
+        }
         api.aiEnabled = true; api.aiFeatures = ["draft"]
         api.syncNoticeDismissed = true
         api.clearIdentity()
@@ -192,4 +224,6 @@ with tempfile.TemporaryDirectory(prefix='cms-swift-tests-') as tmp:
     swift.write_text(prefix + source + suffix)
     subprocess.run(['swiftc', '-module-cache-path', str(path / 'modules'), '-parse-as-library', str(swift), '-o', str(path / 'tests')], check=True)
     import os
-    subprocess.run([str(path / 'tests')], env={**os.environ, 'CMS_QUEUE_TEST_PATH': str(path / 'queue.json')}, check=True)
+    # The queue sits in a folder of its own, which the test makes read-only for a moment.
+    (path / 'queue').mkdir()
+    subprocess.run([str(path / 'tests')], env={**os.environ, 'CMS_QUEUE_TEST_PATH': str(path / 'queue' / 'queue.json')}, check=True)

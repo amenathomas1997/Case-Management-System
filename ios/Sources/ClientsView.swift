@@ -90,7 +90,7 @@ struct ClientsView: View {
             }
         } catch {
             guard q == search else { return }
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }
@@ -112,6 +112,12 @@ struct ClientDetailView: View {
     /// Notes older than the newest 50, fetched on request.
     @State private var olderNotes: [Note] = []
     @State private var loadingOlderNotes = false
+    /// Why "Load older notes" failed, shown by that button: the screen's banner is the list's
+    /// first row, which is not drawn (or heard) while the person is down at the button.
+    @State private var olderNotesError: String?
+    /// Whether the client's email is confirmed (clients.email_verified; nil from a server
+    /// that does not report it), for the edit form.
+    @State private var emailVerified: Bool?
     /// Bumped by every reload of the record: an older-notes page fetched against the list as
     /// it was before is dropped instead of being appended at the wrong place.
     @State private var notesGeneration = 0
@@ -278,6 +284,8 @@ struct ClientDetailView: View {
                                   systemImage: "clock.arrow.circlepath")
                         }
                         .disabled(loadingOlderNotes || recordLoads > 0)
+                        // Said by loadOlderNotes when it happens; shown here, next to the button.
+                        if let olderNotesError { ErrorBanner(message: olderNotesError, announces: false) }
                     } else if detail.notesTotal == nil && shownNotes.count >= 50 {
                         Text("Showing the latest \(shownNotes.count) notes. Older notes are on the website.")
                             .font(.callout).foregroundStyle(Color.secondaryText)
@@ -320,7 +328,7 @@ struct ClientDetailView: View {
         }
         .sheet(isPresented: $showingEditClient, onDismiss: announceSheetResult) {
             if let client = detail?.client {
-                ClientEditSheet(existing: client) { _, message in
+                ClientEditSheet(existing: client, emailVerified: emailVerified) { _, message in
                     confirmation = message; sheetResult = message
                     Task { await reload() }
                 }
@@ -354,7 +362,8 @@ struct ClientDetailView: View {
     }
 
     /// `olderDepth`: how many older notes to fetch again (default: as many as are open now).
-    private func load(olderDepth: Int? = nil) async {
+    /// `reportsFailure`: false when the caller says a failure itself (Load older notes).
+    private func load(olderDepth: Int? = nil, reportsFailure: Bool = true) async {
         recordLoads += 1
         defer { recordLoads -= 1 }
         notesGeneration += 1
@@ -362,9 +371,13 @@ struct ClientDetailView: View {
         // Older notes the person opened stay open across a reload (after a note is saved or
         // edited, on returning to this screen): they are fetched again, so an edit shows.
         let depth = olderDepth ?? olderNotes.count
+        // The account this load is for: another one signing in while it runs must not get this
+        // client's record shown, or its name and tracks kept in that account's offline cache.
+        let owner = api.userId
         do {
             error = nil
-            let fresh: ClientDetail = try await api.call("client", query: ["id": String(clientId)])
+            let record: ClientRecord = try await api.call("client", query: ["id": String(clientId)])
+            let fresh = record.detail
             var older: [Note] = []
             var known = Set(fresh.notes.map(\.id))
             var offset = fresh.notes.count
@@ -377,14 +390,20 @@ struct ClientDetailView: View {
                 older += added
             }
             guard generation == notesGeneration else { return }     // a newer reload replaced this one
+            guard api.userId == owner, !api.token.isEmpty else { return }
             detail = fresh
+            emailVerified = record.emailVerified
             // Kept on this phone, so Log hours can offer this client's tracks with no signal.
-            TrackCache.saveClient(id: clientId, name: fresh.client.name, tracks: fresh.tracks, owner: api.userId)
+            TrackCache.saveClient(id: clientId, name: fresh.client.name, tracks: fresh.tracks, owner: owner)
             olderNotes = older
+            olderNotesError = nil
             notesGeneration += 1    // an older-notes page still on its way was computed against the old list
         } catch {
             guard generation == notesGeneration else { return }
-            self.error = error.localizedDescription
+            // Said as well as shown: the banner is the list's first row, which is not drawn (or
+            // heard) while the person is scrolled down the record.
+            if reportsFailure { showFormError(error.localizedDescription, in: &self.error) }
+            else { self.error = error.localizedDescription }
         }
     }
 
@@ -399,6 +418,7 @@ struct ClientDetailView: View {
         loadingOlderNotes = true
         defer { loadingOlderNotes = false }
         let generation = notesGeneration
+        olderNotesError = nil
         do {
             error = nil
             let page: ClientDetail = try await api.call("client", query: ["id": String(clientId), "notes_offset": String(shownNotes.count)])
@@ -411,8 +431,13 @@ struct ClientDetailView: View {
             // so a note at the old boundary would be skipped without a word: the list is
             // fetched again instead, with this page's worth of older notes included.
             if let total = page.notesTotal, let listed = detail?.notesTotal, total != listed {
-                await load(olderDepth: olderNotes.count + max(page.notes.count, 1))
-                guard error == nil else { return }
+                await load(olderDepth: olderNotes.count + max(page.notes.count, 1), reportsFailure: false)
+                if let failure = error {
+                    // Shown by the button and said, not left in the banner at the top, out of view.
+                    error = nil
+                    olderNotesFailed(failure)
+                    return
+                }
                 announce("The notes changed since this screen opened, so the list was reloaded. It now shows \(shownNotes.count) of \(detail?.notesTotal ?? total) notes.")
                 return
             }
@@ -422,8 +447,33 @@ struct ClientDetailView: View {
             olderNotes += added
             announce(added.isEmpty ? "No older notes." : "\(added.count) older note\(added.count == 1 ? "" : "s") loaded.")
         } catch {
-            self.error = error.localizedDescription
+            olderNotesFailed(error.localizedDescription)
         }
+    }
+
+    /// A failed "Load older notes": shown under the button and said once (the banner there
+    /// does not announce itself, so it is not heard twice).
+    private func olderNotesFailed(_ reason: String) {
+        let message = "Could not load older notes. \(reason)"
+        olderNotesError = message
+        announce(message)
+    }
+}
+
+/// The client record, with whether the client's email is confirmed (clients.email_verified:
+/// false while an address from the public referral form waits for staff to confirm it; nil
+/// from a server that does not report it).
+private struct ClientRecord: Decodable {
+    let detail: ClientDetail
+    let emailVerified: Bool?
+    private enum Keys: String, CodingKey { case client }
+    private enum ClientKeys: String, CodingKey { case emailVerified }
+    init(from d: Decoder) throws {
+        detail = try ClientDetail(from: d)
+        let client = try? d.container(keyedBy: Keys.self).nestedContainer(keyedBy: ClientKeys.self, forKey: .client)
+        if let flag = try? client?.decodeIfPresent(Bool.self, forKey: .emailVerified) { emailVerified = flag }
+        else if let number = try? client?.decodeIfPresent(Int.self, forKey: .emailVerified) { emailVerified = number != 0 }
+        else { emailVerified = nil }
     }
 }
 
@@ -536,7 +586,7 @@ struct AddNoteSheet: View {
             } else {
                 showFormError("Note: it changed while the AI was working, so the clean-up was not applied. Tap Clean up with AI again to use it.", in: &error)
             }
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
         aiBusy = false
     }
 
@@ -544,6 +594,7 @@ struct AddNoteSheet: View {
     private func generate() async {
         genBusy = true; error = nil
         let sentSections = sections
+        let wasFree = !structured
         do {
             let fmt = structured ? noteFormat : "BIRP"
             let r: GenerateNoteResponse = try await api.call("ai_generate_note", body: [
@@ -562,10 +613,13 @@ struct AddNoteSheet: View {
             if hwTrackId == 0 { hwTrackId = activeTracks.first?.id ?? 0 }
             // The draft fills in further down the form with nothing moving: say what arrived.
             var summary = "\(r.format) sections drafted."
+            if wasFree && structured && !body_.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                summary += " The text you typed in Note is kept as the narrative, saved after the sections."
+            }
             if !r.questions.isEmpty { summary += " \(r.questions.count) thing\(r.questions.count == 1 ? "" : "s") to double-check." }
             if !r.homework.isEmpty { summary += " \(r.homework.count) homework item\(r.homework.count == 1 ? "" : "s") found." }
             announce(summary + " Review before saving.")
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
         genBusy = false
     }
 
@@ -626,6 +680,17 @@ struct AddNoteSheet: View {
                             }
                         }
                     }
+                    // A new note keeps its narrative box, as on the website: text typed in it
+                    // (before the format changed, or before Generate) is saved after the
+                    // sections under "Narrative", never dropped. An edit keeps the note's own
+                    // narrative on the server, so it is not shown here.
+                    if existing == nil {
+                        Section("Narrative (optional)") {
+                            TextField("Narrative", text: $body_, axis: .vertical).lineLimit(3...12)
+                            Text("Saved after the sections under “Narrative”. Clear it if the sections already cover it.")
+                                .font(.caption).foregroundStyle(Color.secondaryText)
+                        }
+                    }
                 } else {
                     Section("Note (required)") {
                         TextField("Note", text: $body_, axis: .vertical).lineLimit(5...12)
@@ -650,7 +715,8 @@ struct AddNoteSheet: View {
                 if !homework.isEmpty {
                     Section {
                         if activeTracks.isEmpty {
-                            Text("Homework needs an active training track; none found, so it won't be saved.")
+                            // So no Assign switch or due date is offered: nothing would be assigned.
+                            Text("Homework needs an active training track; none found, so it won't be saved. Copy anything you need into the note.")
                                 .font(.caption).foregroundStyle(Color.secondaryText)
                         } else {
                             Picker("Add homework to track", selection: $hwTrackId) {
@@ -670,18 +736,23 @@ struct AddNoteSheet: View {
                                 // edited with VoiceOver), and the switch says what it does.
                                 rowLayout {
                                     CaptionedField(label: "Homework \(number) title", text: $hw.title)
-                                    Toggle("Assign", isOn: $hw.include)
-                                        .fixedSize()
-                                        .accessibilityLabel("Assign \(named)")
-                                        .accessibilityHint("Adds it to the note and the client portal when you save.")
-                                        .accessibilityInputLabels(["Assign", "Assign homework \(number)"])
+                                    if !activeTracks.isEmpty {
+                                        Toggle("Assign", isOn: $hw.include)
+                                            .fixedSize()
+                                            .accessibilityLabel("Assign \(named)")
+                                            .accessibilityHint("Adds it to the note and the client portal when you save.")
+                                            .accessibilityInputLabels(["Assign", "Assign homework \(number)"])
+                                    }
                                 }
-                                if hw.include {
+                                if hw.include || activeTracks.isEmpty {
                                     CaptionedField(label: "Homework \(number) instructions", text: $hw.instructions, lines: 1...4)
                                         .font(.callout)
                                     // A switch and a date picker: a mistyped due date used to be dropped unannounced.
-                                    OptionalDayField(title: "Due date", text: $hw.due)
-                                        .font(.callout)
+                                    // Numbered, so each item's switch and picker have their own names.
+                                    if !activeTracks.isEmpty {
+                                        OptionalDayField(title: "Homework \(number) due date", text: $hw.due)
+                                            .font(.callout)
+                                    }
                                 }
                             }
                         }
@@ -720,7 +791,8 @@ struct AddNoteSheet: View {
                 }
                 if existing == nil && initialTrackId > 0 {
                     if attachTrackId == 0 { attachTrackId = initialTrackId }
-                    hwTrackId = initialTrackId
+                    // Homework goes only to an active track (one the picker offers).
+                    if activeTracks.contains(where: { $0.id == initialTrackId }) { hwTrackId = initialTrackId }
                 }
                 if hwTrackId == 0 { hwTrackId = activeTracks.first?.id ?? 0 }
             }
@@ -744,6 +816,12 @@ struct AddNoteSheet: View {
         if structured {
             payload["sec1"] = sections[0]; payload["sec2"] = sections[1]
             payload["sec3"] = sections[2]; payload["sec4"] = sections[3]
+            // A new note's narrative is saved after the sections (assemble_note), as on the
+            // website. An edit leaves body out, so the server keeps the note's own narrative
+            // part (body_ holds the whole assembled note there).
+            if existing == nil && !body_.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                payload["body"] = body_
+            }
         } else {
             payload["body"] = body_
         }
@@ -756,7 +834,9 @@ struct AddNoteSheet: View {
                 payload["client_id"] = clientId
                 payload["idem_key"] = idemKey
                 let kept = homework.filter { $0.include && !$0.title.isEmpty }
-                if !kept.isEmpty && hwTrackId > 0 {
+                // Only to an active track the picker offers: the sheet says homework is not
+                // saved otherwise (opened from a completed track, for example).
+                if !kept.isEmpty && activeTracks.contains(where: { $0.id == hwTrackId }) {
                     payload["homework_track_id"] = hwTrackId
                     payload["homework"] = kept.map { ["title": $0.title, "instructions": $0.instructions, "due": $0.due] }
                 }
@@ -782,7 +862,7 @@ struct AddNoteSheet: View {
             clearDraft()
             onSaved(existing == nil ? "Note saved." : "Note updated."); dismiss()
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
     }
@@ -794,6 +874,9 @@ struct AddNoteSheet: View {
 /// "ext. 22", "#22") is dialled after a pause instead of being run onto the number.
 /// A marker counts only after some digits and not inside a word, so "Text 555…" or
 /// "Fax 555…" is a number, not an empty number with an extension.
+/// Only the first phone-shaped run is dialled: a field holding two numbers or a note
+/// ("512-555-1234 or 512-555-9876", "after 3pm 512-555-1234") never has every digit in it
+/// joined into one, and one that holds no plausible number (7 to 15 digits) is not a link.
 func telURL(_ phone: String) -> URL? {
     var main = Substring(phone)
     var ext = ""
@@ -807,8 +890,11 @@ func telURL(_ phone: String) -> URL? {
         }
         from = marker.upperBound
     }
-    let number = main.filter { "0123456789+".contains($0) }
-    guard number.contains(where: { $0 != "+" }) else { return nil }
+    guard let run = main.range(of: #"\+?[0-9][0-9().\- ]{5,}[0-9]"#, options: .regularExpression) else { return nil }
+    let number = main[run].filter { "0123456789+".contains($0) }
+    guard (7...15).contains(number.filter { $0 != "+" }.count) else { return nil }
+    // An extension after a second number belongs to that number, not to this one.
+    if main[run.upperBound...].contains(where: { "0123456789".contains($0) }) { ext = "" }
     return URL(string: "tel:" + number + (ext.isEmpty ? "" : "," + ext))
 }
 
@@ -945,7 +1031,7 @@ struct AICaseSummarySheet: View {
             truncated = r.truncated == true
             announce(truncated ? "Summary drafted. " + Self.truncatedMessage : "Summary drafted. Review and edit before saving.")
         }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
     static let truncatedMessage = "This summary is incomplete: the AI stopped before the end. Review it closely and add what is missing, or close and draft it again."
@@ -969,8 +1055,8 @@ struct AICaseSummarySheet: View {
                 try api.enqueue("add_note", body: payload, label: "Note: Case summary")
                 onSaved("Case summary saved offline — will sync when connected."); dismiss()
             } catch {
-                self.error = error.localizedDescription; saving = false
+                showFormError(error.localizedDescription, in: &self.error); saving = false
             }
-        } catch { self.error = error.localizedDescription; saving = false }
+        } catch { showFormError(error.localizedDescription, in: &self.error); saving = false }
     }
 }

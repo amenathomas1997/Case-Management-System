@@ -97,7 +97,8 @@ if (can('billing')) {
         $pct = $amtC > 0 ? intdiv((int)round((float)$c['spent'] * 100) * 100, $amtC) : 0;
         $endSoon = $c['end_date'] && $c['end_date'] <= $soon;
         if ($pct >= 90 || $endSoon || (int)$c['overdue_deliv'] > 0) {
-            $c['pct'] = $pct; $c['end_soon'] = $endSoon;
+            // A contract whose end date has passed is said to have ended, not to be ending.
+            $c['pct'] = $pct; $c['end_soon'] = $endSoon; $c['ended'] = $endSoon && $c['end_date'] < $today;
             $contractsRisk[] = $c;
         }
     }
@@ -154,7 +155,7 @@ page_header('Compliance', $user, 'compliance');
 <div class="grid grid-4">
   <div class="card stat"><span class="stat-num"><?= count($authRisk) ?></span><span class="stat-label">Authorizations at risk</span></div>
   <div class="card stat"><span class="stat-num"><?= count($reportsDue) ?></span><span class="stat-label">Reports due</span></div>
-  <div class="card stat"><span class="stat-num"><?= can('equipment') ? count($equipDue) : '—' ?></span><span class="stat-label">Equipment service due</span></div>
+  <div class="card stat"><span class="stat-num"><?= can('equipment') ? count($equipDue) : '<span aria-hidden="true">—</span><span class="visually-hidden">Not shown (needs equipment access)</span>' ?></span><span class="stat-label">Equipment service due</span></div>
   <div class="card stat"><span class="stat-num"><?= count(array_filter($authRisk, fn($t) => $t['expired'])) ?></span><span class="stat-label">Expired authorizations</span></div>
   <div class="card stat"><span class="stat-num"><?= count($consentRisk) ?></span><span class="stat-label">Consents to renew</span></div>
 </div>
@@ -180,7 +181,7 @@ page_header('Compliance', $user, 'compliance');
           <strong<?= $t['funds_pct'] >= 100 ? ' class="field-error"' : '' ?>> (<?= $t['funds_pct'] ?>%<?= $t['funds_pct'] >= 100 ? ', used up' : '' ?>)</strong>,
           <?= fmt_money((float)$r['funds_remaining']) ?> remaining
           <?php endif; ?></td>
-        <td><?= $t['expiration_date'] ? fmt_date($t['expiration_date']) : '—' ?>
+        <td><?= fmt_date($t['expiration_date'], true) ?>
           <?= $t['expired'] ? '<br><strong class="field-error">Expired</strong>' : ($t['exp_soon'] ? '<br><span class="badge badge-pending">Expiring soon</span>' : '') ?></td>
         <td><a class="btn btn-secondary btn-sm" href="amendment_request.php?track=<?= (int)$t['id'] ?>">Request amendment<span class="visually-hidden"> for <?= h($t['title']) ?> (<?= h($t['client']) ?>)</span></a></td>
       </tr>
@@ -235,13 +236,13 @@ page_header('Compliance', $user, 'compliance');
 <?php if (can('billing')): ?>
 <section class="card" aria-labelledby="ct-h">
   <h2 id="ct-h">Contracts at risk (<?= count($contractsRisk) ?>)</h2>
-  <p class="muted">Active contracts at 90%+ spent, ending within 30 days, or with an overdue deliverable.</p>
+  <p class="muted">Active contracts at 90%+ spent, already ended or ending within 30 days, or with an overdue deliverable.</p>
   <?php if (!$contractsRisk): ?><p class="muted">Nothing needs attention right now.</p><?php else: ?>
   <ul>
   <?php foreach ($contractsRisk as $c): ?>
     <li><a href="contracts.php?id=<?= (int)$c['id'] ?>"><?= h($c['name']) ?></a> —
       <?= fmt_money((float)$c['spent']) ?> of <?= fmt_money((float)$c['amount']) ?> (<strong<?= $c['pct'] >= 100 ? ' class="field-error"' : '' ?>><?= $c['pct'] ?>%</strong>)
-      <?= $c['end_soon'] ? ' · <span class="badge badge-pending">ends ' . fmt_date($c['end_date']) . '</span>' : '' ?>
+      <?= $c['ended'] ? ' · <strong class="field-error">ended ' . fmt_date($c['end_date']) . '</strong>' : ($c['end_soon'] ? ' · <span class="badge badge-pending">ends ' . fmt_date($c['end_date']) . '</span>' : '') ?>
       <?= (int)$c['overdue_deliv'] > 0 ? ' · <strong class="field-error">' . (int)$c['overdue_deliv'] . ' overdue deliverable(s)</strong>' : '' ?></li>
   <?php endforeach; ?>
   </ul>

@@ -152,6 +152,9 @@ struct ClientInfo: Decodable {
     var a11yPrimaryTech: String?
     var a11yContact: String?
     var a11yNotes: String?
+    /// False while the client's email came from the public referral form and staff have not
+    /// confirmed it yet; nil from a server that does not report it.
+    var emailVerified: Bool?
 }
 
 let clientTypes = ["VR", "Pre-ETS"]
@@ -312,6 +315,10 @@ struct MeResponse: Decodable {
     let scoped: Bool?
     let aiEnabled: Bool?
     let aiFeatures: [String]?
+    /// The server's time zone, such as "America/Chicago"; nil from a server that does not report it.
+    let timezone: String?
+    /// The server's release, such as "3.0.21"; nil from a server that does not report it.
+    let serverVersion: String?
 }
 
 let serviceTypes = ["Assistive Technology", "Rehab Teaching", "Counseling", "Pre-ETS", "Other"]
@@ -626,7 +633,23 @@ enum APIError: LocalizedError {
 
 @MainActor
 final class API: ObservableObject {
-    static let base = URL(string: "https://cms.example.org/api.php")!
+    nonisolated static let base = URL(string: "https://cms.example.org/api.php")!
+    /// Where refreshMe keeps the server's time zone for APIDate.
+    nonisolated static let serverTimeZoneKey = "serverTimeZone"
+    /// Set at the first launch of an install: its absence means the app was just installed.
+    private static let installedKey = "installMarker"
+    /// This build as "<version> (<build>)", such as "3.0.21 (29)".
+    nonisolated static let appVersion: String = {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "unknown"
+        let build = info["CFBundleVersion"] as? String ?? "unknown"
+        return "\(version) (\(build))"
+    }()
+    /// Every request says which build of the app sent it (X-App-Version), so the server can tell
+    /// an out-of-date install apart.
+    nonisolated static func identifyApp(_ request: inout URLRequest) {
+        request.setValue(appVersion, forHTTPHeaderField: "X-App-Version")
+    }
 
     /// Session token lives in the iOS Keychain (hardware-encrypted, this-device-only).
     @Published var token: String {
@@ -664,6 +687,22 @@ final class API: ObservableObject {
     func aiHas(_ key: String) -> Bool { aiEnabled && aiFeatures.contains(key) }
 
     init() {
+        // Deleting the app removes its settings but not its Keychain items. A fresh install (no
+        // marker, and none of the settings a signed-in build writes) drops a token left by an
+        // earlier install and asks the server to end it, so the next person to install the app on
+        // this phone is not signed in as the last one. An upgrade from a build with no marker
+        // keeps its sign-in.
+        let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: API.installedKey) {
+            let upgrade = ["apiToken", "userId", "userName", "userPerms", "userPermsLoaded", "userScoped"]
+                .contains { defaults.object(forKey: $0) != nil }
+            if !upgrade {
+                let stale = Keychain.load("apiToken")
+                Keychain.save("", for: "apiToken")   // saving nothing deletes the item
+                if !stale.isEmpty { API.revoke(stale) }
+            }
+            defaults.set(true, forKey: API.installedKey)
+        }
         // One-time migration: builds ≤6 kept the token in UserDefaults.
         if let legacy = UserDefaults.standard.string(forKey: "apiToken"), !legacy.isEmpty {
             Keychain.save(legacy, for: "apiToken")
@@ -689,6 +728,11 @@ final class API: ObservableObject {
             aiEnabled = me.aiEnabled ?? false
             aiFeatures = me.aiFeatures ?? []
             permsLoaded = true
+            // Appointment times are sent and shown in the server's zone (APIDate); a server that
+            // does not report it keeps the zone known before (America/Chicago by default).
+            if let zone = me.timezone, TimeZone(identifier: zone) != nil {
+                UserDefaults.standard.set(zone, forKey: API.serverTimeZoneKey)
+            }
         }
     }
 
@@ -718,7 +762,7 @@ final class API: ObservableObject {
     /// A confirmed voice write (voice_command with "do") involves no AI: its timeout is a lost
     /// reply, reported as one so the assistant can offer a retry with the same key.
     private static func waitsOnAI(_ action: String, body: [String: Any]?) -> Bool {
-        action.hasPrefix("ai_") || action == "at_ai_draft" || body?["ai_draft"] != nil
+        action.hasPrefix("ai_") || action == "at_ai_draft" || action == "workflow_briefing" || body?["ai_draft"] != nil
             || (action == "voice_command" && body?["do"] == nil)
     }
     private static let aiTimeout: TimeInterval = 100
@@ -736,6 +780,7 @@ final class API: ObservableObject {
         while true {
             let sessionToken = token
             var request = URLRequest(url: API.url(for: action, query: query))
+            API.identifyApp(&request)
             request.httpMethod = body != nil ? "POST" : method
             if isAI { request.timeoutInterval = API.aiTimeout }
             if !sessionToken.isEmpty {
@@ -926,6 +971,10 @@ final class API: ObservableObject {
     @Published var syncNoticeDismissed = false  // the person cleared the sync notice this session
     @AppStorage("userId") var userId: Int = 0
     private var isFlushing = false
+    /// Callers that asked for an upload while one was already running (Retry now while the upload
+    /// started by returning to the app is still going): they wait for it to end, so what they
+    /// report afterwards is its outcome, not the queue as it was half-way through.
+    private var flushWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Application Support (not Documents): never user-visible, excluded from backups, and
     /// unreadable while the phone is locked (complete protection: the queue is only read or
@@ -943,10 +992,16 @@ final class API: ObservableObject {
             try FileManager.default.moveItem(at: legacy, to: queueURL)
         }
         guard FileManager.default.fileExists(atPath: queueURL.path) else { return [] }
-        // A migrated file, or one written by an earlier build, gets the same protection.
+        // A migrated file, or one written by an earlier build, gets the same protection and is
+        // kept out of backups straight away, not only once it is next rewritten (a queue holding
+        // only entries with no owner never is).
         #if os(iOS)
         try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: queueURL.path)
         #endif
+        var stored = queueURL
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? stored.setResourceValues(values)
         return try JSONDecoder().decode([PendingCall].self, from: Data(contentsOf: queueURL))
     }
     private func saveQueue(_ q: [PendingCall]) throws {
@@ -991,9 +1046,20 @@ final class API: ObservableObject {
     /// Keep every unconfirmed entry, including validation and permission failures.
     /// Capture the account and token so switching accounts cannot reassign a write.
     func flushQueue() async {
-        guard !isFlushing, userId > 0, !token.isEmpty, !reauthRequired else { return }
+        if isFlushing {
+            await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
+                flushWaiters.append(waiter)
+            }
+            return
+        }
+        guard userId > 0, !token.isEmpty, !reauthRequired else { return }
         isFlushing = true
-        defer { isFlushing = false }
+        defer {
+            isFlushing = false
+            let waiters = flushWaiters
+            flushWaiters = []
+            for waiter in waiters { waiter.resume() }
+        }
         let owner = userId
         let sessionToken = token
         var transient: String?
@@ -1009,6 +1075,7 @@ final class API: ObservableObject {
                 var components = URLComponents(url: API.base, resolvingAgainstBaseURL: false)!
                 components.queryItems = [URLQueryItem(name: "action", value: item.action)]
                 var request = URLRequest(url: components.url!)
+                API.identifyApp(&request)
                 request.httpMethod = "POST"
                 request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1098,9 +1165,31 @@ final class API: ObservableObject {
         if syncError != notice { syncError = notice }
     }
 
+    #if os(iOS)
+    /// The clipboard's changeCount just after the app last copied client text, or nil. Sign-out
+    /// clears the clipboard only while that copy is still the last thing on it, so whatever the
+    /// person copied since (in any app) is left alone.
+    private var protectedCopyChangeCount: Int?
+
+    /// Copies client text: kept on this phone (never offered to other devices), cleared from the
+    /// clipboard after 10 minutes, and cleared at sign-out if it is still there.
+    func copyProtected(_ text: String) {
+        UIPasteboard.general.setItems([["public.utf8-plain-text": text]],
+                                      options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(600)])
+        protectedCopyChangeCount = UIPasteboard.general.changeCount
+    }
+    #endif
+
     func clearIdentity() {
         // Nothing a previous session downloaded for preview may outlive it.
         PreviewStore.sweep()
+        #if os(iOS)
+        // Nor client text the app copied, unless something else has been copied since.
+        if let count = protectedCopyChangeCount, UIPasteboard.general.changeCount == count {
+            UIPasteboard.general.items = []
+        }
+        protectedCopyChangeCount = nil
+        #endif
         token = ""
         userName = ""
         userId = 0
@@ -1153,10 +1242,16 @@ final class API: ObservableObject {
         DraftStore.removeAll(owner: userId)
         clearIdentity()
         guard !old.isEmpty else { return }
+        API.revoke(old)
+    }
+
+    /// Asks the server to end a session (best effort: the reply is not waited for or reported).
+    private static func revoke(_ sessionToken: String) {
         Task {
             var request = URLRequest(url: URL(string: API.base.absoluteString + "?action=logout")!)
+            API.identifyApp(&request)
             request.httpMethod = "POST"
-            request.setValue("Bearer \(old)", forHTTPHeaderField: "Authorization")
+            request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
             _ = try? await URLSession.shared.data(for: request)
         }
     }

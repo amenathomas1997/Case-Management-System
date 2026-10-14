@@ -2,6 +2,9 @@
 declare(strict_types=1);
 
 const DEVICE_FOLLOWUP_DAYS = [30, 60, 90];
+/** Device request categories: the fixed list the procurement page and the app's
+ *  add_device_request (api.php) both accept, so they cannot drift apart. */
+const DR_CATEGORIES = ['Braille Display', 'Screen Reader', 'Magnifier / CCTV', 'AAC Device', 'Tablet / Phone', 'Computer', 'Hearing / Amplification', 'Switch / Access', 'Software License', 'Other'];
 
 /** Password hashes are already durable credential versions; no schema upgrade is needed. */
 function credential_version(array $row): string {
@@ -74,8 +77,10 @@ function loan_equipment(int $equipmentId, int $clientId, ?string $due, ?string $
     }
 }
 
-/** Returns the equipment ID. Scope must be checked before entering this helper. */
-function return_equipment(int $loanId): int {
+/** Returns the equipment ID. Scope must be checked before entering this helper.
+ *  When the item is free again, the client who has waited longest gets the hold
+ *  (promote_equipment_waitlist(); $actor, who made the return, is not notified). */
+function return_equipment(int $loanId, int $actor = 0): int {
     $db = db();
     $lookup = $db->prepare('SELECT equipment_id FROM equipment_loans WHERE id = ?');
     $lookup->execute([$loanId]);
@@ -107,9 +112,69 @@ function return_equipment(int $loanId): int {
                 if ((string)$e->getCode() !== '42S02') throw $e; // Older schema before the AT migration.
             }
             $db->prepare('UPDATE equipment SET status = ? WHERE id = ?')->execute([$status, $equipmentId]);
+            if ($status === 'Available') promote_equipment_waitlist($equipmentId, $actor);
         }
         if ($ownsTransaction) $db->commit();
         return $equipmentId;
+    } catch (Throwable $e) {
+        if ($ownsTransaction && $db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+
+/** SQL condition, on the equipment_reservations alias $alias, for a hold that still
+ *  counts: its "needed until" date has not passed and its client is neither closed nor
+ *  archived. A lapsed hold, or one for a client no longer served, stays listed (so
+ *  staff can cancel it) but never keeps the item from the next client: it is left out
+ *  of the "held by a reservation" checks, the queue a new request joins and waitlist
+ *  promotion. $alias is a literal table alias, never user input. */
+function equipment_hold_live_sql(string $alias = 'er'): string {
+    return "({$alias}.needed_until IS NULL OR {$alias}.needed_until >= CURDATE())"
+        . " AND EXISTS (SELECT 1 FROM clients hc WHERE hc.id = {$alias}.client_id AND hc.archived_at IS NULL AND hc.status NOT LIKE 'Closed%')";
+}
+
+/** The item has just become free to lend (returned, back from repair or reuse
+ *  refurbishment, set back to Available, or its hold was cancelled): the client who
+ *  has waited longest gets the hold. Turns the oldest live 'Waitlist' row (by
+ *  created_at) into 'Reserved' and returns its id, or null when the item is not
+ *  Available, a live hold already holds it, or nobody is waiting.
+ *  The caller should already hold the equipment row lock (SELECT ... FOR UPDATE)
+ *  inside its transaction; the row is locked again here, and a transaction is opened
+ *  only when none is running. The promotion is audited, and the promoted client's
+ *  instructor and whoever placed the entry are told through notify_hold_change()
+ *  (never $actor), so callers neither audit nor notify it again. */
+function promote_equipment_waitlist(int $equipmentId, int $actor = 0): ?int {
+    $db = db();
+    $ownsTransaction = !$db->inTransaction();
+    if ($ownsTransaction) $db->beginTransaction();
+    try {
+        $promoted = null;
+        $item = $db->prepare('SELECT status FROM equipment WHERE id = ? FOR UPDATE');
+        $item->execute([$equipmentId]);
+        if ($item->fetchColumn() === 'Available') {
+            try {
+                $live = equipment_hold_live_sql('er');
+                $held = $db->prepare("SELECT er.id FROM equipment_reservations er WHERE er.equipment_id = ? AND er.status = 'Reserved' AND $live LIMIT 1");
+                $held->execute([$equipmentId]);
+                if (!$held->fetchColumn()) {
+                    $queue = $db->prepare("SELECT er.id, er.client_id, er.reserved_by FROM equipment_reservations er WHERE er.equipment_id = ? AND er.status = 'Waitlist' AND $live ORDER BY er.created_at, er.id");
+                    $queue->execute([$equipmentId]);
+                    $promote = $db->prepare("UPDATE equipment_reservations SET status = 'Reserved' WHERE id = ? AND status = 'Waitlist'");
+                    foreach ($queue->fetchAll() as $next) {
+                        $promote->execute([(int)$next['id']]);
+                        if ($promote->rowCount() !== 1) continue; // Settled by another request meanwhile.
+                        $promoted = (int)$next['id'];
+                        audit($actor ?: null, 'equipment.waitlist_promote', 'equipment', $equipmentId, 'client #' . (int)$next['client_id'] . ' moved up from the waitlist (reservation #' . $promoted . ')');
+                        notify_hold_change($equipmentId, [$next], $actor, 'waitlist entry', 'was moved up to a reservation hold because the item is available again');
+                        break;
+                    }
+                }
+            } catch (PDOException $e) {
+                if ((string)$e->getCode() !== '42S02') throw $e; // Older schema without reservations, as in loan_equipment().
+            }
+        }
+        if ($ownsTransaction) $db->commit();
+        return $promoted;
     } catch (Throwable $e) {
         if ($ownsTransaction && $db->inTransaction()) $db->rollBack();
         throw $e;
@@ -182,12 +247,18 @@ function change_user_access(int $id, int $actor, array $changes, callable $write
     $db->beginTransaction();
     try {
         $users = $db->query('SELECT * FROM users ORDER BY id FOR UPDATE')->fetchAll();
-        $groups = $db->query('SELECT id, perms FROM `groups` ORDER BY id FOR UPDATE')->fetchAll(PDO::FETCH_KEY_PAIR);
+        $groups = $db->query('SELECT id, perms, own_caseload_only FROM `groups` ORDER BY id FOR UPDATE')->fetchAll(PDO::FETCH_UNIQUE | PDO::FETCH_ASSOC);
         $isAdmin = static function (array $u) use ($groups): bool {
             if (empty($u['is_active'])) return false;
             return !empty($u['group_id']) && isset($groups[$u['group_id']])
-                ? in_array('admin', array_map('trim', explode(';', $groups[$u['group_id']])), true)
+                ? in_array('admin', array_map('trim', explode(';', (string)$groups[$u['group_id']]['perms'])), true)
                 : $u['role'] === 'admin';
+        };
+        // An administrator who sees every caseload, by effective_admin_user_ids()'s rule:
+        // a group limited to its own caseload never counts. Org-wide notices and holds
+        // on unowned clients reach only these accounts, so the last one is kept.
+        $isFullAdmin = static function (array $u) use ($groups, $isAdmin): bool {
+            return $isAdmin($u) && !(!empty($u['group_id']) && isset($groups[$u['group_id']]) && (int)$groups[$u['group_id']]['own_caseload_only'] === 1);
         };
         $byId = array_column($users, null, 'id');
         if (!isset($byId[$id])) throw new DomainException('User not found.');
@@ -195,8 +266,10 @@ function change_user_access(int $id, int $actor, array $changes, callable $write
         $after = array_replace($byId[$id], $changes);
         if (!empty($after['group_id']) && !isset($groups[$after['group_id']])) throw new DomainException('Choose an existing permission group.');
         if ($actor === $id && !$isAdmin($after)) throw new DomainException('You cannot deactivate or demote your own account. Ask another administrator.');
+        $hadFullAdmin = (bool)array_filter($byId, $isFullAdmin);
         $byId[$id] = $after;
         if (!array_filter($byId, $isAdmin)) throw new DomainException('That change would leave no active administrator.');
+        if ($hadFullAdmin && !array_filter($byId, $isFullAdmin)) throw new DomainException('That change would leave no active administrator with access to every caseload. First give another account an administrator group that is not limited to its own caseload.');
         $write($db);
         $db->commit();
     } catch (Throwable $e) {

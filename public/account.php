@@ -55,6 +55,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_disable'])) {
     if ($pwErr === null) {
         db()->prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?')->execute([$user['id']]);
         audit($user['id'], 'totp.disable', 'user', $user['id']);
+        // Tell the account owner, as adding one does: if it was not them, they can react.
+        send_app_mail($user['email'], 'An authenticator app was removed from your account',
+            "Hello {$user['name']},\n\nThe authenticator app was just turned off for your " . cfg('name') . " account. Sign-in codes now arrive by email only.\n\n"
+            . "If this was you, no action is needed. If it was NOT you, change your password under My Account right away (or use \"Forgot your password?\" on the sign-in page), set up the authenticator app again, and tell your administrator.\n");
         flash('Authenticator app disabled. Sign-in codes will arrive by email only.');
     } else {
         keep_field_errors(['td_pw' => $pwErr]);
@@ -108,6 +112,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
         audit($user['id'], 'password.change', 'user', (int)$user['id'], 'browser and app sessions revoked'
             . ($passkeyCount ? ', ' . $passkeyCount . ' passkey(s) removed' : '')
             . ($hadCalFeed ? ', calendar feed address turned off' : ''));
+        // Tell the account owner what changed: if it was not them, every device
+        // was just signed out and they would otherwise get no explanation.
+        $mailFx = ['you were signed out on every device, including the mobile app'];
+        if ($passkeyCount) $mailFx[] = 'your ' . $passkeyCount . ' passkey' . ($passkeyCount === 1 ? ' was' : 's were') . ' removed';
+        if ($hadCalFeed) $mailFx[] = 'your calendar subscription address was turned off';
+        $mailFxLast = array_pop($mailFx);
+        send_app_mail($user['email'], 'Your password was changed',
+            "Hello {$user['name']},\n\nThe password for your " . cfg('name') . ' account was changed on ' . date('M j, Y \a\t g:i A') . ".\n"
+            . ucfirst(($mailFx ? implode(', ', $mailFx) . ' and ' : '') . $mailFxLast) . ".\n\n"
+            . "If this was you, no action is needed. If it was NOT you, use \"Forgot your password?\" on the sign-in page ("
+            . cfg('base_url') . "/forgot.php) to set a new password right away, and tell your administrator.\n");
         flash('Your password has been changed. Sign in again on all devices, including the mobile app.'
             . ($passkeyCount ? ' Your ' . $passkeyCount . ' passkey' . ($passkeyCount === 1 ? ' was' : 's were') . ' removed: add them again under My Account, and remove the old ones from your devices\' saved passwords.' : '')
             . ($hadCalFeed ? ' Your calendar subscription address was turned off as a precaution: create a new one under My Account and subscribe your calendar to it again.' : ''));
@@ -157,19 +172,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retention']) && 
 
 /* Create or replace my calendar-feed address */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cal_regen'])) {
+    // The feed serves only staff with the Scheduling permission (calfeed.php
+    // answers "not found" to anyone else), so an address is never made for others.
+    if (!can('schedule')) {
+        flash('Your account does not have the Scheduling permission, so a calendar address would show nothing. Nothing was changed. Ask an administrator if you need it.', 'error');
+        redirect('account.php#calfeed');
+    }
+    // The address is a lasting key to the schedule (client names and meeting
+    // links; in-person locations are left out of the feed), so the account
+    // password is re-checked first, as for adding an authenticator app or a passkey.
+    $calPw = $_POST['password'] ?? '';
+    $pwErr = account_reauth_error($user, $calPw, $calPw === ''
+        ? 'Enter your account password to create or replace the calendar address.'
+        : 'Password incorrect — the calendar address was not created or replaced.');
+    if ($pwErr !== null) {
+        // On the field (the password is never refilled, so it is typed again).
+        keep_field_errors(['cal_pw' => $pwErr]);
+        redirect('account.php#calfeed');
+    }
+    $hadQ = db()->prepare('SELECT cal_token FROM users WHERE id = ?');
+    $hadQ->execute([$user['id']]);
+    $replaced = (string)$hadQ->fetchColumn() !== '';
     db()->prepare('UPDATE users SET cal_token = ? WHERE id = ?')
         ->execute([bin2hex(random_bytes(24)), $user['id']]);
-    audit($user['id'], 'calfeed.regen', 'user', (int)$user['id']);
+    audit($user['id'], 'calfeed.regen', 'user', (int)$user['id'], $replaced ? 'address replaced' : 'address created');
+    // Tell the account owner, as adding a sign-in method does: if it was not them, they can react.
+    send_app_mail($user['email'], 'A calendar subscription address was ' . ($replaced ? 'replaced' : 'created') . ' for your account',
+        "Hello {$user['name']},\n\nA private calendar subscription address was just " . ($replaced ? 'replaced' : 'created') . ' for your ' . cfg('name') . " account. "
+        . "Any calendar app subscribed to it shows your scheduled sessions, including client first names and meeting links (in-person locations are left out)."
+        . ($replaced ? ' The previous address no longer works.' : '') . "\n\n"
+        . "If this was you, no action is needed. If it was NOT you, choose \"Replace the address\" under My Account right away (the address that was made then stops working), change your password, and tell your administrator.\n");
     flash('Your calendar address is ready — copy it into your calendar app as a subscription.');
     redirect('account.php#calfeed');
 }
 
 /* Remove one of my passkeys */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_passkey'])) {
-    db()->prepare('DELETE FROM passkeys WHERE id = ? AND user_id = ?')
-        ->execute([(int)($_POST['passkey_id'] ?? 0), $user['id']]);
-    audit($user['id'], 'passkey.remove', 'user', (int)$user['id']);
-    flash('Passkey removed. You can still sign in with your password and code.');
+    $pkId = (int)($_POST['passkey_id'] ?? 0);
+    // Its name is read first, so the trail says which passkey went.
+    $pkq = db()->prepare('SELECT name FROM passkeys WHERE id = ? AND user_id = ?');
+    $pkq->execute([$pkId, $user['id']]);
+    $pkName = (string)$pkq->fetchColumn();
+    $pkDel = db()->prepare('DELETE FROM passkeys WHERE id = ? AND user_id = ?');
+    $pkDel->execute([$pkId, $user['id']]);
+    if ($pkDel->rowCount() !== 1) {
+        // A second click, or another open tab: nothing was removed, so nothing is logged.
+        flash('That passkey had already been removed, so nothing changed.', 'error');
+    } else {
+        audit($user['id'], 'passkey.remove', 'user', (int)$user['id'], 'passkey #' . $pkId . ' (' . $pkName . ')');
+        flash('Passkey "' . $pkName . '" removed. You can still sign in with your password and code.');
+    }
     redirect('account.php#passkeys');
 }
 
@@ -243,8 +295,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user']) && can('a
     $email = strtolower(trim($_POST['email'] ?? ''));
     $pw = $_POST['password'] ?? '';
     $role = in_array($_POST['role'] ?? '', ['admin','instructor'], true) ? $_POST['role'] : 'instructor';
+    // A new account is placed in a permission group, so it gets exactly what
+    // that group allows (the seeded Instructors group: their own caseload).
+    // "Legacy (by role)" stays available only when chosen on purpose: a legacy
+    // staff account opens every client and billing.
+    $rawGroup = is_string($_POST['group_id'] ?? null) ? $_POST['group_id'] : '';
+    $newGroup = null;
+    if (ctype_digit($rawGroup) && (int)$rawGroup > 0) {
+        $gq = db()->prepare('SELECT id, perms FROM `groups` WHERE id = ?');
+        $gq->execute([(int)$rawGroup]);
+        $newGroup = $gq->fetch() ?: null;
+    }
     // Each field is checked on its own and its message tied to it.
     $uErrs = [];
+    if ($rawGroup !== '0' && !$newGroup) $uErrs['nu_group'] = 'Choose the permission group this person belongs to.';
+    // With a group, the stored role follows it, so clearing the group later
+    // never hands the account more than the group allowed.
+    if ($newGroup) $role = in_array('admin', array_map('trim', explode(';', (string)$newGroup['perms'])), true) ? 'admin' : 'instructor';
     if ($name === '') $uErrs['nu_name'] = 'Enter the person\'s full name.';
     elseif (mb_strlen($name) > 120) $uErrs['nu_name'] = 'The full name is too long (120 characters maximum).';
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $uErrs['nu_email'] = 'Enter a valid email address, for example name@agency.org.';
@@ -256,9 +323,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user']) && can('a
         keep_field_errors($uErrs);
     } else {
         try {
-            db()->prepare('INSERT INTO users (name, email, password_hash, role) VALUES (?,?,?,?)')
-                ->execute([$name, $email, password_hash($pw, PASSWORD_DEFAULT), $role]);
-            audit($user['id'], 'user.create', 'user', (int)db()->lastInsertId(), "{$name} <{$email}> role={$role}");
+            db()->prepare('INSERT INTO users (name, email, password_hash, role, group_id) VALUES (?,?,?,?,?)')
+                ->execute([$name, $email, password_hash($pw, PASSWORD_DEFAULT), $role, $newGroup ? (int)$newGroup['id'] : null]);
+            audit($user['id'], 'user.create', 'user', (int)db()->lastInsertId(), "{$name} <{$email}> role={$role} group="
+                . ($newGroup ? (int)$newGroup['id'] : 'legacy'));
             flash("User {$name} added.");
         } catch (PDOException $e) {
             keep_input();
@@ -394,9 +462,18 @@ page_header('My Account', $user, 'account');
     $ct = db()->prepare('SELECT cal_token FROM users WHERE id = ?');
     $ct->execute([$user['id']]);
     $calToken = $ct->fetchColumn();
+    // Creating or replacing the address re-checks the account password (as
+    // adding an authenticator app does); the field is the same in both forms.
+    $calPwField = '<div class="field"><label for="cal_pw">Confirm your account password for the calendar address (required)</label>'
+        . '<span class="hint" id="cal_pw-hint">The address gives access to your schedule, so your password is checked first.'
+        . (entra_cfg() ? ' If you sign in only with Microsoft and have no password here, first set one with "Forgot your password?" on the sign-in page.' : '')
+        . '</span><input type="password" id="cal_pw" name="password" required autocomplete="current-password" ' . field_aria('cal_pw', 'cal_pw-hint') . '>'
+        . field_error('cal_pw') . '</div>';
     ?>
-    <?php if ($calToken): ?>
-      <p>Subscribe your Outlook, Apple, or Google calendar to this private address and your sessions appear and update automatically (client names are shortened to first name + last initial):</p>
+    <?php if (!can('schedule')): ?>
+      <p>A calendar subscription shows your scheduled sessions, so it needs the Scheduling permission, which your account does not have. Ask an administrator if you need it.</p>
+    <?php elseif ($calToken): ?>
+      <p>Subscribe your Outlook, Apple, or Google calendar to this private address and your sessions appear and update automatically. Client names are shortened to first name + last initial, and in-person locations are left out of the feed (they are on the schedule in the app):</p>
       <p><code id="calfeed-url" style="user-select: all; word-break: break-all;"><?= h(cfg('base_url')) ?>/calfeed.php?u=<?= h($calToken) ?></code></p>
       <p><button type="button" class="btn btn-secondary btn-sm" id="calfeed-copy">Copy address</button>
          <span id="calfeed-copied" role="status" class="muted"></span></p>
@@ -406,13 +483,17 @@ page_header('My Account', $user, 'account');
           .then(function () { note.textContent = 'Copied.'; })
           .catch(function () { note.textContent = 'Could not copy automatically — select the address and copy it.'; });
       });</script>
-      <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
+      <form method="post" action="account.php" class="stacked" novalidate><?= csrf_field() ?>
+        <?= form_error_summary(['cal_pw' => 'Account password']) ?>
+        <?= $calPwField ?>
         <button type="submit" name="cal_regen" value="1" class="btn btn-secondary btn-sm"
           onclick="return confirm('Make a new calendar address? The old one stops working everywhere it was added.');">Replace the address</button>
       </form>
     <?php else: ?>
-      <p>Get a private address your calendar app can subscribe to, so your sessions always show up without individual invites.</p>
-      <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
+      <p>Get a private address your calendar app can subscribe to, so your sessions always show up without individual invites. Client names are shortened to first name + last initial, and in-person locations are left out of the feed (they are on the schedule in the app).</p>
+      <form method="post" action="account.php" class="stacked" novalidate><?= csrf_field() ?>
+        <?= form_error_summary(['cal_pw' => 'Account password']) ?>
+        <?= $calPwField ?>
         <button type="submit" name="cal_regen" value="1" class="btn btn-secondary">Create my calendar address</button>
       </form>
     <?php endif; ?>
@@ -501,10 +582,13 @@ page_header('My Account', $user, 'account');
     <p><a class="btn btn-secondary" href="audit.php">View audit log</a></p>
     <h2 id="users-heading">Team</h2>
     <h3 id="add-user-h">Add a team member</h3>
-    <?php $nuRefill = old_in('add_user') !== ''; // refill only after this form was sent ?>
+    <?php $nuRefill = old_in('add_user') !== ''; // refill only after this form was sent
+    $allGroups = db()->query('SELECT * FROM `groups` ORDER BY name')->fetchAll();
+    // Preselected: what was chosen before an error, else the seeded own-caseload Instructors group.
+    $nuGroup = $nuRefill ? old_in('group_id') : (string)(array_column($allGroups, 'id', 'name')['Instructors'] ?? ''); ?>
     <form method="post" action="account.php" class="stacked" novalidate>
       <?= csrf_field() ?>
-      <?= form_error_summary(['nu_name' => 'Full name', 'nu_email' => 'Email address', 'nu_password' => 'Temporary password']) ?>
+      <?= form_error_summary(['nu_name' => 'Full name', 'nu_email' => 'Email address', 'nu_password' => 'Temporary password', 'nu_group' => 'Permission group']) ?>
       <div class="field">
         <label for="nu_name">Full name *</label>
         <input type="text" id="nu_name" name="name" required value="<?= h($nuRefill ? old_in('name') : '') ?>" <?= field_aria('nu_name') ?>>
@@ -522,19 +606,30 @@ page_header('My Account', $user, 'account');
         <?= field_error('nu_password') ?>
       </div>
       <div class="field">
-        <label for="nu_role">Role</label>
-        <select id="nu_role" name="role">
+        <label for="nu_group">Permission group *</label>
+        <span class="hint" id="nu_group-hint">Decides which areas this person can open. "Own caseload only" groups see just the clients assigned to them.</span>
+        <select id="nu_group" name="group_id" required <?= field_aria('nu_group', 'nu_group-hint') ?>>
+          <option value="">— Choose a group —</option>
+          <?php foreach ($allGroups as $g): ?>
+          <option value="<?= (int)$g['id'] ?>" <?= $nuGroup === (string)(int)$g['id'] ? 'selected' : '' ?>><?= h($g['name']) ?><?= $g['own_caseload_only'] ? ' (own caseload only)' : '' ?></option>
+          <?php endforeach; ?>
+          <option value="0" <?= $nuGroup === '0' ? 'selected' : '' ?>>Legacy (by role below)</option>
+        </select>
+        <?= field_error('nu_group') ?>
+      </div>
+      <div class="field">
+        <label for="nu_role">Legacy role</label>
+        <span class="hint" id="nu_role-hint">Used only with "Legacy (by role below)": staff then see every client and billing, admins everything. Both can provide any service, including counseling to Pre-ETS students.</span>
+        <select id="nu_role" name="role" aria-describedby="nu_role-hint">
           <option value="instructor">Staff (instructor/counselor)</option>
           <option value="admin" <?= $nuRefill && old_in('role') === 'admin' ? 'selected' : '' ?>>Admin</option>
         </select>
-        <span class="hint">Both roles can provide any service, including counseling to Pre-ETS students — admins additionally manage the team, audit log, and settings.</span>
       </div>
       <button type="submit" name="add_user" value="1" class="btn btn-primary">Add user</button>
     </form>
     <h3 id="team-h">Team members</h3>
     <p class="muted">Quick group and hours changes live here — for everything else (edit details, password resets, 2FA recovery, caseload transfer, deactivate or delete), open <a href="users.php">User management</a>.</p>
-    <?php $allGroups = db()->query('SELECT * FROM `groups` ORDER BY name')->fetchAll();
-    $teamRows = db()->query('SELECT id, name, email, role, group_id, weekly_hours FROM users WHERE is_active = 1 ORDER BY name')->fetchAll();
+    <?php $teamRows = db()->query('SELECT id, name, email, role, group_id, weekly_hours FROM users WHERE is_active = 1 ORDER BY name')->fetchAll();
     $hoursRefill = old_in('set_hours') !== '' ? old_in('uid') : '';
     if ($teamRows) echo form_error_summary(array_column(array_map(fn($r) => ['wh-' . (int)$r['id'], 'Weekly available hours for ' . $r['name']], $teamRows), 1, 0)); ?>
     <div class="table-scroll" tabindex="0" role="region" aria-label="Team members">
@@ -585,7 +680,7 @@ page_header('My Account', $user, 'account');
         <tbody>
         <?php foreach ($allGroups as $g): ?>
           <tr>
-            <td><?= h($g['name']) ?><?= $g['description'] ? '<br><span class="muted">' . h($g['description']) . '</span>' : '' ?></td>
+            <th scope="row"><?= h($g['name']) ?><?= $g['description'] ? '<br><span class="muted">' . h($g['description']) . '</span>' : '' ?></th>
             <td><?= h(implode(' · ', array_map(fn($p) => PERMISSION_KEYS[$p] ?? $p, array_filter(explode(';', $g['perms']))))) ?></td>
             <td><?= $g['own_caseload_only'] ? 'Own caseload only' : 'All clients' ?></td>
           </tr>

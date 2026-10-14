@@ -270,6 +270,7 @@ CREATE TABLE `clients` (
   `name` varchar(120) NOT NULL,
   `dob` date DEFAULT NULL,
   `email` varchar(190) DEFAULT NULL,
+  `email_verified` tinyint(1) NOT NULL DEFAULT 1,
   `phone` varchar(40) DEFAULT NULL,
   `address` varchar(255) DEFAULT NULL,
   `status` enum('Pending Assessment','Waitlist','Active Training','On Hold','Closed - Rehabilitated','Closed - Other') NOT NULL DEFAULT 'Pending Assessment',
@@ -1101,7 +1102,9 @@ CREATE TABLE `track_expenses` (
   `invoice_id` int(10) unsigned DEFAULT NULL,
   `created_by` int(10) unsigned DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `idem_key` char(36) DEFAULT NULL,
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_idem` (`idem_key`),
   KEY `track_id` (`track_id`),
   KEY `idx_invoice` (`invoice_id`),
   CONSTRAINT `track_expenses_ibfk_1` FOREIGN KEY (`track_id`) REFERENCES `training_tracks` (`id`) ON DELETE CASCADE

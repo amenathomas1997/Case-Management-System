@@ -40,6 +40,19 @@ $tooLong = function (array $fields): array {
     }
     return $errs;
 };
+// A saved assessment cannot be edited, so it must not keep a [bracketed]
+// placeholder the AI left for a missing detail (or a redaction tag such as
+// [DOB]); screen readers at the default punctuation level do not say the
+// brackets, so each one is named. Same pattern as eval_report.php.
+$placeholders = function (array $fields): array {
+    $errs = [];
+    foreach (['primary_disability', 'hardware_details', 'software_version', 'summary'] as $k) {
+        if (preg_match('/\[(?=[^\[\]\n]*\p{L})[^\[\]\n]{1,80}\]/u', (string)$fields[$k], $m)) {
+            $errs[$k] = 'Replace the placeholder ' . $m[0] . ' with the actual detail, or remove it, before saving.';
+        }
+    }
+    return $errs;
+};
 
 /* ---- Save the reviewed assessment ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_assessment'])) {
@@ -47,7 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_assessment'])) {
     foreach (array_keys($fields) as $k) $fields[$k] = $in($k);
     if (!in_array($fields['primary_tech'], TECH_TYPES, true)) $fields['primary_tech'] = 'Other';
     $assessDate = $in('assessment_date');
-    $errs = $tooLong($fields);
+    $errs = $tooLong($fields) + $placeholders($fields);
     // tech_assessments.summary is a TEXT column (65,535 bytes), as client.php checks.
     if (!mb_check_encoding($fields['summary'], 'UTF-8')) $errs['summary'] = 'Summary contains characters that could not be read; paste or type it again.';
     elseif (strlen($fields['summary']) > 65535) $errs['summary'] = 'Summary is too long to save (65,535 bytes maximum; accented letters and symbols count as 2 to 4 bytes each). Shorten it, then save.';
@@ -91,14 +104,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) {
             . '[HARDWARE]recommended hardware, if any[/HARDWARE][SOFTWARE]recommended software/versions, if any[/SOFTWARE]'
             . '[SUMMARY]a concise professional assessment summary[/SUMMARY]'
             . '[INSTRUMENTS]comma-separated standardized instruments worth administering[/INSTRUMENTS]. '
-            . 'Use only the information provided; mark gaps with [bracketed] placeholders.',
+            . 'Use only the information provided; mark gaps with [bracketed] placeholders. '
+            . 'Bracketed tags such as [CLIENT], [GUARDIAN] and [COUNSELOR] stand for names that were withheld: keep them exactly as written and do not invent names.',
         $prompt, 1500, $client, (int)$user['id']);
     audit($user['id'], 'ai.draft', 'client', $cid, 'AI-guided intake');
     if ($res['ok']) {
         $txt = $res['text'];
         $missing = [];
+        // The names withheld from the AI are put back (as eval_report.php does), so
+        // the draft never says [CLIENT]; any other tag is caught as a placeholder.
+        $names = ['[CLIENT]' => (string)$client['name'], '[COUNSELOR]' => trim((string)($client['counselor_name'] ?? '')) ?: 'the VR counselor'];
+        if (trim((string)($client['guardian_name'] ?? '')) !== '') $names['[GUARDIAN]'] = trim((string)$client['guardian_name']);
         foreach (['primary_disability' => ['DISABILITY', 'Primary disability'], 'primary_tech' => ['TECH', 'Primary technology'], 'hardware_details' => ['HARDWARE', 'Hardware'], 'software_version' => ['SOFTWARE', 'Software'], 'summary' => ['SUMMARY', 'Summary']] as $k => [$tag, $label]) {
-            if (preg_match('/\[' . $tag . '\](.*?)\[\/' . $tag . '\]/s', $txt, $m)) $fields[$k] = trim($m[1]);
+            if (preg_match('/\[' . $tag . '\](.*?)\[\/' . $tag . '\]/s', $txt, $m)) $fields[$k] = strtr(trim($m[1]), $names);
             else $missing[] = $label;
         }
         if (preg_match('/\[INSTRUMENTS\](.*?)\[\/INSTRUMENTS\]/s', $txt, $m)) $instruments = trim($m[1]);
@@ -111,13 +129,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) {
         // (no tags, or cut off before the first closing tag) is reported, not hidden.
         $generated = count($missing) < 5;
         $long = $tooLong($fields);
-        if ($long) set_form_errors($long);
+        $gaps = array_diff_key($placeholders($fields), $long);
+        if ($long || $gaps) set_form_errors($long + $gaps);
         if (!$generated) flash('The AI reply could not be read, so no draft was made. Press "Draft assessment with AI" to try again.', 'error');
-        elseif ($missing || $long) {
+        elseif ($missing || $long || $gaps) {
             $longNames = array_map(fn($k) => INTAKE_LIMITS[$k][1], array_keys($long));
+            $gapLabels = ['primary_disability' => 'Primary disability', 'hardware_details' => 'Hardware', 'software_version' => 'Software', 'summary' => 'Summary'];
+            $gapNames = array_map(fn($k) => $gapLabels[$k], array_keys($gaps));
             flash('Draft ready below, under "Assessment draft".'
                 . ($missing ? ' These fields were not drafted: ' . implode(', ', $missing) . '. Fill them in before saving.' : '')
-                . ($long ? ' These fields are too long to save: ' . implode(', ', $longNames) . '. Shorten them, then save.' : ''), 'error');
+                . ($long ? ' These fields are too long to save: ' . implode(', ', $longNames) . '. Shorten them, then save.' : '')
+                . ($gaps ? ' These fields have a bracketed placeholder for a missing detail: ' . implode(', ', $gapNames) . '. Replace it, then save.' : ''), 'error');
         }
         else flash('Draft ready below, under "Assessment draft" — review each field and save.');
     } else { flash($res['error'], 'error'); }

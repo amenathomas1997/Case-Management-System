@@ -23,12 +23,26 @@ $postText = fn(string $k, string $default = ''): string => is_string($_POST[$k] 
 /* ---- Create the reviewed curriculum ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create'])) {
     $name = trim($postText('name'));
-    $skills = array_values(array_filter(array_map('trim', preg_split('/\r?\n/', $postText('skills')) ?: []), fn($s) => $s !== ''));
-    // Refused: the review form is shown again as typed, each problem marked on its field.
+    $curTech = trim($postText('tech'));
+    // Each skill, noting the box's line numbers of any that are too long.
+    $skills = [];
+    $longLines = [];
+    foreach (preg_split('/\r?\n/', $postText('skills')) ?: [] as $i => $line) {
+        $s = trim($line);
+        if ($s === '') continue;
+        if (mb_strlen($s) > 300) $longLines[] = $i + 1;
+        $skills[] = $s;
+    }
+    // Refused, never cut (sizes are the curricula and curriculum_skills columns, as
+    // curriculum.php checks): the review form is shown again as typed, each problem
+    // marked on its field.
     $errs = [];
     if ($name === '') $errs['name'] = 'Give the curriculum a name.';
+    elseif (($n = mb_strlen($name)) > 190) $errs['name'] = 'Keep the curriculum name to 190 characters or fewer (it has ' . number_format($n) . ').';
+    if (($n = mb_strlen($curTech)) > 120) $errs['cur_tech'] = 'Keep the technology to 120 characters or fewer (it has ' . number_format($n) . '); more detail can go in the skills.';
     if (mb_strlen($postText('skills')) > CURRICULUM_AI_MAX_CHARS) $errs['skills'] = 'The skill list is too long (20,000 characters maximum). Shorten it and try again.';
     elseif (!$skills) $errs['skills'] = 'Enter at least one skill, one per line.';
+    elseif ($longLines) $errs['skills'] = 'Keep each skill to 300 characters or fewer (too long on line ' . implode(', ', $longLines) . ').';
     if ($errs) { set_form_errors($errs); flash('The curriculum was not created. ' . implode(' ', $errs), 'error'); }
     else {
         // The curriculum and all its skills commit together, so a failure part-way
@@ -36,10 +50,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create'])) {
         db()->beginTransaction();
         try {
             db()->prepare('INSERT INTO curricula (name, tech, description) VALUES (?,?,?)')
-                ->execute([mb_substr($name, 0, 190), mb_substr(trim($postText('tech')), 0, 120) ?: null, 'Generated with AI, staff-reviewed']);
+                ->execute([$name, $curTech !== '' ? $curTech : null, 'Generated with AI, staff-reviewed']);
             $curId = (int)db()->lastInsertId();
             $ins = db()->prepare('INSERT INTO curriculum_skills (curriculum_id, skill, sort) VALUES (?,?,?)');
-            foreach ($skills as $i => $s) $ins->execute([$curId, mb_substr($s, 0, 300), $i + 1]);
+            foreach ($skills as $i => $s) $ins->execute([$curId, $s, $i + 1]);
             audit($user['id'], 'curriculum.ai_create', 'curriculum', $curId, count($skills) . ' skills');
             db()->commit();
         } catch (Throwable $e) {
@@ -65,12 +79,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) {
     }
     elseif (!ai_rate_limit((int)$user['id'])) { flash('You have reached the AI usage limit for now. Please wait a few minutes.', 'error'); }
     else {
+        $started = microtime(true);
         $res = ai_generate(
             ai_system_base() . ' You design training curricula for assistive technology instruction. Produce an ordered list of concrete, '
                 . 'teachable skills (one per line, no numbering, no preamble, no commentary) for the given technology and learner level. '
                 . 'Each line is a single skill a learner can demonstrate.',
             "Technology: {$tech}\nLevel: {$level}\nFocus / notes: " . (trim((string)$focus) ?: '[none]'), 1200);
-        ai_log_usage('curriculum', mb_strlen((string)$tech) + mb_strlen((string)$focus), $res['ok'] ? mb_strlen($res['text']) : 0, false, (int)$user['id']);
+        // Outcome, provider time and cut-off are logged as ai_run() logs them.
+        ai_log_usage('curriculum', mb_strlen((string)$tech) + mb_strlen((string)$focus), $res['ok'] ? mb_strlen($res['text']) : 0, false, (int)$user['id'],
+            (bool)$res['ok'], (int)round((microtime(true) - $started) * 1000), !empty($res['truncated']));
         if ($res['ok']) {
             $skillsText = trim($res['text']);
             if ($name === '') $name = trim($tech . ' — ' . $level);
@@ -105,11 +122,12 @@ page_header('Curriculum generator', $user, 'ai_tools');
   <?php if ($truncated): ?><p class="field-error"><strong>Incomplete:</strong> the AI stopped before finishing the list; check the last skill before you create the curriculum.</p><?php endif; ?>
   <form method="post" action="curriculum_ai.php" class="stacked" novalidate><?= csrf_field() ?>
     <?php // The draft settings ride along so a refused create shows them again. ?>
-    <input type="hidden" name="tech" value="<?= h($tech) ?>">
     <input type="hidden" name="level" value="<?= h($level) ?>">
     <input type="hidden" name="focus" value="<?= h($focus) ?>">
-    <div class="field"><label for="name">Curriculum name <span aria-hidden="true">*</span></label><input type="text" id="name" name="name" value="<?= h($name) ?>" required <?= field_aria('name') ?>><?= field_error('name') ?></div>
-    <div class="field"><label for="skills">Skills <span aria-hidden="true">*</span></label><span class="hint" id="skills-hint">One per line — edit freely.</span><textarea id="skills" name="skills" rows="12" required <?= field_aria('skills', 'skills-hint') ?>><?= h($skillsText) ?></textarea><?= field_error('skills') ?></div>
+    <div class="field"><label for="name">Curriculum name <span aria-hidden="true">*</span></label><span class="hint" id="name-hint">Up to 190 characters.</span><input type="text" id="name" name="name" value="<?= h($name) ?>" maxlength="190" required <?= field_aria('name', 'name-hint') ?>><?= field_error('name') ?></div>
+    <?php // Saved with the curriculum (120 characters at most), so a longer description typed for the draft can be shortened here. ?>
+    <div class="field"><label for="cur_tech">Technology saved with the curriculum</label><span class="hint" id="cur_tech-hint">Up to 120 characters; starts as the technology you drafted for.</span><input type="text" id="cur_tech" name="tech" value="<?= h($tech) ?>" maxlength="120" <?= field_aria('cur_tech', 'cur_tech-hint') ?>><?= field_error('cur_tech') ?></div>
+    <div class="field"><label for="skills">Skills <span aria-hidden="true">*</span></label><span class="hint" id="skills-hint">One per line, up to 300 characters each — edit freely.</span><textarea id="skills" name="skills" rows="12" required <?= field_aria('skills', 'skills-hint') ?>><?= h($skillsText) ?></textarea><?= field_error('skills') ?></div>
     <button type="submit" name="create" value="1" class="btn btn-primary">Create curriculum</button>
   </form>
 </section>

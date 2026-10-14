@@ -5,13 +5,40 @@ struct InstrumentsResponse: Decodable { let instruments: [Instrument] }
 struct InstrumentItem: Decodable, Identifiable { let id: Int; let label: String }
 struct ScoreOption: Decodable { let value: Int; let label: String }
 struct InstrumentItemsResponse: Decodable { let items: [InstrumentItem]; let scaleOptions: [ScoreOption]? }
-struct ScoredRow: Decodable, Identifiable { let id: Int; let assessedOn: String; let totalScore: Int; let maxScore: Int; let pct: Double?; let instrument: String; let assessor: String? }
+struct ScoredRow: Decodable, Identifiable {
+    let id: Int; let assessedOn: String; let totalScore: Int; let maxScore: Int; let pct: Double?; let instrument: String; let assessor: String?
+    /// The instrument's rating scale and the number of items rated (absent from older servers).
+    let scaleMin: Int?; let scaleMax: Int?; let itemCount: Int?
+}
 struct ScoredListResponse: Decodable { let assessments: [ScoredRow] }
 struct ScoredItemRow: Decodable, Identifiable { var id: String { label }; let label: String; let score: Int }
-struct ScoredDetail: Decodable { let id: Int; let instrument: String; let assessedOn: String; let totalScore: Int; let maxScore: Int; let pct: Double?; let notes: String?; let assessor: String?; var instrumentId: Int? }
+struct ScoredDetail: Decodable {
+    let id: Int; let instrument: String; let assessedOn: String; let totalScore: Int; let maxScore: Int; let pct: Double?; let notes: String?; let assessor: String?; var instrumentId: Int?
+    /// The instrument's rating scale (absent from older servers).
+    let scaleMin: Int?; let scaleMax: Int?
+}
 struct ScoredDetailResponse: Decodable { let assessment: ScoredDetail; let items: [ScoredItemRow] }
 
 let scoreLabels = ["0 — Unable", "1 — Maximal assistance", "2 — Moderate assistance", "3 — Minimal assistance / prompts", "4 — Independent"]
+
+/// The lowest total an assessment could score: the items rated times the scale's lowest rating
+/// (a scale whose highest rating is not above its lowest is the 0–4 fallback, as on the
+/// website). Nil when the scale is not known.
+private func lowestTotal(items: Int?, scaleMin: Int?, scaleMax: Int?) -> Int? {
+    guard let items, let scaleMin else { return nil }
+    if let scaleMax, scaleMax <= scaleMin { return 0 }
+    return items * scaleMin
+}
+
+/// A score as the website shows it: "30 of 40 (75%)", or, for a scale that does not start at
+/// 0, "30 on a range of 10 to 50 (50%)": the percentage runs from the lowest possible total, so
+/// "30 of 50" would not match it. With the lowest total unknown (an older server) the total is
+/// read against the maximum.
+private func scoreText(total: Int, maxScore: Int, pct: Double?, lowest: Int?) -> String {
+    let low = lowest ?? 0
+    let percent = Int((pct ?? (maxScore > low ? Double(total - low) / Double(maxScore - low) * 100 : 0)).rounded())
+    return low == 0 ? "\(total) of \(maxScore) (\(percent)%)" : "\(total) on a range of \(low) to \(maxScore) (\(percent)%)"
+}
 
 struct ScoredAssessmentsView: View {
     @EnvironmentObject var api: API
@@ -50,9 +77,10 @@ struct ScoredAssessmentsView: View {
                 ForEach(rows) { r in
                     NavigationLink { ScoredDetailView(id: r.id) } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            let pct = Int((r.pct ?? (r.maxScore > 0 ? Double(r.totalScore) / Double(r.maxScore) * 100 : 0)).rounded())
+                            let score = scoreText(total: r.totalScore, maxScore: r.maxScore, pct: r.pct,
+                                                  lowest: lowestTotal(items: r.itemCount, scaleMin: r.scaleMin, scaleMax: r.scaleMax))
                             Text(r.instrument).font(.body.weight(.semibold))
-                            Text("\(formatDate(r.assessedOn)) · \(r.totalScore)/\(r.maxScore) (\(pct)%)").font(.caption).foregroundStyle(Color.secondaryText)
+                            Text("\(formatDate(r.assessedOn)) · \(score)").font(.caption).foregroundStyle(Color.secondaryText)
                         }
                     }
                 }
@@ -76,11 +104,11 @@ struct ScoredAssessmentsView: View {
         do {
             let a: ScoredListResponse = try await api.call("scored_assessments", query: ["client": String(clientId)])
             rows = a.assessments; rowsLoaded = true
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
         do {
             let i: InstrumentsResponse = try await api.call("instruments")
             instruments = i.instruments; instrumentsLoaded = true
-        } catch { if self.error == nil { self.error = error.localizedDescription } }
+        } catch { if self.error == nil { showFormError(error.localizedDescription, in: &self.error) } }
     }
 }
 
@@ -91,14 +119,20 @@ struct ScoredDetailView: View {
     /// The instrument's rating labels by value, so each item reads as the website shows it.
     @State private var scaleLabels: [Int: String] = [:]
     @State private var error: String?
+    /// The lowest total the assessment could score: from the server, or else from the scale
+    /// read with the labels (nil when neither is known).
+    private func lowest(_ d: ScoredDetailResponse) -> Int? {
+        lowestTotal(items: d.items.count, scaleMin: d.assessment.scaleMin, scaleMax: d.assessment.scaleMax)
+            ?? scaleLabels.keys.min().map { d.items.count * $0 }
+    }
     var body: some View {
         List {
             if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
             if let d = data {
                 Section {
-                    let pct = Int((d.assessment.pct ?? (d.assessment.maxScore > 0 ? Double(d.assessment.totalScore) / Double(d.assessment.maxScore) * 100 : 0)).rounded())
                     LabeledContent("Instrument", value: d.assessment.instrument)
-                    LabeledContent("Score", value: "\(d.assessment.totalScore)/\(d.assessment.maxScore) (\(pct)%)")
+                    LabeledContent("Score", value: scoreText(total: d.assessment.totalScore, maxScore: d.assessment.maxScore,
+                                                             pct: d.assessment.pct, lowest: lowest(d)))
                     LabeledContent("Date", value: formatDate(d.assessment.assessedOn))
                 }
                 Section("Items") {
@@ -120,16 +154,18 @@ struct ScoredDetailView: View {
             do {
                 error = nil
                 let d: ScoredDetailResponse = try await api.call("scored_assessment", query: ["id": String(id)])
-                data = d
                 // The labels are a reading aid: if they cannot be fetched, the numbers shown are
-                // still the stored scores, so that failure is not reported as an error.
+                // still the stored scores, so that failure is not reported as an error. Read
+                // before the assessment is shown, since the scale they give can change how the
+                // score line reads.
                 if let iid = d.assessment.instrumentId,
                    let r: InstrumentItemsResponse = try? await api.call("instrument_items", query: ["id": String(iid)]),
                    let options = r.scaleOptions {
                     scaleLabels = Dictionary(options.map { ($0.value, $0.label) }, uniquingKeysWith: { first, _ in first })
                 }
+                data = d
             }
-            catch { self.error = error.localizedDescription }
+            catch { showFormError(error.localizedDescription, in: &self.error) }
         }
     }
 }
@@ -223,7 +259,7 @@ struct AdministerSheet: View {
                     items = r.items
                     if let options = r.scaleOptions, !options.isEmpty { scaleOptions = options }
                     itemsLoaded = true
-                } catch { self.error = error.localizedDescription }
+                } catch { showFormError(error.localizedDescription, in: &self.error) }
             }
         }
     }
@@ -251,6 +287,6 @@ struct AdministerSheet: View {
             let _: OKResponse = try await api.call("save_scored", body: ["client_id": clientId, "instrument_id": instrument.id, "assessed_on": APIDate.day(date), "notes": notes, "scores": scoreDict])
             // The list announces the result once this sheet has gone.
             onDone(); dismiss()
-        } catch { self.error = error.localizedDescription; busy = false }
+        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

@@ -36,12 +36,12 @@ if (!$recipient) { echo "No backup_email configured.\n"; exit(1); }
 // configuration notice instead — PII must never leave the server in the clear.
 $password = (string)(cfg('backup_password') ?? '');
 if ($password === '') {
-    send_app_mail((string)cfg('backup_email'), 'CMS off-site backup NOT sent — set a backup password',
+    $noticed = send_app_mail((string)cfg('backup_email'), 'CMS off-site backup NOT sent — set a backup password',
         "This week's off-site backup was NOT emailed because no 'backup_password' is configured.\n"
         . "The database dump contains every client's records and will not be sent unencrypted.\n\n"
         . "Add a strong 'backup_password' to the server's config.php to enable encrypted off-site backups,\n"
         . "or download a copy manually from the server at {$dir} and store it off-site.\n");
-    echo "Refused to email an unencrypted backup — no backup_password set. Notice sent.\n";
+    echo "Refused to email an unencrypted backup — no backup_password set. " . offsite_notice($noticed) . "\n";
     exit(1);
 }
 // The off-site copy holds the database AND the uploaded documents (signed
@@ -74,11 +74,11 @@ foreach ($uploads ? [true, false] : [false] as $withUploads) {
     $zipPath = offsite_zip($latest, $withUploads ? $uploads : [], $password, $dir);
     if ($zipPath === null) {
         if ($withUploads) { $warning = 'The uploaded documents were NOT included: the encrypted archive holding them could not be built this week.'; continue; }
-        send_app_mail($recipient, 'CMS off-site backup could not be encrypted',
+        $noticed = send_app_mail($recipient, 'CMS off-site backup could not be encrypted',
             "The weekly off-site backup could not be encrypted this run, so nothing was emailed.\n"
             . "The database dump contains every client's records and will not be sent unencrypted.\n\n"
             . "Check the server's temp space/permissions, then download a copy manually from {$dir} and store it off-site.\n");
-        echo "Refused to email backup — encryption failed. Notice sent.\n";
+        echo "Refused to email backup — encryption failed. " . offsite_notice($noticed) . "\n";
         exit(1);
     }
     $tmpFiles[] = $zipPath;
@@ -87,11 +87,12 @@ foreach ($uploads ? [true, false] : [false] as $withUploads) {
     if ($size > OFFSITE_ATTACH_MAX) {
         @unlink($zipPath);
         if ($withUploads) { $warning = 'The uploaded documents were NOT included: the encrypted archive with them is ' . offsite_mb($size) . ' MB, more than the 150 MB an email attachment can carry.'; continue; }
-        send_app_mail($recipient, 'CMS backup too large to email',
+        $noticed = send_app_mail($recipient, 'CMS backup too large to email',
             'The latest database backup (' . basename($latest) . ', ' . offsite_mb($size) . " MB encrypted) is too large to send by email.\n"
             . "Download a copy manually from the server at {$dir} and store it off-site.\n");
-        echo "Backup too large to email — notice sent.\n";
-        exit(0);
+        echo "Backup too large to email. " . offsite_notice($noticed) . "\n";
+        // Nobody was told when the notice itself failed: say so with the exit status too.
+        exit($noticed ? 0 : 1);
     }
     $body = "Attached is the latest Case Management System off-site backup ({$attachName}, " . offsite_mb($size) . " MB): an AES-256 encrypted ZIP holding "
         . ($withUploads ? 'the database and every uploaded document' : 'the database') . ".\n\n"
@@ -159,6 +160,11 @@ function offsite_zip(string $dump, array $files, string $password, string $tmpDi
 
 function offsite_mb(int $bytes): string {
     return (string)round($bytes / 1048576, 1);
+}
+
+/** What the run's output says about a notice email: only one that really went out is reported as sent. */
+function offsite_notice(bool $sent): string {
+    return $sent ? 'Notice sent.' : 'The notice could NOT be emailed either: tell the backup contact another way.';
 }
 
 /**

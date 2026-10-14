@@ -2,8 +2,9 @@
 // Personal iCalendar subscription feed: sessions for one staff member,
 // authorized by a private per-user token. Subscribe once in Outlook/Apple/
 // Google Calendar and sessions appear and update automatically.
-// Client names are shortened to first name + last initial, since calendar
-// providers store the feed contents.
+// Client names are shortened to first name + last initial, and an in-person
+// session's location (often the client's home address) is left out, since
+// calendar providers store the feed contents.
 require __DIR__ . '/inc/core.php';
 
 // This feed loads core.php, not bootstrap.php, so it installs its own last-resort
@@ -56,10 +57,16 @@ echo "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//CaseManagement//CMS//EN\r\n"
     . "X-PUBLISHED-TTL:PT1H\r\n";
 foreach ($rows->fetchAll() as $s) {
     $remote = !empty($s['is_remote']);
-    // Completion is said in words: a check mark alone is dropped or garbled by some
-    // braille tables and screen-reader punctuation settings.
-    $title = ($s['status'] === 'Completed' ? 'Completed — ' : '') . ($remote ? 'Remote training: ' : 'Training: ') . $shortName($s['client_name']);
-    $loc = $remote ? ((string)($s['meeting_url'] ?? '') ?: 'Remote / telepractice') : (string)($s['location'] ?? '');
+    // Completion and a No Show are said in words: a check mark alone is dropped or
+    // garbled by some braille tables and screen-reader punctuation settings. A No Show
+    // stays in the feed (it was the instructor's time) but never reads as a confirmed
+    // appointment: it is titled so, and marked cancelled.
+    $noShow = $s['status'] === 'No Show';
+    $title = ($s['status'] === 'Completed' ? 'Completed — ' : ($noShow ? 'No show — ' : '')) . ($remote ? 'Remote training: ' : 'Training: ') . $shortName($s['client_name']);
+    // An in-person location is often the client's home address, so it stays in the
+    // app: the event says where to find it instead.
+    $loc = $remote ? ((string)($s['meeting_url'] ?? '') ?: 'Remote / telepractice')
+        : (trim((string)($s['location'] ?? '')) !== '' ? 'In person (location on the schedule in the app)' : '');
     echo "BEGIN:VEVENT\r\n"
         . "UID:cms-cal-" . (int)$s['id'] . "@" . (parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost') . "\r\n"
         . "DTSTAMP:" . gmdate('Ymd\THis\Z') . "\r\n"
@@ -71,6 +78,6 @@ foreach ($rows->fetchAll() as $s) {
         // Session notes are intentionally omitted: calendar providers store the
         // feed, so clinical detail must not leave the app (matches the name
         // shortening above). Staff read notes in the app, not the calendar.
-        . "STATUS:CONFIRMED\r\nEND:VEVENT\r\n";
+        . "STATUS:" . ($noShow ? 'CANCELLED' : 'CONFIRMED') . "\r\nEND:VEVENT\r\n";
 }
 echo "END:VCALENDAR\r\n";

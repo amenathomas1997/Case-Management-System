@@ -8,15 +8,18 @@
 // times are days away from now, so a time-zone difference between this
 // connection and the page's cannot make a valid link look expired or the reverse.
 $anonIp = '192.0.2.44';
-$anon = function (string $page, array $query, ?array $post = null, array $session = []) use ($root, $tmp, $anonIp): array {
+$anon = function (string $page, array $query, ?array $post = null, array $session = []) use ($root, $tmp, $anonIp, $noSecret): array {
     $source = swap_required("require __DIR__ . '/inc/bootstrap.php';", 'require ' . var_export($tmp . '/bootstrap.php', true) . ';', file_get_contents($root . '/public/' . $page . '.php'), "public/$page.php");
     file_put_contents($tmp . '/anon_' . $page . '.php', str_replace('__DIR__', var_export($root . '/public', true), $source));
     $args = [PHP_BINARY, '-d', 'display_errors=stderr', '-d', 'sendmail_path=/usr/bin/true', $root . '/tests/full_schema.php', $post === null ? 'page' : 'page_post', $tmp . '/anon_' . $page . '.php', json_encode($query)];
     if ($post !== null) $args[] = json_encode($post);
     $env = array_merge(getenv(), ['CMS_TEST_ANON' => '1', 'CMS_TEST_SESSION' => json_encode($session ?: new stdClass()), 'REMOTE_ADDR' => $anonIp]);
     $p = proc_open($args, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $env);
-    $out = stream_get_contents($pipes[1]); $err = stream_get_contents($pipes[2]); fclose($pipes[1]); fclose($pipes[2]);
-    return [proc_close($p), $out, $err];
+    $out = stream_get_contents($pipes[1]); $err = stream_get_contents($pipes[2]); fclose($pipes[1]); fclose($pipes[2]); $code = proc_close($p);
+    // No stored secret on a public page either; the page is kept for the browser checks.
+    $noSecret("public $page.php", $out . $err);
+    snapshot_html($page, $query, $post, $out);
+    return [$code, $out, $err];
 };
 $clean = fn(int $code, string $err): bool => $code === 0 && !preg_match('/Fatal error|Warning|Notice|Uncaught|Deprecated/', $err);
 
@@ -130,4 +133,19 @@ check($clean($code, $err) && password_verify('Reset-synthetic-pass-1', $storedHa
 $afterReset = $storedHash();
 [$code, $out, $err] = $anon('reset', ['t' => $resetToken], ['new_password' => 'Second-use-pass-1', 'confirm_password' => 'Second-use-pass-1']);
 check($clean($code, $err) && str_contains($out, 'Link expired or invalid') && $storedHash() === $afterReset, 'A used reset link cannot change the password again' . ($err ? ": $err" : ''));
+
+/* ---- Confirmation, consent and survey forms behind a valid link ---- */
+// Rendered as the visitor holding the link sees them (the page loop only reaches
+// their "not recognized" state), so their real forms are snapshotted for the
+// browser accessibility checks too.
+foreach ([
+    'ack' => ["INSERT INTO report_acks(client_id,track_id,token,sent_to) VALUES(1,1,?,'snapshot@example.invalid')", 'name="confirm"'],
+    'consent' => ["INSERT INTO consent_forms(client_id,guardian_name,guardian_email,token) VALUES(1,'Snapshot Guardian','snapshot@example.invalid',?)", 'name="signature"'],
+    'survey' => ["INSERT INTO surveys(client_id,token) VALUES(1,?)", 'name="satisfaction"'],
+] as $page => [$insert, $field]) {
+    $linkToken = bin2hex(random_bytes(24));
+    $db->prepare($insert)->execute([$linkToken]);
+    [$code, $out, $err] = $anon($page, ['t' => $linkToken]);
+    check($clean($code, $err) && str_contains($out, $field) && !str_contains($out, 'not recognized'), "The $page page shows its form for a valid link" . ($err ? ": $err" : ''));
+}
 $db->prepare('DELETE FROM login_attempts WHERE ip = ?')->execute([$anonIp]);

@@ -1,5 +1,11 @@
 <?php
 declare(strict_types=1);
+// As bootstrap.php: api.php and calfeed.php load this file directly, and a PHP
+// warning printed into their response would show server paths. Logged instead.
+if (PHP_SAPI !== 'cli') {
+    ini_set('display_errors', '0');
+    ini_set('log_errors', '1');
+}
 require_once __DIR__ . '/access.php';
 require_once __DIR__ . '/referral_request.php';
 require_once __DIR__ . '/program_access.php';
@@ -21,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.20';
+const APP_VERSION = '3.0.21';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -298,9 +304,9 @@ const EMAIL_TEMPLATES = [
     'vrc_code' => ['Counselor portal access code', 'Your portal access code: {code}',
         "Hello {name},\n\nYour access code for the {org_short} counselor portal is:\n\n{code}\n\nIt expires in 10 minutes.\n",
         '{name} {code} {org_short}'],
-    'session_reminder_client' => ['Session reminder (client)', 'Reminder: your assistive technology training session tomorrow',
-        "Hello {name},\n\nThis is a friendly reminder of your training session with {org}.\n\nWhen: {when}{where}\nInstructor: {instructor}\n\nIf you need to reschedule, please reply to this email or call your instructor.\n\nSee you tomorrow!\n",
-        '{name} {when} {where} {instructor} {org}'],
+    'session_reminder_client' => ['Session reminder (client)', 'Reminder: your assistive technology training session {day}',
+        "Hello {name},\n\nThis is a friendly reminder of your training session with {org}.\n\nWhen: {when}{where}\nInstructor: {instructor}\n\nIf you need to reschedule, please reply to this email or call your instructor.\n\nSee you {day}!\n",
+        '{name} {when} {where} {instructor} {org} {day} {date} {time} {location} {join_link}'],
     'report_cover' => ['Report email closing note', '',
         "Please confirm you received this report (one click):\n{ack}\n",
         '{ack}'],
@@ -450,6 +456,47 @@ function purge_trash(int $id, bool $expiredOnly=false): ?array {
 /* ---------- Mail ---------- */
 require __DIR__ . '/graph_mail.php';
 
+/**
+ * One plain-text message through Microsoft Graph, sent as graph_send_mail() sends
+ * it (no Sent Items copy), with what is known of the outcome: 'sent' (HTTP 202);
+ * 'refused' when Graph cannot have accepted it (no token, a connection that never
+ * carried the request, a 4xx answer), so another route may be tried; 'unknown'
+ * when the request went out and no answer came back, or Graph answered 5xx: it
+ * may already be queued, and sending it another way could deliver it twice.
+ */
+function graph_send_text(string $to, string $subject, string $body): string {
+    $g = graph_cfg();
+    $token = $g ? graph_token() : null;
+    if (!$g || !$token) return 'refused';
+    $payload = json_encode(['message' => [
+        'subject' => $subject,
+        'body' => ['contentType' => 'Text', 'content' => $body],
+        'toRecipients' => [['emailAddress' => ['address' => $to]]],
+    ], 'saveToSentItems' => false], JSON_INVALID_UTF8_SUBSTITUTE);
+    for ($try = 0; ; $try++) {
+        $ch = curl_init('https://graph.microsoft.com/v1.0/users/' . rawurlencode($g['sender']) . '/sendMail');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => (string)$payload,
+            CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $token, 'Content-Type: application/json'],
+            CURLOPT_TIMEOUT => 30,
+        ]);
+        curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        // Bytes of the request body that went out: none means the request never left.
+        $uploaded = (float)curl_getinfo($ch, CURLINFO_SIZE_UPLOAD);
+        // No curl_close(): the handle is freed with $ch (the call has done nothing
+        // since PHP 8.0 and is deprecated from 8.5).
+        // A refused token means the request was not carried out, so it is safe to resend.
+        if ($try === 0 && ($fresh = graph_retry_token($code)) !== null) { $token = $fresh; continue; }
+        break;
+    }
+    if ($code === 202) return 'sent';
+    error_log("Graph sendMail failed with HTTP $code");
+    return ($code >= 500 || ($code === 0 && $uploaded > 0)) ? 'unknown' : 'refused';
+}
+
 function send_app_mail(string $to, string $subject, string $body): bool {
     // Subjects and addresses can carry record data (names); newlines in them
     // would become extra SMTP headers through the mail() fallback.
@@ -463,8 +510,15 @@ function send_app_mail(string $to, string $subject, string $body): bool {
     }
     // Preferred path: Microsoft Graph (cmswebnotifications mailbox)
     if (graph_cfg() !== null) {
-        if (graph_send_mail($to, $subject, $body)) return true;
+        $outcome = graph_send_text($to, $subject, $body);
+        if ($outcome === 'sent') return true;
         // No recipient address: the server log is outside the app's retention controls.
+        // A timeout or 5xx after the request went out may still be delivered by Graph,
+        // so it is not sent a second time through mail(); the caller reports it unsent.
+        if ($outcome === 'unknown') {
+            error_log('Graph send outcome unknown (timeout or server error); not resent through PHP mail().');
+            return false;
+        }
         error_log('Graph send failed; falling back to PHP mail().');
     }
     $from = cfg('mail_from');
@@ -631,12 +685,46 @@ function save_note_homework(int $clientId, int $trackId, array $post, int $userI
         $t = trim($t);
         if ($t === '') continue;
         $instr = is_string($instrs[$k] ?? null) ? trim($instrs[$k]) : '';
-        $due = is_string($dues[$k] ?? null) ? valid_date($dues[$k]) : null;
+        // The years the standalone homework form allows; callers report a bad ticked
+        // date before saving the note (so this only drops a value posted around them).
+        $due = is_string($dues[$k] ?? null) ? valid_date($dues[$k], 2000, (int)date('Y') + 5) : null;
         $ins->execute([$trackId, mb_substr($t, 0, 190), $instr !== '' ? mb_substr($instr, 0, 1000) : null, $due, $userId]);
         $added++;
     }
     if ($added) audit($userId, 'homework.add', 'client', $clientId, $added . ' from case note');
     return $added;
+}
+
+/**
+ * A one-time key for a web form that creates a record, so the same form sent
+ * twice (Enter pressed again while the first POST is still loading) is saved
+ * once. Each render gets a fresh key. A table with an idem_key column stores it,
+ * as the app API does (a UNIQUE clash means "already saved"); for a table without
+ * one the page remembers, in the session, the record a key created
+ * (web_once_get() / web_once_set()).
+ */
+function web_idem_field(): string {
+    $hex = strtoupper(bin2hex(random_bytes(16)));
+    return '<input type="hidden" name="idem_key" value="' . substr($hex, 0, 8) . '-' . substr($hex, 8, 4) . '-'
+        . substr($hex, 12, 4) . '-' . substr($hex, 16, 4) . '-' . substr($hex, 20) . '">';
+}
+/** The key a web form posted, normalized as the app API stores it; null when it is
+ *  missing (a page opened before this release) or malformed, which is simply saved. */
+function web_idem_key(array $post): ?string {
+    $k = $post['idem_key'] ?? null;
+    return is_string($k) && preg_match('/^[0-9a-fA-F-]{36}$/D', $k) ? strtoupper($k) : null;
+}
+/** The record an earlier POST of the same form created in this browser session, else
+ *  null. PHP's session file lock runs one browser's requests one at a time, so the
+ *  check and the save cannot interleave. */
+function web_once_get(?string $key): ?int {
+    return $key !== null && isset($_SESSION['web_once'][$key]) ? (int)$_SESSION['web_once'][$key] : null;
+}
+function web_once_set(?string $key, int $id): void {
+    if ($key === null) return;
+    $_SESSION['web_once'][$key] = $id;
+    // A double submit follows within seconds, so only the latest few are kept.
+    $_SESSION['web_once'] = array_slice($_SESSION['web_once'], -20, null, true);
 }
 
 /** Validate a YYYY-MM-DD date from user input; null when blank or invalid.
@@ -689,6 +777,8 @@ function log_line_amounts(array $log, float $fallbackRate, float $fallbackMileag
  * - submitted_amount: the part of that on invoices Submitted to the funder or
  *   Paid (what the AT funding record calls invoiced);
  * - unbilled_*: logged work and expenses not on any invoice yet;
+ * - billable_*: the part of that dated today or earlier, which is exactly what
+ *   generate_invoice() bills now (work dated ahead waits for its date);
  * - funds_remaining: authorized funds less all logged work AND expenses,
  *   since expenses are billed against the same authorization.
  */
@@ -701,19 +791,24 @@ function track_rollup(int $trackId): array {
     $mileageRate = (float)($track['mileage_rate'] ?? 0);
     $hAmt = 'ROUND(w.hours * COALESCE(w.hourly_rate, t.hourly_rate), 2)';
     $mAmt = 'ROUND(w.mileage * COALESCE(w.mileage_rate, t.mileage_rate), 2)';
+    $today = date('Y-m-d');
     $w = db()->prepare("SELECT COALESCE(SUM(w.hours),0) AS worked,
         COALESCE(SUM(CASE WHEN w.is_billed=0 THEN w.hours ELSE 0 END),0) AS unbilled,
         COALESCE(SUM(w.mileage),0) AS mileage,
         COALESCE(SUM(CASE WHEN w.is_billed=0 THEN w.mileage ELSE 0 END),0) AS unbilled_mileage,
         COALESCE(SUM($hAmt),0) AS hours_amount,
         COALESCE(SUM($mAmt),0) AS mileage_amount,
-        COALESCE(SUM(CASE WHEN w.is_billed=0 THEN $hAmt + $mAmt ELSE 0 END),0) AS unbilled_amount
+        COALESCE(SUM(CASE WHEN w.is_billed=0 THEN $hAmt + $mAmt ELSE 0 END),0) AS unbilled_amount,
+        COALESCE(SUM(CASE WHEN w.is_billed=0 AND w.work_date <= ? THEN w.hours ELSE 0 END),0) AS billable_hours,
+        COALESCE(SUM(CASE WHEN w.is_billed=0 AND w.work_date <= ? THEN w.mileage ELSE 0 END),0) AS billable_mileage,
+        COALESCE(SUM(CASE WHEN w.is_billed=0 AND w.work_date <= ? THEN $hAmt + $mAmt ELSE 0 END),0) AS billable_amount
         FROM work_logs w JOIN training_tracks t ON t.id = w.track_id WHERE w.track_id = ?");
-    $w->execute([$trackId]);
+    $w->execute([$today, $today, $today, $trackId]);
     $sums = $w->fetch();
-    $e = db()->prepare('SELECT COALESCE(SUM(amount),0) AS total, COALESCE(SUM(CASE WHEN is_billed=0 THEN amount ELSE 0 END),0) AS unbilled
+    $e = db()->prepare('SELECT COALESCE(SUM(amount),0) AS total, COALESCE(SUM(CASE WHEN is_billed=0 THEN amount ELSE 0 END),0) AS unbilled,
+        COALESCE(SUM(CASE WHEN is_billed=0 AND expense_date <= ? THEN amount ELSE 0 END),0) AS billable
         FROM track_expenses WHERE track_id = ?');
-    $e->execute([$trackId]);
+    $e->execute([$today, $trackId]);
     $exp = $e->fetch();
     $inv = db()->prepare("SELECT COALESCE(SUM(total_amount),0) AS total,
         COALESCE(SUM(CASE WHEN status IN ('Submitted','Paid') THEN total_amount ELSE 0 END),0) AS submitted
@@ -743,6 +838,10 @@ function track_rollup(int $trackId): array {
         'unbilled_mileage' => (float)$sums['unbilled_mileage'],
         'unbilled_amount' => (float)$sums['unbilled_amount'],
         'unbilled_expenses' => (float)$exp['unbilled'],
+        'billable_hours' => (float)$sums['billable_hours'],
+        'billable_mileage' => (float)$sums['billable_mileage'],
+        'billable_amount' => (float)$sums['billable_amount'],
+        'billable_expenses' => (float)$exp['billable'],
         'mileage' => $mileage,
         'pct_used' => $authHours > 0 ? min(100.0, round($worked / $authHours * 100, 1)) : 0.0,
     ];
@@ -752,23 +851,24 @@ function track_rollup(int $trackId): array {
  * Logged work and expenses not yet on any invoice, across every track, or only
  * the caseload of $scopeUserId (clients assigned to that user) when given.
  * service_amount is hours plus mileage at each log's snapshot rate, rounded per
- * line exactly as generate_invoice() will bill it. Shared by the dashboard, the
- * Invoices page and the app dashboard so all three agree.
+ * line exactly as generate_invoice() will bill it. Like generate_invoice(), only
+ * entries dated today or earlier count (work dated ahead waits for its date).
+ * Shared by the dashboard, the Invoices page and the app dashboard so all three agree.
  * Returns ['hours', 'service_amount', 'expense_amount', 'total'] as floats.
  */
 function unbilled_totals(?int $scopeUserId): array {
     $scope = $scopeUserId !== null ? ' AND c.assigned_to = ?' : '';
-    $args = $scopeUserId !== null ? [$scopeUserId] : [];
+    $args = array_merge([date('Y-m-d')], $scopeUserId !== null ? [$scopeUserId] : []);
     $w = db()->prepare('SELECT COALESCE(SUM(w.hours),0) AS h,
         COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate, t.hourly_rate), 2)
             + ROUND(w.mileage * COALESCE(w.mileage_rate, t.mileage_rate), 2)),0) AS a
         FROM work_logs w JOIN training_tracks t ON t.id = w.track_id JOIN clients c ON c.id = t.client_id
-        WHERE w.is_billed = 0' . $scope);
+        WHERE w.is_billed = 0 AND w.work_date <= ?' . $scope);
     $w->execute($args);
     $work = $w->fetch();
     $e = db()->prepare('SELECT COALESCE(SUM(e.amount),0) FROM track_expenses e
         JOIN training_tracks t ON t.id = e.track_id JOIN clients c ON c.id = t.client_id
-        WHERE e.is_billed = 0' . $scope);
+        WHERE e.is_billed = 0 AND e.expense_date <= ?' . $scope);
     $e->execute($args);
     $service = (float)$work['a'];
     $expense = (float)$e->fetchColumn();
@@ -807,6 +907,14 @@ function record_status_change(int $clientId, ?string $old, string $new, ?int $us
     }
     $s = db()->prepare('INSERT INTO client_status_history (client_id, old_status, new_status, changed_by, note) VALUES (?,?,?,?,?)');
     $s->execute([$clientId, $old, $new, $userId, $note]);
+    // A closed case needs no more assessment, homework-support or waitlist
+    // follow-ups: its open system tasks are completed with the status change
+    // (callers run this inside their transaction). Staff-made tasks stay open.
+    if (str_starts_with($new, 'Closed')) {
+        db()->prepare("UPDATE tasks SET status = 'Done', done_at = NOW(), done_by = ? WHERE client_id = ? AND status = 'Open'
+            AND (auto_key LIKE 'assess-%' OR auto_key LIKE 'practice:%' OR auto_key LIKE 'wait-%')")
+            ->execute([$userId, $clientId]);
+    }
 }
 
 /** Email with attachments — Graph only (no fallback). */
@@ -915,14 +1023,16 @@ function session_remote_input(array $post): array {
 }
 
 /** Send the post-closure outcome survey to a client (if they have an email).
+ * An address not yet confirmed by staff (email_verified = 0: typed on the public
+ * referral form) is skipped like a missing one, so nothing goes to a stranger.
  * When the email does not go out the survey row is removed again, so it is not
  * counted as sent and the 30-day resend guard does not block a retry; callers
  * tell the user on false. */
 function send_outcome_survey(int $clientId): bool {
-    $c = db()->prepare('SELECT name, email FROM clients WHERE id = ?');
+    $c = db()->prepare('SELECT name, email, email_verified FROM clients WHERE id = ?');
     $c->execute([$clientId]);
     $client = $c->fetch();
-    if (!$client || !filter_var($client['email'] ?? '', FILTER_VALIDATE_EMAIL)) return false;
+    if (!$client || !filter_var($client['email'] ?? '', FILTER_VALIDATE_EMAIL) || (int)$client['email_verified'] === 0) return false;
     $token = bin2hex(random_bytes(24));
     db()->prepare('INSERT INTO surveys (client_id, token) VALUES (?,?)')->execute([$clientId, $token]);
     $surveyId = (int)db()->lastInsertId();
@@ -980,11 +1090,14 @@ function generate_invoice(int $trackId, ?int $userId): ?int {
         $hoursAmt = round((float)$sums['ha'], 2);
         $milesAmt = round((float)$sums['ma'], 2);
         $dates = array_filter([$sums['d1'], $sums['d2'], $exp['d1'], $exp['d2']]);
-        $c = $pdo->prepare('SELECT counselor_name, counselor_agency, counselor_email FROM clients WHERE id = ?');
+        // A counselor email not yet confirmed (counselor_verified = 0, e.g. typed on
+        // the public referral form) is left off the bill-to, as client_edit.php does.
+        $c = $pdo->prepare('SELECT counselor_name, counselor_agency, counselor_email, counselor_verified FROM clients WHERE id = ?');
         $c->execute([(int)$track['client_id']]);
         $counselor = $c->fetch() ?: [];
         $billTo = implode("\n", array_filter(array_map(fn($v) => trim((string)$v),
-            [$counselor['counselor_name'] ?? null, $counselor['counselor_agency'] ?? null, $counselor['counselor_email'] ?? null]), fn($v) => $v !== ''));
+            [$counselor['counselor_name'] ?? null, $counselor['counselor_agency'] ?? null,
+                (int)($counselor['counselor_verified'] ?? 0) === 1 ? ($counselor['counselor_email'] ?? null) : null]), fn($v) => $v !== ''));
         // Number the invoice from its own id after the insert — collision-free
         // even for two invoices created at the same instant.
         $pdo->prepare('INSERT INTO invoices (track_id, invoice_number, hours, hours_amount, mileage, mileage_amount, expenses_amount, total_amount, created_by,
@@ -1193,6 +1306,25 @@ function track_program_label(array $track): string {
 }
 
 /**
+ * Why work dated $workDate (YYYY-MM-DD) should not be billed under this track's
+ * authorization without a person confirming it, as one plain sentence; null when
+ * nothing is wrong. $track is a training_tracks row (status, start_date,
+ * expiration_date). It never refuses by itself: track.php asks for a "Log it
+ * anyway" tick, the app API answers 422 until authorization_ack is sent, the
+ * voice assistant reads it back before "Say yes to save", and session completion
+ * (auto_log_session()) logs the hours and adds the sentence to its message.
+ */
+function work_authorization_issue(array $track, string $workDate): ?string {
+    $exp = (string)($track['expiration_date'] ?? '');
+    if ($exp !== '' && $workDate > substr($exp, 0, 10)) return 'This authorization expired on ' . fmt_date($exp) . '.';
+    $start = (string)($track['start_date'] ?? '');
+    if ($start !== '' && $workDate < substr($start, 0, 10)) return 'This authorization does not start until ' . fmt_date($start) . '.';
+    $status = (string)($track['status'] ?? 'Active');
+    if ($status !== 'Active') return 'This training track is ' . $status . '.';
+    return null;
+}
+
+/**
  * Insert an auto-generated work log (session completion): stamps the track's
  * service type and its default RSA category. Returns the new log id.
  * A track with no hourly rate, or a session dated after today, is refused
@@ -1202,8 +1334,12 @@ function track_program_label(array $track): string {
  * The rate is read under the track's row lock (track_edit.php re-prices unbilled
  * work under that lock), so a rate corrected at the same moment either applies
  * here or re-prices this log, never neither.
+ * A session outside the track's authorization (work_authorization_issue()) is
+ * still logged, never refused: $authIssue receives that sentence (else null) for
+ * the caller to add to its success message.
  */
-function auto_log_session(int $trackId, string $date, float $hours, string $description, int $userId): int {
+function auto_log_session(int $trackId, string $date, float $hours, string $description, int $userId, ?string &$authIssue = null): int {
+    $authIssue = null;
     $year = (int)substr($date, 0, 4);
     if ($year < 2000 || $year > (int)date('Y') + 5) {
         throw new DomainException('The session date must have a year from 2000 to ' . ((int)date('Y') + 5) . '.');
@@ -1226,7 +1362,9 @@ function auto_log_session(int $trackId, string $date, float $hours, string $desc
             ->execute([$trackId, $date, $track['service_type'] ?? null, $cats[0] ?? null, $hours, $description, $userId,
                 $track['hourly_rate'] ?? null, $track['mileage_rate'] ?? null]);
         $logId = (int)$pdo->lastInsertId();
+        $issue = $track ? work_authorization_issue($track, $date) : null;
         if ($own) $pdo->commit();
+        $authIssue = $issue;
         return $logId;
     } catch (Throwable $e) {
         if ($own && $pdo->inTransaction()) $pdo->rollBack();

@@ -1,5 +1,6 @@
 import SwiftUI
 import LocalAuthentication
+import SafariServices
 
 @main
 struct CaseManagementApp: App {
@@ -43,8 +44,18 @@ struct RootView: View {
                 Color(.systemBackground).ignoresSafeArea()
             }
         }
-        .onAppear { lock.start(signedIn: api.isSignedIn) }
+        .onAppear {
+            lock.start(signedIn: api.isSignedIn)
+            // A scene iOS connected afresh (after disconnecting the old one in the background)
+            // has a new presenter with no window: a sign-in that was already being asked for is
+            // shown again here, since onChange below does not fire for a value already set.
+            if api.reauthRequired { reauth.show(api) }
+        }
         .onChange(of: api.isSignedIn) { lock.signedInChanged($0) }
+        // Website pages opened inside the app (Action center) keep their own cookies: they go
+        // whenever the account changes or signs out, so the next person is not signed in to the
+        // website as the last one.
+        .onChange(of: api.userId) { _ in SFSafariViewController.DataStore.default.clearWebsiteData() }
         // An expired session asks for sign-in above everything that is open, instead of
         // replacing it, so nothing typed is lost (see API.expireSession).
         .onChange(of: api.reauthRequired) { needed in
@@ -76,6 +87,9 @@ final class AppLock: ObservableObject {
     /// True while a signed-in session is waiting for Face ID / Touch ID / passcode.
     @Published private(set) var locked = false
     @Published private(set) var authFailed = false
+    /// Why Face ID or the passcode cannot be checked right now (shown on the lock screen, which
+    /// stays up); nil when they can.
+    @Published private(set) var unavailableReason: String?
     /// One-time notice shown when the device has nothing to lock the app with.
     @Published var protectionWarning: String?
 
@@ -164,6 +178,7 @@ final class AppLock: ObservableObject {
             unlocked = false
             hasUnlocked = false
             authFailed = false
+            unavailableReason = nil
             needsPrompt = false
             refresh()
         }
@@ -229,12 +244,27 @@ final class AppLock: ObservableObject {
         let context = LAContext()
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
-            // The device has nothing to lock with. Don't lock the user out of their own app,
-            // but say so (once) instead of silently unlocking.
+            guard error?.code == LAError.Code.passcodeNotSet.rawValue else {
+                // Face ID and the passcode can't be checked just now for another reason (too
+                // many attempts, or Stolen Device Protection withholding the passcode away from
+                // a familiar place): the records stay locked, the lock screen says why, and
+                // Unlock tries again.
+                let reason = "This phone can't check Face ID or your passcode right now, so your client records stay locked. Unlock the phone itself with its passcode, or wait a while, then choose Unlock."
+                authFailed = true
+                unavailableReason = reason
+                Task {
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    if self.locked { announce(reason) }
+                }
+                return
+            }
+            // The device has no passcode, so there is nothing to lock with. Don't lock the user
+            // out of their own app, but say so (once) instead of silently unlocking.
             warnDeviceCannotLock(error)
             markUnlocked()
             return
         }
+        unavailableReason = nil
         UserDefaults.standard.removeObject(forKey: Self.warnedKey)
         var ok = false
         do {
@@ -260,6 +290,7 @@ final class AppLock: ObservableObject {
         unlocked = true
         hasUnlocked = true
         authFailed = false
+        unavailableReason = nil
         needsPrompt = false
         refresh()
     }
@@ -279,7 +310,7 @@ final class AppLock: ObservableObject {
         if error?.code == LAError.Code.passcodeNotSet.rawValue {
             protectionWarning = "This phone has no passcode, so the app cannot lock itself. Anyone who picks up the phone can open client records. Set a passcode in Settings to protect them."
         } else {
-            protectionWarning = "This phone could not check Face ID or a passcode, so the app is not locked. Check your passcode settings in Settings."
+            protectionWarning = "This phone could not check Face ID or a passcode just now. When the app next locks, it stays locked until the phone can check them again. Check your passcode settings in Settings."
         }
     }
 
@@ -473,7 +504,8 @@ struct LockOverlay: View {
         ZStack {
             Color(.systemBackground).ignoresSafeArea()
             if lock.locked {
-                LockScreen(hint: lock.unlockHint, authFailed: lock.authFailed) {
+                LockScreen(hint: lock.unlockHint, authFailed: lock.authFailed,
+                           unavailableReason: lock.unavailableReason) {
                     Task { await lock.authenticate() }
                 }
             } else {
@@ -489,6 +521,7 @@ struct LockOverlay: View {
 struct LockScreen: View {
     let hint: String
     let authFailed: Bool
+    var unavailableReason: String? = nil
     let retry: () -> Void
 
     var body: some View {
@@ -503,7 +536,11 @@ struct LockScreen: View {
                 .accessibilityAddTraits(.isHeader)
             Text(hint)
                 .foregroundStyle(Color.secondaryText)
-            if authFailed {
+            if let unavailableReason {
+                Text(unavailableReason)
+                    .font(.callout.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if authFailed {
                 Text("Unlock didn't succeed. Try again.")
                     .font(.callout.weight(.medium))
             }
@@ -632,8 +669,12 @@ struct MainTabs: View {
 /// calendar are fixed (en_US_POSIX, Gregorian) so a phone set to a Buddhist or Japanese
 /// calendar, or to 12-hour time, cannot change what goes over the wire.
 enum APIDate {
-    /// The server stores and interprets date-times in America/Chicago.
-    static let central = TimeZone(identifier: "America/Chicago") ?? .current
+    /// The zone the server stores and interprets date-times in: the one its `me` reply reported
+    /// (kept by API.refreshMe), or America/Chicago, the server's default, until a server reports one.
+    static var central: TimeZone {
+        UserDefaults.standard.string(forKey: API.serverTimeZoneKey).flatMap(TimeZone.init(identifier:))
+            ?? TimeZone(identifier: "America/Chicago") ?? .current
+    }
 
     private static func formatter(_ format: String, zone: TimeZone) -> DateFormatter {
         let f = DateFormatter()
@@ -742,11 +783,17 @@ extension View {
     }
 }
 
-/// Puts a validation message in a form's error banner. ErrorBanner announces itself when it
-/// appears or its text changes; an identical repeat would otherwise be silent, so that case
-/// is announced here.
+/// The message showFormError has just announced, and when: the banner that then shows it does
+/// not say it a second time.
+@MainActor private var formErrorAnnounced: (message: String, at: Date)?
+
+/// Puts an error in a screen's error banner and announces it here, every time (an identical
+/// repeat too). The announcement does not wait for the banner: a banner that is a List or Form
+/// row is never drawn while the person is scrolled away from it, so its own announcement
+/// would never come.
 @MainActor func showFormError(_ message: String, in error: inout String?) {
-    if error == message { announce(message) }
+    announce(message)
+    formErrorAnnounced = (message, Date())
     error = message
 }
 
@@ -755,6 +802,15 @@ struct ErrorBanner: View {
     /// False where the owner announces changes itself (the offline-sync notice, which is
     /// redrawn on every return to the app and must not be read out each time).
     var announces = true
+
+    /// A banner set directly (not through showFormError) announces itself when it appears or its
+    /// text changes; one showFormError has just announced is not said twice.
+    @MainActor private func announceIfNeeded(_ text: String) {
+        guard announces else { return }
+        if let said = formErrorAnnounced, said.message == text, Date().timeIntervalSince(said.at) < 2 { return }
+        UIAccessibility.post(notification: .announcement, argument: text)
+    }
+
     var body: some View {
         Text(message)
             .font(.callout.weight(.medium))
@@ -765,9 +821,9 @@ struct ErrorBanner: View {
             // needed for callout text; 85% system red was about 3.1:1 in light mode).
             .background(Color.alertFill, in: RoundedRectangle(cornerRadius: 10))
             .accessibilityLabel("Error: \(message)")
-            .onAppear { if announces { UIAccessibility.post(notification: .announcement, argument: message) } }
+            .onAppear { announceIfNeeded(message) }
             // A banner that is already on screen and gets a new message must be heard too.
-            .onChange(of: message) { if announces { UIAccessibility.post(notification: .announcement, argument: $0) } }
+            .onChange(of: message) { announceIfNeeded($0) }
     }
 }
 

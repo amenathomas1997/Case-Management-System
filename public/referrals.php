@@ -60,12 +60,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 audit($user['id'], 'referral.assign', 'referral', $id, 'to #' . $assigneeId);
                 if ((int)$assignee['id'] !== (int)$user['id'] && (int)($ref['assigned_to'] ?? 0) !== $assigneeId) {
                     notify_user((int)$assignee['id'], 'Referral assigned to you: ' . $ref['client_name'], 'referrals.php?view=' . $id);
+                    // The email carries no names or other text typed into the public
+                    // form (as the new-referral email): they are read after signing in.
                     send_app_mail($assignee['email'],
-                        'Referral assigned to you: ' . $ref['client_name'],
-                        "{$user['name']} assigned you a referral.\n\n"
-                        . "Client: {$ref['client_name']}\nReason: {$ref['reason']}\n"
-                        . "Counselor: {$ref['counselor_name']} ({$ref['counselor_agency']})\n\n"
-                        . 'Review it here: ' . cfg('base_url') . '/referrals.php?view=' . $id . "\n");
+                        'A referral was assigned to you (#' . $id . ')',
+                        "{$user['name']} assigned you referral #{$id}.\n\n"
+                        . "The person's and the referrer's details are on the referrals page. Review it here: " . cfg('base_url') . '/referrals.php?view=' . $id . "\n");
                 }
                 flash('Referral assigned to ' . $assignee['name'] . '.');
             } else {
@@ -112,34 +112,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // the counselor_email drives report delivery and the counselor portal,
         // so a family member's or self-referrer's email must not land there.
         $isCounselor = in_array($ref['referral_source'] ?? 'counselor', ['counselor', ''], true);
-        // Scoped staff own what they convert. Otherwise the new client follows the
-        // referral's assignee (who also gets the assessment task below), so a
-        // caseload-scoped assignee can open the client the task points to.
-        $clientAssignee = caseload_scoped() ? (int)$user['id'] : null;
+        // Scoped staff own what they convert, when they can open client records.
+        // Otherwise the new client follows the referral's assignee (who also gets
+        // the assessment task below), so a caseload-scoped assignee can open the
+        // client the task points to.
+        $clientAssignee = caseload_scoped() && can('clients') ? (int)$user['id'] : null;
         if ($clientAssignee === null && $ref['assigned_to'] !== null) {
             // ... only when that assignee can open client records too; otherwise
-            // the client starts unassigned and the task goes to the converter.
+            // the client starts unassigned and the task goes to the converter (or,
+            // when the converter cannot open client records either, stays
+            // unassigned for staff who can).
             $au = db()->prepare('SELECT * FROM users WHERE id = ? AND is_active = 1');
             $au->execute([(int)$ref['assigned_to']]);
             $auRow = $au->fetch();
             $clientAssignee = $auRow && in_array('clients', resolve_perms($auRow)['perms'], true) ? (int)$auRow['id'] : null;
         }
         // The counselor's email was typed into the public form by whoever sent it.
-        // It becomes the counselor of record (monthly progress reports, the
-        // counselor portal) only when the converter confirms it is genuine.
-        $counselorEmail = $isCounselor && !empty($_POST['confirm_counselor_email']) ? $ref['counselor_email'] : null;
-        $counselorEmailHeld = $isCounselor && $counselorEmail === null && trim((string)$ref['counselor_email']) !== '';
+        // It is kept on the client but unconfirmed (counselor_verified = 0: no
+        // monthly progress reports, counselor portal or email filing use it) unless
+        // the converter confirms it is genuine, as the app's conversion does; staff
+        // confirm it later on the client's edit page.
+        $counselorEmail = $isCounselor ? (trim((string)($ref['counselor_email'] ?? '')) ?: null) : null;
+        $counselorConfirmed = $counselorEmail !== null && !empty($_POST['confirm_counselor_email']);
+        $counselorEmailHeld = $counselorEmail !== null && !$counselorConfirmed;
         // The person's email receives session reminders: only one valid address is copied.
         $clientEmail = trim((string)($ref['client_email'] ?? ''));
         $clientEmailHeld = $clientEmail !== '' && !filter_var($clientEmail, FILTER_VALIDATE_EMAIL);
-        // A confirmed address is stored as verified, so reports and the counselor
-        // portal reach it without a second confirmation on the edit page.
-        db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_verified, counselor_phone, counselor_agency)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute([
-            $ref['client_name'], $ref['client_dob'], $clientEmail !== '' && !$clientEmailHeld ? $clientEmail : null, $ref['client_phone'], $ref['client_address'],
+        // Whoever sent the public form typed it, so it is stored unconfirmed
+        // (email_verified = 0): no reminder, survey or portal link goes to it until
+        // staff confirm it with the client on the edit page.
+        $clientEmailCopied = $clientEmail !== '' && !$clientEmailHeld;
+        // A confirmed counselor address is stored as verified, so reports and the
+        // counselor portal reach it without a second confirmation on the edit page.
+        db()->prepare('INSERT INTO clients (name, dob, email, email_verified, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_verified, counselor_phone, counselor_agency)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute([
+            $ref['client_name'], $ref['client_dob'], $clientEmailCopied ? $clientEmail : null, $clientEmailCopied ? 0 : 1, $ref['client_phone'], $ref['client_address'],
             'Pending Assessment', $isPreETS ? 'Pre-ETS' : 'VR', $ref['school'] ?? null,
             $clientAssignee,
-            $isCounselor ? $ref['counselor_name'] : null, $counselorEmail, $counselorEmail !== null && trim((string)$counselorEmail) !== '' ? 1 : 0,
+            $isCounselor ? $ref['counselor_name'] : null, $counselorEmail, $counselorConfirmed ? 1 : 0,
             $isCounselor ? $ref['counselor_phone'] : null, $isCounselor ? $ref['counselor_agency'] : null,
         ]);
         $clientId = (int)db()->lastInsertId();
@@ -159,17 +169,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         complete_task_by_key('ref-contact-' . $id, (int)$user['id']);
         // Same active-staff rule as the client: a deactivated assignee would
         // leave the task where no active instructor sees it.
+        // A converter who cannot open client records never holds the task either:
+        // it then stays unassigned, where staff with client access pick it up.
         add_task('Schedule initial assessment: ' . $ref['client_name'],
             'The referral was converted — get the first assessment on the calendar.',
             $clientId, null, date('Y-m-d', strtotime('+14 days')),
-            $clientAssignee ?? (int)$user['id'], (int)$user['id'], 'assess-' . $clientId);
+            $clientAssignee ?? (can('clients') ? (int)$user['id'] : null), (int)$user['id'], 'assess-' . $clientId);
         audit($user['id'], 'referral.convert', 'client', $clientId, 'from referral #' . $id
-            . ($counselorEmail !== null ? '; counselor email confirmed by converter' : ($counselorEmailHeld ? '; counselor email not confirmed, left off' : '')));
+            . ($counselorConfirmed ? '; counselor email confirmed by converter' : ($counselorEmailHeld ? '; counselor email kept unconfirmed' : ''))
+            . ($clientEmailCopied ? '; client email copied unconfirmed' : ''));
         flash('Referral converted — client record created with an intake note.'
-            . ($counselorEmailHeld ? ' The counselor\'s email was not confirmed, so it was left off the client record (it is in the intake note): add it on the client\'s edit page once you have checked it.' : '')
-            . ($clientEmailHeld ? ' The email given for the person is not one valid address, so it was left off the client record (it stays on the referral).' : ''));
-        // Staff without client-record access stay on the referral they converted.
-        redirect(can('clients') ? 'client.php?id=' . $clientId : 'referrals.php?view=' . $id);
+            . ($counselorEmailHeld ? ' The counselor\'s email from the referral form is marked not yet confirmed: no progress report, counselor portal link or email filing uses it until someone confirms it on the client\'s edit page.' : '')
+            . ($clientEmailHeld ? ' The email given for the person is not one valid address, so it was left off the client record (it stays on the referral).' : '')
+            . ($clientEmailCopied ? ' The person\'s email from the referral form is marked not yet confirmed: no reminder, survey or portal link goes to it until someone confirms it with the client on the client\'s edit page.' : '')
+            . ($clientAssignee === null && !can('clients') ? ' Your account cannot open client records, so the new client and its assessment task are unassigned for a colleague with client access to pick up.' : ''));
+        // Staff without client-record access stay on the referral they converted
+        // (a caseload-scoped converter can no longer open it once it is converted
+        // into a client they do not hold, so they go back to the queue).
+        redirect(can('clients') ? 'client.php?id=' . $clientId
+            : (caseload_scoped() ? 'referrals.php' : 'referrals.php?view=' . $id));
     }
     redirect('referrals.php');
 }
@@ -280,7 +298,10 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
     <?php else: ?>
     <dt>Original referral type</dt><dd><?= h($view['note_type']) ?></dd>
     <?php endif; ?>
-    <?php $src = $view['referral_source'] ?? 'counselor'; ?>
+    <?php $src = $view['referral_source'] ?? 'counselor';
+    // Only one valid address becomes a mailto link: stored '?cc=' or list text must not add recipients.
+    $refMail = filter_var((string)$view['counselor_email'], FILTER_VALIDATE_EMAIL)
+        ? '<a href="mailto:' . h($view['counselor_email']) . '">' . h($view['counselor_email']) . '</a>' : h($view['counselor_email']); ?>
     <?php if ($src === 'self'): ?>
     <dt>Source</dt><dd><strong>Self-referral</strong></dd>
     <dt>Income</dt><dd><?= h($view['income_bracket'] ?? '—') ?></dd>
@@ -288,7 +309,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
     <?php elseif ($src !== 'counselor'): ?>
     <dt>Source</dt><dd><strong><?= h(ucfirst($src)) ?> referral</strong></dd>
     <dt>Referred by</dt><dd><?= h($view['counselor_name']) ?> — <?= h($view['counselor_agency']) ?><br>
-      <a href="mailto:<?= h($view['counselor_email']) ?>"><?= h($view['counselor_email']) ?></a> · <?= h($view['counselor_phone']) ?></dd>
+      <?= $refMail ?> · <?= h($view['counselor_phone']) ?></dd>
     <?php if ($src === 'school'): ?>
       <dt>School</dt><dd><?= h($view['school'] ?? '—') ?><?= $view['grade_level'] ? ' · Grade ' . h($view['grade_level']) : '' ?></dd>
       <dt>Parent/guardian</dt><dd><?= h($view['guardian_name'] ?? '—') ?><?= $view['guardian_phone'] ? ' · ' . h($view['guardian_phone']) : '' ?></dd>
@@ -301,7 +322,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
     <dt>Consent</dt><dd><?= $view['consent_confirmed'] ? 'Client/guardian aware and agreed to contact' : ($src === 'school' ? 'Via guardian contact' : '<strong class="field-error">Not confirmed</strong>') ?></dd>
     <?php else: ?>
     <dt>Counselor</dt><dd><?= h($view['counselor_name']) ?> — <?= h($view['counselor_agency']) ?><br>
-      <a href="mailto:<?= h($view['counselor_email']) ?>"><?= h($view['counselor_email']) ?></a> · <?= h($view['counselor_phone']) ?></dd>
+      <?= $refMail ?> · <?= h($view['counselor_phone']) ?></dd>
     <?php endif; ?>
     <dt>Client</dt><dd><?= h($view['client_name']) ?><?= $view['client_dob'] ? ' (date of birth ' . fmt_date($view['client_dob']) . ')' : '' ?><br>
       <?= h($view['client_phone'] ?? '') ?> <?= h($view['client_email'] ?? '') ?><br><?= h($view['client_address'] ?? '') ?></dd>
@@ -340,11 +361,11 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
     <form method="post" action="referrals.php" class="inline-form"><?= csrf_field() ?>
       <input type="hidden" name="id" value="<?= (int)$view['id'] ?>">
       <?php if (in_array($view['referral_source'] ?? 'counselor', ['counselor', ''], true) && trim((string)$view['counselor_email']) !== ''): ?>
-      <?php // Anyone can send the public form as a "counselor": the address is
-      // only made the counselor of record once someone has checked it. ?>
+      <?php // Anyone can send the public form as a "counselor": the address is kept
+      // unconfirmed, and used for reports only once someone has checked it. ?>
       <div class="field">
         <label><input type="checkbox" name="confirm_counselor_email" value="1" aria-describedby="confirm-ce-hint"> I have confirmed that <?= h($view['counselor_email']) ?> belongs to this person's VR counselor</label>
-        <p class="hint" id="confirm-ce-hint">This email was typed into the public referral form and has not been verified. Once on the client record, it receives monthly progress reports and can be invited to the counselor portal. Check it against the authorization paperwork or the agency first; leave this unticked to convert without it.</p>
+        <p class="hint" id="confirm-ce-hint">This email was typed into the public referral form and has not been verified. Once confirmed, it receives monthly progress reports and can be invited to the counselor portal. Check it against the authorization paperwork or the agency first; leave this unticked to keep it on the client record marked not yet confirmed, and confirm it later on the client's edit page.</p>
       </div>
       <?php endif; ?>
       <button type="submit" name="convert" value="1" class="btn btn-primary"

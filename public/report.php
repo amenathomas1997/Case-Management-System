@@ -35,7 +35,10 @@ function report_placeholder(string $s): ?string {
 // AI: draft a short cover narrative from the report data. Fills the intro field,
 // which the staff member then edits before sending.
 $aiDraft = '';
-if ($posted && isset($_POST['ai_draft']) && ai_enabled()) {
+if ($posted && isset($_POST['ai_draft']) && !ai_feature_enabled('draft')) {
+    // Pressed on a page loaded before drafting was turned off: nothing is sent or audited.
+    flash('That AI feature is turned off. An administrator can enable it under AI assistant settings.', 'error');
+} elseif ($posted && isset($_POST['ai_draft'])) {
     // The prompt is the report with the client's name and DOB, the counselor's name and
     // agency, and the authorization number already replaced by placeholders; the full
     // client row lets ai_run() also mask the client's own details wherever else they
@@ -59,12 +62,25 @@ if ($posted && isset($_POST['ai_draft']) && ai_enabled()) {
         $left = report_placeholder($aiDraft);
         flash(($typedIntro ? 'Draft added below your message' : 'Draft created') . ' — review and edit it below, then send.'
             . ($left !== null ? ' It still contains the placeholder ' . $left . ': replace it with the actual detail before sending.' : ''));
+        // Recorded only when a draft was written (a refused or failed request drafts nothing).
+        audit($user['id'], 'ai.draft', 'client', (int)$t['cid'], 'VRC progress cover note');
     }
     else flash($res['error'], 'error');
-    audit($user['id'], 'ai.draft', 'client', (int)$t['cid'], 'VRC progress cover note');
 }
 
 if ($posted && isset($_POST['send_report'])) {
+    // Each rendering of the form carries a one-time send token, used up here before
+    // anything is sent. A second press (or a resubmitted page) while the first send is
+    // still going waits for the session, then finds its token used and is refused, so
+    // the counselor never gets the report, its acknowledgment link or the note twice.
+    $sendTok = is_string($_POST['send_token'] ?? null) ? $_POST['send_token'] : '';
+    $sendOk = $sendTok !== '' && (int)($_SESSION['report_send_tokens'][$sendTok] ?? 0) === $trackId;
+    if ($sendTok !== '') unset($_SESSION['report_send_tokens'][$sendTok]);
+    if (!$sendOk) {
+        keep_input();
+        flash('The report was not sent: it was already sent from this page, or the page was out of date. Check the client\'s notes for "Training report emailed to VRC" before you send it again.', 'error');
+        redirect('report.php?track=' . $trackId);
+    }
     $to = strtolower(trim(is_string($_POST['recipient'] ?? null) ? $_POST['recipient'] : ''));
     $ccSelf = !empty($_POST['cc_self']);
     $signature = trim(is_string($_POST['signature'] ?? null) ? $_POST['signature'] : '');
@@ -161,6 +177,12 @@ $ccChecked = $posted ? !empty($_POST['cc_self']) : (!$refill || old_in('cc_self'
 // An AI draft never replaces what the user typed: it is added below it.
 $introShown = $aiDraft === '' ? $introIn : (trim($introIn) !== '' ? rtrim($introIn) . "\n\n" . $aiDraft : $aiDraft);
 $noCounselorEmail = empty($t['counselor_email']);
+// A new one-time send token for this rendering (see send_report). The last 20 are kept,
+// so report pages open in other tabs can each still send once.
+$sendToken = bin2hex(random_bytes(16));
+$sendTokens = is_array($_SESSION['report_send_tokens'] ?? null) ? $_SESSION['report_send_tokens'] : [];
+$sendTokens[$sendToken] = $trackId;
+$_SESSION['report_send_tokens'] = array_slice($sendTokens, -20, null, true);
 
 page_header('Training report', $user, 'clients');
 ?>
@@ -171,6 +193,7 @@ page_header('Training report', $user, 'clients');
   <h2 id="send-h">Email this report</h2>
   <form method="post" action="report.php?track=<?= $trackId ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
+    <input type="hidden" name="send_token" value="<?= h($sendToken) ?>">
     <?= form_error_summary(['recipient' => 'Send to', 'intro' => 'Personal message', 'signature' => 'Electronic signature']) ?>
     <?php // Pressing Enter in a field submits with the form's FIRST submit button. This
           // hidden copy of the send button comes first, so Enter sends (and checks) the
@@ -188,7 +211,7 @@ page_header('Training report', $user, 'clients');
       <label for="intro">Personal message (optional) <span class="hint">Appears at the top of the report</span></label>
       <textarea id="intro" name="intro" rows="<?= $aiDraft ? 8 : 3 ?>" <?= field_aria('intro') ?>><?= h($introShown) ?></textarea>
       <?= field_error('intro') ?>
-      <?php if (ai_enabled()): ?>
+      <?php if (ai_feature_enabled('draft')): ?>
       <button type="submit" name="ai_draft" value="1" class="btn btn-secondary btn-sm" formnovalidate aria-describedby="ai-draft-hint">Draft with AI</button>
       <span class="hint" id="ai-draft-hint">Generates a cover note from this track's progress and adds it below anything you have already typed — you can edit it before sending.</span>
       <?php endif; ?>

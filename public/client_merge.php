@@ -44,8 +44,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
         $dupeSessions->execute([$mergeId]);
         $dupeSessionIds = array_map('intval', $dupeSessions->fetchAll(PDO::FETCH_COLUMN));
         move_client_records($pdo, $keepId, $mergeId);
-        // The kept client keeps its portal link; the duplicate's dies with it
-        $pdo->prepare('DELETE FROM portal_tokens WHERE client_id = ?')->execute([$mergeId]);
+        // A portal link the client is using on the duplicate moves to the kept
+        // record when that has none (one link per client); otherwise the kept
+        // record's own link stays and the duplicate's stops working.
+        $keepPortal = $pdo->prepare('SELECT id FROM portal_tokens WHERE client_id = ? FOR UPDATE');
+        $keepPortal->execute([$keepId]);
+        $portalMoved = $portalDropped = 0;
+        if ($keepPortal->fetchColumn() === false) {
+            $pm = $pdo->prepare('UPDATE portal_tokens SET client_id = ? WHERE client_id = ?');
+            $pm->execute([$keepId, $mergeId]);
+            $portalMoved = $pm->rowCount();
+        } else {
+            $pd = $pdo->prepare('DELETE FROM portal_tokens WHERE client_id = ?');
+            $pd->execute([$mergeId]);
+            $portalDropped = $pd->rowCount();
+        }
         // Fill the chosen blank profile fields on the kept record from the duplicate
         $src = $pdo->prepare('SELECT * FROM clients WHERE id = ? FOR UPDATE');
         $src->execute([$mergeId]);
@@ -60,6 +73,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
         if (isset($fill['counselor_email']) && array_key_exists('counselor_verified', $t)) {
             $fill['counselor_verified'] = (int)($s['counselor_verified'] ?? 0) === 1 ? 1 : 0;
         }
+        // The same for the client's own email (one from the public referral form
+        // gets no reminders, surveys or portal link until staff confirm it).
+        if (isset($fill['email'])) $fill['email_verified'] = (int)$s['email_verified'] === 1 ? 1 : 0;
         // The access-needs profile comes across too: blank fields are filled,
         // "uses a screen reader" holds if either record says so, and access
         // notes on both records are kept (the duplicate's appended).
@@ -92,11 +108,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
             $movedTasks = $mv->rowCount();
         }
         // So do its upcoming sessions (a session always needs an instructor).
+        // reminder_sent goes back to 0, so the new instructor still gets the
+        // day-before reminder when the old one had already been sent it.
         $movedSessions = 0;
+        $movedSessionRows = [];
         if ($dupeSessionIds && $dupeAssignee !== null && $finalAssignee !== null && $dupeAssignee !== $finalAssignee) {
-            $ms = $pdo->prepare('UPDATE scheduled_sessions SET user_id = ? WHERE id IN (' . implode(',', array_fill(0, count($dupeSessionIds), '?')) . ") AND status = 'Scheduled' AND user_id = ?");
-            $ms->execute([$finalAssignee, ...$dupeSessionIds, $dupeAssignee]);
-            $movedSessions = $ms->rowCount();
+            $idList = implode(',', array_fill(0, count($dupeSessionIds), '?'));
+            $sq = $pdo->prepare("SELECT id, start_at, end_at FROM scheduled_sessions WHERE id IN ($idList) AND status = 'Scheduled' AND user_id = ? ORDER BY start_at, id FOR UPDATE");
+            $sq->execute([...$dupeSessionIds, $dupeAssignee]);
+            $movedSessionRows = $sq->fetchAll();
+            if ($movedSessionRows) {
+                $ids = array_map(fn($r) => (int)$r['id'], $movedSessionRows);
+                $ms = $pdo->prepare('UPDATE scheduled_sessions SET user_id = ?, reminder_sent = 0 WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')');
+                $ms->execute([$finalAssignee, ...$ids]);
+                $movedSessions = count($ids);
+            }
         }
         // Converted referrals (the intake copies) follow the kept client's instructor.
         $mr = $pdo->prepare("UPDATE referrals SET assigned_to = ? WHERE client_id = ? AND status = 'Converted' AND NOT (assigned_to <=> ?)");
@@ -114,12 +140,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
             $pl['client_id'] = $keepId;
             $trUpd->execute([json_encode($pl, JSON_THROW_ON_ERROR), (int)$trow['id']]);
         }
+        // Staff alerts that link to the duplicate (survey results, consent, portal
+        // requests and messages) now link to the kept record, so they open it and
+        // a later purge of the kept record finds them. Links are matched whole,
+        // so client 5 never re-points client 57's.
+        $relink = $pdo->prepare('UPDATE notifications SET link = CONCAT(?, SUBSTRING(link, CHAR_LENGTH(?) + 1))
+            WHERE link = ? OR link LIKE ? OR link LIKE ?');
+        foreach (['client.php?id=', 'messages.php?client=', 'portal_requests.php?client='] as $base) {
+            $old = $base . $mergeId;
+            $like = addcslashes($old, '\\%_');
+            $relink->execute([$base . $keepId, $old, $old, $like . '&%', $like . '#%']);
+        }
         // The key is unique: when the kept client already has its own assessment
-        // task, the duplicate's is closed (under its old key nothing would ever
-        // complete it); otherwise it takes the kept client's key.
+        // task, or has been assessed already, the duplicate's is closed (under its
+        // old key nothing would ever complete it); otherwise it takes the kept
+        // client's key. Assessments moved across from the duplicate count too.
         $keepTask = $pdo->prepare('SELECT id FROM tasks WHERE auto_key = ? FOR UPDATE');
         $keepTask->execute(['assess-' . $keepId]);
-        if ($keepTask->fetchColumn()) {
+        $keepAssessed = $pdo->prepare('SELECT 1 FROM tech_assessments WHERE client_id = ? LIMIT 1');
+        $keepAssessed->execute([$keepId]);
+        if ($keepTask->fetchColumn() || $keepAssessed->fetchColumn()) {
             $pdo->prepare("UPDATE tasks SET auto_key = NULL, status = 'Done', done_at = COALESCE(done_at, NOW()), done_by = COALESCE(done_by, ?) WHERE auto_key = ?")
                 ->execute([(int)$user['id'], 'assess-' . $mergeId]);
         } else {
@@ -136,7 +176,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
         $pdo->commit();
         audit($user['id'], 'client.merge', 'client', $keepId, "merged #{$mergeId} ({$s['name']}) into #{$keepId}"
             . (($filledKeys = array_keys(array_diff_key($fill, ['archived_at' => 1]))) ? '; filled: ' . implode(', ', $filledKeys) : '')
-            . ($unarchive ? '; re-opened (was archived)' : ''));
+            . ($unarchive ? '; re-opened (was archived)' : '')
+            . ($portalMoved ? '; portal link moved from the duplicate' : '')
+            . ($portalDropped ? "; duplicate's portal link turned off" : ''));
         if ($movedTasks > 0) {
             audit($user['id'], 'task.reassign', 'client', $keepId, $movedTasks . ' open task(s) from merged #' . $mergeId . ' moved from instructor #'
                 . $dupeAssignee . ' to ' . ($finalAssignee !== null ? '#' . $finalAssignee : 'unassigned'));
@@ -149,8 +191,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
             audit($user['id'], 'referral.reassign', 'client', $keepId, $movedReferrals . ' converted referral(s) moved to '
                 . ($finalAssignee !== null ? 'instructor #' . $finalAssignee : 'unassigned'));
         }
+        $told = ['to' => false, 'from' => false];
+        try {
+            $told = send_session_move_notices($movedSessionRows, $dupeAssignee, $finalAssignee, (string)$t['name'], (int)$user['id']);
+        } catch (Throwable $e) {
+            // The merge is committed: a notice that fails must not report it as undone.
+            error_log('Merge session notices failed: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
+        }
         flash('Records merged. Everything from "' . $s['name'] . '" is now on this client.'
-            . ($movedSessions > 0 ? ' ' . $movedSessions . ' upcoming session' . ($movedSessions === 1 ? '' : 's') . ' moved to this client\'s instructor.' : '')
+            . ($movedSessions > 0 ? ' ' . $movedSessions . ' upcoming session' . ($movedSessions === 1 ? '' : 's') . ' moved to this client\'s instructor.'
+                . ($told['to'] ? ' The new instructor was sent the list.' : '') . ($told['from'] ? ' The previous instructor was told they were moved.' : '') : '')
+            . ($portalMoved ? ' The portal link the client had for the duplicate keeps working and now opens this record.' : '')
+            . ($portalDropped ? ' The duplicate\'s portal link no longer works, because this record already had its own: if the client was using the duplicate\'s link, send them a new portal link.' : '')
             . ($unarchive ? ' The kept record was archived; the merge re-opened it.' : ''));
         redirect('client.php?id=' . $keepId);
     } catch (Throwable $e) {
@@ -211,8 +263,17 @@ page_header('Merge clients', $user, 'clients');
   <div class="alert alert-error" role="alert">
     <p><strong>Check carefully — merging cannot be undone.</strong></p>
     <ul>
-      <li>Keeping: <strong><?= h($keep['name']) ?></strong> (#<?= $keepId ?>) — <?= h($keep['status']) ?><?= $keep['archived_at'] !== null ? ' (archived)' : '' ?>, date of birth <?= fmt_date($keep['dob']) ?>, <?= h($keep['email'] ?: 'no email') ?>, <?= h($keep['phone'] ?: 'no phone') ?></li>
-      <li>Merging in &amp; removing: <strong><?= h($dupe['name']) ?></strong> (#<?= $mergeId ?>) — <?= h($dupe['status']) ?><?= $dupe['archived_at'] !== null ? ' (archived)' : '' ?>, date of birth <?= fmt_date($dupe['dob']) ?>, <?= h($dupe['email'] ?: 'no email') ?>, <?= h($dupe['phone'] ?: 'no phone') ?></li>
+      <?php // A missing date of birth is written out like the missing email and phone (a lone dash is skipped or misread by screen readers). ?>
+      <li>Keeping: <strong><?= h($keep['name']) ?></strong> (#<?= $keepId ?>) — <?= h($keep['status']) ?><?= $keep['archived_at'] !== null ? ' (archived)' : '' ?>, <?= $keep['dob'] ? 'date of birth ' . fmt_date($keep['dob']) : 'no date of birth' ?>, <?= h($keep['email'] ?: 'no email') ?>, <?= h($keep['phone'] ?: 'no phone') ?></li>
+      <li>Merging in &amp; removing: <strong><?= h($dupe['name']) ?></strong> (#<?= $mergeId ?>) — <?= h($dupe['status']) ?><?= $dupe['archived_at'] !== null ? ' (archived)' : '' ?>, <?= $dupe['dob'] ? 'date of birth ' . fmt_date($dupe['dob']) : 'no date of birth' ?>, <?= h($dupe['email'] ?: 'no email') ?>, <?= h($dupe['phone'] ?: 'no phone') ?></li>
+      <?php $pq = db()->prepare('SELECT client_id FROM portal_tokens WHERE client_id IN (?, ?)');
+      $pq->execute([$keepId, $mergeId]);
+      $withPortal = array_map('intval', $pq->fetchAll(PDO::FETCH_COLUMN));
+      if (in_array($mergeId, $withPortal, true)): ?>
+      <li><?= in_array($keepId, $withPortal, true)
+          ? 'Both records have a client portal link. The kept record\'s link stays; the duplicate\'s stops working, so if the client uses that one, send them a new portal link after the merge.'
+          : 'The duplicate has a client portal link. It keeps working after the merge and opens the kept record.' ?></li>
+      <?php endif; ?>
       <?php if ($keep['archived_at'] !== null && $dupe['archived_at'] === null): ?>
       <li>The record you keep is archived. The merge re-opens it, so the duplicate's current work stays in the client lists; its status is not changed.</li>
       <?php elseif ($keep['archived_at'] !== null): ?>
@@ -229,7 +290,7 @@ page_header('Merge clients', $user, 'clients');
   <?php if ($fillable): ?>
   <fieldset aria-describedby="fill-hint">
     <legend>Blank fields on <?= h($keep['name']) ?> (#<?= $keepId ?>) to fill from the duplicate</legend>
-    <p class="hint" id="fill-hint">Untick any value that should not be copied; an unticked value is removed with the duplicate. The client, guardian and counselor email addresses start unticked and are copied only when you tick them, because session reminders, portal links, progress reports and messages are then sent there — check they are genuine first.<?= isset($fillable['counselor_email']) ? ' A counselor email marked not yet confirmed stays unconfirmed after the merge.' : '' ?></p>
+    <p class="hint" id="fill-hint">Untick any value that should not be copied; an unticked value is removed with the duplicate. The client, guardian and counselor email addresses start unticked and are copied only when you tick them, because session reminders, portal links, progress reports and messages are then sent there — check they are genuine first.<?= isset($fillable['counselor_email']) || isset($fillable['email']) ? ' An email marked not yet confirmed stays unconfirmed after the merge.' : '' ?></p>
     <?php foreach ($fillable as $f => $val):
       if ($f === 'dob') $shown = fmt_date($val);
       elseif ($f === 'assigned_to') {
@@ -237,8 +298,9 @@ page_header('Merge clients', $user, 'clients');
           $un->execute([(int)$val]);
           $shown = (string)($un->fetchColumn() ?: 'user #' . (int)$val);
       } else $shown = (string)$val;
-      // An unconfirmed counselor email is copied as unconfirmed, and says so here.
-      $fieldLabel = MERGE_FILL_FIELDS[$f] . ($f === 'counselor_email' && array_key_exists('counselor_verified', $dupeRow) && (int)$dupeRow['counselor_verified'] !== 1 ? ' (not yet confirmed)' : ''); ?>
+      // An unconfirmed counselor or client email is copied as unconfirmed, and says so here.
+      $fieldLabel = MERGE_FILL_FIELDS[$f] . (($f === 'counselor_email' && array_key_exists('counselor_verified', $dupeRow) && (int)$dupeRow['counselor_verified'] !== 1)
+          || ($f === 'email' && (int)$dupeRow['email_verified'] !== 1) ? ' (not yet confirmed)' : ''); ?>
     <div class="field"><label><input type="checkbox" name="fill[]" value="<?= h($f) ?>"<?= in_array($f, MERGE_FILL_OPT_IN, true) ? '' : ' checked' ?>> <?= h($fieldLabel) ?>: <?= h($shown) ?></label></div>
     <?php endforeach; ?>
   </fieldset>

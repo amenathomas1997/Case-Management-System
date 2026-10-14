@@ -12,7 +12,7 @@ $user = require_login();
 require_perm('procurement');
 
 const DR_STATUSES = ['Requested', 'Quoting', 'Awaiting Authorization', 'Authorized', 'Ordered', 'Delivered', 'Trained', 'Denied', 'Cancelled'];
-const DR_CATEGORIES = ['Braille Display', 'Screen Reader', 'Magnifier / CCTV', 'AAC Device', 'Tablet / Phone', 'Computer', 'Hearing / Amplification', 'Switch / Access', 'Software License', 'Other'];
+// DR_CATEGORIES is shared with the app's API, so it lives in inc/access.php.
 // The open lifecycle, in order. Denied/Cancelled close a request from any open step.
 const DR_LIFECYCLE = ['Requested', 'Quoting', 'Awaiting Authorization', 'Authorized', 'Ordered', 'Delivered', 'Trained'];
 
@@ -55,6 +55,14 @@ function dr_date_script(): string {
         . 'f.querySelectorAll("input[type=date]").forEach(function(i){if(i.validity&&i.validity.badInput){var b=document.createElement("input");b.type="hidden";b.name="date_bad[]";b.value=i.name;f.appendChild(b);}});});</script>';
 }
 
+/** A posted text field, trimmed. Anything that is not one value (an array from a
+ *  crafted post such as serial[]=x) reads as blank, so it is refused or left empty on
+ *  its field instead of throwing a TypeError. */
+function dr_text(string $key, string $default = ''): string {
+    $v = $_POST[$key] ?? $default;
+    return is_string($v) ? trim($v) : '';
+}
+
 /** Load one request scoped to the user's caseload, or null. */
 function dr_load(int $id, array $user): ?array {
     $s = db()->prepare('SELECT dr.*, c.name AS client_name, c.assigned_to, u.name AS requester
@@ -70,7 +78,7 @@ function dr_load(int $id, array $user): ?array {
 /* ---- Create a request ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_request'])) {
     $cid = (int)($_POST['client_id'] ?? 0);
-    $name = trim($_POST['device_name'] ?? '');
+    $name = dr_text('device_name');
     // Browsers send each line break as CRLF; count it once, as the textarea's maxlength does.
     $justification = trim(str_replace("\r\n", "\n", (string)($_POST['justification'] ?? '')));
     // Over-long text is refused, not cut: a scripted or app post must not lose part of the justification.
@@ -121,7 +129,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
     }
 
     if (isset($_POST['add_quote'])) {
-        $vendor = trim($_POST['vendor'] ?? '');
+        $vendor = dr_text('vendor');
         // A quote needs its price: a blank amount would be stored as $0.00 and then
         // read as the cheapest quote and as the letter's estimated cost. The amount
         // must also fit the column (decimal 10,2).
@@ -133,8 +141,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
         if ($quoteErrors) { keep_input(); keep_field_errors($quoteErrors); redirect($back); }
         db()->prepare('INSERT INTO device_request_quotes (request_id, vendor, amount, quote_ref, notes, created_by) VALUES (?,?,?,?,?,?)')
             ->execute([$rid, mb_substr($vendor, 0, 190), (float)$amountRaw,
-                mb_substr(trim($_POST['quote_ref'] ?? ''), 0, 120) ?: null,
-                mb_substr(trim($_POST['quote_notes'] ?? ''), 0, 500) ?: null, $user['id']]);
+                mb_substr(dr_text('quote_ref'), 0, 120) ?: null,
+                mb_substr(dr_text('quote_notes'), 0, 500) ?: null, $user['id']]);
         if (in_array($r['status'], ['Requested'], true)) db()->prepare("UPDATE device_requests SET status = 'Quoting' WHERE id = ?")->execute([$rid]);
         audit($user['id'], 'device.quote', 'device_request', $rid, $vendor);
         flash('Quote added.');
@@ -162,8 +170,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
         // Each step only moves the status forward, and a date left blank keeps the
         // one already recorded (today's date only when there is none yet).
         db()->prepare("UPDATE device_requests SET funding_source = ?, auth_number = ?, authorized_amount = ?, authorized_at = ?, status = " . dr_forward_sql('Authorized') . " WHERE id = ?")
-            ->execute([mb_substr(trim($_POST['funding_source'] ?? ''), 0, 120) ?: null,
-                mb_substr(trim($_POST['auth_number'] ?? ''), 0, 80) ?: null,
+            ->execute([mb_substr(dr_text('funding_source'), 0, 120) ?: null,
+                mb_substr(dr_text('auth_number'), 0, 80) ?: null,
                 $authAmountRaw !== '' ? (float)$authAmountRaw : null,
                 $authDate ?: ($r['authorized_at'] ?: date('Y-m-d')), $rid]);
         audit($user['id'], 'device.authorize', 'device_request', $rid, $r['device_name']);
@@ -174,7 +182,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
         if ($dateError === null && $r['delivered_at'] && $ordered > $r['delivered_at']) $dateError = 'Ordered on cannot be after the delivery date (' . fmt_date($r['delivered_at']) . ').';
         if ($dateError !== null) { keep_input(); keep_field_errors(['ordered_at' => $dateError]); redirect($back); }
         db()->prepare("UPDATE device_requests SET po_number = ?, ordered_at = ?, status = " . dr_forward_sql('Ordered') . " WHERE id = ?")
-            ->execute([mb_substr(trim($_POST['po_number'] ?? ''), 0, 80) ?: null, $ordered, $rid]);
+            ->execute([mb_substr(dr_text('po_number'), 0, 80) ?: null, $ordered, $rid]);
         audit($user['id'], 'device.order', 'device_request', $rid);
         flash('Order recorded.');
     } elseif (isset($_POST['record_delivery'])) {
@@ -195,18 +203,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
             $lock->execute([$rid]);
             $lock->fetchColumn();
             $pdo->prepare("UPDATE device_requests SET delivered_at = ?, serial = ?, warranty_until = ?, status = " . dr_forward_sql('Delivered') . " WHERE id = ?")
-                ->execute([$delivered, mb_substr(trim($_POST['serial'] ?? ''), 0, 120) ?: null, $warranty, $rid]);
+                ->execute([$delivered, mb_substr(dr_text('serial'), 0, 120) ?: null, $warranty, $rid]);
             // Optionally add the delivered device to the loaner/equipment inventory —
             // once per request, however many times the form is submitted. The note
             // names the request, not the client: the inventory is visible to staff
-            // outside the client's caseload.
+            // outside the client's caseload. The result is said in the confirmation.
+            $inventory = null;
             if (!empty($_POST['add_to_inventory']) && can('equipment')) {
                 $marker = 'From device request #' . $rid;
                 $have = $pdo->prepare('SELECT id FROM equipment WHERE notes = ? OR notes LIKE ? LIMIT 1');
                 $have->execute([$marker, $marker . ' for %']); // second form: rows written before this change
                 if (!$have->fetchColumn()) {
                     $pdo->prepare('INSERT INTO equipment (name, category, serial, item_condition, notes) VALUES (?,?,?,?,?)')
-                        ->execute([$r['device_name'], 'Other', mb_substr(trim($_POST['serial'] ?? ''), 0, 120) ?: null, 'New', $marker]);
+                        ->execute([$r['device_name'], 'Other', mb_substr(dr_text('serial'), 0, 120) ?: null, 'New', $marker]);
+                    $inventory = 'added';
+                } else {
+                    $inventory = 'already';
                 }
             }
             $pdo->commit();
@@ -214,8 +226,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             throw $e;
         }
-        audit($user['id'], 'device.deliver', 'device_request', $rid);
-        flash('Delivery recorded.');
+        audit($user['id'], 'device.deliver', 'device_request', $rid, $inventory === 'added' ? 'added to the loaner inventory' : null);
+        flash('Delivery recorded' . ($inventory === 'added' ? ' and the device added to the loaner inventory.'
+            : ($inventory === 'already' ? '. The device was already in the loaner inventory from this request, so it was not added again.'
+            : (can('equipment') ? '. The device was not added to the loaner inventory.' : '.'))));
     } elseif (isset($_POST['record_training'])) {
         // Trained closes the request for good (it cannot be reopened), so it is
         // recorded only after the delivery and with an explicit confirmation, on a
@@ -236,10 +250,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
     } elseif (isset($_POST['set_state'])) {
         $to = in_array($_POST['to'] ?? '', ['Denied', 'Cancelled', 'Requested'], true) ? $_POST['to'] : null;
         if ($to) {
+            // A reopened request resumes at the furthest step it had recorded (delivery,
+            // order, authorization, recommended quote, any quote), so its status agrees
+            // with its lifecycle and it is counted and filtered where it belongs. Nothing
+            // can change those steps while it is closed.
+            if ($to === 'Requested') {
+                $qc = db()->prepare('SELECT COUNT(*) FROM device_request_quotes WHERE request_id = ?');
+                $qc->execute([$rid]);
+                $to = $r['delivered_at'] ? 'Delivered' : ($r['ordered_at'] ? 'Ordered' : ($r['authorized_at'] ? 'Authorized'
+                    : ($r['selected_quote_id'] ? 'Awaiting Authorization' : ((int)$qc->fetchColumn() > 0 ? 'Quoting' : 'Requested'))));
+            }
             db()->prepare('UPDATE device_requests SET status = ?, notes = ? WHERE id = ?')
-                ->execute([$to, mb_substr(trim($_POST['notes'] ?? ($r['notes'] ?? '')), 0, 4000) ?: null, $rid]);
-            audit($user['id'], 'device.status', 'device_request', $rid, $to);
-            flash('Status updated to ' . $to . '.');
+                ->execute([$to, mb_substr(dr_text('notes', (string)($r['notes'] ?? '')), 0, 4000) ?: null, $rid]);
+            audit($user['id'], 'device.status', 'device_request', $rid, ($isReopen ? 'reopened as ' : '') . $to);
+            flash(($isReopen ? 'Request reopened. ' : '') . 'Status updated to ' . $to . '.');
         } else {
             flash('Choose whether the request was denied or cancelled. Nothing was changed.', 'error');
         }
@@ -386,7 +410,8 @@ if (isset($_GET['id'])) {
           <div class="field"><label for="delivered_at">Delivered on</label><input type="date" id="delivered_at" name="delivered_at" max="<?= date('Y-m-d') ?>" value="<?= h($oldDel('delivered_at', (string)($r['delivered_at'] ?: date('Y-m-d')))) ?>" <?= field_aria('delivered_at') ?>><?= field_error('delivered_at') ?></div>
           <div class="field"><label for="serial">Serial number</label><input type="text" id="serial" name="serial" maxlength="120" value="<?= h($oldDel('serial', (string)($r['serial'] ?? ''))) ?>"></div>
           <div class="field"><label for="warranty_until">Warranty until</label><input type="date" id="warranty_until" name="warranty_until" value="<?= h($oldDel('warranty_until', (string)($r['warranty_until'] ?? ''))) ?>" <?= field_aria('warranty_until') ?>><?= field_error('warranty_until') ?></div>
-          <?php if (can('equipment')): ?><div class="field"><label><input type="checkbox" name="add_to_inventory" value="1"> Also add to the loaner inventory</label></div><?php endif; ?>
+          <?php // After a refused save the box comes back as it was ticked, like the fields above. ?>
+          <?php if (can('equipment')): ?><div class="field"><label><input type="checkbox" name="add_to_inventory" value="1"<?= old_in('record_delivery') !== '' && old_in('add_to_inventory') === '1' ? ' checked' : '' ?>> Also add to the loaner inventory</label></div><?php endif; ?>
           <button type="submit" name="record_delivery" value="1" class="btn btn-primary">Save delivery</button>
         </form>
 

@@ -28,10 +28,13 @@ function fixture() {
   return {el, storage, focus:()=>focused, mic:()=>micStarts, cancelled:()=>cancelled};
 }
 
+// A leftover conversation flag with no saved history of this account: voice.js
+// forgets it on load (the resume itself is checked in voiceFixture below).
 const f = fixture();
 assert.equal(f.mic(), 0);
 assert.equal(f.el('.vfab-panel').hidden, true);
-console.log('PASS: Saved conversation does not automatically restart microphone or open the panel');
+assert.equal(f.storage.has('cms_convo'), false);
+console.log('PASS: A conversation flag with no saved history is forgotten on load and starts nothing');
 f.el('.vfab-btn').handlers.click();
 assert.equal(f.mic(), 0);
 assert.equal(f.focus(), '.vfab-input');
@@ -60,6 +63,9 @@ console.log('PASS: Stop speaking preserves the open panel and reports the stoppe
 // endpoint and document-level listeners are all stand-ins the test controls.
 function voiceFixture({storage = new Map(), local = new Map(), uid = 7, csrf = 'synthetic-csrf', earcon = null} = {}) {
   const elements = new Map(), timers = [], requests = [], documentHandlers = {}, utterances = [];
+  // What voice.js adds outside the panel (its page-level live region) and beside the
+  // status line (the listening note), so both can be checked.
+  const fabChildren = [], inserted = [];
   let focused = null, micStarts = 0, recognizer = null;
   function el(selector) {
     if (!elements.has(selector)) elements.set(selector, {
@@ -68,6 +74,7 @@ function voiceFixture({storage = new Map(), local = new Map(), uid = 7, csrf = '
       addEventListener(n, f) { this.handlers[n] = f; },
       setAttribute(n, v) { this.attrs[n] = v; },
       focus() { focused = selector; }, querySelector: el, appendChild(child) { this.children.push(child); },
+      parentNode: {insertBefore(node) { inserted.push(node); }},
     });
     return elements.get(selector);
   }
@@ -77,8 +84,10 @@ function voiceFixture({storage = new Map(), local = new Map(), uid = 7, csrf = '
     speechSynthesis: {getVoices: () => [{name: 'Synthetic voice', lang: 'en-US'}], cancel() {}, speak(u) { utterances.push(u); }},
   };
   const location = {pathname: '/index.php', href: ''};
-  const document = {activeElement: null, getElementById: () => ({querySelector: el}),
-    createElement: tag => ({tagName: tag, className: '', textContent: '', children: [], appendChild(child) { this.children.push(child); }}),
+  const fab = {querySelector: el, appendChild(child) { fabChildren.push(child); }};
+  const document = {activeElement: null, getElementById: () => fab,
+    createElement: tag => ({tagName: tag, className: '', textContent: '', children: [], attrs: {},
+      appendChild(child) { this.children.push(child); }, setAttribute(n, v) { this.attrs[n] = String(v); }}),
     addEventListener(n, f) { documentHandlers[n] = f; }};
   vm.runInNewContext(fs.readFileSync(__dirname + '/../public/assets/voice.js', 'utf8'), {
     window, speechSynthesis: window.speechSynthesis, Earcon: earcon, SpeechSynthesisUtterance: function (text) { this.text = text; }, URL,
@@ -89,8 +98,11 @@ function voiceFixture({storage = new Map(), local = new Map(), uid = 7, csrf = '
     fetch: (url, init) => new Promise(resolve => { requests.push({url, init, resolve}); }),
   });
   return {el, storage, timers, requests, documentHandlers, utterances, location, document, focus: () => focused, mic: () => micStarts, recognizer: () => recognizer,
-    reply(body, status = 200) {
-      requests.shift().resolve({status, ok: status < 400, text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body))});
+    pageLive: () => fabChildren.find(child => child.attrs && child.attrs.role === 'status'), listenNote: () => inserted[0],
+    // headers: response headers by name (ping.php sends X-CSRF-Token and X-User-Id).
+    reply(body, status = 200, headers = null) {
+      requests.shift().resolve({status, ok: status < 400, headers: headers ? {get: n => headers[n] || null} : undefined,
+        text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body))});
     }};
 }
 const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setImmediate(resolve)); };
@@ -139,6 +151,11 @@ const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resol
   const saved = new Map([...first.storage, ['cms_convo', '1']]);
   v = voiceFixture({storage: new Map(saved), uid: 7});
   assert.equal(v.el('.vfab-log').children.length, 1);
+  // The same account's conversation is offered again, never resumed by itself.
+  assert.equal(v.mic(), 0);
+  assert.equal(v.el('.vfab-panel').hidden, true);
+  assert.match(v.el('.vfab-status').textContent, /previous conversation is available/);
+  console.log('PASS: A saved conversation is offered again after a page change without opening the panel or the microphone');
   v = voiceFixture({storage: new Map(saved), uid: 8});
   assert.equal(v.storage.has('cms_convo_hist'), false);
   assert.equal(v.storage.has('cms_convo'), false);
@@ -244,7 +261,18 @@ const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resol
   await settle();
   assert.equal(v.el('.vfab-status').textContent, 'Saved the note.');
   assert.match(v.storage.get('cms_convo_hist') || '', /Saved the note\./);
-  console.log('PASS: Closing the panel after answering yes still reports and keeps the result of the save');
+  // The status line is inside the closed panel, so a screen reader hears the result
+  // from the polite live region outside it, written after a short pause.
+  const live = v.pageLive();
+  assert.ok(live, 'voice.js adds a role=status region outside the panel');
+  assert.equal(live.className, 'visually-hidden');
+  const announce = v.timers[v.timers.length - 1];
+  assert.equal(announce.ms, 150);
+  announce.fn();
+  assert.equal(live.textContent, 'Voice assistant: Saved the note.');
+  // The listening note beside the status line is seen, not announced.
+  assert.equal(v.listenNote().attrs['aria-hidden'], 'true');
+  console.log('PASS: Closing the panel after answering yes still reports and keeps the result of the save, announced outside the panel');
 
   // In a spoken conversation the question is read aloud, then the microphone
   // opens again for the answer; focus is not pulled onto the Yes button.
@@ -292,8 +320,55 @@ const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resol
   v.el('.vfab-send').handlers.click();
   v.reply('Invalid request token.', 403);
   await settle();
+  // The refused token is checked against ping.php first; a session that has ended there ends the conversation.
+  assert.equal(v.requests[0].url, 'ping.php');
+  v.reply('expired', 401);
+  await settle();
   assert.ok(v.utterances.some(u => /session has changed/.test(u.text)));
   console.log('PASS: A 508 error page keeps the conversation and a plain-text 403 ends it');
+
+  // After signing in again in another tab, a plain-text 403 refuses this page's old
+  // token: when the same account is signed in, its current token is taken from
+  // ping.php and the request is sent once more, with the conversation kept.
+  const refused = async () => {
+    const w = voiceFixture({});
+    w.el('.vfab-btn').handlers.click();
+    w.el('.vfab-input').value = 'Synthetic question';
+    w.el('.vfab-send').handlers.click();
+    w.reply('Invalid request token.', 403);
+    await settle();
+    assert.equal(w.requests[0].url, 'ping.php');
+    return w;
+  };
+  v = await refused();
+  v.reply('ok', 200, {'X-CSRF-Token': 'fresh-csrf', 'X-User-Id': '7'});
+  await settle();
+  assert.equal(v.requests.length, 1);
+  assert.equal(v.requests[0].url, 'ai_command.php');
+  assert.equal(v.requests[0].init.headers['X-CSRF-Token'], 'fresh-csrf');
+  assert.equal(JSON.parse(v.requests[0].init.body).transcript, 'Synthetic question');
+  v.reply({ok: true, action: 'answer', speak: 'Answered after the refresh.'});
+  await settle();
+  assert.ok(v.utterances.some(u => u.text === 'Answered after the refresh.'));
+  assert.ok(!v.utterances.some(u => /session has changed/.test(u.text)));
+  assert.match(v.storage.get('cms_convo_hist') || '', /Synthetic question[\s\S]*Answered after the refresh\./);
+  console.log('PASS: A refused token of the same account is refreshed from ping.php and the request is sent once more, keeping the conversation');
+  // Another account signed in since: its token is never used and nothing is sent again.
+  v = await refused();
+  v.reply('ok', 200, {'X-CSRF-Token': 'other-csrf', 'X-User-Id': '9'});
+  await settle();
+  assert.equal(v.requests.length, 0);
+  assert.ok(v.utterances.some(u => /session has changed/.test(u.text)));
+  console.log('PASS: When another account has signed in, a refused token is not refreshed and the session is said to have changed');
+  // A second refusal after the refresh is not retried again.
+  v = await refused();
+  v.reply('ok', 200, {'X-CSRF-Token': 'fresh-csrf', 'X-User-Id': '7'});
+  await settle();
+  v.reply('Invalid request token.', 403);
+  await settle();
+  assert.equal(v.requests.length, 0);
+  assert.ok(v.utterances.some(u => /session has changed/.test(u.text)));
+  console.log('PASS: A request refused again after the token refresh is sent only once more, then the session is said to have changed');
 
   // With sound cues muted, "Listening" is announced first and the microphone
   // starts only after the pause; with cues on, starting does not rewrite the status.

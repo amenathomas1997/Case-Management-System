@@ -33,9 +33,11 @@ function move_client_records(PDO $pdo, int $keepId, int $mergeId): void {
     }
 }
 
+// Sessions move before training tracks: completing a session locks the session
+// row and then its track, so the merge takes them in the same order.
 const CLIENT_MERGE_TABLES = [
-    'client_notes', 'training_tracks', 'tech_assessments', 'client_documents',
-    'scheduled_sessions', 'equipment_loans', 'equipment_followups', 'messages',
+    'client_notes', 'scheduled_sessions', 'training_tracks', 'tech_assessments', 'client_documents',
+    'equipment_loans', 'equipment_followups', 'messages',
     'incidents', 'consent_forms', 'surveys', 'report_acks', 'client_status_history',
     'referrals', 'tasks', 'client_scored_assessments', 'access_bookings',
     'client_competency', 'device_requests', 'equipment_reservations',
@@ -58,4 +60,52 @@ function merge_fillable(array $t, array $s): array {
         if ((($t[$f] ?? null) === null || $t[$f] === '') && ($s[$f] ?? null) !== null && $s[$f] !== '') $out[$f] = $s[$f];
     }
     return $out;
+}
+
+/**
+ * After a commit that moved one client's upcoming sessions ($sessions: rows with
+ * start_at and end_at) from instructor $fromId to $toId (a reassignment on the
+ * edit page, or a merge): the new instructor is emailed the list and told in the
+ * app, the previous one is emailed a notice that they were moved. Calendar
+ * invitations went to the previous instructor and no invitation id is kept, so
+ * this plain text is the only notice. Only the dates, times and the client's
+ * first name go into the email. Inactive accounts and the person who made the
+ * change are not written to. Returns ['to' => bool, 'from' => bool]: who was told.
+ */
+function send_session_move_notices(array $sessions, ?int $fromId, ?int $toId, string $clientName, int $actorId): array {
+    $told = ['to' => false, 'from' => false]; // who was told, for the page's message
+    if (!$sessions || $fromId === null || $toId === null || $fromId === $toId) return $told;
+    $q = db()->prepare('SELECT id, name, email FROM users WHERE id IN (?, ?) AND is_active = 1');
+    $q->execute([$fromId, $toId]);
+    $people = [];
+    foreach ($q->fetchAll() as $u) $people[(int)$u['id']] = $u;
+    $first = explode(' ', trim($clientName))[0];
+    if ($first === '') $first = 'the client';
+    $lines = [];
+    foreach (array_slice($sessions, 0, 50) as $s) {
+        $start = strtotime((string)$s['start_at']);
+        $end = strtotime((string)($s['end_at'] ?? ''));
+        $lines[] = '- ' . ($start !== false ? date('D, M j, Y g:i A', $start) : (string)$s['start_at'])
+            . ($end !== false ? ' to ' . date('g:i A', $end) : '');
+    }
+    if (count($sessions) > 50) $lines[] = '- and ' . (count($sessions) - 50) . ' more on the Schedule page';
+    $n = count($sessions);
+    $what = $n . ' upcoming session' . ($n === 1 ? '' : 's') . ' with ' . $first;
+    $fromName = (string)($people[$fromId]['name'] ?? 'the previous instructor');
+    if (isset($people[$toId]) && $toId !== $actorId) {
+        $told['to'] = true;
+        send_app_mail((string)$people[$toId]['email'], 'Upcoming sessions were moved to you',
+            "Hello {$people[$toId]['name']},\n\n{$what} " . ($n === 1 ? 'was' : 'were') . " moved from {$fromName} to you in " . cfg('name') . ":\n\n"
+            . implode("\n", $lines) . "\n\n"
+            . 'The full details are on your Schedule page: ' . cfg('base_url') . "/schedule.php\n"
+            . "Calendar invitations for these sessions went to {$fromName}, so they are not in your calendar yet: add them, or subscribe to your calendar address under My Account.\n");
+        notify_user($toId, $what . ' ' . ($n === 1 ? 'was' : 'were') . ' moved to you from ' . $fromName . '.', 'schedule.php');
+    }
+    if (isset($people[$fromId]) && $fromId !== $actorId) {
+        $told['from'] = send_app_mail((string)$people[$fromId]['email'], 'Your upcoming sessions were moved to another instructor',
+            "Hello {$people[$fromId]['name']},\n\n{$what} " . ($n === 1 ? 'was' : 'were') . ' moved to ' . (string)($people[$toId]['name'] ?? 'another instructor') . ' in ' . cfg('name') . ".\n"
+            . "Remove them from your calendar if they are there; they are no longer yours:\n\n"
+            . implode("\n", $lines) . "\n");
+    }
+    return $told;
 }

@@ -3,7 +3,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const code = fs.readFileSync(__dirname + '/../public/assets/session-timeout.js', 'utf8');
 
-function fixture(fetch) {
+// timeoutMs: the configured session length (data-timeout-ms; none by default, so the
+// end-of-session timer is off). storage: a localStorage stand-in shared by the tabs.
+function fixture(fetch, {timeoutMs = null, storage = null} = {}) {
   let now = 0, currentFetch = fetch;
   const handlers = {}, timers = new Map(); let nextTimer = 0;
   const elements = {}, events = [], fetches = [], armed = [];
@@ -29,8 +31,9 @@ function fixture(fetch) {
   dialog.querySelectorAll = () => [stay, dismiss, link];
   expired.querySelector = () => link;
   const main = element('main');
+  if (timeoutMs !== null) dialog.dataset.timeoutMs = timeoutMs;
   vm.runInNewContext(code, {document, fetch: (...args) => { fetches.push(args[0]); return currentFetch(...args); }, AbortController, Date: {now: () => now}, Array, Number,
-    Event: class { constructor(type) { this.type = type; } },
+    Event: class { constructor(type) { this.type = type; } }, ...(storage ? {localStorage: storage} : {}),
     setTimeout(fn, ms) { const id = ++nextTimer; timers.set(id, {fn, ms}); if (ms === 100) armed.push(id); return id; },
     clearTimeout(id) { timers.delete(id); }});
   function key(name, shiftKey = false) {
@@ -42,6 +45,7 @@ function fixture(fetch) {
   // The most recently scheduled timer with this delay (a later warning).
   function runLatest(ms) { [...timers.values()].reverse().find(t => t.ms === ms).fn(); }
   return {dialog, stay, dismiss, error, description, expired, link, original, main, document, events, fetches, armed, key, runTimer, runLatest,
+    hasTimer: ms => [...timers.values()].some(t => t.ms === ms), at(ms) { now = ms; },
     useFetch(fn) { currentFetch = fn; }, activity(ms) { now = ms; for (const fn of handlers.input) fn({}); },
     fire(name) { for (const fn of handlers[name] || []) fn({type: name}); }};
 }
@@ -140,4 +144,47 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(f.armed.length, armedAtLoad + 1);
   assert.deepEqual(f.fetches, []);
   console.log('PASS: cms:activity re-arms the hidden warning without calling the server');
+
+  // A keepalive the server refuses because the session has ended (401) switches the
+  // dialog to its signed-out message and opens it again, even after Escape closed it.
+  // Once said, it is not repeated: a second Escape closes it for good, so unsaved text
+  // can still be copied.
+  f = fixture(() => Promise.resolve({ok: false, status: 401}));
+  f.runTimer(100); f.key('Escape'); await flush();
+  assert.equal(f.dialog.hidden, false); assert.equal(f.expired.hidden, false); assert.equal(f.stay.hidden, true);
+  assert.equal(f.document.activeElement, f.link); assert.deepEqual(f.events, ['cms:session-ended']);
+  f.key('Escape'); await flush();
+  assert.equal(f.dialog.hidden, true); assert.deepEqual(f.events, ['cms:session-ended']);
+  console.log('PASS: Escape on a session that has ended reopens the dialog signed out once, and a second Escape closes it');
+  // The same refusal of a keepalive sent for typing, while the dialog is closed.
+  f = fixture(() => Promise.resolve({ok: false, status: 401}));
+  f.activity(5000); await flush();
+  assert.equal(f.dialog.hidden, false); assert.equal(f.expired.hidden, false); assert.equal(f.stay.hidden, true);
+  assert.equal(f.document.activeElement, f.link); assert.deepEqual(f.events, ['cms:session-ended']);
+  console.log('PASS: A keepalive refused as signed out while the dialog is closed opens it in the signed-out state');
+  // With the session length known, the dialog says the session has ended once that
+  // time (and a few seconds' grace) has passed with no activity, whether it is open or closed.
+  f = fixture(() => Promise.resolve({ok: true}), {timeoutMs: '1000'});
+  assert.ok(f.hasTimer(6000));
+  f.at(6000); f.runTimer(6000);
+  assert.equal(f.dialog.hidden, false); assert.equal(f.expired.hidden, false); assert.equal(f.stay.hidden, true);
+  assert.equal(f.document.activeElement, f.link); assert.deepEqual(f.events, ['cms:session-ended']);
+  f = fixture(() => Promise.resolve({ok: true}), {timeoutMs: '1000'});
+  f.runTimer(100); f.at(6000); f.runTimer(6000);
+  assert.equal(f.dialog.hidden, false); assert.equal(f.expired.hidden, false); assert.equal(f.stay.hidden, true);
+  assert.equal(f.document.activeElement, f.link); assert.deepEqual(f.events, ['cms:session-ended']);
+  assert.deepEqual(f.fetches, []);
+  console.log('PASS: Once the session length passes with no activity, a closed or open dialog switches to signed out without asking the server');
+  // Another tab of the site kept the session in use: this tab waits for the session
+  // length from that moment instead of saying it has ended.
+  const sharedStore = new Map();
+  const storage = {getItem: k => sharedStore.has(k) ? sharedStore.get(k) : null, setItem: (k, v) => sharedStore.set(k, String(v))};
+  f = fixture(() => Promise.resolve({ok: true}), {timeoutMs: '1000', storage});
+  sharedStore.set('cms-session-active', '5500');
+  f.at(6000); f.runTimer(6000);
+  assert.equal(f.dialog.hidden, true); assert.deepEqual(f.events, []);
+  assert.ok(f.hasTimer(5500));
+  f.at(11500); f.runTimer(5500);
+  assert.equal(f.dialog.hidden, false); assert.equal(f.expired.hidden, false); assert.deepEqual(f.events, ['cms:session-ended']);
+  console.log('PASS: Activity recorded by another tab postpones the signed-out notice until the session length has passed since then');
 })().catch(error => { console.error(error); process.exitCode = 1; });

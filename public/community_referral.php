@@ -9,7 +9,9 @@ register_translations(['Email us at' => 'Escríbanos a', 'required: choose at le
     'The date of birth cannot be in the future. Please check the year.' => 'La fecha de nacimiento no puede ser una fecha futura. Revise el año.',
     'Enter the date of birth as a valid date (YYYY-MM-DD) from the year 1900 onwards.' => 'Escriba la fecha de nacimiento como una fecha válida (AAAA-MM-DD) a partir del año 1900.',
     'Enter one valid email address for the person, for example name@example.org, or leave it blank.' => 'Escriba un solo correo electrónico válido de la persona, por ejemplo nombre@ejemplo.org, o déjelo en blanco.',
-    'Please also correct the following:' => 'Corrija también lo siguiente:']);
+    'Please also correct the following:' => 'Corrija también lo siguiente:',
+    'The referral could not be sent because of a problem on our side, and nothing was saved. Everything you typed is still here. Please try again in a few minutes, or email us.'
+        => 'No se pudo enviar la referencia por un problema de nuestra parte, y no se guardó nada. Todo lo que escribió sigue aquí. Inténtelo de nuevo en unos minutos o escríbanos.']);
 // A public visitor has no account to sign back into. When the form's token no
 // longer matches (the session lapsed while the page sat open), show the form
 // again with everything typed still in place — nothing is saved — instead of
@@ -39,7 +41,9 @@ $old = fn(string $k) => h(is_string($_POST[$k] ?? null) ? $_POST[$k] : '');
 // Administrator-authored options and hints are rendered whole: translated only
 // when the administrator (or the dictionary) gives the entire string, otherwise
 // kept in English and marked so, never split into mixed-language fragments.
-$whole = fn(string $x): string => __($x) === $x ? en($x) : h(__($x));
+// A translation spelled the same as the English is still Spanish, so the dictionary
+// entry decides, not a comparison of the two strings.
+$whole = fn(string $x): string => isset(translations()[$x]) ? h(__($x)) : en($x);
 // By-reference captures: $errors is filled AFTER these helpers are defined.
 $err = function (string $k) use (&$errors): string {
     return isset($errors[$k]) ? '<p class="field-error" id="err-' . $k . '">' . t($errors[$k]) . '</p>' : '';
@@ -52,9 +56,18 @@ $aria = function (string $k, string $describe = '') use (&$errors): string {
     return (isset($errors[$k]) ? 'aria-invalid="true" ' : '') . 'aria-describedby="' . implode(' ', $ids) . '"';
 };
 $role = $_POST['role'] ?? (is_string($_GET['role'] ?? '') ? ($_GET['role'] ?? '') : '');
+// One form, one referral: each form carries a key, remembered in this visitor's
+// session (with what was sent) once its referral is saved. A double click, or
+// the same page sent again, then gets the same confirmation instead of filing a
+// second referral; requests in one session run one at a time, so a second
+// click waits for the first. A page edited and sent again is a new referral.
+$formKey = is_string($_POST['form_key'] ?? null) && preg_match('/^[0-9a-f]{32}$/D', $_POST['form_key']) ? $_POST['form_key'] : bin2hex(random_bytes(16));
+$formSig = hash('sha256', json_encode(array_diff_key($_POST, ['csrf' => 1, 'csrf_uid' => 1, 'form_key' => 1])) ?: '');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (($_POST['website'] ?? '') !== '') redirect('community_referral.php?submitted=1');
+    $sent = $_SESSION['referral_form_keys'][$formKey] ?? null;
+    if (is_array($sent) && hash_equals((string)($sent['sig'] ?? ''), $formSig)) redirect('community_referral.php?submitted=1' . (string)($sent['done'] ?? ''));
     if ($csrfStale) $errors['form'] = 'This page was open for a long time, so the referral was not sent yet. Everything you typed is still here. Please review it and choose Send referral again.';
     $ip = $_SERVER['REMOTE_ADDR'] ?? '';
     // One IPv6 connection can rotate freely within its /64 network, so that
@@ -181,39 +194,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $clientName = $role === 'self' ? trim($_POST['referrer_name']) : trim($_POST['client_name']);
         $clientPhone = $role === 'self' ? trim($_POST['referrer_phone']) : (trim($_POST['client_phone'] ?? '') ?: null);
         $clientEmail = $role === 'self' ? strtolower($refEmail) : (trim($_POST['client_email'] ?? '') ?: null);
-        db()->prepare('INSERT INTO referrals (reason, note_type, subject, body,
-                counselor_name, counselor_agency, counselor_email, counselor_phone,
-                client_name, client_dob, client_phone, client_email, client_address,
-                referral_source, school, grade_level, guardian_name, guardian_phone,
-                relationship, contact_first, consent_confirmed, preets_services, income_bracket, quoted_fee, referral_purpose, requested_service, specific_needs)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute([
-            REFERRER_ROLES[$role] . ' referral', $noteType,
-            mb_substr(ucfirst($role) . ' referral: ' . $clientName, 0, 255),
-            // Cap free-text public inputs so an anonymous submitter can't store multi-MB values.
-            mb_substr(trim($_POST['body']), 0, 8000),
-            mb_substr(trim($_POST['referrer_name']), 0, 120), mb_substr($orgLabel, 0, 190), strtolower($refEmail), mb_substr(trim($_POST['referrer_phone']), 0, 40),
-            $clientName,
-            valid_date($_POST['client_dob'] ?? ''),
-            $clientPhone,
-            $clientEmail,
-            mb_substr(trim($_POST['client_address'] ?? ''), 0, 255) ?: null,
-            $role,
-            $role === 'school' ? $organization : null,
-            mb_substr(trim($_POST['grade_level'] ?? ''), 0, 40) ?: null,
-            mb_substr(trim($_POST['guardian_name'] ?? ''), 0, 120) ?: null,
-            mb_substr(trim($_POST['guardian_phone'] ?? ''), 0, 40) ?: null,
-            mb_substr(trim($_POST['relationship'] ?? ''), 0, 80) ?: null,
-            in_array($_POST['contact_first'] ?? '', ['client','referrer'], true) ? $_POST['contact_first'] : null,
-            $consent ? 1 : 0,
-            null, // Historical Pre-ETS data remains readable; new AT referrals never populate it.
-            $role === 'self' ? INCOME_BRACKETS[$income] : null,
-            $fee, $requestFields['referral_purpose'], $requestFields['requested_service'], $requestFields['specific_needs'],
-        ]);
-        $refId = (int)db()->lastInsertId();
-        add_task('Contact new referral: ' . $clientName,
-            'Reach out to the referral within 3 business days of receipt.',
-            null, $refId, business_days_from(3), null, null, 'ref-contact-' . $refId);
-        db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?, 'referral-portal', 1)")->execute([$ip]);
+        // The referral, its contact task and the rate-limit count are saved
+        // together or not at all: the page never confirms a referral nobody is
+        // asked to follow up.
+        $refSaved = false;
+        $pdo = db();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('INSERT INTO referrals (reason, note_type, subject, body,
+                    counselor_name, counselor_agency, counselor_email, counselor_phone,
+                    client_name, client_dob, client_phone, client_email, client_address,
+                    referral_source, school, grade_level, guardian_name, guardian_phone,
+                    relationship, contact_first, consent_confirmed, preets_services, income_bracket, quoted_fee, referral_purpose, requested_service, specific_needs)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute([
+                REFERRER_ROLES[$role] . ' referral', $noteType,
+                mb_substr(ucfirst($role) . ' referral: ' . $clientName, 0, 255),
+                // Cap free-text public inputs so an anonymous submitter can't store multi-MB values.
+                mb_substr(trim($_POST['body']), 0, 8000),
+                mb_substr(trim($_POST['referrer_name']), 0, 120), mb_substr($orgLabel, 0, 190), strtolower($refEmail), mb_substr(trim($_POST['referrer_phone']), 0, 40),
+                $clientName,
+                valid_date($_POST['client_dob'] ?? ''),
+                $clientPhone,
+                $clientEmail,
+                mb_substr(trim($_POST['client_address'] ?? ''), 0, 255) ?: null,
+                $role,
+                $role === 'school' ? $organization : null,
+                mb_substr(trim($_POST['grade_level'] ?? ''), 0, 40) ?: null,
+                mb_substr(trim($_POST['guardian_name'] ?? ''), 0, 120) ?: null,
+                mb_substr(trim($_POST['guardian_phone'] ?? ''), 0, 40) ?: null,
+                mb_substr(trim($_POST['relationship'] ?? ''), 0, 80) ?: null,
+                in_array($_POST['contact_first'] ?? '', ['client','referrer'], true) ? $_POST['contact_first'] : null,
+                $consent ? 1 : 0,
+                null, // Historical Pre-ETS data remains readable; new AT referrals never populate it.
+                $role === 'self' ? INCOME_BRACKETS[$income] : null,
+                $fee, $requestFields['referral_purpose'], $requestFields['requested_service'], $requestFields['specific_needs'],
+            ]);
+            $refId = (int)$pdo->lastInsertId();
+            if (!add_task('Contact new referral: ' . $clientName,
+                'Reach out to the referral within 3 business days of receipt.',
+                null, $refId, business_days_from(3), null, null, 'ref-contact-' . $refId)) {
+                throw new RuntimeException('The contact task for a new referral could not be created.');
+            }
+            $pdo->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?, 'referral-portal', 1)")->execute([$ip]);
+            $pdo->commit();
+            $refSaved = true;
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            // Logged by class and code only: the message can quote what was typed.
+            error_log('Referral save failed: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
+            $errors['form'] = 'The referral could not be sent because of a problem on our side, and nothing was saved. Everything you typed is still here. Please try again in a few minutes, or email us.';
+        }
+    }
+    if (!$errors && $refSaved) {
+        $done = $fee !== null ? '&fee=' . ($fee > 0 ? 'paid' : 'free') : '';
+        // Remembered for this form (newest 20 kept), so the same page sent again
+        // is answered with this confirmation instead of a second referral.
+        $_SESSION['referral_form_keys'] = array_slice(($_SESSION['referral_form_keys'] ?? []) + [$formKey => ['sig' => $formSig, 'done' => $done]], -20, null, true);
         // Site-wide ceiling on the alerts (not on the referrals): past it, every
         // referral is still saved with its task, but administrators get one
         // notice instead of a message and email per referral until the hour's
@@ -232,7 +268,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'More than ' . REFERRAL_ALERTS_PER_HOUR . " referrals arrived through the public referral form in the last hour, so the alert for each new referral is paused until the rate drops.\n\n"
                     . "Every referral is still saved, with its contact task. Review them here: " . cfg('base_url') . "/referrals.php\n");
             }
-            redirect('community_referral.php?submitted=1' . ($fee !== null ? '&fee=' . ($fee > 0 ? 'paid' : 'free') : ''));
+            redirect('community_referral.php?submitted=1' . $done);
         }
         notify_admin_users('New ' . strtoupper($role) . ' referral: ' . $clientName, 'referrals.php?view=' . $refId);
         // The email goes out from the organisation's own mailbox, so it carries
@@ -245,7 +281,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             . ($structured ? referral_request_summary($requestFields) . "\n" : '')
             . ($fee !== null ? 'Fee determination: ' . ($fee > 0 ? '$' . number_format($fee, 2) . '/hour' : 'Free') . "\n" : '')
             . "\nThe referrer's and the person's details are on the referrals page. Review it here: " . cfg('base_url') . '/referrals.php?view=' . $refId . "\n");
-        redirect('community_referral.php?submitted=1' . ($fee !== null ? '&fee=' . ($fee > 0 ? 'paid' : 'free') : ''));
+        redirect('community_referral.php?submitted=1' . $done);
     }
 }
 
@@ -306,8 +342,11 @@ if ($errors): ?>
 <?php endif; ?>
 <?php if ($errors): ?><script>document.addEventListener('DOMContentLoaded',function(){var a=document.getElementById('form-errors');if(a)a.focus();});</script><?php endif; ?>
 
-<form method="post" action="community_referral.php" class="stacked" id="referral-form" novalidate>
+<?php // The page language rides on the form address: if the session lapses while the
+// form is open, the page that comes back (and its notice) is still in that language. ?>
+<form method="post" action="community_referral.php?lang=<?= h(page_lang()) ?>" class="stacked" id="referral-form" novalidate>
   <?= csrf_field() ?>
+  <input type="hidden" name="form_key" value="<?= h($formKey) ?>">
   <div class="honeypot" aria-hidden="true">
     <label for="website"><?= t('Leave this field empty') ?></label>
     <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">

@@ -94,39 +94,111 @@ $enAttr = page_lang() !== 'en' ? ' lang="en"' : ''; ?>
 <p<?= $enAttr ?>>Staff sessions end after <?= max(1, (int)cfg('session_timeout_minutes')) ?> minutes without activity. A warning lets you extend the session. If it has ended, keep the form open, sign in in another tab, and return to the form. Copy important unsaved text before leaving or reloading. Passwords and files are not automatically restored.</p>
 <p<?= $enAttr ?>>The voice assistant also accepts typed requests. Opening it does not start the microphone. Use Stop speaking to stop a spoken reply; the reply remains as text. Escape closes the assistant and stops the conversation.</p>
 </section>
+<?php // Clients and guardians reach this list from the public pages' footer, so it is
+// translated like the sections above: [term, Spanish term, meaning, Spanish meaning].
+$glossary = [
+    ['AAC — augmentative and alternative communication', 'AAC — comunicación aumentativa y alternativa',
+        'Devices and methods, such as speech-generating devices or symbol boards, that help a person communicate.',
+        'Dispositivos y métodos, como los aparatos que generan voz o los tableros de símbolos, que ayudan a una persona a comunicarse.'],
+    ['AI — artificial intelligence', 'AI — inteligencia artificial (IA)',
+        'Software that drafts or suggests text. In this app its output is always a draft for staff to review; it never saves, sends, or changes a record by itself.',
+        'Programas que redactan o sugieren texto. En esta aplicación, lo que producen es siempre un borrador que el personal revisa; nunca guardan, envían ni cambian un registro por sí mismos.'],
+    ['AT — assistive technology', 'AT — tecnología de asistencia',
+        'Tools or software that help a person perform an activity.',
+        'Herramientas o programas que ayudan a una persona a realizar una actividad.'],
+    ['Authorization', 'Autorización',
+        'Approval for a service, often with an allowed number of hours or a spending limit.',
+        'Aprobación de un servicio, a menudo con un número de horas permitido o un límite de gasto.'],
+    ['BIRP — behavior, intervention, response, plan', 'BIRP — conducta, intervención, respuesta, plan',
+        'A structured case-note format with one part for each of those four headings.',
+        'Un formato estructurado de nota de caso, con una parte para cada uno de esos cuatro encabezados.'],
+    ['CART — Communication Access Realtime Translation', 'CART — subtitulado en tiempo real para el acceso a la comunicación',
+        'Live captioning typed by a trained captioner during a meeting or session.',
+        'Subtítulos en vivo que escribe una persona capacitada durante una reunión o sesión.'],
+    ['Caseload', 'Carga de casos',
+        'The clients assigned to a staff member.',
+        'Los clientes asignados a un miembro del personal.'],
+    ['CCTV — closed-circuit television (video magnifier)', 'CCTV — circuito cerrado de televisión (lupa electrónica)',
+        'A desktop or portable camera and screen that enlarges print and objects.',
+        'Una cámara con pantalla, de escritorio o portátil, que amplía textos impresos y objetos.'],
+    ['Consent', 'Consentimiento',
+        'A person\'s agreement to the activity described in a form.',
+        'El acuerdo de una persona con la actividad descrita en un formulario.'],
+    ['CSV — comma-separated values', 'CSV — valores separados por comas',
+        'A plain spreadsheet file that Excel and QuickBooks open.',
+        'Un archivo sencillo de hoja de cálculo que se abre en Excel y QuickBooks.'],
+    ['Current value (book value)', 'Valor actual (valor en libros)',
+        'What an item cost, reduced by an equal amount each month over its useful life, counted from its purchase date.',
+        'Lo que costó un artículo, reducido en una cantidad igual cada mes durante su vida útil, contando desde la fecha de compra.'],
+    ['Deliverable', 'Entregable',
+        'A specific item or result required by a contract.',
+        'Un artículo o resultado específico que exige un contrato.'],
+    ['EFT — electronic funds transfer', 'EFT — transferencia electrónica de fondos',
+        'A direct bank payment. Its reference number is recorded when an invoice is marked paid.',
+        'Un pago bancario directo. Su número de referencia se registra cuando una factura se marca como pagada.'],
+    ['IPE — individualized plan for employment', 'IPE — plan individualizado de empleo',
+        'A plan describing an employment goal and the services intended to help reach it.',
+        'Un plan que describe una meta de empleo y los servicios destinados a ayudar a alcanzarla.'],
+    ['KB — knowledge base', 'KB — base de conocimientos',
+        'The collection of how-to articles and reference notes staff can search.',
+        'La colección de artículos prácticos y notas de referencia en la que el personal puede buscar.'],
+    ['MB — megabytes', 'MB — megabytes',
+        'A measure of file size.',
+        'Una medida del tamaño de un archivo.'],
+    ['NPS — Net Promoter Score', 'NPS — índice neto de promotores',
+        'A survey measure based on how likely people say they are to recommend a service.',
+        'Una medida de encuesta basada en qué tan probable es, según las personas, que recomienden un servicio.'],
+    ['OTP — one-time password', 'OTP — contraseña de un solo uso',
+        'A temporary sign-in code. You can paste it into the code field.',
+        'Un código temporal para iniciar sesión. Puede pegarlo en el campo del código.'],
+    ['PAIP — purpose, assessment, intervention, plan', 'PAIP — propósito, evaluación, intervención, plan',
+        'A structured case-note format with one part for each of those four headings.',
+        'Un formato estructurado de nota de caso, con una parte para cada uno de esos cuatro encabezados.'],
+    ['Passkey', 'Llave de acceso (passkey)',
+        'A sign-in method that uses your device to approve access instead of typing an account password.',
+        'Un método para iniciar sesión que usa su dispositivo para aprobar el acceso en lugar de escribir una contraseña.'],
+    ['PDF — Portable Document Format', 'PDF — formato de documento portátil',
+        'A common document file type that looks the same on any device.',
+        'Un tipo de archivo de documento común que se ve igual en cualquier dispositivo.'],
+    ['PO — purchase order', 'PO — orden de compra',
+        'The order number a funder or purchaser issues for a device.',
+        'El número de orden que emite un financiador o comprador para un dispositivo.'],
+    ['Pre-ETS — pre-employment transition services', 'Pre-ETS — servicios de transición previos al empleo',
+        'Services that help students with disabilities prepare for work and further education.',
+        'Servicios que ayudan a estudiantes con discapacidades a prepararse para el trabajo y para continuar sus estudios.'],
+    ['ROI — release of information', 'ROI — autorización para divulgar información',
+        'In consent records, permission to share the information described in the release.',
+        'En los registros de consentimiento, el permiso para compartir la información descrita en la autorización.'],
+    ['RSA — Rehabilitation Services Administration', 'RSA — Administración de Servicios de Rehabilitación',
+        'The agency name used in the app\'s service categories and reporting.',
+        'El nombre de la agencia que se usa en las categorías de servicio y en los informes de la aplicación.'],
+    ['Serial number', 'Número de serie',
+        'The manufacturer\'s unique number for one device.',
+        'El número único que el fabricante asigna a un dispositivo.'],
+    ['SMART goal', 'Meta SMART',
+        'A goal that is specific, measurable, achievable, relevant, and time-bound.',
+        'Una meta específica, medible, alcanzable, relevante y con un plazo definido.'],
+    ['SOAP — subjective, objective, assessment, plan', 'SOAP — subjetivo, objetivo, evaluación, plan',
+        'A structured case-note format with one part for each of those four headings.',
+        'Un formato estructurado de nota de caso, con una parte para cada uno de esos cuatro encabezados.'],
+    ['Telepractice', 'Telepráctica',
+        'A session provided remotely, such as through a video call.',
+        'Una sesión que se presta a distancia, por ejemplo, por videollamada.'],
+    ['VR — vocational rehabilitation', 'VR — rehabilitación vocacional',
+        'Services intended to help people with disabilities prepare for, find, or keep work.',
+        'Servicios destinados a ayudar a personas con discapacidades a prepararse para un trabajo, encontrarlo o conservarlo.'],
+    ['VRC — vocational rehabilitation counselor', 'VRC — consejero de rehabilitación vocacional',
+        'A counselor who helps plan and coordinate vocational rehabilitation services.',
+        'Un consejero que ayuda a planificar y coordinar los servicios de rehabilitación vocacional.'],
+    ['WPM — words per minute', 'WPM — palabras por minuto',
+        'A typing or reading speed, such as a keyboarding goal of 30 WPM.',
+        'Una velocidad de escritura o de lectura, como una meta de mecanografía de 30 WPM.'],
+];
+register_translations(array_merge(...array_map(fn(array $g): array => [$g[0] => $g[1], $g[2] => $g[3]], $glossary))); ?>
 <section aria-labelledby="terms"><h2 id="terms"><?= t('Common terms') ?></h2>
-<dl class="props"<?= $enAttr ?>>
-  <dt>AAC — augmentative and alternative communication</dt><dd>Devices and methods, such as speech-generating devices or symbol boards, that help a person communicate.</dd>
-  <dt>AI — artificial intelligence</dt><dd>Software that drafts or suggests text. In this app its output is always a draft for staff to review; it never saves, sends, or changes a record by itself.</dd>
-  <dt>AT — assistive technology</dt><dd>Tools or software that help a person perform an activity.</dd>
-  <dt>Authorization</dt><dd>Approval for a service, often with an allowed number of hours or a spending limit.</dd>
-  <dt>BIRP — behavior, intervention, response, plan</dt><dd>A structured case-note format with one part for each of those four headings.</dd>
-  <dt>CART — Communication Access Realtime Translation</dt><dd>Live captioning typed by a trained captioner during a meeting or session.</dd>
-  <dt>Caseload</dt><dd>The clients assigned to a staff member.</dd>
-  <dt>CCTV — closed-circuit television (video magnifier)</dt><dd>A desktop or portable camera and screen that enlarges print and objects.</dd>
-  <dt>Consent</dt><dd>A person's agreement to the activity described in a form.</dd>
-  <dt>CSV — comma-separated values</dt><dd>A plain spreadsheet file that Excel and QuickBooks open.</dd>
-  <dt>Current value (book value)</dt><dd>What an item cost, reduced by an equal amount each month over its useful life, counted from its purchase date.</dd>
-  <dt>Deliverable</dt><dd>A specific item or result required by a contract.</dd>
-  <dt>EFT — electronic funds transfer</dt><dd>A direct bank payment. Its reference number is recorded when an invoice is marked paid.</dd>
-  <dt>IPE — individualized plan for employment</dt><dd>A plan describing an employment goal and the services intended to help reach it.</dd>
-  <dt>KB — knowledge base</dt><dd>The collection of how-to articles and reference notes staff can search.</dd>
-  <dt>MB — megabytes</dt><dd>A measure of file size.</dd>
-  <dt>NPS — Net Promoter Score</dt><dd>A survey measure based on how likely people say they are to recommend a service.</dd>
-  <dt>OTP — one-time password</dt><dd>A temporary sign-in code. You can paste it into the code field.</dd>
-  <dt>PAIP — purpose, assessment, intervention, plan</dt><dd>A structured case-note format with one part for each of those four headings.</dd>
-  <dt>Passkey</dt><dd>A sign-in method that uses your device to approve access instead of typing an account password.</dd>
-  <dt>PDF — Portable Document Format</dt><dd>A common document file type that looks the same on any device.</dd>
-  <dt>PO — purchase order</dt><dd>The order number a funder or purchaser issues for a device.</dd>
-  <dt>Pre-ETS — pre-employment transition services</dt><dd>Services that help students with disabilities prepare for work and further education.</dd>
-  <dt>ROI — release of information</dt><dd>In consent records, permission to share the information described in the release.</dd>
-  <dt>RSA — Rehabilitation Services Administration</dt><dd>The agency name used in the app's service categories and reporting.</dd>
-  <dt>Serial number</dt><dd>The manufacturer's unique number for one device.</dd>
-  <dt>SMART goal</dt><dd>A goal that is specific, measurable, achievable, relevant, and time-bound.</dd>
-  <dt>SOAP — subjective, objective, assessment, plan</dt><dd>A structured case-note format with one part for each of those four headings.</dd>
-  <dt>Telepractice</dt><dd>A session provided remotely, such as through a video call.</dd>
-  <dt>VR — vocational rehabilitation</dt><dd>Services intended to help people with disabilities prepare for, find, or keep work.</dd>
-  <dt>VRC — vocational rehabilitation counselor</dt><dd>A counselor who helps plan and coordinate vocational rehabilitation services.</dd>
-  <dt>WPM — words per minute</dt><dd>A typing or reading speed, such as a keyboarding goal of 30 WPM.</dd>
+<dl class="props">
+<?php foreach ($glossary as [$term, , $meaning]): ?>
+  <dt><?= t($term) ?></dt><dd><?= t($meaning) ?></dd>
+<?php endforeach; ?>
 </dl></section>
 <?php page_footer();

@@ -116,7 +116,8 @@ struct SearchView: View {
             guard q == query, requestID == currentRequest else { return }
             groups = []
             searched = false
-            self.error = error.localizedDescription
+            // Said here: the banner is a List row, never drawn (or heard) while scrolled away from.
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }

@@ -9,13 +9,25 @@ struct FollowupsView: View {
     @State private var skipping: Followup?
     /// A sheet's success message, announced once the sheet has gone (see announceAfterDismiss).
     @State private var sheetResult: String?
+    /// A follow-up recorded without its task (the server's warning): shown until the next
+    /// refresh as well as announced, since it asks the user to add the task themselves.
+    @State private var notice: String?
     /// After Snooze or Skip takes a row out of Due now, VoiceOver is put on that section's
     /// heading rather than left wherever it lands.
     @AccessibilityFocusState private var dueHeaderFocused: Bool
+    /// Follow-ups with a Snooze or Skip being sent: a second tap would move a snoozed check out
+    /// another two weeks, so their buttons are off until the reply comes.
+    @State private var acting: Set<Int> = []
 
     var body: some View {
         List {
             if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
+            if let notice {
+                // Said in words and with an icon, not only by colour.
+                Label { Text(notice) } icon: { Image(systemName: "exclamationmark.triangle.fill").accessibilityHidden(true) }
+                    .font(.callout.weight(.medium))
+                    .listRowSeparator(.hidden)
+            }
 
             if let d = data {
                 Section {
@@ -52,7 +64,11 @@ struct FollowupsView: View {
         }
         .navigationTitle("Device follow-ups")
         .sheet(item: $recording, onDismiss: announceSheetResult) { f in
-            RecordFollowupSheet(followup: f) { sheetResult = "Follow-up recorded."; Task { await load() } }
+            RecordFollowupSheet(followup: f) { warning in
+                notice = warning
+                sheetResult = warning ?? "Follow-up recorded."
+                Task { await load() }
+            }
         }
         // Skipping closes the check for good, so it takes a second, deliberate step.
         .confirmationDialog("Skip this check for \(skipping?.equipmentName ?? "this device")? It will not be asked again.",
@@ -61,7 +77,7 @@ struct FollowupsView: View {
             Button("Skip this check", role: .destructive) { Task { await act(f, "skip") } }
             Button("Cancel", role: .cancel) {}
         }
-        .refreshable { await load() }
+        .refreshable { notice = nil; await load() }
         .task { await load() }
     }
 
@@ -96,13 +112,17 @@ struct FollowupsView: View {
         // Each button names its check, since every due row has the same three; the
         // visible words stay a Voice Control name.
         let check = "\(f.equipmentName) check for \(f.clientName)"
+        let sending = acting.contains(f.id)
         Button("Record") { recording = f }.buttonStyle(.borderedProminent).onBrandLabel().controlSize(.large)
+            .disabled(sending)
             .accessibilityLabel("Record \(check)")
             .accessibilityInputLabels(["Record", "Record \(check)"])
         Button("Snooze 2 weeks") { Task { await act(f, "snooze") } }.buttonStyle(.bordered).controlSize(.large)
+            .disabled(sending)
             .accessibilityLabel("Snooze \(check) two weeks")
             .accessibilityInputLabels(["Snooze", "Snooze 2 weeks", "Snooze \(check) two weeks"])
         Button("Skip") { skipping = f }.buttonStyle(.bordered).controlSize(.large)
+            .disabled(sending)
             .accessibilityLabel("Skip \(check)")
             .accessibilityInputLabels(["Skip", "Skip \(check)"])
     }
@@ -130,6 +150,9 @@ struct FollowupsView: View {
     }
 
     private func act(_ f: Followup, _ op: String) async {
+        guard !acting.contains(f.id) else { return }
+        acting.insert(f.id)
+        defer { acting.remove(f.id) }
         do {
             let _: OKResponse = try await api.call("save_followup", body: ["id": f.id, "op": op])
             await load()
@@ -137,12 +160,12 @@ struct FollowupsView: View {
             // after the focus move so it is not cut off.
             dueHeaderFocused = true
             announceAfterDismiss(op == "skip" ? "Follow-up skipped." : "Follow-up moved out two weeks.")
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 
     private func load() async {
         do { error = nil; data = try await api.call("followups") }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -150,15 +173,22 @@ struct RecordFollowupSheet: View {
     @EnvironmentObject var api: API
     @Environment(\.dismiss) private var dismiss
     let followup: Followup
-    let onSaved: () -> Void
+    /// Called with the server's warning when the follow-up was recorded but its task could not
+    /// be created, or nil.
+    let onSaved: (String?) -> Void
 
-    @State private var inUse = "yes"
+    /// "yes", "no" or "" (Unknown); nil until the user answers. Nothing is chosen for them: an
+    /// untouched answer was saved as "in use" for good and counted in the retention figure.
+    @State private var inUse: String?
     @State private var satisfaction = 0
     @State private var barriers = ""
     @State private var notes = ""
     @State private var busy = false
     @State private var error: String?
     @State private var confirmingDiscard = false
+    /// "No" also adds a case note and a task, and a recorded follow-up cannot be changed, so
+    /// that answer is confirmed first (as on the website).
+    @State private var confirmingNotInUse = false
 
     /// Typed text that closing the sheet would throw away.
     private var hasTypedText: Bool {
@@ -172,10 +202,11 @@ struct RecordFollowupSheet: View {
                 if let error { ErrorBanner(message: error) }
                 Section(followup.equipmentName) {
                     Text(followup.clientName).foregroundStyle(Color.secondaryText)
-                    // A segmented picker shows (and speaks) no label of its own.
-                    Text("Still in use?")
+                    // A segmented picker shows (and speaks) no label of its own. No segment is
+                    // selected until one is chosen.
+                    Text("Still in use? (required)")
                     Picker("Still in use?", selection: $inUse) {
-                        Text("Yes").tag("yes"); Text("No").tag("no"); Text("Unknown").tag("")
+                        Text("Yes").tag("yes" as String?); Text("No").tag("no" as String?); Text("Unknown").tag("" as String?)
                     }.pickerStyle(.segmented)
                     // Each rating says what it means, and "not rated" is a word, not a dash.
                     Picker("Satisfaction", selection: $satisfaction) {
@@ -192,13 +223,20 @@ struct RecordFollowupSheet: View {
                     }
                 }
             }
+            .confirmationDialog("Record that \(followup.equipmentName) is no longer in use by \(followup.clientName)? This adds a case note and a follow-up task, and a recorded follow-up cannot be changed.",
+                                isPresented: $confirmingNotInUse, titleVisibility: .visible) {
+                Button("Record as not in use") { Task { await save() } }
+                Button("Go back", role: .cancel) {}
+            }
             .navigationTitle("Record follow-up")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // Not while saving: the result (or a failure) must be shown on this sheet.
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { requestClose() }.disabled(busy) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }.disabled(busy)
+                    Button("Save") { if inUse == "no" { confirmingNotInUse = true } else { Task { await save() } } }
+                        .disabled(busy || inUse == nil)
+                        .accessibilityHint(inUse == nil ? "Answer Still in use first." : "")
                 }
             }
             // A swipe down cannot close the sheet while saving or once text has been typed;
@@ -229,14 +267,29 @@ struct RecordFollowupSheet: View {
     }
 
     private func save() async {
+        guard let inUse else { return }
         busy = true; error = nil
         var body: [String: Any] = ["id": followup.id, "op": "complete", "in_use": inUse, "barriers": barriers, "notes": notes]
         if satisfaction > 0 { body["satisfaction"] = satisfaction }
         do {
-            let _: OKResponse = try await api.call("save_followup", body: body)
+            let r: SaveFollowupResponse = try await api.call("save_followup", body: body)
             // The list announces the result once this sheet has gone (a message posted while it
             // is still open is cut off when it closes).
-            onSaved(); dismiss()
-        } catch { self.error = error.localizedDescription; busy = false }
+            onSaved(r.warning); dismiss()
+        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+    }
+}
+
+/// save_followup's reply: `warning` says the follow-up was recorded but its task could not be
+/// created (absent on older servers and when nothing went wrong). Tolerant: the follow-up is
+/// recorded once the server says ok, so an unexpected shape here must not be shown as a
+/// failure that invites recording it again.
+struct SaveFollowupResponse: Decodable {
+    let warning: String?
+    private enum CodingKeys: String, CodingKey { case warning }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        let text = try? c.decodeIfPresent(String.self, forKey: .warning)
+        warning = (text ?? "").isEmpty ? nil : text
     }
 }

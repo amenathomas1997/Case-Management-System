@@ -75,7 +75,7 @@ page_header('Documentation audit', $user, 'compliance');
   <tbody>
   <?php foreach ($withFindings as [$c, $f]): ?>
     <tr>
-      <td><a href="client.php?id=<?= (int)$c['id'] ?>"><?= h($c['name']) ?></a></td>
+      <th scope="row"><a href="client.php?id=<?= (int)$c['id'] ?>"><?= h($c['name']) ?></a></th>
       <td><ul style="margin:0;padding-left:1.1rem">
         <?php foreach ($f as $finding): ?><li><?= h($finding) ?></li><?php endforeach; ?>
       </ul></td>

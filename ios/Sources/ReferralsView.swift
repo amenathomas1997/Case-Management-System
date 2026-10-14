@@ -139,6 +139,8 @@ struct ConvertReferralResponse: Decodable {
     let ok: Bool
     let counselorEmailHeld: Bool?
     let clientEmailHeld: Bool?
+    /// True (3.0.21 servers) when the client's email was copied but waits for staff to confirm it.
+    let clientEmailUnconfirmed: Bool?
 }
 
 struct ReferralDetailResponse: Decodable {
@@ -159,12 +161,16 @@ struct StaffMember: Decodable, Identifiable {
     let name: String
     /// Whether the person may work the referral queue (nil from a server that does not say).
     let canReferrals: Bool?
-    private enum CodingKeys: String, CodingKey { case id, name, canReferrals }
+    /// Whether the person may open client records, so only they are offered as a client's
+    /// assigned instructor (nil from a server that does not say).
+    let canClients: Bool?
+    private enum CodingKeys: String, CodingKey { case id, name, canReferrals, canClients }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id)
         name = (try? c.decode(String.self, forKey: .name)) ?? ""
         canReferrals = try? c.decodeIfPresent(Bool.self, forKey: .canReferrals)
+        canClients = try? c.decodeIfPresent(Bool.self, forKey: .canClients)
     }
 }
 struct StaffResponse: Decodable { let staff: [StaffMember] }
@@ -260,7 +266,7 @@ struct ReferralsView: View {
             total = response.total
             loaded = true
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }
@@ -289,6 +295,9 @@ struct ReferralDetailView: View {
     /// After Mark as reviewed or Convert removes the button VoiceOver was on, VoiceOver is put
     /// on the referral's status rather than left wherever it lands.
     @AccessibilityFocusState private var statusFocused: Bool
+    /// After a hand-off removes every row (and the picker VoiceOver was on), VoiceOver is put
+    /// on the confirmation, the only row left.
+    @AccessibilityFocusState private var confirmationFocused: Bool
 
     var body: some View {
         List {
@@ -296,6 +305,7 @@ struct ReferralDetailView: View {
             if let confirmation {
                 Text(confirmation).font(.callout.weight(.medium)).foregroundStyle(Color.brandTeal)
                     .listRowSeparator(.hidden)
+                    .accessibilityFocused($confirmationFocused)
             }
             if let detail, !handedOff {
                 // As on the website: anyone this might already be, before converting.
@@ -494,7 +504,9 @@ struct ReferralDetailView: View {
                 staff = s.staff
             }
         } catch {
-            self.error = error.localizedDescription
+            // Said as well as shown: the banner is the list's first row, not drawn (or heard)
+            // while the person is down at the actions.
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 
@@ -514,14 +526,20 @@ struct ReferralDetailView: View {
                 message += " It is now on their caseload and leaves your list."
                 handedOff = true
                 confirmation = message
-                announce(message)
+                onChanged()
+                busy = false
+                // The picker VoiceOver was on is gone with the other rows: VoiceOver is put on the
+                // confirmation, which reads it (announced before that, the focus move cut it off).
+                try? await Task.sleep(nanoseconds: 150_000_000)   // let the remaining row appear first
+                confirmationFocused = true
+                return
             } else {
                 confirmation = message
                 announce(message)
                 await load()
             }
             onChanged()
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
 
@@ -536,7 +554,7 @@ struct ReferralDetailView: View {
             onChanged()
             busy = false
             await confirmAfterReload(confirmation!)
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
 
@@ -566,12 +584,15 @@ struct ReferralDetailView: View {
             if r.clientEmailHeld == true {
                 message += " The referral's client email was not one valid address, so it was left off the client record."
             }
+            if r.clientEmailUnconfirmed == true {
+                message += " The client's email is kept unconfirmed: no reminders, surveys or portal link go to it until it is confirmed on the client's record."
+            }
             confirmation = message
             await load()
             onChanged()
             busy = false
             await confirmAfterReload(confirmation!)
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
 }

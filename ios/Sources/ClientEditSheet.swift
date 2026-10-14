@@ -4,6 +4,9 @@ struct ClientEditSheet: View {
     @EnvironmentObject var api: API
     @Environment(\.dismiss) private var dismiss
     let existing: ClientInfo?          // nil = create new client
+    /// The stored client email is unconfirmed (it came from the public referral form):
+    /// clients.email_verified is false. Nothing is emailed to it until staff confirm it.
+    private let emailUnconfirmed: Bool
     /// The saved client's id and the result to tell the user. The presenter shows it and
     /// announces it once the sheet has gone: closing the sheet moves VoiceOver focus, which
     /// would cut off an announcement made from here.
@@ -29,14 +32,20 @@ struct ClientEditSheet: View {
     @State private var a11yPrimaryTech = ""
     @State private var a11yContact = ""
     @State private var a11yNotes = ""
+    /// Staff confirmed the unconfirmed client email with the client (sent as email_verified).
+    @State private var confirmEmail = false
     @State private var busy = false
     @State private var error: String?
 
     /// The form is filled from the record before it is first drawn, so it is never shown blank
     /// (and can't be saved with defaults) while the staff list is still loading.
-    init(existing: ClientInfo?, onSaved: @escaping (_ clientId: Int, _ message: String) -> Void) {
+    /// `emailVerified`: the record's email_verified (nil from a server that does not report it).
+    init(existing: ClientInfo?, emailVerified: Bool? = nil,
+         onSaved: @escaping (_ clientId: Int, _ message: String) -> Void) {
         self.existing = existing
         self.onSaved = onSaved
+        emailUnconfirmed = emailVerified == false
+            && !(existing?.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         guard let existing else { return }
         _name = State(initialValue: existing.name)
         _phone = State(initialValue: existing.phone ?? "")
@@ -58,18 +67,36 @@ struct ClientEditSheet: View {
 
     private var statusChanged: Bool { existing != nil && existing?.status != status }
 
+    /// The unconfirmed email is still the one in the field: it can be confirmed here. A different
+    /// address typed by staff is confirmed by the server when saved.
+    private var offersEmailConfirmation: Bool {
+        emailUnconfirmed && email.trimmingCharacters(in: .whitespacesAndNewlines)
+            == (existing?.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Only staff with client access can be assigned a client (save_client refuses anyone else,
+    /// as the website's list does); an older server that does not say keeps everyone offered.
+    private var clientStaff: [StaffMember] { staff.filter { $0.canClients != false } }
+
+    /// The row for a current assignee the list does not offer.
+    private var currentAssigneeLabel: String {
+        if staff.isEmpty { return "Current instructor" }
+        if let member = staff.first(where: { $0.id == assignedTo }) { return "\(member.name) (current, no client access)" }
+        return "Current instructor (inactive)"
+    }
+
     /// Every field as text, to tell whether anything was changed since the form opened.
     private var values: [String] {
         [name, phone, email, address, status, statusNote, counselorName, counselorAgency,
          counselorEmail, counselorPhone, String(assignedTo), clientType, a11yScreenReader ? "1" : "0",
-         a11yFormat, a11yPrimaryTech, a11yContact, a11yNotes]
+         a11yFormat, a11yPrimaryTech, a11yContact, a11yNotes, confirmEmail ? "1" : "0"]
     }
     /// The same fields as the form opens with them (see init and the property defaults).
     private static func values(of c: ClientInfo?) -> [String] {
         [c?.name ?? "", c?.phone ?? "", c?.email ?? "", c?.address ?? "", c?.status ?? "Pending Assessment", "",
          c?.counselorName ?? "", c?.counselorAgency ?? "", c?.counselorEmail ?? "", c?.counselorPhone ?? "",
          String(c?.assignedTo ?? 0), c?.clientType ?? "VR", (c?.a11yScreenReader ?? false) ? "1" : "0",
-         c?.a11yFormat ?? "", c?.a11yPrimaryTech ?? "", c?.a11yContact ?? "", c?.a11yNotes ?? ""]
+         c?.a11yFormat ?? "", c?.a11yPrimaryTech ?? "", c?.a11yContact ?? "", c?.a11yNotes ?? "", "0"]
     }
     private var hasChanges: Bool { values != Self.values(of: existing) }
     @State private var askingDiscard = false
@@ -82,6 +109,17 @@ struct ClientEditSheet: View {
                     CaptionedField(label: "Full name (required)", text: $name, prompt: "Full name")
                     CaptionedField(label: "Phone", text: $phone, keyboard: .phonePad)
                     CaptionedField(label: "Email", text: $email, keyboard: .emailAddress).textInputAutocapitalization(.never)
+                    // An address from the public referral form, not yet checked: said in words,
+                    // with the confirmation beside it (as the counselor email on the website).
+                    if offersEmailConfirmation {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Email not yet confirmed").font(.callout.weight(.semibold))
+                            Text("This address came from the public referral form and has not been checked, so no session reminders, outcome survey or portal invitation go to it yet. Confirm it with the client first. Typing a different address also confirms the new one.")
+                                .font(.caption).foregroundStyle(Color.secondaryText)
+                            Toggle("Confirmed with the client", isOn: $confirmEmail)
+                                .accessibilityHint("Confirms \(email.trimmingCharacters(in: .whitespacesAndNewlines)) as the client's email address when you save.")
+                        }
+                    }
                     CaptionedField(label: "Address", text: $address)
                 }
                 Section("Case status") {
@@ -93,7 +131,7 @@ struct ClientEditSheet: View {
                         Text("Recorded in the audit history.").font(.caption).foregroundStyle(Color.secondaryText)
                         // Said before Save: the email can't be called back once it has gone.
                         if status == "Closed - Rehabilitated" {
-                            Label("Saving with this status emails the client an outcome survey, if they have an email address and were not sent one in the last 30 days.",
+                            Label("Saving with this status emails the client an outcome survey, if they have a confirmed email address and were not sent one in the last 30 days.",
                                   systemImage: "envelope")
                                 .font(.callout)
                         }
@@ -115,10 +153,10 @@ struct ClientEditSheet: View {
                             Text("Unassigned").tag(0)
                             // The current assignee stays selectable while the list loads, or when
                             // that person is no longer active.
-                            if assignedTo != 0 && !staff.contains(where: { $0.id == assignedTo }) {
-                                Text(staff.isEmpty ? "Current instructor" : "Current instructor (inactive)").tag(assignedTo)
+                            if assignedTo != 0 && !clientStaff.contains(where: { $0.id == assignedTo }) {
+                                Text(currentAssigneeLabel).tag(assignedTo)
                             }
-                            ForEach(staff) { member in Text(member.name).tag(member.id) }
+                            ForEach(clientStaff) { member in Text(member.name).tag(member.id) }
                         }
                     }
                 }
@@ -144,6 +182,9 @@ struct ClientEditSheet: View {
                         ForEach(a11yContacts, id: \.self) { Text($0).tag($0) }
                     }
                     CaptionedField(label: "Access notes", text: $a11yNotes, lines: 2...5)
+                    // As on the website: the client reads (and can change) these on the portal.
+                    Text("Shown to the client on their portal, where they can also change it. Keep internal remarks in case notes.")
+                        .font(.caption).foregroundStyle(Color.secondaryText)
                 }
             }
             .navigationTitle(existing == nil ? "New client" : "Edit client")
@@ -173,7 +214,7 @@ struct ClientEditSheet: View {
             let response: StaffResponse = try await api.call("staff")
             staff = response.staff
         } catch {
-            staffError = "Could not load the staff list, so an instructor can't be chosen. \(error.localizedDescription)"
+            showFormError("Could not load the staff list, so an instructor can't be chosen. \(error.localizedDescription)", in: &staffError)
         }
     }
 
@@ -203,7 +244,7 @@ struct ClientEditSheet: View {
                     surveySent = try? c.decodeIfPresent(Bool.self, forKey: .surveySent)
                 }
             }
-            let result: SaveResult = try await api.call("save_client", body: [
+            var body: [String: Any] = [
                 "id": existing?.id ?? 0,
                 "name": name, "phone": phone, "email": email, "address": address,
                 "status": status, "status_note": statusNote, "assigned_to": assignedTo,
@@ -212,7 +253,12 @@ struct ClientEditSheet: View {
                 "client_type": clientType, "a11y_screen_reader": a11yScreenReader ? 1 : 0,
                 "a11y_format": a11yFormat, "a11y_primary_tech": a11yPrimaryTech,
                 "a11y_contact": a11yContact, "a11y_notes": a11yNotes,
-            ])
+            ]
+            // Sent only when staff turned the confirmation on; otherwise the server keeps the
+            // stored state (and confirms an address staff typed themselves).
+            let emailStaysUnconfirmed = offersEmailConfirmation && !confirmEmail
+            if offersEmailConfirmation && confirmEmail { body["email_verified"] = true }
+            let result: SaveResult = try await api.call("save_client", body: body)
             // Saving an archived record with an open status re-opens it, as on the website.
             var message = result.unarchived
                 ? "Client saved. The archived record was re-opened and is back in the active client lists."
@@ -222,13 +268,15 @@ struct ClientEditSheet: View {
             // surveyed, so that is not reported as a failure.
             if result.surveySent == true {
                 message += " An outcome survey was emailed to the client."
+            } else if result.surveySent == false && emailStaysUnconfirmed {
+                message += " No outcome survey was emailed, because the client's email address is not yet confirmed."
             } else if result.surveySent == false && email.trimmingCharacters(in: .whitespaces).contains("@") {
                 message += " The outcome survey email could not be sent. Close the case again later or check the email settings."
             }
             onSaved(result.clientId > 0 ? result.clientId : (existing?.id ?? 0), message)
             dismiss()
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
     }
@@ -422,7 +470,7 @@ struct AddAssessmentSheet: View {
             onSaved()
             dismiss()
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
     }

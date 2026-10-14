@@ -127,13 +127,14 @@ $db = db();
 $existing = $db->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
 if ($existing) throw new RuntimeException('Test database must be empty.');
 try {
-    $db->exec('CREATE TABLE groups (id INT PRIMARY KEY, perms VARCHAR(255)) ENGINE=InnoDB');
+    // own_caseload_only: change_user_access() keeps an administrator who sees every caseload.
+    $db->exec('CREATE TABLE `groups` (id INT PRIMARY KEY, perms VARCHAR(255), own_caseload_only TINYINT(1) NOT NULL DEFAULT 0) ENGINE=InnoDB');
     $db->exec('CREATE TABLE users (id INT PRIMARY KEY, role VARCHAR(20), group_id INT NULL, is_active TINYINT) ENGINE=InnoDB');
     $db->exec('CREATE TABLE clients (id INT PRIMARY KEY, assigned_to INT NULL) ENGINE=InnoDB');
     $db->exec('CREATE TABLE equipment (id INT PRIMARY KEY, status VARCHAR(20)) ENGINE=InnoDB');
     $db->exec('CREATE TABLE equipment_loans (id INT AUTO_INCREMENT PRIMARY KEY, equipment_id INT, client_id INT, loaned_at DATE, returned_at DATE NULL, due_date DATE NULL, notes TEXT NULL, created_by INT, FOREIGN KEY (equipment_id) REFERENCES equipment(id), FOREIGN KEY (client_id) REFERENCES clients(id)) ENGINE=InnoDB');
     $db->exec("CREATE TABLE equipment_followups (id INT AUTO_INCREMENT PRIMARY KEY, loan_id INT NOT NULL, client_id INT NOT NULL, equipment_id INT NOT NULL, interval_days INT NOT NULL, due_date DATE NOT NULL, status ENUM('Pending','Completed','Skipped') NOT NULL DEFAULT 'Pending', completed_at DATETIME NULL, notes TEXT NULL, FOREIGN KEY (loan_id) REFERENCES equipment_loans(id)) ENGINE=InnoDB");
-    $db->exec("INSERT INTO groups VALUES (1, 'clients;equipment'), (2, 'admin;clients')");
+    $db->exec("INSERT INTO `groups` (id, perms) VALUES (1, 'clients;equipment'), (2, 'admin;clients')");
     $db->exec("INSERT INTO users VALUES (1, 'admin', NULL, 1), (2, 'admin', NULL, 1), (3, 'instructor', NULL, 1)");
     $db->exec("INSERT INTO clients VALUES (1, 1), (2, 2); INSERT INTO equipment VALUES (1, 'Available'), (2, 'Available')");
     $db->exec("CREATE TABLE tasks (id INT AUTO_INCREMENT PRIMARY KEY, title VARCHAR(190), details TEXT, client_id INT NULL, referral_id INT NULL, assigned_to INT NULL, created_by INT NULL, auto_key VARCHAR(190) UNIQUE, due_date DATE NULL, status VARCHAR(20) DEFAULT 'Open', done_at DATETIME NULL, done_by INT NULL, FOREIGN KEY (client_id) REFERENCES clients(id)) ENGINE=InnoDB");
@@ -185,12 +186,16 @@ try {
     check($doneRow['status'] === 'Done' && (int)$doneRow['done_by'] === 3 && $doneRow['done_at'] === '2026-01-01 09:00:00', 'A repeated completion keeps who completed the task and when');
     check(!add_task('Invalid client', null, 999, null, null, 1, 1), 'Failed task insert returns failure');
     $db->exec("UPDATE tasks SET status = 'Open', due_date = CURDATE() WHERE id = " . $taskId);
+    // Open tasks that only an unescaped wildcard would match ('%' as any text, '_' as
+    // any one character): the counts below hold only while % and _ are searched literally.
+    $db->exec("INSERT INTO tasks (title, details, status) VALUES ('1000 units', NULL, 'Open'), ('literalXsearch', NULL, 'Open')");
     foreach (['100%' => 1, 'literal_' => 1, 'missing' => 0] as $query => $expected) {
         $params = [];
         $stmt = $db->prepare('SELECT COUNT(*) FROM tasks t WHERE 1=1' . task_filter_sql(task_filters(['q' => $query]), $params));
         $stmt->execute($params);
         check((int)$stmt->fetchColumn() === $expected, 'Task search handles ' . $query);
     }
+    $db->exec("DELETE FROM tasks WHERE title IN ('1000 units', 'literalXsearch')");
     foreach (['today' => 1, 'week' => 1, 'overdue' => 0, 'none' => 0] as $due => $expected) {
         $params = [];
         $stmt = $db->prepare('SELECT COUNT(*) FROM tasks t WHERE 1=1' . task_filter_sql(task_filters(['due' => $due]), $params));
@@ -218,6 +223,12 @@ try {
     $admin = (int)$db->query('SELECT id FROM users WHERE role="admin" AND group_id IS NULL')->fetchColumn();
     setGroup(3, $admin, 2);
     check((int)$db->query('SELECT group_id FROM users WHERE id=3')->fetchColumn() === 2, 'An instructor can acquire administrator access through a group');
+    // An administrator limited to their own caseload still counts as an administrator,
+    // but cannot remove the last one who sees every caseload.
+    $db->exec("INSERT INTO `groups` (id, perms, own_caseload_only) VALUES (3, 'clients;admin', 1)");
+    setGroup(3, $admin, 3);
+    check(denied(fn() => setGroup($admin, 3, 1)), 'A caseload-limited administrator cannot demote the only administrator who sees every caseload');
+    check($db->query("SELECT group_id FROM users WHERE id=$admin")->fetchColumn() === null, 'The refused demotion leaves that administrator unchanged');
     // Program cohorts (inc/program_access.php), as caseload-scoped user 1 (client 1
     // is theirs, client 2 is user 2's): the coordinator always sees their cohort;
     // anyone else only while every current member and every attendee is theirs.
@@ -237,6 +248,6 @@ try {
     $db->exec('INSERT INTO cohort_attendance VALUES (1, 2)');
     check(!cohort_accessible(3, 1), "A former member's recorded attendance still hides the cohort from other caseloads");
 } finally {
-    foreach (['cohort_attendance', 'cohort_sessions', 'cohort_members', 'cohorts', 'tasks', 'referrals', 'equipment_followups', 'equipment_loans', 'equipment', 'clients', 'users', 'groups'] as $table) $db->exec('DROP TABLE IF EXISTS ' . $table);
+    foreach (['cohort_attendance', 'cohort_sessions', 'cohort_members', 'cohorts', 'tasks', 'referrals', 'equipment_followups', 'equipment_loans', 'equipment', 'clients', 'users', 'groups'] as $table) $db->exec('DROP TABLE IF EXISTS `' . $table . '`');
 }
 echo "Audit regression checks passed.\n";

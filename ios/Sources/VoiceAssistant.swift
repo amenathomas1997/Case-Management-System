@@ -32,6 +32,15 @@ final class SpeechController: NSObject, ObservableObject {
             // (locking sends the app to the background, which stops everything), and hand
             // Auto-Lock back as soon as the assistant is idle.
             UIApplication.shared.isIdleTimerDisabled = phase != .idle
+            // While it is not idle, a watch stops it once nobody has tapped for a while.
+            if phase == .idle {
+                unattendedWatch?.invalidate()
+                unattendedWatch = nil
+            } else if unattendedWatch == nil {
+                unattendedWatch = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+                    Task { @MainActor in self?.stopIfUnattended() }
+                }
+            }
         }
     }
     @Published var partial = ""                 // live transcript while listening
@@ -92,6 +101,13 @@ final class SpeechController: NSObject, ObservableObject {
     private let synth = AVSpeechSynthesizer()
     private var speaking: ObjectIdentifier?     // the utterance whose end drives the next step
     private var silenceTimer: Timer?
+    /// The phone is kept awake while the assistant is busy (see phase), and nothing else ends a
+    /// listen in "Until I tap the microphone", nor the hands-free loop while people talk nearby.
+    /// So it stops once this long has passed since the last tap, typed request or answer button,
+    /// and an unattended phone can sleep and the app lock engage.
+    private static let unattendedLimit: TimeInterval = 180
+    private var lastTouchAt = Date()
+    private var unattendedWatch: Timer?
     private var heardSpeech = false
     private var pendingConfirm: PendingConfirm? {
         didSet {
@@ -214,6 +230,7 @@ final class SpeechController: NSObject, ObservableObject {
     /// The big button: start, finish, or — while a reply is being spoken — cut it short and listen.
     func micTapped() async {
         typedTurn = false
+        lastTouchAt = Date()
         switch phase {
         case .listening, .confirming:
             finishListening(submit: true)
@@ -425,6 +442,7 @@ final class SpeechController: NSObject, ObservableObject {
     /// The Accept and save / Decline buttons: the same as saying yes or no.
     func answerConfirm(_ accept: Bool) {
         guard pendingConfirm != nil, phase != .thinking else { return }
+        lastTouchAt = Date()
         stopAudio()
         stopSpeaking()
         partial = ""
@@ -438,6 +456,7 @@ final class SpeechController: NSObject, ObservableObject {
     func submitTyped(_ raw: String) {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, phase != .thinking else { return }
+        lastTouchAt = Date()
         stopAudio()
         stopSpeaking()
         partial = ""
@@ -445,6 +464,21 @@ final class SpeechController: NSObject, ObservableObject {
         typedTurn = true
         errorText = nil
         handle(text)
+    }
+
+    /// The watch set up in `phase`: the assistant has gone on with nobody touching the phone for
+    /// `unattendedLimit`. A reply being read out is let finish (a long note can take minutes);
+    /// the next check after it stops the loop.
+    private func stopIfUnattended() {
+        guard phase != .idle, phase != .speaking,
+              Date().timeIntervalSince(lastTouchAt) >= Self.unattendedLimit else { return }
+        // One notice: the stop, and a confirmation that was waiting.
+        let dropped = pendingConfirm
+        pendingConfirm = nil
+        cancelAll()
+        noteAside("Stopped after 3 minutes without a tap, so the phone can lock."
+                  + (dropped != nil ? " " + droppedText(dropped) : "")
+                  + " Tap the microphone to carry on.")
     }
 
     /// The Stop button while a reply is read out. A confirmation being asked keeps waiting for
@@ -498,7 +532,9 @@ final class SpeechController: NSObject, ObservableObject {
 
     /// Reads a spoken answer to "shall I save this?". Whole words only, negatives first: any
     /// "no"-word cancels whatever else was said ("no, don't save it", "that's not correct").
-    /// A yes only counts in a short answer (four words or fewer). Everything else is unclear.
+    /// A yes only counts in a short answer (four words or fewer) made only of yes-words and
+    /// the few words said around them ("yes please", "okay, go ahead", "that's correct").
+    /// Everything else is unclear, so the question is asked again.
     nonisolated static func confirmAnswer(_ utterance: String) -> ConfirmAnswer {
         let lowered = utterance.lowercased().replacingOccurrences(of: "’", with: "'")
         let tokens = lowered.split(whereSeparator: { !($0.isLetter || $0.isNumber || $0 == "'") }).map(String.init)
@@ -509,14 +545,17 @@ final class SpeechController: NSObject, ObservableObject {
         // "don't", "isn't", "can't", "wasn't" …: every "-n't" is a negative ("do not" is caught by "not").
         if tokens.contains(where: { $0.hasSuffix("n't") }) || words.contains(where: negatives.contains) { return .no }
 
-        guard words.count <= 4 else { return .unclear }
-        // A hedge or a question ("wait, which one?", "yes but…") is never taken as a yes (as on the web).
-        // "what's" / "whats" and the like count too, apostrophe or not ("Sure, what's that for?").
-        // "say" too: "say yes to save" is the end of our own question heard back, not an answer.
-        let hedges: Set<String> = ["wait", "hold", "hang", "which", "what", "who", "when", "where", "why", "how", "but", "actually", "hmm", "um", "say",
-                                   "whats", "whos", "whens", "wheres", "whys", "hows"]
-        if tokens.contains(where: { hedges.contains($0.replacingOccurrences(of: "'", with: "")) || hedges.contains(String($0.split(separator: "'", omittingEmptySubsequences: false).first ?? "")) }) { return .unclear }
+        // The recognizer adds punctuation: "Is it okay?" is a question, not an answer.
+        guard words.count <= 4, !utterance.contains("?") else { return .unclear }
+        // Every word must be on this list. A correction said with a yes ("OK, make it three",
+        // "yes, Tuesday instead", "correct the time"), a number, a hedge or a question ("wait,
+        // which one?", "sure, what's that for?") is never taken as a yes (as on the web). Nor is
+        // speech the microphone picks up from VoiceOver: "say yes to save" (the end of our own
+        // question heard back) or an earlier row read as "You said: Yes".
         let affirmatives: Set<String> = ["yes", "yeah", "yep", "ok", "okay", "sure", "confirm", "correct"]
+        let around: Set<String> = ["please", "thanks", "thank", "you", "go", "ahead", "do", "it", "save",
+                                   "that", "thats", "is", "right", "fine", "i", "im"]
+        guard words.allSatisfy({ affirmatives.contains($0) || around.contains($0) }) else { return .unclear }
         if words.contains(where: affirmatives.contains) { return .yes }
         let phrases = [["go", "ahead"], ["do", "it"], ["save", "it"]]
         for i in words.indices.dropLast() where phrases.contains([words[i], words[i + 1]]) { return .yes }
@@ -568,7 +607,10 @@ final class SpeechController: NSObject, ObservableObject {
     private func interpret(_ text: String, gen: Int) async {
         do {
             var body: [String: Any] = ["transcript": text]
-            if !history.isEmpty { body["history"] = Array(history.suffix(8)) }
+            // handle() has just remembered this request, which goes as the transcript: the
+            // history is the turns before it.
+            let earlier = history.dropLast()
+            if !earlier.isEmpty { body["history"] = Array(earlier.suffix(8)) }
             let r = try await api?.callDict("voice_command", body: body) ?? [:]
             guard gen == generation else { return }     // cancelled while waiting: say nothing
             dispatch(r)

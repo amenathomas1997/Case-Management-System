@@ -136,3 +136,11 @@ for (const length of [1, 10, 14, 20, 26, 40, 60, 62, 84, 100, 106, 107, 122, 140
 assert.deepEqual([...seen].sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 assert.match(win.QRCode.svg('Synthetic label'), /^<svg /);
 console.log('PASS: Generated symbols for versions 1-10 decode to the encoded text, with valid error correction');
+// equipment_labels.php writes svg() into innerHTML with a label typed by staff (an
+// equipment name), so the label must be escaped; and every image is named.
+const labelled = win.QRCode.svg('t', {label: '"><img src=x onerror=1>&'});
+assert.match(labelled, /role="img" aria-label="&quot;&gt;&lt;img src=x onerror=1&gt;&amp;"/);
+assert.ok(!labelled.includes('<img'));
+assert.match(win.QRCode.svg('t'), /role="img" aria-label="QR code"/);
+assert.match(win.QRCode.svg('t', {label: ''}), /role="img" aria-label="QR code"/);
+console.log('PASS: A QR image is named by its escaped label (or "QR code"), so a label can never add markup');

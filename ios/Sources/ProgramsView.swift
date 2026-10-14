@@ -58,7 +58,7 @@ struct ProgramsView: View {
     }
     private func load() async {
         do { error = nil; let r: CohortsResponse = try await api.call("cohorts"); rows = r.cohorts; loaded = true }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -76,64 +76,83 @@ struct CohortDetail: View {
     /// A sheet's success message, announced once the sheet has gone (see announceAfterDismiss).
     @State private var sheetResult: String?
     /// After an add, VoiceOver is put on the new student; after a removal, on the Students
-    /// heading (-1), since the row it was on is gone.
+    /// heading (-1), since the row it was on is gone (errorFocus: the error banner, after a failure).
     @AccessibilityFocusState private var focusedMember: Int?
+    private let errorFocus = -2
+    private let errorRow = "cohortError"
 
     var body: some View {
-        List {
-            if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
-            if let d = data {
-                Section {
-                    ForEach(d.members) { m in
-                        HStack {
-                            Text(m.name).accessibilityFocused($focusedMember, equals: m.id)
-                            Spacer()
-                            // A visible single-tap way to remove, as well as the swipe action below.
-                            Button("Remove") { pendingRemove = m }
-                                .buttonStyle(.bordered).controlSize(.large)
-                                .accessibilityLabel("Remove \(m.name) from the cohort")
-                                .accessibilityInputLabels(["Remove", "Remove \(m.name)"])
+        ScrollViewReader { proxy in
+            List {
+                if let error {
+                    ErrorBanner(message: error).listRowSeparator(.hidden)
+                        .id(errorRow)
+                        .accessibilityFocused($focusedMember, equals: errorFocus)
+                }
+                if let d = data {
+                    Section {
+                        ForEach(d.members) { m in
+                            HStack {
+                                Text(m.name).accessibilityFocused($focusedMember, equals: m.id)
+                                Spacer()
+                                // A visible single-tap way to remove, as well as the swipe action below.
+                                Button("Remove") { pendingRemove = m }
+                                    .buttonStyle(.bordered).controlSize(.large)
+                                    .accessibilityLabel("Remove \(m.name) from the cohort")
+                                    .accessibilityInputLabels(["Remove", "Remove \(m.name)"])
+                            }
+                            // Confirmed first (not a destructive-role button, which would take the
+                            // row off screen before the user has confirmed).
+                            .swipeActions(allowsFullSwipe: false) {
+                                Button { pendingRemove = m } label: { Text("Remove") }
+                                    .tint(Color.alertFill)   // white on #9B1C1C is 8.2:1 (system red was 3.55:1)
+                            }
                         }
-                        // Confirmed first (not a destructive-role button, which would take the
-                        // row off screen before the user has confirmed).
-                        .swipeActions(allowsFullSwipe: false) {
-                            Button { pendingRemove = m } label: { Text("Remove") }
-                                .tint(Color.alertFill)   // white on #9B1C1C is 8.2:1 (system red was 3.55:1)
+                        if !d.available.isEmpty {
+                            // Choosing a name only selects it; the button below adds the student, as
+                            // on the website.
+                            Picker("Student to add", selection: $addMember) {
+                                Text("Choose…").tag(nil as Int?)
+                                ForEach(d.available) { a in Text(a.name).tag(a.id as Int?) }
+                            }
+                            let chosen = d.available.first(where: { $0.id == addMember })
+                            Button {
+                                if let chosen { Task { await member(chosen.id, name: chosen.name, "add") } }
+                            } label: {
+                                Label(chosen.map { "Add \($0.name) to the cohort" } ?? "Add student", systemImage: "person.badge.plus")
+                            }
+                            .disabled(chosen == nil || addingMember)
+                            .accessibilityHint(chosen == nil ? "Choose a student to add first." : "")
+                        }
+                    } header: {
+                        Text("Students (\(d.members.count))").accessibilityFocused($focusedMember, equals: -1)
+                    }
+                    Section {
+                        Button { logSession = true } label: { Label("Log a group session", systemImage: "plus.circle") }
+                            .disabled(d.members.isEmpty)
+                    }
+                    Section("Recent sessions") {
+                        if d.sessions.isEmpty { Text("None yet.").foregroundStyle(Color.secondaryText) }
+                        ForEach(d.sessions) { s in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(s.activity).font(.body.weight(.semibold))
+                                Text("\(formatDate(s.sessionDate)) · \(s.durationMin) min · \(s.presentN) present").font(.caption).foregroundStyle(Color.secondaryText)
+                            }
                         }
                     }
-                    if !d.available.isEmpty {
-                        // Choosing a name only selects it; the button below adds the student, as
-                        // on the website.
-                        Picker("Student to add", selection: $addMember) {
-                            Text("Choose…").tag(nil as Int?)
-                            ForEach(d.available) { a in Text(a.name).tag(a.id as Int?) }
-                        }
-                        let chosen = d.available.first(where: { $0.id == addMember })
-                        Button {
-                            if let chosen { Task { await member(chosen.id, name: chosen.name, "add") } }
-                        } label: {
-                            Label(chosen.map { "Add \($0.name) to the cohort" } ?? "Add student", systemImage: "person.badge.plus")
-                        }
-                        .disabled(chosen == nil || addingMember)
-                        .accessibilityHint(chosen == nil ? "Choose a student to add first." : "")
-                    }
-                } header: {
-                    Text("Students (\(d.members.count))").accessibilityFocused($focusedMember, equals: -1)
+                } else if error == nil { ProgressView() }
+            }
+            // The banner is the list's first row: a failed add or removal further down would
+            // otherwise leave it off screen, where a List never draws it, so it was neither seen
+            // nor heard. Scroll it into view once it exists, then put VoiceOver on it.
+            .onChange(of: error) { message in
+                guard message != nil else { return }
+                DispatchQueue.main.async { withAnimation { proxy.scrollTo(errorRow, anchor: .top) } }
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    focusedMember = errorFocus
                 }
-                Section {
-                    Button { logSession = true } label: { Label("Log a group session", systemImage: "plus.circle") }
-                        .disabled(d.members.isEmpty)
-                }
-                Section("Recent sessions") {
-                    if d.sessions.isEmpty { Text("None yet.").foregroundStyle(Color.secondaryText) }
-                    ForEach(d.sessions) { s in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(s.activity).font(.body.weight(.semibold))
-                            Text("\(formatDate(s.sessionDate)) · \(s.durationMin) min · \(s.presentN) present").font(.caption).foregroundStyle(Color.secondaryText)
-                        }
-                    }
-                }
-            } else if error == nil { ProgressView() }
+            }
         }
         .navigationTitle(data?.cohort.name ?? "Cohort")
         .navigationBarTitleDisplayMode(.inline)
@@ -160,7 +179,7 @@ struct CohortDetail: View {
     }
     private func load() async {
         do { error = nil; data = try await api.call("cohort", query: ["id": String(id)]) }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
     private func member(_ clientId: Int, name: String, _ op: String) async {
         if op == "add" {
@@ -179,7 +198,7 @@ struct CohortDetail: View {
             focusedMember = op == "add" ? clientId : -1
             announceAfterDismiss(op == "add" ? "\(name) added to the cohort." : "\(name) removed from the cohort.")
         }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -196,8 +215,10 @@ struct CohortSessionSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            // The error banner is the form's first row; it is scrolled into view and given
+            // VoiceOver focus when a problem is reported (see ErrorFocusForm): Log is usually
+            // pressed with the attendance list and Notes scrolled into view.
+            ErrorFocusForm(error: error) {
                 Picker("Activity", selection: $activity) { ForEach(preetsActivities, id: \.self) { Text($0) } }
                 DatePicker("Date", selection: $date, displayedComponents: .date)
                 // Any whole number of minutes, as the server and website accept (a 50-minute class
@@ -253,7 +274,7 @@ struct CohortSessionSheet: View {
         busy = true; error = nil
         // The cohort screen announces the result once this sheet has gone.
         do { let _: OKResponse = try await api.call("log_cohort_session", body: ["cohort_id": cohortId, "activity": activity, "session_date": APIDate.day(date), "duration_min": duration, "topic": topic, "notes": notes, "present": Array(present)]); onDone(); dismiss() }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -262,20 +283,31 @@ struct CohortNewSheet: View {
     @Environment(\.dismiss) private var dismiss
     let onDone: () -> Void
     @State private var name = ""; @State private var school = ""; @State private var busy = false; @State private var error: String?
+    @State private var askingDiscard = false
+    private var hasChanges: Bool {
+        [name, school].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            // The error banner is the form's first row; it is scrolled into view and given
+            // VoiceOver focus when a problem is reported (see ErrorFocusForm).
+            ErrorFocusForm(error: error) {
                 // Visible names that stay once the fields are filled; the required one says so.
                 CaptionedField(label: "Cohort name (required)", text: $name)
                 CaptionedField(label: "School / district", text: $school)
             }
             .navigationTitle("New cohort").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                // Not while saving: the cohort would still be created, with no word of it here.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
                 // Left enabled: a missing name is explained by the error banner, not a dimmed button.
                 ToolbarItem(placement: .confirmationAction) { Button("Create") { Task { await submit() } }.disabled(busy) }
             }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this new cohort?",
+                                 asking: $askingDiscard) { dismiss() }
         }
     }
     private func submit() async {
@@ -285,6 +317,6 @@ struct CohortNewSheet: View {
         busy = true; error = nil
         // The programs list announces the result once this sheet has gone.
         do { let _: OKResponse = try await api.call("add_cohort", body: ["name": name, "school": school]); onDone(); dismiss() }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

@@ -90,7 +90,7 @@ struct MessagesView: View {
             let r: MessageThreadSummaries = try await api.call("message_threads")
             threads = r.threads
             loaded = true
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -149,7 +149,7 @@ struct MessageClientPicker: View {
             }
         } catch {
             guard q == search else { return }
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }
@@ -172,6 +172,10 @@ struct MessageThreadView: View {
     @State private var sending = false
     @State private var loaded = false
     @AccessibilityFocusState private var focusedMessage: Int?
+    /// By channel, a reply whose sending was not confirmed, with the idempotency key it was sent
+    /// with: sending the same text again reuses the key, so a server that recognises it does not
+    /// save the message twice (changed text is a new message with a new key).
+    @State private var unconfirmed: [String: (text: String, key: String)] = [:]
 
     /// `startChannel` is the conversation shown first ("client" or "counselor").
     init(clientId: Int, clientName: String, startChannel: String = "client", drafts: Binding<[String: String]>? = nil) {
@@ -320,9 +324,12 @@ struct MessageThreadView: View {
         sending = true; error = nil; notice = nil
         let target = channel
         let text = draftText(target)
+        let key = unconfirmed[target].flatMap { $0.text == text ? $0.key : nil } ?? UUID().uuidString
+        unconfirmed[target] = (text: text, key: key)
         do {
             let r: PostMessageResponse = try await api.call("post_message",
-                body: ["client_id": clientId, "channel": target, "body": text])
+                body: ["client_id": clientId, "channel": target, "body": text, "idem_key": key])
+            unconfirmed[target] = nil
             if draftText(target) == text { setDraft(target, "") }
             await load()
             if r.delivered == false {
@@ -334,6 +341,11 @@ struct MessageThreadView: View {
             } else {
                 announce("Message sent")
             }
+        } catch APIError.network {
+            // A lost reply can come after the server has saved the message, so "could not reach
+            // the server" invited sending it twice: show the thread as it now stands instead.
+            if target == channel { await load() }
+            self.error = "The connection dropped while sending, so the message may or may not have been sent. Check the conversation for it before sending it again; your text is still in the message box."
         } catch { self.error = error.localizedDescription }
         sending = false
     }

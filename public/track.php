@@ -46,6 +46,12 @@ if (isset($_GET['tpl_search_json'])) {
 
 /* ---- POST: add SMART goal ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_goal'])) {
+    // The same form sent twice (Enter pressed again while it loads) adds the goal once.
+    $goalKey = web_idem_key($_POST);
+    if (web_once_get($goalKey) !== null) {
+        flash('This goal was already added (the form was sent twice), so it was saved once.', 'info');
+        redirect("track.php?id=$id#goals");
+    }
     // A field posted as an array (name[]=) is treated as blank, never a TypeError.
     $specific = is_string($_POST['specific_goal'] ?? null) ? trim($_POST['specific_goal']) : '';
     $metric = is_string($_POST['measurable_metric'] ?? null) ? trim($_POST['measurable_metric']) : '';
@@ -69,6 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_goal'])) {
         // A goal created as Achieved is complete; any other status starts at 0%.
         db()->prepare('INSERT INTO smart_goals (track_id, specific_goal, measurable_metric, focus_area, status, progress_pct, target_date) VALUES (?,?,?,?,?,?,?)')
             ->execute([$id, $specific, $metric, $focus ?: null, $newStatus, $newStatus === 'Achieved' ? 100 : 0, $target]);
+        web_once_set($goalKey, (int)db()->lastInsertId());
         audit($user['id'], 'goal.add', 'track', $id);
         flash('SMART goal added.');
     }
@@ -127,6 +134,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_goal'])) {
 
 /* ---- POST: log hours ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
+    // The same form sent twice (Enter pressed again while it loads) is logged once:
+    // its key is stored in work_logs.idem_key, as the app's entries are.
+    $logKey = web_idem_key($_POST);
+    $logDup = db()->prepare('SELECT id FROM work_logs WHERE idem_key = ?');
+    $logAlready = function () use ($logKey, $logDup, $id): void {
+        if ($logKey === null) return;
+        $logDup->execute([$logKey]);
+        if ($logDup->fetchColumn()) {
+            flash('These hours were already logged (the form was sent twice), so they were saved once.', 'info');
+            redirect("track.php?id=$id#logs");
+        }
+    };
+    $logAlready();
     // As for session completion (auto_log_session) and the voice assistant: work
     // is never snapshotted at a $0.00 rate. What was typed is kept.
     if ((float)$track['hourly_rate'] <= 0) {
@@ -170,11 +190,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
     $rsaOk = $rawRsa === '' || in_array($rawRsa, $offered, true);
     // The description is a TEXT column (65,535 bytes), as the app's API_TEXT_BYTES allows.
     $descTooLong = strlen($desc) > 65535;
-    if (!$date || $futureDate || $hours < 0.01 || $hours > 24 || $mileage < 0 || $mileage > 1000 || $desc === '' || $descTooLong || !$typeOk || !$rsaOk || !$goalOk) {
+    // Work dated outside the authorization, or on a track that is not Active, is
+    // logged only once "Log it anyway" is ticked (the authorization is being
+    // renewed or amended); the override is audited.
+    $authIssue = ($date && !$futureDate) ? work_authorization_issue($track, $date) : null;
+    $authAcked = ($_POST['auth_ack'] ?? '') === '1';
+    if (!$date || $futureDate || $hours < 0.01 || $hours > 24 || $mileage < 0 || $mileage > 1000 || $desc === '' || $descTooLong || !$typeOk || !$rsaOk || !$goalOk
+        || ($authIssue !== null && !$authAcked)) {
         keep_input();
         $lErrs = [];
         if (!$date) $lErrs['work_date'] = 'Enter a valid date with a four-digit year from 2000 on, no later than today.';
         elseif ($futureDate) $lErrs['work_date'] = 'The date ' . fmt_date($date) . ' is in the future. Hours are logged once a session has taken place: enter the session date, today or earlier.';
+        if ($authIssue !== null && !$authAcked) $lErrs['log_auth_ack'] = $authIssue . ' Check the date, or tick "Log it anyway" if the authorization is being renewed or amended.';
         if (!$rsaOk) $lErrs['visit_rsa_category'] = 'RSA service delivered this visit: choose one of the services listed for this track.';
         if (!$typeOk) $lErrs['visit_service_type'] = 'Service type: choose one of the service types listed.';
         if (!$goalOk) $lErrs['goal_id'] = 'Goal this session advanced: that goal is not on this track any more. Choose one of the goals listed, or None.';
@@ -198,16 +225,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
                 flash('Nothing was logged: this training track has no hourly rate yet. Enter its hourly billing rate under Edit track / authorization, then log the hours.', 'error');
                 redirect("track.php?id=$id#logs");
             }
-            db()->prepare('INSERT INTO work_logs (track_id, work_date, service_type, rsa_category, goal_id, hours, mileage, description, created_by, hourly_rate, mileage_rate) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+            db()->prepare('INSERT INTO work_logs (track_id, work_date, service_type, rsa_category, goal_id, hours, mileage, description, created_by, hourly_rate, mileage_rate, idem_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
                 ->execute([$id, $date, $visitType, $visitRsa, $goalId, $hours, $mileage, $desc, $user['id'],
-                    $rates['hourly_rate'], $rates['mileage_rate']]);
+                    $rates['hourly_rate'], $rates['mileage_rate'], $logKey]);
+            $logId = (int)db()->lastInsertId();
             db()->commit();
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
+            // Only a clash on the form's key means "already logged" (a concurrent copy won).
+            if ($e instanceof PDOException && (string)$e->getCode() === '23000') $logAlready();
             throw $e;
         }
         audit($user['id'], 'hours.log', 'track', $id, $hours . ' hrs on ' . $date . ' (' . $visitRsa . ')');
-        flash('Hours logged.');
+        if ($authIssue !== null) {
+            audit($user['id'], 'hours.auth_override', 'track', $id, 'log #' . $logId . ' logged anyway: ' . $authIssue);
+        }
+        flash('Hours logged.' . ($authIssue !== null ? ' ' . $authIssue . ' They were logged anyway, as you confirmed.' : ''));
         // Documentation reminder: active-training sessions should have homework.
         $hwq = db()->prepare('SELECT COUNT(*) FROM homework WHERE track_id = ?');
         $hwq->execute([$id]);
@@ -225,8 +258,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mark_billed'])) {
     $invId = generate_invoice($id, $user['id']);
     if ($invId) {
         audit($user['id'], 'invoice.create', 'invoice', $invId, 'from track #' . $id);
-        flash('Invoice created as a draft. Review it on the Invoices page or download the PDF.');
-        redirect('invoices.php');
+        // Name the new draft, and land on it alone (with a link back to every invoice).
+        $ni = db()->prepare('SELECT invoice_number, total_amount FROM invoices WHERE id = ?');
+        $ni->execute([$invId]);
+        $newInv = $ni->fetch() ?: ['invoice_number' => '', 'total_amount' => 0];
+        flash('Draft invoice ' . $newInv['invoice_number'] . ' for ' . $track['client_name'] . ', ' . fmt_money((float)$newInv['total_amount'])
+            . ', created. Review it below, then mark it submitted when it goes to the funder.');
+        redirect('invoices.php?id=' . $invId);
     }
     flash('No unbilled entries dated today or earlier to invoice.', 'error');
     redirect("track.php?id=$id#logs");
@@ -311,6 +349,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['hw_done'])) {
 
 /* ---- POST: expense ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_expense'])) {
+    // The same form sent twice is logged once: its key is stored in track_expenses.idem_key.
+    $expKey = web_idem_key($_POST);
+    $expDup = db()->prepare('SELECT id FROM track_expenses WHERE idem_key = ?');
+    $expAlready = function () use ($expKey, $expDup, $id): void {
+        if ($expKey === null) return;
+        $expDup->execute([$expKey]);
+        if ($expDup->fetchColumn()) {
+            flash('This expense was already logged (the form was sent twice), so it was saved once.', 'info');
+            redirect("track.php?id=$id#expenses");
+        }
+    };
+    $expAlready();
     $desc = is_string($_POST['exp_description'] ?? null) ? trim($_POST['exp_description']) : '';
     $amtRaw = is_string($_POST['exp_amount'] ?? null) ? trim($_POST['exp_amount']) : '';
     // Dollars and cents only (the column holds up to 9,999,999.99); never round or guess.
@@ -325,21 +375,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_expense'])) {
     if ($amt <= 0) $eErrs['exp_amount'] = 'Enter a positive amount in dollars and cents, such as 150.00.';
     if (!$expDate) $eErrs['exp_date'] = 'Enter a valid date with a four-digit year from 2000 on, no later than today, or leave it blank for today.';
     elseif ($expFuture) $eErrs['exp_date'] = 'The date ' . fmt_date($expDate) . ' is in the future. Log an expense once it has been incurred: enter its date, today or earlier.';
+    // As for hours: an expense outside the authorization, or on a track that is not
+    // Active, needs "Log it anyway", and the override is audited.
+    $expAuthIssue = ($expDate && !$expFuture) ? work_authorization_issue($track, $expDate) : null;
+    if ($expAuthIssue !== null && ($_POST['exp_auth_ack'] ?? '') !== '1') {
+        $eErrs['exp_auth_ack'] = $expAuthIssue . ' Check the date, or tick "Log it anyway" if the authorization is being renewed or amended.';
+    }
     if ($eErrs) {
         keep_input();
         keep_field_errors($eErrs);
     }
     else {
-        db()->prepare('INSERT INTO track_expenses (track_id, expense_date, description, amount, created_by) VALUES (?,?,?,?,?)')
-            ->execute([$id, $expDate, $desc, $amt, $user['id']]);
+        try {
+            db()->prepare('INSERT INTO track_expenses (track_id, expense_date, description, amount, created_by, idem_key) VALUES (?,?,?,?,?,?)')
+                ->execute([$id, $expDate, $desc, $amt, $user['id'], $expKey]);
+        } catch (PDOException $e) {
+            // Only a clash on the form's key means "already logged" (a concurrent copy won).
+            if ((string)$e->getCode() === '23000') $expAlready();
+            throw $e;
+        }
+        $expId = (int)db()->lastInsertId();
         audit($user['id'], 'expense.add', 'track', $id, fmt_money($amt) . ' ' . $desc);
-        flash('Expense logged — it will be included on the next invoice.');
+        if ($expAuthIssue !== null) {
+            audit($user['id'], 'expense.auth_override', 'track', $id, 'expense #' . $expId . ' logged anyway: ' . $expAuthIssue);
+        }
+        flash('Expense logged — it will be included on the next invoice.' . ($expAuthIssue !== null ? ' ' . $expAuthIssue . ' It was logged anyway, as you confirmed.' : ''));
     }
     redirect("track.php?id=$id#expenses");
 }
 
 /* ---- POST: add a case note attached to THIS track ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_track_note'])) {
+    // The same form sent twice saves the note (and its homework) once: its key is
+    // stored in client_notes.idem_key, as the app's notes are.
+    $noteKey = web_idem_key($_POST);
+    $noteDup = db()->prepare('SELECT id FROM client_notes WHERE idem_key = ?');
+    $noteAlready = function () use ($noteKey, $noteDup, $id): void {
+        if ($noteKey === null) return;
+        $noteDup->execute([$noteKey]);
+        if ($noteDup->fetchColumn()) {
+            flash('This note was already saved (the form was sent twice), so it was saved once.', 'info');
+            redirect("track.php?id=$id#notes");
+        }
+    };
+    $noteAlready();
     $subject = is_string($_POST['subject'] ?? null) ? trim($_POST['subject']) : '';
     $a = assemble_note($_POST);
     $tnErrs = [];
@@ -356,6 +435,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_track_note'])) {
                 . '. A note can hold 65,535 bytes, and accented letters and symbols count as 2 to 4 bytes each. Shorten it, or split it into two notes.';
         }
     }
+    // A ticked homework row's due date is checked as the Assign homework form checks
+    // it, and reported on that row, never dropped (the portal would show none).
+    $hwMaxYear = (int)date('Y') + 5;
+    foreach (posted_note_homework($_POST) as $k => $hwRow) {
+        if (!$hwRow['include'] || trim($hwRow['title']) === '' || trim($hwRow['due']) === '') continue;
+        if (!valid_date($hwRow['due'], 2000, $hwMaxYear)) {
+            $tnErrs['tn_hw_due_' . $k] = 'Homework item ' . ($k + 1) . ': enter a valid due date with a four-digit year from 2000 to ' . $hwMaxYear . ', or clear it.';
+        }
+    }
     if ($tnErrs) {
         keep_input();
         // Generated homework rows are arrays, which keep_input() leaves out: hold
@@ -363,11 +451,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_track_note'])) {
         if ($hwRows = posted_note_homework($_POST)) $_SESSION['tn_homework'] = ['track' => $id, 'rows' => $hwRows];
         keep_field_errors($tnErrs);
     } else {
-        db()->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-            ->execute([(int)$track['client_id'], $id, $a['type'], $a['format'], $subject, $a['body'], $a['cols'][0], $a['cols'][1], $a['cols'][2], $a['cols'][3], $user['id']]);
-        audit($user['id'], 'note.add', 'client', (int)$track['client_id'], 'track #' . $id . ': ' . $subject);
-        // Homework captured by the generator attaches to THIS track (shows in the portal).
-        $added = save_note_homework((int)$track['client_id'], $id, $_POST, (int)$user['id']);
+        // The note and its homework are saved together or not at all.
+        db()->beginTransaction();
+        try {
+            db()->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+                ->execute([(int)$track['client_id'], $id, $a['type'], $a['format'], $subject, $a['body'], $a['cols'][0], $a['cols'][1], $a['cols'][2], $a['cols'][3], $user['id'], $noteKey]);
+            audit($user['id'], 'note.add', 'client', (int)$track['client_id'], 'track #' . $id . ': ' . $subject);
+            // Homework captured by the generator attaches to THIS track (shows in the portal).
+            $added = save_note_homework((int)$track['client_id'], $id, $_POST, (int)$user['id']);
+            db()->commit();
+        } catch (Throwable $e) {
+            if (db()->inTransaction()) db()->rollBack();
+            // Only a clash on the form's key means "already saved" (a concurrent copy won).
+            if ($e instanceof PDOException && (string)$e->getCode() === '23000') $noteAlready();
+            throw $e;
+        }
         flash('Note added to this track.' . ($added ? ' ' . $added . ' homework item' . ($added === 1 ? '' : 's') . ' added to the client portal.' : ''));
     }
     redirect("track.php?id=$id#notes");
@@ -430,8 +528,10 @@ $notes = db()->prepare('SELECT n.*, u.name AS author FROM client_notes n LEFT JO
 $notes->execute([$id]); $notes = $notes->fetchAll();
 
 $r = track_rollup($id);
-$expiringSoon = $track['expiration_date'] && strtotime($track['expiration_date']) < strtotime('+30 days') && $track['status'] === 'Active';
-$authExpired = $expiringSoon && $track['expiration_date'] < date('Y-m-d');
+// An expired authorization is announced whatever the track's status (work logged on a
+// Completed track would still be billed under it); one about to expire, only while Active.
+$authExpired = $track['expiration_date'] && $track['expiration_date'] < date('Y-m-d');
+$expiringSoon = $authExpired || ($track['expiration_date'] && strtotime($track['expiration_date']) < strtotime('+30 days') && $track['status'] === 'Active');
 // One goal row's typed values after its progress form was refused (see update_goal).
 $gpDraft = $_SESSION['goal_progress_draft'] ?? null;
 unset($_SESSION['goal_progress_draft']);
@@ -534,8 +634,12 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   <h2 id="tnotes-h">Case notes for this track (<?= count($notes) ?>)</h2>
   <p class="muted">Notes recorded here are attached to this training track. General notes that aren't about a specific track belong on the client's <a href="client.php?id=<?= (int)$track['client_id'] ?>&amp;tab=notes">Client Notes</a> tab.</p>
   <form method="post" action="track.php?id=<?= $id ?>#notes" class="stacked" novalidate>
-    <?= csrf_field() ?>
-    <?= form_error_summary(['subject' => 'Subject', 'note_content' => 'Note'], ['subject' => 'tn_subject', 'note_content' => 'tn_body']) ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
+    <?php // A refused homework due date links to that row's date field.
+    $tnSumLabels = ['subject' => 'Subject', 'note_content' => 'Note'];
+    $tnSumAnchors = ['subject' => 'tn_subject', 'note_content' => 'tn_body'];
+    foreach (array_keys($tnHomework ?? []) as $k) { $tnSumLabels['tn_hw_due_' . $k] = 'Homework due date'; $tnSumAnchors['tn_hw_due_' . $k] = 'thwd' . (int)$k; }
+    echo form_error_summary($tnSumLabels, $tnSumAnchors); ?>
     <?php
     $tnCurFmt = $tnSections !== null ? $tnFormat : (old_in('note_format') ?: 'free');
     if (!isset(NOTE_FORMATS[$tnCurFmt])) $tnCurFmt = 'free';
@@ -580,7 +684,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
         <label for="thwi<?= (int)$k ?>">Instructions<?= $hwItem ?></label>
         <input type="text" id="thwi<?= (int)$k ?>" name="hw_instructions[<?= (int)$k ?>]" maxlength="1000" value="<?= h($hw['instructions']) ?>">
         <label for="thwd<?= (int)$k ?>">Due date (optional)<?= $hwItem ?></label>
-        <input type="date" id="thwd<?= (int)$k ?>" name="hw_due[<?= (int)$k ?>]" value="<?= h($hw['due']) ?>">
+        <input type="date" id="thwd<?= (int)$k ?>" name="hw_due[<?= (int)$k ?>]" value="<?= h($hw['due']) ?>" <?= field_aria('tn_hw_due_' . (int)$k) ?>><?= field_error('tn_hw_due_' . (int)$k) ?>
       </div>
       <?php endforeach; ?>
     </fieldset>
@@ -615,7 +719,9 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
         <?= $isStruct ? ' <span aria-hidden="true">·</span> <span class="badge badge-active">' . h($nfmt) . '</span>' : '' ?>
         <?= $tn['updated_at'] ? ' <span aria-hidden="true">·</span> edited ' . fmt_datetime($tn['updated_at']) : '' ?></p>
       <?php if ($isStruct): $labels = NOTE_FORMATS[$nfmt]; ?>
-        <dl class="props"><?php foreach ($nCols as $i => $v): if ($v === '') continue; ?><dt><?= h($labels[$i]) ?></dt><dd style="white-space:pre-wrap"><?= h($v) ?></dd><?php endforeach; ?></dl>
+        <?php // The narrative saved after the sections (see assemble_note()) is shown too. ?>
+        <dl class="props"><?php foreach ($nCols as $i => $v): if ($v === '') continue; ?><dt><?= h($labels[$i]) ?></dt><dd style="white-space:pre-wrap"><?= h($v) ?></dd><?php endforeach; ?>
+          <?php $narr = note_narrative($tn); if ($narr !== ''): ?><dt>Narrative</dt><dd style="white-space:pre-wrap"><?= h($narr) ?></dd><?php endif; ?></dl>
       <?php else: ?>
         <p style="white-space:pre-wrap"><?= h($tn['body']) ?></p>
       <?php endif; ?>
@@ -797,7 +903,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   </script>
   <?php endif; ?>
   <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['specific_goal' => 'Specific objective', 'measurable_metric' => 'Measurable criteria', 'focus_area' => 'Relevant focus area', 'target_date' => 'Target completion date']) ?>
     <div class="field"><label for="specific_goal">Specific objective <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <textarea id="specific_goal" name="specific_goal" required rows="2" <?= field_aria('specific_goal') ?><?= $goalTpl ? ' autofocus' : '' ?>><?= h($goalTpl['specific_goal'] ?? old_in('specific_goal')) ?></textarea><?= field_error('specific_goal') ?></div>
@@ -821,11 +927,16 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   <p class="alert alert-error" role="note">Hours cannot be logged to this track yet because it has no hourly rate. <a href="track_edit.php?id=<?= $id ?>">Enter the hourly billing rate</a> first.</p>
   <?php endif; ?>
   <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate>
-    <?= csrf_field() ?>
-    <?= form_error_summary(['work_date' => 'Date', 'visit_rsa_category' => 'RSA service delivered this visit', 'visit_service_type' => 'Service type',
-        'goal_id' => 'Goal this session advanced', 'hours' => 'Hours worked', 'mileage' => 'Mileage', 'description' => 'Activity description'], ['goal_id' => 'log_goal']) ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
+    <?= form_error_summary(['work_date' => 'Date', 'log_auth_ack' => 'Authorization', 'visit_rsa_category' => 'RSA service delivered this visit', 'visit_service_type' => 'Service type',
+        'goal_id' => 'Goal this session advanced', 'hours' => 'Hours worked', 'mileage' => 'Mileage', 'description' => 'Activity description'], ['goal_id' => 'log_goal', 'log_auth_ack' => 'log_auth_ack']) ?>
     <div class="field"><label for="work_date">Date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <input type="date" id="work_date" name="work_date" required min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('work_date', date('Y-m-d'))) ?>" <?= field_aria('work_date') ?>><?= field_error('work_date') ?></div>
+    <?php // Shown once the date was refused as outside the authorization (or a ticked box is being kept). ?>
+    <?php if (has_field_error('log_auth_ack') || old_in('auth_ack') === '1'): ?>
+    <div class="field"><label><input type="checkbox" id="log_auth_ack" name="auth_ack" value="1"<?= old_in('auth_ack') === '1' ? ' checked' : '' ?> <?= field_aria('log_auth_ack') ?>>
+      Log it anyway (the authorization is being renewed or amended)<span class="visually-hidden">, these hours</span></label><?= field_error('log_auth_ack') ?></div>
+    <?php endif; ?>
     <?php $visitCats = track_visit_categories($track); ?>
     <div class="field"><label for="visit_rsa_category">RSA service delivered this visit <span class="hint"><?= count($visitCats) > 1 ? 'Choose which of this program\'s categories was delivered — it drives state reporting' : 'This track bills a single category' ?></span></label>
       <select id="visit_rsa_category" name="visit_rsa_category" <?= field_aria('visit_rsa_category') ?>><?= select_options($visitCats, old_in('visit_rsa_category') ?: ($visitCats[0] ?? null)) ?></select><?= field_error('visit_rsa_category') ?></div>
@@ -838,7 +949,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
         <?php foreach ($openGoals as $g): ?>
         <option value="<?= (int)$g['id'] ?>" <?= old_in('goal_id') === (string)$g['id'] ? 'selected' : '' ?>><?= h(mb_strimwidth($g['specific_goal'], 0, 90, '…')) ?></option>
         <?php endforeach; ?>
-      </select></div>
+      </select><?= field_error('goal_id') ?></div>
     <?php endif; ?>
     <div class="field"><label for="hours">Hours worked <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <span class="hint" id="hours-hint">Decimals allowed, e.g., 1.5</span>
@@ -852,15 +963,17 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   </form>
 
   <h3>Log entries (<?= count($logs) ?>)</h3>
-  <?php $unbilledTotal = round($r['unbilled_amount'] + $r['unbilled_expenses'], 2); ?>
-  <p>On invoices so far, including drafts: <?= fmt_money($r['invoiced_amount']) ?> (<?= fmt_money($r['submitted_amount']) ?> submitted to the funder or paid). Not yet on an invoice: <?= fmt_money($unbilledTotal) ?><?= $r['unbilled_expenses'] > 0 ? ' (including ' . fmt_money($r['unbilled_expenses']) . ' of expenses)' : '' ?>.</p>
-  <?php // Expenses or mileage alone are billable too, so any unbilled item offers the button. ?>
-  <?php if (($r['unbilled_hours'] > 0 || $r['unbilled_mileage'] > 0 || $r['unbilled_expenses'] > 0) && can('billing')): ?>
+  <?php $unbilledTotal = round($r['unbilled_amount'] + $r['unbilled_expenses'], 2);
+  // What Generate invoice bills now: unbilled entries dated today or earlier (as generate_invoice()).
+  $billableTotal = round($r['billable_amount'] + $r['billable_expenses'], 2); ?>
+  <p>On invoices so far, including drafts: <?= fmt_money($r['invoiced_amount']) ?> (<?= fmt_money($r['submitted_amount']) ?> submitted to the funder or paid). Not yet on an invoice: <?= fmt_money($unbilledTotal) ?><?= $r['unbilled_expenses'] > 0 ? ' (including ' . fmt_money($r['unbilled_expenses']) . ' of expenses)' : '' ?>.<?= $billableTotal < $unbilledTotal ? ' ' . fmt_money(round($unbilledTotal - $billableTotal, 2)) . ' of that is dated after today and is invoiced once its date has come.' : '' ?></p>
+  <?php // Expenses or mileage alone are billable too, so any billable item offers the button. ?>
+  <?php if (($r['billable_hours'] > 0 || $r['billable_mileage'] > 0 || $r['billable_expenses'] > 0) && can('billing')): ?>
   <form method="post" action="track.php?id=<?= $id ?>" class="inline-form">
     <?= csrf_field() ?>
     <button type="submit" name="mark_billed" value="1" class="btn btn-secondary btn-sm"
-      onclick="return confirm('Create an invoice from all unbilled entries and expenses on this track?');">
-      Generate invoice for <?= fmt_money($unbilledTotal) ?> unbilled (<?= fmt_hours($r['unbilled_hours']) ?><?= $r['unbilled_expenses'] > 0 ? ' and ' . fmt_money($r['unbilled_expenses']) . ' of expenses' : '' ?>)</button>
+      onclick="return confirm('Create an invoice from all unbilled entries and expenses on this track dated today or earlier?');">
+      Generate invoice for <?= fmt_money($billableTotal) ?> unbilled (<?= fmt_hours($r['billable_hours']) ?><?= $r['billable_expenses'] > 0 ? ' and ' . fmt_money($r['billable_expenses']) . ' of expenses' : '' ?>)</button>
   </form>
   <?php endif; ?>
   <div class="table-scroll" tabindex="0" role="region" aria-labelledby="logs-cap">
@@ -987,10 +1100,15 @@ $expenses->execute([$id]); $expenses = $expenses->fetchAll();
   </div>
   <h3>Log an expense</h3>
   <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate>
-    <?= csrf_field() ?>
-    <?= form_error_summary(['exp_date' => 'Date', 'exp_description' => 'Description', 'exp_amount' => 'Amount']) ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
+    <?= form_error_summary(['exp_date' => 'Date', 'exp_auth_ack' => 'Authorization', 'exp_description' => 'Description', 'exp_amount' => 'Amount'], ['exp_auth_ack' => 'exp_auth_ack']) ?>
     <div class="field"><label for="exp_date">Date</label>
       <input type="date" id="exp_date" name="exp_date" min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('exp_date', date('Y-m-d'))) ?>" <?= field_aria('exp_date') ?>><?= field_error('exp_date') ?></div>
+    <?php // Shown once the date was refused as outside the authorization (or a ticked box is being kept). ?>
+    <?php if (has_field_error('exp_auth_ack') || old_in('exp_auth_ack') === '1'): ?>
+    <div class="field"><label><input type="checkbox" id="exp_auth_ack" name="exp_auth_ack" value="1"<?= old_in('exp_auth_ack') === '1' ? ' checked' : '' ?> <?= field_aria('exp_auth_ack') ?>>
+      Log it anyway (the authorization is being renewed or amended)<span class="visually-hidden">, this expense</span></label><?= field_error('exp_auth_ack') ?></div>
+    <?php endif; ?>
     <div class="field"><label for="exp_description">Description <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <input type="text" id="exp_description" name="exp_description" required maxlength="255" value="<?= h(old_in('exp_description')) ?>" <?= field_aria('exp_description') ?>><?= field_error('exp_description') ?></div>
     <div class="field"><label for="exp_amount">Amount (USD) <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>

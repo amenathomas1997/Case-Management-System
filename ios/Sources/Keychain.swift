@@ -2,7 +2,8 @@ import Foundation
 import Security
 
 /// Minimal Keychain wrapper for the API session token.
-/// Hardware-encrypted, this-device-only, excluded from backups.
+/// Hardware-encrypted, this-device-only, excluded from backups, and readable only while the
+/// phone is unlocked (the app has no background work that needs it while locked).
 enum Keychain {
     private static let service = "org.example.cms"
 
@@ -16,22 +17,32 @@ enum Keychain {
         guard !value.isEmpty, let data = value.data(using: .utf8) else { return }
         var attributes = base
         attributes[kSecValueData as String] = data
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         SecItemAdd(attributes as CFDictionary, nil)
     }
 
     static func load(_ key: String) -> String {
-        let query: [String: Any] = [
+        let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
         ]
+        var query = base
+        query[kSecReturnData as String] = true
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data,
+              let item = result as? [String: Any],
+              let data = item[kSecValueData as String] as? Data,
               let value = String(data: data, encoding: .utf8) else { return "" }
+        // An item saved by an earlier build could be read while the phone was locked: it moves
+        // to the when-unlocked class in place (if that fails it stays as it was, and is tried
+        // again at the next launch).
+        if (item[kSecAttrAccessible as String] as? String) != (kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String) {
+            SecItemUpdate(base as CFDictionary,
+                          [kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly] as CFDictionary)
+        }
         return value
     }
 

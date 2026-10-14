@@ -111,12 +111,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // A rate correction reaches the work already logged but not yet
                 // invoiced, and the work on this track's Draft invoices (not yet sent
                 // to the funder): those entries carry the rate as a snapshot, which
-                // would otherwise bill them at the old rate. Submitted and paid
-                // invoices never change. The drafts are locked (after the track, as
-                // in invoices.php) so none is submitted while it is re-priced.
+                // would otherwise bill them at the old rate. A new authorization number
+                // or funding agency likewise reaches the Drafts' captured header.
+                // Submitted and paid invoices never change. The drafts are locked
+                // (after the track, as in invoices.php) so none is submitted meanwhile.
                 $repriced = 0;
                 $draftIds = [];
-                if ($rateChanged || $mileageChanged) {
+                if ($rateChanged || $mileageChanged || $authNoChanged || $agencyChanged) {
                     $dq = db()->prepare("SELECT id FROM invoices WHERE track_id = ? AND status = 'Draft' FOR UPDATE");
                     $dq->execute([(int)$track['id']]);
                     $draftIds = array_map('intval', $dq->fetchAll(PDO::FETCH_COLUMN));
@@ -131,6 +132,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $rp = db()->prepare('UPDATE work_logs SET mileage_rate = ? WHERE track_id = ? AND (is_billed = 0' . $onDraft . ')');
                     $rp->execute([$mileageRate, (int)$track['id']]);
                     $repriced = max($repriced, $rp->rowCount());
+                }
+                // Drafts that captured a header print it (invoice_pdf.php, the list and the
+                // QuickBooks export); older drafts without one already show the track's.
+                $headerUpdated = 0;
+                if ($draftIds && ($authNoChanged || $agencyChanged)) {
+                    $hu = db()->prepare('UPDATE invoices SET auth_number = ?, funding_agency = ? WHERE id IN (' . implode(',', $draftIds) . ")
+                        AND status = 'Draft' AND auth_number IS NOT NULL");
+                    $hu->execute([$authNumber, $agency]);
+                    $headerUpdated = $hu->rowCount();
                 }
                 $amended = $hoursChanged || $rateChanged || $expChanged || $authNoChanged || $mileageChanged;
                 if ($amended) {
@@ -163,7 +173,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         . ($authNoChanged ? "auth# {$track['auth_number']}->{$authNumber} " : '')
                         . ($agencyChanged ? "agency {$track['funding_agency']}->{$agency} " : '')
                         . ($repriced ? "; {$repriced} unbilled or draft log(s) re-priced" : '')
-                        . ($draftIds && $repriced ? '; draft invoice(s) #' . implode(', #', $draftIds) . ' re-priced' : ''));
+                        . ($draftIds && $repriced ? '; draft invoice(s) #' . implode(', #', $draftIds) . ' re-priced' : '')
+                        . ($headerUpdated ? "; {$headerUpdated} draft invoice header(s) updated" : ''));
                 }
                 $vals[] = $track['id'];
                 db()->prepare('UPDATE training_tracks SET title=?, service_type=?, rsa_category=?, bundle_id=?, status=?, auth_number=?, funding_agency=?, authorized_hours=?, hourly_rate=?, mileage_rate=?, start_date=?, expiration_date=?, report_cadence=? WHERE id=?')->execute($vals);
@@ -171,7 +182,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // sums it (each line rounded to the cent), and its header names the
                 // new rates. Its expenses are unchanged.
                 $retotalled = 0;
-                if ($draftIds) {
+                if ($draftIds && ($rateChanged || $mileageChanged)) {
                     $headerSet = ($rateChanged ? ', i.hourly_rate = ?' : '') . ($mileageChanged ? ', i.mileage_rate = ?' : '');
                     $headerArgs = array_merge($rateChanged ? [$rate] : [], $mileageChanged ? [$mileageRate] : []);
                     $rt = db()->prepare('UPDATE invoices i
@@ -193,13 +204,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             audit($user['id'], 'track.update', 'track', (int)$track['id'], $changes ? implode('; ', $changes) : 'no changes (' . $title . ')');
             flash('Training track updated.' . ($amended ? ' The authorization change was recorded in the amendment history.' : '')
                 . ($repriced ? ' ' . $repriced . ' work log entr' . ($repriced === 1 ? 'y' : 'ies') . ' not yet invoiced or on a draft invoice now use' . ($repriced === 1 ? 's' : '') . ' the new rate.' : '')
-                . ($retotalled ? ' ' . ($retotalled === 1 ? '1 draft invoice was' : $retotalled . ' draft invoices were') . ' re-totalled at the new rate.' : ''));
+                . ($retotalled ? ' ' . ($retotalled === 1 ? '1 draft invoice was' : $retotalled . ' draft invoices were') . ' re-totalled at the new rate.' : '')
+                . ($headerUpdated ? ' ' . ($headerUpdated === 1 ? '1 draft invoice now shows' : $headerUpdated . ' draft invoices now show') . ' the new authorization number and funding agency.' : ''));
             redirect('track.php?id=' . (int)$track['id']);
         } else {
+            // The same form sent twice (Enter pressed again while it loads) creates
+            // the track once; the second answer goes to the track the first created.
+            $trackKey = web_idem_key($_POST);
+            if (($firstId = web_once_get($trackKey)) !== null) {
+                flash('This track was already created (the form was sent twice), so it was saved once.', 'info');
+                redirect('track.php?id=' . $firstId);
+            }
             db()->prepare('INSERT INTO training_tracks (client_id, title, service_type, rsa_category, bundle_id, status, auth_number, funding_agency, authorized_hours, hourly_rate, mileage_rate, start_date, expiration_date, report_cadence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
                 ->execute(array_merge([$clientId], $vals));
             // Capture the id before audit() inserts its own row and replaces it.
             $newTrackId = (int)db()->lastInsertId();
+            web_once_set($trackKey, $newTrackId);
             audit($user['id'], 'track.create', 'track', $newTrackId, $title . ' (auth ' . $authNumber . ')');
             flash('Training track created.');
             redirect('track.php?id=' . $newTrackId);
@@ -222,7 +242,7 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
 
 <p class="hint">Fields marked * are required.</p>
 <form method="post" class="stacked" novalidate>
-  <?= csrf_field() ?>
+  <?= csrf_field() ?><?php if (!$track) echo web_idem_field(); ?>
   <fieldset>
     <legend>Track</legend>
     <div class="field">
@@ -341,7 +361,7 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
     <?php if ($track): ?>
     <div class="field">
       <label for="amendment_reason">Amendment reason</label>
-      <span class="hint" id="amend-hint">If you are changing the authorization number, hours, hourly or mileage rate, or expiration, note why (e.g., “VR approved 10 additional hours 7/21”) — kept in the audit history. A new hourly or mileage rate also applies to work logged on this track that is not yet on an invoice.</span>
+      <span class="hint" id="amend-hint">If you are changing the authorization number, hours, hourly or mileage rate, or expiration, note why (e.g., “VR approved 10 additional hours 7/21”) — kept in the audit history. A new hourly or mileage rate also applies to work logged on this track that is not yet on an invoice, and re-prices and re-totals this track's Draft invoices; a new authorization number or funding agency is shown on those drafts too. Submitted and paid invoices keep what they billed.</span>
       <input type="text" id="amendment_reason" name="amendment_reason" maxlength="255" value="<?= $v('amendment_reason') ?>" <?= field_aria('amendment_reason', 'amend-hint') ?>>
       <?= field_error('amendment_reason') ?>
     </div>

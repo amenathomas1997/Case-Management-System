@@ -46,6 +46,7 @@ final class DocumentDownloader: ObservableObject {
         ]
         let sessionToken = api.token
         var request = URLRequest(url: components.url!)
+        API.identifyApp(&request)
         request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
         running.task = Task { [weak self] in
             let reply = try? await URLSession.shared.data(for: request)
@@ -60,18 +61,22 @@ final class DocumentDownloader: ObservableObject {
         // Signed out (or another account) meanwhile: nothing is written.
         guard api.token == sessionToken else { return }
         guard let reply else {
-            error = "Could not download \(document.title). Check your connection and try again."
+            showFormError("Could not download \(document.title). Check your connection and try again.", in: &error)
             return
         }
         let (data, response) = reply
         if (response as? HTTPURLResponse)?.statusCode == 401 {
             // The sign-in opens over the app; the download is not retried, so say so.
-            error = "Your session ended. Sign in again, then open \(document.title) again."
+            showFormError("Your session ended. Sign in again, then open \(document.title) again.", in: &error)
             api.expireSession()
             return
         }
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            error = "Could not download \(document.title)."
+            // The server says why (the file is missing, the document is gone, or the client is
+            // not on this caseload), so a lasting problem doesn't sound like one worth retrying.
+            let reason = (try? JSONDecoder().decode(APIErrorResponse.self, from: data))?.error?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            showFormError("Could not download \(document.title)." + ((reason?.isEmpty == false) ? " \(reason!)" : ""), in: &error)
             return
         }
         removePreview()
@@ -85,7 +90,7 @@ final class DocumentDownloader: ObservableObject {
             previewURL = fileURL
         } catch {
             removePreview()
-            self.error = "Could not download \(document.title)."
+            showFormError("Could not download \(document.title).", in: &self.error)
         }
     }
 
@@ -154,7 +159,7 @@ struct DocumentsSection: View {
         } catch {
             // A load replaced by a newer one, or the screen closing, is not a failure to report.
             guard !Task.isCancelled else { return }
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }
@@ -171,6 +176,16 @@ struct HomeworkItem: Decodable, Identifiable {
     let trackTitle: String
     let trackId: Int
     let editToken: String?
+    /// When the client marked it done on the portal; it stays Assigned until staff verify it.
+    let clientReportedAt: String?
+}
+
+extension HomeworkItem {
+    /// "Client reported done Oct 8, 2026" for an Assigned item the client marked done.
+    var clientReportText: String? {
+        guard status == "Assigned", let reported = clientReportedAt, !reported.isEmpty else { return nil }
+        return "Client reported done \(formatDate(reported))"
+    }
 }
 
 struct HomeworkResponse: Decodable { let homework: [HomeworkItem] }
@@ -216,6 +231,10 @@ struct HomeworkSection: View {
                                 .accessibilityFocused($focusedStatus, equals: item.id)
                         }
                         .font(.caption.weight(.semibold))
+                    }
+                    // In words (as the track page's badge): the status stays Assigned until verified.
+                    if let report = item.clientReportText {
+                        Text(report).font(.caption.weight(.semibold)).foregroundStyle(.primary)
                     }
                     if let instructions = item.instructions, !instructions.isEmpty {
                         Text(instructions).font(.callout).foregroundStyle(Color.secondaryText)
@@ -289,7 +308,7 @@ struct HomeworkSection: View {
         } catch {
             // A load replaced by a newer one, or the screen closing, is not a failure to report.
             guard !Task.isCancelled else { return }
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 
@@ -304,7 +323,7 @@ struct HomeworkSection: View {
             try? await Task.sleep(nanoseconds: 150_000_000)   // let the reloaded rows appear first
             if homework.contains(where: { $0.id == item.id }) { focusedStatus = item.id }
             announceAfterDismiss("\(item.title) marked completed.")
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -320,6 +339,8 @@ struct AssignHomeworkSheet: View {
 
     /// The edit token of the version this form holds (refreshed by "Reload the latest version").
     @State private var editToken: String?
+    /// "Client reported done …" for the version this form holds (refreshed with it).
+    @State private var clientReport: String?
     @State private var selectedTrack: Int?
     @State private var title = ""
     @State private var instructions = ""
@@ -335,16 +356,27 @@ struct AssignHomeworkSheet: View {
     private var values: [String] {
         [selectedTrack.map(String.init) ?? "", title, instructions, hasDue ? APIDate.day(dueDate) : ""]
     }
+    /// The start of the server's refusal when the assignment changed since this form opened
+    /// (at_homework_update: "This assignment changed. Reload it before saving.").
+    private static let changedRefusal = "This assignment changed."
     private var hasChanges: Bool { opened.map { $0 != values } ?? false }
 
     var body: some View {
         NavigationStack {
             ErrorFocusForm(error: error) {
-                // After a refusal (for example "This assignment changed"), the current version
-                // can be loaded here instead of only by leaving the client screen.
-                if item != nil && error != nil && clientId > 0 {
+                // After the "This assignment changed" refusal, the current version can be loaded
+                // here instead of only by leaving the client screen. Only then: it replaces what
+                // was typed, so it is not offered after other errors, where it looked like a retry.
+                if item != nil && clientId > 0 && error?.hasPrefix(Self.changedRefusal) == true {
                     Button("Reload the latest version") { Task { await reloadItem() } }
                         .disabled(busy)
+                        .accessibilityHint("Replaces your changes with the saved version.")
+                }
+                // The client's report is kept by a due-date change, but cleared by a new title or
+                // new instructions (at_homework_update): said before they are changed.
+                if let clientReport {
+                    Text("\(clientReport). Changing the title or instructions clears the client's report, so they would have to report it again; changing only the due date keeps it.")
+                        .font(.callout)
                 }
                 Picker("Training track (required)", selection: $selectedTrack) {
                     Text("Choose…").tag(nil as Int?)
@@ -391,6 +423,7 @@ struct AssignHomeworkSheet: View {
                     selectedTrack = item.trackId; title = item.title; instructions = item.instructions ?? ""; hasDue = item.dueDate != nil
                     if let date = item.dueDate.flatMap(APIDate.parseDay) { dueDate = date }
                     editToken = item.editToken
+                    clientReport = item.clientReportText
                 } else if tracks.count == 1 { selectedTrack = tracks.first?.id }
                 opened = values
             }
@@ -412,6 +445,7 @@ struct AssignHomeworkSheet: View {
             hasDue = fresh.dueDate != nil
             if let date = fresh.dueDate.flatMap(APIDate.parseDay) { dueDate = date }
             editToken = fresh.editToken
+            clientReport = fresh.clientReportText
             error = nil
             announce("Latest version loaded. Make your changes again, then save.")
         } catch {
@@ -437,7 +471,7 @@ struct AssignHomeworkSheet: View {
             onDone(item == nil ? "Homework assigned." : "Homework updated.")
             dismiss()
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
     }

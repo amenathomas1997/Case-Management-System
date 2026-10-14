@@ -53,6 +53,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pkDel = db()->prepare('DELETE FROM passkeys WHERE user_id = ?');
         $pkDel->execute([$row['user_id']]);
         db()->prepare('UPDATE login_otps SET consumed = 1 WHERE user_id = ?')->execute([$row['user_id']]);
+        // The failed attempts that may have led here are cleared (the same keys as
+        // "Clear sign-in lockout" on users.php), so the new password is not
+        // refused as "too many attempts" the first time it is used.
+        $re = strtolower((string)$row['email']);
+        $lockDel = db()->prepare('DELETE FROM login_attempts WHERE success = 0 AND email IN (?, ?, ?, ?)');
+        $lockDel->execute(['login:' . $re, $re, 'verify:' . $re, 'reauth:' . $re]);
         db()->commit();
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
@@ -60,7 +66,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         audit((int)$row['user_id'], 'password.reset', 'user', (int)$row['user_id'],
             'via emailed reset link; browser and app sessions revoked' . ($pkDel->rowCount() ? ', ' . $pkDel->rowCount() . ' passkey(s) removed' : '')
-            . ($hadCalFeed ? ', calendar feed address turned off' : ''));
+            . ($hadCalFeed ? ', calendar feed address turned off' : '')
+            . ($lockDel->rowCount() ? ', sign-in lockout cleared' : ''));
         flash('Password changed. Sign in with your new password. (For safety, any passkeys on the account were removed — you can add them back from My Account.)'
             . ($hadCalFeed ? ' Your calendar subscription address was also turned off: create a new one under My Account and subscribe your calendar to it again.' : ''));
         redirect('login.php');

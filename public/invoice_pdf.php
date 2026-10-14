@@ -17,7 +17,7 @@ if (!empty($_GET['invoice'])) {
 } else {
     $trackId = (int)($_GET['track'] ?? 0);
 }
-$stmt = db()->prepare('SELECT t.*, c.name AS client_name, c.assigned_to, c.counselor_name, c.counselor_agency, c.counselor_email FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.id = ?');
+$stmt = db()->prepare('SELECT t.*, c.name AS client_name, c.assigned_to, c.counselor_name, c.counselor_agency, c.counselor_email, c.counselor_verified FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.id = ?');
 $stmt->execute([$trackId]);
 $t = $stmt->fetch();
 if (!$t) { flash('That training track no longer exists.', 'error'); redirect('clients.php'); }
@@ -58,16 +58,31 @@ if ($invoice) {
 
 // A stored invoice prints the billing header captured when it was generated
 // (generate_invoice()), so a later edit to the track never rewrites what was
-// billed. Invoices from before that capture fall back to the track as it is now.
+// billed. Invoices from before that capture fall back to the track as it is now,
+// leaving out a counselor email not yet confirmed (counselor_verified = 0).
 $snap = $invoice && ($invoice['auth_number'] ?? null) !== null;
 $authNo = $snap ? (string)$invoice['auth_number'] : (string)$t['auth_number'];
 $billTo = array_values(array_filter(array_map(fn($v) => trim((string)$v), $snap
     ? array_merge([$invoice['funding_agency'] ?? ''], explode("\n", (string)($invoice['bill_to'] ?? '')))
-    : [$t['funding_agency'], $t['counselor_name'], $t['counselor_agency'], $t['counselor_email']]), fn($v) => $v !== ''));
+    : [$t['funding_agency'], $t['counselor_name'], $t['counselor_agency'], (int)$t['counselor_verified'] === 1 ? $t['counselor_email'] : null]), fn($v) => $v !== ''));
 // Lines without their own rate snapshot are priced at the rate captured on the
 // invoice (what they were billed at), else the track's current rate.
 $fbRate = ($invoice && ($invoice['hourly_rate'] ?? null) !== null) ? (float)$invoice['hourly_rate'] : $r['hourly_rate'];
 $fbMileageRate = ($invoice && ($invoice['mileage_rate'] ?? null) !== null) ? (float)$invoice['mileage_rate'] : $r['mileage_rate'];
+// An invoice from before the rate was captured: its lines without a snapshot are
+// priced at the rate it actually billed them at (its stored amount less the lines
+// that carry their own rate, over their hours or miles), never at the track's rate
+// as later amended, so the lines still add up to the stored totals.
+if ($invoice) {
+    $bare = ['h' => 0.0, 'm' => 0.0, 'ha' => (float)$invoice['hours_amount'], 'ma' => (float)$invoice['mileage_amount']];
+    foreach ($logs as $l) {
+        $own = log_line_amounts($l, 0.0, 0.0);
+        if ($l['hourly_rate'] === null) $bare['h'] += (float)$l['hours']; else $bare['ha'] -= $own['hours'];
+        if ($l['mileage_rate'] === null) $bare['m'] += (float)$l['mileage']; else $bare['ma'] -= $own['mileage'];
+    }
+    if (($invoice['hourly_rate'] ?? null) === null && $bare['h'] > 0) $fbRate = round(max(0.0, $bare['ha']) / $bare['h'], 2);
+    if (($invoice['mileage_rate'] ?? null) === null && $bare['m'] > 0) $fbMileageRate = round(max(0.0, $bare['ma']) / $bare['m'], 3);
+}
 // The header names the rate the lines were actually priced at; when entries
 // carry different rates it says so instead of quoting one that does not apply.
 $hRates = array_unique(array_map(fn($l) => round((float)($l['hourly_rate'] ?? $fbRate), 2), $logs));
@@ -125,6 +140,8 @@ if (($_GET['format'] ?? '') === 'html') {
     $doc->properties($totals);
     $doc->heading('Authorization usage');
     $doc->paragraph('Authorization usage: ' . fmt_hours($authUsage['hours_worked']) . ' of ' . fmt_hours($authUsage['authorized_hours']) . ' authorized hours used (' . $authUsage['pct_used'] . '%). Remaining: ' . fmt_hours($authUsage['hours_remaining']) . ' / ' . fmt_money($authUsage['funds_remaining']) . '. Prepared by ' . $user['name'] . '.');
+    // A download of the client's billing record is listed in their audit history.
+    audit((int)$user['id'], 'invoice.download', $invoice ? 'invoice' : 'track', $invoice ? (int)$invoice['id'] : $trackId, ($invoice ? 'invoice ' . $invoice['invoice_number'] : 'statement') . ' (accessible HTML)');
     $doc->download('invoice_' . ($invoice['id'] ?? 'track_' . $trackId) . '.html');
 }
 
@@ -242,12 +259,15 @@ $rightLines = [
     $periodLabel . ': ' . $periodText,
     'Rate: ' . $rateText,
 ];
-$n = max(count($leftLines), count($rightLines));
-$leftLines = array_values($leftLines);
-for ($i = 0; $i < $n; $i++) {
-    $pdf->Cell($half, 5, pdf_txt($leftLines[$i] ?? ''), 0, 0);
-    $pdf->Cell(0, 5, pdf_txt($rightLines[$i] ?? ''), 0, 1);
-}
+// Each block wraps within its own column (a Cell neither wraps nor clips, so a long
+// agency name ran into the right column and a long title off the page); the next
+// part starts below the taller of the two.
+$x0 = $pdf->GetX(); $y0 = $pdf->GetY();
+$pdf->MultiCell($half, 5, pdf_txt(implode("\n", $leftLines)), 0, 'L');
+$yLeft = $pdf->GetY();
+$pdf->SetXY($x0 + $half, $y0);
+$pdf->MultiCell(0, 5, pdf_txt(implode("\n", $rightLines)), 0, 'L');
+$pdf->SetY(max($yLeft, $pdf->GetY()));
 // A standalone file has no glossary: expand RSA once, under the column that uses it.
 $pdf->SetFont('Helvetica', '', 9);
 $pdf->Cell($half, 5, '', 0, 0);
@@ -314,4 +334,11 @@ $pdf->SetTextColor(60, 60, 60);   // #3C3C3C: 11:1 on white (small text needs 7:
 $pdf->MultiCell(0, 5, pdf_txt('Authorization usage: ' . fmt_hours($authUsage['hours_worked']) . ' of ' . fmt_hours($authUsage['authorized_hours']) . ' authorized hours used (' . $authUsage['pct_used'] . '%). Remaining: ' . fmt_hours($authUsage['hours_remaining']) . ' / ' . fmt_money($authUsage['funds_remaining']) . '. Prepared by ' . $user['name'] . '.'));
 
 $filename = 'invoice_' . preg_replace('/[^A-Za-z0-9]+/', '_', $t['client_name']) . '_' . preg_replace('/[^A-Za-z0-9]+/', '_', $authNo) . '_' . date('Ymd') . '.pdf';
-$pdf->Output('D', $filename);
+// Built as a string and sent with this page's own headers: FPDF's download output
+// replaces the app's Cache-Control: no-store with a cacheable one.
+$bytes = $pdf->Output('S');
+audit((int)$user['id'], 'invoice.download', $invoice ? 'invoice' : 'track', $invoice ? (int)$invoice['id'] : $trackId, ($invoice ? 'invoice ' . $invoice['invoice_number'] : 'statement') . ' (PDF)');
+header('Content-Type: application/pdf');
+header('Content-Disposition: attachment; filename="' . $filename . '"');
+echo $bytes;
+exit;

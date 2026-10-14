@@ -16,7 +16,9 @@ struct WorksiteRow: Decodable, Identifiable {
         clientId = (try? c.decode(Int.self, forKey: .clientId)) ?? 0
     }
 }
-struct WorksiteRowsResponse: Decodable { let assessments: [WorksiteRow] }
+/// The server lists the 300 most recently updated assessments; `total` is how many match in
+/// all (nil from an older server that does not say).
+struct WorksiteRowsResponse: Decodable { let assessments: [WorksiteRow]; let total: Int? }
 struct Worksite: Decodable {
     let id: Int; let clientId: Int; let employer: String?; let jobTitle: String?
     let worksiteLocation: String?; let assessmentDate: String?; let jobTasks: String?
@@ -31,18 +33,32 @@ let worksiteStatuses = ["Scheduled", "Assessed", "Recommendations Sent", "Implem
 struct AccommodationsView: View {
     @EnvironmentObject var api: API
     @State private var rows: [WorksiteRow] = []
+    /// How many assessments match in all: the server lists only the 300 most recently updated.
+    @State private var total: Int?
+    /// One client's assessments (nil: everyone's), so one older than the newest 300 can be found.
+    @State private var clientFilter: Int?
     @State private var loaded = false
     @State private var error: String?
     @State private var showNew = false
     /// The sheet's confirmation, spoken once the sheet has closed (see announceAfterDismiss).
     @State private var sheetResult: String?
 
+    /// The list stops short of every matching assessment.
+    private var isCut: Bool { loaded && (total ?? 0) > rows.count }
+    private var cutNotice: String {
+        "Showing the \(rows.count) most recently updated of \(total ?? rows.count) assessments. "
+            + (clientFilter == nil ? "Choose a client above to find an older one." : "The website lists them all.")
+    }
+
     var body: some View {
         List {
             if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
+            NewRecordClientPicker(title: "Show assessments for", noneLabel: "All clients", includeClosed: true, selection: $clientFilter)
+            // Said in words above the rows, so a missing older assessment is not taken as deleted.
+            if isCut { Text(cutNotice).font(.callout) }
             // The empty-state claim only after a load has actually returned no rows.
             if loaded && rows.isEmpty {
-                Text("No worksite assessments yet.")
+                Text(clientFilter == nil ? "No worksite assessments yet." : "No worksite assessments for this client.")
             } else if !loaded && error == nil {
                 ProgressView("Loading assessments…")
             }
@@ -62,6 +78,7 @@ struct AccommodationsView: View {
         .navigationTitle("Accommodations")
         .refreshable { await load() }
         .task { await load() }
+        .onChange(of: clientFilter) { _ in Task { await load(announceCount: true) } }
         .toolbar { ToolbarItem(placement: .primaryAction) { Button { showNew = true } label: { Image(systemName: "plus") }.accessibilityLabel("Add worksite assessment") } }
         .sheet(isPresented: $showNew, onDismiss: announceSheetResult) { WorksiteNewSheet { sheetResult = "Assessment created."; Task { await load() } } }
     }
@@ -71,30 +88,60 @@ struct AccommodationsView: View {
         sheetResult = nil
     }
 
-    private func load() async {
-        do { error = nil; let r: WorksiteRowsResponse = try await api.call("worksite_assessments"); rows = r.assessments; loaded = true }
-        catch { self.error = error.localizedDescription }
+    /// `announceCount`: the client filter changed, and the rows below it changed with nothing spoken.
+    private func load(announceCount: Bool = false) async {
+        let filter = clientFilter
+        do {
+            error = nil
+            let r: WorksiteRowsResponse = try await api.call("worksite_assessments", query: filter.map { ["client_id": String($0)] } ?? [:])
+            guard filter == clientFilter else { return }   // another client was chosen meanwhile
+            let wasCut = isCut
+            rows = r.assessments; total = r.total; loaded = true
+            if announceCount {
+                announce((rows.isEmpty ? "No assessments listed." : "\(rows.count) assessment\(rows.count == 1 ? "" : "s") listed.")
+                         + (isCut ? " " + cutNotice : ""))
+            } else if isCut && !wasCut {
+                // Once when the list first comes back cut short, not on every reload.
+                announce(cutNotice)
+            }
+        } catch {
+            guard filter == clientFilter else { return }
+            showFormError(error.localizedDescription, in: &self.error)
+        }
     }
 }
 
 struct WorksiteDetailView: View {
     @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
     let id: Int
     let onChanged: () -> Void
     @State private var w: Worksite?
     @State private var error: String?
     @State private var busy = false
     @State private var loading = false
+    /// Leaving with unsaved edits (Back, or the VoiceOver escape gesture): asked about first.
+    @State private var askingLeave = false
 
     @State private var employer = ""; @State private var jobTitle = ""; @State private var location = ""
     @State private var jobTasks = ""; @State private var barriers = ""; @State private var recommendations = ""
     @State private var status = "Scheduled"; @State private var outcome = ""
     @State private var hasDate = false; @State private var date = Date()
     @State private var hasFollow = false; @State private var follow = Date()
+    /// What the form held when it was loaded or last saved: anything different is unsaved.
+    @State private var stored: [String]?
+
+    /// Every value Save sends, in a fixed order (the dates as the days the pickers show).
+    private var current: [String] {
+        [employer, jobTitle, location, jobTasks, barriers, recommendations, status, outcome,
+         hasDate ? APIDate.day(date) : "", hasFollow ? APIDate.day(follow) : ""]
+    }
+    private var hasEdits: Bool { stored != nil && current != stored }
 
     var body: some View {
-        Form {
-            if let error { ErrorBanner(message: error) }
+        // ErrorFocusForm: Save is in the toolbar and the form is long, so a refused save is
+        // scrolled to and given VoiceOver focus rather than left in a banner row off screen.
+        ErrorFocusForm(error: error) {
             // The form appears only once the stored assessment has loaded: a blank form saved
             // after a failed load would overwrite the record with empty fields.
             if let w {
@@ -128,7 +175,29 @@ struct WorksiteDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         // Load once: coming back to this screen must not replace edits that are not saved yet.
         .task { if w == nil { await load() } }
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await save() } }.disabled(busy || w == nil) } }
+        // With unsaved edits, Back (and the VoiceOver escape gesture) asks first, as on the
+        // Competency screen: leaving would otherwise throw the typed text away in silence.
+        .navigationBarBackButtonHidden(hasEdits)
+        .toolbar {
+            if hasEdits {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button { askingLeave = true } label: { Label("Back", systemImage: "chevron.backward").labelStyle(.titleAndIcon) }
+                        .accessibilityHint("Asks what to do with your unsaved changes first.")
+                        .disabled(busy)
+                }
+            }
+            ToolbarItem(placement: .confirmationAction) { Button(busy ? "Saving…" : "Save") { Task { await save() } }.disabled(busy || w == nil) }
+        }
+        .accessibilityAction(.escape) {
+            if busy { announce("Still saving. Wait for it to finish.") }
+            else if hasEdits { askingLeave = true }
+            else { dismiss() }
+        }
+        .confirmationDialog("Your changes to this assessment are not saved yet.", isPresented: $askingLeave, titleVisibility: .visible) {
+            Button("Save, then go back") { Task { if await save(leaving: true) { dismiss() } } }
+            Button("Discard changes", role: .destructive) { dismiss() }
+            Button("Keep editing", role: .cancel) { }
+        }
     }
 
     private func load() async {
@@ -142,19 +211,31 @@ struct WorksiteDetailView: View {
             status = a.status; outcome = a.outcome ?? ""
             if let d = a.assessmentDate, let pd = ymd(d) { hasDate = true; date = pd }
             if let d = a.followUpDate, let pd = ymd(d) { hasFollow = true; follow = pd }
-        } catch { self.error = error.localizedDescription }
+            stored = current
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
-    private func save() async {
-        guard w != nil else { return }
+    /// True once the assessment is saved; false when the save failed. `leaving`: the screen
+    /// closes next, which would cut off a confirmation spoken at once.
+    @discardableResult private func save(leaving: Bool = false) async -> Bool {
+        guard w != nil else { return false }
         busy = true; error = nil
+        let sent = current
         var b: [String: Any] = ["id": id, "employer": employer, "job_title": jobTitle, "worksite_location": location,
             "job_tasks": jobTasks, "barriers": barriers, "recommendations": recommendations, "status": status, "outcome": outcome]
         // The same calendar day the pickers show (and the one ymd() read), so a save can't shift it.
         b["assessment_date"] = hasDate ? APIDate.day(date) : ""
         b["follow_up_date"] = hasFollow ? APIDate.day(follow) : ""
-        do { let _: OKResponse = try await api.call("save_worksite", body: b); announce("Assessment saved."); onChanged() }
-        catch { self.error = error.localizedDescription }
+        do {
+            let _: OKResponse = try await api.call("save_worksite", body: b)
+            // What was sent is now what is stored, so Back no longer asks about it.
+            stored = sent
+            busy = false
+            if leaving { announceAfterDismiss("Assessment saved.") } else { announce("Assessment saved.") }
+            onChanged()
+            return true
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
+        return false
     }
 }
 
@@ -193,7 +274,7 @@ struct WorksiteNewSheet: View {
         guard let cid = selectedClient else { return }
         busy = true; error = nil
         do { let _: OKResponse = try await api.call("add_worksite", body: ["client_id": cid, "employer": employer, "job_title": jobTitle, "assessment_date": APIDate.day(date)]); onDone(); dismiss() }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
     }
 }
 

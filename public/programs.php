@@ -102,6 +102,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cohort_id'])) {
         if (!in_array($activity, PREETS_ACTIVITIES, true)) $errors['activity'] = 'Choose a Pre-ETS activity from the list.';
         if ($dateIn === '') $errors['session_date'] = 'Enter the date of the session.';
         elseif ($date === null) $errors['session_date'] = 'Enter the session date as a real date with a year from 2000 to ' . $maxYear . ' (for example 2026-09-15).';
+        // Attendance counts in the hours report at once, so a session is logged once it
+        // has taken place, as work logs are (a future date is usually a mistyped year).
+        elseif ($date > date('Y-m-d')) $errors['session_date'] = 'The date ' . fmt_date($date) . ' is in the future. Log a session once it has taken place, with today\'s date or an earlier one.';
         if ($dur < 1 || $dur > 1440) $errors['duration_min'] = 'Enter the duration as whole minutes, from 1 to 1440.';
         if ($errors) {
             keep_input();
@@ -110,11 +113,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cohort_id'])) {
             keep_field_errors($errors);
             redirect($back);
         }
+        $topic = mb_substr(trim($_POST['topic'] ?? ''), 0, 190) ?: null;
+        $sessNotes = mb_substr(trim($_POST['notes'] ?? ''), 0, 2000) ?: null;
         db()->beginTransaction();
         try {
+            // The cohort row is locked first, so a repeated submit (Log session pressed
+            // again while the first was saving) finds the session it already logged and
+            // adds nothing: the hours would otherwise count twice in the report.
+            db()->prepare('SELECT id FROM cohorts WHERE id = ? FOR UPDATE')->execute([$cid]);
+            $dup = db()->prepare('SELECT id FROM cohort_sessions WHERE cohort_id = ? AND session_date = ? AND activity = ? AND duration_min = ?
+                AND staff_id <=> ? AND topic <=> ? AND notes <=> ? AND created_at > DATE_SUB(NOW(), INTERVAL 10 MINUTE) LIMIT 1');
+            $dup->execute([$cid, $date, $activity, $dur, $user['id'], $topic, $sessNotes]);
+            if ($dup->fetchColumn()) {
+                db()->rollBack();
+                flash('That session (' . $activity . ', ' . fmt_date($date) . ', ' . $dur . ' minutes) was already logged a moment ago, so it was not added again. It is under Recent sessions.', 'info');
+                redirect($back);
+            }
             db()->prepare('INSERT INTO cohort_sessions (cohort_id, session_date, activity, topic, duration_min, staff_id, notes) VALUES (?,?,?,?,?,?,?)')
-                ->execute([$cid, $date, $activity, mb_substr(trim($_POST['topic'] ?? ''), 0, 190) ?: null, $dur, $user['id'],
-                    mb_substr(trim($_POST['notes'] ?? ''), 0, 2000) ?: null]);
+                ->execute([$cid, $date, $activity, $topic, $dur, $user['id'], $sessNotes]);
             $sid = (int)db()->lastInsertId();
             // Attendance: a checked box per present student.
             $present = $_POST['present'] ?? [];
@@ -208,6 +224,7 @@ if (isset($_GET['export'])) {
     $co = cohort_load((int)$_GET['export']);
     if (!$co) { flash('Cohort not found.', 'error'); redirect('programs.php'); }
     $matrix = cohort_matrix((int)$co['id']);
+    audit($user['id'], 'cohort.export', 'cohort', (int)$co['id'], 'Pre-ETS cohort CSV (' . count($matrix) . ' students)');
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="preets_' . preg_replace('/[^A-Za-z0-9_-]/', '_', $co['name']) . '.csv"');
     $out = fopen('php://output', 'w');
@@ -318,7 +335,7 @@ if (isset($_GET['id'])) {
         <div class="grid grid-4">
           <div class="field"><label for="activity">Pre-ETS activity</label>
             <select id="activity" name="activity" <?= field_aria('activity') ?>><?= select_options(PREETS_ACTIVITIES, $oldLog ? old_in('activity') : 'Job Exploration Counseling') ?></select><?= field_error('activity') ?></div>
-          <div class="field"><label for="session_date">Date</label><input type="date" id="session_date" name="session_date" required min="2000-01-01" max="<?= (int)date('Y') + 5 ?>-12-31" value="<?= h($oldLog ? old_in('session_date') : date('Y-m-d')) ?>" <?= field_aria('session_date') ?>><?= field_error('session_date') ?></div>
+          <div class="field"><label for="session_date">Date</label><input type="date" id="session_date" name="session_date" required min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h($oldLog ? old_in('session_date') : date('Y-m-d')) ?>" <?= field_aria('session_date') ?>><?= field_error('session_date') ?></div>
           <div class="field"><label for="duration_min">Duration (minutes)</label><input type="number" id="duration_min" name="duration_min" min="1" max="1440" required value="<?= h($oldLog ? old_in('duration_min') : '60') ?>" <?= field_aria('duration_min') ?>><?= field_error('duration_min') ?></div>
           <div class="field"><label for="topic">Topic</label><input type="text" id="topic" name="topic" maxlength="190" value="<?= h($oldLog ? old_in('topic') : '') ?>"></div>
         </div>
@@ -362,7 +379,11 @@ if (isset($_GET['id'])) {
       <?php if ($sessions): ?>
       <ul class="timeline">
         <?php foreach ($sessions as $s): ?>
-        <?php $att = $attendance[(int)$s['id']] ?? []; $sessWhich = h($s['activity']) . ', ' . fmt_date($s['session_date']); ?>
+        <?php // The delete button names the session fully (two sessions can share an activity
+        // and a date, such as a morning and an afternoon one), ending with its record number.
+        $att = $attendance[(int)$s['id']] ?? [];
+        $sessWhich = h($s['activity']) . ', ' . fmt_date($s['session_date']) . ', ' . (int)$s['duration_min'] . ' minutes'
+            . ($s['topic'] ? ', ' . h($s['topic']) : '') . ' (record ' . (int)$s['id'] . ')'; ?>
         <li><strong><?= h($s['activity']) ?></strong> · <?= fmt_date($s['session_date']) ?> · <?= (int)$s['duration_min'] ?> min · <?= (int)$s['present_n'] ?> present
           <?= $s['topic'] ? '<br>' . h($s['topic']) : '' ?>
           <span class="muted"><?= $s['staff_name'] ? ' — ' . h($s['staff_name']) : '' ?></span>

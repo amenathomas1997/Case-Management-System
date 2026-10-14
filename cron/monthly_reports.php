@@ -22,6 +22,15 @@ if (!function_exists('db')) {
 }
 require $inc . '/report_builder.php';
 
+// One run at a time: a track is marked only after its report is emailed, so a
+// manual run that overlaps the scheduled one would send each due report (and its
+// receipt and case note) twice. The lock is named for this database, so another
+// installation on the same database server is not held up; it ends with this process.
+if ((int)db()->query("SELECT GET_LOCK(CONCAT('cms_monthly_reports_', MD5(DATABASE())), 0)")->fetchColumn() !== 1) {
+    echo "Another progress report run is still working; this run sent nothing.\n";
+    exit(0);
+}
+
 // A closed or archived client's track that was left Active gets no automatic
 // report: the report carries the full record, and the counselor on file may be stale.
 // A counselor email that came from the public referral form is unconfirmed

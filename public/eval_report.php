@@ -26,8 +26,11 @@ $defaults = [
         . "Estimated training: [hours] hours of individualized instruction.",
     'justification' => "The recommended technology is necessary for the client to access print material, complete essential job functions, and achieve the vocational goal identified in their Individualized Plan for Employment. Without this technology and associated training, the client cannot independently perform the tasks required.",
 ];
+// After a sign-in (session timeout) or a stale-token redirect, what the evaluator
+// typed comes back as old input on a GET, as on report.php; it replaces the defaults.
+$refill = $_SERVER['REQUEST_METHOD'] !== 'POST' && array_key_exists('background', $GLOBALS['OLD_INPUT'] ?? []);
 $fields = [];
-foreach ($defaults as $k => $d) $fields[$k] = is_string($_POST[$k] ?? null) ? $_POST[$k] : $d;
+foreach ($defaults as $k => $d) $fields[$k] = is_string($_POST[$k] ?? null) ? $_POST[$k] : ($refill ? old_in($k, $d) : $d);
 
 // Section labels as on the form (used in messages and the error summary).
 const EVAL_SECTIONS = ['background' => 'Background', 'findings' => 'Evaluation findings',
@@ -66,9 +69,12 @@ $sameText = fn(string $x, string $y): bool => trim(str_replace("\r\n", "\n", $x)
 $toDraft = [];
 foreach (EVAL_SECTIONS as $k => $label) if (trim($fields[$k]) === '' || $sameText($fields[$k], $defaults[$k])) $toDraft[$k] = $label;
 $kept = array_diff_key(EVAL_SECTIONS, $toDraft);
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ai_draft']) && ai_enabled() && !$toDraft) {
+// Offered only while the drafting feature itself is on (as amendment_request.php),
+// not merely while AI is configured.
+$aiDraftOn = ai_feature_enabled('draft');
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ai_draft']) && $aiDraftOn && !$toDraft) {
     flash('Nothing was drafted: every section holds text you have written, and the AI never replaces it. To have a section drafted, clear it, then press "Draft narrative with AI" again.', 'error');
-} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ai_draft']) && ai_enabled()) {
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ai_draft']) && $aiDraftOn) {
     // The client's full record is the redaction list (every name part, contacts,
     // guardian, counselor, DOB in any written form). The narrative does not need
     // the date of birth, so it is not part of the context at all.
@@ -111,7 +117,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ai_draft']) && ai_ena
     } else {
         flash($res['error'], 'error');
     }
-    audit($user['id'], 'ai.draft', 'client', (int)$a['cid'], 'AT evaluation narrative');
+    // Recorded only when the assessment was actually sent to the provider (ai_run()
+    // logged the call); a refusal before sending (feature off, usage limit) is not a draft.
+    // A failed provider call is still recorded (the assessment may have reached the provider), noting that nothing was drafted.
+    if (array_key_exists('usage_id', $res)) audit($user['id'], 'ai.draft', 'client', (int)$a['cid'], 'AT evaluation narrative' . ($res['ok'] ? '' : ' (AI call failed; nothing drafted)'));
 }
 
 function eval_html(array $a, array $fields, string $preparedBy, bool $signed = false): AccessibleDocument {
@@ -243,11 +252,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['email_report'])) {
             } catch (Throwable $e) {
                 error_log('eval_report.php: report send not counted: ' . get_class($e) . ' code=' . $e->getCode());
             }
-            db()->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,?)')
-                ->execute([(int)$a['cid'], 'Progress Report', 'AT evaluation report emailed',
-                    "Evaluation report (assessment of " . fmt_date($a['assessment_date']) . ") emailed to {$to}, signed by {$user['name']}.", $user['id']]);
+            // The email has gone: a failure recording it must not show an error page,
+            // or the evaluator would send the report again (as report.php).
+            $recorded = true;
+            try {
+                db()->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,?)')
+                    ->execute([(int)$a['cid'], 'Progress Report', 'AT evaluation report emailed',
+                        "Evaluation report (assessment of " . fmt_date($a['assessment_date']) . ") emailed to {$to}, signed by {$user['name']}.", $user['id']]);
+            } catch (Throwable $e) {
+                $recorded = false;
+                error_log('eval_report.php: report note not recorded: ' . get_class($e) . ' code=' . $e->getCode());
+            }
             audit($user['id'], 'evalreport.send', 'client', (int)$a['cid'], 'to ' . $to);
-            flash("Evaluation report emailed to {$to} and logged on the client's file.");
+            if ($recorded) flash("Evaluation report emailed to {$to} and logged on the client's file.");
+            else flash("Evaluation report signed and emailed to {$to}, so do not send it again. It could not be logged on the client's file: add a Progress Report note saying it was sent.", 'error');
             redirect('client.php?id=' . (int)$a['cid'] . '&tab=assessments');
         }
         flash('The report email could not be sent.', 'error');
@@ -280,21 +298,21 @@ page_header('Evaluation report', $user, 'clients');
   <div class="card">
     <div class="field">
       <label for="recipient">Email to</label>
-      <input type="email" id="recipient" name="recipient" value="<?= h(is_string($_POST['recipient'] ?? null) ? $_POST['recipient'] : ($a['counselor_email'] ?? '')) ?>" <?= field_aria('recipient') ?>><?= field_error('recipient') ?>
+      <input type="email" id="recipient" name="recipient" value="<?= h(is_string($_POST['recipient'] ?? null) ? $_POST['recipient'] : ($refill ? old_in('recipient') : ($a['counselor_email'] ?? ''))) ?>" <?= field_aria('recipient') ?>><?= field_error('recipient') ?>
     </div>
     <div class="field">
       <label for="signature">Electronic signature <span class="hint">Type your full name (<?= h($user['name']) ?>) — required for emailing</span></label>
       <input type="text" id="signature" name="signature" autocomplete="name" value="<?= h($sigKeep) ?>" <?= field_aria('signature') ?>><?= field_error('signature') ?>
     </div>
     <div class="page-actions">
-      <?php if (ai_enabled()): ?>
+      <?php if ($aiDraftOn): ?>
       <button type="submit" name="ai_draft" value="1" class="btn btn-secondary" formnovalidate aria-describedby="ai-draft-hint">Draft narrative with AI</button>
       <?php endif; ?>
       <button type="submit" name="download_html" value="1" class="btn btn-secondary">Download accessible HTML</button>
       <button type="submit" name="download" value="1" class="btn btn-secondary">Download PDF</button>
       <button type="submit" name="email_report" value="1" class="btn btn-primary">Email signed report to counselor</button>
     </div>
-    <?php if (ai_enabled()): ?><p class="hint" id="ai-draft-hint">“Draft narrative with AI” fills only the sections above that are empty or still hold the prefilled text; a section you have written in is kept as it is. To have it drafted, clear it first. Review and edit every section before sending.</p><?php endif; ?>
+    <?php if ($aiDraftOn): ?><p class="hint" id="ai-draft-hint">“Draft narrative with AI” fills only the sections above that are empty or still hold the prefilled text; a section you have written in is kept as it is. To have it drafted, clear it first. Review and edit every section before sending.</p><?php endif; ?>
   </div>
 </form>
 <?php page_footer();

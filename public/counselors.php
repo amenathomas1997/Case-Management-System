@@ -30,6 +30,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_portal'])) {
         $kn->execute([$email]);
         $name = trim((string)$kn->fetchColumn()) ?: 'Counselor';
     }
+    // Each send replaces (revokes) the link before it, so a second send within a minute
+    // (a double press, or a resubmit after a slow email) would kill the link just
+    // emailed. The app uses the same guard and the same key, so the two share it.
+    $portalKey = 'vrc-portal-' . sprintf('%u', crc32($email));
+    $recent = db()->prepare('SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 SECOND)');
+    $recent->execute([$portalKey]);
+    if ((int)$recent->fetchColumn() >= 1) {
+        flash('A portal link was just sent to ' . $name . ' (' . $email . '); the link in that email is the one that works. Wait a minute before sending another.', 'error');
+        redirect('counselors.php');
+    }
+    db()->prepare('INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)')->execute([(string)($_SERVER['REMOTE_ADDR'] ?? ''), $portalKey]);
     $token = bin2hex(random_bytes(24));
     // Email first and store the new link only once it has gone out: storing it
     // replaces (and so revokes) the counselor's current link.
@@ -38,12 +49,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_portal'])) {
         . cfg('base_url') . '/vrc.php?t=' . $token
         . "\n\nEach new browser session asks for a 6-digit code emailed to you, to protect client information. Keep this link private; if it's ever lost, we can send a new one (which replaces this one).\n");
     if (!$sent) {
+        // Nothing went out, so an immediate retry is allowed.
+        db()->prepare('DELETE FROM login_attempts WHERE email = ?')->execute([$portalKey]);
         flash("The email to {$name} could not be sent, so nothing was changed: their current portal link, if they have one, still works. Try again later.", 'error');
         redirect('counselors.php');
     }
-    db()->prepare('INSERT INTO vrc_tokens (counselor_email, counselor_name, token, expires_at) VALUES (?,?,?, DATE_ADD(NOW(), INTERVAL 180 DAY))
-        ON DUPLICATE KEY UPDATE token = VALUES(token), counselor_name = VALUES(counselor_name), created_at = NOW(), expires_at = DATE_ADD(NOW(), INTERVAL 180 DAY)')
-        ->execute([$email, $name, $token]);
+    try {
+        db()->prepare('INSERT INTO vrc_tokens (counselor_email, counselor_name, token, expires_at) VALUES (?,?,?, DATE_ADD(NOW(), INTERVAL 180 DAY))
+            ON DUPLICATE KEY UPDATE token = VALUES(token), counselor_name = VALUES(counselor_name), created_at = NOW(), expires_at = DATE_ADD(NOW(), INTERVAL 180 DAY), last_used_at = NULL')
+            ->execute([$email, $name, $token]);
+    } catch (Throwable $e) {
+        // The email has gone, so this is not "nothing was changed": say exactly what happened.
+        error_log('Counselor portal link store failed: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
+        // The emailed link does not open, so a new one may be sent at once.
+        try { db()->prepare('DELETE FROM login_attempts WHERE email = ?')->execute([$portalKey]); } catch (Throwable $ignored) {}
+        audit($user['id'], 'vrcportal.send_failed', 'counselor', null, $email . ': emailed, but the link could not be activated');
+        flash("The portal email went to {$name} ({$email}), but its link could not be activated, so it will not open. Send a new link; any link sent before this one still works.", 'error');
+        redirect('counselors.php');
+    }
     audit($user['id'], 'vrcportal.send', 'counselor', null, $email);
     flash("Portal link emailed to {$name}. Any previous link no longer works.");
     redirect('counselors.php');

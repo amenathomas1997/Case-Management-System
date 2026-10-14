@@ -29,11 +29,13 @@ foreach($rows as $r){
     // only when there is no such person or that person cannot act on it (inactive or without access).
     $target=(int)($r['staff_id']?:($r['assigned_to']?:$r['created_by']));
     $recipients=isset($eligible[$target])?[$target]:array_keys(array_filter($eligible,fn(array $a):bool=>in_array('admin',$a['perms'],true)));
+    // A denied funding record is reminded of its appeal deadline, and says so (its own due date may differ).
+    $what=$r['kind']==='funding'&&in_array($r['status'],['Denied','Appeal'],true)&&(string)$r['reminder_due']!==(string)$r['due_date']?'AT appeal deadline ':'AT due ';
     foreach($recipients as $uid){
         db()->beginTransaction();
         try{
             $q=db()->prepare('INSERT IGNORE INTO at_reminders(record_id,due_date,user_id) VALUES (?,?,?)');$q->execute([$r['id'],$r['reminder_due'],$uid]);
-            if($q->rowCount()) {db()->prepare('INSERT INTO notifications(user_id,message,link) VALUES (?,?,?)')->execute([$uid,mb_substr('AT due '.$r['reminder_due'].': '.$r['title'],0,190),'at_services.php?id='.(int)$r['id']]);$sent++;}
+            if($q->rowCount()) {db()->prepare('INSERT INTO notifications(user_id,message,link) VALUES (?,?,?)')->execute([$uid,mb_substr($what.$r['reminder_due'].': '.$r['title'],0,190),'at_services.php?id='.(int)$r['id']]);$sent++;}
             db()->commit();
         }catch(Throwable $e){if(db()->inTransaction())db()->rollBack();throw $e;}
     }

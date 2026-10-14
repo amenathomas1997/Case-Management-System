@@ -104,7 +104,8 @@ echo lang_toggle();
   <div class="alert alert-error" id="form-errors" tabindex="-1"><span class="visually-hidden"><?= t('Error:') ?> </span><?= t('This page was open for a long time, so your answers were not sent yet. Everything you chose and typed is still here. Please check it and choose Submit feedback again.') ?></div>
   <script>document.addEventListener("DOMContentLoaded",function(){var e=document.getElementById("form-errors");if(e)e.focus();});</script>
   <?php endif; ?>
-  <form method="post" action="survey.php?t=<?= h($token) ?>" class="stacked" novalidate>
+  <?php // The page language rides the form, so the reply keeps it even if the session lapsed. ?>
+  <form method="post" action="survey.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?php // One focused summary names each unanswered question and links to it (announced once, by the focus move). ?>
     <?= form_error_summary(['satisfaction' => '1. Overall, how satisfied are you with your training?', 'goals_met' => '2. How well did the training meet your goals?',

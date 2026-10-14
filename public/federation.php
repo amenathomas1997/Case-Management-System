@@ -25,10 +25,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['use_graph'])) {
         flash('Microsoft sign-in is ON, so its saved credentials were not replaced. To switch to the email app, turn Microsoft sign-in off and save first, or paste the new values into the form.', 'error');
     } else {
         $had = entra_form_values();
-        set_setting('entra_tenant_id', $g['tenant_id']);
-        set_setting('entra_client_id', $g['client_id']);
-        set_setting('entra_client_secret', $g['client_secret']);
-        audit($user['id'], 'federation.update', 'settings', null, 'copied app credentials from email (Graph) settings');
+        // One transaction, secret first: a failure part-way never pairs an old
+        // secret with a new tenant or app.
+        db()->beginTransaction();
+        try {
+            set_setting('entra_client_secret', $g['client_secret']);
+            set_setting('entra_tenant_id', strtolower(trim((string)$g['tenant_id'])));
+            set_setting('entra_client_id', strtolower(trim((string)$g['client_id'])));
+            audit($user['id'], 'federation.update', 'settings', null, 'copied app credentials from email (Graph) settings');
+            db()->commit();
+        } catch (Throwable $e) { if (db()->inTransaction()) db()->rollBack(); throw $e; }
         flash(($had['tenant_id'] !== '' || $had['client_id'] !== '' || $had['client_secret'] !== ''
                 ? 'The saved tenant and app credentials were replaced with the ones from your email settings.'
                 : 'Tenant and app credentials copied from your email settings.')
@@ -39,8 +45,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['use_graph'])) {
 
 /* ---- Save settings ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
-    $tenant = trim($_POST['tenant_id'] ?? '');
-    $client = trim($_POST['client_id'] ?? '');
+    // Stored in lower case, as Microsoft issues them in the ID token (sso.php
+    // compares the token's tenant and audience with these).
+    $tenant = strtolower(trim(is_string($_POST['tenant_id'] ?? null) ? $_POST['tenant_id'] : ''));
+    $client = strtolower(trim(is_string($_POST['client_id'] ?? null) ? $_POST['client_id'] : ''));
     $secret = trim($_POST['client_secret'] ?? '');
     $enabled = !empty($_POST['enabled']);
     $apg = trim($_POST['auto_provision_group'] ?? '');
@@ -67,13 +75,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
         keep_input();
         keep_field_errors($errors);
     } else {
-        set_setting('entra_tenant_id', $tenant);
-        set_setting('entra_client_id', $client);
-        set_setting('entra_client_secret', $secret);
-        set_setting('entra_enabled', $enabled ? '1' : '0');
-        set_setting('entra_auto_provision_group', $apg);
-        audit($user['id'], 'federation.update', 'settings', null,
-            ($enabled ? 'enabled' : 'disabled') . ($apg !== '' ? ', auto-provision into ' . $apg : ''));
+        // One transaction, secret first: a failure part-way never pairs an old
+        // secret with a new tenant or app, or turns sign-in on half-configured.
+        db()->beginTransaction();
+        try {
+            set_setting('entra_client_secret', $secret);
+            set_setting('entra_tenant_id', $tenant);
+            set_setting('entra_client_id', $client);
+            set_setting('entra_enabled', $enabled ? '1' : '0');
+            set_setting('entra_auto_provision_group', $apg);
+            audit($user['id'], 'federation.update', 'settings', null,
+                ($enabled ? 'enabled' : 'disabled') . ($apg !== '' ? ', auto-provision into ' . $apg : ''));
+            db()->commit();
+        } catch (Throwable $e) { if (db()->inTransaction()) db()->rollBack(); throw $e; }
         flash($enabled
             ? 'Federation settings saved. Microsoft sign-in is ON — the button now appears on the sign-in page.'
             : 'Federation settings saved. Microsoft sign-in is currently OFF.');

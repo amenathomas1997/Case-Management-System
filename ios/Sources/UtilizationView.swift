@@ -197,7 +197,7 @@ struct UtilizationView: View {
         }
         catch {
             guard mine == loadSeq else { return }
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
             stale = data != nil
         }
     }

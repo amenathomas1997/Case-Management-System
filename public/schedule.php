@@ -74,6 +74,92 @@ function schedule_hours(array $sess): float {
     return round((strtotime($sess['end_at']) - strtotime($sess['start_at'])) / 3600 * 4) / 4;
 }
 
+/** First name + last initial, as the calendar feed shows a client: an emailed
+ *  invite ends up in the calendar provider's storage too. */
+function schedule_short_name(string $n): string {
+    $parts = preg_split('/\s+/', trim($n)) ?: [];
+    return count($parts) < 2 ? trim($n) : $parts[0] . ' ' . mb_substr(end($parts), 0, 1) . '.';
+}
+
+/** The work log text for a completed session. A sitting of a group says so, however
+ *  it is completed: the invoice line is the only place a group service shows. */
+function schedule_log_description(array $sess): string {
+    if (!empty($sess['group_uid'])) return 'Group session' . ($sess['notes'] ? ': ' . $sess['notes'] : '');
+    return 'Training session' . ($sess['notes'] ? ': ' . $sess['notes'] : '') . ($sess['location'] ? ' (' . $sess['location'] . ')' : '');
+}
+
+/** Unbilled hours already logged on the session's track for the session's day that no
+ *  session is linked to. Voice, the app and the track page log hours without closing
+ *  the session, so these may be this session's hours: completing it would log them twice. */
+function schedule_logged_candidates(array $sess): array {
+    if (empty($sess['track_id'])) return [];
+    $q = db()->prepare('SELECT w.id, w.hours, w.description FROM work_logs w
+        WHERE w.track_id = ? AND w.work_date = ? AND w.is_billed = 0
+          AND NOT EXISTS (SELECT 1 FROM scheduled_sessions s2 WHERE s2.work_log_id = w.id) ORDER BY w.id LIMIT 5');
+    $q->execute([(int)$sess['track_id'], date('Y-m-d', strtotime($sess['start_at']))]);
+    return $q->fetchAll();
+}
+
+/** A fingerprint of the authorization warnings a booking form was shown. The approval
+ *  box is drawn only beside those warnings and carries this, so it approves exactly
+ *  them: a box ticked before any warning was shown, or for warnings that have since
+ *  changed, approves nothing. $p is the group form's "g_" prefix. */
+function schedule_auth_hash(array $warnings): string {
+    return hash('sha256', json_encode(array_values($warnings)));
+}
+function schedule_auth_approved(string $p, array $warnings): bool {
+    $posted = $_POST[$p . 'authorization_hash'] ?? null;
+    return ($_POST[$p . 'authorization_ack'] ?? '') === '1' && is_string($posted) && hash_equals(schedule_auth_hash($warnings), $posted);
+}
+
+/**
+ * Tell each session's instructor when someone else cancels it or records a No Show:
+ * an in-app alert and one plain-text email naming only the date, the time and the
+ * client's first name. The emailed invite has no stored id to withdraw, so the email
+ * asks them to remove a cancelled session from their calendar themselves.
+ */
+function schedule_tell_instructors(array $sessions, string $outcome, array $user): void {
+    $byInstructor = [];
+    foreach ($sessions as $s) if ((int)$s['user_id'] !== (int)$user['id']) $byInstructor[(int)$s['user_id']][] = $s;
+    if (!$byInstructor) return;
+    $uq = db()->prepare('SELECT name, email FROM users WHERE id = ? AND is_active = 1');
+    $what = $outcome === 'Cancelled' ? 'cancelled' : 'recorded as a No Show';
+    foreach ($byInstructor as $instructorId => $list) {
+        $uq->execute([$instructorId]);
+        $instr = $uq->fetch();
+        if (!$instr) continue;
+        $lines = [];
+        $future = false; // a cancelled one-to-one session still ahead, whose invite should go
+        $inGroup = false; // a group's invite stays: the rest of the group still meets
+        foreach ($list as $s) {
+            $ts = strtotime($s['start_at']);
+            $lines[] = date('l, F j, Y \a\t g:i A T', $ts) . ' with ' . (explode(' ', trim((string)$s['client_name']))[0] ?: 'a client');
+            if (!empty($s['group_uid'])) $inGroup = true;
+            elseif ($ts > time()) $future = true;
+        }
+        $one = count($lines) === 1;
+        notify_user($instructorId, ($one ? 'Session ' : count($lines) . ' sessions ') . $what . ' by ' . $user['name'] . ': ' . implode('; ', $lines), 'schedule.php');
+        send_app_mail((string)$instr['email'],
+            ($one ? 'Session ' . $what : 'Sessions ' . $what) . ' — ' . date('D, M j g:i A', strtotime($list[0]['start_at'])),
+            "Hello {$instr['name']},\n\n{$user['name']} {$what} " . ($one ? 'this training session' : 'these training sessions') . " of yours:\n\n"
+            . implode("\n", $lines) . "\n\n"
+            . ($outcome === 'Cancelled'
+                ? ($one ? 'It is' : 'They are') . ' no longer on your schedule.' . ($future ? ' If you added the emailed invite to your calendar, delete it there too, so its reminder does not go off.' : '')
+                    . ($inGroup ? ' The rest of the group session is unchanged.' : '')
+                : 'No hours were logged for ' . ($one ? 'it.' : 'them.'))
+            . "\n\nThe schedule: " . cfg('base_url') . "/schedule.php\n");
+    }
+}
+
+/** Where to return after recording an outcome: beside the ended sessions still
+ *  waiting for one (so the next is close at hand), otherwise the upcoming list. */
+function schedule_outcome_back(array $user): string {
+    $q = db()->prepare("SELECT 1 FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
+        WHERE s.status = 'Scheduled' AND s.end_at < NOW()" . (caseload_scoped() ? ' AND c.assigned_to = ?' : '') . ' LIMIT 1');
+    $q->execute(caseload_scoped() ? [(int)$user['id']] : []);
+    return $q->fetchColumn() ? 'schedule.php#overdue-h' : 'schedule.php#upcoming-h';
+}
+
 /* ---- POST: schedule a GROUP session (one time slot, many clients) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session'])) {
     // array_unique: a client posted twice would be booked, and later billed, twice.
@@ -117,14 +203,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
             $trackIds[$cid] = (int)$newest->fetchColumn() ?: null;
         }
     }
-    if (!$errors) foreach ($trackIds as $tid) if ($tid) {
-        $warnings=workflow_authorization($tid,$f['start'],$f['end']);
-        if ($warnings && ($_POST['authorization_ack']??'')!=='1') $errors['g_clients']='Authorization review: '.implode(' ',$warnings).' Review the track, then explicitly approve the warning below if this booking is appropriate.';
+    // Each client's authorization warnings, named, all shown together: the approval
+    // then covers exactly the warnings the user read (and is recorded with them).
+    $authLines = [];
+    if (!$errors) foreach ($trackIds as $cid => $tid) if ($tid) {
+        $warnings = workflow_authorization($tid, $f['start'], $f['end']);
+        if ($warnings) $authLines[] = $members[$cid]['name'] . ': ' . implode(' ', $warnings);
+    }
+    if ($authLines && !schedule_auth_approved('g_', $authLines)) {
+        $errors['g_authorization_ack'] = 'Authorization review. ' . implode(' ', $authLines)
+            . ' Review the tracks, then tick the approval box below if this booking is still appropriate.';
     }
     if ($errors) {
         keep_input();
         // The ticked clients are an array, which keep_input() does not keep.
         $_SESSION['old_input']['g_clients'] = implode(',', $clientIds);
+        // The approval box comes back only beside the warnings it approves.
+        if (isset($errors['g_authorization_ack'])) $_SESSION['old_input']['g_authorization_hash'] = schedule_auth_hash($authLines);
+        else unset($_SESSION['old_input']['g_authorization_hash']);
+        unset($_SESSION['old_input']['g_authorization_ack']);
         keep_field_errors($errors);
         redirect('schedule.php');
     }
@@ -140,6 +237,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
     // Every client's row is saved or none is, so a retry can't duplicate part of the group.
     db()->beginTransaction();
     try {
+        // The client rows are locked first, so a second press of the button (the invite
+        // email can take a while) waits for the first and then finds its sessions.
+        $sorted = $clientIds;
+        sort($sorted);
+        db()->prepare('SELECT id FROM clients WHERE id IN (' . implode(',', array_fill(0, count($sorted), '?')) . ') ORDER BY id FOR UPDATE')->execute($sorted);
+        $dupQ = db()->prepare("SELECT 1 FROM scheduled_sessions WHERE client_id = ? AND user_id = ? AND start_at = ? AND status = 'Scheduled' LIMIT 1");
+        $booked = [];
+        foreach ($clientIds as $cid) {
+            $dupQ->execute([$cid, (int)$staff['id'], date('Y-m-d H:i:s', $startTs)]);
+            if ($dupQ->fetchColumn()) $booked[] = $members[$cid]['name'];
+        }
+        if ($booked) {
+            db()->rollBack();
+            if (count($booked) === count($clientIds)) {
+                // The same group, already saved (a repeated submit): nothing is added twice.
+                flash('That group session is already on the schedule (' . $staff['name'] . ', ' . date('D, M j g:i A', $startTs) . '), so it was not added again.', 'info');
+                redirect('schedule.php#upcoming-h');
+            }
+            keep_input();
+            $_SESSION['old_input']['g_clients'] = implode(',', $clientIds);
+            unset($_SESSION['old_input']['g_authorization_hash'], $_SESSION['old_input']['g_authorization_ack']);
+            keep_field_errors(['g_clients' => 'Already scheduled with ' . $staff['name'] . ' at that time: ' . implode(', ', $booked)
+                . '. Untick ' . (count($booked) === 1 ? 'that client' : 'those clients') . ', or choose another time. Nothing was saved.']);
+            redirect('schedule.php');
+        }
         foreach ($clientIds as $cid) {
             $ins->execute([$cid, $trackIds[$cid], (int)$staff['id'], date('Y-m-d H:i:s', $startTs), date('Y-m-d H:i:s', $endTs), $location ?: null, $notes ?: null, $groupUid, $isRemote ? 1 : 0, $meetingUrl]);
         }
@@ -148,15 +270,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
         if (db()->inTransaction()) db()->rollBack();
         throw $e;
     }
+    // No session notes in the invite: calendar providers store it (as with the feed).
     $ics = build_ics('cms-group-' . $groupUid . '@' . (parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost'),
         ($isRemote ? 'Remote group session (' : 'Group session (') . count($clientIds) . ' clients)',
-        "Group training session with " . count($clientIds) . " clients." . ($notes !== '' ? "\nNotes: {$notes}" : ''),
+        "Group training session with " . count($clientIds) . " clients.\nDetails: " . cfg('base_url') . '/schedule.php',
         $location, $startTs, $endTs, cfg('mail_from'), $staff['email'], [], $meetingUrl ?? '');
     $sent = send_app_mail_attach($staff['email'],
         'Group session scheduled — ' . date('D, M j g:i A T', $startTs),
         "A group session with " . count($clientIds) . " clients has been scheduled.\nOpen the attached invite to add it to your calendar.\n",
         [['name' => 'invite.ics', 'mime' => 'text/calendar; method=REQUEST', 'bytes' => $ics]]);
-    audit($user['id'], 'session.schedule', 'group', null, 'group of ' . count($clientIds).(($_POST['authorization_ack']??'')==='1'?' — authorization exception approved':''));
+    // An approval is recorded only when there were warnings to approve, with them.
+    audit($user['id'], 'session.schedule', 'group', null, 'group of ' . count($clientIds)
+        . ($authLines ? ' — authorization exception approved: ' . implode(' ', $authLines) : ''));
     $noTrack = [];
     foreach ($clientIds as $cid) if ($trackIds[$cid] === null) $noTrack[] = $members[$cid]['name'];
     flash('Group session scheduled for ' . count($clientIds) . ' clients. Completing it logs hours to each client\'s training track.'
@@ -165,26 +290,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
     redirect('schedule.php');
 }
 
-/* ---- POST: complete an entire group ---- */
+/* ---- POST: record a group's attendance and complete it ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_group'])) {
     $uid = preg_replace('/[^a-f0-9]/', '', is_string($_POST['group_uid'] ?? '') ? $_POST['group_uid'] : '');
+    // Attendance is marked on the group card: each client listed there is Completed,
+    // with hours logged, when ticked as attended, and No Show, with nothing logged,
+    // when not. A post from a card drawn before it asked who attended is refused,
+    // so an absent client is never billed unseen.
+    if (($_POST['attendance_form'] ?? '') !== '1') {
+        flash('Nothing was completed: the page was out of date. Mark who attended on the group card, then choose Record attendance again.', 'error');
+        redirect('schedule.php');
+    }
+    $postedIds = fn(string $k): array => array_map('intval', array_filter(is_array($_POST[$k] ?? null) ? $_POST[$k] : [], 'is_string'));
+    $listed = $postedIds('listed');
+    $attended = $postedIds('attended');
     // Scoped staff complete only their own clients' rows of the group, instead of
     // stopping part-way at the first client that belongs to someone else.
     $rows = db()->prepare("SELECT s.*, c.name AS client_name FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
-        WHERE s.group_uid = ? AND s.status = 'Scheduled'" . (caseload_scoped() ? ' AND c.assigned_to = ?' : ''));
+        WHERE s.group_uid = ? AND s.status = 'Scheduled'" . (caseload_scoped() ? ' AND c.assigned_to = ?' : '') . ' ORDER BY c.name, s.id');
     $rows->execute(caseload_scoped() ? [$uid, (int)$user['id']] : [$uid]);
     $done = 0;
     $logged = 0;
     $notLogged = [];
     $refused = []; // left Scheduled: their track has no hourly rate yet
     $refusedWhy = []; // auto_log_session()'s own explanation, each once
+    $alreadyLogged = []; // left Scheduled: hours for that day are already on their track
+    $noShows = []; // not ticked as attended: recorded as No Show, nothing logged
+    $authNotes = []; // logged, but outside the track's authorization (named per client)
     $notStarted = 0; // a session that has not begun cannot be completed (or billed)
+    $startAt = null;
     $claim = db()->prepare('UPDATE scheduled_sessions SET status = "Completed" WHERE id = ? AND status = "Scheduled"');
+    $claimNoShow = db()->prepare('UPDATE scheduled_sessions SET status = "No Show" WHERE id = ? AND status = "Scheduled"');
     $setLog = db()->prepare('UPDATE scheduled_sessions SET work_log_id = ? WHERE id = ?');
     foreach ($rows->fetchAll() as $sess) {
+        // Only the clients the card showed are recorded.
+        if (!in_array((int)$sess['id'], $listed, true)) continue;
         schedule_scope_check((int)$sess['client_id'], $user);
         if (strtotime($sess['start_at']) > time()) { $notStarted++; continue; }
+        $startAt = $sess['start_at'];
+        if (!in_array((int)$sess['id'], $attended, true)) {
+            $claimNoShow->execute([(int)$sess['id']]);
+            if ($claimNoShow->rowCount() === 1) $noShows[] = $sess;
+            continue;
+        }
         $hours = $sess['track_id'] ? schedule_hours($sess) : 0.0;
+        // Hours already logged for that day (by voice, the app or the track page) are
+        // not logged again: that client's session is left for a one-by-one outcome.
+        if ($hours > 0 && schedule_logged_candidates($sess)) { $alreadyLogged[] = $sess['client_name']; continue; }
+        $authIssue = null;
         // Per session, the claim (double-submit guard) and its work log commit
         // together, so an error part-way can't leave it Completed with no hours.
         db()->beginTransaction();
@@ -192,8 +345,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_group'])) {
             $claim->execute([(int)$sess['id']]);
             if ($claim->rowCount() !== 1) { db()->rollBack(); continue; }
             if ($hours > 0) {
+                // The hours are the instructor's who taught the session, whoever records it.
                 $logId = auto_log_session((int)$sess['track_id'], date('Y-m-d', strtotime($sess['start_at'])), $hours,
-                    'Group session' . ($sess['notes'] ? ': ' . $sess['notes'] : ''), $user['id']);
+                    schedule_log_description($sess), (int)$sess['user_id'], $authIssue);
                 $setLog->execute([$logId, (int)$sess['id']]);
             }
             db()->commit();
@@ -207,27 +361,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_group'])) {
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
             // Sessions already committed above stay completed: record them before failing.
-            if ($done > 0) audit($user['id'], 'session.complete', 'group', null, "group {$uid}, {$done} clients, hours logged for {$logged} (stopped by an error)");
+            if ($done > 0 || $noShows) audit($user['id'], 'session.complete', 'group', null, "group {$uid}, {$done} attended, hours logged for {$logged}, "
+                . count($noShows) . ' No Show (stopped by an error)');
             throw $e;
         }
         $done++;
         if ($hours > 0) $logged++;
         else $notLogged[] = $sess['client_name'] . ($sess['track_id'] ? ' (session too short to log hours)' : ' (no training track linked)');
+        if ($authIssue) $authNotes[] = $sess['client_name'] . ': ' . $authIssue;
     }
     $refusedMsg = $refused ? ' Not completed (still Scheduled): ' . implode(', ', $refused) . '. '
         . implode(' ', array_keys($refusedWhy)) . ' Then complete '
         . (count($refused) === 1 ? 'that session' : 'those sessions') . '.' : '';
-    if ($done === 0) {
-        flash($refused ? 'Nothing was completed.' . $refusedMsg
+    $loggedMsg = $alreadyLogged ? ' Not completed (still Scheduled), because hours are already logged on their training track for that day: '
+        . implode(', ', $alreadyLogged) . '. Record ' . (count($alreadyLogged) === 1 ? 'that session' : 'each of those sessions')
+        . ' under "Ended sessions awaiting an outcome": choose "Completed — hours already logged" if those are its hours, or "Completed — log hours as well" if it was a separate visit.' : '';
+    if ($done === 0 && !$noShows) {
+        flash(($refused || $alreadyLogged) ? 'Nothing was completed.' . $refusedMsg . $loggedMsg
             : ($notStarted ? 'Nothing was completed: that group session has not started yet. Complete it once it has taken place, or cancel each client\'s session if it will not happen.'
             : 'Nothing was completed: no session in that group is still waiting for an outcome.'), 'error');
         redirect('schedule.php');
     }
-    audit($user['id'], 'session.complete', 'group', null, "group {$uid}, {$done} clients, hours logged for {$logged}"
-        . ($refused ? ', ' . count($refused) . ' left Scheduled (track has no hourly rate)' : ''));
-    flash("Group completed for {$done} client(s) — hours logged for {$logged}."
-        . ($notLogged ? ' No hours were logged for ' . implode(', ', $notLogged) . '.' : '') . $refusedMsg, $refused ? 'error' : 'success');
-    redirect('schedule.php');
+    if ($noShows) schedule_tell_instructors($noShows, 'No Show', $user);
+    audit($user['id'], 'session.complete', 'group', null, "group {$uid}, {$done} attended, hours logged for {$logged}"
+        . ($noShows ? ', No Show: client #' . implode(', #', array_map(fn($s) => (int)$s['client_id'], $noShows)) : '')
+        . ($refused ? ', ' . count($refused) . ' left Scheduled (track has no hourly rate)' : '')
+        . ($alreadyLogged ? ', ' . count($alreadyLogged) . ' left Scheduled (hours already logged that day)' : ''));
+    flash('Group session of ' . fmt_datetime($startAt) . ': '
+        . ($done > 0 ? "completed for {$done} client(s) — hours logged for {$logged}." : 'nobody was recorded as attending.')
+        . ($noShows ? ' Recorded as No Show, with no hours logged: ' . implode(', ', array_column($noShows, 'client_name')) . '.' : '')
+        . ($notLogged ? ' No hours were logged for ' . implode(', ', $notLogged) . '.' : '')
+        . ($authNotes ? ' ' . implode(' ', $authNotes) : '') . $refusedMsg . $loggedMsg, ($refused || $alreadyLogged) ? 'error' : 'success');
+    redirect(schedule_outcome_back($user));
 }
 
 /* ---- POST: schedule a session ---- */
@@ -256,12 +421,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
             $errors['track_id'] = 'That training track belongs to a different client. Pick the client\'s own track.';
         }
     }
+    $authWarnings = [];
     if (!$errors && $trackId) {
-        $warnings=workflow_authorization($trackId,$f['start'],$f['end'],$repeatWeeks);
-        if ($warnings && ($_POST['authorization_ack']??'')!=='1') $errors['track_id']='Authorization review: '.implode(' ',$warnings).' Review the track, then explicitly approve the warning below if this booking is appropriate.';
+        $authWarnings = workflow_authorization($trackId, $f['start'], $f['end'], $repeatWeeks);
+        if ($authWarnings && !schedule_auth_approved('', $authWarnings)) {
+            $errors['authorization_ack'] = 'Authorization review: ' . implode(' ', $authWarnings)
+                . ' Review the track, then tick the approval box below if this booking is still appropriate.';
+        }
     }
     if ($errors) {
         keep_input();
+        // The approval box comes back only beside the warnings it approves.
+        if (isset($errors['authorization_ack'])) $_SESSION['old_input']['authorization_hash'] = schedule_auth_hash($authWarnings);
+        else unset($_SESSION['old_input']['authorization_hash']);
+        unset($_SESSION['old_input']['authorization_ack']);
         keep_field_errors($errors);
         redirect('schedule.php');
     }
@@ -275,15 +448,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
     $ins = db()->prepare('INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, notes, is_remote, meeting_url) VALUES (?,?,?,?,?,?,?,?,?)');
     $sessionId = 0;
     $occurrences = [];
+    for ($w = 0; $w < $repeatWeeks; $w++) {
+        // "+N week" keeps the local start time across daylight-saving changes
+        $occurrences[] = [$w === 0 ? $startTs : strtotime("+{$w} week", $startTs), $w === 0 ? $endTs : strtotime("+{$w} week", $endTs)];
+    }
     // The whole series is saved or none of it: a failure part-way through must
     // not leave a partial series that a retry would then duplicate.
     db()->beginTransaction();
     try {
-        for ($w = 0; $w < $repeatWeeks; $w++) {
-            // "+N week" keeps the local start time across daylight-saving changes
-            $s0 = $w === 0 ? $startTs : strtotime("+{$w} week", $startTs);
-            $e0 = $w === 0 ? $endTs : strtotime("+{$w} week", $endTs);
-            $occurrences[] = [$s0, $e0];
+        // The client row is locked first, so a second press of the button (the invite
+        // email can take a while) waits for the first and then finds its sessions.
+        db()->prepare('SELECT id FROM clients WHERE id = ? FOR UPDATE')->execute([$clientId]);
+        $dupQ = db()->prepare("SELECT 1 FROM scheduled_sessions WHERE client_id = ? AND user_id = ? AND start_at = ? AND status = 'Scheduled' LIMIT 1");
+        $booked = [];
+        foreach ($occurrences as [$s0, $e0]) {
+            $dupQ->execute([$clientId, $staffId, date('Y-m-d H:i:s', $s0)]);
+            if ($dupQ->fetchColumn()) $booked[] = date('D, M j, Y g:i A', $s0);
+        }
+        if ($booked) {
+            db()->rollBack();
+            if (count($booked) === count($occurrences)) {
+                // The same booking, already saved (a repeated submit): nothing is added twice.
+                flash(($repeatWeeks > 1 ? 'That series is' : 'That session is') . ' already on the schedule (' . $client['name'] . ' with ' . $f['staff']['name']
+                    . ', ' . $booked[0] . '), so it was not added again.', 'info');
+                redirect('schedule.php#upcoming-h');
+            }
+            keep_input();
+            unset($_SESSION['old_input']['authorization_hash'], $_SESSION['old_input']['authorization_ack']);
+            keep_field_errors(['date' => $client['name'] . ' already has a session with ' . $f['staff']['name'] . ' at this time on '
+                . implode('; ', $booked) . '. Choose another start date or number of weeks. Nothing was saved.']);
+            redirect('schedule.php');
+        }
+        foreach ($occurrences as $w => [$s0, $e0]) {
             $ins->execute([$clientId, $trackId, $staffId, date('Y-m-d H:i:s', $s0), date('Y-m-d H:i:s', $e0), $location ?: null, $notes ?: null, $isRemote ? 1 : 0, $meetingUrl]);
             if ($w === 0) $sessionId = (int)db()->lastInsertId();
         }
@@ -292,17 +488,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         if (db()->inTransaction()) db()->rollBack();
         throw $e;
     }
-    audit($user['id'], 'session.schedule', 'client', $clientId, ($repeatWeeks > 1 ? "series of {$repeatWeeks} weekly sessions" : 'single session').(($_POST['authorization_ack']??'')==='1'?' — authorization exception approved':''));
+    // An approval is recorded only when there were warnings to approve, with them.
+    audit($user['id'], 'session.schedule', 'client', $clientId, ($repeatWeeks > 1 ? "series of {$repeatWeeks} weekly sessions" : 'single session')
+        . ($authWarnings ? ' — authorization exception approved: ' . implode(' ', $authWarnings) : ''));
 
     // Calendar invite to the instructor (renders as an Outlook meeting request)
     $clientName = (string)$client['name'];
     $staff = $f['staff'];
     if ($staff) {
         $seriesNote = $repeatWeeks > 1 ? " (repeats weekly, {$repeatWeeks} sessions)" : '';
+        // The invite is stored by the calendar provider, so it carries what the calendar
+        // feed does: the client's first name and last initial, no session notes, and a
+        // link to the session in the app for the rest.
+        $calName = schedule_short_name($clientName);
         $ics = build_ics(
             'cms-session-' . $sessionId . '@' . (parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost'),
-            ($isRemote ? 'Remote AT Training: ' : 'AT Training: ') . $clientName,
-            "Training session with {$clientName}.{$seriesNote}" . ($notes !== '' ? "\nNotes: {$notes}" : ''),
+            ($isRemote ? 'Remote AT Training: ' : 'AT Training: ') . $calName,
+            "Training session with {$calName}.{$seriesNote}\nDetails: " . cfg('base_url') . '/schedule.php#s-' . $sessionId,
             $location, $startTs, $endTs,
             cfg('mail_from'), $staff['email'], $occurrences, $meetingUrl ?? ''
         );
@@ -322,8 +524,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
 /* ---- POST: update session status (Completed logs hours to the track) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     $sid = (int)($_POST['session_id'] ?? 0);
-    $to = in_array($_POST['to'] ?? '', array_diff(SESSION_STATUSES, ['Scheduled']), true) ? $_POST['to'] : null;
-    $st = db()->prepare('SELECT * FROM scheduled_sessions WHERE id = ?');
+    // Beside the plain outcomes: "Completed — hours already logged" (links the work
+    // log chosen, logs nothing) and "Completed — log hours as well" (a separate visit
+    // on a day that already has hours logged).
+    $toIn = is_string($_POST['to'] ?? null) ? $_POST['to'] : '';
+    $linkLogId = preg_match('/^Completed_logged_(\d+)$/D', $toIn, $lm) ? (int)$lm[1] : 0;
+    $separate = $toIn === 'Completed_separate';
+    $to = ($linkLogId > 0 || $separate) ? 'Completed' : (in_array($toIn, array_diff(SESSION_STATUSES, ['Scheduled']), true) ? $toIn : null);
+    $st = db()->prepare('SELECT s.*, c.name AS client_name, t.title AS track_title FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
+        LEFT JOIN training_tracks t ON t.id = s.track_id WHERE s.id = ?');
     $st->execute([$sid]);
     $sess = $st->fetch();
     if ($sess && $to === null) {
@@ -332,25 +541,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     }
     if ($sess && $to && $sess['status'] === 'Scheduled') {
         schedule_scope_check((int)$sess['client_id'], $user);
+        // Every message names the session, as the row's controls do.
+        $which = 'session with ' . $sess['client_name'] . ' on ' . fmt_datetime($sess['start_at']);
+        $onTrack = $sess['track_title'] ? ' on the training track "' . $sess['track_title'] . '"' : '';
         // A session that has not started cannot be completed: it would log billable
-        // hours for a session that never took place (one in progress can).
-        if ($to === 'Completed' && strtotime($sess['start_at']) > time()) {
-            flash('That session has not started yet (' . fmt_datetime($sess['start_at']) . '), so it cannot be marked Completed. Nothing was changed.', 'error');
+        // hours for a session that never took place (one in progress can). Nor can it
+        // be a No Show yet: a client who says ahead that they will not come cancelled.
+        if (($to === 'Completed' || $to === 'No Show') && strtotime($sess['start_at']) > time()) {
+            flash('The ' . $which . ' has not started yet, so it cannot be '
+                . ($to === 'Completed' ? 'marked Completed.' : 'recorded as a No Show. If the client said they will not come, record it as Cancelled.')
+                . ' Nothing was changed.', 'error');
             redirect('schedule.php#s-' . $sid);
         }
-        $hours = ($to === 'Completed' && $sess['track_id']) ? schedule_hours($sess) : 0.0;
+        $hours = ($to === 'Completed' && $sess['track_id'] && !$linkLogId) ? schedule_hours($sess) : 0.0;
+        // Hours already logged for that day (by voice, the app or the track page) are
+        // not logged a second time without the user saying which case this is.
+        if ($hours > 0 && !$separate && ($cands = schedule_logged_candidates($sess))) {
+            flash('Not completed: ' . implode(' and ', array_map(fn($w) => fmt_hours((float)$w['hours']), $cands))
+                . ' already logged' . $onTrack . ' for ' . fmt_date($sess['start_at']) . '. If those are this session\'s hours, choose "Completed — hours already logged" for the '
+                . $which . '. If it was a separate visit, choose "Completed — log hours as well". Nothing was changed.', 'error');
+            redirect('schedule.php#s-' . $sid);
+        }
+        $authIssue = null;
+        $linked = null;
         // One transaction, as in the app: the claim (double-submit guard) and the
         // hour logging succeed or fail together, so an error can't strand a
         // Completed session with no work log.
         db()->beginTransaction();
         try {
-            $claim = db()->prepare('UPDATE scheduled_sessions SET status = ? WHERE id = ? AND status = "Scheduled"');
-            $claim->execute([$to, $sid]);
+            if ($linkLogId) {
+                // The chosen log must still be unbilled, on this track and day, and not
+                // already another session's.
+                $lq = db()->prepare('SELECT id, hours FROM work_logs WHERE id = ? AND track_id = ? AND work_date = ? AND is_billed = 0 FOR UPDATE');
+                $lq->execute([$linkLogId, (int)$sess['track_id'], date('Y-m-d', strtotime($sess['start_at']))]);
+                $linked = $lq->fetch();
+                $taken = db()->prepare('SELECT 1 FROM scheduled_sessions WHERE work_log_id = ? LIMIT 1');
+                $taken->execute([$linkLogId]);
+                if (!$linked || $taken->fetchColumn()) {
+                    db()->rollBack();
+                    flash('Not completed: the hours chosen for the ' . $which . ' can no longer be linked (they were billed, removed, or linked to another session). Choose the outcome again.', 'error');
+                    redirect('schedule.php#s-' . $sid);
+                }
+                $claim = db()->prepare('UPDATE scheduled_sessions SET status = "Completed", work_log_id = ? WHERE id = ? AND status = "Scheduled"');
+                $claim->execute([$linkLogId, $sid]);
+            } else {
+                $claim = db()->prepare('UPDATE scheduled_sessions SET status = ? WHERE id = ? AND status = "Scheduled"');
+                $claim->execute([$to, $sid]);
+            }
             $claimed = $claim->rowCount() === 1;
             if ($claimed && $hours > 0) {
+                // The hours are the instructor's who taught the session, whoever records it.
                 $logId = auto_log_session((int)$sess['track_id'], date('Y-m-d', strtotime($sess['start_at'])), $hours,
-                    'Training session' . ($sess['notes'] ? ': ' . $sess['notes'] : '') . ($sess['location'] ? ' (' . $sess['location'] . ')' : ''),
-                    $user['id']);
+                    schedule_log_description($sess), (int)$sess['user_id'], $authIssue);
                 db()->prepare('UPDATE scheduled_sessions SET work_log_id = ? WHERE id = ?')
                     ->execute([$logId, $sid]);
             }
@@ -359,21 +601,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
             // auto_log_session() refuses a track with no hourly rate: nothing is saved,
             // the session stays Scheduled, and its own message says what to fix.
             if (db()->inTransaction()) db()->rollBack();
-            flash($e->getMessage(), 'error');
-            redirect('schedule.php');
+            flash('Not completed: the ' . $which . $onTrack . '. ' . $e->getMessage(), 'error');
+            redirect('schedule.php#s-' . $sid);
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
             throw $e;
         }
         if ($claimed) {
             $act = ['Completed' => 'session.complete', 'Cancelled' => 'session.cancel', 'No Show' => 'session.no_show'][$to] ?? 'session.status';
-            audit($user['id'], $act, 'session', $sid, 'client #' . (int)$sess['client_id'] . ($hours > 0 ? ', ' . fmt_hours($hours) . ' logged' : ''));
-            if ($hours > 0) {
-                flash('Session completed — ' . fmt_hours($hours) . ' logged to the training track.');
+            audit($user['id'], $act, 'session', $sid, 'client #' . (int)$sess['client_id']
+                . ($hours > 0 ? ', ' . fmt_hours($hours) . ' logged' : '') . ($linkLogId ? ', linked to work log #' . $linkLogId . ' (hours already logged)' : ''));
+            if ($linkLogId) {
+                flash('Completed: the ' . $which . ', linked to the ' . fmt_hours((float)$linked['hours']) . ' already logged' . $onTrack . '. No more hours were logged.');
+            } elseif ($hours > 0) {
+                flash('Completed: the ' . $which . ' — ' . fmt_hours($hours) . ' logged' . ($onTrack ?: ' to the training track') . '.' . ($authIssue ? ' ' . $authIssue : ''));
             } elseif ($to === 'Completed') {
-                flash('Session marked Completed' . ($sess['track_id'] ? ' (it was too short to log any hours).' : ' (no track linked, so no hours were logged).'));
+                flash('Completed: the ' . $which . ($sess['track_id'] ? ' (it was too short to log any hours).' : ' (no track linked, so no hours were logged).'));
             } else {
-                flash('Session marked ' . $to . '.');
+                flash('Recorded as ' . $to . ': the ' . $which . '.');
+                schedule_tell_instructors([$sess], $to, $user);
             }
         } else {
             flash('That session was already closed, so nothing changed.', 'error');
@@ -381,7 +627,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     } elseif ($sess && $to) {
         flash('That session was already closed, so nothing changed.', 'error');
     }
-    redirect('schedule.php');
+    redirect(schedule_outcome_back($user));
 }
 
 $scoped = caseload_scoped();
@@ -455,12 +701,20 @@ function session_row(array $s, string $csrf): void {
     $started = strtotime($s['start_at']) <= time();
     // The confirm says what completing this session actually logs, and where.
     $hrs = $s['track_id'] ? schedule_hours($s) : 0.0;
+    // Hours already logged on the track for that day, which this session may account
+    // for: it is then completed by linking them, or by logging more for a separate visit.
+    $cands = ($started && $hrs > 0 && $s['status'] === 'Scheduled') ? schedule_logged_candidates($s) : [];
+    $onTrack = $s['track_title'] ? ' "' . $s['track_title'] . '"' : '';
     $completeMsg = !$s['track_id'] ? 'Mark completed? No training track is linked, so no hours will be logged.'
-        : ($hrs > 0 ? 'Mark completed? This logs ' . fmt_hours($hrs) . ' to the training track' . ($s['track_title'] ? ' "' . $s['track_title'] . '"' : '') . '.'
-            : 'Mark completed? The session is too short to log any hours to the training track.'); ?>
+        : ($hrs > 0 ? 'Mark completed? This logs ' . fmt_hours($hrs) . ' to the training track' . $onTrack . '.'
+            : 'Mark completed? The session is too short to log any hours to the training track.');
+    $separateMsg = 'Mark completed and log hours as well? This logs ' . fmt_hours($hrs) . ' to the training track' . $onTrack . ', beside the hours already logged for that day.';
+    $linkedMsg = 'Mark completed as the hours already logged? The session is linked to them and no more hours are logged.';
+    $js = fn(string $m): string => h(json_encode($m, JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)); ?>
     <tr>
       <th scope="row" id="s-<?= (int)$s['id'] ?>" tabindex="-1"><?= fmt_datetime($s['start_at']) ?><br><span class="muted">to <?= date('g:i A', strtotime($s['end_at'])) ?></span></th>
-      <td><a href="client.php?id=<?= (int)$s['client_id'] ?>"><?= h($s['client_name']) ?></a>
+      <?php // The client links to their record only for staff who can open it. ?>
+      <td><?php if (can('clients')): ?><a href="client.php?id=<?= (int)$s['client_id'] ?>"><?= h($s['client_name']) ?></a><?php else: ?><?= h($s['client_name']) ?><?php endif; ?>
           <?= $s['track_title'] ? '<br><span class="muted">' . h($s['track_title']) . '</span>' : '' ?></td>
       <td><?= h($s['staff_name'] ?? '—') ?></td>
       <td><?php if (!empty($s['is_remote'])): ?><span class="badge badge-active">Remote</span><?= !empty($s['meeting_url']) ? ' <a href="' . h($s['meeting_url']) . '" target="_blank" rel="noopener">Join<span class="visually-hidden"> ' . $which . ' (opens in a new tab)</span></a>' : '' ?><?php else: ?><?= h($s['location'] ?: '—') ?><?php endif; ?></td>
@@ -471,15 +725,21 @@ function session_row(array $s, string $csrf): void {
           <?= csrf_field() ?>
           <input type="hidden" name="session_id" value="<?= (int)$s['id'] ?>">
           <label class="visually-hidden" for="st-<?= (int)$s['id'] ?>">Update status for <?= $which ?></label>
-          <?php // A session that has not started yet cannot be completed, and nothing is
-          // preselected for it, so Save never records an outcome by default. ?>
+          <?php // A session that has not started yet can only be cancelled, and nothing is
+          // preselected for it (or when hours for that day are already logged), so Save
+          // never records an outcome by default. ?>
           <select id="st-<?= (int)$s['id'] ?>" name="to">
-            <?php if ($started): ?><option value="Completed">Completed<?= $s['track_id'] ? ' (log hours)' : '' ?></option><?php else: ?><option value="">— Choose an outcome —</option><?php endif; ?>
+            <?php if (!$started || $cands): ?><option value="">— Choose an outcome —</option><?php endif; ?>
+            <?php if ($started && $cands): foreach ($cands as $w): ?>
+            <option value="Completed_logged_<?= (int)$w['id'] ?>">Completed — hours already logged (<?= h(fmt_hours((float)$w['hours']) . (trim((string)$w['description']) !== '' ? ': ' . mb_strimwidth(trim((string)$w['description']), 0, 60, '…') : '')) ?>)</option>
+            <?php endforeach; ?>
+            <option value="Completed_separate">Completed — log hours as well (a separate visit)</option>
+            <?php elseif ($started): ?><option value="Completed">Completed<?= $s['track_id'] ? ' (log hours)' : '' ?></option><?php endif; ?>
             <option value="Cancelled">Cancelled</option>
-            <option value="No Show">No Show</option>
+            <?php if ($started): ?><option value="No Show">No Show</option><?php endif; ?>
           </select>
           <button type="submit" name="set_status" value="1" class="btn btn-secondary btn-sm"
-            onclick="var s=document.getElementById('st-<?= (int)$s['id'] ?>').value;return s===''||confirm(s==='Completed'?<?= h(json_encode($completeMsg, JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>:'Record this session as '+s+'? This cannot be changed back. Choose OK to record it, or Cancel to leave the session as it is.');">Save<span class="visually-hidden"> status for <?= $which ?></span></button>
+            onclick="var s=document.getElementById('st-<?= (int)$s['id'] ?>').value;return s===''||confirm(s==='Completed'?<?= $js($completeMsg) ?>:(s==='Completed_separate'?<?= $js($separateMsg) ?>:(s.indexOf('Completed_logged_')===0?<?= $js($linkedMsg) ?>:'Record this session as '+s+'? This cannot be changed back. Choose OK to record it, or Cancel to leave the session as it is.')));">Save<span class="visually-hidden"> status for <?= $which ?></span></button>
         </form>
         <?php endif; ?>
       </td>
@@ -497,7 +757,7 @@ function session_row(array $s, string $csrf): void {
     <?= csrf_field() ?>
     <?= form_error_summary(['client_id' => 'Client', 'track_id' => 'Training track', 'staff_id' => 'Instructor', 'date' => 'Date',
         'time' => 'Start time', 'duration' => 'Duration (hours)', 'repeat_weeks' => 'Repeat weekly', 'location' => 'Location',
-        'notes' => 'Notes', 'meeting_url' => 'Meeting link']) ?>
+        'notes' => 'Notes', 'meeting_url' => 'Meeting link', 'authorization_ack' => 'Authorization approval']) ?>
     <div class="grid grid-2">
       <div class="field">
         <label for="client_id">Client <span aria-hidden="true">*</span></label>
@@ -537,7 +797,12 @@ function session_row(array $s, string $csrf): void {
     <div class="field" id="meeting_url_wrap">
       <label for="meeting_url">Meeting link <span class="hint">the video/phone link clients and you will join (https://…); tick Remote above to use it</span></label>
       <input type="url" id="meeting_url" name="meeting_url" maxlength="500" placeholder="https://" value="<?= h(old_in('meeting_url')) ?>" <?= field_aria('meeting_url') ?>><?= field_error('meeting_url') ?></div>
-    <label><input type="checkbox" name="authorization_ack" value="1"> I reviewed any authorization warnings and approve booking despite them.</label>
+    <?php // The approval box is drawn only beside the authorization warnings it approves
+    // (their fingerprint goes with it), never before any warning has been shown. ?>
+    <?php if (old_in('add_session') !== '' && old_in('authorization_hash') !== '' && has_field_error('authorization_ack')): ?>
+    <input type="hidden" name="authorization_hash" value="<?= h(old_in('authorization_hash')) ?>">
+    <div class="field"><label><input type="checkbox" id="authorization_ack" name="authorization_ack" value="1" <?= field_aria('authorization_ack') ?>> I reviewed these authorization warnings and approve this booking despite them.</label><?= field_error('authorization_ack') ?></div>
+    <?php endif; ?>
     <button type="submit" name="add_session" value="1" class="btn btn-primary"
       onclick="var w=parseInt(document.getElementById('repeat_weeks').value||'1',10);return w<=1||confirm('Schedule '+w+' weekly sessions? Each must be cancelled individually if plans change.');">Schedule &amp; send calendar invite</button>
   </form>
@@ -552,7 +817,7 @@ function session_row(array $s, string $csrf): void {
   // session and sign-in (the posted group_clients[] list).
   $keptGroup = array_map('intval', array_filter(array_merge(explode(',', old_in('g_clients')), old_in_list('group_clients'))));
   $gLabels = ['g_clients' => 'Clients', 'g_staff_id' => 'Instructor', 'g_date' => 'Date', 'g_time' => 'Start', 'g_duration' => 'Duration (hours)',
-      'g_location' => 'Location', 'g_notes' => 'Notes', 'g_meeting_url' => 'Meeting link'];
+      'g_location' => 'Location', 'g_notes' => 'Notes', 'g_meeting_url' => 'Meeting link', 'g_authorization_ack' => 'Authorization approval'];
   foreach ($clients as $c) if (count($tracksByClient[(int)$c['id']] ?? []) > 1) $gLabels['g_track_' . (int)$c['id']] = 'Training track for ' . $c['name'];
   // A track error for a client no longer listed here is still reported.
   foreach (array_keys(form_errors()) as $k) if (str_starts_with($k, 'g_track_') && !isset($gLabels[$k])) $gLabels[$k] = 'Training track'; ?>
@@ -591,7 +856,10 @@ function session_row(array $s, string $csrf): void {
     <div class="field"><label><input type="checkbox" id="g_is_remote" name="g_is_remote" value="1" <?= old_in('g_is_remote') ? 'checked' : '' ?>> Remote / telepractice session</label></div>
     <div class="field"><label for="g_meeting_url">Meeting link <span class="hint">https://…; tick Remote above to use it</span></label>
       <input type="url" id="g_meeting_url" name="g_meeting_url" maxlength="500" placeholder="https://" value="<?= h(old_in('g_meeting_url')) ?>" <?= field_aria('g_meeting_url') ?>><?= field_error('g_meeting_url') ?></div>
-    <label><input type="checkbox" name="authorization_ack" value="1"> I reviewed any authorization warnings and approve booking despite them.</label>
+    <?php if (old_in('add_group_session') !== '' && old_in('g_authorization_hash') !== '' && has_field_error('g_authorization_ack')): ?>
+    <input type="hidden" name="g_authorization_hash" value="<?= h(old_in('g_authorization_hash')) ?>">
+    <div class="field"><label><input type="checkbox" id="g_authorization_ack" name="g_authorization_ack" value="1" <?= field_aria('g_authorization_ack') ?>> I reviewed these authorization warnings and approve this group booking despite them.</label><?= field_error('g_authorization_ack') ?></div>
+    <?php endif; ?>
     <button type="submit" name="add_group_session" value="1" class="btn btn-primary">Schedule group session</button>
   </form>
 </section>
@@ -608,22 +876,36 @@ foreach ($groupsPending as $uid => $members): if (count($members) < 2) continue;
 <div class="card">
   <h3>Group session — <?= fmt_datetime($members[0]['start_at']) ?> (<?= count($members) ?> clients)
     <?= $groupEnded ? '<span class="badge badge-pending">Ended — not yet completed</span>' : '<span class="badge badge-active">Upcoming</span>' ?></h3>
+  <?php if (strtotime($members[0]['start_at']) <= time()): // a group that has not started cannot be completed
+    $gWhen = fmt_datetime($members[0]['start_at']); ?>
+  <?php // Attendance is recorded with the outcome: a client not ticked is recorded as No
+  // Show with no hours logged, so an absent client is never billed for the sitting. ?>
+  <form method="post" action="schedule.php" class="stacked"><?= csrf_field() ?>
+    <input type="hidden" name="group_uid" value="<?= h($uid) ?>">
+    <input type="hidden" name="attendance_form" value="1">
+    <fieldset aria-describedby="gatt-hint-<?= h($uid) ?>">
+      <legend>Who attended?</legend>
+      <p class="hint" id="gatt-hint-<?= h($uid) ?>">Untick anyone who did not come: they are recorded as No Show, and no hours are logged for them.</p>
+      <?php foreach ($members as $m): $mh = $m['track_id'] ? schedule_hours($m) : 0.0; ?>
+      <input type="hidden" name="listed[]" value="<?= (int)$m['id'] ?>">
+      <div class="field"><label><input type="checkbox" class="att-box" name="attended[]" value="<?= (int)$m['id'] ?>" data-bill="<?= $mh > 0 ? '1' : '0' ?>" checked> <?= h($m['client_name']) ?> attended<span class="visually-hidden"> the group session of <?= $gWhen ?></span></label>
+        <span class="muted">(<?= $mh > 0 ? fmt_hours($mh) . ' logged to ' . ($m['track_title'] ? h($m['track_title']) : 'their training track') : ($m['track_id'] ? 'too short to log any hours' : 'no training track, so no hours are logged') ?>)</span></div>
+      <?php endforeach; ?>
+    </fieldset>
+    <button type="submit" name="complete_group" value="1" class="btn btn-secondary btn-sm"
+      onclick="var b=this.form.querySelectorAll('.att-box'),a=0,p=0;b.forEach(function(x){if(x.checked){a++;if(x.getAttribute('data-bill')==='1')p++;}});return confirm('Record attendance for this group session? '+a+' of '+b.length+' clients attended and will be marked Completed, and '+p+' of them will have hours logged to their training track and billed. '+(b.length-a)+' will be recorded as No Show, with no hours logged.');">Record attendance and complete<span class="visually-hidden"> — group session of <?= $gWhen ?>, <?= count($members) ?> clients</span></button>
+  </form>
+  <?php else: ?>
   <ul class="muted" aria-label="Clients, and the training track each one's hours log to">
     <?php foreach ($members as $m): ?><li><?= h($m['client_name']) ?> — <?= $m['track_title'] ? h($m['track_title']) : 'no training track, so no hours will be logged' ?></li><?php endforeach; ?>
   </ul>
-  <?php if (strtotime($members[0]['start_at']) <= time()): // a group that has not started cannot be completed ?>
-  <form method="post" action="schedule.php" class="inline-form"><?= csrf_field() ?>
-    <input type="hidden" name="group_uid" value="<?= h($uid) ?>">
-    <button type="submit" name="complete_group" value="1" class="btn btn-secondary btn-sm"
-      onclick="return confirm('Mark the whole group completed and log hours for every client?');">Complete whole group<span class="visually-hidden"> — session of <?= fmt_datetime($members[0]['start_at']) ?>, <?= count($members) ?> clients</span></button>
-  </form>
-  <?php else: ?><p class="hint">It can be completed once it has started. To call it off, cancel each client's session in the upcoming list.</p><?php endif; ?>
+  <p class="hint">It can be completed once it has started, with who attended. To call it off, cancel each client's session in the upcoming list.</p><?php endif; ?>
 </div>
 <?php endforeach; ?>
 
 <?php if ($overdue): ?>
 <h2 id="overdue-h">Ended sessions awaiting an outcome (<?= count($overdue) ?>)</h2>
-<p class="muted">These sessions have ended but are still marked Scheduled. Record each one as Completed, Cancelled, or No Show — completing a session linked to a track logs its hours.</p>
+<p class="muted">These sessions have ended but are still marked Scheduled. Record each one as Completed, Cancelled, or No Show — completing a session linked to a track logs its hours. When hours for that day are already logged on the track (by voice, in the app or on the track page), choose "Completed — hours already logged" so they are not logged twice.</p>
 <div class="table-scroll" tabindex="0" role="region" aria-labelledby="overdue-h">
 <table>
   <caption class="visually-hidden">Ended sessions still awaiting an outcome</caption>

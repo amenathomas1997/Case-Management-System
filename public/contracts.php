@@ -28,15 +28,21 @@ function contract_pct(float $spent, float $amount): int {
     return $amountCents > 0 ? intdiv((int)round($spent * 100) * 100, $amountCents) : 0;
 }
 /** A dollar amount typed on a form. "$50,000", "50000" and "1250.5" are read as typed
- *  (the $ sign, commas and spaces are dropped); null when blank; false when it is not a
- *  plain non-negative amount with at most 2 decimals that fits DECIMAL(12,2). */
+ *  (the $ sign and spaces are dropped, and commas that separate thousands); null when
+ *  blank; false when it is not a plain non-negative amount with at most 2 decimals that
+ *  fits DECIMAL(12,2). A comma anywhere else ("50,00", "1,2,3") is refused, never read
+ *  as a thousands separator that makes the amount 100 times too large. */
 function contract_money_in(mixed $raw): float|false|null {
     if (!is_string($raw)) return false;
-    $v = str_replace(['$', ',', ' '], '', trim($raw));
+    $v = str_replace(['$', ' '], '', trim($raw));
     if ($v === '') return null;
+    if (str_contains($v, ',')) {
+        if (!preg_match('/^\d{1,3}(,\d{3})+(\.\d{1,2})?$/', $v)) return false;
+        $v = str_replace(',', '', $v);
+    }
     return preg_match('/^\d{1,10}(\.\d{1,2})?$/', $v) ? (float)$v : false;
 }
-const CONTRACT_MONEY_HINT = 'Enter a dollar amount of 0 or more, for example 50000 or 50,000.00.';
+const CONTRACT_MONEY_HINT = 'Enter a dollar amount of 0 or more, for example 50000 or 50,000.00, with a period before the cents.';
 /** True when a date field was typed but cannot be read: a value that is not a real
  *  date, one with a year outside 2000 to $yearsAhead years from now (the app's range,
  *  api.php api_date: 5 years, or 25 for a contract end or deliverable due date), or one
@@ -142,7 +148,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['contract_id'])) {
         // As in the app, a spend entry must be a positive amount; it is never stored as $0.00.
         $spendAmount = contract_money_in($_POST['amount'] ?? '');
         $sErrs = [];
-        if (!is_float($spendAmount) || $spendAmount <= 0) $sErrs['spend_amount'] = 'Amount: enter a dollar amount above 0, for example 1250 or 1,250.00.';
+        if (!is_float($spendAmount) || $spendAmount <= 0) $sErrs['spend_amount'] = 'Amount: enter a dollar amount above 0, for example 1250 or 1,250.00, with a period before the cents.';
         if (contract_date_bad('spent_on')) $sErrs['spent_on'] = 'Date: ' . contract_date_hint();
         if ($sErrs) { keep_input(); keep_field_errors($sErrs); redirect($back); }
         // A date left blank on purpose is today's; the confirmation names the date used.
@@ -233,7 +239,7 @@ if (isset($_GET['id'])) {
       <?php if ($ended): ?>
       <div class="card stat"><span class="stat-num">Ended</span><span class="stat-label"><?= $daysToEnd === 1 ? '1 day ago' : $daysToEnd . ' days ago' ?></span></div>
       <?php else: ?>
-      <div class="card stat"><span class="stat-num"><?= $daysToEnd === null ? '—' : $daysToEnd ?></span><span class="stat-label">Days to end<?= $daysToEnd === 0 ? ' (ends today)' : '' ?></span></div>
+      <div class="card stat"><span class="stat-num"><?= $daysToEnd === null ? '<span aria-hidden="true">—</span><span class="visually-hidden">No end date set</span>' : $daysToEnd ?></span><span class="stat-label">Days to end<?= $daysToEnd === 0 ? ' (ends today)' : '' ?></span></div>
       <?php endif; ?>
     </div>
     <div class="progress-wrap card">
@@ -267,7 +273,7 @@ if (isset($_GET['id'])) {
         <?php foreach ($deliverables as $d): $overdue = $d['due_date'] && $d['due_date'] < $today && $d['status'] !== 'Accepted'; ?>
           <tr>
             <th scope="row"><?= h($d['title']) ?><?= $d['notes'] ? '<br><span class="muted">' . h($d['notes']) . '</span>' : '' ?></th>
-            <td><?= $d['due_date'] ? ($overdue ? '<strong class="field-error">' . fmt_date($d['due_date']) . ' — overdue</strong>' : fmt_date($d['due_date'])) : '—' ?></td>
+            <td><?= $d['due_date'] ? ($overdue ? '<strong class="field-error">' . fmt_date($d['due_date']) . ' — overdue</strong>' : fmt_date($d['due_date'])) : no_date_mark(true) ?></td>
             <td>
               <form method="post" action="contracts.php" class="inline-form"><?= csrf_field() ?>
                 <input type="hidden" name="contract_id" value="<?= $cid ?>"><input type="hidden" name="deliverable_id" value="<?= (int)$d['id'] ?>">
@@ -387,7 +393,7 @@ page_header($showClosed ? 'Closed contracts' : 'Contracts', $user, 'contracts');
       <?php else: ?>
       <td class="num"><?= fmt_money((float)$c['spent']) ?> <strong<?= $pct >= 100 ? ' class="field-error"' : '' ?>>(<?= $pct ?>%)<?= $pct >= 100 ? ((float)$c['spent'] > (float)$c['amount'] ? ' over budget' : ' fully spent') : '' ?></strong></td>
       <?php endif; ?>
-      <td><?= $c['end_date'] ? ($endingSoon ? '<strong class="field-error">' . fmt_date($c['end_date']) . ($c['end_date'] < $today ? ' — ended' : ' — ending soon') . '</strong>' : fmt_date($c['end_date'])) : '—' ?></td>
+      <td><?= $c['end_date'] ? ($endingSoon ? '<strong class="field-error">' . fmt_date($c['end_date']) . ($c['end_date'] < $today ? ' — ended' : ' — ending soon') . '</strong>' : fmt_date($c['end_date'])) : no_date_mark(true) ?></td>
       <td class="num"><?= (int)$c['open_deliv'] ?></td>
     </tr>
   <?php endforeach; ?>

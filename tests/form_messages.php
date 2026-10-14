@@ -33,3 +33,10 @@ $refused = array_filter(['https://127.0.0.1/', 'https://10.0.0.5/', 'https://[::
     fn(string $u): bool => ai_endpoint_ips($u) !== null);
 check($refused === [] && ai_endpoint_ips('https://8.8.8.8/') === ['8.8.8.8'],
     'ai_endpoint_ips refuses http and internal addresses and returns a public https address');
+// Shared, benchmarking and translated ranges reach internal hosts too: carrier-grade
+// NAT and a cloud metadata address in it, benchmarking, NAT64 and 6to4 forms of a
+// private IPv4 address. A public IPv6 address is still accepted.
+$refused = array_filter(['https://100.100.100.200/', 'https://100.64.0.1/', 'https://198.18.0.1/', 'https://[64:ff9b::a00:1]/', 'https://[2002:a00:1::1]/'],
+    fn(string $u): bool => ai_endpoint_ips($u) !== null);
+check($refused === [] && ai_endpoint_ips('https://[2606:4700::1111]/') === ['2606:4700::1111'],
+    'ai_endpoint_ips refuses shared, benchmarking, NAT64 and 6to4 addresses and accepts a public IPv6 address');

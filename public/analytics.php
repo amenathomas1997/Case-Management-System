@@ -77,7 +77,7 @@ page_header('Analytics', $user, 'analytics');
     <span class="stat-label">SMART goals achieved (<?= $goalAchieved ?> of <?= $goalTotal ?>)</span></div>
   <div class="card stat"><span class="stat-num"><?= $closedTotal ? round($rehab / $closedTotal * 100) : 0 ?>%</span>
     <span class="stat-label">Closures rehabilitated (<?= $rehab ?> of <?= $closedTotal ?>)</span></div>
-  <div class="card stat"><span class="stat-num"><?= $avgRow['avg_hours'] ? number_format((float)$avgRow['avg_hours'], 1) : '—' ?></span>
+  <div class="card stat"><span class="stat-num"><?= $avgRow['avg_hours'] ? number_format((float)$avgRow['avg_hours'], 1) : '<span aria-hidden="true">—</span><span class="visually-hidden">Not applicable (no achieved goals with logged hours)</span>' ?></span>
     <span class="stat-label">Avg training hours per achieved goal</span></div>
   <div class="card stat"><span class="stat-num"><?= fmt_money((float)array_sum(array_map(fn($p) => $p['status'] !== 'Draft' ? (float)$p['outstanding'] : 0, $pay))) ?></span>
     <span class="stat-label">Invoiced, not yet paid</span></div>

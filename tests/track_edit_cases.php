@@ -38,3 +38,13 @@ check((float)$db->query("SELECT hourly_rate FROM work_logs WHERE id=$draftLog")-
     'A rate change re-prices a draft invoice\'s work and re-totals the draft at the new rate, expenses kept');
 $db->exec("DELETE FROM work_logs WHERE id IN ($unbilled,$sentLog,$draftLog)");
 $db->exec("DELETE FROM invoices WHERE id IN ($sentInvoice,$draftInvoice)");
+// A new authorization number reaches the header a Draft invoice captured (with the
+// track's funding agency); a Submitted invoice keeps what it was sent with, and a
+// Draft made before headers were captured (no auth_number) shows the track's anyway.
+$db->exec("INSERT INTO invoices(track_id,invoice_number,status,auth_number,funding_agency) VALUES(1,'TE-HDR-DRAFT','Draft','AUTH-TEST','Earlier funder'),(1,'TE-HDR-OLD','Draft',NULL,NULL),(1,'TE-HDR-SENT','Submitted','AUTH-TEST','Earlier funder')");
+$header=fn(string $number):array=>$db->query("SELECT auth_number,funding_agency FROM invoices WHERE invoice_number='$number'")->fetch();
+[$code,$out,$err]=$editTrack(['auth_number'=>'AUTH-RENEWED']);
+check($code===0&&$err===''&&$header('TE-HDR-DRAFT')===['auth_number'=>'AUTH-RENEWED','funding_agency'=>'Test funder']
+    &&$header('TE-HDR-OLD')===['auth_number'=>null,'funding_agency'=>null]&&$header('TE-HDR-SENT')===['auth_number'=>'AUTH-TEST','funding_agency'=>'Earlier funder'],
+    'A new authorization number updates the header of a Draft invoice that captured one, and leaves a submitted invoice and an uncaptured draft as they were'.($err?': '.$err:''));
+$db->exec("DELETE FROM invoices WHERE invoice_number IN ('TE-HDR-DRAFT','TE-HDR-OLD','TE-HDR-SENT')");

@@ -30,9 +30,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
                 complete_task_by_key('preq-' . $id, (int)$user['id']);
             } elseif (in_array($row['status'], $closed, true)) {
                 // Opened again: so is its follow-up task (only this request's own task),
-                // so it is back on the assignee's list with its original due date.
-                db()->prepare("UPDATE tasks SET status = 'Open', done_at = NULL, done_by = NULL WHERE auto_key = ? AND status = 'Done'")
-                    ->execute(['preq-' . $id]);
+                // with its original due date. It goes to the client's instructor as of now
+                // (an active account; unassigned otherwise, as when the portal opened it),
+                // so a former instructor of a reassigned client never gets the request back.
+                $owner = db()->prepare('SELECT u.id FROM clients c JOIN users u ON u.id = c.assigned_to AND u.is_active = 1 WHERE c.id = ?');
+                $owner->execute([(int)$row['client_id']]);
+                $ownerId = $owner->fetchColumn();
+                db()->prepare("UPDATE tasks SET status = 'Open', done_at = NULL, done_by = NULL, assigned_to = ? WHERE auto_key = ? AND status = 'Done'")
+                    ->execute([$ownerId !== false ? (int)$ownerId : null, 'preq-' . $id]);
             }
             db()->commit();
         } catch (Throwable $e) {
@@ -48,27 +53,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
 
 $scoped = caseload_scoped();
 $showDone = !empty($_GET['all']);
+$scopeSql = $scoped ? ' AND c.assigned_to = ?' : '';
+$scopeArg = $scoped ? [(int)$user['id']] : [];
+// 300 rows are listed; one more is read only to know whether any were left out, so
+// the page never claims to show "all" requests when it does not.
 $sql = "SELECT pr.*, c.name AS client_name, c.id AS cid, s.start_at
     FROM portal_requests pr JOIN clients c ON c.id = pr.client_id
     LEFT JOIN scheduled_sessions s ON s.id = pr.session_id
-    WHERE 1=1" . ($showDone ? '' : " AND pr.status IN ('New','In Progress')") . ($scoped ? ' AND c.assigned_to = ?' : '') . '
-    ORDER BY pr.status = \'New\' DESC, pr.created_at DESC LIMIT 300';
+    WHERE 1=1" . ($showDone ? '' : " AND pr.status IN ('New','In Progress')") . $scopeSql . '
+    ORDER BY pr.status = \'New\' DESC, pr.created_at DESC LIMIT 301';
 $st = db()->prepare($sql);
-$st->execute($scoped ? [(int)$user['id']] : []);
+$st->execute($scopeArg);
 $rows = $st->fetchAll();
-$newCount = count(array_filter($rows, fn($r) => $r['status'] === 'New'));
+$truncated = count($rows) > 300;
+$rows = array_slice($rows, 0, 300);
+// Counted over every request in scope, not only the rows listed.
+$nc = db()->prepare("SELECT COUNT(*) FROM portal_requests pr JOIN clients c ON c.id = pr.client_id WHERE pr.status = 'New'" . $scopeSql);
+$nc->execute($scopeArg);
+$newCount = (int)$nc->fetchColumn();
 
 page_header('Client requests', $user, 'portal_requests');
 ?>
 <h1>Client self-service requests</h1>
 <p class="muted">What clients have asked for from their portal<?= $scoped ? ' (your caseload)' : '' ?>. <?= $newCount ?> new.
-  <?= $showDone ? 'Showing all requests, including done and declined ones.' : 'Showing open requests (new and in progress); done and declined requests are hidden.' ?></p>
+  <?= $showDone ? ($truncated ? 'Showing the 300 most recent requests (new ones first), including done and declined ones; older requests are not listed.' : 'Showing all requests, including done and declined ones.')
+      : ($truncated ? 'Showing 300 open requests (new and in progress, new ones first); more open requests are not listed. Done and declined requests are hidden.' : 'Showing open requests (new and in progress); done and declined requests are hidden.') ?></p>
 <?php // The link text says what the list will show, read alone in a links list. ?>
 <div class="page-actions"><a class="btn btn-secondary btn-sm" href="portal_requests.php<?= $showDone ? '' : '?all=1' ?>"><?= $showDone ? 'Show open requests only' : 'Show all requests, including done and declined' ?></a></div>
 
 <div class="table-scroll" tabindex="0" role="region" aria-label="Client requests">
 <table>
-  <caption class="visually-hidden"><?= $showDone ? 'All client self-service requests' : 'Open client self-service requests (new and in progress)' ?></caption>
+  <caption class="visually-hidden"><?= $showDone ? ($truncated ? 'Client self-service requests: the 300 most recent' : 'All client self-service requests')
+      : 'Open client self-service requests (new and in progress)' . ($truncated ? ': the first 300' : '') ?></caption>
   <thead><tr><th scope="col">Client</th><th scope="col">Type</th><th scope="col">Details</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
   <tbody>
   <?php if (!$rows): ?><tr><td colspan="5" class="muted">No <?= $showDone ? '' : 'open ' ?>requests.</td></tr><?php endif; ?>
@@ -79,7 +95,10 @@ page_header('Client requests', $user, 'portal_requests');
     <tr>
       <th scope="row"><a href="client.php?id=<?= (int)$r['cid'] ?>"><?= h($r['client_name']) ?></a><br><span class="muted"><?= fmt_date($r['created_at']) ?></span></th>
       <?php // The session link names its date and time and opens the schedule at that session's row. ?>
-      <td><?= h(PREQ_TYPES[$r['type']] ?? 'Request') ?><?= $r['start_at'] ? '<br><a class="muted" href="schedule.php#s-' . (int)$r['session_id'] . '">session ' . fmt_datetime($r['start_at']) . '<span class="visually-hidden"> on the schedule</span></a>' : '' ?></td>
+      <?php // Only staff who can open the schedule get a link to it; others see the date. ?>
+      <td><?= h(PREQ_TYPES[$r['type']] ?? 'Request') ?><?= $r['start_at'] ? (can('schedule')
+          ? '<br><a class="muted" href="schedule.php#s-' . (int)$r['session_id'] . '">session ' . fmt_datetime($r['start_at']) . '<span class="visually-hidden"> on the schedule</span></a>'
+          : '<br><span class="muted">session ' . fmt_datetime($r['start_at']) . '</span>') : '' ?></td>
       <?php // Line breaks the client typed are kept (a list of times stays a list). ?>
       <td><?= $r['details'] ? nl2br(h($r['details'])) : '<span class="muted">—</span>' ?></td>
       <td><span class="badge <?= $r['status'] === 'Done' ? 'badge-closed' : ($r['status'] === 'Declined' ? 'badge-hold' : 'badge-pending') ?>"><?= h($r['status']) ?></span></td>

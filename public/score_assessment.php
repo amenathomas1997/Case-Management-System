@@ -27,6 +27,10 @@ if (!empty($_GET['scored'])) {
     $items = $its->fetchAll();
     $scaleOpts = instrument_scale($rec);
     $pct = round((float)$rec['pct']);
+    // The percentage runs from the lowest possible total (items x the scale's
+    // lowest rating), so a scale that does not start at 0 shows its whole range.
+    $recMin = (int)$rec['scale_min'] < (int)$rec['scale_max'] ? (int)$rec['scale_min'] : 0;
+    $recLow = count($items) * $recMin;
     // Named for the instrument and client, so two open tabs can be told apart.
     page_header('Scored assessment: ' . $rec['instrument'] . ' — ' . $client['name'], $user, 'clients');
     ?>
@@ -34,7 +38,7 @@ if (!empty($_GET['scored'])) {
     <h1><?= h($rec['instrument']) ?></h1>
     <p class="muted"><?= h($client['name']) ?> · <?= fmt_date($rec['assessed_on']) ?> · by <?= h($rec['assessor'] ?? 'Unknown') ?></p>
     <div class="progress-wrap card">
-      <label for="sa-score" class="progress-caption"><strong>Score:</strong> <?= (int)$rec['total_score'] ?> of <?= (int)$rec['max_score'] ?> (<?= $pct ?>%)</label>
+      <label for="sa-score" class="progress-caption"><strong>Score:</strong> <?= (int)$rec['total_score'] ?> <?= $recLow === 0 ? 'of ' . (int)$rec['max_score'] : 'on a range of ' . $recLow . ' to ' . (int)$rec['max_score'] ?> (<?= $pct ?>%)</label>
       <progress id="sa-score" class="hours" max="100" value="<?= $pct ?>"><?= $pct ?>%</progress>
     </div>
     <table><caption class="visually-hidden">Ratings for <?= h($rec['instrument']) ?>, <?= fmt_date($rec['assessed_on']) ?></caption>
@@ -104,7 +108,7 @@ if ($saving) {
             db()->commit();
         } catch (Throwable $e) { db()->rollBack(); throw $e; }
         audit($user['id'], 'assessment.scored', 'client', $cid, $instrument['name'] . ': ' . $total . '/' . $max);
-        flash('Scored assessment saved (' . $total . ' of ' . $max . ').'
+        flash('Scored assessment saved (' . $total . ($n * $sMin === 0 ? ' of ' . $max : ' on a range of ' . ($n * $sMin) . ' to ' . $max) . ', ' . round($pct) . '%).'
             . (empty($instrument['active']) ? ' This instrument has since been retired, so it is no longer offered for new assessments.' : ''));
         redirect('client.php?id=' . $cid . '&tab=assessments');
     }

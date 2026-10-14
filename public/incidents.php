@@ -24,11 +24,19 @@ function incident_clients(array $user): array {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_incident'])) {
     $cid = (int)($_POST['client_id'] ?? 0) ?: null;
-    if ($cid) scope_check_client_id($cid, $user);
     // A safety record is never quietly altered: a missing or invalid value is
     // refused with a message on its field, the same rules the app follows.
     $in = fn(string $k): string => trim(is_string($_POST[$k] ?? null) ? $_POST[$k] : '');
     $incErrs = [];
+    // The chosen client may have been merged, purged or reassigned since the form
+    // was opened: the report is sent back with everything typed, never lost.
+    if ($cid) {
+        $cq = db()->prepare('SELECT assigned_to FROM clients WHERE id = ?');
+        $cq->execute([$cid]);
+        $cOwner = $cq->fetch();
+        if (!$cOwner) $incErrs['client_id'] = 'That client record no longer exists (it may have been merged into another record or removed). Choose the client again, or choose None.';
+        elseif ($scoped && (int)$cOwner['assigned_to'] !== (int)$user['id']) $incErrs['client_id'] = 'That client is no longer on your caseload. Choose a client on your caseload, or choose None.';
+    }
     $date = valid_date($in('incident_date'), 2000, (int)date('Y'));
     if ($in('incident_date') === '') $incErrs['incident_date'] = 'Enter the date of the incident.';
     elseif ($date === null) $incErrs['incident_date'] = 'Enter the incident date as a valid date (YYYY-MM-DD) from the year 2000 onwards.';
@@ -46,8 +54,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_incident'])) {
     if (mb_strlen($location) > 190) $incErrs['location'] = 'Location is too long (190 characters maximum).';
     if (mb_strlen($action) > 5000) $incErrs['action_taken'] = 'Action taken is too long (5,000 characters maximum).';
     if ($incErrs) { keep_input(); keep_field_errors($incErrs); redirect('incidents.php'); }
-    db()->prepare('INSERT INTO incidents (client_id, reported_by, incident_date, location, type, severity, description, action_taken) VALUES (?,?,?,?,?,?,?,?)')
-        ->execute([$cid, (int)$user['id'], $date, $location !== '' ? $location : null, $type, $sev, $desc, $action !== '' ? $action : null]);
+    try {
+        db()->prepare('INSERT INTO incidents (client_id, reported_by, incident_date, location, type, severity, description, action_taken) VALUES (?,?,?,?,?,?,?,?)')
+            ->execute([$cid, (int)$user['id'], $date, $location !== '' ? $location : null, $type, $sev, $desc, $action !== '' ? $action : null]);
+    } catch (PDOException $e) {
+        // The client removed in the moment since the check above (fk_inc_client).
+        if ($cid === null || (string)$e->getCode() !== '23000') throw $e;
+        keep_input();
+        keep_field_errors(['client_id' => 'That client record no longer exists (it may have been merged into another record or removed). Choose the client again, or choose None.']);
+        redirect('incidents.php');
+    }
     $iid = (int)db()->lastInsertId();
     audit($user['id'], 'incident.add', 'incident', $iid, $type . ' / ' . $sev);
     if (in_array($sev, ['High', 'Critical'], true)) notify_admin_users($sev . ' incident reported (' . $type . ')', 'incidents.php');
@@ -108,15 +124,15 @@ $sevBadge = fn($s) => '<span class="badge ' . ($s === 'Critical' || $s === 'High
   <h2 id="add-h">Report an incident</h2>
   <p class="muted">Fields marked with an asterisk (*) are required. Check the details before you log the incident: afterwards only its status can be changed.</p>
   <form method="post" action="incidents.php" class="stacked" novalidate><?= csrf_field() ?>
-    <?= form_error_summary(['incident_date' => 'Date', 'type' => 'Type', 'severity' => 'Severity', 'location' => 'Location', 'description' => 'What happened', 'action_taken' => 'Action taken']) ?>
+    <?= form_error_summary(['incident_date' => 'Date', 'type' => 'Type', 'severity' => 'Severity', 'client_id' => 'Client', 'location' => 'Location', 'description' => 'What happened', 'action_taken' => 'Action taken']) ?>
     <div class="grid grid-4">
       <div class="field"><label for="incident_date">Date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><input type="date" id="incident_date" name="incident_date" required max="<?= date('Y-m-d') ?>" value="<?= h(old_in('incident_date', date('Y-m-d'))) ?>" <?= field_aria('incident_date') ?>><?= field_error('incident_date') ?></div>
       <div class="field"><label for="type">Type <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><select id="type" name="type" required <?= field_aria('type') ?>><option value="">Choose a type</option><?php foreach (INCIDENT_TYPES as $t): ?><option<?= old_in('type') === $t ? ' selected' : '' ?>><?= h($t) ?></option><?php endforeach; ?></select><?= field_error('type') ?></div>
       <div class="field"><label for="severity">Severity <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><select id="severity" name="severity" required <?= field_aria('severity') ?>><option value="">Choose a severity</option><?php foreach (INCIDENT_SEVERITY as $s): ?><option<?= old_in('severity') === $s ? ' selected' : '' ?>><?= h($s) ?></option><?php endforeach; ?></select><?= field_error('severity') ?></div>
       <div class="field"><label for="client_id">Client <span class="hint">optional</span></label>
-        <select id="client_id" name="client_id"><option value="">— None —</option>
+        <select id="client_id" name="client_id" <?= field_aria('client_id') ?>><option value="">— None —</option>
           <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= old_in('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
-        </select></div>
+        </select><?= field_error('client_id') ?></div>
     </div>
     <div class="field"><label for="location">Location</label><input type="text" id="location" name="location" maxlength="190" value="<?= h(old_in('location')) ?>" <?= field_aria('location') ?>><?= field_error('location') ?></div>
     <div class="field"><label for="description">What happened? <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><textarea id="description" name="description" rows="3" required <?= field_aria('description') ?>><?= h(old_in('description')) ?></textarea><?= field_error('description') ?></div>

@@ -136,6 +136,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_reservation'])) {
     if ($fromRaw !== '' && $from === null) $dateErrors['needed_from'] = 'Needed from: enter a valid date (YYYY-MM-DD) with a year from 2000 to ' . $maxYear . '.';
     if ($untilRaw !== '' && $until === null) $dateErrors['needed_until'] = 'Needed until: enter a valid date (YYYY-MM-DD) with a year from 2000 to ' . $maxYear . '.';
     elseif ($from !== null && $until !== null && $until < $from) $dateErrors['needed_until'] = '"Needed until" cannot be before "needed from".';
+    $resNotes = is_string($_POST['notes'] ?? null) ? trim($_POST['notes']) : '';
+    if (mb_strlen($resNotes) > 500) $dateErrors['res_notes'] = 'Notes must be 500 characters or fewer.';
     if ($dateErrors) { keep_input(); keep_field_errors($dateErrors); redirect('equipment.php'); }
     $pdo = db();
     $pdo->beginTransaction();
@@ -151,21 +153,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_reservation'])) {
             flash('That item is retired and cannot be reserved.', 'error');
             redirect('equipment.php');
         }
-        $held = $pdo->prepare("SELECT COUNT(*) FROM equipment_reservations WHERE equipment_id = ? AND status = 'Reserved'");
+        // One active hold per client and item: a double submit, or re-adding a client
+        // who is already listed, would count them twice in the queue.
+        $dup = $pdo->prepare("SELECT status FROM equipment_reservations WHERE equipment_id = ? AND client_id = ? AND status IN ('Reserved','Waitlist') LIMIT 1");
+        $dup->execute([$eid, $cid]);
+        if ($dupStatus = $dup->fetchColumn()) {
+            $pdo->rollBack();
+            keep_input();
+            keep_field_errors(['res_client_id' => 'Client: this client ' . ($dupStatus === 'Reserved' ? 'already has a reservation for' : 'is already on the waitlist for') . ' that item (listed above), so nothing was added. To change its dates, cancel that entry and add it again' . ($dupStatus === 'Reserved' ? '.' : ' (it then joins the end of the waitlist).')]);
+            redirect('equipment.php');
+        }
+        // Holds that lapsed (their "needed until" date passed) or belong to a closed or
+        // archived client do not count (equipment_hold_live_sql()).
+        $live = equipment_hold_live_sql('er');
+        $held = $pdo->prepare("SELECT COUNT(*) FROM equipment_reservations er WHERE er.equipment_id = ? AND er.status = 'Reserved' AND $live");
         $held->execute([$eid]);
-        // Reserved = the one hold on an item that is available right now.
-        // Anything else (item out, in repair, or already held) joins the waitlist.
-        $rstatus = ($estatus === 'Available' && (int)$held->fetchColumn() === 0) ? 'Reserved' : 'Waitlist';
+        $heldNow = (int)$held->fetchColumn() > 0;
+        $waiting = $pdo->prepare("SELECT COUNT(*) FROM equipment_reservations er WHERE er.equipment_id = ? AND er.status = 'Waitlist' AND $live");
+        $waiting->execute([$eid]);
+        $queueAhead = (int)$waiting->fetchColumn() > 0;
+        // Reserved = the one hold on an item that is available right now, when nobody
+        // is already waiting for it. Anything else (item out, in repair, already held,
+        // or clients waiting since earlier) joins the end of the waitlist.
+        $rstatus = ($estatus === 'Available' && !$heldNow && !$queueAhead) ? 'Reserved' : 'Waitlist';
         $pdo->prepare('INSERT INTO equipment_reservations (equipment_id, client_id, reserved_by, needed_from, needed_until, status, notes) VALUES (?,?,?,?,?,?,?)')
-            ->execute([$eid, $cid, $user['id'], $from, $until, $rstatus,
-                mb_substr(trim($_POST['notes'] ?? ''), 0, 500) ?: null]);
+            ->execute([$eid, $cid, $user['id'], $from, $until, $rstatus, $resNotes !== '' ? $resNotes : null]);
+        // An available item with clients waiting and no hold (left so by an older
+        // release, or by a hold that lapsed) gives the hold to whoever has waited
+        // longest; this new entry is behind them. The promotion is audited and its
+        // client's instructor told by promote_equipment_waitlist().
+        $promoted = ($estatus === 'Available' && !$heldNow && $queueAhead) ? promote_equipment_waitlist($eid, (int)$user['id']) : null;
         $pdo->commit();
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         throw $e;
     }
     audit($user['id'], 'equipment.reserve', 'equipment', $eid, 'client #' . $cid . ' (' . $rstatus . ')');
-    flash($rstatus === 'Reserved' ? 'Item reserved.' : 'Added to the waitlist.');
+    flash($rstatus === 'Reserved' ? 'Item reserved.' : 'Added to the end of the waitlist.'
+        . ($promoted !== null ? ' The item is available, so it is now held for the client who has waited longest.' : ''));
     redirect('equipment.php');
 }
 
@@ -176,13 +201,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cancel_reservation'])
     $r->execute([$resId]);
     if ($row = $r->fetch()) {
         if (caseload_scoped() && (int)$row['assigned_to'] !== (int)$user['id']) { flash('Not your caseload.', 'error'); redirect('equipment.php#res-h'); }
-        // Only an active hold or waitlist entry is cancelled: one already fulfilled by
-        // a loan (or cancelled from another page) keeps its history.
-        $cancel = db()->prepare("UPDATE equipment_reservations SET status = 'Cancelled' WHERE id = ? AND status IN ('Reserved','Waitlist')");
-        $cancel->execute([$resId]);
-        if ($cancel->rowCount() === 1) {
+        // The item row is locked first (the order loans use), so a cancelled hold on an
+        // available item passes to the client who has waited longest exactly once.
+        $pdo = db();
+        $pdo->beginTransaction();
+        try {
+            $lock = $pdo->prepare('SELECT status FROM equipment WHERE id = ? FOR UPDATE');
+            $lock->execute([(int)$row['equipment_id']]);
+            $lock->fetchColumn();
+            $was = $pdo->prepare('SELECT status FROM equipment_reservations WHERE id = ? FOR UPDATE');
+            $was->execute([$resId]);
+            $wasStatus = $was->fetchColumn();
+            // Only an active hold or waitlist entry is cancelled: one already fulfilled by
+            // a loan (or cancelled from another page) keeps its history.
+            $cancel = $pdo->prepare("UPDATE equipment_reservations SET status = 'Cancelled' WHERE id = ? AND status IN ('Reserved','Waitlist')");
+            $cancel->execute([$resId]);
+            $cancelled = $cancel->rowCount() === 1;
+            $promoted = ($cancelled && $wasStatus === 'Reserved') ? promote_equipment_waitlist((int)$row['equipment_id'], (int)$user['id']) : null;
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $e;
+        }
+        if ($cancelled) {
             audit($user['id'], 'equipment.reservation_cancel', 'equipment', (int)$row['equipment_id'], 'client #' . (int)$row['client_id']);
-            flash('Reservation cancelled.');
+            flash('Reservation cancelled.' . ($promoted !== null ? ' The item is now held for the client who has waited longest on its waitlist.' : ''));
         } else {
             flash('That reservation is no longer active (it was already fulfilled or cancelled).', 'error');
         }
@@ -201,7 +244,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['return_item'])) {
     $l->execute([$lid]);
     if ($loan = $l->fetch()) {
         scope_check_client_id((int)$loan['client_id'], $user);
-        try { return_equipment($lid); }
+        // A returned item that is free again goes to the client who has waited longest
+        // (return_equipment() promotes the waitlist and tells that client's instructor).
+        try { return_equipment($lid, (int)$user['id']); }
         catch (DomainException $e) { flash($e->getMessage(), 'error'); redirect('equipment.php#inv-h'); }
         audit($user['id'], 'equipment.return', 'equipment', (int)$loan['equipment_id']);
         flash('Item marked returned.');
@@ -258,8 +303,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
         }
         $cancelledHolds = 0;
         $holders = [];
+        $promoted = null;
         if ($refusal === null && $from !== $to) {
             $pdo->prepare('UPDATE equipment SET status = ? WHERE id = ?')->execute([$to, $eid]);
+            // Back in service (from Repair, say): the client who has waited longest for
+            // the item gets the hold, under the lock taken above.
+            if ($to === 'Available') $promoted = promote_equipment_waitlist($eid, (int)$user['id']);
             // A retired item never returns to service, so its holds and waitlist entries
             // could never be met: they are cancelled with the retirement, and whoever made
             // each one is told, so no client is left expecting the device.
@@ -284,7 +333,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
         audit($user['id'], 'equipment.status', 'equipment', $eid, $from . ' to ' . $to
             . ($cancelledHolds ? '; ' . $cancelledHolds . ' reservation' . ($cancelledHolds === 1 ? '' : 's') . ' cancelled' : ''));
         notify_retired_holders($eid, $holders, (int)$user['id']);
-        flash('Status updated.' . ($cancelledHolds ? ' ' . $cancelledHolds . ' reservation' . ($cancelledHolds === 1 ? ' was' : 's were') . ' cancelled because the item is retired.' : ''));
+        flash('Status updated.' . ($cancelledHolds ? ' ' . $cancelledHolds . ' reservation' . ($cancelledHolds === 1 ? ' was' : 's were') . ' cancelled because the item is retired.' : '')
+            . ($promoted !== null ? ' The item is now held for the client who has waited longest on its waitlist.' : ''));
     }
     redirect('equipment.php#inv-h');
 }
@@ -296,13 +346,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['log_service'])) {
     if (!$ex->fetchColumn()) { flash('Item not found.', 'error'); redirect('equipment.php'); }
     // "Last serviced" only ever moves forward, so a date that cannot be read is refused
     // rather than read as today, and a future date (a mistyped year) is refused rather
-    // than stored where it would hide the item's next service for years. The error is
+    // than stored where it would hide the item's next service for years. A year before
+    // 2000 (0026 for 2026, say) is refused as the app refuses it. The error is
     // shown on this item's date field with what was typed kept.
     $dateRaw = trim((string)($_POST['service_date'] ?? ''));
-    $date = valid_date($dateRaw);
+    $date = valid_date($dateRaw, 2000, (int)date('Y'));
     $svcErrors = [];
     if ($dateRaw === '') $svcErrors['service_date_' . $eid] = 'Service date is required.';
-    elseif ($date === null) $svcErrors['service_date_' . $eid] = 'Service date: enter a valid date (YYYY-MM-DD).';
+    elseif ($date === null) $svcErrors['service_date_' . $eid] = 'Service date: enter the full date (month, day and year) with a year from 2000 to ' . date('Y') . '.';
     elseif ($date > date('Y-m-d')) $svcErrors['service_date_' . $eid] = 'Service date cannot be in the future.';
     $type = in_array($_POST['service_type'] ?? '', MAINT_TYPES, true) ? $_POST['service_type'] : 'Maintenance';
     $notes = trim((string)($_POST['service_notes'] ?? ''));
@@ -349,11 +400,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['correct_service'])) {
     $ex = db()->prepare('SELECT id FROM equipment WHERE id = ?'); $ex->execute([$eid]);
     if (!$ex->fetchColumn()) { flash('Item not found.', 'error'); redirect('equipment.php'); }
     $dateRaw = trim((string)($_POST['corrected_date'] ?? ''));
-    $date = valid_date($dateRaw);
+    $date = valid_date($dateRaw, 2000, (int)date('Y'));
     $reason = trim((string)($_POST['correction_reason'] ?? ''));
     $errors = [];
-    // Blank means the item has no service on record.
-    if ($dateRaw !== '' && $date === null) $errors['corrected_date_' . $eid] = 'Corrected last service date: enter a valid date (YYYY-MM-DD), or leave it blank for no service on record.';
+    // Blank means the item has no service on record. A mistyped year is refused, as
+    // when a service is logged.
+    if ($dateRaw !== '' && $date === null) $errors['corrected_date_' . $eid] = 'Corrected last service date: enter the full date (month, day and year) with a year from 2000 to ' . date('Y') . ', or leave it blank for no service on record.';
     elseif ($date !== null && $date > date('Y-m-d')) $errors['corrected_date_' . $eid] = 'Corrected last service date cannot be in the future.';
     if ($reason === '') $errors['correction_reason_' . $eid] = 'Reason for the correction is required.';
     elseif (mb_strlen($reason) > 300) $errors['correction_reason_' . $eid] = 'Reason for the correction must be 300 characters or fewer.';
@@ -441,9 +493,11 @@ if (isset($_GET['scan'])) {
     // Mask the borrower (and the return action) when the loan is outside a
     // caseload-scoped user's caseload — the same masking the inventory list applies.
     $scanOutside = caseload_scoped() && $it['borrower_id'] !== null && (int)$it['borrower_assigned'] !== (int)$user['id'];
-    [$mLabel, $mClass] = maint_status($it['last_service_date'], $it['maintenance_interval_days']);
+    // A retired item is no longer serviced, so it is never shown as due or overdue.
+    [$mLabel, $mClass] = $it['status'] === 'Retired' ? ['Not scheduled (retired)', 'muted'] : maint_status($it['last_service_date'], $it['maintenance_interval_days']);
     // A hold is shown without naming the client, since it may be another caseload's.
-    $hq = db()->prepare("SELECT COUNT(*) FROM equipment_reservations WHERE equipment_id = ? AND status = 'Reserved'");
+    // A lapsed hold, or one for a closed or archived client, does not count.
+    $hq = db()->prepare("SELECT COUNT(*) FROM equipment_reservations er WHERE er.equipment_id = ? AND er.status = 'Reserved' AND " . equipment_hold_live_sql('er'));
     $hq->execute([$sid]);
     $scanHeld = (int)$hq->fetchColumn() > 0;
     ?>
@@ -549,22 +603,26 @@ foreach ($items as $i) {
     if ($daysLeft <= 14) $maintDue++;
 }
 
-// Active reservations / waitlist (caseload-scoped), newest first.
-$resSql = "SELECT er.*, e.name AS item_name, e.status AS item_status, c.name AS client_name, c.id AS cid, u.name AS by_name
+// Active reservations / waitlist (caseload-scoped): holds first, then the waitlist in
+// the order it was joined (the order a freed item passes to the next client).
+// "live" is 0 for a hold that no longer counts (equipment_hold_live_sql()); it stays
+// listed so staff can cancel it.
+$resSql = "SELECT er.*, e.name AS item_name, e.status AS item_status, c.name AS client_name, c.id AS cid, u.name AS by_name,
+        c.status AS client_status, c.archived_at AS client_archived, (" . equipment_hold_live_sql('er') . ") AS live
     FROM equipment_reservations er
     JOIN equipment e ON e.id = er.equipment_id
     JOIN clients c ON c.id = er.client_id
     LEFT JOIN users u ON u.id = er.reserved_by
     WHERE er.status IN ('Reserved','Waitlist')" . (caseload_scoped() ? ' AND c.assigned_to = ?' : '') . "
-    ORDER BY er.status, er.needed_from IS NULL, er.needed_from, er.created_at";
+    ORDER BY er.status, er.created_at, er.id";
 $resStmt = db()->prepare($resSql);
 $resStmt->execute(caseload_scoped() ? [(int)$user['id']] : []);
 $reservations = $resStmt->fetchAll();
 $resCount = [];
 foreach ($reservations as $rr) $resCount[(int)$rr['equipment_id']] = ($resCount[(int)$rr['equipment_id']] ?? 0) + 1;
-// Items with a 'Reserved' hold, for any caseload: the loan picker flags them (without
-// the client) so a hold is never taken over unknowingly.
-$heldIds = array_flip(array_map('intval', db()->query("SELECT DISTINCT equipment_id FROM equipment_reservations WHERE status = 'Reserved'")->fetchAll(PDO::FETCH_COLUMN)));
+// Items with a 'Reserved' hold that still counts, for any caseload: the loan picker
+// flags them (without the client) so a hold is never taken over unknowingly.
+$heldIds = array_flip(array_map('intval', db()->query("SELECT DISTINCT er.equipment_id FROM equipment_reservations er WHERE er.status = 'Reserved' AND " . equipment_hold_live_sql('er'))->fetchAll(PDO::FETCH_COLUMN)));
 
 page_header('Equipment', $user, 'equipment');
 ?>
@@ -622,15 +680,19 @@ page_header('Equipment', $user, 'equipment');
   <?php if ($reservations): ?>
   <div class="table-scroll" tabindex="0" role="region" aria-labelledby="res-cap">
   <table>
-    <caption class="visually-hidden" id="res-cap">Active holds: item, client, hold type and dates needed</caption>
+    <caption class="visually-hidden" id="res-cap">Active holds, then the waitlist in the order it was joined: item, client, hold type and dates needed</caption>
     <thead><tr><th scope="col">Item</th><th scope="col">Client</th><th scope="col">Hold</th><th scope="col">Needed</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
     <tbody>
-    <?php foreach ($reservations as $rr): ?>
+    <?php foreach ($reservations as $rr):
+      // Why a listed hold no longer keeps the item (equipment_hold_live_sql()), in words.
+      $notCounted = (int)$rr['live'] === 1 ? '' : ($rr['client_archived'] !== null ? 'the client is archived' : (str_starts_with((string)$rr['client_status'], 'Closed') ? 'the client\'s case is closed' : 'the "needed until" date has passed')); ?>
       <tr>
         <th scope="row"><?= h($rr['item_name']) ?><br><span class="muted"><?= h($rr['item_status']) ?></span></th>
         <td><a href="client.php?id=<?= (int)$rr['cid'] ?>"><?= h($rr['client_name']) ?></a></td>
-        <td><?= $rr['status'] === 'Reserved' ? '<span class="badge badge-active">Reserved</span>' : '<span class="badge badge-pending">Waitlist</span>' ?></td>
-        <td><?= $rr['needed_from'] ? fmt_date($rr['needed_from']) . ($rr['needed_until'] ? ' – ' . fmt_date($rr['needed_until']) : '') : ($rr['needed_until'] ? 'Until ' . fmt_date($rr['needed_until']) : '—') ?>
+        <td><?= $rr['status'] === 'Reserved' ? '<span class="badge badge-active">Reserved</span>' : '<span class="badge badge-pending">Waitlist</span>' ?>
+          <br><span class="muted">added <?= fmt_date($rr['created_at'], true) ?></span>
+          <?= $notCounted !== '' ? '<br><strong>' . ($rr['status'] === 'Reserved' ? 'No longer holds the item' : 'Passed over when the item is free') . ': ' . h($notCounted) . '. Cancel it if it is no longer needed.</strong>' : '' ?></td>
+        <td><?= $rr['needed_from'] ? fmt_date($rr['needed_from']) . ($rr['needed_until'] ? ' – ' . fmt_date($rr['needed_until']) : '') : ($rr['needed_until'] ? 'Until ' . fmt_date($rr['needed_until']) : no_date_mark(true)) ?>
           <?= $rr['notes'] ? '<br><span class="muted">' . h($rr['notes']) . '</span>' : '' ?></td>
         <td><form method="post" action="equipment.php" class="inline-form"><?= csrf_field() ?>
           <input type="hidden" name="reservation_id" value="<?= (int)$rr['id'] ?>">
@@ -647,7 +709,7 @@ page_header('Equipment', $user, 'equipment');
   $oldRes = fn(string $k): string => old_in('add_reservation') !== '' ? old_in($k) : ''; ?>
   <form method="post" action="equipment.php" class="stacked" style="margin-top:1rem"><?= csrf_field() ?>
     <h3>Reserve or waitlist an item</h3>
-    <?= form_error_summary(['needed_from' => '', 'needed_until' => ''], ['needed_from' => 'res_from', 'needed_until' => 'res_until']) ?>
+    <?= form_error_summary(['res_client_id' => '', 'needed_from' => '', 'needed_until' => '', 'res_notes' => ''], ['res_client_id' => 'res_client', 'needed_from' => 'res_from', 'needed_until' => 'res_until', 'res_notes' => 'res_notes']) ?>
     <?= $requiredNote ?>
     <div class="grid grid-4">
       <div class="field"><label for="res_item">Item <span aria-hidden="true">*</span></label>
@@ -658,14 +720,14 @@ page_header('Equipment', $user, 'equipment');
           <?php endforeach; ?>
         </select></div>
       <div class="field"><label for="res_client">Client <span aria-hidden="true">*</span></label>
-        <select id="res_client" name="client_id" required>
+        <select id="res_client" name="client_id" required <?= field_aria('res_client_id') ?>>
           <option value="">— Choose —</option>
           <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $oldRes('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
-        </select></div>
+        </select><?= field_error('res_client_id') ?></div>
       <div class="field"><label for="res_from">Needed from</label><input type="date" id="res_from" name="needed_from" value="<?= h($oldRes('needed_from')) ?>" <?= field_aria('needed_from') ?>><?= field_error('needed_from') ?></div>
       <div class="field"><label for="res_until">Needed until</label><input type="date" id="res_until" name="needed_until" value="<?= h($oldRes('needed_until')) ?>" <?= field_aria('needed_until') ?>><?= field_error('needed_until') ?></div>
     </div>
-    <div class="field"><label for="res_notes">Notes</label><input type="text" id="res_notes" name="notes" maxlength="500" value="<?= h($oldRes('notes')) ?>"></div>
+    <div class="field"><label for="res_notes">Notes</label><input type="text" id="res_notes" name="notes" maxlength="500" value="<?= h($oldRes('notes')) ?>" <?= field_aria('res_notes') ?>><?= field_error('res_notes') ?></div>
     <button type="submit" name="add_reservation" value="1" class="btn btn-secondary">Add reservation</button>
   </form>
 </section>
@@ -690,9 +752,10 @@ page_header('Equipment', $user, 'equipment');
           <span class="badge <?= $bm[$i['status']] ?>"><?= h($i['status']) ?></span>
           <?= $i['overdue'] ? '<br><strong class="field-error">Overdue since ' . fmt_date($i['due_date']) . '</strong>' : '' ?>
           <?= ($resCount[(int)$i['id']] ?? 0) ? '<br><span class="muted">' . (int)$resCount[(int)$i['id']] . ' waiting</span>' : '' ?></td>
-      <td><?= $i['outside_caseload'] ? 'On loan (not your caseload)' : ($i['borrower'] ? '<a href="client.php?id=' . (int)$i['borrower_id'] . '">' . h($i['borrower']) . '</a><br><span class="muted">out ' . fmt_date($i['loaned_at']) . ($i['due_date'] ? ', due ' . fmt_date($i['due_date']) : '') . '</span>' : '—') ?></td>
+      <td><?= $i['outside_caseload'] ? 'On loan (not your caseload)' : ($i['borrower'] ? '<a href="client.php?id=' . (int)$i['borrower_id'] . '">' . h($i['borrower']) . '</a><br><span class="muted">out ' . fmt_date($i['loaned_at']) . ($i['due_date'] ? ', due ' . fmt_date($i['due_date']) : '') . '</span>' : '<span aria-hidden="true">—</span><span class="visually-hidden">not on loan</span>') ?></td>
       <td>
-        <?php [$mLabel, $mClass] = maint_status($i['last_service_date'], $i['maintenance_interval_days']); $hist = $maintHist[(int)$i['id']] ?? [];
+        <?php // A retired item is no longer serviced, so it is never shown as due or overdue.
+        [$mLabel, $mClass] = $i['status'] === 'Retired' ? ['Not scheduled (retired)', 'muted'] : maint_status($i['last_service_date'], $i['maintenance_interval_days']); $hist = $maintHist[(int)$i['id']] ?? [];
         // A refused service date (or correction) comes back on this item's own fields,
         // with what was typed kept and its Service section open.
         $iid = (int)$i['id'];
@@ -790,7 +853,7 @@ page_header('Equipment', $user, 'equipment');
       <div class="field"><label for="name">Item name <span aria-hidden="true">*</span></label>
         <input type="text" id="name" name="name" required maxlength="190" value="<?= h($oldItem('name')) ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
       <div class="field"><label for="category">Category</label>
-        <select id="category" name="category"><?= select_options(EQUIP_CATEGORIES, $oldItem('category') ?: null) ?></select></div>
+        <select id="category" name="category"><?= select_options(EQUIP_CATEGORIES, $oldItem('category', 'Other')) ?></select></div>
       <div class="field"><label for="serial">Serial number</label>
         <input type="text" id="serial" name="serial" maxlength="120" value="<?= h($oldItem('serial')) ?>" <?= field_aria('serial') ?>><?= field_error('serial') ?></div>
       <div class="field"><label for="item_condition">Condition</label>

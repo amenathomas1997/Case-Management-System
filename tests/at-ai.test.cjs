@@ -112,9 +112,20 @@ async function main() {
     r = await probe(async () => ({ok: false, status, json: async () => { throw new Error('not JSON'); }}));
     assert.match(r.status, /session has changed or ended/); unchanged(r);
   }
-  r = await probe(async () => ({ok: true, status: 200, json: async () => { const e = new Error('Unexpected token <'); e.name = 'SyntaxError'; throw e; }}));
+  const notJson = async () => { const e = new Error('Unexpected token <'); e.name = 'SyntaxError'; throw e; };
+  // An ended session redirected to the sign-in page, which answers 200 with HTML.
+  r = await probe(async () => ({ok: true, status: 200, redirected: true, url: 'https://example.test/login.php', json: notJson}));
   assert.match(r.status, /session has changed or ended/); unchanged(r);
   console.log('PASS: A refused or ended session, or a sign-in page instead of JSON, says the session changed and leaves the form unchanged');
+  // Any other reply that is not JSON (a host's error page, or an empty body after a
+  // server error, with or without an error status) is a server problem: the session is fine.
+  for (const status of [502, 504, 508, 500]) {
+    r = await probe(async () => ({ok: false, status, json: notJson}));
+    assert.match(r.status, /server had a problem/); unchanged(r);
+  }
+  r = await probe(async () => ({ok: true, status: 200, json: notJson}));
+  assert.match(r.status, /server had a problem/); unchanged(r);
+  console.log('PASS: A host error page or empty server reply says the server had a problem, not that the session changed, and leaves the form unchanged');
   r = await probe(async () => { throw new TypeError('Failed to fetch'); });
   assert.match(r.status, /could not reach the server/); unchanged(r);
   console.log('PASS: A request that cannot reach the server says so and leaves the form unchanged');

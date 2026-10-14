@@ -1,6 +1,7 @@
 <?php
 require __DIR__ . '/inc/bootstrap.php';
 require __DIR__ . '/inc/layout.php';
+require_once __DIR__ . '/inc/client_merge.php'; // send_session_move_notices()
 csrf_check();
 $user = require_login();
 require_perm('clients');
@@ -97,6 +98,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     elseif (!$client || strcasecmp($counselorIn, (string)($client['counselor_email'] ?? '')) !== 0) $counselorVerified = 1;
     else $counselorVerified = $wasVerified || !empty($_POST['confirm_counselor']) ? 1 : 0;
     $vals[] = $counselorVerified;
+    // The client's own email the same way (email_verified): session reminders, the
+    // outcome survey and the portal link go to it only once it is confirmed. One
+    // copied from the public referral form stays unconfirmed until staff tick
+    // "Confirmed with the client"; an address typed here counts as confirmed.
+    $emailIn = $vals[2];
+    $wasEmailVerified = !$client || (int)$client['email_verified'] === 1;
+    if ($emailIn === null || !$client || strcasecmp($emailIn, (string)($client['email'] ?? '')) !== 0) $emailVerified = 1;
+    else $emailVerified = $wasEmailVerified || !empty($_POST['confirm_email']) ? 1 : 0;
+    $vals[] = $emailVerified;
     // RSA guidance: Pre-ETS serves students with disabilities, generally ages 14–21.
     // Advisory only — state rules vary, so we flag rather than block. It is added
     // to the success message, so a save that went through is never announced as an error.
@@ -120,12 +130,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $movedTasks = 0;
             $movedReferrals = 0;
             $movedSessions = 0;
+            $movedSessionRows = [];
+            $portalRevoked = 0;
+            $redraftedInvoices = 0;
+            // Draft invoices bill whoever the client's counselor is now (the same
+            // Bill to that generate_invoice() writes); sent ones keep what was sent.
+            // A counselor email not yet confirmed (counselor_verified = 0) is left off.
+            $billTo = fn(array $c): string => implode("\n", array_filter(array_map(fn($v) => trim((string)$v),
+                [$c['counselor_name'] ?? null, $c['counselor_agency'] ?? null, (int)($c['counselor_verified'] ?? 0) === 1 ? ($c['counselor_email'] ?? null) : null]), fn($v) => $v !== ''));
+            $newBillTo = $billTo(['counselor_name' => $vals[9], 'counselor_agency' => $vals[12], 'counselor_email' => $vals[10], 'counselor_verified' => $counselorVerified]);
             $pdo = db();
             $pdo->beginTransaction();
             try {
                 record_status_change((int)$client['id'], $client['status'], $status, $user['id'], trim($_POST['status_note'] ?? '') ?: null);
-                $pdo->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, client_type=?, school=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, counselor_verified=?'
+                $pdo->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, client_type=?, school=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, counselor_verified=?, email_verified=?'
                     . ($unarchive ? ', archived_at=NULL' : '') . ' WHERE id=?')->execute($vals);
+                // A portal link already emailed to the old address stops working when
+                // the address changes: it may belong to someone else now.
+                if (trim((string)($client['email'] ?? '')) !== '' && strcasecmp((string)($emailIn ?? ''), trim((string)$client['email'])) !== 0) {
+                    $pr = $pdo->prepare('DELETE FROM portal_tokens WHERE client_id = ?');
+                    $pr->execute([(int)$client['id']]);
+                    $portalRevoked = $pr->rowCount();
+                }
+                if ($newBillTo !== $billTo($client)) {
+                    $rb = $pdo->prepare("UPDATE invoices i JOIN training_tracks t ON t.id = i.track_id SET i.bill_to = ?
+                        WHERE t.client_id = ? AND i.status = 'Draft' AND NOT (i.bill_to <=> ?)");
+                    $rb->execute([$newBillTo, (int)$client['id'], $newBillTo]);
+                    $redraftedInvoices = $rb->rowCount();
+                }
                 // The previous instructor's open tasks for this client follow the
                 // client, so nobody is left holding work on a record they may no
                 // longer be able to open. Tasks held by anyone else stay put.
@@ -138,10 +170,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // transfer uses): otherwise the former instructor keeps getting
                 // reminders for a client they may no longer be able to open.
                 // A session needs an instructor, so they stay put when unassigning.
+                // reminder_sent goes back to 0, so the new instructor still gets the
+                // day-before reminder when the old one had already been sent it.
                 if ($oldAssignee !== null && $assignedTo !== null && $oldAssignee !== $assignedTo) {
-                    $ms = $pdo->prepare("UPDATE scheduled_sessions SET user_id = ? WHERE client_id = ? AND user_id = ? AND status = 'Scheduled' AND start_at >= NOW()");
-                    $ms->execute([$assignedTo, (int)$client['id'], $oldAssignee]);
-                    $movedSessions = $ms->rowCount();
+                    $sq = $pdo->prepare("SELECT id, start_at, end_at FROM scheduled_sessions WHERE client_id = ? AND user_id = ? AND status = 'Scheduled' AND start_at >= NOW() ORDER BY start_at, id FOR UPDATE");
+                    $sq->execute([(int)$client['id'], $oldAssignee]);
+                    $movedSessionRows = $sq->fetchAll();
+                    if ($movedSessionRows) {
+                        $ids = array_map(fn($r) => (int)$r['id'], $movedSessionRows);
+                        $pdo->prepare('UPDATE scheduled_sessions SET user_id = ?, reminder_sent = 0 WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')')
+                            ->execute([$assignedTo, ...$ids]);
+                        $movedSessions = count($ids);
+                    }
                 }
                 // A converted referral follows its client's instructor, so it stays
                 // visible to whoever now holds the case.
@@ -160,6 +200,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($counselorVerified === 1 && !$wasVerified) {
                 audit($user['id'], 'client.counselor_confirm', 'client', (int)$client['id'],
                     strcasecmp((string)$counselorIn, (string)($client['counselor_email'] ?? '')) === 0 ? 'counselor email confirmed by staff' : 'counselor email entered by staff');
+            }
+            if ($emailIn !== null && $emailVerified === 1 && !$wasEmailVerified) {
+                audit($user['id'], 'client.email_confirm', 'client', (int)$client['id'],
+                    strcasecmp($emailIn, (string)($client['email'] ?? '')) === 0 ? 'client email confirmed with the client' : 'client email entered by staff');
+            }
+            if ($portalRevoked > 0) {
+                audit($user['id'], 'portal.revoke', 'client', (int)$client['id'], 'client email changed');
+            }
+            if ($redraftedInvoices > 0) {
+                audit($user['id'], 'invoice.bill_to', 'client', (int)$client['id'], $redraftedInvoices . ' draft invoice(s) re-addressed to the current counselor');
             }
             if ($movedTasks > 0) {
                 audit($user['id'], 'task.reassign', 'client', (int)$client['id'], $movedTasks . ' open task(s) moved from instructor #'
@@ -185,19 +235,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ((int)$recentSurvey->fetchColumn() === 0) {
                     if (send_outcome_survey((int)$client['id'])) {
                         flash('An outcome survey was emailed to the client.');
+                    } elseif (filter_var($vals[2] ?? '', FILTER_VALIDATE_EMAIL) && $emailVerified !== 1) {
+                        // send_outcome_survey() skips an address not yet confirmed with the
+                        // client: nothing failed, so this is not reported as an error.
+                        flash('No outcome survey was sent because the client\'s email has not been confirmed.', 'info');
                     } elseif (filter_var($vals[2] ?? '', FILTER_VALIDATE_EMAIL)) {
                         // The failed survey row is removed, so closing the case again retries it.
                         flash('The outcome survey email could not be sent. Close the case again later or check the email settings.', 'error');
                     }
                 }
             }
+            $told = ['to' => false, 'from' => false];
+            if ($movedSessionRows) {
+                try {
+                    $told = send_session_move_notices($movedSessionRows, $oldAssignee, $assignedTo, $name, (int)$user['id']);
+                } catch (Throwable $e) {
+                    // The change is saved: a notice that fails must not report it as lost.
+                    error_log('Reassignment session notices failed: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
+                }
+            }
             flash('Client updated.' . ($movedTasks > 0 ? ' ' . $movedTasks . ' open task' . ($movedTasks === 1 ? '' : 's')
                 . ' for this client ' . ($movedTasks === 1 ? 'was' : 'were') . ' moved from the previous instructor'
                 . ($assignedTo !== null ? ' to the new one.' : ' and ' . ($movedTasks === 1 ? 'is' : 'are') . ' now unassigned.') : '')
-                . ($movedSessions > 0 ? ' ' . $movedSessions . ' upcoming session' . ($movedSessions === 1 ? '' : 's') . ' moved to the new instructor.' : '') . $ageNote);
+                . ($movedSessions > 0 ? ' ' . $movedSessions . ' upcoming session' . ($movedSessions === 1 ? '' : 's') . ' moved to the new instructor.'
+                    . ($told['to'] ? ' The new instructor was sent the list.' : '') . ($told['from'] ? ' The previous instructor was told they were moved.' : '') : '')
+                . ($portalRevoked > 0 ? ' The email address changed, so the portal link sent to the old address was turned off. Send a new portal link when the client needs one.' : '')
+                . ($redraftedInvoices > 0 ? ' ' . $redraftedInvoices . ' draft invoice' . ($redraftedInvoices === 1 ? ' now bills' : 's now bill') . ' the counselor as entered here.' : '')
+                . $ageNote);
             redirect('client.php?id=' . (int)$client['id']);
         } else {
-            db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, counselor_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
+            db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, counselor_verified, email_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
             $newId = (int)db()->lastInsertId();
             record_status_change($newId, null, $status, $user['id'], 'Client created');
             audit($user['id'], 'client.create', 'client', $newId, $name);
@@ -237,6 +304,13 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       <input type="date" id="dob" name="dob" max="<?= date('Y-m-d') ?>" value="<?= $v('dob') ?>" <?= field_aria('dob') ?>><?= field_error('dob') ?></div>
     <div class="field"><label for="email">Email</label>
       <input type="email" id="email" name="email" value="<?= $v('email') ?>" <?= field_aria('email') ?>><?= field_error('email') ?></div>
+    <?php if ($client && trim((string)($client['email'] ?? '')) !== '' && (int)$client['email_verified'] !== 1): ?>
+    <?php // An address typed into the public referral form is not checked: nothing is sent to it until confirmed. ?>
+    <div class="field">
+      <p class="hint" id="email-unverified"><strong>Unverified — confirm before anything is sent.</strong> <?= h($client['email']) ?> came from the public referral form and has not been checked with the client, so no session reminder, outcome survey or portal link goes to it yet. Confirm it with the client first. Typing a different address above also confirms the new one.</p>
+      <label><input type="checkbox" name="confirm_email" value="1" aria-describedby="email-unverified"<?= $raw('confirm_email') !== null ? ' checked' : '' ?>> Confirmed with the client</label>
+    </div>
+    <?php endif; ?>
     <div class="field"><label for="phone">Phone</label>
       <input type="tel" id="phone" name="phone" value="<?= $v('phone') ?>" <?= field_aria('phone') ?>><?= field_error('phone') ?></div>
     <div class="field"><label for="address">Address</label>
@@ -348,8 +422,9 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       </select>
     </div>
     <div class="field">
-      <label for="a11y_notes">Access notes <span class="hint">communication preferences, accommodations, anything staff should know</span></label>
-      <textarea id="a11y_notes" name="a11y_notes" rows="3" <?= field_aria('a11y_notes') ?>><?= $v('a11y_notes') ?></textarea><?= field_error('a11y_notes') ?>
+      <label for="a11y_notes">Access notes <span class="hint">communication preferences and accommodations</span></label>
+      <p class="hint" id="a11y-notes-hint">Shown to the client on their portal, where they can also change it. Keep internal remarks in case notes.</p>
+      <textarea id="a11y_notes" name="a11y_notes" rows="3" <?= field_aria('a11y_notes', 'a11y-notes-hint') ?>><?= $v('a11y_notes') ?></textarea><?= field_error('a11y_notes') ?>
     </div>
   </fieldset>
 

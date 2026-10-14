@@ -20,11 +20,20 @@ struct LogHoursView: View {
     /// retry after a lost reply is recognised by the server instead of billing the hours twice.
     @State private var idemKey = UUID().uuidString
     @State private var askingDiscard = false
-    /// The track whose draft key the typed entry is kept under (DraftStore).
+    /// The track whose draft key the typed entry is kept under (DraftStore). It stays on the
+    /// last track chosen while "Choose…" is picked, so that draft is moved or discarded with
+    /// the entry instead of being left behind to come back later.
     @State private var draftTrackId: Int?
+    /// A goal from a restored draft, chosen once the track's goals have loaded.
+    @State private var restoredGoalId: Int?
     /// Set when the server could not be reached and the tracks shown are the ones kept on
     /// this phone (TrackCache), so hours can still be logged and queued.
     @State private var tracksNotice: String?
+    /// The server's authorization problem with this entry (expired, not yet started, or the
+    /// track not Active), shown with the switch that logs it anyway. Offered only after the
+    /// server named it, and withdrawn when the track or date changes.
+    @State private var authorizationIssue: String?
+    @State private var authorizationAck = false
 
     /// The description as it is sent: spaces or blank lines alone are no description.
     private var trimmedDescription: String { descriptionText.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -38,6 +47,14 @@ struct LogHoursView: View {
                     Text(confirmation)
                         .font(.callout.weight(.medium))
                         .foregroundStyle(Color.brandTeal)
+                }
+                // Just after the error banner (the next thing VoiceOver reaches from it), with the
+                // problem it answers next to it, as the website's hour log offers it.
+                if let authorizationIssue {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(authorizationIssue).font(.callout)
+                        Toggle("Log it anyway (the authorization is being renewed or amended)", isOn: $authorizationAck)
+                    }
                 }
                 if let tracksNotice {
                     Text(tracksNotice).font(.callout)
@@ -53,12 +70,15 @@ struct LogHoursView: View {
                     if let trackType = track?.serviceType { serviceType = trackType }
                     rsaCategory = track?.visitCategories?.first ?? ""
                     selectedGoal = nil
+                    restoredGoalId = nil
                     goals = []
                     idemKey = UUID().uuidString     // another track is another entry
+                    clearAuthorizationIssue()
                     // Typed text moves with the form to the new track (and its draft with it);
-                    // an empty form picks up the new track's draft, if there is one.
+                    // an empty form picks up the new track's draft, if there is one. "Choose…"
+                    // keeps the draft where it is, under the last track.
                     let oldTrack = draftTrackId
-                    draftTrackId = newValue
+                    if let newValue { draftTrackId = newValue }
                     if hasEntry {
                         if let oldTrack, let newValue, oldTrack != newValue { clearDraft(oldTrack) }
                         saveDraft()
@@ -127,12 +147,20 @@ struct LogHoursView: View {
             }
             .discardChangesGuard(hasChanges: hasEntry, busy: busy, question: "Discard the hours entry you have not logged?",
                                  asking: $askingDiscard) {
-                if let tid = selectedTrack { clearDraft(tid) }
+                if let tid = draftTrackId ?? selectedTrack { clearDraft(tid) }
                 dismiss()
             }
             .onChange(of: descriptionText) { _ in saveDraft() }
             .onChange(of: mileage) { _ in saveDraft() }
             .onChange(of: hours) { _ in saveDraft() }
+            .onChange(of: date) { _ in
+                // The authorization problem was for the date it was sent with.
+                clearAuthorizationIssue()
+                saveDraft()
+            }
+            .onChange(of: serviceType) { _ in saveDraft() }
+            .onChange(of: rsaCategory) { _ in saveDraft() }
+            .onChange(of: selectedGoal) { _ in saveDraft() }
             .task { await loadTracks() }
             .refreshable { await loadTracks() }
         }
@@ -144,15 +172,22 @@ struct LogHoursView: View {
     private func draftKey(_ trackId: Int) -> String { "hours-\(trackId)" }
 
     private func saveDraft() {
-        guard let tid = selectedTrack else { return }
+        guard let tid = draftTrackId else { return }
         var fields = ["description": descriptionText, "mileage": mileage]
-        // The hours travel only with text: a draft with nothing typed is removed.
+        // The rest of the entry travels only with text: a draft with nothing typed is removed.
         if fields.values.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
             fields["hours"] = String(hours)
+            fields["date"] = APIDate.day(date)
+            fields["service_type"] = serviceType
+            fields["rsa_category"] = rsaCategory
+            fields["goal_id"] = (selectedGoal ?? restoredGoalId).map(String.init) ?? ""
         }
         DraftStore.save(fields, key: draftKey(tid), owner: api.userId)
     }
 
+    /// Puts the whole entry back (the work date, service, RSA category and goal too), each
+    /// checked against what can be chosen now; one that can't be put back is said, never
+    /// silently left at its default.
     private func restoreDraft(_ trackId: Int) {
         guard let draft = DraftStore.load(key: draftKey(trackId), owner: api.userId) else { return }
         let text = draft["description"] ?? ""
@@ -161,8 +196,34 @@ struct LogHoursView: View {
         descriptionText = text
         mileage = miles
         if let h = draft["hours"].flatMap(Double.init), Self.hoursRange.contains(h) { hours = h }
-        announce("Your unsaved hours entry for this track was restored.")
+        var checks: [String] = []
+        // 2000 through today, as the date picker allows (yyyy-MM-dd compares as text).
+        if let day = draft["date"], let saved = APIDate.strictDay(day), day >= "2000-01-01", day <= APIDate.day(Date()) {
+            date = min(saved, Date())
+        } else {
+            checks.append("The date was not restored: check it before logging.")
+        }
+        if let service = draft["service_type"], serviceTypes.contains(service) { serviceType = service }
+        // (A track kept on this phone may not list its categories: the server then uses its own.)
+        if let category = draft["rsa_category"], !category.isEmpty, !visitCategories.isEmpty {
+            if visitCategories.contains(category) { rsaCategory = category }
+            else { checks.append("The RSA category chosen before is no longer offered on this track: check it.") }
+        }
+        // Chosen once this track's goals have loaded (loadGoals).
+        restoredGoalId = draft["goal_id"].flatMap(Int.init)
+        announce((["Your unsaved hours entry for this track was restored."] + checks).joined(separator: " "))
     }
+
+    private func clearAuthorizationIssue() {
+        // The banner telling the person to use the switch goes with it.
+        if let issue = authorizationIssue, error?.hasPrefix(issue) == true { error = nil }
+        authorizationIssue = nil
+        authorizationAck = false
+    }
+
+    /// The end of log_hours' refusal of an entry outside the authorization (3.0.21 servers):
+    /// the app answers it with the "Log it anyway" switch instead.
+    private static let authorizationConfirmSuffix = "Log it on the website to confirm."
 
     private func clearDraft(_ trackId: Int) {
         DraftStore.clear(key: draftKey(trackId), owner: api.userId)
@@ -187,6 +248,15 @@ struct LogHoursView: View {
         if let response: GoalsResponse = try? await api.call("goals", query: ["track_id": String(trackId)]),
            selectedTrack == trackId {   // a slow reply must not overwrite a newer selection
             goals = response.goals
+            // The goal a restored draft had: chosen again if it is still open, else said.
+            if let goalId = restoredGoalId {
+                restoredGoalId = nil
+                if openGoals.contains(where: { $0.id == goalId }) {
+                    selectedGoal = goalId
+                } else {
+                    announce("The goal chosen in your unsaved entry is no longer open on this track. Choose a goal again if one applies.")
+                }
+            }
         }
     }
 
@@ -211,8 +281,8 @@ struct LogHoursView: View {
             // sync later (the server checks the track and caseload again then).
             let cached = TrackCache.load(owner: api.userId)
             guard !cached.isEmpty else {
-                self.error = APIError.network.localizedDescription
-                    + " No training tracks are saved on this phone yet: open a client's screen while connected to keep their tracks here."
+                showFormError(APIError.network.localizedDescription
+                    + " No training tracks are saved on this phone yet: open a client's screen while connected to keep their tracks here.", in: &self.error)
                 return
             }
             tracks = cached
@@ -221,7 +291,7 @@ struct LogHoursView: View {
             if tracksNotice != notice { announce(notice) }
             tracksNotice = notice
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 
@@ -250,6 +320,8 @@ struct LogHoursView: View {
             "idem_key": idemKey,
         ]
         if let selectedGoal { body["goal_id"] = selectedGoal }
+        // Only once the person turned it on, in answer to the server's authorization problem.
+        if authorizationIssue != nil && authorizationAck { body["authorization_ack"] = true }
         do {
             let result: SaveAck = try await api.call("log_hours", body: body)
             confirmation = result.deduplicated == true
@@ -260,6 +332,7 @@ struct LogHoursView: View {
             descriptionText = ""
             mileage = ""
             idemKey = UUID().uuidString     // the next entry is a new one
+            clearAuthorizationIssue()
         } catch APIError.network {
             // No signal: keep the entry on the phone and sync automatically.
             do {
@@ -270,11 +343,19 @@ struct LogHoursView: View {
                 descriptionText = ""
                 mileage = ""
                 idemKey = UUID().uuidString
+                clearAuthorizationIssue()
             } catch {
-                self.error = "Could not save offline. Your entry is still in this form. \(error.localizedDescription)"
+                showFormError("Could not save offline. Your entry is still in this form. \(error.localizedDescription)", in: &self.error)
             }
+        } catch APIError.server(let message) where message.hasSuffix(Self.authorizationConfirmSuffix) {
+            // Outside the authorization (expired, not yet started, or the track not Active): the
+            // server names the problem, and the hours are logged only once the person says to.
+            let problem = message.dropLast(Self.authorizationConfirmSuffix.count).trimmingCharacters(in: .whitespaces)
+            authorizationIssue = problem
+            authorizationAck = false
+            showFormError(problem + " To log these hours anyway (the authorization is being renewed or amended), turn on “Log it anyway” just below this message, then tap Log hours again.", in: &self.error)
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
         busy = false
     }

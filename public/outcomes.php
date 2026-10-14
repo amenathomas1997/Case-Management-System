@@ -94,6 +94,13 @@ $totals = db()->prepare("SELECT COALESCE(SUM(w.hours),0) hrs, COALESCE(SUM(w.mil
     FROM work_logs w JOIN {$rt} t ON t.id = w.track_id WHERE w.work_date BETWEEN ? AND ?");
 $totals->execute([$from, $to]);
 $totals = $totals->fetch();
+// The value above is hours and mileage. Track expenses dated in the period are billed on
+// the same invoices (generate_invoice) and are in the RSA-911 export's Service Value, so
+// they are shown beside it, with the total of both, and the two reports reconcile.
+$exq = db()->prepare("SELECT COALESCE(SUM(e.amount),0) FROM track_expenses e JOIN {$rt} t ON t.id = e.track_id WHERE e.expense_date BETWEEN ? AND ?");
+$exq->execute([$from, $to]);
+$expenses = (float)$exq->fetchColumn();
+$valueAll = round((float)$totals['val'] + $expenses, 2);
 
 /* Survey results in the period */
 $sv = db()->prepare("SELECT COUNT(*) n, AVG(satisfaction) sat, AVG(goals_met) goals
@@ -113,7 +120,9 @@ if (isset($_GET['export'])) {
     write_csv_row($out, ['CLIENTS SERVED', $servedTotal]);
     foreach ($served as $s) write_csv_row($out, [csv_cell('  ' . ($s['client_type'] ?? 'VR')), $s['n']]);
     write_csv_row($out, ['TOTAL SERVICE HOURS', number_format((float)$totals['hrs'], 2)]);
-    write_csv_row($out, ['TOTAL SERVICE VALUE', number_format((float)$totals['val'], 2)]);
+    write_csv_row($out, ['TOTAL SERVICE VALUE (HOURS AND MILEAGE)', number_format((float)$totals['val'], 2)]);
+    write_csv_row($out, ['TRACK EXPENSES', number_format($expenses, 2)]);
+    write_csv_row($out, ['TOTAL VALUE INCLUDING EXPENSES', number_format($valueAll, 2)]);
     write_csv_row($out, ['CLIENTS CLOSED', $closedTotal]);
     foreach ($closures as $c) write_csv_row($out, [csv_cell('  ' . $c['new_status']), $c['n']]);
     write_csv_row($out, ['REHABILITATION RATE', $closedTotal ? round($rehab / $closedTotal * 100) . '%' : 'n/a']);
@@ -141,7 +150,8 @@ if (isset($_GET['html'])) {
     $doc->heading('Summary');
     $doc->properties(['Period' => fmt_date($from) . ' to ' . fmt_date($to),
         'Clients served' => (string)$servedTotal, 'Total service hours' => fmt_hours((float)$totals['hrs']),
-        'Total service value' => fmt_money((float)$totals['val']), 'Cases closed' => (string)$closedTotal,
+        'Total service value (hours and mileage)' => fmt_money((float)$totals['val']), 'Track expenses' => fmt_money($expenses),
+        'Total value including expenses' => fmt_money($valueAll), 'Cases closed' => (string)$closedTotal,
         'Rehabilitation rate' => $closedTotal ? round($rehab / $closedTotal * 100) . '% (' . $rehab . ' rehabilitated)' : 'n/a']);
     $doc->heading('Who was served');
     if ($served) $doc->table('Clients served by client type', ['Client type', 'Clients'], array_map(fn($s) => [$s['client_type'] ?? 'VR', $s['n']], $served));
@@ -197,7 +207,9 @@ if (isset($_GET['pdf'])) {
     };
     $stat('Clients served', (string)$servedTotal
         . ($served ? ' (' . implode(', ', array_map(fn($s) => ($s['client_type'] ?? 'VR') . ': ' . $s['n'], $served)) . ')' : ''));
-    $stat('Total service hours', number_format((float)$totals['hrs'], 2) . '  (value ' . fmt_money((float)$totals['val']) . ')');
+    $stat('Total service hours', number_format((float)$totals['hrs'], 2) . '  (value ' . fmt_money((float)$totals['val']) . ', hours and mileage)');
+    $stat('Track expenses', fmt_money($expenses));
+    $stat('Total incl. track expenses', fmt_money($valueAll));
     $stat('Cases closed', (string)$closedTotal);
     $stat('Rehabilitation rate', $closedTotal ? round($rehab / $closedTotal * 100) . '% (' . $rehab . ' rehabilitated)' : 'n/a');
     if ($avgHours > 0) $stat('Avg hours per rehabilitated client', number_format($avgHours, 1));
@@ -246,7 +258,12 @@ if (isset($_GET['pdf'])) {
     $pdf->SetFont('Helvetica', 'I', 8);
     $pdf->SetTextColor(60, 60, 60);
     $pdf->Cell(0, 5, $tx('Prepared ' . date('F j, Y') . ' by ' . $user['name'] . ' — ' . cfg('name')), 0, 1);
-    $pdf->Output('D', 'outcome_report_' . $from . '_' . $to . '.pdf');
+    // Built as a string and sent with this page's own headers: FPDF's download output
+    // replaces the app's Cache-Control: no-store with a cacheable one.
+    $bytes = $pdf->Output('S');
+    header('Content-Type: application/pdf');
+    header('Content-Disposition: attachment; filename="outcome_report_' . $from . '_' . $to . '.pdf"');
+    echo $bytes;
     exit;
 }
 
@@ -273,10 +290,12 @@ page_header('Outcome report', $user, 'analytics');
 <h2 class="visually-hidden">Outcomes at a glance</h2>
 <div class="grid grid-4">
   <div class="card stat"><span class="stat-num"><?= $servedTotal ?></span><span class="stat-label">Clients served</span></div>
-  <div class="card stat"><span class="stat-num"><?= fmt_hours((float)$totals['hrs']) ?></span><span class="stat-label">Service hours (<?= fmt_money((float)$totals['val']) ?>)</span></div>
+  <div class="card stat"><span class="stat-num"><?= fmt_hours((float)$totals['hrs']) ?></span><span class="stat-label">Service hours (<?= fmt_money((float)$totals['val']) ?> for hours and mileage)</span></div>
   <div class="card stat"><span class="stat-num"><?= $closedTotal ?></span><span class="stat-label">Cases closed</span></div>
   <div class="card stat"><span class="stat-num"><?= $closedTotal ? round($rehab / $closedTotal * 100) . '%' : '<span aria-hidden="true">—</span><span class="visually-hidden">Not applicable (no cases closed)</span>' ?></span><span class="stat-label">Rehabilitation rate<?= $rehab ? ' (' . $rehab . ' rehabilitated)' : '' ?></span></div>
 </div>
+<p>Track expenses dated in this period (billed on the same invoices): <strong><?= fmt_money($expenses) ?></strong>, for a total value of <strong><?= fmt_money($valueAll) ?></strong> with the hours and mileage.
+   Clients served counts clients with a logged session<?= can('billing') ? '; the RSA-911 export also lists a client whose only billed item in the period is a track expense' : '' ?>.</p>
 
 <section class="card" aria-labelledby="oc-served">
   <h2 id="oc-served">Who was served</h2>

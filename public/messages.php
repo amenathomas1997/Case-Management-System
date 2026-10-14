@@ -14,7 +14,7 @@ $scopeArgs = $scoped ? [(int)$user['id']] : [];
 
 /** Guard: this client is on the user's caseload. */
 function msg_client_or_deny(int $clientId, array $user): array {
-    $q = db()->prepare('SELECT id, name, assigned_to, archived_at FROM clients WHERE id = ?');
+    $q = db()->prepare('SELECT id, name, assigned_to, archived_at, counselor_email, counselor_verified FROM clients WHERE id = ?');
     $q->execute([$clientId]); $c = $q->fetch();
     if (!$c) { flash('Client not found.', 'error'); redirect('messages.php'); }
     if (caseload_scoped() && (int)$c['assigned_to'] !== (int)$user['id']) { flash('That client is not on your caseload.', 'error'); redirect('messages.php'); }
@@ -44,15 +44,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reply'])) {
     post_message($cid, $channel, 'staff', (int)$user['id'], $body);
     audit($user['id'], 'message.send', 'client', $cid, $channel);
     // Only promise delivery when the other side has a live portal link to read it on.
+    // The counselor portal lists only clients whose counselor email staff have
+    // confirmed (counselor_verified = 1), so the message shows there only then.
     if ($channel === 'client') {
         $link = db()->prepare('SELECT 1 FROM portal_tokens WHERE client_id = ? AND (expires_at IS NULL OR expires_at > NOW())');
     } else {
         $link = db()->prepare('SELECT 1 FROM vrc_tokens v JOIN clients c ON c.counselor_email = v.counselor_email
-            WHERE c.id = ? AND (v.expires_at IS NULL OR v.expires_at > NOW())');
+            WHERE c.id = ? AND c.counselor_verified = 1 AND (v.expires_at IS NULL OR v.expires_at > NOW())');
     }
     $link->execute([$cid]);
     if ($link->fetchColumn()) {
         flash('Message sent — it will appear on the ' . ($channel === 'client' ? "client's" : "counselor's") . ' portal.');
+    } elseif ($channel === 'counselor' && trim((string)$c['counselor_email']) !== '' && (int)$c['counselor_verified'] === 0) {
+        flash('Message saved, but ' . $c['name'] . '\'s counselor email has not been confirmed, so the counselor portal does not show this client yet. Confirm the counselor on the client\'s edit page.', 'error');
     } elseif ($channel === 'client') {
         flash('Message saved, but this client has no active portal link, so they cannot read it yet. Send them a portal link from their client record.', 'error');
     } else {
@@ -112,9 +116,15 @@ if ($openCid) {
       <form method="post" action="messages.php" class="stacked"><?= csrf_field() ?>
         <?= form_error_summary(['body' => 'Reply to the ' . $chanWho]) ?>
         <input type="hidden" name="client_id" value="<?= $openCid ?>"><input type="hidden" name="channel" value="<?= h($openChannel) ?>">
+        <?php // Said before the reply is typed: the counselor portal does not show a client
+        // whose counselor email is still unconfirmed, so the counselor would not see it. ?>
+        <?php $unconfirmed = $openChannel === 'counselor' && trim((string)$c['counselor_email']) !== '' && (int)$c['counselor_verified'] === 0; ?>
+        <?php if ($unconfirmed): ?>
+        <p class="alert alert-info" id="counselor-unconfirmed"><strong>Not yet visible to the counselor:</strong> <?= h($c['name']) ?>'s counselor email has not been confirmed, so the counselor portal does not show this client. Replies are saved here and appear there once the counselor is confirmed on <a href="client_edit.php?id=<?= $openCid ?>">the client's edit page</a>.</p>
+        <?php endif; ?>
         <label for="body">Reply to the <?= $chanWho ?></label>
         <p class="hint" id="body-hint">Up to 5,000 characters. It appears on the <?= $openChannel === 'client' ? "client's" : "counselor's" ?> portal.</p>
-        <textarea id="body" name="body" rows="3" required <?= field_aria('body', 'body-hint') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?>
+        <textarea id="body" name="body" rows="3" required <?= field_aria('body', 'body-hint', $unconfirmed ? 'counselor-unconfirmed' : '') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?>
         <button type="submit" name="reply" value="1" class="btn btn-primary">Send to the <?= $chanWho ?></button>
       </form>
     </section>

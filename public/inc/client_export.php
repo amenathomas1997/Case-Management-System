@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/at_services.php';
+require_once __DIR__ . '/workflows.php'; // workflows_ready()
 
 /** Complete structured case data. Caller must authorize access to this client first. */
 function client_export_records(PDO $pdo, int $clientId): array {
@@ -9,7 +10,15 @@ function client_export_records(PDO $pdo, int $clientId): array {
     $row = $client->fetch(PDO::FETCH_ASSOC);
     if (!$row) throw new DomainException('Client not found.');
     $result = ['client' => $row];
-    foreach (CLIENT_EXPORT_TABLES as $table) {
+    // Procurement records (device requests and their vendor quotes) and the
+    // referral queue's rows go only to staff who could open them in the app,
+    // as invoices and AT records do below.
+    $tables = CLIENT_EXPORT_TABLES;
+    if (can('procurement')) $tables[] = 'device_requests';
+    else $result['device_requests_not_included'] = 'Device requests and their vendor quotes are not in this export: they need procurement access, which this account does not have.';
+    if (can('referrals')) $tables[] = 'referrals';
+    else $result['referrals_not_included'] = 'Referral records are not in this export: they need referral access, which this account does not have. The intake note made from each referral is included with the client notes.';
+    foreach ($tables as $table) {
         $query = $pdo->prepare("SELECT * FROM `$table` WHERE client_id = ? ORDER BY id");
         $query->execute([$clientId]);
         $rows = $query->fetchAll(PDO::FETCH_ASSOC);
@@ -30,14 +39,23 @@ function client_export_records(PDO $pdo, int $clientId): array {
         unset($record);
         $result[$table] = $rows;
     }
-    foreach ([
-        'homework_practice' => 'SELECT r.id,r.homework_id,r.minutes,r.difficulty,r.notes,r.created_at FROM homework_practice r JOIN homework h ON h.id=r.homework_id JOIN training_tracks t ON t.id=h.track_id WHERE t.client_id=? ORDER BY r.id',
-        'documentation_reviews' => 'SELECT r.* FROM documentation_reviews r JOIN client_notes n ON n.id=r.note_id WHERE n.client_id=? ORDER BY r.note_id',
+    $extra = [
         'goal_progress' => 'SELECT r.* FROM goal_progress r JOIN smart_goals g ON g.id=r.goal_id JOIN training_tracks t ON t.id=g.track_id WHERE t.client_id=? ORDER BY r.id',
         'client_scored_assessment_items' => 'SELECT r.*, i.label FROM client_scored_assessment_items r JOIN client_scored_assessments a ON a.id=r.scored_id JOIN assessment_instrument_items i ON i.id=r.item_id WHERE a.client_id=? ORDER BY r.id',
-        'device_request_quotes' => 'SELECT r.* FROM device_request_quotes r JOIN device_requests d ON d.id=r.request_id WHERE d.client_id=? ORDER BY r.id',
         'cohort_sessions' => 'SELECT DISTINCT s.id, s.cohort_id, s.session_date, s.activity, s.topic, s.duration_min FROM cohort_sessions s JOIN cohort_attendance a ON a.session_id=s.id WHERE a.client_id=? ORDER BY s.id',
-    ] as $key => $sql) {
+    ];
+    if (can('procurement')) $extra['device_request_quotes'] = 'SELECT r.* FROM device_request_quotes r JOIN device_requests d ON d.id=r.request_id WHERE d.client_id=? ORDER BY r.id';
+    // Tables from migration 3.0.16, checked first as the other workflow pages do.
+    if (workflows_ready()) {
+        $extra['homework_practice'] = 'SELECT r.id,r.homework_id,r.minutes,r.difficulty,r.notes,r.created_at FROM homework_practice r JOIN homework h ON h.id=r.homework_id JOIN training_tracks t ON t.id=h.track_id WHERE t.client_id=? ORDER BY r.id';
+        $extra['documentation_reviews'] = 'SELECT r.* FROM documentation_reviews r JOIN client_notes n ON n.id=r.note_id WHERE n.client_id=? ORDER BY r.note_id';
+        // The waitlist entry staff kept for a referral (availability, languages,
+        // areas) stays with the converted referral: it is part of the record.
+        if (can('referrals')) $extra['referral_waitlist'] = 'SELECT w.* FROM referral_waitlist w JOIN referrals r ON r.id=w.referral_id WHERE r.client_id=? ORDER BY w.referral_id';
+    } else {
+        $result['workflow_records_not_included'] = 'Homework practice reports, documentation reviews and referral waitlist entries are not in this export: this site has not applied migration 3.0.16 yet.';
+    }
+    foreach ($extra as $key => $sql) {
         $query = $pdo->prepare($sql); $query->execute([$clientId]);
         $result[$key] = $query->fetchAll(PDO::FETCH_ASSOC);
     }
@@ -61,11 +79,13 @@ function client_export_records(PDO $pdo, int $clientId): array {
     return $result;
 }
 
+// Exported for every account that can open the client. 'device_requests' and
+// 'referrals' are added only with the procurement / referrals permission.
 const CLIENT_EXPORT_TABLES = [
     'client_notes', 'training_tracks', 'tech_assessments', 'client_documents',
     'scheduled_sessions', 'equipment_loans', 'equipment_followups', 'messages',
     'incidents', 'consent_forms', 'surveys', 'report_acks', 'client_status_history',
-    'referrals', 'tasks', 'client_scored_assessments', 'access_bookings',
-    'client_competency', 'device_requests', 'equipment_reservations',
+    'tasks', 'client_scored_assessments', 'access_bookings',
+    'client_competency', 'equipment_reservations',
     'portal_requests', 'worksite_assessments', 'cohort_members', 'cohort_attendance',
 ];

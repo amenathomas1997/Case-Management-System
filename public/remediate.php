@@ -67,8 +67,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['go'])) {
         if (!ai_rate_limit((int)$user['id'])) { flash('You have reached the AI usage limit for now. Please wait a few minutes, then press Transform again.', 'error'); }
         else {
             // The output budget grows with the input, so a long document is not cut short.
+            $started = microtime(true);
             $res = ai_generate($sys, $content, ai_output_tokens($content));
-            ai_log_usage('remediate', mb_strlen($content), $res['ok'] ? mb_strlen($res['text']) : 0, false, (int)$user['id']);
+            // Outcome, provider time and cut-off are logged as ai_run() logs them.
+            ai_log_usage('remediate', mb_strlen($content), $res['ok'] ? mb_strlen($res['text']) : 0, false, (int)$user['id'],
+                (bool)$res['ok'], (int)round((microtime(true) - $started) * 1000), !empty($res['truncated']));
             if ($res['ok']) {
                 $output = $res['text'];
                 $truncated = !empty($res['truncated']);

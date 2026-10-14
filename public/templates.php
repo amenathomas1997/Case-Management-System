@@ -28,6 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_goal_tpl'])) {
     if ($errs) tpl_refuse($errs, 'add-goal-tpl-h');
     db()->prepare('INSERT INTO goal_templates (category, specific_goal, measurable_metric, focus_area) VALUES (?,?,?,?)')
         ->execute([$cat, $goal, $metric, $focus ?: null]);
+    audit($user['id'], 'goal_template.add', 'goal_template', (int)db()->lastInsertId(), $cat . ': ' . $goal);
     flash('Goal template added.');
     redirect('templates.php');
 }
@@ -61,6 +62,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assess_tpl'])) {
     $tech = in_array($_POST['primary_tech'] ?? '', TECH_TYPES, true) ? $_POST['primary_tech'] : 'Screen Reader';
     db()->prepare('INSERT INTO assessment_templates (name, primary_tech, hardware_details, software_version, summary) VALUES (?,?,?,?,?)')
         ->execute([$name, $tech, $hardware ?: null, $software ?: null, trim($_POST['summary'] ?? '') ?: null]);
+    audit($user['id'], 'assessment_template.add', 'assessment_template', (int)db()->lastInsertId(), $name);
     flash('Assessment template added.');
     redirect('templates.php');
 }
@@ -157,6 +159,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_instrument'])) {
     $sMax = filter_var(trim((string)($_POST['scale_max'] ?? '')), FILTER_VALIDATE_INT, $range);
     $sLabels = trim($_POST['scale_labels'] ?? '') ?: null;
     $lines = array_values(array_filter(array_map('trim', preg_split('/\r?\n/', (string)($_POST['instrument_items'] ?? ''))), fn($l) => $l !== ''));
+    // Which way is an improvement: the funder report counts a gain in this direction.
+    $direction = $_POST['higher_is_better'] ?? '';
     $errs = [];
     if ($name === '') $errs['instrument_name'] = 'An instrument name is required.';
     elseif (mb_strlen($name) > 190) $errs['instrument_name'] = 'Keep the name to 190 characters or fewer.';
@@ -165,6 +169,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_instrument'])) {
     if ($sMax === false) $errs['scale_max'] = 'Enter the highest rating as a whole number from -10 to 10.';
     elseif ($sMin !== false && $sMax <= $sMin) $errs['scale_max'] = 'The highest rating must be greater than the lowest rating.';
     if ($sLabels !== null && mb_strlen($sLabels) > 600) $errs['scale_labels'] = 'Keep the rating labels to 600 characters or fewer.';
+    if ($direction !== '1' && $direction !== '0') $errs['higher_is_better'] = 'Choose whether a higher rating means better or worse.';
     if (!$lines) $errs['instrument_items'] = 'Add at least one item, one per line.';
     foreach ($lines as $n => $lab) {
         if (mb_strlen($lab) > 255) { $errs['instrument_items'] = 'Item ' . ($n + 1) . ' is longer than 255 characters — shorten it or split it into two items.'; break; }
@@ -172,13 +177,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_instrument'])) {
     if ($errs) tpl_refuse($errs, 'add-instrument-h');
     db()->beginTransaction();
     try {
-        db()->prepare('INSERT INTO assessment_instruments (name, description, scale_min, scale_max, scale_labels) VALUES (?,?,?,?,?)')->execute([$name, $desc, $sMin, $sMax, $sLabels]);
+        db()->prepare('INSERT INTO assessment_instruments (name, description, scale_min, scale_max, scale_labels, higher_is_better) VALUES (?,?,?,?,?,?)')->execute([$name, $desc, $sMin, $sMax, $sLabels, (int)$direction]);
         $iid = (int)db()->lastInsertId();
         $ins = db()->prepare('INSERT INTO assessment_instrument_items (instrument_id, label, sort) VALUES (?,?,?)');
         foreach ($lines as $n => $lab) $ins->execute([$iid, $lab, $n + 1]);
         db()->commit();
     } catch (Throwable $e) { db()->rollBack(); throw $e; }
-    audit($user['id'], 'instrument.add', 'instrument', $iid, $name . ' (' . count($lines) . ' items)');
+    audit($user['id'], 'instrument.add', 'instrument', $iid, $name . ' (' . count($lines) . ' items, ' . ($direction === '1' ? 'higher' : 'lower') . ' is better)');
     flash('Assessment instrument added.');
     redirect('templates.php#instruments');
 }
@@ -279,17 +284,20 @@ page_header('Templates', $user, 'templates');
     <thead><tr><th scope="col">Category</th><th scope="col">Objective</th><th scope="col">Measurable criteria</th><th scope="col">Focus</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
     <tbody>
     <?php if (!$goalTpls): ?><tr><td colspan="5" class="muted">No templates match — try different words.</td></tr><?php endif; ?>
-    <?php foreach ($goalTpls as $g): ?>
+    <?php foreach ($goalTpls as $g):
+      // Many objectives share their opening words, so the button and the confirmation
+      // name the whole objective and its category.
+      $gtName = $g['category'] . ': ' . $g['specific_goal']; ?>
       <tr>
         <td><?= h($g['category']) ?></td>
-        <td><?= h($g['specific_goal']) ?></td>
+        <th scope="row"><?= h($g['specific_goal']) ?></th>
         <td><?= h($g['measurable_metric']) ?></td>
         <td><?= h($g['focus_area'] ?? '—') ?></td>
         <td>
           <form method="post" action="templates.php" class="inline-form"><?= csrf_field() ?>
             <input type="hidden" name="id" value="<?= (int)$g['id'] ?>">
             <button type="submit" name="del_goal_tpl" value="1" class="btn btn-danger btn-sm"
-              onclick="return confirm('Delete this goal template permanently? This cannot be undone.');">Delete permanently<span class="visually-hidden"> — goal template: <?= h(mb_substr($g['specific_goal'], 0, 50)) ?></span></button>
+              onclick="return confirm(<?= h((string)json_encode('Delete the goal template "' . $gtName . '" permanently? This cannot be undone.', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)) ?>);">Delete permanently<span class="visually-hidden"> — goal template <?= h($gtName) ?></span></button>
           </form>
         </td>
       </tr>
@@ -323,7 +331,7 @@ page_header('Templates', $user, 'templates');
     <tbody>
     <?php foreach ($assessTpls as $a): ?>
       <tr>
-        <td><?= h($a['name']) ?></td>
+        <th scope="row"><?= h($a['name']) ?></th>
         <td><?= h($a['primary_tech']) ?></td>
         <td><?= h($a['hardware_details'] ?? '—') ?></td>
         <td><?= h($a['software_version'] ?? '—') ?></td>
@@ -331,7 +339,7 @@ page_header('Templates', $user, 'templates');
           <form method="post" action="templates.php" class="inline-form"><?= csrf_field() ?>
             <input type="hidden" name="id" value="<?= (int)$a['id'] ?>">
             <button type="submit" name="del_assess_tpl" value="1" class="btn btn-danger btn-sm"
-              onclick="return confirm('Delete this assessment template permanently? This cannot be undone.');">Delete permanently<span class="visually-hidden"> — assessment template: <?= h($a['name']) ?></span></button>
+              onclick="return confirm(<?= h((string)json_encode('Delete the assessment template "' . $a['name'] . '" permanently? This cannot be undone.', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)) ?>);">Delete permanently<span class="visually-hidden"> — assessment template: <?= h($a['name']) ?></span></button>
           </form>
         </td>
       </tr>
@@ -366,7 +374,7 @@ page_header('Templates', $user, 'templates');
     <tbody>
     <?php foreach ($bundles as $b): ?>
       <tr>
-        <td><?= h($b['name']) ?><?= $b['description'] ? '<br><span class="muted">' . h($b['description']) . '</span>' : '' ?></td>
+        <th scope="row"><?= h($b['name']) ?><?= $b['description'] ? '<br><span class="muted">' . h($b['description']) . '</span>' : '' ?></th>
         <td><?= h($b['client_type']) ?></td>
         <td><?= h(implode(' · ', bundle_categories($b))) ?></td>
         <td><?= $b['active'] ? '<span class="badge badge-closed">Active</span>' : '<span class="badge badge-hold">Retired</span>' ?></td>
@@ -409,7 +417,7 @@ page_header('Templates', $user, 'templates');
 
 <section id="instruments" class="card" aria-labelledby="instr-h">
   <h2 id="instr-h">Scored assessment instruments (<?= count($instruments) ?>)</h2>
-  <p class="muted">Structured rating instruments that staff administer on a client's Assessments tab and re-administer over time to show progress. Each item is rated on the instrument's own scale; scores are normalized to a percent so trends compare fairly. Includes seeded AT-outcome tools (device satisfaction, psychosocial impact, person–technology match).</p>
+  <p class="muted">Structured rating instruments that staff administer on a client's Assessments tab and re-administer over time to show progress. Each item is rated on the instrument's own scale; scores are normalized to a percent so trends compare fairly, and each instrument says whether a higher rating means better or worse, so the funder report counts an improvement as a gain. Includes seeded AT-outcome tools (device satisfaction, psychosocial impact, person–technology match).</p>
   <div class="table-scroll" tabindex="0" role="region" aria-labelledby="instr-cap">
   <table>
     <caption class="visually-hidden" id="instr-cap">Scored assessment instruments with item count, scale, use and status</caption>
@@ -418,9 +426,9 @@ page_header('Templates', $user, 'templates');
     <?php if (!$instruments): ?><tr><td colspan="6" class="muted">None yet — add one below.</td></tr><?php endif; ?>
     <?php foreach ($instruments as $ins): ?>
       <tr>
-        <td><?= h($ins['name']) ?><?= $ins['description'] ? '<br><span class="muted">' . h($ins['description']) . '</span>' : '' ?></td>
+        <th scope="row"><?= h($ins['name']) ?><?= $ins['description'] ? '<br><span class="muted">' . h($ins['description']) . '</span>' : '' ?></th>
         <td class="num"><?= (int)$ins['n'] ?></td>
-        <td><?= (int)$ins['scale_min'] ?>–<?= (int)$ins['scale_max'] ?></td>
+        <td><?= (int)$ins['scale_min'] ?>–<?= (int)$ins['scale_max'] ?>, <?= (int)($ins['higher_is_better'] ?? 1) === 0 ? 'lower is better' : 'higher is better' ?></td>
         <td class="num"><?= (int)$ins['used'] ?></td>
         <td><?= $ins['active'] ? status_badge('Active') : '<span class="badge badge-hold">Inactive</span>' ?></td>
         <td>
@@ -444,7 +452,7 @@ page_header('Templates', $user, 'templates');
   <h3 id="add-instrument-h">Add an instrument</h3>
   <form method="post" action="templates.php" class="stacked" novalidate>
     <?= csrf_field() ?>
-    <?= form_error_summary(['instrument_name' => 'Name', 'instrument_desc' => 'Description', 'scale_min' => 'Lowest rating', 'scale_max' => 'Highest rating', 'scale_labels' => 'Rating labels', 'instrument_items' => 'Items']) ?>
+    <?= form_error_summary(['instrument_name' => 'Name', 'instrument_desc' => 'Description', 'scale_min' => 'Lowest rating', 'scale_max' => 'Highest rating', 'scale_labels' => 'Rating labels', 'higher_is_better' => 'Higher ratings mean', 'instrument_items' => 'Items'], ['higher_is_better' => 'hib-1']) ?>
     <div class="field"><label for="instrument_name">Name *</label>
       <input type="text" id="instrument_name" name="instrument_name" required maxlength="190" value="<?= h(old_in('instrument_name')) ?>" <?= field_aria('instrument_name') ?>><?= field_error('instrument_name') ?></div>
     <div class="field"><label for="instrument_desc">Description</label>
@@ -459,6 +467,14 @@ page_header('Templates', $user, 'templates');
     <div class="field"><label for="scale_labels">Rating labels</label>
       <span class="hint" id="scale_labels-hint">optional; one per level as <code>value=label</code> separated by semicolons, e.g. <code>0=0 Not at all;4=4 Fully</code>. Levels without a label show the number.</span>
       <input type="text" id="scale_labels" name="scale_labels" maxlength="600" value="<?= h(old_in('scale_labels')) ?>" <?= field_aria('scale_labels', 'scale_labels-hint') ?>><?= field_error('scale_labels') ?></div>
+    <?php // Required, with no default: the funder report counts a gain in this direction. ?>
+    <fieldset <?= has_field_error('higher_is_better') ? 'aria-describedby="err-higher_is_better"' : '' ?>>
+      <legend>Higher ratings mean *</legend>
+      <?= field_error('higher_is_better') ?>
+      <?php foreach (['1' => 'Better (for example, more independent or more satisfied)', '0' => 'Worse (for example, more difficulty or more help needed)'] as $hv => $hl): ?>
+      <div class="field"><label><input type="radio" id="hib-<?= $hv ?>" name="higher_is_better" value="<?= $hv ?>"<?= old_in('higher_is_better') === (string)$hv ? ' checked' : '' ?><?= has_field_error('higher_is_better') ? ' aria-invalid="true"' : '' ?>> <?= h($hl) ?></label></div>
+      <?php endforeach; ?>
+    </fieldset>
     <div class="field"><label for="instrument_items">Items</label>
       <span class="hint" id="instrument_items-hint">one item per line, up to 255 characters each; each is rated on the scale above when administered</span>
       <textarea id="instrument_items" name="instrument_items" rows="6" required <?= field_aria('instrument_items', 'instrument_items-hint') ?>><?= h(old_in('instrument_items')) ?></textarea><?= field_error('instrument_items') ?></div>

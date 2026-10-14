@@ -28,7 +28,27 @@ if (isset($_GET['template'])) {
     exit;
 }
 
-$results = null; $imported = 0; $skipped = 0; $dryRun = false; $converted = false;
+$results = null; $imported = 0; $skipped = 0; $dryRun = false; $converted = false; $ignoredCols = [];
+
+/** A one-use token for each import form shown. A real import spends it, so pressing the
+ *  button twice, or reloading the result page (which posts the file again), cannot add
+ *  the same devices a second time. A few are kept so two open tabs both work. */
+function import_form_token(): string {
+    $t = bin2hex(random_bytes(16));
+    $kept = is_array($_SESSION['equipment_import_tokens'] ?? null) ? $_SESSION['equipment_import_tokens'] : [];
+    $kept[] = $t;
+    $_SESSION['equipment_import_tokens'] = array_slice($kept, -10);
+    return $t;
+}
+/** Spends the posted token; false when it was never issued or is already spent. */
+function import_spend_token(mixed $t): bool {
+    $kept = is_array($_SESSION['equipment_import_tokens'] ?? null) ? $_SESSION['equipment_import_tokens'] : [];
+    $at = is_string($t) && $t !== '' ? array_search($t, $kept, true) : false;
+    if ($at === false) return false;
+    unset($kept[$at]);
+    $_SESSION['equipment_import_tokens'] = array_values($kept);
+    return true;
+}
 
 /** Read one CSV record: RFC 4180 quoting with no backslash escape (as write_csv_row
  *  writes), and text decoded to UTF-8. Excel's plain "CSV" is Windows-1252, so a row
@@ -47,6 +67,11 @@ function import_csv_row($fh, bool &$converted): array|false {
 /* ---- Handle upload ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
     $dryRun = !empty($_POST['dry_run']);
+    // A dry run changes nothing, so only a real import spends the form's token.
+    if (!$dryRun && !import_spend_token($_POST['import_token'] ?? null)) {
+        flash('Nothing was imported: this form was already used (the button was pressed twice, or the result page was reloaded) or has expired. Check the inventory on the Equipment page, then upload the file again if it is still needed.', 'error');
+        redirect('equipment_import.php');
+    }
     $f = $_FILES['csv'] ?? null;
     if (!$f || ($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
         flash('Please choose a CSV file to upload.', 'error');
@@ -59,24 +84,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
     $fh = fopen($f['tmp_name'], 'r');
     if (!$fh) { flash('Could not read the uploaded file.', 'error'); redirect('equipment_import.php'); }
 
-    // Header row → column index map (case/space-insensitive).
+    // Header row → column index map (case/space-insensitive): spaces around a heading are
+    // ignored ("Serial " is serial), and inner spaces or hyphens read as underscores.
+    // A heading that matches no column (or repeats one) is named in the result, so a
+    // column that will not be imported is seen in the dry run, not discovered later.
     $header = import_csv_row($fh, $converted);
     if ($header === false) { fclose($fh); flash('The file appears to be empty.', 'error'); redirect('equipment_import.php'); }
     $header[0] = preg_replace('/^\xEF\xBB\xBF/', '', (string)$header[0]); // strip BOM
     $idx = [];
     foreach ($header as $i => $h) {
-        $key = strtolower(trim(str_replace([' ', '-'], '_', (string)$h)));
-        if (in_array($key, IMPORT_COLUMNS, true)) $idx[$key] = $i;
+        $label = trim((string)$h);
+        $key = strtolower((string)preg_replace('/[\s\-]+/u', '_', $label));
+        if (in_array($key, IMPORT_COLUMNS, true) && !isset($idx[$key])) $idx[$key] = $i;
+        elseif ($label !== '') $ignoredCols[] = $label . (in_array($key, IMPORT_COLUMNS, true) ? ' (a second ' . $key . ' column)' : '');
     }
+    $ignoredNote = $ignoredCols ? ' Ignored columns, not imported: ' . implode(', ', $ignoredCols) . '. The columns read are: ' . implode(', ', IMPORT_COLUMNS) . '.' : '';
     if (!isset($idx['name'])) {
         fclose($fh);
-        flash('The CSV needs at least a "name" column. Download the template for the expected format.', 'error');
+        flash('The CSV needs at least a "name" column. Download the template for the expected format.' . $ignoredNote, 'error');
         redirect('equipment_import.php');
     }
 
     $get = fn(array $row, string $col) => isset($idx[$col]) ? trim((string)($row[$idx[$col]] ?? '')) : '';
     $valid = [];
     $results = [];
+    $seenSerials = [];
+    $serialHave = db()->prepare('SELECT id FROM equipment WHERE serial = ? LIMIT 1');
     $line = 1;
     while (($row = import_csv_row($fh, $converted)) !== false) {
         $line++;
@@ -118,6 +151,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
         // in both modes, and the result row says so when something was shortened.
         $serial = $get($row, 'serial');
         $notes = $get($row, 'notes');
+        // A serial number already in the inventory, or earlier in this file, is the same
+        // device: the row is skipped (and said so in the dry run too), never added twice.
+        $serialKey = mb_strtolower(mb_substr($serial, 0, 120));
+        if ($serial !== '') {
+            if (isset($seenSerials[$serialKey])) {
+                $results[] = ['line' => $line, 'name' => $name, 'ok' => false, 'msg' => 'Serial number ' . $serial . ' is also on row ' . $seenSerials[$serialKey] . ' of this file — skipped'];
+                $skipped++;
+                continue;
+            }
+            $serialHave->execute([mb_substr($serial, 0, 120)]);
+            if ($serialHave->fetchColumn()) {
+                $results[] = ['line' => $line, 'name' => $name, 'ok' => false, 'msg' => 'Serial number ' . $serial . ' is already in the inventory — skipped'];
+                $skipped++;
+                continue;
+            }
+            $seenSerials[$serialKey] = $line;
+        }
         $shortened = array_keys(array_filter(['name' => mb_strlen($name) > 190, 'serial' => mb_strlen($serial) > 120, 'notes' => mb_strlen($notes) > 255]));
         $rec = [mb_substr($name, 0, 190), $cat, mb_substr($serial, 0, 120) ?: null, $cond,
             $value, mb_substr($notes, 0, 255) ?: null, $iv ?: null];
@@ -136,11 +186,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
             db()->commit();
         } catch (Throwable $e) { db()->rollBack(); throw $e; }
         audit($user['id'], 'equipment.import', 'equipment', null, $imported . ' items');
-        flash("Imported {$imported} item(s)." . ($skipped ? " Skipped {$skipped}." : '') . ($converted ? ' ' . IMPORT_ENCODING_NOTE : ''));
+        flash("Imported {$imported} item(s)." . ($skipped ? " Skipped {$skipped}." : '') . $ignoredNote . ($converted ? ' ' . IMPORT_ENCODING_NOTE : ''));
     } elseif ($dryRun) {
-        flash('Dry run only — nothing was imported. ' . count($valid) . ' row(s) would import, ' . $skipped . ' skipped.' . ($converted ? ' ' . IMPORT_ENCODING_NOTE : ''));
+        flash('Dry run only — nothing was imported. ' . count($valid) . ' row(s) would import, ' . $skipped . ' skipped.' . $ignoredNote . ($converted ? ' ' . IMPORT_ENCODING_NOTE : ''));
     } else {
-        flash('No valid rows to import.', 'error');
+        flash('No valid rows to import.' . $ignoredNote, 'error');
     }
 }
 
@@ -158,9 +208,12 @@ page_header('Import equipment', $user, 'equipment');
     <li>Category must be one of: <?= h(implode(', ', IMPORT_CATEGORIES)) ?> (anything else becomes “Other”).</li>
     <li>Condition must be one of: <?= h(implode(', ', IMPORT_CONDITIONS)) ?> (anything else becomes “Good”).</li>
     <li><code>maintenance_interval_days</code> must be a whole number of days from 0 to 3650 (blank or 0 = no service schedule); a row with anything else is skipped.</li>
+    <li>A row whose serial number is already in the inventory, or repeats an earlier row's, is skipped, so the same device is never added twice.</li>
+    <li>A column with any other heading is not imported; the result names it.</li>
     <li>Upload below. Use <strong>Validate only</strong> first to preview without importing.</li>
   </ol>
   <form method="post" action="equipment_import.php" enctype="multipart/form-data" class="stacked"><?= csrf_field() ?>
+    <input type="hidden" name="import_token" value="<?= h(import_form_token()) ?>">
     <div class="field"><label for="csv">CSV file</label><input type="file" id="csv" name="csv" accept=".csv,text/csv" required></div>
     <div class="field"><label><input type="checkbox" name="dry_run" value="1" checked> Validate only (dry run — don't import yet)</label></div>
     <button type="submit" name="do_import" value="1" class="btn btn-primary">Upload &amp; process</button>
@@ -171,6 +224,7 @@ page_header('Import equipment', $user, 'equipment');
 <section class="card" aria-labelledby="res-h">
   <h2 id="res-h">Result <?= $dryRun ? '(dry run)' : '' ?></h2>
   <p><?= $dryRun ? count(array_filter($results, fn($r) => $r['ok'])) . ' row(s) would import' : $imported . ' item(s) imported' ?><?= $skipped ? ', ' . $skipped . ' skipped' : '' ?>.</p>
+  <?php if ($ignoredCols): ?><p><strong>Ignored columns, not imported:</strong> <?= h(implode(', ', $ignoredCols)) ?>. The columns read are: <?= h(implode(', ', IMPORT_COLUMNS)) ?>.</p><?php endif; ?>
   <div class="table-scroll" tabindex="0" role="region" aria-label="Import results">
   <table>
     <caption class="visually-hidden">Import results by row</caption>

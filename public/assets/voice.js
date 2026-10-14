@@ -60,7 +60,7 @@
   if (spoken === null) { spoken = !(window.Earcon && Earcon.volume === 'max'); autoMuted = !spoken; }
   function earcon(n) { if (window.Earcon) Earcon.play(n); }
 
-  // The token is read on every request: session-forms.js refreshes it after re-checking the session.
+  // The token is read on every request: session-forms.js and refreshToken() (below) refresh it after re-checking the session.
   function headers() { return { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__csrf || '' }; }
   function setStatus(t) { statusEl.textContent = t; }
   // A polite live region outside the panel, in place from page load, for a result
@@ -107,17 +107,50 @@
   // A request that reached the server signed in kept the session alive there:
   // session-timeout.js re-arms its warning, so it never opens over a conversation.
   function activity(r) { if (r && r.ok) { try { document.dispatchEvent(new Event('cms:activity')); } catch (e) {} } }
-  function readReply(r) {
+  // A plain-text 403 refuses the token this page was given, and nothing was done.
+  // Every sign-in issues a new token, so after signing in again in a new tab (as
+  // SESSION_CHANGED asks) this page's token is stale. When the account signed in
+  // now is the one this page belongs to, its current token is taken from ping.php
+  // (with the conversation, which is that account's own) and the request is sent
+  // once more; otherwise the session has changed. Resolves true when refreshed.
+  function refreshToken() {
+    return fetch('ping.php', { credentials: 'same-origin', cache: 'no-store' }).then(function (p) {
+      var header = function (n) { return p.headers && p.headers.get ? p.headers.get(n) : null; };
+      var token = header('X-CSRF-Token');
+      if (!p.ok || !token || token === window.__csrf || header('X-User-Id') !== String(window.__voiceUid || '')) return false;
+      var kept = history();
+      window.__csrf = token;
+      try { sessionStorage.setItem(HIST_KEY, JSON.stringify({ o: owner(), h: kept })); } catch (e) {}
+      activity(p);
+      return true;
+    }, function () { return false; });
+  }
+  // again: sends the same request once more (see refreshToken), or null.
+  function readReply(r, again) {
     activity(r);
     return r.text().then(function (body) {
       var d = null;
       try { d = JSON.parse(body); } catch (e) {}
       var json = !!d && typeof d === 'object';
       var toLogin = !!r.redirected && /\/login\.php(?:[?#]|$)/.test(String(r.url || ''));
+      if (again && r.status === 403 && !json) {
+        return refreshToken().then(function (fresh) {
+          if (fresh) return again();
+          forgetConversation(); throw SESSION_GONE;
+        });
+      }
       if (r.status === 401 || toLogin || (r.status === 403 && !json)) { forgetConversation(); throw SESSION_GONE; }
       if (!json) throw SERVER_TROUBLE;
       return d;
     });
+  }
+  // A request to the voice endpoint; resolves to its JSON reply (see readReply).
+  function command(body) {
+    var send = function (retry) {
+      return fetch('ai_command.php', { method: 'POST', headers: headers(), body: JSON.stringify(body) })
+        .then(function (r) { return readReply(r, retry ? function () { return send(false); } : null); });
+    };
+    return send(true);
   }
   // What to say when a request failed. A changed session also ends a running
   // conversation: every further command would fail until the page is reloaded.
@@ -343,9 +376,10 @@
     // Otherwise a short "Working on it…" is put there (the microphone is off
     // now), so a screen reader has finished it before the spoken reply starts.
     setStatus(spoken ? 'Working on it…' : '“' + transcript + '”');
+    // The history sent is what came before: the request itself goes once, as the transcript.
+    var earlier = history();
     logMsg('u', transcript); pushHistory('user', transcript);
-    fetch('ai_command.php', { method: 'POST', headers: headers(), body: JSON.stringify({ transcript: transcript, history: history(), context: { page: location.pathname } }) })
-      .then(readReply)
+    command({ transcript: transcript, history: earlier, context: { page: location.pathname } })
       .then(function (d) {
         if (panel.hidden) return;
         if (!d.ok) { earcon('error'); speak(d.error || 'Sorry, something went wrong.', afterReply); return; }
@@ -385,8 +419,7 @@
     confirmBox.hidden = true;
     if (!yes || !pending) { pending = null; tell(cancelled || 'Okay, cancelled.'); return; }
     var body = pending.params || {}; body.do = pending.do; body.idem = pending.idem; pending = null;
-    fetch('ai_command.php', { method: 'POST', headers: headers(), body: JSON.stringify(body) })
-      .then(readReply)
+    command(body)
       .then(function (d) {
         earcon(d.ok ? 'success' : 'error');
         // The user asked to save, not to leave: the page (and anything typed in
@@ -429,13 +462,33 @@
     statusEl.parentNode.insertBefore(listenNote, statusEl.nextSibling);
   } catch (e) { listenNote = null; }
   function showListening(on) { if (on) btn.classList.add('listening'); else btn.classList.remove('listening'); if (listenNote) listenNote.hidden = !on; }
+  // The inactivity warning (session-timeout.js) is a modal dialog that a screen
+  // reader reads aloud. The microphone is never open, and never reopens, while it
+  // is shown, or that reading would be heard and sent as a request. Once it closes,
+  // the status line says the microphone was turned off; it is opened again only on
+  // request (Continue listening or Alt+L).
+  var timeoutWarn = document.getElementById('timeout-warn'), micPaused = false;
+  function warningOpen() { return !!timeoutWarn && timeoutWarn.hidden === false; }
+  if (timeoutWarn && window.MutationObserver) {
+    try {
+      new window.MutationObserver(function () {
+        if (warningOpen()) {
+          if (listening || listenTimer) { stopListen(true); micPaused = true; }
+        } else if (micPaused) {
+          micPaused = false;
+          if (!panel.hidden) setStatus('The microphone was turned off while the inactivity warning was open. Choose ' + listenBtn.textContent + ' to go on.');
+        }
+      }).observe(timeoutWarn, { attributes: true, attributeFilter: ['hidden'] });
+    } catch (e) {}
+  }
   function startListen() {
     if (speaking) return; // automatic re-listening never captures our own voice (see listenNow)
+    if (warningOpen()) { micPaused = true; return; }
     if (!SR) { setStatus('Voice input is not supported in this browser — type your request below.'); input.focus(); return; }
     if (listening || listenTimer) return;
     if (window.Earcon && Earcon.muted) {
       setStatus(LISTENING);
-      listenTimer = setTimeout(function () { listenTimer = null; if (!panel.hidden && !speaking && !listening) openMic(); }, readTime(LISTENING));
+      listenTimer = setTimeout(function () { listenTimer = null; if (!panel.hidden && !speaking && !listening && !warningOpen()) openMic(); }, readTime(LISTENING));
       return;
     }
     openMic();
@@ -465,10 +518,14 @@
       r.start();
     } catch (e) { setStatus('Could not start the microphone — type below.'); input.focus(); }
   }
-  function stopListen() {
+  // discard: drop whatever was heard (abort) rather than let it end as a request (stop).
+  function stopListen(discard) {
     if (listenTimer) { clearTimeout(listenTimer); listenTimer = null; }
     var r = rec; rec = null;
-    if (r) { try { r.stop(); } catch (e) {} }
+    if (r) {
+      if (discard) r.onresult = null;
+      try { if (discard && r.abort) r.abort(); else r.stop(); } catch (e) {}
+    }
     listening = false; showListening(false);
   }
   // The microphone button and Alt+L are asked for on purpose: they stop a reply

@@ -142,6 +142,9 @@ check(ai_redact('maria called. Maria came. tom left.', ['name' => 'Maria Tom']) 
     'Name parts of three or more letters that are not common words are redacted in any case');
 check(ai_redact('Will called; he will practice with the long cane. LONG day.', ['name' => 'Daniel Lopez', 'counselor_name' => 'Will Long']) === '[COUNSELOR] called; he will practice with the long cane. [COUNSELOR] day.',
     'A common-word name part is redacted capitalised or in capitals, but kept in lower-case prose');
+check(ai_redact('Client will mark the labels and bookmark the guidance page. Mark called. Ann reviewed the annual plan.', ['name' => 'Daniel Lopez', 'guardian_name' => 'Mark', 'counselor_name' => 'Ann'])
+    === 'Client will mark the labels and bookmark the guidance page. [GUARDIAN] called. [COUNSELOR] reviewed the annual plan.',
+    'A short or common-word name is redacted as a whole word only, never inside another word or in lower-case prose');
 check(ai_done('x', true)['truncated'] === true && ai_done('x')['truncated'] === false, 'An AI reply cut off at the length limit is marked as truncated');
 if (!getenv('CMS_TEST_DSN')) {
     // The one-time-code concurrency checks below need the test database. Without it

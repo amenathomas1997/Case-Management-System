@@ -43,6 +43,7 @@ usort($rows, fn($x, $y) => strcasecmp((string)$x['name'], (string)$y['name']));
 $capped = $totalActive > count($rows);
 
 $flags = null;
+$cutOff = false;   // the AI stopped at its length limit, so the list is incomplete
 $today = new DateTime('today');
 $daysSince = function (?string $d) use ($today): ?int {
     if (!$d) return null;
@@ -82,7 +83,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) {
         audit($user['id'], 'ai.risk', 'user', (int)$user['id'], count($rows) . ' active clients assessed (client names tokenized)');
         if ($res['ok']) {
             $flags = preg_replace_callback('/\bC(\d+)\b/', fn($m) => $names[(int)$m[1]] ?? $m[0], $res['text']);
-            flash('Risk flags are ready below, under the heading "Risk flags (AI triage)".');
+            // Stopped at the length limit: the last item may end part-way, and the
+            // clients that would have followed were never assessed.
+            $cutOff = !empty($res['truncated']);
+            if ($cutOff) flash('The risk flags below are incomplete: the AI stopped before finishing the list, so the clients after the last item were not assessed. Check them in the Signals table.', 'error');
+            else flash('Risk flags are ready below, under the heading "Risk flags (AI triage)".');
         }
         else flash($res['error'], 'error');
     }
@@ -103,7 +108,8 @@ page_header('Risk flags', $user, 'ai_tools');
 
 <?php if ($flags !== null): ?>
 <section class="card" aria-labelledby="fl-h" style="margin-top:1rem">
-  <h2 id="fl-h">Risk flags (AI triage)</h2>
+  <h2 id="fl-h">Risk flags (AI triage)<?= $cutOff ? ' (incomplete)' : '' ?></h2>
+  <?php if ($cutOff): ?><p class="field-error"><strong>Incomplete:</strong> the AI stopped before finishing this list. The last item may be cut off, and clients after it were not assessed: check them in the Signals table below.</p><?php endif; ?>
   <?= plain_text_html($flags) ?>
   <p class="hint">Verify against each client's record before acting.</p>
 </section>

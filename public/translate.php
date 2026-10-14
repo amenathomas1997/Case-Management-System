@@ -16,8 +16,11 @@ if (!ai_feature_enabled('translate')) {
 
 const TRANSLATE_LANGS = ['Spanish', 'Arabic', 'Chinese (Simplified)', 'Vietnamese', 'Russian', 'French', 'Haitian Creole', 'Somali', 'Nepali', 'Korean', 'Tagalog', 'Other (type below)'];
 
-// Most pasted text accepted per request (it is sent to the AI provider).
-const TRANSLATE_MAX_CHARS = 20000;
+// Most pasted text accepted per request (it is sent to the AI provider). Every
+// provider's reply is capped at 4,096 tokens (ai_generate), and a translation into
+// a non-Latin script can take three or more tokens for each token of English, so
+// longer text would come back cut off: it is refused and split by the user instead.
+const TRANSLATE_MAX_CHARS = 6000;
 
 $output = null;
 $truncated = false;
@@ -33,7 +36,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['go'])) {
     $target = $lang === 'Other (type below)' ? $other : $lang;
     $errs = [];
     if (trim($content) === '') $errs['content'] = 'Paste the text to translate.';
-    elseif (mb_strlen($content) > TRANSLATE_MAX_CHARS) $errs['content'] = 'That is too much text to translate at once (20,000 characters maximum). Split it into smaller parts.';
+    elseif (($cLen = mb_strlen($content)) > TRANSLATE_MAX_CHARS) $errs['content'] = 'That is too much text to translate at once: shorten it to 6,000 characters or fewer (it has ' . number_format($cLen) . '), or split it into parts and translate each one.';
     if ($lang === 'Other (type below)') {
         if ($other === '') $errs['other'] = 'Type the language to translate into.';
         elseif (!preg_match('/^[\p{L}\p{M} ()\'’.-]{1,40}$/u', $other)) $errs['other'] = 'The language name can use only letters, spaces, hyphens, apostrophes, periods and parentheses (40 characters maximum).';
@@ -45,12 +48,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['go'])) {
     elseif (!ai_rate_limit((int)$user['id'])) { flash('You have reached the AI usage limit for now. Please wait a few minutes.', 'error'); }
     else {
         // Translations can need more tokens than the source text (non-Latin
-        // scripts especially), so the budget is twice the input's, within the cap.
+        // scripts especially), so the budget is three times the input's, within
+        // the cap (which the longest accepted text reaches).
+        $started = microtime(true);
         $res = ai_generate(
             ai_system_base() . ' You are a professional translator. Translate the user\'s content into ' . $target
                 . '. Preserve meaning, tone and formatting; keep any [bracketed] placeholders unchanged; do not add commentary. Output only the translation.',
-            $content, ai_output_tokens($content, 2.0));
-        ai_log_usage('translate', mb_strlen($content), $res['ok'] ? mb_strlen($res['text']) : 0, false, (int)$user['id']);
+            $content, ai_output_tokens($content, 3.0));
+        // Outcome, provider time and cut-off are logged as ai_run() logs them.
+        ai_log_usage('translate', mb_strlen($content), $res['ok'] ? mb_strlen($res['text']) : 0, false, (int)$user['id'],
+            (bool)$res['ok'], (int)round((microtime(true) - $started) * 1000), !empty($res['truncated']));
         if ($res['ok']) {
             $output = $res['text'];
             // Unknown typed languages get lang="" (language unknown) rather than inheriting English.
@@ -78,7 +85,7 @@ page_header('Translate', $user, 'ai_tools');
       <input type="text" id="other" name="other" value="<?= h($other) ?>" maxlength="40" <?= field_aria('other', 'other-hint') ?>><?= field_error('other') ?></div>
   </div>
   <div class="field"><label for="content">Text to translate</label>
-    <span class="hint" id="content-hint">Up to 20,000 characters; split longer text into parts.</span>
+    <span class="hint" id="content-hint">Up to 6,000 characters (about two pages); split longer text into parts.</span>
     <textarea id="content" name="content" rows="10" <?= field_aria('content', 'content-hint') ?>><?= h($content) ?></textarea><?= field_error('content') ?></div>
   <button type="submit" name="go" value="1" class="btn btn-primary">Translate</button>
 </form>

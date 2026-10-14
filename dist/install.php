@@ -117,6 +117,7 @@ $backupPassword = '';
 $cronDir = '';
 $cronConfig = '';
 $backupConf = '';
+$cronShift = '';      // how far the server's clock is from the app's time zone, for the cron hours
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // ---- Gather ----
@@ -203,19 +204,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         return 0.2126 * $lin($r) + 0.7152 * $lin($g) + 0.0722 * $lin($b);
     };
     $contrast = fn(string $a, string $b): float => (max($luminance($a), $luminance($b)) + .05) / (min($luminance($a), $luminance($b)) + .05);
+    // The exact ratio is compared, as the app does: 6.998:1 shown rounded is "7:1",
+    // but the app would refuse that colour on every page. The message rounds down.
+    $shown = fn(float $ratio): string => number_format(floor($ratio * 100) / 100, 2);
     if (!$errors) {
         $surfaces = ['#ffffff', '#eef1f6', '#ecfdf5', '#fef2f2', '#f4f6fb'];
         foreach (['Primary' => [$brandColor, 7.0], 'Dark' => [$brandDark, 7.0], 'Accent' => [$brandAccent, 4.5]] as $label => [$c, $min]) {
             foreach ($surfaces as $surface) {
-                $ratio = round($contrast($c, $surface), 2);
-                if ($ratio < $min) { $errors[] = "{$label} color {$c} is too light ({$ratio}:1 against {$surface}; {$min}:1 is needed). Pick a darker shade."; break; }
+                $ratio = $contrast($c, $surface);
+                if ($ratio < $min) { $errors[] = "{$label} color {$c} is too light ({$shown($ratio)}:1 against {$surface}; {$min}:1 is needed). Pick a darker shade."; break; }
             }
         }
         if (!$errors) {
             [$r, $g, $b] = sscanf($brandDark, '#%02x%02x%02x');
             $header = sprintf('#%02x%02x%02x', (int)round($r * .88 + 255 * .12), (int)round($g * .88 + 255 * .12), (int)round($b * .88 + 255 * .12));
-            $ratio = round($contrast($header, '#ffffff'), 2);
-            if ($ratio < 7.0) $errors[] = "Dark color {$brandDark} is too light for the page header ({$ratio}:1 against white once lightened; 7:1 is needed). Pick a darker shade.";
+            $ratio = $contrast($header, '#ffffff');
+            if ($ratio < 7.0) $errors[] = "Dark color {$brandDark} is too light for the page header ({$shown($ratio)}:1 against white once lightened; 7:1 is needed). Pick a darker shade.";
         }
     }
 
@@ -232,6 +236,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 || !preg_match('/^(\d+)\.(\d+)/', (string)$versionNumber, $vm)
                 || version_compare($vm[1] . '.' . $vm[2], '10.4', '<')) {
                 $errors[] = "This application requires MariaDB 10.4 or newer, but the database server reports \"{$serverVersion}\". MySQL and older MariaDB releases are not supported. Nothing was changed — point the installer at a MariaDB 10.4+ database and run it again.";
+                $pdo = null;
+            } elseif ((int)$pdo->query("SELECT GET_LOCK(CONCAT('cms_install_', MD5(DATABASE())), 0)")->fetchColumn() !== 1) {
+                // One installation into this database at a time: a second press of
+                // Install while the first is still importing the schema would
+                // otherwise run beside it. The lock ends with the first request.
+                $errors[] = 'An installation into this database is already running: the Install button was probably pressed twice. Nothing was changed by this request. '
+                    . 'Wait a minute for the first one to finish, then go to your site\'s sign-in page. The off-site backup password that installation shows once is also the '
+                    . "'backup_password' in config.php in the private directory you entered: keep it in your organisation's password manager.";
                 $pdo = null;
             } else {
                 // The database must be empty BEFORE anything is written anywhere —
@@ -261,6 +273,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             . "The app sets each of its database connections to {$tz}, so dates and times inside the app are right. "
                             . "Anything else that reads this database directly (a report or export run by hand) sees the server's clock instead. "
                             . "If {$tz} is not your organisation's local time zone, correct 'timezone' in config.php now, before any records are entered.";
+                        // Cron runs on the server's clock too: say how to shift the hours shown on the success page.
+                        $shift = $dbOffset - $tzOffset;
+                        $amount = intdiv(abs($shift), 60) . ' hour' . (intdiv(abs($shift), 60) === 1 ? '' : 's') . (abs($shift) % 60 ? ' ' . (abs($shift) % 60) . ' minutes' : '');
+                        $cronShift = "This server's clock appears to run at {$utc($dbOffset)} (measured on the database server, which usually shares the web server's clock), while {$tz} is at {$utc($tzOffset)} right now: "
+                            . ($shift > 0 ? "add {$amount} to" : "subtract {$amount} from") . " each hour above so the jobs run at those local times, and check them again after a daylight-saving change.";
                     }
                 }
             }
@@ -383,8 +400,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'backup_password' => $backupPassword,
             ],
         ], true) . ";\n";
-        if (@file_put_contents($configFile, $config) === false) {
-            $errors[] = "Could not write {$configFile}, so the installation is incomplete. The database was already loaded: {$dropHint} Also check that {$privateDir} is writable.";
+        // Created, never overwritten: a config.php that appeared since the check above
+        // belongs to another installation.
+        $configHandle = @fopen($configFile, 'x');
+        $configWritten = $configHandle !== false && @fwrite($configHandle, $config) === strlen($config);
+        if ($configHandle !== false) @fclose($configHandle);
+        if (!$configWritten) {
+            $errors[] = "Could not write {$configFile}, so the installation is incomplete. The database was already loaded: {$dropHint} Also check that {$privateDir} is writable and holds no config.php.";
         } else {
             @chmod($configFile, 0600);
             $report[] = "Config written to {$configFile}";
@@ -459,11 +481,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $manifestOk = @file_put_contents(__DIR__ . '/manifest.webmanifest', json_encode([
             'name' => $brandName, 'short_name' => $brandShort,
             'description' => 'Case management for ' . $brandOrg,
-            'start_url' => '/index.php', 'scope' => '/', 'display' => 'standalone',
+            // Relative to the manifest, so a site installed in a folder (https://example.org/cms)
+            // opens, and shows the icons of, that folder rather than the domain's root.
+            'start_url' => 'index.php', 'scope' => './', 'display' => 'standalone',
             'background_color' => $brandDark, 'theme_color' => $brandDark,
             'icons' => [
-                ['src' => '/assets/icon-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
-                ['src' => '/assets/icon-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
+                ['src' => 'assets/icon-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
+                ['src' => 'assets/icon-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
             ],
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)) !== false;
         if ($manifestOk) $report[] = 'Web-app manifest written.';
@@ -549,15 +573,16 @@ user=<?= htmlspecialchars($dbUser) ?>
 password="YOUR DATABASE PASSWORD"
 host=<?= htmlspecialchars($dbHost) ?>
 </pre></li>
-    <li>Add cron jobs (adjust the PHP path as needed):<br>
+    <li>Add cron jobs (adjust the PHP path as needed). The hours are local times in <?= htmlspecialchars($tz) ?>, but cron runs them by the server's own clock<?= $cronShift === '' ? ', which appears to match it' : '' ?>:<br>
       <code>15 2 * * * <?= htmlspecialchars($cronDir) ?>/backup.sh</code> (make it executable: chmod 700)<br>
       <code>0 7 * * * php <?= htmlspecialchars($cronDir) ?>/daily_alerts.php</code><br>
-      <code>15 7,17 * * * php <?= htmlspecialchars($cronDir) ?>/session_reminders.php</code> (morning and evening, so sessions booked during the day for tomorrow are reminded too)<br>
+      <code>15 7,17 * * * php <?= htmlspecialchars($cronDir) ?>/session_reminders.php</code> (morning and evening; each run reminds every session from then to the end of tomorrow not yet reminded, so a session booked after the evening run is reminded the next morning)<br>
       <code>30 7 * * * php <?= htmlspecialchars($cronDir) ?>/monthly_reports.php</code><br>
       <code>0 8 * * * php <?= htmlspecialchars($cronDir) ?>/at_reminders.php</code><br>
       <code>*/15 * * * * php <?= htmlspecialchars($cronDir) ?>/ingest_email.php</code> (needs Graph)<br>
       <code>*/10 * * * * php <?= htmlspecialchars($cronDir) ?>/watchdog.php</code><br>
-      <code>45 2 * * 1 php <?= htmlspecialchars($cronDir) ?>/weekly_offsite.php</code></li>
+      <code>45 2 * * 1 php <?= htmlspecialchars($cronDir) ?>/weekly_offsite.php</code>
+      <?php if ($cronShift !== ''): ?><br><strong>Server clock:</strong> <?= htmlspecialchars($cronShift) ?><?php endif; ?></li>
     <li>After the first night, confirm a <code>cms_*.sql.gz</code> file appeared in <code><?= htmlspecialchars($privateDir) ?>/backups</code>. The watchdog emails <code><?= htmlspecialchars($adminEmail) ?></code> if no backup is newer than 48 hours.</li>
   </ol>
 <?php else: ?>
@@ -607,7 +632,23 @@ host=<?= htmlspecialchars($dbHost) ?>
       <label for="admin_email">Administrator's email <span class="hint">(used to sign in)</span></label><input id="admin_email" name="admin_email" type="email" required maxlength="183" autocomplete="email" value="<?= htmlspecialchars(field('admin_email')) ?>">
       <label for="admin_pass">Administrator's password <span class="hint">(10+ characters)</span></label><input id="admin_pass" name="admin_pass" type="password" required minlength="10" autocomplete="new-password">
     </fieldset>
+    <p id="install-progress" role="status"></p>
     <button type="submit">Install</button>
   </form>
+  <script>
+  // One press installs: a second press (or Enter) while the first is still running
+  // is not sent, and the status line says what is happening.
+  (function () {
+    var form = document.querySelector('form'), status = document.getElementById('install-progress'), sent = false;
+    if (!form || !status) return;
+    form.addEventListener('submit', function (event) {
+      if (sent) { event.preventDefault(); return; }
+      sent = true;
+      var button = form.querySelector('button[type=submit]');
+      if (button) button.setAttribute('aria-disabled', 'true');
+      status.textContent = 'Installing. This can take a minute: keep this page open and do not press Install again.';
+    });
+  })();
+  </script>
 <?php endif; ?>
 </body></html>

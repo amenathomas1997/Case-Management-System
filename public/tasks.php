@@ -226,7 +226,8 @@ function due_note(?int $daysLeft): string {
         <?php if ($t['referral_id'] && can('referrals')): ?><a href="referrals.php?view=<?= (int)$t['referral_id'] ?>">Referral: <?= h($t['referral_name'] ?? '#' . (int)$t['referral_id']) ?></a><br><?php endif; ?>
         <span class="muted"><?= h($t['assigned_name'] ?? 'Anyone') ?></span>
       </td>
-      <td><?= $t['status'] === 'Open' ? due_note($t['due_date'] !== null ? (int)$t['days_left'] : null) : '<span class="muted">' . h(fmt_date($t['due_date'])) . '</span>' ?></td>
+      <?php // A done task without a due date says so in words, as an open one does (a lone dash is skipped or read as "dash"). ?>
+      <td><?= $t['status'] === 'Open' ? due_note($t['due_date'] !== null ? (int)$t['days_left'] : null) : '<span class="muted">' . ($t['due_date'] ? h(fmt_date($t['due_date'])) : 'no due date') . '</span>' ?></td>
       <td><span class="badge <?= $t['status'] === 'Open' ? 'badge-active' : 'badge-closed' ?>"><?= h($t['status']) ?></span></td>
       <td>
         <form method="post" action="tasks.php" class="inline-form"><?= csrf_field() ?>

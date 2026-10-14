@@ -72,7 +72,7 @@ struct ProcurementView: View {
     }
     private func load() async {
         do { error = nil; let r: DeviceRowsResponse = try await api.call("device_requests"); rows = r.requests; loaded = true }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -198,7 +198,7 @@ struct DeviceRequestDetail: View {
     /// True when the request was read; false leaves the error banner saying why.
     @discardableResult private func load() async -> Bool {
         do { error = nil; let r: DeviceRequestResponse = try await api.call("device_request", query: ["id": String(id)]); req = r.request; quotes = r.quotes; return true }
-        catch { self.error = error.localizedDescription; return false }
+        catch { showFormError(error.localizedDescription, in: &self.error); return false }
     }
     /// `done` says what the step did; the status read back afterwards is added, so the outcome
     /// is heard rather than a generic "updated". `focusQuote` puts VoiceOver on that quote once
@@ -214,7 +214,7 @@ struct DeviceRequestDetail: View {
             // still reported when the refresh fails; only the status is left out then.
             announceAfterDismiss(reloaded && req != nil ? "\(done) Status: \(req!.status)." : done)
         }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -275,11 +275,20 @@ struct DeviceActionSheet: View {
     @State private var warranty = ""
     @State private var date = Date(); @State private var busy = false; @State private var error: String?
     @State private var filled = false
+    @State private var askingDiscard = false
+    /// The values filled in from the stored request, so only real edits ask before they are discarded.
+    @State private var initial: [String] = ["", "", "", ""]
+    @State private var initialDate = Date()
+
+    private var hasChanges: Bool {
+        filled && ([text1, text2, amount, warranty] != initial || !Calendar.current.isDate(date, inSameDayAs: initialDate))
+    }
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            // The error banner is the form's first row; it is scrolled into view and given
+            // VoiceOver focus when a problem is reported (see ErrorFocusForm).
+            ErrorFocusForm(error: error) {
                 switch action {
                 // Each field keeps a visible name above it: they are filled in from the stored
                 // request, and a placeholder alone disappears once a field holds a value.
@@ -315,13 +324,20 @@ struct DeviceActionSheet: View {
                     warranty = String((r.warrantyUntil ?? "").prefix(10))
                     if let d = r.deliveredAt, let day = ymd(d) { date = day }
                 }
+                initial = [text1, text2, amount, warranty]; initialDate = date
             }
             .navigationTitle(action.rawValue.capitalized)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                // Not while saving: the step would still be recorded, with no word of it here.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await submit() } }.disabled(busy) }
             }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard your changes to this step?",
+                                 asking: $askingDiscard) { dismiss() }
         }
     }
     private func submit() async {
@@ -340,7 +356,7 @@ struct DeviceActionSheet: View {
         // The presenter announces the result once the sheet has gone (a message posted while it
         // is still open is cut off when it closes).
         do { let _: OKResponse = try await api.call("device_request_update", body: b); onDone(); dismiss() }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -365,35 +381,51 @@ struct DeviceQuoteSheet: View {
     let requestId: Int; let onDone: () -> Void
     @State private var vendor = ""; @State private var amount = ""; @State private var ref = ""; @State private var notes = ""
     @State private var busy = false; @State private var error: String?
+    @State private var askingDiscard = false
+
+    private var hasChanges: Bool {
+        [vendor, amount, ref, notes].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
-                // Visible names that stay once a field is filled; the required one says so.
+            // The error banner is the form's first row; it is scrolled into view and given
+            // VoiceOver focus when a problem is reported (see ErrorFocusForm).
+            ErrorFocusForm(error: error) {
+                // Visible names that stay once a field is filled; the required ones say so.
                 CaptionedField(label: "Vendor (required)", text: $vendor)
-                KeyboardCaptionedField(label: "Amount (digits, like 1250.00)", text: $amount, keyboard: .decimalPad)
+                KeyboardCaptionedField(label: "Amount (required, digits, like 1250.00)", text: $amount, keyboard: .decimalPad)
                 CaptionedField(label: "Quote #", text: $ref)
                 CaptionedField(label: "Notes", text: $notes)
             }
             .navigationTitle("Add quote")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                // Left enabled: a missing vendor is explained by the error banner, not a dimmed button.
+                // Not while saving: the quote would still be added, with no word of it here.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
+                // Left enabled: a missing vendor or amount is explained by the error banner, not a dimmed button.
                 ToolbarItem(placement: .confirmationAction) { Button("Add") { Task { await submit() } }.disabled(busy) }
             }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this quote?",
+                                 asking: $askingDiscard) { dismiss() }
         }
     }
     private func submit() async {
         if vendor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             showFormError("Vendor: enter the vendor's name.", in: &error); return
         }
+        // The server needs the quoted price; said here rather than after a round trip.
+        if amount.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            showFormError("Amount: enter the quoted price in digits, like 1250.00.", in: &error); return
+        }
         guard let amountText = checkedAmount(amount) else { showFormError(amountFormatMessage("Amount"), in: &error); return }
         busy = true; error = nil
         // The presenter announces the result once the sheet has gone.
         do { let _: OKResponse = try await api.call("device_request_update", body: ["id": requestId, "op": "add_quote", "vendor": vendor, "amount": amountText, "quote_ref": ref, "notes": notes]); onDone(); dismiss() }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -404,11 +436,18 @@ struct DeviceNewSheet: View {
     @State private var selectedClient: Int?
     @State private var deviceName = ""; @State private var category = "Other"; @State private var justification = ""
     @State private var busy = false; @State private var error: String?
+    @State private var askingDiscard = false
+
+    private var hasChanges: Bool {
+        selectedClient != nil || category != "Other"
+            || [deviceName, justification].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            // The error banner is the form's first row; it is scrolled into view and given
+            // VoiceOver focus when a problem is reported (see ErrorFocusForm).
+            ErrorFocusForm(error: error) {
                 NewRecordClientPicker(title: "Client (required)", selection: $selectedClient)
                 CaptionedField(label: "Device / technology (required)", text: $deviceName)
                 Picker("Category", selection: $category) { ForEach(deviceCategories, id: \.self) { Text($0) } }
@@ -417,10 +456,16 @@ struct DeviceNewSheet: View {
             .navigationTitle("New request")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                // Not while saving: the request would still be created, with no word of it here.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
                 // Left enabled: what is missing is explained by the error banner, not a dimmed button.
                 ToolbarItem(placement: .confirmationAction) { Button("Create") { Task { await submit() } }.disabled(busy) }
             }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this new request?",
+                                 asking: $askingDiscard) { dismiss() }
         }
     }
     private func submit() async {
@@ -431,7 +476,7 @@ struct DeviceNewSheet: View {
         busy = true; error = nil
         // The presenter announces the result once the sheet has gone.
         do { let _: OKResponse = try await api.call("add_device_request", body: ["client_id": cid, "device_name": deviceName, "category": category, "justification": justification]); onDone(); dismiss() }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 

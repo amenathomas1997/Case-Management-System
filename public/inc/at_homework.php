@@ -23,7 +23,9 @@ function at_homework_update(int $id,array $input,int $actor): void {
         // Instructions may be as long as when they were assigned (the app and the track
         // page store up to the column's 65,535 bytes), so any assignment can be edited.
         if($title===''||mb_strlen($title)>190||strlen($instructions)>65535)throw new DomainException('Use a title up to 190 characters and instructions up to 65,535 bytes (about 65,000 plain characters).');
-        if($due!==''&&!valid_date($due))throw new DomainException('Use a valid due date.');
+        // The same year range as assigning homework (track page and app): a mistyped year
+        // (0026, 2062) would make the assignment long overdue or never due.
+        if($due!==''&&!valid_date($due,2000,(int)date('Y')+5))throw new DomainException('Use a valid due date with a four-digit year from 2000 to '.((int)date('Y')+5).'.');
         $changed=$title!==trim((string)$h['title'])||$instructions!==$lf((string)$h['instructions']);
         db()->prepare('UPDATE homework SET title=?,instructions=?,due_date=?,client_reported_at=? WHERE id=?')->execute([$title,$instructions?:null,$due?:null,$changed?null:$h['client_reported_at'],$id]);
         audit($actor,'homework.edit','track',(int)$h['track_id'],'Assignment #'.$id);db()->commit();

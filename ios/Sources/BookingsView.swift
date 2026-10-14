@@ -4,6 +4,8 @@ struct Booking: Decodable, Identifiable {
     let id: Int; let serviceType: String; let provider: String?; let neededAt: String?
     let durationMin: Int; let location: String?; let status: String; let cost: Double?
     let clientName: String; let clientId: Int
+    /// Access needs, where to meet (nil from a server that does not send it).
+    let notes: String?
 }
 struct BookingsResponse: Decodable { let bookings: [Booking] }
 
@@ -79,6 +81,8 @@ struct BookingsView: View {
                 Text(b.clientName).font(.caption)
                 if let n = b.neededAt { Text(formatDateTime(n)).font(.caption) }
                 if let p = b.provider, !p.isEmpty { Text(p).font(.caption) }
+                // As on the website: the booking's notes are shown with it, named.
+                if let n = b.notes, !n.isEmpty { Text("Notes: \(n)").font(.caption) }
             }
             .accessibilityElement(children: .combine)
             .accessibilityFocused($focusedBooking, equals: b.id)
@@ -143,7 +147,7 @@ struct BookingsView: View {
             past = pastList
                 .sorted { ($0.neededAt ?? "") > ($1.neededAt ?? "") }
             loaded = true
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
     private func setStatus(_ b: Booking, _ to: String) async {
         pendingCancel = nil
@@ -166,7 +170,7 @@ struct BookingsView: View {
             else if let first = upcoming.first ?? past.first { focusedBooking = first.id }
             else if loaded { focusedBooking = emptyFocus }
             announceAfterDismiss("Booking cancelled.")
-        } catch { self.error = error.localizedDescription }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 
     /// The booking shown in a removed one's place: the next in its section, else the one
@@ -343,7 +347,7 @@ struct NewRecordClientPicker: View {
             }
             loaded = true
         } catch {
-            loadError = "Could not load the client list. \(error.localizedDescription)"
+            showFormError("Could not load the client list. \(error.localizedDescription)", in: &loadError)
         }
     }
 }

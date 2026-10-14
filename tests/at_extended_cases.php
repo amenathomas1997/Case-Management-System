@@ -11,7 +11,8 @@ if($start===false||$end===false)throw new RuntimeException('Test harness: could 
 $stub='function ai_http(string $url,array $headers,string $body): array { file_put_contents('.var_export($tmp.'/ai_request.json',true).', $body); return [200,["choices"=>[["message"=>["content"=>"Synthetic editable practice draft"]]]],""]; }' . "\n\n";
 file_put_contents($tmp.'/ai.php',substr($aiSource,0,$start).$stub.substr($aiSource,$end));
 file_put_contents($tmp.'/core.php',swap_required(var_export($root.'/public/inc',true)." . '/ai.php'",var_export($tmp.'/ai.php',true),$originalCore,'the temporary core.php (AI transport stub)'));
-foreach(['ai_enabled'=>'1','ai_api_key'=>'synthetic-test-key','ai_provider'=>'openai','ai_redact'=>'1','ai_feat_draft'=>'1'] as $key=>$value)$db->prepare('INSERT INTO settings(`name`,value) VALUES (?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)')->execute([$key,$value]);
+// The stored key stays the suite's synthetic secret, which no page or response may show.
+foreach(['ai_enabled'=>'1','ai_api_key'=>$secrets['ai'],'ai_provider'=>'openai','ai_redact'=>'1','ai_feat_draft'=>'1'] as $key=>$value)$db->prepare('INSERT INTO settings(`name`,value) VALUES (?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)')->execute([$key,$value]);
 try{
     $db->exec("UPDATE clients SET name='Syntheticlong Sensitiveperson' WHERE id=3");
     $db->prepare('INSERT INTO smart_goals(track_id,specific_goal,measurable_metric) VALUES(100,?,?)')->execute([str_repeat('x',75).' Syntheticlong Sensitiveperson practices','Synthetic metric']);

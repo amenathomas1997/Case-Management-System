@@ -1,7 +1,8 @@
 <?php
 declare(strict_types=1);
-// Email-to-client-file: forward any email to notifications@example.org
-// with the client's full name in the subject, and it becomes a note on their file.
+// Email-to-client-file: forward any email to this installation's own Graph sender
+// mailbox (the 'sender' in the 'graph' block of the private config.php) with the
+// client's full name in the subject, and it becomes a note on their file.
 // A client, guardian or counselor who replies without a name in the subject is
 // filed by address only when that address belongs to exactly one client AND the
 // message body names that client. Mail from a known client contact (an archived
@@ -82,7 +83,7 @@ foreach ($clients as $cl) {
 // first, a few pages deep, so mail that cannot be filed and stays in the inbox
 // cannot crowd a new reply out of the window.
 $msgs = [];
-$path = $sender . '/mailFolders/inbox/messages?$top=25&$orderby=receivedDateTime%20desc&$select=id,subject,from,receivedDateTime,bodyPreview,body,internetMessageHeaders';
+$path = $sender . '/mailFolders/inbox/messages?$top=25&$orderby=receivedDateTime%20desc&$select=id,subject,from,receivedDateTime,bodyPreview,body,internetMessageHeaders,hasAttachments';
 for ($page = 0; $page < 4 && $path !== ''; $page++) {
     [$mc, $list] = graph_api('GET', $path, null, ['Prefer: outlook.body-content-type="text"']);
     if ($mc < 200 || $mc >= 300 || !is_array($list)) {
@@ -156,6 +157,12 @@ foreach ($msgs as $m) {
             // Cut on a character boundary, by bytes, and say so in the note.
             $bodyText = mb_strcut($bodyText, 0, $maxBodyBytes, 'UTF-8')
                 . "\n\n[This email was too long to store in full. The complete message is in the \"Filed to CMS\" mailbox folder.]";
+        }
+        // Only the text is filed: the note says when the email carried attachments
+        // (an authorization letter, a report), so whoever reads the record knows a
+        // document is waiting in the mailbox folder.
+        if (!empty($m['hasAttachments'])) {
+            $bodyText .= "\n\n[This email had attachments. They were not added to the record; they are in the \"Filed to CMS\" mailbox folder.]";
         }
         // Persist before moving. A stable key makes a failed move safe to retry
         // without creating another case note, while a failed INSERT leaves mail in the inbox.

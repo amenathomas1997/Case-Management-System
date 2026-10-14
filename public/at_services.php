@@ -28,7 +28,9 @@ try{
             if($issueIn['client']<=0)$issueErrors['loan_client_id']='Client is required: choose who receives the equipment.';
             if($issueIn['equipment']<=0)$issueErrors['loan_equipment_id']='Equipment is required: choose the device to issue.';
             elseif($record['kind']==='repair'&&$issueIn['equipment']===(int)$record['equipment_id'])$issueErrors['loan_equipment_id']='Equipment: choose a replacement different from the device under repair.';
-            if($issueIn['due']!==''&&!valid_date($issueIn['due']))$issueErrors['loan_due']='Return date: use a valid date, or leave it blank.';
+            // As at_issue() checks it: a mistyped year or a date already past is refused.
+            if($issueIn['due']!==''&&!valid_date($issueIn['due'],2000,(int)date('Y')+5))$issueErrors['loan_due']='Return date: use a valid date with a year from 2000 to '.((int)date('Y')+5).', or leave it blank.';
+            elseif($issueIn['due']!==''&&$issueIn['due']<date('Y-m-d'))$issueErrors['loan_due']='Return date cannot be before today.';
             if(!$issueErrors&&($_POST['confirm_issue']??'')==='1'){at_issue($id,$issueIn['equipment'],$issueIn['client'],$issueIn['due']?:null,$actor);flash('Equipment issued and linked to this record.');redirect('at_services.php?id='.$id);}
             if(!$issueErrors){
                 $issueClient=at_client($issueIn['client'],$actor);
@@ -48,8 +50,8 @@ if($error!==null&&$record&&$issueIn!==null&&isset($_POST['issue'])){
     $issueKey=match($error){
         'Client not found on your caseload.','Choose the repair client and an open repair.','Choose a client whose case is open: a redeployed device cannot go to a closed or archived client.'=>'loan_client_id',
         'Choose a replacement different from the device under repair.','That item is no longer available.','That item already has an open loan.','Complete the equipment repair or reuse checks before lending this item.'=>'loan_equipment_id',
-        'Use a valid loan return date.'=>'loan_due',
-        default=>null};
+        'The loan return date cannot be before today.'=>'loan_due',
+        default=>str_starts_with($error,'Use a valid loan return date')?'loan_due':null};
     if($issueKey!==null){$issueErrors[$issueKey]=['loan_client_id'=>'Client: ','loan_equipment_id'=>'Equipment: ','loan_due'=>'Return date: '][$issueKey].lcfirst($error);$error=null;}
 }
 // A failed action still shows the record's current summary (such as whether its loaner is out).
@@ -62,7 +64,8 @@ elseif($def)$pageTitle=(isset($_GET['new'])?'New record: ':'').$def['label'].' �
 page_header(($error||$issueErrors?'Error — ':'').$pageTitle,$user,'at_services');
 ?>
 <h1>AT services</h1>
-<p><a href="at_services.php">All AT services</a> · <a href="followups.php">Existing loan follow-ups</a></p>
+<?php // Device follow-ups need the clients permission (followups.php), so the link is offered only with it. ?>
+<p><a href="at_services.php">All AT services</a><?php if(can('clients')):?> · <a href="followups.php">Existing loan follow-ups</a><?php endif;?></p>
 <?php if($error&&!$def)echo error_notice($error);?>
 <?php if(!$kind):?>
 <div class="grid grid-2">
@@ -151,8 +154,9 @@ elseif($matches!==null):?><p id="match-results" tabindex="-1"><strong><?=$matche
 <?php endif;?>
 <?php if($record && !$edit):?>
 <h3><?=h($record['title'])?></h3><p>Status: <?=h($record['status'])?>. <?php if($mayEdit):?><a href="at_services.php?id=<?=$id?>&amp;edit=1">Edit record<span class="visually-hidden">: <?=h($record['title'])?></span></a><?php endif;?> · <a href="at_services.php?kind=<?=h($kind)?>">Back to list<span class="visually-hidden">: <?=h($def['label'])?></span></a></p>
-<?php if($record['client_id']):?><p><a href="client.php?id=<?=(int)$record['client_id']?>">Open client record</a></p><?php endif;?>
-<?php if($record['track_id']):?><p><a href="track.php?id=<?=(int)$record['track_id']?>">Open training track</a></p><?php endif;?>
+<?php // Client records and tracks need the clients permission, which some AT kinds (funding, repair, licence seats) do not. ?>
+<?php if($record['client_id']&&can('clients')):?><p><a href="client.php?id=<?=(int)$record['client_id']?>">Open client record</a></p><?php endif;?>
+<?php if($record['track_id']&&can('clients')):?><p><a href="track.php?id=<?=(int)$record['track_id']?>">Open training track</a></p><?php endif;?>
 <dl><?php foreach($fields as $f):$v=$values[$f['key']]??'';if($v==='')continue;$label=$v;foreach($f['options'] as $opt)if($opt['value']===$v)$label=$opt['label'];?><dt><strong><?=h($f['label'])?></strong></dt><dd style="white-space:pre-wrap"><?php if($f['type']==='url'):?><a href="<?=h($v)?>" rel="noreferrer"><?=h($v)?></a><?php else:?><?=h($label)?><?php endif;?></dd><?php endforeach;?></dl>
 <?php foreach((array)($detail['summary']??[]) as $label=>$v):?><p><strong><?=h($label)?>:</strong> <?=h($v)?></p><?php endforeach;?>
 <?php $childKind=['trial'=>'trial_option','setup'=>'outcome','resource'=>'learning','license'=>'license_seat'][$kind]??null;if($childKind):?>
@@ -166,7 +170,10 @@ foreach((array)($detail['children']??[]) as $child):$cv=(array)$child['values'];
 <section class="card"><h3><?= $kind==='repair'?'Loaner support':'Redeploy device'?></h3>
 <?php // Return is offered only while the linked loan is still out; a new loaner only once it is back.
 $loanOpen=!empty($record['details']['loan_id'])&&(((array)($detail['summary']??[]))['Returned']??'')==='Not returned';
-if($loanOpen):?><form method="post"><?=csrf_field()?><button name="return" value="1">Return linked equipment</button></form><?php endif;?>
+// A return closes the loan and cannot be undone, so it is confirmed
+// first, naming the device and the client (as the Equipment page's "Mark returned" does).
+if($loanOpen):$retItem=(string)(((array)($detail['summary']??[]))['Loaner']??'the linked equipment');
+$retQ=db()->prepare('SELECT name FROM clients WHERE id=?');$retQ->execute([(int)$record['client_id']]);$retClient=(string)($retQ->fetchColumn()?:'the client');?><form method="post"><?=csrf_field()?><button name="return" value="1" onclick="return confirm(<?=h((string)json_encode('Mark '.$retItem.' returned from '.$retClient.'? This closes the loan and cannot be undone.',JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP|JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE))?>);">Return linked equipment<span class="visually-hidden">: <?=h($retItem)?></span></button></form><?php endif;?>
 <?php if(!$loanOpen&&(($kind==='repair'&&!in_array($record['status'],['Resolved','Cancelled'],true))||($kind==='reuse'&&$record['status']==='Ready'))):?>
 <?php if($issueReview):// The choices are read back, and focus moves to them once, before the loan is created.?>
 <div id="issue-review" tabindex="-1"><h4>Check before issuing</h4>

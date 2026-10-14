@@ -16,11 +16,13 @@ if (can('clients')) {
     $q->execute($scopeParams); $pendingClients = (int)$q->fetchColumn();
     // Active tracks whose authorization has already lapsed stay listed (first,
     // marked expired): that is when hours must stop being logged against them.
+    // Open clients only, as on the Compliance page and in cron/daily_alerts.php:
+    // closing a client leaves its track Active, so it would stay listed forever.
     $q = db()->prepare("SELECT t.id, t.title, t.auth_number, t.expiration_date, t.authorized_hours, c.id AS client_id, c.name AS client_name,
           (t.expiration_date < CURDATE()) AS is_expired,
           (SELECT COALESCE(SUM(hours),0) FROM work_logs WHERE track_id = t.id) AS worked
         FROM training_tracks t JOIN clients c ON c.id = t.client_id
-        WHERE t.status = 'Active' AND t.expiration_date IS NOT NULL
+        WHERE t.status = 'Active' AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%' AND t.expiration_date IS NOT NULL
           AND t.expiration_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)" . $scopeAnd . "
         ORDER BY t.expiration_date");
     $q->execute($scopeParams); $expiring = $q->fetchAll();

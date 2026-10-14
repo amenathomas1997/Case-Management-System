@@ -21,6 +21,7 @@ if (!ai_feature_enabled('ask')) {
 $question = trim(is_string($_POST['question'] ?? null) ? $_POST['question'] : '');
 $answer = null;
 $truncated = false;
+$cutOff = false;   // the AI stopped at its length limit, so the answer is incomplete
 $asking = $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ask']);
 if ($asking && $question === '') {
     set_form_errors(['question' => 'Type a question to ask.']);
@@ -93,7 +94,10 @@ if ($asking) {
     if ($res['ok']) {
         // Substitute tokens back to real names for display (provider never saw them).
         $answer = preg_replace_callback('/\bC(\d+)\b/', fn($m) => $names[(int)$m[1]] ?? $m[0], $res['text']);
-        flash('The answer is ready below, under the heading "Answer".');
+        // Stopped at the length limit: a list may end part-way, with clients missing.
+        $cutOff = !empty($res['truncated']);
+        if ($cutOff) flash('The answer below is incomplete: the AI stopped before finishing it, so anything after the last line is missing. Narrow the question (for example to one goal or status) and ask again.', 'error');
+        else flash('The answer is ready below, under the heading "Answer".');
     } else { flash($res['error'], 'error'); }
 }
 
@@ -114,7 +118,8 @@ page_header('Ask your caseload', $user, 'ai_tools');
 
 <?php if ($answer !== null): ?>
 <section class="card" aria-labelledby="ans-h" style="margin-top:1rem">
-  <h2 id="ans-h">Answer</h2>
+  <h2 id="ans-h">Answer<?= $cutOff ? ' (incomplete)' : '' ?></h2>
+  <?php if ($cutOff): ?><p class="field-error"><strong>Incomplete:</strong> the AI stopped before finishing this answer, so clients after the last line are missing. Narrow the question and ask again.</p><?php endif; ?>
   <?= plain_text_html($answer) ?>
   <?php if ($truncated): ?><p class="hint">Note: only part of the caseload fit in one question — narrow the question for larger caseloads.</p><?php endif; ?>
   <p class="hint">AI can be wrong — verify against the records before acting.</p>

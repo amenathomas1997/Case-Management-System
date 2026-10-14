@@ -23,6 +23,10 @@ $refused=$rejectEdit($trial,[],'Completed');
 check(str_starts_with((string)($refused['error']??''),'Recommended trial option is required'),'A comparison completed without a recommended option is refused with a message that names the field');
 $edit($trial,['preferred_option'=>(string)$option,'rationale'=>'Meets the stated reading goal'],'Completed');
 check($call('at_detail',[],['id'=>$trial])['record']['status']==='Completed','Device comparisons require a tested option and rationale');
+// The recommended option is one of the comparison's own options, never another's.
+$otherTrial=$save('trial',$base+['goals'=>'Magnify printed text','context'=>'Kitchen']);
+$refused=$rejectEdit($otherTrial,['preferred_option'=>(string)$option]);
+check(str_starts_with((string)($refused['error']??''),'Recommended trial option:')&&$call('at_detail',[],['id'=>$otherTrial])['record']['values']['preferred_option']==='','A comparison cannot recommend another comparison\'s option, and the refusal names the field');
 $stale=$call('at_detail',[],['id'=>$trial])['record'];$edit($trial,['rationale'=>'Updated explanation']);
 $call('at_save',['kind'=>'trial','id'=>$trial,'version'=>$stale['version'],'title'=>$stale['title'],'status'=>'Completed','values'=>$stale['values']],[],false);
 check(true,'Stale edits are rejected instead of overwriting newer work');
@@ -34,6 +38,15 @@ $lateSetup=$save('setup',$base+['device'=>'Synthetic magnifier','versions'=>'2.0
 check(count($call('at_detail',[],['id'=>$lateSetup])['children'])===0,'An active setup without a delivery date has no outcome checks yet');
 $edit($lateSetup,['delivered_on'=>'2026-10-02']);
 check(count($call('at_detail',[],['id'=>$lateSetup])['children'])===3,'Adding the delivery date to an active setup schedules its 30/60/90-day outcomes');
+// Superseding a setup closes its scheduled checks; making it Active again resumes
+// those automatically closed checks. Retiring it from Draft closes them as well.
+$lateChecks=fn(string $status):int=>(int)$db->query("SELECT COUNT(*) FROM at_records WHERE parent_id=$lateSetup AND kind='outcome' AND status='$status'")->fetchColumn();
+$edit($lateSetup,[],'Superseded');
+check($lateChecks('Skipped')===3,'Superseding an active setup closes its scheduled outcome checks');
+$edit($lateSetup,[],'Active');
+check($lateChecks('Scheduled')===3&&$lateChecks('Skipped')===0,'Making a superseded setup Active again returns its automatically closed checks to Scheduled');
+$edit($lateSetup,[],'Draft');$edit($lateSetup,[],'Retired');
+check($lateChecks('Skipped')===3,'Retiring a setup from Draft closes its outcome checks still scheduled');
 $outcome=$detail['children'][0]['id'];$refused=$rejectEdit($outcome,[],'Completed');
 check(str_starts_with((string)($refused['error']??''),'Completion date is required'),'An outcome completed without a completion date is refused with a message that names the field');
 $edit($outcome,['completed_on'=>'2026-10-31','in_use'=>'Daily','independence'=>'4','confidence'=>'5'],'Completed');
@@ -54,7 +67,8 @@ check($learningDetail['record']['status']==='Completed'&&str_starts_with((string
 $edit($resource,[],'Published');
 $call('at_save',['kind'=>'resource','title'=>'Unsafe URL','values'=>['goals'=>'Test','format'=>'Text','instructions'=>'test','url'=>'javascript:alert(1)']],[],false);
 $repair=$save('repair',['client_id'=>'3','equipment_id'=>'100','device'=>'Broken reader','issue'=>'No power']);
-$loan=$call('at_issue',['id'=>$repair,'client_id'=>3,'equipment_id'=>101,'due_date'=>'2026-11-01'])['id'];
+// A return date after today: a date already past is refused.
+$loan=$call('at_issue',['id'=>$repair,'client_id'=>3,'equipment_id'=>101,'due_date'=>date('Y-m-d',strtotime('+30 days'))])['id'];
 check((int)$db->query('SELECT COUNT(*) FROM equipment_followups WHERE loan_id='.(int)$loan)->fetchColumn()===0,'A temporary repair loaner gets no "still in use?" follow-ups');
 $call('at_issue',['id'=>$repair,'client_id'=>3,'equipment_id'=>101],[],false);$rejectEdit($repair,['resolution'=>'Repaired'],'Resolved');
 $call('at_return',['id'=>$repair]);$edit($repair,['resolution'=>'Repaired and tested'],'Resolved');
@@ -86,6 +100,13 @@ check($call('at_detail',[],['id'=>$license])['summary']['Available seats']==='0'
 $profile=$save('staff_profile',['staff_id'=>'1','expertise'=>'Screen reader, magnification','languages'=>'English, ASL','areas'=>'Chicago','modality'=>'Both','availability'=>'Weekdays']);
 $matches=$call('at_matches',[],['expertise'=>'Screen reader','languages'=>'English','areas'=>'Chicago','modality'=>'Remote'])['matches'];
 check(count($matches)===1&&$matches[0]['missing']===''&&$matches[0]['score']===3,'Instructor matching combines skills, communication, location and schedule capacity');
+// A need of 'Both' (the waitlist's default) accepts either mode, so a remote-only
+// instructor is not listed as missing 'Both'; a need for in-person is still missing.
+$edit($profile,['modality'=>'Remote']);
+$bothMatch=$call('at_matches',[],['expertise'=>'Screen reader','modality'=>'Both'])['matches'];
+$inPerson=$call('at_matches',[],['expertise'=>'Screen reader','modality'=>'In person'])['matches'];
+check(count($bothMatch)===1&&$bothMatch[0]['missing']===''&&count($inPerson)===1&&$inPerson[0]['missing']==='In person','Instructor matching treats a need of Both as no constraint on delivery mode');
+$edit($profile,['modality'=>'Both']);
 $rate=$save('rate',['staff_id'=>'1','due_date'=>'2026-01-01','hourly_cost'=>'40']);
 $cost=$save('cost',$base+['spent_on'=>'2026-10-01','category'=>'Travel','amount'=>'10.00']);
 $db->exec("INSERT INTO work_logs(track_id,work_date,hours,description,created_by) VALUES(100,'2026-10-01',2,'Synthetic work',1)");

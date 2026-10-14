@@ -1,7 +1,7 @@
 {
     "product": "Case Management System",
-    "latest": "3.0.20",
-    "released": "2026-10-12",
-    "notes": "Shows the CMS version on a separate, clearly labeled footer line with additional iPhone safe-area spacing. No additional database migration is required for sites on 3.0.16 or later.",
+    "latest": "3.0.21",
+    "released": "2026-10-13",
+    "notes": "Security and accessibility fixes: a calendar address needs your password, and you are emailed when your password, authenticator or calendar address changes. Moved sessions are emailed to both instructors. Closed clients leave the dashboard's expired list. Sites on 3.0.16 or later apply dist/migrations/mig_3.0.21.sql. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16 and 3.0.21 in order. All are safe to re-run.",
     "contact": "Contact Example Agency for the update package."
 }

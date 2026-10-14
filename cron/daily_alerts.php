@@ -20,6 +20,15 @@ if (!function_exists('db')) {
     exit(1);
 }
 
+// One run at a time: alerts are marked only after they are emailed, so a manual
+// run that overlaps the scheduled one (or a crontab line added twice) would email
+// every alert twice. The lock is named for this database, so another installation
+// on the same database server is not held up, and it ends with this process.
+if ((int)db()->query("SELECT GET_LOCK(CONCAT('cms_daily_alerts_', MD5(DATABASE())), 0)")->fetchColumn() !== 1) {
+    echo "Another daily alerts run is still working; this run sent nothing.\n";
+    exit(0);
+}
+
 $alerts = [];          // ['text' => ..., 'assigned_to' => user id or null]
 
 // The overdue-task and overdue-loan lists are a standing digest rather than
@@ -100,7 +109,12 @@ foreach ($tracks as $t) {
 }
 
 // Waitlist check-ins: nobody waits silently — every ~3 weeks an open task
-// reminds staff to check in with each waitlisted client.
+// reminds staff to check in with each waitlisted client. A check-in still open for
+// a client who has left the waitlist (or been archived) no longer applies: it is
+// closed here, or it would appear in the overdue digest every day.
+db()->exec("UPDATE tasks t JOIN clients c ON c.id = t.client_id
+    SET t.status = 'Done', t.done_at = NOW()
+    WHERE t.status = 'Open' AND t.auto_key LIKE 'wait-%' AND (c.status <> 'Waitlist' OR c.archived_at IS NOT NULL)");
 foreach (db()->query("SELECT id, name, assigned_to FROM clients WHERE status = 'Waitlist' AND archived_at IS NULL")->fetchAll() as $wc) {
     $open = db()->prepare("SELECT COUNT(*) FROM tasks WHERE client_id = ? AND auto_key LIKE 'wait-%' AND status = 'Open'");
     $open->execute([(int)$wc['id']]);
@@ -122,13 +136,16 @@ foreach (db()->query("SELECT id, name, assigned_to FROM clients WHERE status = '
 // as a service done last week and logged today), the service date was moved on to
 // or past the day the task opened, or the item was retired or taken off its
 // schedule. Otherwise a serviced item's task would stay open and appear in the
-// overdue digest every day.
+// overdue digest every day. An administrator's correction of the last service
+// date (equipment.php logs it as 'Other', "Correction (not a service): …") is not
+// a service: it closes the task only by moving the date on, as above.
 db()->exec("UPDATE tasks t JOIN equipment e ON t.auto_key LIKE CONCAT('equip-maint-', e.id, '-%')
     SET t.status = 'Done', t.done_at = NOW()
     WHERE t.status = 'Open'
       AND (e.status = 'Retired' OR e.maintenance_interval_days IS NULL OR e.maintenance_interval_days <= 0
            OR (e.last_service_date IS NOT NULL AND e.last_service_date >= DATE(t.created_at))
-           OR EXISTS (SELECT 1 FROM equipment_maintenance m WHERE m.equipment_id = e.id AND m.created_at >= t.created_at))");
+           OR EXISTS (SELECT 1 FROM equipment_maintenance m WHERE m.equipment_id = e.id AND m.created_at >= t.created_at
+                AND NOT (m.service_type = 'Other' AND COALESCE(m.notes, '') LIKE 'Correction (not a service)%')))");
 foreach (db()->query("SELECT id, name, last_service_date, maintenance_interval_days
         FROM equipment WHERE status <> 'Retired' AND maintenance_interval_days IS NOT NULL AND maintenance_interval_days > 0")->fetchAll() as $eq) {
     $due = $eq['last_service_date']

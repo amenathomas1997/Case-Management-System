@@ -9,11 +9,34 @@ require_perm('clients');
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['unarchive'])) {
     require_perm('admin');
     $restoreId = (int)($_POST['client_id'] ?? 0);
-    $un = db()->prepare('UPDATE clients SET archived_at = NULL WHERE id = ? AND archived_at IS NOT NULL');
-    $un->execute([$restoreId]);
-    if ($un->rowCount() === 1) {
+    // The nightly retention run archives a closed record whose last status-history
+    // entry is older than the retention period, which a restored record still is.
+    // The restore is written to the history (status unchanged; the reports count
+    // a closure only when a case moves into Closed from an open status), so the
+    // retention period starts again from today.
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $cur = $pdo->prepare('SELECT status FROM clients WHERE id = ? AND archived_at IS NOT NULL FOR UPDATE');
+        $cur->execute([$restoreId]);
+        $restoredStatus = $cur->fetchColumn();
+        if ($restoredStatus !== false) {
+            $pdo->prepare('UPDATE clients SET archived_at = NULL WHERE id = ?')->execute([$restoreId]);
+            $pdo->prepare('INSERT INTO client_status_history (client_id, old_status, new_status, changed_by, note) VALUES (?,?,?,?,?)')
+                ->execute([$restoreId, $restoredStatus, $restoredStatus, (int)$user['id'], 'Restored from archive (retention period restarts)']);
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+    if ($restoredStatus !== false) {
         audit($user['id'], 'client.unarchive', 'client', $restoreId);
-        flash('The record was restored to the active lists.');
+        $retYears = (int)(setting('retention_years') ?? '0');
+        flash('The record was restored to the active lists.'
+            . ($retYears > 0 && str_starts_with((string)$restoredStatus, 'Closed')
+                ? ' Its retention period starts again today, so it will be archived again automatically in ' . $retYears . ' year' . ($retYears === 1 ? '' : 's') . ' if it is still closed then.'
+                : ''));
     } else {
         flash('That record is not archived.', 'error');
     }

@@ -175,7 +175,7 @@ struct CounselorsView: View {
             counselors = response.counselors
             loaded = true
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 
@@ -190,7 +190,7 @@ struct CounselorsView: View {
             announce(confirmation!)
             await load()
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
         pendingSend = nil
     }
@@ -214,9 +214,9 @@ struct CounselorsView: View {
             }
         } catch APIError.server(let message) where message == "Unknown action." {
             // A server that predates this action: say where it can be done instead.
-            self.error = "This server cannot turn off a link from the app yet. Use Turn off link on the website's Counselor portal page."
+            showFormError("This server cannot turn off a link from the app yet. Use Turn off link on the website's Counselor portal page.", in: &self.error)
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }

@@ -96,6 +96,6 @@ struct ComplianceView: View {
 
     private func load() async {
         do { error = nil; data = try await api.call("compliance"); stale = false }
-        catch { self.error = error.localizedDescription; stale = true }
+        catch { showFormError(error.localizedDescription, in: &self.error); stale = true }
     }
 }

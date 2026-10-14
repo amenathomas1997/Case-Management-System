@@ -26,17 +26,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $fieldErrs) {
     set_form_errors($fieldErrs);
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Rate limit: max 8 failed attempts per email or IP in 15 minutes. A signed-in
-    // user's password re-check failures ('reauth:', limited on their own) do not
-    // use up the sign-in budget of everyone sharing the address.
+    // user's password re-check failures ('reauth:') and wrong counselor-portal codes
+    // ('vrc-fail-<id>'), each limited on their own, do not use up the sign-in budget
+    // of everyone sharing the address.
     // Attempts are recorded under 'login:<email>', so whatever is typed here can
     // never land in another limiter's bucket ('verify:<email>', 'portal-msg-7'…).
     // Rows under the bare email (earlier releases, and the app sign-in until it
     // uses the same key) still count toward the same limit.
     $lkey = 'login:' . $email;
-    $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE success = 0 AND attempted_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE) AND (email IN (?, ?) OR (ip = ? AND email NOT LIKE 'reauth:%'))");
+    // Each attempt is recorded as a failure BEFORE it is counted or checked (and
+    // the record removed if it is refused untested, or marked a success), as
+    // verify.php does: requests sent in parallel cannot all see room under the
+    // cap during the slow password check and all be tested.
+    db()->prepare('INSERT INTO login_attempts (ip, email, success) VALUES (?,?,0)')->execute([$ip, $lkey]);
+    $attemptRow = (int)db()->lastInsertId();
+    $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE success = 0 AND attempted_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE) AND (email IN (?, ?) OR (ip = ? AND email NOT LIKE 'reauth:%' AND email NOT LIKE 'vrc-fail-%'))");
     $rl->execute([$lkey, $email, $ip]);
-    if ((int)$rl->fetchColumn() >= 8) {
+    // A correct password emails a new code and cancels the one before, so the codes
+    // sent are capped per account too (shared with the app sign-in, which uses the
+    // same key): someone who knows the password but not the mailbox cannot flood it,
+    // or keep cancelling the code the real user is typing. Only correct passwords
+    // leave success rows, and the cap is checked before the password, so the answer
+    // says nothing about whether this password is right.
+    $sentQ = db()->prepare('SELECT COUNT(*) FROM login_attempts WHERE email = ? AND success = 1 AND attempted_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE)');
+    $sentQ->execute([$lkey]);
+    $codesCapped = (int)$sentQ->fetchColumn() >= 5;
+    if ((int)$rl->fetchColumn() > 8) {   // 8 earlier failures plus this attempt
+        db()->prepare('DELETE FROM login_attempts WHERE id = ?')->execute([$attemptRow]);
         $error = 'Too many sign-in attempts. Please wait 15 minutes and try again.';
+    } elseif ($codesCapped) {
+        db()->prepare('DELETE FROM login_attempts WHERE id = ?')->execute([$attemptRow]);
+        $error = 'Too many sign-in codes were requested for this account. Wait 15 minutes, then sign in again.';
     } else {
         $stmt = db()->prepare('SELECT * FROM users WHERE email = ? AND is_active = 1');
         $stmt->execute([$email]);
@@ -46,7 +66,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $fieldErrs) {
         $ok = $user
             ? password_verify($password, $user['password_hash'])
             : password_verify($password, dummy_password_hash()) && false;
-        db()->prepare('INSERT INTO login_attempts (ip, email, success) VALUES (?,?,?)')->execute([$ip, $lkey, $ok ? 1 : 0]);
+        if ($ok) {
+            db()->prepare('UPDATE login_attempts SET success = 1 WHERE id = ?')->execute([$attemptRow]);
+            // Counted again with this one included: requests sent in parallel can
+            // all pass the check above during the slow password check.
+            $okq = db()->prepare('SELECT COUNT(*) FROM login_attempts WHERE success = 1 AND email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE)');
+            $okq->execute([$lkey]);
+            if ((int)$okq->fetchColumn() > 5) {
+                $ok = false;
+                $error = 'Too many sign-in codes were requested for this account. Wait 15 minutes, then sign in again.';
+            }
+        }
 
         if ($ok) {
             // Password verified — issue 6-digit OTP and email it (2FA step)

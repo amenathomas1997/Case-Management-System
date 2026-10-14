@@ -54,11 +54,33 @@ function ai_cfg(): ?array {
 
 function ai_enabled(): bool { return ai_cfg() !== null; }
 
+// Address ranges that are not on the public internet but that FILTER_FLAG_NO_PRIV_RANGE
+// and FILTER_FLAG_NO_RES_RANGE let through on PHP 8.1 (FILTER_FLAG_GLOBAL_RANGE only
+// exists from 8.2, and even it accepts NAT64): shared address space (carrier NAT and
+// some hosts' internal networks, e.g. the 100.100.100.200 metadata address), IETF
+// protocol assignments, benchmarking and documentation ranges, and the IPv6 forms
+// that carry an IPv4 address inside them (NAT64, 6to4, Teredo). Refused on every version.
+const AI_ENDPOINT_BLOCKED = ['100.64.0.0/10', '192.0.0.0/24', '198.18.0.0/15', '192.0.2.0/24', '198.51.100.0/24',
+    '203.0.113.0/24', '64:ff9b::/96', '64:ff9b:1::/48', '2002::/16', '2001::/32', '2001:db8::/32', '100::/64'];
+
+/** Whether an IP address (v4 or v6) lies in a CIDR range of the same family. */
+function ai_ip_in_cidr(string $ip, string $cidr): bool {
+    [$net, $bits] = explode('/', $cidr, 2);
+    $a = @inet_pton($ip); $b = @inet_pton($net);
+    if ($a === false || $b === false || strlen($a) !== strlen($b)) return false;
+    $bytes = intdiv((int)$bits, 8); $rest = (int)$bits % 8;
+    if (substr($a, 0, $bytes) !== substr($b, 0, $bytes)) return false;
+    if ($rest === 0) return true;
+    $mask = (0xFF << (8 - $rest)) & 0xFF;
+    return (ord($a[$bytes]) & $mask) === (ord($b[$bytes]) & $mask);
+}
+
 /**
  * The addresses an AI endpoint's host resolves to, or null when it does not
- * resolve or any address is loopback, private, link-local or reserved. The API
- * key is POSTed from inside the hosting network, so the configured address must
- * never reach an internal service (ai.php refuses such an address when saved).
+ * resolve or any address is loopback, private, link-local, reserved or in
+ * AI_ENDPOINT_BLOCKED. The API key is POSTed from inside the hosting network, so
+ * the configured address must never reach an internal service (ai.php refuses
+ * such an address when saved).
  */
 function ai_endpoint_ips(string $url): ?array {
     if (!preg_match('#^https://#i', $url)) return null;
@@ -71,7 +93,10 @@ function ai_endpoint_ips(string $url): ?array {
     }
     if (!$ips) return null;
     $flags = FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE | (defined('FILTER_FLAG_GLOBAL_RANGE') ? FILTER_FLAG_GLOBAL_RANGE : 0);
-    foreach ($ips as $ip) if (!filter_var($ip, FILTER_VALIDATE_IP, $flags)) return null;
+    foreach ($ips as $ip) {
+        if (!filter_var($ip, FILTER_VALIDATE_IP, $flags)) return null;
+        foreach (AI_ENDPOINT_BLOCKED as $cidr) if (ai_ip_in_cidr($ip, $cidr)) return null;
+    }
     return $ips;
 }
 
@@ -153,7 +178,17 @@ function ai_generate(string $system, string $prompt, int $maxTokens = 1500): arr
         (string)json_encode(['model' => $cfg['model'], 'max_tokens' => $maxTokens,
             'messages' => [['role' => 'system', 'content' => $system], ['role' => 'user', 'content' => $prompt]]], $enc));
     if ($status !== 200) return ai_err($status, $data, $err);
-    $text = (string)($data['choices'][0]['message']['content'] ?? '');
+    // Some providers and gateways return the content as a list of parts
+    // ([{"type":"text","text":...}, {"type":"thinking",...}]): only the text parts
+    // are kept, and nothing that is not text is ever cast to the word "Array".
+    $content = $data['choices'][0]['message']['content'] ?? '';
+    $text = '';
+    if (is_string($content)) $text = $content;
+    elseif (is_array($content)) {
+        foreach ($content as $part) {
+            if (is_array($part) && ($part['type'] ?? 'text') === 'text' && is_string($part['text'] ?? null)) $text .= $part['text'];
+        }
+    }
     return ai_done($text, ($data['choices'][0]['finish_reason'] ?? '') === 'length');
 }
 
@@ -381,12 +416,16 @@ function ai_speak(string $text, string $voice = 'nova', ?int $actorId = null): a
         CURLOPT_HTTPHEADER => ['content-type: application/json', 'authorization: Bearer ' . $cfg['key']],
         CURLOPT_POSTFIELDS => (string)json_encode(['model' => 'tts-1', 'voice' => $voice, 'input' => mb_substr($text, 0, 4000)]),
     ]);
+    $started = microtime(true);
     $resp = curl_exec($ch);
     $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $ct = (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
     curl_close($ch);
-    ai_log_usage('readaloud', mb_strlen($text), $status === 200 && $resp !== false ? strlen((string)$resp) : 0, false, $actorId);
-    if ($status !== 200 || $resp === false) return ['ok' => false, 'error' => 'The voice service did not respond.'];
+    // Outcome and provider time are logged as ai_run() logs them, so read-aloud
+    // failures count on the AI quality summary instead of showing as "Unknown".
+    $ok = $status === 200 && $resp !== false;
+    ai_log_usage('readaloud', mb_strlen($text), $ok ? strlen((string)$resp) : 0, false, $actorId, $ok, (int)round((microtime(true) - $started) * 1000));
+    if (!$ok) return ['ok' => false, 'error' => 'The voice service did not respond.'];
     return ['ok' => true, 'bytes' => (string)$resp, 'mime' => $ct ?: 'audio/mpeg'];
 }
 
@@ -423,6 +462,9 @@ function ai_redact(string $text, ?array $client = null): string {
             'counselor_name' => '[COUNSELOR]', 'counselor_email' => '[EMAIL]', 'counselor_phone' => '[PHONE]'];
         foreach ($map as $f => $tag) {
             $v = trim((string)($client[$f] ?? ''));
+            // A one-word name ("Mark", "Ann") is left to the word-bounded pass below:
+            // replaced as a substring it would garble "bookmark" or "annual".
+            if (in_array($f, ['name', 'guardian_name', 'counselor_name'], true) && !preg_match('/\s/', $v)) continue;
             if ($v !== '' && mb_strlen($v) >= 3) $text = str_ireplace($v, $tag, $text);
         }
         // Each part of the client's, guardian's and counselor's names on its own
@@ -576,7 +618,11 @@ function ai_log_usage(string $feature, int $charsIn, int $charsOut, bool $redact
         db()->prepare('INSERT INTO ai_usage (user_id, feature, provider, model, chars_in, chars_out, redacted, succeeded, duration_ms, truncated) VALUES (?,?,?,?,?,?,?,?,?,?)')
             ->execute([$actorId, $feature, $cfg['provider'] ?? '', $cfg['model'] ?? '', $charsIn, $charsOut, $redacted ? 1 : 0, $succeeded === null ? null : (int)$succeeded, $durationMs, (int)$truncated]);
         return (int)db()->lastInsertId();
-    } catch (Throwable $e) { /* usage logging is best-effort */ return 0; }
+    } catch (Throwable $e) {
+        // Usage logging is best-effort. Class and code only: the message could quote the values.
+        error_log('ai_log_usage failed: ' . get_class($e) . ' ' . $e->getCode());
+        return 0;
+    }
 }
 
 /** Shared guardrails prepended to every drafting prompt. */

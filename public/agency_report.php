@@ -107,6 +107,9 @@ $totAmt = array_sum(array_map($rowAmt, $rows));
 if (isset($_GET['export'])) {
     // Plain numbers (no thousands separator) so spreadsheets and accounting imports read them as numbers.
     $num = fn(float $v, int $dp = 2): string => number_format($v, $dp, '.', '');
+    // The file names every client billed in the range, so the download is audited (as audit.php's own export is).
+    audit($user['id'], 'report.export', 'client', null, 'Agency billing summary CSV ' . $from . ' to ' . $to
+        . ($agency !== '' ? ', ' . $agency : '') . ' (' . count($rows) . ' rows)');
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="agency_summary_' . $from . '_' . $to . '.csv"');
     $out = fopen('php://output', 'w');

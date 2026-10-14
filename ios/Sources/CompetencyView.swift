@@ -39,49 +39,62 @@ struct CompetencyView: View {
     }
 
     var body: some View {
-        List {
-            if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
-            if let statusLine { Text(statusLine).font(.callout.weight(.medium)).listRowSeparator(.hidden) }
-            Picker("Curriculum", selection: Binding(get: { selected }, set: { choice in
-                guard choice != selected else { return }
-                if unsavedCount > 0 { pendingLeave = .curriculum(choice) } else { selected = choice }
-            })) {
-                Text("Choose…").tag(nil as Int?)
-                ForEach(curricula) { c in Text(c.tech != nil ? "\(c.name) (\(c.tech!))" : c.name).tag(c.id as Int?) }
-            }
-            .onChange(of: selected) { _ in Task { await loadSkills() } }
+        ScrollViewReader { proxy in
+            List {
+                if let error { ErrorBanner(message: error).listRowSeparator(.hidden).id("competencyError") }
+                if let statusLine { Text(statusLine).font(.callout.weight(.medium)).listRowSeparator(.hidden) }
+                Picker("Curriculum", selection: Binding(get: { selected }, set: { choice in
+                    guard choice != selected else { return }
+                    if unsavedCount > 0 { pendingLeave = .curriculum(choice) } else { selected = choice }
+                })) {
+                    Text("Choose…").tag(nil as Int?)
+                    ForEach(curricula) { c in Text(c.tech != nil ? "\(c.name) (\(c.tech!))" : c.name).tag(c.id as Int?) }
+                }
+                .onChange(of: selected) { _ in Task { await loadSkills() } }
 
-            if let cur = selected, loadedCurriculum == cur {
-                if skills.isEmpty {
-                    Text("This curriculum has no skills.")
-                } else {
-                    Section("\(mastered) of \(skills.count) skills mastered") {
-                        ProgressView(value: Double(mastered), total: Double(skills.count))
-                    }
-                    Section("Skills") {
-                        ForEach(skills) { s in
-                            VStack(alignment: .leading) {
-                                Text(s.skill).font(.callout)
-                                // Primary, not secondary: grey caption text is about 3.4:1 on a white row.
-                                if let at = s.assessedAt { Text("Last rated \(formatDate(at))").font(.caption2) }
-                                Picker("Level", selection: Binding(get: { levels[s.id] ?? 0 }, set: { levels[s.id] = $0; statusLine = nil })) {
-                                    ForEach(0..<5, id: \.self) { Text(competencyLevels[$0]).tag($0) }
+                if let cur = selected, loadedCurriculum == cur {
+                    if skills.isEmpty {
+                        Text("This curriculum has no skills.")
+                    } else {
+                        Section("\(mastered) of \(skills.count) skills mastered") {
+                            ProgressView(value: Double(mastered), total: Double(skills.count))
+                        }
+                        Section("Skills") {
+                            ForEach(skills) { s in
+                                VStack(alignment: .leading) {
+                                    Text(s.skill).font(.callout)
+                                    // Primary, not secondary: grey caption text is about 3.4:1 on a white row.
+                                    if let at = s.assessedAt { Text("Last rated \(formatDate(at))").font(.caption2) }
+                                    Picker("Level", selection: Binding(get: { levels[s.id] ?? 0 }, set: { levels[s.id] = $0; statusLine = nil })) {
+                                        ForEach(0..<5, id: \.self) { Text(competencyLevels[$0]).tag($0) }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .accessibilityLabel("Level for \(s.skill)")
+                                    // Locked while saving: the reload after the save would quietly put
+                                    // back a level changed in the meantime.
+                                    .disabled(busy)
                                 }
-                                .pickerStyle(.menu)
-                                .accessibilityLabel("Level for \(s.skill)")
-                                // Locked while saving: the reload after the save would quietly put
-                                // back a level changed in the meantime.
-                                .disabled(busy)
                             }
                         }
+                        Section {
+                            Button { Task { await save() } } label: { Label("Save competency levels", systemImage: "checkmark.circle") }
+                                .disabled(busy || loadingSkills)
+                        }
                     }
-                    Section {
-                        Button { Task { await save() } } label: { Label("Save competency levels", systemImage: "checkmark.circle") }
-                            .disabled(busy || loadingSkills)
-                    }
+                } else if selected != nil && loadingSkills {
+                    ProgressView("Loading skills…")
                 }
-            } else if selected != nil && loadingSkills {
-                ProgressView("Loading skills…")
+            }
+            // The banner is the list's first row: a failed save from the button at the bottom
+            // would otherwise leave it off screen, where it is neither seen nor announced.
+            .onChange(of: error) { if $0 != nil { proxy.scrollTo("competencyError", anchor: .top) } }
+        }
+        // Reloads the skills without throwing away levels changed here and not saved yet.
+        .refreshable {
+            guard !busy else { return }
+            await loadCurricula()
+            if let removed = await reloadKeepingChanges(), !removed.isEmpty {
+                announce("Removed from this curriculum on the website: \(removed.joined(separator: ", ")).")
             }
         }
         .navigationTitle("Competency")
@@ -119,7 +132,7 @@ struct CompetencyView: View {
 
     private func loadCurricula() async {
         do { error = nil; let r: CurriculaResponse = try await api.call("curricula"); curricula = r.curricula }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
     /// `clear` empties the screen first (a different curriculum was chosen) so the previous
     /// curriculum's skills are never left on screen, or saved, under the new name.
@@ -145,7 +158,7 @@ struct CompetencyView: View {
             }
         } catch {
             guard selected == cur else { return }
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
     /// True once the levels are stored (or nothing needed saving); false when the save failed.
@@ -173,8 +186,36 @@ struct CompetencyView: View {
             if selected == cur { statusLine = "Competency saved." }
             busy = false
             return true
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            let message = error.localizedDescription
+            // A skill removed on the website while this screen was open refuses the whole save.
+            // The skills are reloaded, keeping the levels changed here for those still in the
+            // curriculum, so the save can be tried again without rating every skill again.
+            if let removed = await reloadKeepingChanges(), !removed.isEmpty {
+                showFormError("Nothing was saved: \(removed.joined(separator: ", ")) \(removed.count == 1 ? "was" : "were") removed from this curriculum on the website. The list is reloaded and your other changes are kept, so save again.", in: &self.error)
+            } else {
+                showFormError(message, in: &self.error)
+            }
+        }
         busy = false
         return false
+    }
+    /// Reloads the chosen curriculum's skills, keeping each level changed here and not saved for
+    /// the skills still in it. Returns the skills that were on screen and are gone, or nil when
+    /// the reload failed or another curriculum was chosen (the screen is then left as it was).
+    private func reloadKeepingChanges() async -> [String]? {
+        guard let cur = loadedCurriculum, selected == cur else { return nil }
+        do {
+            let r: CompetencyResponse = try await api.call("client_competency", query: ["client": String(clientId), "curriculum": String(cur)])
+            guard selected == cur, loadedCurriculum == cur else { return nil }
+            let stillThere = Set(r.skills.map(\.id))
+            let removed = skills.filter { !stillThere.contains($0.id) }.map(\.skill)
+            let unsaved = levels.filter { loadedLevels[$0.key] != $0.value && stillThere.contains($0.key) }
+            let loadedNow = Dictionary(uniqueKeysWithValues: r.skills.map { ($0.id, $0.level ?? 0) })
+            skills = r.skills
+            loadedLevels = loadedNow
+            levels = loadedNow.merging(unsaved) { _, mine in mine }
+            return removed
+        } catch { return nil }
     }
 }

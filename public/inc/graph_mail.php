@@ -60,11 +60,23 @@ function graph_token(bool $fresh = false): ?string {
         return null;
     }
     $mem = ['token' => $data['access_token'], 'expires' => time() + (int)($data['expires_in'] ?? 3600)];
-    if ($cacheFile === '' || !is_dir($cacheDir) || @file_put_contents($cacheFile, json_encode($mem), LOCK_EX) === false) {
+    // Written to a new file that is made owner-only BEFORE the token goes in,
+    // then moved over the cache in one step: the token is never in a file
+    // others could read, and a reader never sees half a file.
+    $saved = false;
+    if ($cacheFile !== '' && is_dir($cacheDir)) {
+        $tmp = $cacheFile . '.' . bin2hex(random_bytes(6)) . '.tmp';
+        $fh = @fopen($tmp, 'x');
+        if ($fh !== false) {
+            $saved = chmod($tmp, 0600) && fwrite($fh, (string)json_encode($mem)) !== false;
+            fclose($fh);
+            $saved = $saved && rename($tmp, $cacheFile);
+            if (!$saved) @unlink($tmp);
+        }
+    }
+    if (!$saved) {
         // Every send would otherwise fetch a new token without anyone knowing why.
-        error_log('Graph token cache not writable (set graph.token_cache in config.php); fetching a token per request.');
-    } else {
-        @chmod($cacheFile, 0600);
+        error_log('Graph token cache not writable or could not be made owner-only (set graph.token_cache in config.php); fetching a token per request.');
     }
     return $data['access_token'];
 }
@@ -153,9 +165,15 @@ function graph_send_mail(string $to, string $subject, string $body, bool $isHtml
     $to = $hdr($to);
     $cc = $cc !== null ? $hdr($cc) : null;
     $encSubject = mb_encode_mimeheader($hdr($subject), 'UTF-8', 'B', "\r\n");
-    $fromName = mb_encode_mimeheader($hdr((string)cfg('mail_from_name')), 'UTF-8', 'B', "\r\n");
+    // The display name is encoded as send_app_mail() does for mail(): non-ASCII
+    // as an encoded word, and an ASCII name with RFC 5322 specials (a comma in
+    // "Acme, Inc.") as a quoted-string, or the From header becomes a broken
+    // mailbox list. With no name, the address stands alone.
+    $fromName = trim($hdr((string)cfg('mail_from_name')));
+    if (preg_match('/[^\x20-\x7E]/', $fromName)) $fromName = mb_encode_mimeheader($fromName, 'UTF-8', 'B', "\r\n");
+    elseif (preg_match('/[()<>\[\]:;@\\\\,."]/', $fromName)) $fromName = '"' . addcslashes($fromName, '"\\') . '"';
     $boundary = 'cms' . bin2hex(random_bytes(12));
-    $mime = "From: {$fromName} <{$g['sender']}>\r\n"
+    $mime = 'From: ' . ($fromName !== '' ? "{$fromName} <{$g['sender']}>" : $g['sender']) . "\r\n"
         . "To: {$to}\r\n"
         . ($cc ? "Cc: {$cc}\r\n" : '')
         . "Subject: {$encSubject}\r\n"

@@ -18,21 +18,25 @@ const COMPETENCY_LEVELS = [0 => 'Not started', 1 => 'Introduced', 2 => 'Practici
 /* ---- Management actions (require templates permission) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_curriculum'])) {
     require_perm('templates');
-    $name = trim($_POST['name'] ?? '');
+    // A field posted as an array (name[]=) counts as blank, never a TypeError.
+    $str = fn(string $k): string => is_string($_POST[$k] ?? null) ? trim($_POST[$k]) : '';
+    $name = $str('name');
+    $tech = $str('tech');
+    $description = $str('description');
     // Each problem is tied to its field, and what was typed stays in the form
     // (sizes are the curricula columns).
     $cErrs = [];
     if ($name === '') $cErrs['name'] = 'Curriculum name is required.';
     elseif (mb_strlen($name) > 190) $cErrs['name'] = 'Keep the curriculum name to 190 characters or fewer.';
-    if (mb_strlen(trim((string)($_POST['tech'] ?? ''))) > 120) $cErrs['tech'] = 'Keep the technology to 120 characters or fewer.';
-    if (mb_strlen(trim((string)($_POST['description'] ?? ''))) > 500) $cErrs['description'] = 'Keep the description to 500 characters or fewer.';
+    if (mb_strlen($tech) > 120) $cErrs['tech'] = 'Keep the technology to 120 characters or fewer.';
+    if (mb_strlen($description) > 500) $cErrs['description'] = 'Keep the description to 500 characters or fewer.';
     if ($cErrs) {
         keep_input();
         keep_field_errors($cErrs);
         redirect('curriculum.php#new-h');
     }
     db()->prepare('INSERT INTO curricula (name, tech, description) VALUES (?,?,?)')
-        ->execute([mb_substr($name, 0, 190), mb_substr(trim($_POST['tech'] ?? ''), 0, 120) ?: null, mb_substr(trim($_POST['description'] ?? ''), 0, 500) ?: null]);
+        ->execute([$name, $tech !== '' ? $tech : null, $description !== '' ? $description : null]);
     // Capture the id before audit() inserts its own row and replaces it.
     $newCurId = (int)db()->lastInsertId();
     audit($user['id'], 'curriculum.add', 'curriculum', $newCurId, $name);
@@ -49,7 +53,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_skill'])) {
     // (a skill is at most 300 characters, the curriculum_skills.skill column).
     $skillLines = [];
     $tooLong = [];
-    foreach (preg_split('/\r?\n/', (string)($_POST['skills'] ?? '')) as $i => $line) {
+    // Not text (skills[]=x) counts as empty, so it gets the 'enter a skill' message
+    // instead of becoming a skill named "Array".
+    foreach (preg_split('/\r?\n/', is_string($_POST['skills'] ?? null) ? $_POST['skills'] : '') as $i => $line) {
         $s = trim($line);
         if ($s === '') continue;
         if (mb_strlen($s) > 300) $tooLong[] = $i + 1;
@@ -186,8 +192,15 @@ if (isset($_GET['client'])) {
     $client = $cstmt->fetch();
     if (!$client) { flash('Client not found.', 'error'); redirect('clients.php'); }
     scope_check_client($client, $user);
-    $curricula = db()->query('SELECT id, name, tech FROM curricula WHERE active = 1 ORDER BY name')->fetchAll();
     $curId = (int)($_GET['curriculum'] ?? 0);
+    // Active curricula, plus any deactivated one this client was rated on (its
+    // history stays reachable) and the one asked for, so the chooser always names
+    // the curriculum whose table is shown.
+    $curQ = db()->prepare('SELECT id, name, tech, active FROM curricula WHERE active = 1 OR id = ?
+        OR id IN (SELECT cs.curriculum_id FROM curriculum_skills cs JOIN client_competency cc ON cc.skill_id = cs.id WHERE cc.client_id = ?)
+        ORDER BY active DESC, name');
+    $curQ->execute([$curId, $cid]);
+    $curricula = $curQ->fetchAll();
     $skills = [];
     if ($curId) {
         $sk = db()->prepare('SELECT cs.id, cs.skill,
@@ -207,7 +220,7 @@ if (isset($_GET['client'])) {
       <label for="curriculum">Curriculum</label>
       <select id="curriculum" name="curriculum">
         <option value="">— Choose a curriculum —</option>
-        <?php foreach ($curricula as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $curId === (int)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?><?= $c['tech'] ? ' (' . h($c['tech']) . ')' : '' ?></option><?php endforeach; ?>
+        <?php foreach ($curricula as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $curId === (int)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?><?= $c['tech'] ? ' (' . h($c['tech']) . ')' : '' ?><?= $c['active'] ? '' : ' (inactive)' ?></option><?php endforeach; ?>
       </select>
       <button type="submit" class="btn btn-secondary btn-sm">Go</button>
     </form>
@@ -225,11 +238,11 @@ if (isset($_GET['client'])) {
         <tbody>
         <?php foreach ($skills as $s): $lvl = (int)($s['lvl'] ?? 0); ?>
           <tr>
-            <td><label for="lvl-<?= (int)$s['id'] ?>"><?= h($s['skill']) ?></label></td>
+            <th scope="row"><label for="lvl-<?= (int)$s['id'] ?>"><?= h($s['skill']) ?></label></th>
             <td><select id="lvl-<?= (int)$s['id'] ?>" name="level[<?= (int)$s['id'] ?>]">
               <?php foreach (COMPETENCY_LEVELS as $v => $lab): ?><option value="<?= $v ?>" <?= $v === $lvl ? 'selected' : '' ?>><?= h($lab) ?></option><?php endforeach; ?>
             </select><input type="hidden" name="prev[<?= (int)$s['id'] ?>]" value="<?= $lvl ?>"></td>
-            <td class="muted"><?= $s['at'] ? fmt_date($s['at']) : '—' ?></td>
+            <td class="muted"><?= fmt_date($s['at'], true) ?></td>
           </tr>
         <?php endforeach; ?>
         </tbody>
@@ -315,7 +328,7 @@ page_header('Curricula', $user, 'templates');
   <?php if (!$curricula): ?><tr><td colspan="5" class="muted">No curricula yet.</td></tr><?php endif; ?>
   <?php foreach ($curricula as $c): ?>
     <tr>
-      <td><?php if (can('templates')): ?><a href="curriculum.php?manage=<?= (int)$c['id'] ?>"><?= h($c['name']) ?></a><?php else: ?><?= h($c['name']) ?><?php endif; ?></td>
+      <th scope="row"><?php if (can('templates')): ?><a href="curriculum.php?manage=<?= (int)$c['id'] ?>"><?= h($c['name']) ?></a><?php else: ?><?= h($c['name']) ?><?php endif; ?></th>
       <td><?= h($c['tech'] ?? '—') ?></td>
       <td class="num"><?= (int)$c['n'] ?></td>
       <td><?= $c['active'] ? '<span class="badge badge-closed">Active</span>' : '<span class="badge badge-hold">Inactive</span>' ?></td>

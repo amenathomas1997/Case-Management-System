@@ -21,7 +21,9 @@ struct ContractInfo: Decodable {
     let id: Int; let name: String; let funder: String?; let contractNumber: String?
     let amount: Double; let startDate: String?; let endDate: String?; let status: String
 }
-struct ContractResponse: Decodable { let contract: ContractInfo; let spent: Double; let deliverables: [ContractDeliverable]; let spend: [ContractSpend] }
+/// `spend` is the latest 100 entries; `spendTotal` is how many there are in all (nil from an
+/// older server that does not say), while `spent` is always the full sum.
+struct ContractResponse: Decodable { let contract: ContractInfo; let spent: Double; let deliverables: [ContractDeliverable]; let spend: [ContractSpend]; let spendTotal: Int? }
 
 let deliverableStatuses = ["Pending", "In Progress", "Submitted", "Accepted"]
 
@@ -63,7 +65,7 @@ struct ContractsView: View {
     }
     private func load() async {
         do { error = nil; let r: ContractsResponse = try await api.call("contracts"); rows = r.contracts; loaded = true }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -79,61 +81,71 @@ struct ContractDetail: View {
     @State private var sheetResult: String?
 
     var body: some View {
-        List {
-            if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
-            if let d = data {
-                Section {
-                    // Rounded down in whole cents, as on the website, so 99.5% spent never reads as 100%.
-                    let budgetCents = Int((d.contract.amount * 100).rounded())
-                    LabeledContent("Budget", value: money(d.contract.amount))
-                    if budgetCents > 0 {
-                        let pct = Int((d.spent * 100).rounded()) * 100 / budgetCents
-                        LabeledContent("Spent", value: "\(money(d.spent)) (\(pct)%)")
-                        LabeledContent("Remaining", value: money(d.contract.amount - d.spent))
-                        ProgressView(value: min(Double(pct), 100), total: 100).accessibilityLabel("Budget spent")
-                    } else {
-                        // As on the website: a share of a $0 budget would read as 0% spent.
-                        LabeledContent("Spent", value: "\(money(d.spent)) (no budget set)")
-                        LabeledContent("Remaining", value: money(d.contract.amount - d.spent))
-                    }
-                }
-                Section("Deliverables") {
-                    ForEach(d.deliverables) { del in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(del.title)
-                                if let due = del.dueDate { Text("due \(formatDate(due))").font(.caption) }
-                            }
-                            Spacer()
-                            Menu {
-                                ForEach(deliverableStatuses, id: \.self) { s in Button(s) { Task { await update(["op": "set_deliverable", "deliverable_id": del.id, "status": s], done: "\(del.title) marked \(s).") } } }
-                            } label: { Text(del.status).font(.caption.weight(.semibold)).foregroundStyle(Color.brand) }
-                            // Says which deliverable it belongs to and what it does; the visible
-                            // status stays a spoken input label for Voice Control.
-                            .accessibilityLabel("Status of \(del.title)")
-                            .accessibilityValue(del.status)
-                            .accessibilityHint("Opens a menu to change the status.")
-                            .accessibilityInputLabels([del.status, "Status of \(del.title)"])
+        ScrollViewReader { proxy in
+            List {
+                if let error { ErrorBanner(message: error).listRowSeparator(.hidden).id("contractError") }
+                if let d = data {
+                    Section {
+                        // Rounded down in whole cents, as on the website, so 99.5% spent never reads as 100%.
+                        let budgetCents = Int((d.contract.amount * 100).rounded())
+                        LabeledContent("Budget", value: money(d.contract.amount))
+                        if budgetCents > 0 {
+                            let pct = Int((d.spent * 100).rounded()) * 100 / budgetCents
+                            LabeledContent("Spent", value: "\(money(d.spent)) (\(pct)%)")
+                            LabeledContent("Remaining", value: money(d.contract.amount - d.spent))
+                            ProgressView(value: min(Double(pct), 100), total: 100).accessibilityLabel("Budget spent")
+                        } else {
+                            // As on the website: a share of a $0 budget would read as 0% spent.
+                            LabeledContent("Spent", value: "\(money(d.spent)) (no budget set)")
+                            LabeledContent("Remaining", value: money(d.contract.amount - d.spent))
                         }
                     }
-                    Button { addDeliverable = true } label: { Label("Add deliverable", systemImage: "plus") }
-                }
-                Section("Spend") {
-                    ForEach(d.spend) { s in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(money(s.amount))
-                                if let m = s.memo, !m.isEmpty { Text(m).font(.caption) }
+                    Section("Deliverables") {
+                        ForEach(d.deliverables) { del in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(del.title)
+                                    if let due = del.dueDate { Text("due \(formatDate(due))").font(.caption) }
+                                }
+                                Spacer()
+                                Menu {
+                                    ForEach(deliverableStatuses, id: \.self) { s in Button(s) { Task { await update(["op": "set_deliverable", "deliverable_id": del.id, "status": s], done: "\(del.title) marked \(s).") } } }
+                                } label: { Text(del.status).font(.caption.weight(.semibold)).foregroundStyle(Color.brand) }
+                                // Says which deliverable it belongs to and what it does; the visible
+                                // status stays a spoken input label for Voice Control.
+                                .accessibilityLabel("Status of \(del.title)")
+                                .accessibilityValue(del.status)
+                                .accessibilityHint("Opens a menu to change the status.")
+                                .accessibilityInputLabels([del.status, "Status of \(del.title)"])
                             }
-                            Spacer()
-                            Text(formatDate(s.spentOn)).font(.caption)
                         }
+                        Button { addDeliverable = true } label: { Label("Add deliverable", systemImage: "plus") }
                     }
-                    Button { addSpend = true } label: { Label("Record spend", systemImage: "plus") }
+                    Section("Spend") {
+                        // Said before the rows, so a list that adds up to less than Spent is not
+                        // taken for a discrepancy.
+                        if let total = d.spendTotal, total > d.spend.count {
+                            Text("Showing the latest \(d.spend.count) of \(total) entries. The website lists them all.").font(.callout)
+                        }
+                        ForEach(d.spend) { s in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(money(s.amount))
+                                    if let m = s.memo, !m.isEmpty { Text(m).font(.caption) }
+                                }
+                                Spacer()
+                                Text(formatDate(s.spentOn)).font(.caption)
+                            }
+                        }
+                        Button { addSpend = true } label: { Label("Record spend", systemImage: "plus") }
+                    }
+                } else if error == nil {
+                    ProgressView("Loading contract…")
                 }
-            } else if error == nil {
-                ProgressView("Loading contract…")
             }
+            // The banner is the list's first row: a failed status change on a deliverable further
+            // down would otherwise leave it off screen, where it is neither seen nor announced.
+            .onChange(of: error) { if $0 != nil { proxy.scrollTo("contractError", anchor: .top) } }
         }
         .navigationTitle(data?.contract.name ?? "Contract")
         .navigationBarTitleDisplayMode(.inline)
@@ -147,7 +159,7 @@ struct ContractDetail: View {
     }
     private func load() async {
         do { error = nil; data = try await api.call("contract", query: ["id": String(id)]) }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
     /// `done` is spoken once the change is saved (a menu choice otherwise closes in silence).
     private func update(_ body: [String: Any], done: String) async {
@@ -155,7 +167,7 @@ struct ContractDetail: View {
         // Cleared first so a repeat of the same failure is shown (and announced) again.
         error = nil
         do { let _: OKResponse = try await api.call("contract_update", body: b); announce(done); await load(); onChanged() }
-        catch { self.error = error.localizedDescription }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -165,6 +177,8 @@ struct ContractDeliverableSheet: View {
     let contractId: Int; let onDone: () -> Void
     @State private var title = ""; @State private var hasDue = false; @State private var due = Date()
     @State private var busy = false; @State private var error: String?
+    @State private var askingDiscard = false
+    private var hasChanges: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasDue }
     var body: some View {
         NavigationStack {
             Form {
@@ -175,10 +189,15 @@ struct ContractDeliverableSheet: View {
             }
             .navigationTitle("Add deliverable").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                // Not while saving: the deliverable would still be added after the sheet had gone.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }.disabled(busy)
+                }
                 // Not dimmed when the title is empty: Add says what is missing instead.
                 ToolbarItem(placement: .confirmationAction) { Button("Add") { Task { await submit() } }.disabled(busy) }
             }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this deliverable?",
+                                 asking: $askingDiscard) { dismiss() }
         }
     }
     private func submit() async {
@@ -189,7 +208,7 @@ struct ContractDeliverableSheet: View {
         // The presenter confirms once the sheet has gone: closing it moves VoiceOver focus,
         // which would cut off an announcement made here.
         do { let _: OKResponse = try await api.call("contract_update", body: b); onDone(); dismiss() }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
     }
 }
 
@@ -199,6 +218,12 @@ struct ContractSpendSheet: View {
     let contractId: Int; let onDone: () -> Void
     @State private var amount = ""; @State private var date = Date(); @State private var memo = ""
     @State private var busy = false; @State private var error: String?
+    @State private var askingDiscard = false
+    /// The day the sheet opened with, so choosing another date counts as a change.
+    @State private var openedDay = APIDate.day(Date())
+    private var hasChanges: Bool {
+        [amount, memo].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } || APIDate.day(date) != openedDay
+    }
     var body: some View {
         NavigationStack {
             Form {
@@ -209,10 +234,16 @@ struct ContractSpendSheet: View {
             }
             .navigationTitle("Record spend").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                // Not while saving: the spending would still be recorded after the sheet had gone,
+                // and recorded again by someone who thought it was not.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }.disabled(busy)
+                }
                 // Not dimmed when the amount is empty: Save says what is missing instead.
                 ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await submit() } }.disabled(busy) }
             }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this spending entry?",
+                                 asking: $askingDiscard) { dismiss() }
         }
     }
     private func submit() async {
@@ -220,7 +251,7 @@ struct ContractSpendSheet: View {
         guard let amountText = checkedAmount(amount), !amountText.isEmpty else { showFormError(amountFormatMessage("Amount"), in: &error); return }
         busy = true; error = nil
         do { let _: OKResponse = try await api.call("contract_update", body: ["contract_id": contractId, "op": "add_spend", "amount": amountText, "spent_on": APIDate.day(date), "memo": memo]); onDone(); dismiss() }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
     }
 }
 
@@ -231,6 +262,10 @@ struct ContractNewSheet: View {
     @State private var name = ""; @State private var funder = ""; @State private var number = ""; @State private var amount = ""
     @State private var hasStart = false; @State private var start = Date(); @State private var hasEnd = false; @State private var end = Date()
     @State private var busy = false; @State private var error: String?
+    @State private var askingDiscard = false
+    private var hasChanges: Bool {
+        [name, funder, number, amount].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } || hasStart || hasEnd
+    }
     var body: some View {
         NavigationStack {
             Form {
@@ -245,10 +280,15 @@ struct ContractNewSheet: View {
             }
             .navigationTitle("New contract").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                // Not while saving: the contract would still be created after the sheet had gone.
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }.disabled(busy)
+                }
                 // Not dimmed when the name is empty: Create says what is missing instead.
                 ToolbarItem(placement: .confirmationAction) { Button("Create") { Task { await submit() } }.disabled(busy) }
             }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this new contract?",
+                                 asking: $askingDiscard) { dismiss() }
         }
     }
     private func submit() async {
@@ -259,7 +299,7 @@ struct ContractNewSheet: View {
         if hasStart { b["start_date"] = APIDate.day(start) }
         if hasEnd { b["end_date"] = APIDate.day(end) }
         do { let _: OKResponse = try await api.call("add_contract", body: b); onDone(); dismiss() }
-        catch { self.error = error.localizedDescription; busy = false }
+        catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
     }
 }
 

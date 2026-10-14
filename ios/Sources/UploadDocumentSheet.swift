@@ -158,7 +158,27 @@ struct UploadDocumentSheet: View {
             pickerError("That file is empty. Choose another.")
             return
         }
-        attached(data, as: url.lastPathComponent)
+        attached(data, as: Self.uploadName(url.lastPathComponent))
+    }
+
+    /// The server keeps a file name of at most 190 characters (api.php upload_document, counted
+    /// as PHP's mb_strlen does: Unicode scalars) and refuses a longer one only after the whole
+    /// file has been sent. A longer name is shortened here instead, keeping its extension and
+    /// never splitting a character.
+    private static let maxNameLength = 190
+    private static func uploadName(_ name: String) -> String {
+        guard name.unicodeScalars.count > maxNameLength else { return name }
+        let ext = (name as NSString).pathExtension
+        let suffix = ext.isEmpty ? "" : "." + ext
+        var kept = ""
+        var used = suffix.unicodeScalars.count
+        for character in (name as NSString).deletingPathExtension {
+            let size = character.unicodeScalars.count
+            guard used + size <= maxNameLength else { break }
+            kept.append(character)
+            used += size
+        }
+        return kept.trimmingCharacters(in: .whitespaces) + suffix
     }
 
     /// A file or scan was chosen: a library photo still loading from an earlier pick is dropped
@@ -224,7 +244,7 @@ struct UploadDocumentSheet: View {
             onSaved("Document uploaded.")
             dismiss()
         } catch {
-            self.error = error.localizedDescription
+            showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
     }

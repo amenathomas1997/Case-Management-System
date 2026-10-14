@@ -13,9 +13,21 @@ if [ -n "$UNTRACKED" ]; then
   echo "$UNTRACKED" >&2
   exit 1
 fi
+# The file list comes from git but each file's content from this working tree, so a
+# tracked file edited since the last commit (a debug line, a hard-coded value, a
+# change nobody reviewed) would ship as it is on this machine. The bundle is built
+# only from committed content: commit (or undo) such changes first.
+CHANGED=$(git status --porcelain --untracked-files=no -- public cron dist/migrations dist/install.php dist/schema_full.sql LICENSE)
+if [ -n "$CHANGED" ]; then
+  echo "Refusing to build: these tracked files have changes that are not committed. Commit or undo them first:" >&2
+  echo "$CHANGED" >&2
+  exit 1
+fi
 STAGE=$(mktemp -d)
 mkdir -p "$STAGE/docroot" "$STAGE/cron" "$STAGE/migrations" "$STAGE/src"
 git ls-files -z -- public cron dist/migrations dist/install.php dist/schema_full.sql | tar --null -T - -cf - | tar -xf - -C "$STAGE/src"
+# The licence the software is conveyed under travels with it (GPL-3, section 4).
+cp LICENSE "$STAGE/LICENSE"
 cp -R "$STAGE/src/public/." "$STAGE/docroot/"
 cp -R "$STAGE/src/cron/." "$STAGE/cron/"
 cp -R "$STAGE/src/dist/migrations/." "$STAGE/migrations/"
@@ -32,6 +44,12 @@ rm -f "$STAGE/cron/cron_config.php" "$STAGE/cron/backup.conf" "$STAGE/docroot/in
 find "$STAGE" -name '.DS_Store' -delete
 cat > "$STAGE/README.txt" << 'EOF'
 WHITE-LABEL CASE MANAGEMENT SYSTEM — INSTALL
+Licence: this software is free software, licensed under the GNU General Public
+License, version 3; the full terms are in the LICENSE file beside this one. It
+comes with NO WARRANTY, to the extent permitted by law. It includes FPDF 1.86 by
+Olivier Plathey (docroot/inc/fpdf/), which is free to use, change and pass on
+under FPDF's own permissive licence (www.fpdf.org).
+
 Requirements: PHP 8.1+ (extensions: pdo_mysql, mbstring, iconv, curl, zip,
 openssl; gd is optional, for icons in your colors — the installer refuses to run
 without the others) and MariaDB 10.4 or newer. MySQL is not supported: the
