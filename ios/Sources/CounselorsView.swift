@@ -135,7 +135,7 @@ struct CounselorsView: View {
             // an off-screen row, so it would be neither seen nor heard), then put VoiceOver on it.
             .onChange(of: error) { message in
                 guard message != nil else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo("counselorsError", anchor: .top) } }
+                DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo("counselorsError", anchor: .top) } }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)
                     errorFocused = true

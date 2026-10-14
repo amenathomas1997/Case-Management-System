@@ -213,7 +213,7 @@ if (isset($_GET['client'])) {
     $mastered = count(array_filter($skills, fn($s) => (int)$s['lvl'] === 4));
     page_header('Competency: ' . $client['name'], $user, 'clients');
     ?>
-    <p><a href="client.php?id=<?= $cid ?>&tab=assessments">&larr; <?= h($client['name']) ?></a></p>
+    <p><a href="client.php?id=<?= $cid ?>&tab=assessments"><span aria-hidden="true">&larr; </span><?= h($client['name']) ?></a></p>
     <h1>Curriculum &amp; competency — <?= h($client['name']) ?></h1>
     <form method="get" action="curriculum.php" class="page-actions">
       <input type="hidden" name="client" value="<?= $cid ?>">
@@ -268,7 +268,7 @@ if (isset($_GET['manage']) && can('templates')) {
     $skills = $skills->fetchAll();
     page_header('Curriculum: ' . $c['name'], $user, 'templates');
     ?>
-    <p><a href="curriculum.php">&larr; All curricula</a></p>
+    <p><a href="curriculum.php"><span aria-hidden="true">&larr; </span>All curricula</a></p>
     <h1><?= h($c['name']) ?><?= $c['tech'] ? ' <span class="muted">' . h($c['tech']) . '</span>' : '' ?></h1>
     <?php if ($c['description']): ?><p class="muted"><?= h($c['description']) ?></p><?php endif; ?>
     <section class="card" aria-labelledby="sk-h">

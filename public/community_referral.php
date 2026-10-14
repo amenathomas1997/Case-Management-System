@@ -7,7 +7,7 @@ register_translations(referral_form_translations());
 // Copy used only on this page ('Email' alone is the field label, a noun).
 register_translations(['Email us at' => 'Escríbanos a', 'required: choose at least one' => 'obligatorio: elija al menos uno',
     'The date of birth cannot be in the future. Please check the year.' => 'La fecha de nacimiento no puede ser una fecha futura. Revise el año.',
-    'Enter the date of birth as a valid date (YYYY-MM-DD) from the year 1900 onwards.' => 'Escriba la fecha de nacimiento como una fecha válida (AAAA-MM-DD) a partir del año 1900.',
+    'Enter the date of birth as a valid date, from the year 1900 onwards.' => 'Escriba la fecha de nacimiento como una fecha válida, a partir del año 1900.',
     'Enter one valid email address for the person, for example name@example.org, or leave it blank.' => 'Escriba un solo correo electrónico válido de la persona, por ejemplo nombre@ejemplo.org, o déjelo en blanco.',
     'Please also correct the following:' => 'Corrija también lo siguiente:',
     'The referral could not be sent because of a problem on our side, and nothing was saved. Everything you typed is still here. Please try again in a few minutes, or email us.'
@@ -115,7 +115,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Same bounds as a staff edit: a mistyped year would reach RSA-911 as an age.
     $dobIn = trim($_POST['client_dob'] ?? '');
     if ($dobIn !== '' && !valid_date($dobIn, 1900, (int)date('Y'))) {
-        $errors['client_dob'] = 'Enter the date of birth as a valid date (YYYY-MM-DD) from the year 1900 onwards.';
+        $errors['client_dob'] = 'Enter the date of birth as a valid date, from the year 1900 onwards.';
     } elseif ($dobIn !== '' && $dobIn > date('Y-m-d')) {
         $errors['client_dob'] = 'The date of birth cannot be in the future. Please check the year.';
     }

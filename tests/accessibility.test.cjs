@@ -108,6 +108,29 @@ function voiceFixture({storage = new Map(), local = new Map(), uid = 7, csrf = '
 const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setImmediate(resolve)); };
 
 (async () => {
+  // A silent or unclear answer must not erase a pending write or loop the microphone.
+  let quiet = voiceFixture({local: new Map([['cms_voice_replies', 'off']])});
+  quiet.el('.vfab-btn').handlers.click();
+  quiet.el('.vfab-input').value = 'Create a synthetic task';
+  quiet.el('.vfab-send').handlers.click();
+  quiet.reply({ok: true, action: 'confirm', do: 'create_task', params: {title: 'Keep this draft'}, speak: 'Say yes to save.'});
+  await settle();
+  quiet.el('.vfab-convo').handlers.click();
+  quiet.recognizer().onerror({error: 'no-speech'});
+  assert.equal(quiet.el('.vfab-confirm').hidden, false);
+  assert.equal(quiet.storage.has('cms_convo'), false);
+  assert.equal(quiet.requests.length, 0);
+  assert.match(quiet.el('.vfab-status').textContent, /still waiting/);
+  quiet.el('.vfab-input').value = 'I need more time';
+  quiet.el('.vfab-send').handlers.click();
+  assert.equal(quiet.el('.vfab-confirm').hidden, false);
+  assert.equal(quiet.requests.length, 0);
+  quiet.el('.vfab-listen').handlers.click();
+  quiet.el('.vfab-panel').handlers.keydown({key: 'Tab'});
+  assert.equal(quiet.recognizer().onresult, null);
+  quiet.el('.vfab-no').handlers.click();
+  assert.equal(quiet.el('.vfab-confirm').hidden, true);
+  console.log('PASS: Silence and unclear answers preserve a pending write; keyboard navigation aborts capture; explicit decline cancels');
   // Spoken replies off: in a conversation the reply is the status line (which a
   // screen reader or braille display reads), so the microphone does not start
   // again by itself or on a timer; Alt+L in the panel continues.
@@ -186,7 +209,7 @@ const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resol
   assert.equal(v.el('.vfab-confirm').hidden, true);
   console.log('PASS: A typed yes confirms the pending action and is never sent as a new request');
 
-  // Two unclear answers cancel with nothing sent; a negative anywhere cancels.
+  // Unclear answers preserve the pending draft; an explicit negative cancels.
   v = voiceFixture({local: new Map([['cms_voice_replies', 'off']])});
   v.el('.vfab-btn').handlers.click();
   v.el('.vfab-input').value = 'Add a synthetic note';
@@ -197,12 +220,12 @@ const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resol
   v.el('.vfab-send').handlers.click();
   assert.equal(v.requests.length, 0);
   assert.equal(v.el('.vfab-confirm').hidden, false);
-  assert.match(v.el('.vfab-status').textContent, /say yes to confirm/);
+  assert.match(v.el('.vfab-status').textContent, /still waiting/);
   v.el('.vfab-input').value = 'synthetic nonsense';
   v.el('.vfab-send').handlers.click();
   assert.equal(v.requests.length, 0);
-  assert.equal(v.el('.vfab-confirm').hidden, true);
-  assert.match(v.el('.vfab-status').textContent, /nothing was saved/);
+  assert.equal(v.el('.vfab-confirm').hidden, false);
+  assert.match(v.el('.vfab-status').textContent, /still waiting/);
   v = voiceFixture({local: new Map([['cms_voice_replies', 'off']])});
   v.el('.vfab-btn').handlers.click();
   v.el('.vfab-input').value = 'Add a synthetic note';
@@ -213,7 +236,7 @@ const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resol
   v.el('.vfab-send').handlers.click();
   assert.equal(v.requests.length, 0);
   assert.match(v.el('.vfab-status').textContent, /cancelled/);
-  console.log('PASS: Two unclear answers or a "no" cancel the confirmation with nothing sent');
+  console.log('PASS: Unclear answers preserve the draft and an explicit negative cancels without sending');
 
   // A typed request that waits for a confirmation, with spoken replies off.
   const confirming = async () => {

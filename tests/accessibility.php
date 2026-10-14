@@ -69,6 +69,24 @@ check(accessible_brand_color('#1e3a8a', '#000000', true) === '#1e3a8a', 'Default
 check(accessible_brand_color('#1e40af', '#000000') === '#1e40af', 'Accessible brand colors remain unchanged');
 ob_start(); require __DIR__ . '/accessibility_fixture.php'; $html = ob_get_clean();
 $dom = new DOMDocument(); @$dom->loadHTML($html); $xp = new DOMXPath($dom);
+check($xp->query('//nav[contains(@class,"cms-page-navigation")]//a[@data-cms-back]')->length === 1, 'Shared pages provide an explicit Go back link');
+check($xp->query('//nav[contains(@class,"cms-page-navigation")]//a[@href="index.php"]')->length >= 2, 'Shared pages provide a Dashboard destination and safe back fallback');
+check($xp->query('//footer//a[@data-cms-menu]')->length === 1, 'Main navigation is reachable at the bottom of shared pages');
+check($xp->query('//ul[@id="main-nav" and @tabindex="-1"]')->length === 1, 'Main navigation accepts focus from the navigation shortcut');
+check($xp->query('//details[contains(@class,"vision-panel") and not(@open)]/summary')->length === 1, 'Low-vision controls start collapsed with a native keyboard-operable disclosure');
+// Native HTML landmarks retain their specific roles; named sections supplement them.
+check($xp->query('//header[@aria-label="Site header"]')->length === 1, 'One named site-header banner landmark');
+check($xp->query('//nav[@aria-label="Main"]')->length === 1, 'One named Main navigation landmark');
+check($xp->query('//main[@aria-label="Main content"]')->length === 1, 'One named main-content landmark');
+check($xp->query('//footer[@aria-label="Site information"]')->length === 1, 'One named site-information contentinfo landmark');
+check($xp->query('//form[@role="search" and @aria-label="Site search"]')->length === 1, 'Site search has a named search landmark');
+check($xp->query('//section[@id="low-vision-bar" and @aria-labelledby="vision-title"]')->length === 1, 'Display controls have a heading-named region');
+$navNames = [];
+foreach ($xp->query('//nav') as $nav) {
+    $name = trim($nav->getAttribute('aria-label'));
+    check($name !== '' && !in_array($name, $navNames, true), 'Navigation landmark has a distinct name: ' . $name);
+    $navNames[] = $name;
+}
 check($xp->query('//main[@id="main" and @tabindex="-1"]')->length === 1, 'Skip-link destination accepts keyboard focus');
 check($xp->query('//button[contains(@class,"vfab-stop")]')->length === 1, 'Speech output has an explicit stop control');
 check($xp->query('//button[contains(@class,"vfab-listen")]')->length === 1, 'Microphone has an explicit activation control');

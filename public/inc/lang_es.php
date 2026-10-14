@@ -2,6 +2,15 @@
 // Spanish translations for the public-facing pages (referral form, consent,
 // survey, client portal). Keys are the exact English source strings.
 return [
+    'Show dropdown choices as lists' => 'Mostrar las opciones desplegables como listas',
+    'Site header' => 'Encabezado del sitio',
+    'Main content' => 'Contenido principal',
+    'Site information' => 'Información del sitio',
+    'Page navigation' => 'Navegación de la página',
+    'Footer navigation' => 'Navegación del pie de página',
+    'Go back' => 'Volver',
+    'Dashboard' => 'Panel principal',
+    'Main navigation' => 'Navegación principal',
     'Assistive technology for daily living' => 'Tecnología de asistencia para la vida diaria',
     'Other assistive technology needs' => 'Otras necesidades de tecnología de asistencia',
     'Request assistive technology assessment, training, demonstrations, or recommendations for devices, apps, and software.' => 'Solicite evaluación, capacitación, demostraciones o recomendaciones de tecnología de asistencia para dispositivos, aplicaciones y software.',

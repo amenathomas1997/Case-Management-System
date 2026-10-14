@@ -27,6 +27,7 @@ if (!snapshots) throw new Error('Set CMS_TEST_HTML_DIR to the synthetic integrat
     for (const file of files) {
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.goto('https://audit.invalid/' + file);
+      await page.locator('.vision-panel > summary').click();
       await page.locator('.vision-options > summary').click();
       const problems = await page.evaluate(() => {
         const visible = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
@@ -62,7 +63,8 @@ if (!snapshots) throw new Error('Set CMS_TEST_HTML_DIR to the synthetic integrat
     // Check actual keyboard behavior on the rendered referral form, including its
     // horizontally scrolling table. The browser handles focus and scrolling here.
     await page.goto('https://audit.invalid/referrals.html');
-    await page.locator('.vision-options > summary').click();
+    await page.locator('.vision-panel > summary').click();
+      await page.locator('.vision-options > summary').click();
     await page.setViewportSize({ width: 320, height: 900 });
     await page.locator('#vision-size').selectOption('100');
     await page.keyboard.press('Tab');
@@ -81,7 +83,8 @@ if (!snapshots) throw new Error('Set CMS_TEST_HTML_DIR to the synthetic integrat
     await page.locator('#nav-toggle').click();
     assert.equal(await page.locator('#nav-toggle').getAttribute('aria-expanded'), 'false');
     await page.goto('https://audit.invalid/equipment_labels.html');
-    await page.locator('.vision-options > summary').click();
+    await page.locator('.vision-panel > summary').click();
+      await page.locator('.vision-options > summary').click();
     await page.locator('#vision-size').selectOption('200');
     for (const palette of ['light', 'dark', 'black', 'white', 'yellow', 'cream']) {
       await page.locator(`[data-palette="${palette}"]`).click();

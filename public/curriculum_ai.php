@@ -101,7 +101,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) {
 
 page_header('Curriculum generator', $user, 'ai_tools');
 ?>
-<p><a href="ai_tools.php">&larr; AI tools</a></p>
+<p><a href="ai_tools.php"><span aria-hidden="true">&larr; </span>AI tools</a></p>
 <h1>AI curriculum generator</h1>
 <p class="muted">Draft an ordered skill set for a technology, review it, then create a curriculum the competency tracker can use.</p>
 

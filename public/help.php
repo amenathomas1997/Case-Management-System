@@ -30,8 +30,8 @@ register_translations([
         => 'Un formulario de consentimiento permite que un padre, madre o tutor acepte los servicios para un estudiante. Lea el acuerdo en la página. Para firmar, escriba el nombre completo del tutor exactamente como aparece encima del cuadro de firma y luego elija “Firmar y enviar”. Escribir el nombre es su firma electrónica; no hace falta dibujar ni imprimir nada.',
     'After you sign, the page confirms it and a record is placed in the student\'s file. You can withdraw consent at any time by contacting us. A consent link stops working 60 days after it is sent; ask us for a new one if yours has expired.'
         => 'Después de firmar, la página lo confirma y se guarda un registro en el expediente del estudiante. Puede retirar su consentimiento en cualquier momento comunicándose con nosotros. Un enlace de consentimiento deja de funcionar 60 días después de enviarse; pídanos uno nuevo si el suyo venció.',
-    'Anyone can use the referral form to ask us to help a person with vision loss: a school, a medical provider, an agency, an employer, a family member, or the person themselves. Required fields are marked with an asterisk (*). If something is missing, a list of the problems appears at the top of the form, with a link to each field.'
-        => 'Cualquier persona puede usar el formulario de referencia para pedirnos que ayudemos a alguien con pérdida de visión: una escuela, un proveedor médico, una agencia, un empleador, un familiar o la propia persona. Los campos obligatorios están marcados con un asterisco (*). Si falta algo, aparece una lista de los problemas al principio del formulario, con un enlace a cada campo.',
+    'Anyone can use the referral form to request assistive technology services: a school, a medical provider, an agency, an employer, a family member, or the person themselves. Required fields are marked with an asterisk (*). If something is missing, a list of the problems appears at the top of the form, with a link to each field.'
+        => 'Cualquier persona puede usar el formulario de referencia para solicitar servicios de tecnología de asistencia: una escuela, un proveedor médico, una agencia, un empleador, un familiar o la propia persona. Los campos obligatorios están marcados con un asterisco (*). Si falta algo, aparece una lista de los problemas al principio del formulario, con un enlace a cada campo.',
     'After you send it, the page confirms that it was received, and we will contact you within 3 business days.'
         => 'Después de enviarlo, la página confirma que se recibió y nos comunicaremos con usted dentro de 3 días hábiles.',
     'After training, we may email you a short survey with three questions: how satisfied you are, how well the training met your goals, and any comments. The first two are required; comments are optional. You can answer it once, and your answers go to our team to improve our services.'
@@ -48,12 +48,13 @@ register_translations([
         => 'Presione Tab para avanzar por los enlaces y controles, y Mayús+Tab para retroceder. El enlace “Saltar al contenido principal” pasa por alto la navegación repetida. Las tablas desplazables pueden recibir el foco del teclado para que use las flechas y lea las columnas que no se ven en la pantalla.',
 ]);
 // Signed-in staff keep their full navigation.
-page_header('Help and glossary', $viewer);
+page_header('Help and glossary', $viewer, 'help');
 if (!$viewer) echo lang_toggle();
 ?>
 <h1><?= t('Help and glossary') ?></h1>
 <p><?= t('Use this guide to find your way around, fill in forms, and understand common terms.') ?></p>
 <nav aria-label="<?= h(__('Help topics')) ?>"><ul>
+  <?php if ($viewer): ?><li><a href="#staff-guide">CMS user guide for staff: menu meanings and step-by-step workflows</a></li><?php endif; ?>
   <li><a href="#portal"><?= t('Your client portal') ?></a></li>
   <li><a href="#consent"><?= t('Signing a consent form') ?></a></li>
   <li><a href="#referral"><?= t('The referral form') ?></a></li>
@@ -63,6 +64,7 @@ if (!$viewer) echo lang_toggle();
   <li><a href="#session"><?= t('For staff: keeping your work and the voice assistant') ?></a></li>
   <li><a href="#terms"><?= t('Common terms') ?></a></li>
 </ul></nav>
+<?php if ($viewer) require __DIR__ . '/inc/staff_guide.php'; ?>
 <section aria-labelledby="portal"><h2 id="portal"><?= t('Your client portal') ?></h2>
 <p><?= t('Your portal is a private page reached through the link we emailed you. Keep the link to yourself: anyone who has it can see your page. There is no password. If the link stops working, contact us for a new one.') ?></p>
 <p><?= t('On the portal you can see your upcoming sessions and your progress, mark practice and homework as done with the button “I\'ve done this”, log practice you did on your own, ask for an appointment or other help, share a document with your instructor, send your instructor a message, and update your contact information.') ?></p>
@@ -73,7 +75,7 @@ if (!$viewer) echo lang_toggle();
 <p><?= t('After you sign, the page confirms it and a record is placed in the student\'s file. You can withdraw consent at any time by contacting us. A consent link stops working 60 days after it is sent; ask us for a new one if yours has expired.') ?></p>
 </section>
 <section aria-labelledby="referral"><h2 id="referral"><?= t('The referral form') ?></h2>
-<p><?= t('Anyone can use the referral form to ask us to help a person with vision loss: a school, a medical provider, an agency, an employer, a family member, or the person themselves. Required fields are marked with an asterisk (*). If something is missing, a list of the problems appears at the top of the form, with a link to each field.') ?></p>
+<p><?= t('Anyone can use the referral form to request assistive technology services: a school, a medical provider, an agency, an employer, a family member, or the person themselves. Required fields are marked with an asterisk (*). If something is missing, a list of the problems appears at the top of the form, with a link to each field.') ?></p>
 <p><?= t('After you send it, the page confirms that it was received, and we will contact you within 3 business days.') ?></p>
 </section>
 <section aria-labelledby="survey"><h2 id="survey"><?= t('The survey') ?></h2>

@@ -40,7 +40,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['batch_generate'])) {
     }
     flash($made ? "Generated {$made} invoice(s) from all unbilled work. They are listed below as Drafts."
                 : 'No unbilled work found — nothing to invoice.');
-    redirect('invoices.php');
+    redirect('invoices.php#inv-list-h');
 }
 
 /* Status transitions, voiding a draft and payments on a Paid invoice share the caseload check */
@@ -54,12 +54,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['set_status']) || iss
         $own = db()->prepare('SELECT c.assigned_to FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id WHERE i.id = ?');
         $own->execute([$id]);
         $assignedTo = $own->fetchColumn();
-        if ($assignedTo === false || (int)$assignedTo !== $uid) { flash('That invoice is not on your caseload.', 'error'); redirect('invoices.php'); }
+        if ($assignedTo === false || (int)$assignedTo !== $uid) { flash('That invoice is not on your caseload.', 'error'); redirect('invoices.php#inv-list-h'); }
     }
     $cur = db()->prepare('SELECT invoice_number, track_id, total_amount FROM invoices WHERE id = ?');
     $cur->execute([$id]);
     $inv = $cur->fetch();
-    if (!$inv) { flash('That invoice no longer exists.', 'error'); redirect('invoices.php'); }
+    if (!$inv) { flash('That invoice no longer exists.', 'error'); redirect('invoices.php#inv-list-h'); }
     $num = $inv['invoice_number'];
 }
 
@@ -78,7 +78,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['void_draft'])) {
         if (!$locked || $locked['status'] !== 'Draft') {
             $pdo->rollBack();
             flash('Invoice ' . $num . ' was not voided: only a Draft invoice can be voided, and this one ' . ($locked ? 'is ' . $locked['status'] . '.' : 'no longer exists.'), 'error');
-            redirect('invoices.php');
+            redirect('invoices.php#inv-list-h');
         }
         // The released work goes back at the track's CURRENT rates (the track row is
         // locked above), as every other unbilled log is priced: a rate corrected
@@ -103,7 +103,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['void_draft'])) {
         . $wl->rowCount() . ' work log entr' . ($wl->rowCount() === 1 ? 'y' : 'ies') . ' and ' . $ex->rowCount() . ' expense' . ($ex->rowCount() === 1 ? '' : 's')
         . ' are unbilled again, so they can be corrected on the track and invoiced again.'
         . ($repriced ? ' ' . $repriced . ' of those work log entr' . ($repriced === 1 ? 'y was' : 'ies were') . ' re-priced to the track\'s current rates.' : ''));
-    redirect('invoices.php');
+    redirect('invoices.php#inv-list-h');
 }
 
 /* A Paid invoice: record a further payment toward a short-paid balance, or correct
@@ -126,7 +126,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['add_payment']) || is
         if (!$locked || $locked['status'] !== 'Paid') {
             $pdo->rollBack();
             flash('Invoice ' . $num . ' was not changed: ' . ($locked ? 'it is ' . $locked['status'] . ', and payments are added or corrected here only once it is marked paid.' : 'it no longer exists.'), 'error');
-            redirect('invoices.php');
+            redirect('invoices.php#inv-list-h');
         }
         $totalCents = (int)round((float)$locked['total_amount'] * 100);
         // An older Paid invoice with no amount recorded was paid in full.
@@ -229,7 +229,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
         $detail = ($ref !== '' ? "ref {$ref}; " : '') . 'paid ' . fmt_money(($amtCents ?? $totalCents) / 100);
     } else {
         flash('Choose a valid invoice status.', 'error');
-        redirect('invoices.php');
+        redirect('invoices.php#inv-list-h');
     }
     // Only a row that actually changed is audited and reported as done; a stale
     // page (someone else already moved it) gets told what happened instead.
@@ -239,7 +239,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     } else {
         flash('Invoice ' . $num . ' was not changed: it is no longer ' . $from . ', so someone may have already updated it. The list below shows its current status.', 'error');
     }
-    redirect('invoices.php');
+    redirect('invoices.php#inv-list-h');
 }
 
 /* QuickBooks-friendly CSV export */
@@ -415,6 +415,7 @@ $pageNote = $invTotal > $perPage && $onlyId === 0
   <?php if ($page < $pages): ?><a href="<?= h($pageUrl($page + 1)) ?>">Older invoices<span class="visually-hidden"> (page <?= $page + 1 ?> of <?= $pages ?>)</span></a><?php endif; ?>
 </nav>
 <?php endif; ?>
+<h2 id="inv-list-h"><?= $onlyId > 0 ? 'Requested invoice' : ($listStatus !== '' ? h($listStatus) . ' invoices' : 'All invoices') ?></h2>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Invoices list">
 <table>
   <caption class="visually-hidden"><?= $onlyId > 0 ? 'The requested invoice' : ($pageNote !== '' ? 'Invoices ' . $firstShown . ' to ' . $lastShown . ' of ' . $invTotal . ', newest first' : 'Invoices, newest first') ?></caption>

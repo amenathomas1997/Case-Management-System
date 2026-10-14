@@ -173,7 +173,7 @@ struct TrackDetailView: View {
                         Text("No goals yet.").foregroundStyle(Color.secondaryText)
                     }
                     ForEach(goals) { goal in
-                        let short = shortGoalText(goal.specificGoal)
+                        let short = "Goal #\(goal.id): \(shortGoalText(goal.specificGoal))"
                         VStack(alignment: .leading, spacing: 4) {
                             Text(goal.specificGoal).font(.body.weight(.medium))
                             Text(goal.measurableMetric).font(.callout).foregroundStyle(Color.secondaryText)
@@ -325,7 +325,7 @@ struct TrackDetailView: View {
             // it). Scrolled into view once it exists, then VoiceOver is put on it.
             .onChange(of: error) { message in
                 guard message != nil else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(Self.errorRow, anchor: .top) } }
+                DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(Self.errorRow, anchor: .top) } }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)
                     errorFocused = true
@@ -410,7 +410,7 @@ struct TrackDetailView: View {
 
     private var goalStatusQuestion: String {
         guard let pending = pendingGoalStatus else { return "" }
-        let short = shortGoalText(pending.goal.specificGoal)
+        let short = "Goal #\(pending.goal.id): \(shortGoalText(pending.goal.specificGoal))"
         let pct = pending.goal.progressPct ?? 0
         switch pending.status {
         case "Achieved": return "Mark “\(short)” achieved? Its progress is recorded as 100%."
@@ -614,7 +614,7 @@ struct AmendmentView: View {
             // Scrolled into view once it exists, then VoiceOver is put on it.
             .onChange(of: error) { message in
                 guard message != nil else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(Self.errorRow, anchor: .top) } }
+                DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(Self.errorRow, anchor: .top) } }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)
                     errorFocused = true

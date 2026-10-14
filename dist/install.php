@@ -530,10 +530,11 @@ header('Cache-Control: no-store');   // the success page shows the off-site back
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CMS Installer</title>
 <style>
+*{box-sizing:border-box}input:not([type=checkbox]),button{min-height:44px}input[type=checkbox]{width:24px;height:24px}label:has(input[type=checkbox]){min-height:44px}
 body{font-family:system-ui,sans-serif;max-width:44rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1a1a2e}
 h1{color:#1e3a8a} fieldset{border:1px solid #ccd;border-radius:8px;margin:0 0 1rem;padding:1rem}
 label{display:block;font-weight:600;margin:.6rem 0 .2rem} input{width:100%;padding:.5rem;border:2px solid #667;border-radius:6px;font-size:1rem}
-input[type=checkbox]{width:auto;margin-right:.5rem;transform:scale(1.3)}
+input[type=checkbox]{width:24px;height:24px;margin-right:.5rem}
 button{background:#1e40af;color:#fff;border:0;border-radius:8px;padding:.7rem 1.4rem;font-size:1rem;font-weight:600;cursor:pointer}
 .err{background:#fef2f2;border:2px solid #dc2626;color:#991b1b;padding:.7rem 1rem;border-radius:8px;margin-bottom:1rem}
 .ok{background:#ecfdf5;border:2px solid #059669;color:#065f46;padding:.7rem 1rem;border-radius:8px;margin-bottom:1rem}

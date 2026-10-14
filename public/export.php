@@ -36,7 +36,7 @@ $out = fopen('php://output', 'w');
 fwrite($out, "\xEF\xBB\xBF"); // UTF-8 BOM for Excel
 
 if ($asTable) {
-    write_csv_row($out, ['Type', 'Date', 'RSA Category', 'Service Type', 'Hours', 'Mileage', 'Description', 'Rate', 'Hours Amount', 'Mileage Amount', 'Amount', 'Billed', 'Invoice #', 'Logged By']);
+    write_csv_row($out, ['Type', 'Date', 'RSA Category (Rehabilitation Services Administration)', 'Service Type', 'Hours', 'Mileage', 'Description', 'Rate', 'Hours Amount', 'Mileage Amount', 'Amount', 'Billed', 'Invoice #', 'Logged By']);
     foreach ($logs as $l) {
         $amt = log_line_amounts($l, $r['hourly_rate'], $r['mileage_rate']);
         write_csv_row($out, [
@@ -77,11 +77,11 @@ write_csv_row($out, ['BILLING SUMMARY — ' . cfg('name')]);
 write_csv_row($out, ['Generated', date('Y-m-d H:i'), 'By', csv_cell($user['name'])]);
 write_csv_row($out, []);
 write_csv_row($out, ['Client', csv_cell($track['client_name'])]);
-write_csv_row($out, ['VR Counselor', csv_cell($track['counselor_name'] ?? ''), 'Agency', csv_cell($track['counselor_agency'] ?? '')]);
+write_csv_row($out, ['VR Counselor (vocational rehabilitation)', csv_cell($track['counselor_name'] ?? ''), 'Agency', csv_cell($track['counselor_agency'] ?? '')]);
 write_csv_row($out, ['Training Track', csv_cell($track['title'])]);
 write_csv_row($out, ['Authorization #', csv_cell($track['auth_number']), 'Funding Agency', csv_cell($track['funding_agency'])]);
-write_csv_row($out, ['RSA Program', csv_cell(track_program_label($track))]);
-write_csv_row($out, ['Auth Period', fmt_date($track['start_date']) . ' to ' . fmt_date($track['expiration_date'])]);
+write_csv_row($out, ['RSA Program (Rehabilitation Services Administration)', csv_cell(track_program_label($track))]);
+write_csv_row($out, ['Authorization Period', fmt_date($track['start_date']) . ' to ' . fmt_date($track['expiration_date'])]);
 write_csv_row($out, ['Authorized Hours', number_format($r['authorized_hours'], 2), 'Hourly Rate', number_format($r['hourly_rate'], 2), 'Mileage Rate', number_format($r['mileage_rate'], 3)]);
 write_csv_row($out, []);
 write_csv_row($out, ['Date', 'RSA Category', 'Service Type', 'Hours', 'Mileage', 'Activity Description', 'Rate', 'Hours Amount', 'Mileage Amount', 'Line Total', 'Billed', 'Logged By']);

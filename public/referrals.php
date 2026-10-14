@@ -270,7 +270,7 @@ $referrals = $stmt->fetchAll();
 page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'] . ' — Referrals' : 'Referrals', $user, 'referrals');
 ?>
 <h1>Referrals</h1>
-<p class="muted">Submitted through the <a href="community_referral.php">public referral form</a>. · <a href="counselors.php">Manage counselor portal access</a></p>
+<p class="muted">Submitted through the <a href="community_referral.php">public referral form</a>. · <a class="tap" href="counselors.php">Manage counselor portal access</a></p>
 
 <?php if ($view): ?>
 <section class="card" aria-labelledby="view-heading">
@@ -335,7 +335,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
   <p>This referral follows the assigned instructor on the client record.</p>
   <?php else: ?>
   <p>Currently assigned to: <strong><?= h($view['assigned_name'] ?? 'Unassigned') ?></strong></p>
-  <form method="post" action="referrals.php" class="inline-form">
+  <form method="post" action="referrals.php" class="inline-form" onsubmit="return confirm('Assign this referral? Its details are emailed to the chosen instructor straight away.');">
     <?= csrf_field() ?>
     <input type="hidden" name="id" value="<?= (int)$view['id'] ?>">
     <label for="assigned_to" class="visually-hidden">Assign this referral to</label>
@@ -352,7 +352,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
 
   <div class="page-actions">
     <?php if ($view['status'] === 'New'): ?>
-    <form method="post" action="referrals.php" class="inline-form"><?= csrf_field() ?>
+    <form method="post" action="referrals.php" class="inline-form" onsubmit="return confirm('Mark this referral as reviewed? This cannot be undone.');"><?= csrf_field() ?>
       <input type="hidden" name="id" value="<?= (int)$view['id'] ?>">
       <button type="submit" name="mark_reviewed" value="1" class="btn btn-secondary">Mark as reviewed</button>
     </form>

@@ -795,7 +795,7 @@ page_header('Equipment', $user, 'equipment');
           <?php endif; ?>
           <form method="post" action="equipment.php" class="inline-form" style="margin-top:.4rem"><?= csrf_field() ?>
             <input type="hidden" name="equipment_id" value="<?= (int)$i['id'] ?>">
-            <label for="mi-<?= (int)$i['id'] ?>">Service every<span class="visually-hidden"> (days)</span></label>
+            <label for="mi-<?= (int)$i['id'] ?>">Service every<span class="visually-hidden"> (days)</span><span class="visually-hidden"> — <?= h($i['name']) ?></span></label>
             <input type="number" id="mi-<?= (int)$i['id'] ?>" name="interval" min="0" max="3650" step="1" value="<?= $i['maintenance_interval_days'] !== null ? (int)$i['maintenance_interval_days'] : '' ?>" style="max-width:5rem"> <span aria-hidden="true">days</span>
             <button type="submit" name="set_interval" value="1" class="btn btn-secondary btn-sm">Set<span class="visually-hidden"> service interval — <?= h($i['name']) ?></span></button>
           </form>

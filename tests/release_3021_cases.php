@@ -112,3 +112,51 @@ $renderPage('client',['id'=>$webClient],$webNote);
 [$code,,$err]=$renderPage('client',['id'=>$webClient],$webNote);
 check($code===0 && $err==='' && (int)$db->query("SELECT COUNT(*) FROM client_notes WHERE subject='Synthetic web note sent twice'")->fetchColumn()===1,
     'A new-note form sent twice on the website saves one note' . ($err ? ": $err" : ''));
+
+// Stale and forged sign-out requests must not destroy the current session.
+[[$code,$out,$err],$sess]=$pageSession(fn()=>$renderPage('logout',[],['csrf'=>'stale-token']));
+check($code===0 && $err==='' && str_contains($out,'Confirm sign out') && str_contains($out,'name="csrf"') && str_contains($sess,'user_id|i:1;'),
+    'A stale sign-out keeps the account signed in and offers a fresh protected confirmation');
+[[$code,$out,$err],$sess]=$pageSession(fn()=>$renderPage('logout',[],[]));
+check($code===0 && $err==='' && !str_contains($sess,'user_id|') && str_contains($sess,'You have been signed out.'),
+    'A valid sign-out destroys the authenticated session');
+
+// Restoring a reviewed intake draft is a GET: it must not call AI or save an assessment.
+$intakeSettingKeys=['ai_enabled','ai_provider','ai_api_key','ai_feat_intake'];
+$intakeSettings=[];
+foreach($intakeSettingKeys as $key){$q=$db->prepare('SELECT value FROM settings WHERE name=?');$q->execute([$key]);$intakeSettings[$key]=$q->fetchColumn();}
+try {
+    foreach(['ai_enabled'=>'1','ai_provider'=>'anthropic','ai_api_key'=>'synthetic-unused-key','ai_feat_intake'=>'1'] as $key=>$value)set_setting($key,$value);
+    putenv('CMS_TEST_ANON=1');
+    putenv('CMS_TEST_SESSION='.json_encode(['user_id'=>1,'otp_verified'=>true,'credential_version'=>hash('sha256','test'),'last_activity'=>time(),
+        'old_input'=>['save_assessment'=>'1','summary'=>'Reviewed synthetic intake retained','primary_tech'=>'Other','goals'=>'Synthetic retained goal','assessment_date'=>date('Y-m-d')]]));
+    $intakeBefore=(int)$db->query('SELECT COUNT(*) FROM tech_assessments')->fetchColumn();
+    [$code,$out,$err]=$renderPage('intake',['client'=>$expClient]);
+    check($code===0 && $err==='' && str_contains($out,'Reviewed synthetic intake retained') && str_contains($out,'Synthetic retained goal')
+        && (int)$db->query('SELECT COUNT(*) FROM tech_assessments')->fetchColumn()===$intakeBefore,
+        'Session recovery restores intake answers and the reviewed draft without saving it');
+} finally {
+    putenv('CMS_TEST_ANON');putenv('CMS_TEST_SESSION');
+    foreach($intakeSettings as $key=>$value){if($value===false){$q=$db->prepare('DELETE FROM settings WHERE name=?');$q->execute([$key]);}else set_setting($key,$value);}
+}
+
+/* Account-owned toolbar visibility uses the signed-in actor, never a posted ID. */
+$displayKey = 'user_low_vision_hidden_1';
+$oldDisplay = $db->prepare('SELECT value FROM settings WHERE name=?');
+$oldDisplay->execute([$displayKey]); $previousDisplay = $oldDisplay->fetchColumn();
+try {
+    [$code,,$err] = $renderPage('account', [], ['save_display_controls'=>'1', 'display_controls'=>'hide', 'user_id'=>'999999']);
+    $oldDisplay->execute([$displayKey]);
+    check($code===0 && $err==='' && $oldDisplay->fetchColumn()==='1', 'Account display settings save only for the signed-in user');
+    [$code,$html,$err] = $renderPage('account', []);
+    check($code===0 && $err==='' && str_contains($html,'data-account-hidden="true"') && str_contains($html,'Save display settings'), 'Hidden toolbar keeps its account recovery control available');
+    [$code,,$err] = $renderPage('account', [], ['save_display_controls'=>'1', 'display_controls'=>['hide']]);
+    $oldDisplay->execute([$displayKey]);
+    check($code===0 && $err==='' && $oldDisplay->fetchColumn()==='1', 'Malformed visibility values cannot change the preference');
+    [$code,,$err] = $renderPage('account', [], ['save_display_controls'=>'1', 'display_controls'=>'show']);
+    [$code,$html,$err] = $renderPage('account', []);
+    check($code===0 && $err==='' && str_contains($html,'data-account-hidden="false"'), 'Users can show the toolbar again from My Account');
+} finally {
+    if ($previousDisplay===false) $db->prepare('DELETE FROM settings WHERE name=?')->execute([$displayKey]);
+    else $db->prepare('UPDATE settings SET value=? WHERE name=?')->execute([$previousDisplay,$displayKey]);
+}

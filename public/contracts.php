@@ -99,6 +99,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['contract_id'])) {
     $back = 'contracts.php?id=' . $cid;
 
     if (isset($_POST['add_deliverable'])) {
+        $back .= '#del-h';
         $title = trim($_POST['title'] ?? '');
         // A blank (or spaces-only) title passes the browser's "required" check, so say so here.
         $dErrs = [];
@@ -111,6 +112,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['contract_id'])) {
         audit($user['id'], 'contract.add_deliverable', 'contract', $cid, $title);
         flash('Deliverable added.');
     } elseif (isset($_POST['set_deliverable'])) {
+        $back .= '#del-h';
         $did = (int)($_POST['deliverable_id'] ?? 0);
         // An unrecognised status is refused (as in the app) — never quietly reset to Pending.
         $to = $_POST['status'] ?? '';
@@ -219,7 +221,7 @@ if (isset($_GET['id'])) {
     }
     page_header('Contract: ' . $c['name'], $user, 'contracts');
     ?>
-    <p><a href="contracts.php">&larr; All contracts</a></p>
+    <p><a href="contracts.php"><span aria-hidden="true">&larr; </span>All contracts</a></p>
     <h1><?= h($c['name']) ?> <?= $c['status'] === 'Active' ? '' : '<span class="badge badge-hold">Closed</span>' ?></h1>
     <p class="muted"><?= $c['funder'] ? h($c['funder']) . ' · ' : '' ?><?= $c['contract_number'] ? '#' . h($c['contract_number']) . ' · ' : '' ?>
       <?= $c['start_date'] ? fmt_date($c['start_date']) : '' ?><?= $c['end_date'] ? ' – ' . fmt_date($c['end_date']) : '' ?></p>
@@ -385,7 +387,7 @@ page_header($showClosed ? 'Closed contracts' : 'Contracts', $user, 'contracts');
   <?php foreach ($contracts as $c): $pct = contract_pct((float)$c['spent'], (float)$c['amount']); $endingSoon = $c['end_date'] && $c['end_date'] <= $soon; ?>
     <tr>
       <th scope="row"><a href="contracts.php?id=<?= (int)$c['id'] ?>"><?= h($c['name']) ?></a></th>
-      <td><?= h($c['funder'] ?? '—') ?></td>
+      <td><?= ($c['funder'] ?? '') !== '' ? h($c['funder']) : no_date_mark(true) ?></td>
       <td class="num"><?= fmt_money((float)$c['amount']) ?></td>
       <?php // What the red emphasis means is also said in words. ?>
       <?php if ((float)$c['amount'] <= 0): // No budget: a percentage of $0 would read as 0% spent. ?>

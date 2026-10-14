@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var root = document.documentElement, key = 'cms_low_vision';
-  var defaults = {palette:'auto', size:'100', spacing:false, width:false, links:false, motion:false};
+  var defaults = {palette:'auto', size:'100', spacing:false, width:false, links:false, motion:false, lists:false};
   var palettes = ['auto','light','dark','black','white','yellow','cream'];
   var sizes = ['100','125','150','175','200'];
   var prefs = Object.assign({}, defaults);
@@ -11,7 +11,7 @@
     if (stored && typeof stored === 'object') {
       if (palettes.includes(stored.palette)) prefs.palette = stored.palette;
       if (sizes.includes(String(stored.size))) prefs.size = String(stored.size);
-      ['spacing','width','links','motion'].forEach(function (k) { prefs[k] = stored[k] === true; });
+      ['spacing','width','links','motion','lists'].forEach(function (k) { prefs[k] = stored[k] === true; });
     } else {
       var theme = localStorage.getItem('cms_theme');
       if (theme === 'light' || theme === 'dark') prefs.palette = theme;
@@ -23,7 +23,7 @@
     root.setAttribute('data-theme', ['dark','black','yellow'].includes(prefs.palette) || (prefs.palette === 'auto' && mq && mq.matches) ? 'dark' : 'light');
     root.setAttribute('data-vision-palette', prefs.palette);
     root.setAttribute('data-vision-size', prefs.size);
-    ['spacing','width','links','motion'].forEach(function (k) { root.setAttribute('data-vision-' + k, String(prefs[k])); });
+    ['spacing','width','links','motion','lists'].forEach(function (k) { root.setAttribute('data-vision-' + k, String(prefs[k])); });
     fit();
   }
   // Media queries measure the viewport at the browser's own text size, not this
@@ -40,7 +40,7 @@
   document.addEventListener('DOMContentLoaded', function () {
     var bar = document.getElementById('low-vision-bar');
     if (!bar) return;
-    bar.hidden = false;
+    bar.hidden = bar.dataset.accountHidden === 'true';
     var live = document.getElementById('vision-live');
     var size = document.getElementById('vision-size');
     function paint() {

@@ -76,6 +76,10 @@
   function syncToggle() {
     var btn = document.getElementById && document.getElementById('earcon-toggle');
     if (btn) btn.setAttribute('aria-pressed', String(!muted));
+    // The voice panel's own button says the same thing (voice.js keeps it in step when the
+    // toggle comes from the panel; this covers the low-vision bar).
+    var fab = document.querySelector && document.querySelector('.vfab-mute');
+    if (fab) fab.textContent = 'Sound cues: ' + (muted ? 'off' : 'on');
   }
   function wireToggle() {
     var btn = document.getElementById('earcon-toggle');

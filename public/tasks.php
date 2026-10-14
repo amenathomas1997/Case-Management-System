@@ -217,10 +217,10 @@ function due_note(?int $daysLeft): string {
   <thead><tr><th scope="col">Task</th><th scope="col">Who / what</th><th scope="col">Due</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
   <tbody>
   <?php if (!$tasks): ?><tr><td colspan="5" class="muted">No tasks match this view.</td></tr><?php endif; ?>
-  <?php foreach ($tasks as $t): ?>
+  <?php foreach ($tasks as $t): $taskLabel = $t['title'] . ' — task #' . (int)$t['id'] . ($t['client_name'] ? ' for ' . $t['client_name'] : ''); ?>
     <tr>
-      <td><?= h($t['title']) ?><?= $t['details'] ? '<br><span class="muted">' . h($t['details']) . '</span>' : '' ?>
-          <?= $t['auto_key'] ? '<br><span class="muted">(automatic — ' . (int)$t['age_days'] . ' day' . ((int)$t['age_days'] === 1 ? '' : 's') . ' since created)</span>' : '' ?></td>
+      <th scope="row"><?= h($t['title']) ?><?= $t['details'] ? '<br><span class="muted">' . h($t['details']) . '</span>' : '' ?>
+          <?= $t['auto_key'] ? '<br><span class="muted">(automatic — ' . (int)$t['age_days'] . ' day' . ((int)$t['age_days'] === 1 ? '' : 's') . ' since created)</span>' : '' ?></th>
       <td>
         <?php if ($t['client_id'] && can('clients')): ?><a href="client.php?id=<?= (int)$t['client_id'] ?>"><?= h($t['client_name']) ?></a><br><?php elseif ($t['client_name']): ?><?= h($t['client_name']) ?><br><?php endif; ?>
         <?php if ($t['referral_id'] && can('referrals')): ?><a href="referrals.php?view=<?= (int)$t['referral_id'] ?>">Referral: <?= h($t['referral_name'] ?? '#' . (int)$t['referral_id']) ?></a><br><?php endif; ?>
@@ -237,10 +237,10 @@ function due_note(?int $daysLeft): string {
           <input type="hidden" name="due" value="<?= h($filters['due']) ?>">
           <input type="hidden" name="focus_next" value="<?= (int)($nextTask[(int)$t['id']] ?? 0) ?>">
           <?php if ($t['status'] === 'Open'): ?>
-          <button type="submit" name="set_done" value="1" class="btn btn-secondary btn-sm" id="task-act-<?= (int)$t['id'] ?>">Done<span class="visually-hidden"> — <?= h($t['title']) ?></span></button>
+          <button type="submit" name="set_done" value="1" class="btn btn-secondary btn-sm" id="task-act-<?= (int)$t['id'] ?>">Done<span class="visually-hidden"> — <?= h($taskLabel) ?></span></button>
           <?php else: ?>
           <input type="hidden" name="to" value="Open">
-          <button type="submit" name="set_done" value="1" class="btn btn-secondary btn-sm" id="task-act-<?= (int)$t['id'] ?>">Reopen<span class="visually-hidden"> — <?= h($t['title']) ?></span></button>
+          <button type="submit" name="set_done" value="1" class="btn btn-secondary btn-sm" id="task-act-<?= (int)$t['id'] ?>">Reopen<span class="visually-hidden"> — <?= h($taskLabel) ?></span></button>
           <?php endif; ?>
         </form>
         <?php if ($isAdmin): ?>
@@ -251,7 +251,7 @@ function due_note(?int $daysLeft): string {
           <input type="hidden" name="due" value="<?= h($filters['due']) ?>">
           <input type="hidden" name="focus_next" value="<?= (int)($nextTask[(int)$t['id']] ?? 0) ?>">
           <button type="submit" name="delete_task" value="1" class="btn btn-danger btn-sm"
-            onclick="return confirm('Delete this task permanently?');">Delete<span class="visually-hidden"> — <?= h($t['title']) ?></span></button>
+            onclick="return confirm('Delete this task permanently?');">Delete<span class="visually-hidden"> — <?= h($taskLabel) ?></span></button>
         </form>
         <?php endif; ?>
       </td>

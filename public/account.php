@@ -5,6 +5,18 @@ require __DIR__ . '/inc/totp.php';
 csrf_check();
 $user = require_login();
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_display_controls'])) {
+    $visibility = $_POST['display_controls'] ?? null;
+    if (!is_string($visibility) || !in_array($visibility, ['show', 'hide'], true)) {
+        flash('Choose whether to show or hide the low-vision controls.', 'error');
+    } else {
+        set_setting('user_low_vision_hidden_' . (int)$user['id'], $visibility === 'hide' ? '1' : '0');
+        flash('Low-vision controls ' . ($visibility === 'hide' ? 'hidden' : 'shown') . '. You can change this in My Account at any time.');
+    }
+    redirect('account.php#display-settings');
+}
+
+
 /**
  * Re-check the account password for a sensitive change on this page. Returns
  * null when it matches, else the message to show. Wrong guesses count toward a
@@ -12,7 +24,9 @@ $user = require_login();
  * user to sign in instead of returning.
  */
 function account_reauth_error(array $user, $password, string $wrong): ?string {
-    $r = reauth_check((int)$user['id'], is_string($password) ? $password : '');
+    // An empty box is a missed step, not a wrong password (3.3.1).
+    if (!is_string($password) || $password === '') return 'Enter your password to confirm this change. Nothing was changed.';
+    $r = reauth_check((int)$user['id'], $password);
     if ($r === 'ok') return null;
     if ($r === 'signed_out') { flash(REAUTH_SIGNED_OUT_MSG, 'error'); redirect('login.php'); }
     return $r === 'locked' ? REAUTH_LOCKED_MSG : $wrong;
@@ -234,10 +248,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_group']) && can('
         change_user_access($uid, (int)$user['id'], ['group_id' => $gid], function (PDO $db) use ($gid, $uid): void {
             $db->prepare('UPDATE users SET group_id = ? WHERE id = ?')->execute([$gid, $uid]);
         });
-    } catch (DomainException $e) { flash($e->getMessage(), 'error'); redirect('account.php'); }
+    } catch (DomainException $e) { flash($e->getMessage(), 'error'); redirect('account.php#team-h'); }
     audit($user['id'], 'user.group', 'user', (int)($_POST['uid'] ?? 0), $gid ? 'group #' . $gid : 'legacy role behavior');
     flash('Group updated — takes effect on that user\'s next page load.');
-    redirect('account.php');
+    redirect('account.php#team-h');
 }
 
 /* Admin: create a permission group */
@@ -286,7 +300,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_hours']) && can('
     db()->prepare('UPDATE users SET weekly_hours = ? WHERE id = ?')->execute([$weeklyHours, $hoursUid]);
     audit($user['id'], 'user.hours', 'user', $hoursUid, $weeklyHours . ' hrs/week');
     flash('Weekly hours updated.');
-    redirect('account.php');
+    redirect('account.php#team-h');
 }
 
 // Admin: add a new user
@@ -344,6 +358,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user']) && can('a
 page_header('My Account', $user, 'account');
 ?>
 <h1>My Account</h1>
+<section class="card" aria-labelledby="display-settings">
+<h2 id="display-settings">Display and accessibility settings</h2>
+<p>Show or hide the low-vision controls while signed in to this account, on any browser. Hiding the controls keeps your current colors, text size and other display preferences. You can always show the controls again here.</p>
+<form method="post">
+<?= csrf_field() ?>
+<fieldset><legend>Low-vision controls</legend>
+<?php $hiddenControls = setting('user_low_vision_hidden_' . (int)$user['id']) === '1'; ?>
+<label><input type="radio" name="display_controls" value="show" <?= !$hiddenControls ? 'checked' : '' ?>> Show controls (expand when needed)</label>
+<label><input type="radio" name="display_controls" value="hide" <?= $hiddenControls ? 'checked' : '' ?>> Hide controls</label>
+</fieldset>
+<button type="submit" name="save_display_controls" value="1" class="btn btn-primary">Save display settings</button>
+</form>
+</section>
 <?php if (entra_cfg()): ?>
 <section class="card" aria-labelledby="microsoft-link-h">
   <h2 id="microsoft-link-h">Microsoft sign-in</h2>
@@ -425,7 +452,7 @@ page_header('My Account', $user, 'account');
           <script>document.getElementById('totp-key-copy').addEventListener('click', function () {
             var key = this.getAttribute('data-key'), note = document.getElementById('totp-key-copied');
             (navigator.clipboard ? navigator.clipboard.writeText(key) : Promise.reject())
-              .then(function () { note.textContent = 'Setup key copied, without spaces.'; })
+              .then(function () { note.textContent = ''; setTimeout(function () { note.textContent = 'Setup key copied, without spaces.'; }, 60); })
               .catch(function () { note.textContent = 'Could not copy automatically — select the key and copy it.'; });
           });</script></li>
         <li>On a phone, you can instead tap this link: <a href="<?= h(totp_provisioning_uri($pendingSecret, $user['email'])) ?>">add to authenticator app</a></li>
@@ -480,7 +507,7 @@ page_header('My Account', $user, 'account');
       <script>document.getElementById('calfeed-copy').addEventListener('click', function () {
         var url = document.getElementById('calfeed-url').textContent, note = document.getElementById('calfeed-copied');
         (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject())
-          .then(function () { note.textContent = 'Copied.'; })
+          .then(function () { note.textContent = ''; setTimeout(function () { note.textContent = 'Address copied.'; }, 60); })
           .catch(function () { note.textContent = 'Could not copy automatically — select the address and copy it.'; });
       });</script>
       <form method="post" action="account.php" class="stacked" novalidate><?= csrf_field() ?>
@@ -571,16 +598,16 @@ page_header('My Account', $user, 'account');
             location.hash = 'passkeys';
             location.reload();
           })
-          .catch(function(e){ fail(e.message || 'The passkey was not added.'); });
+          .catch(function(e){ fail(e && (e.name === 'NotAllowedError' || e.name === 'AbortError') ? 'The passkey was not added: the request was cancelled or timed out. Choose Add passkey to try again.' : (e && e.name === 'InvalidStateError' ? 'This passkey is already registered on this account.' : 'The passkey was not added. Try again, or use a different device or browser.')); });
       });
     })();
     </script>
   </section>
 
   <?php if (can('admin')): ?>
-  <section class="card" aria-label="Team administration">
-    <p><a class="btn btn-secondary" href="audit.php">View audit log</a></p>
+  <section class="card" aria-labelledby="users-heading">
     <h2 id="users-heading">Team</h2>
+    <p><a class="btn btn-secondary" href="audit.php">View audit log</a></p>
     <h3 id="add-user-h">Add a team member</h3>
     <?php $nuRefill = old_in('add_user') !== ''; // refill only after this form was sent
     $allGroups = db()->query('SELECT * FROM `groups` ORDER BY name')->fetchAll();
@@ -628,14 +655,14 @@ page_header('My Account', $user, 'account');
       <button type="submit" name="add_user" value="1" class="btn btn-primary">Add user</button>
     </form>
     <h3 id="team-h">Team members</h3>
-    <p class="muted">Quick group and hours changes live here — for everything else (edit details, password resets, 2FA recovery, caseload transfer, deactivate or delete), open <a href="users.php">User management</a>.</p>
+    <p class="muted">Quick group and hours changes live here — for everything else (edit details, password resets, two-factor (2FA) sign-in recovery, caseload transfer, deactivate or delete), open <a href="users.php">User management</a>.</p>
     <?php $teamRows = db()->query('SELECT id, name, email, role, group_id, weekly_hours FROM users WHERE is_active = 1 ORDER BY name')->fetchAll();
     $hoursRefill = old_in('set_hours') !== '' ? old_in('uid') : '';
     if ($teamRows) echo form_error_summary(array_column(array_map(fn($r) => ['wh-' . (int)$r['id'], 'Weekly available hours for ' . $r['name']], $teamRows), 1, 0)); ?>
     <div class="table-scroll" tabindex="0" role="region" aria-label="Team members">
       <table>
         <caption class="visually-hidden">Team members</caption>
-        <thead><tr><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Permission group</th><th scope="col">Available hrs/week</th></tr></thead>
+        <thead><tr><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Permission group</th><th scope="col">Available hours per week</th></tr></thead>
         <tbody>
         <?php foreach ($teamRows as $u): ?>
           <tr>

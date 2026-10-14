@@ -310,7 +310,7 @@ if (isset($_GET['id'])) {
     $done = in_array($r['status'], ['Trained', 'Denied', 'Cancelled'], true);
     page_header('Device request: ' . $r['device_name'], $user, 'procurement');
     ?>
-    <p><a href="procurement.php">&larr; All device requests</a></p>
+    <p><a href="procurement.php"><span aria-hidden="true">&larr; </span>All device requests</a></p>
     <h1><?= h($r['device_name']) ?> <?= dr_badge($r['status']) ?></h1>
     <p class="muted">For <a href="client.php?id=<?= (int)$r['client_id'] ?>"><?= h($r['client_name']) ?></a>
        <?= $r['category'] ? ' · ' . h($r['category']) : '' ?> · requested by <?= h($r['requester'] ?? 'unknown') ?> <?= fmt_date($r['created_at']) ?></p>
@@ -358,7 +358,7 @@ if (isset($_GET['id'])) {
         <h3>Add a quote</h3>
         <div class="grid grid-4">
           <div class="field"><label for="vendor">Vendor *</label><input type="text" id="vendor" name="vendor" required maxlength="190" value="<?= $oldQuote('vendor') ?>" <?= field_aria('vendor') ?>><?= field_error('vendor') ?></div>
-          <div class="field"><label for="amount">Amount (USD) *</label><input type="number" id="amount" name="amount" step="0.01" min="0" max="99999999.99" required value="<?= $oldQuote('amount') ?>" <?= field_aria('amount') ?>><?= field_error('amount') ?></div>
+          <div class="field"><label for="amount">Amount in US dollars <span aria-hidden="true">*</span><span class="visually-hidden">(required)</span></label><input type="number" id="amount" name="amount" step="0.01" min="0" max="99999999.99" required value="<?= $oldQuote('amount') ?>" <?= field_aria('amount') ?>><?= field_error('amount') ?></div>
           <div class="field"><label for="quote_ref">Quote #</label><input type="text" id="quote_ref" name="quote_ref" maxlength="120" value="<?= $oldQuote('quote_ref') ?>"></div>
           <div class="field"><label for="quote_notes">Notes</label><input type="text" id="quote_notes" name="quote_notes" maxlength="500" value="<?= $oldQuote('quote_notes') ?>"></div>
         </div>
@@ -549,7 +549,7 @@ page_header('Procurement', $user, 'procurement');
 <div class="table-scroll" tabindex="0" role="region" aria-label="Device requests">
 <table>
   <caption class="visually-hidden">Device requests</caption>
-  <thead><tr><th scope="col">Device</th><th scope="col">Client</th><th scope="col">Status</th><th scope="col" class="num">Est. cost</th><th scope="col">Requested</th></tr></thead>
+  <thead><tr><th scope="col">Device</th><th scope="col">Client</th><th scope="col">Status</th><th scope="col" class="num">Estimated cost</th><th scope="col">Requested</th></tr></thead>
   <tbody>
   <?php if (!$rows): ?><tr><td colspan="5" class="muted">No device requests<?= $statusFilter ? ' with that status' : ' yet' ?>.</td></tr><?php endif; ?>
   <?php foreach ($rows as $x): ?>

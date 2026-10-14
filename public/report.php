@@ -186,7 +186,7 @@ $_SESSION['report_send_tokens'] = array_slice($sendTokens, -20, null, true);
 
 page_header('Training report', $user, 'clients');
 ?>
-<p class="page-actions"><a href="track.php?id=<?= $trackId ?>">&larr; Back to <?= h($t['title']) ?></a></p>
+<p class="page-actions"><a href="track.php?id=<?= $trackId ?>"><span aria-hidden="true">&larr; </span>Back to <?= h($t['title']) ?></a></p>
 <h1>Training progress report</h1>
 
 <section class="card" aria-labelledby="send-h">

@@ -157,7 +157,7 @@ if (isset($_GET['id'])) {
     $old = old_in('save_assessment') !== '' && old_in('id') === (string)$id;
     $v = fn(string $k): string => $old ? old_in($k) : (string)($r[$k] ?? '');
     ?>
-    <p><a href="accommodations.php">&larr; All assessments</a></p>
+    <p><a href="accommodations.php"><span aria-hidden="true">&larr; </span>All assessments</a></p>
     <h1>Worksite assessment <?= wa_badge($r['status']) ?></h1>
     <p class="muted">For <a href="client.php?id=<?= (int)$r['client_id'] ?>"><?= h($r['client_name']) ?></a>
       <?= $r['employer'] ? ' · ' . h($r['employer']) : '' ?><?= $r['job_title'] ? ' · ' . h($r['job_title']) : '' ?></p>
@@ -278,6 +278,7 @@ page_header('Accommodations', $user, 'accommodations');
 </form>
 <?php if ($truncated): ?><p class="muted">Only the 300 most recently updated assessments are listed here. Choose a client or a status above to find an older one.</p><?php endif; ?>
 
+<h2 id="list-h">Worksite assessments</h2>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Worksite assessments">
 <table>
   <caption class="visually-hidden">Worksite assessments</caption>

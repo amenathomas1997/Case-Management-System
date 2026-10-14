@@ -108,9 +108,8 @@ if (isset($_GET['export'])) {
     header('Content-Disposition: attachment; filename="rsa911_case_service_' . $from . '_' . $to . '.csv"');
     $out = fopen('php://output', 'w');
     fwrite($out, "\xEF\xBB\xBF");
-    write_csv_row($out, ['RSA-911 ALIGNED CASE-SERVICE EXPORT — ' . cfg('name')]);
-    write_csv_row($out, ['Period', $from . ' to ' . $to, 'Generated', date('Y-m-d'), 'By', csv_cell($user['name'])]);
-    write_csv_row($out, []);
+    // The header row is the first row, so spreadsheet and import tools read the columns;
+    // the title and period follow the data.
     write_csv_row($out, ['Client ID', 'Client Name', 'Age', 'Client Type', 'Primary Disability', 'Funding Agency',
         'Authorization #', 'RSA Service Categories', 'Service Hours', 'Service Value', 'First Service', 'Last Service',
         'Current Status', 'Closed Status (period)', 'Closed Date', 'Employment Outcome']);
@@ -127,6 +126,8 @@ if (isset($_GET['export'])) {
             $c && $c['new_status'] === 'Closed - Rehabilitated' ? 'Y' : '',
         ]);
     }
+    write_csv_row($out, []);
+    write_csv_row($out, ['RSA-911 aligned case-service export', csv_cell(cfg('name')), 'Period', $from . ' to ' . $to, 'Generated', date('Y-m-d'), 'By', csv_cell($user['name'])]);
     fclose($out);
     exit;
 }

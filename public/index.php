@@ -45,12 +45,15 @@ if (can('referrals')) {
 }
 $tvParams = [];
 $tvSql = task_visibility_sql($user, $tvParams);
-$tq = db()->prepare("SELECT t.*, c.name AS client_name, DATEDIFF(t.due_date, CURDATE()) AS days_left
-    FROM tasks t LEFT JOIN clients c ON c.id = t.client_id
+$tq = db()->prepare("SELECT t.*, c.name AS client_name, u.name AS assignee_name, DATEDIFF(t.due_date, CURDATE()) AS days_left
+    FROM tasks t LEFT JOIN clients c ON c.id = t.client_id LEFT JOIN users u ON u.id = t.assigned_to
     WHERE t.status = 'Open' AND " . $tvSql . "
     ORDER BY t.due_date IS NULL, t.due_date LIMIT 6");
 $tq->execute($tvParams);
 $myTasks = $tq->fetchAll();
+// Administrators see the whole team's open tasks here, so the heading says so and each
+// task names its assignee when it is someone else's (2.4.6).
+$teamTasks = (bool)array_filter($myTasks, fn($t) => (int)($t['assigned_to'] ?? 0) !== (int)$user['id']);
 // Real totals — the list above is only the first six.
 $tc = db()->prepare("SELECT COUNT(*) n, COALESCE(SUM(t.due_date IS NOT NULL AND t.due_date < CURDATE()), 0) overdue
     FROM tasks t WHERE t.status = 'Open' AND " . $tvSql);
@@ -72,11 +75,11 @@ page_header('Dashboard', $user, 'dashboard');
 
 <?php if ($myTasks): ?>
 <section class="card" aria-labelledby="tasks-heading">
-  <h2 id="tasks-heading">My tasks (<?= $taskCount ?><?= $overdueTasks ? ', ' . $overdueTasks . ' overdue' : '' ?><?= $taskCount > count($myTasks) ? ' — first ' . count($myTasks) . ' shown' : '' ?>)</h2>
+  <h2 id="tasks-heading"><?= $teamTasks ? 'Open tasks, yours and your team\'s' : 'My tasks' ?> (<?= $taskCount ?><?= $overdueTasks ? ', ' . $overdueTasks . ' overdue' : '' ?><?= $taskCount > count($myTasks) ? ' — first ' . count($myTasks) . ' shown' : '' ?>)</h2>
   <ul>
   <?php foreach ($myTasks as $t): $dl = $t['due_date'] !== null ? (int)$t['days_left'] : null; ?>
     <li>
-      <?= h($t['title']) ?><?= $t['client_name'] && can('clients') ? ' — <a href="client.php?id=' . (int)$t['client_id'] . '">' . h($t['client_name']) . '</a>' : '' ?>
+      <?= h($t['title']) ?><?= $t['client_name'] && can('clients') ? ' — <a href="client.php?id=' . (int)$t['client_id'] . '">' . h($t['client_name']) . '</a>' : '' ?><?= $teamTasks && (int)($t['assigned_to'] ?? 0) !== (int)$user['id'] ? ' <span class="muted">(' . ($t['assignee_name'] ? 'assigned to ' . h($t['assignee_name']) : 'unassigned') . ')</span>' : '' ?>
       <?php if ($dl !== null && $dl < 0): ?> <span class="field-error"><strong><?= abs($dl) ?> day<?= abs($dl) === 1 ? '' : 's' ?> overdue</strong></span>
       <?php elseif ($dl === 0): ?> <strong>(due today)</strong>
       <?php elseif ($dl !== null): ?> <span class="muted">(due <?= fmt_date($t['due_date']) ?>)</span><?php endif; ?>

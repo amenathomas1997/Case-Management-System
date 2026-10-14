@@ -283,7 +283,7 @@ if (isset($_GET['id'])) {
     ?>
     <?php /* A student's name link sits beside its remove button, so it also gets a 44px target (2.5.5). */ ?>
     <style>.link-target a{display:inline-flex;align-items:center;min-height:2.75rem}</style>
-    <p><a href="programs.php">&larr; All cohorts</a></p>
+    <p><a href="programs.php"><span aria-hidden="true">&larr; </span>All cohorts</a></p>
     <h1><?= h($co['name']) ?> <?= $co['active'] ? '' : '<span class="badge badge-hold">Archived</span>' ?></h1>
     <p class="muted"><?= $co['school'] ? h($co['school']) . ' · ' : '' ?><?= $co['coordinator'] ? 'Coordinator: ' . h($co['coordinator']) : '' ?>
       <?= $co['start_date'] ? ' · ' . fmt_date($co['start_date']) . ($co['end_date'] ? ' – ' . fmt_date($co['end_date']) : '') : '' ?></p>
@@ -374,7 +374,7 @@ if (isset($_GET['id'])) {
 
     <section class="card" aria-labelledby="sess-h">
       <h2 id="sess-h"><?= $allSessions ? 'All sessions' : 'Recent sessions' ?> (<?= count($sessions) < $sessionTotal ? 'showing ' . count($sessions) . ' of ' . $sessionTotal : $sessionTotal ?>)</h2>
-      <?php if (count($sessions) < $sessionTotal): ?><p><a href="programs.php?id=<?= $cid ?>&amp;all_sessions=1#sess-h">Show all <?= $sessionTotal ?> sessions</a> <span class="muted">(older sessions, including any logged with a mistyped date, can be deleted from the full list)</span></p>
+      <?php if (count($sessions) < $sessionTotal): ?><p><a class="tap" href="programs.php?id=<?= $cid ?>&amp;all_sessions=1#sess-h">Show all <?= $sessionTotal ?> sessions</a> <span class="muted">(older sessions, including any logged with a mistyped date, can be deleted from the full list)</span></p>
       <?php elseif ($allSessions && $sessionTotal > 50): ?><p><a href="programs.php?id=<?= $cid ?>#sess-h">Show the 50 most recent sessions only</a></p><?php endif; ?>
       <?php if ($sessions): ?>
       <ul class="timeline">
@@ -427,7 +427,7 @@ page_header($showArchived ? 'Programs (archived cohorts)' : 'Programs', $user, '
     <?= csrf_field() ?>
     <?= form_error_summary(['name' => '', 'start_date' => '', 'end_date' => '']) ?>
     <div class="grid grid-4">
-      <div class="field"><label for="name">Cohort name *</label><input type="text" id="name" name="name" required maxlength="190" placeholder="e.g. Central HS Fall 2026" value="<?= h($oldCohort ? old_in('name') : '') ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
+      <div class="field"><label for="name">Cohort name <span aria-hidden="true">*</span><span class="visually-hidden">(required)</span></label><input type="text" id="name" name="name" required maxlength="190" placeholder="e.g. Central HS Fall 2026" value="<?= h($oldCohort ? old_in('name') : '') ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
       <div class="field"><label for="school">School / district</label><input type="text" id="school" name="school" maxlength="190" value="<?= h($oldCohort ? old_in('school') : '') ?>"></div>
       <div class="field"><label for="coordinator_id">Coordinator</label>
         <select id="coordinator_id" name="coordinator_id">

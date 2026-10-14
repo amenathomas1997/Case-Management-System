@@ -85,7 +85,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['go'])) {
 
 page_header('Remediation', $user, 'ai_tools');
 ?>
-<p><a href="ai_tools.php">&larr; AI tools</a></p>
+<p><a href="ai_tools.php"><span aria-hidden="true">&larr; </span>AI tools</a></p>
 <h1>Accessible content &amp; remediation</h1>
 <p class="muted">Transform content for accessibility. <strong>The text you paste is sent to the AI provider as-is</strong> — don't paste anything you wouldn't send them.
    <?= $targetFormat !== '' ? 'Targeting the client\'s preferred format: <strong>' . h($targetFormat) . '</strong>.' : '' ?></p>

@@ -25,7 +25,7 @@ check(!str_contains($out,'IN-PERSON-HOME-ADDRESS')&&str_contains($out,'LOCATION:
 check(preg_match('~BEGIN:VEVENT\r\nUID:cms-cal-'.$noShowSession.'@(?:(?!END:VEVENT).)*SUMMARY:No show — (?:(?!END:VEVENT).)*STATUS:CANCELLED\r\nEND:VEVENT~s',$out)===1,'A No Show is titled as one and marked cancelled in the calendar feed');
 $db->exec("DELETE FROM scheduled_sessions WHERE id=$noShowSession");
 $db->exec("UPDATE groups SET perms='clients' WHERE id=999");
-check($feed()==='Feed not found.','Calendar tokens stop disclosing sessions after schedule permission is revoked');
+check(str_contains($deniedFeed=$feed(), '<title>Calendar feed not found</title>') && !str_contains($deniedFeed, 'BEGIN:VEVENT'),'Calendar tokens stop disclosing sessions after schedule permission is revoked');
 $db->exec("UPDATE users SET group_id=NULL,is_active=0 WHERE id=1");
-check($feed()==='Feed not found.','Inactive accounts cannot use calendar feeds');
+check(str_contains($deniedFeed=$feed(), '<title>Calendar feed not found</title>') && !str_contains($deniedFeed, 'BEGIN:VEVENT'),'Inactive accounts cannot use calendar feeds');
 $db->exec("UPDATE users SET is_active=1 WHERE id=1");

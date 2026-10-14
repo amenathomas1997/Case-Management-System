@@ -73,7 +73,7 @@ if (isset($_GET['edit']) && can('templates')) {
     }
     page_header($a['id'] ? 'Edit article' : 'New article', $user, 'kb');
     ?>
-    <p><a href="kb.php" style="display:inline-flex; align-items:center; min-height:2.75rem;">&larr; Knowledge base</a></p>
+    <p><a href="kb.php" style="display:inline-flex; align-items:center; min-height:2.75rem;"><span aria-hidden="true">&larr; </span>Knowledge base</a></p>
     <h1><?= $a['id'] ? 'Edit article' : 'New article' ?></h1>
     <form method="post" action="kb.php" class="stacked"><?= csrf_field() ?>
       <input type="hidden" name="id" value="<?= (int)$a['id'] ?>">
@@ -101,7 +101,7 @@ if (isset($_GET['id'])) {
     if (!$a) { flash('Article not found.', 'error'); redirect('kb.php'); }
     page_header($a['title'], $user, 'kb');
     ?>
-    <p><a href="kb.php" style="display:inline-flex; align-items:center; min-height:2.75rem;">&larr; Knowledge base</a></p>
+    <p><a href="kb.php" style="display:inline-flex; align-items:center; min-height:2.75rem;"><span aria-hidden="true">&larr; </span>Knowledge base</a></p>
     <h1><?= h($a['title']) ?></h1>
     <p class="muted"><?= $a['category'] ? h($a['category']) . ' · ' : '' ?>updated <?= fmt_date($a['updated_at']) ?><?= $a['author'] ? ' · ' . h($a['author']) : '' ?>
       <?= $a['is_public'] ? ' · <span class="badge badge-closed">Shared with clients</span>' : '' ?></p>
@@ -134,7 +134,7 @@ page_header('Knowledge base', $user, 'kb');
 
 <div class="page-actions">
   <form method="get" action="kb.php" role="search" class="inline-form" aria-label="Search the knowledge base">
-    <label for="q" class="visually-hidden">Search the knowledge base</label>
+    <label for="q" class="visually-hidden">Search articles in the knowledge base</label>
     <input type="search" id="q" name="q" value="<?= h($q) ?>" placeholder="Search articles…" minlength="2">
     <button type="submit" class="btn btn-secondary btn-sm">Search</button>
   </form>

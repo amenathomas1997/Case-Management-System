@@ -29,6 +29,17 @@ $answers = ['goals' => '', 'limitations' => '', 'tried' => '', 'context' => ''];
 $assessDate = date('Y-m-d');
 $generated = false;
 $saveRefused = false;
+// Stale-session recovery returns the same user's typed answers and reviewed draft.
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && (old_in('generate') !== '' || old_in('save_assessment') !== '')) {
+    foreach ($answers as $key => $_) $answers[$key] = old_in($key);
+    if (old_in('save_assessment') !== '') {
+        foreach ($fields as $key => $default) $fields[$key] = old_in($key, $default);
+        if (!in_array($fields['primary_tech'], TECH_TYPES, true)) $fields['primary_tech'] = 'Other';
+        $assessDate = old_in('assessment_date', $assessDate);
+        $instruments = old_in('instruments');
+        $generated = true;
+    }
+}
 // Column sizes of the short draft fields (tech_assessments), with their labels.
 const INTAKE_LIMITS = ['primary_disability' => [190, 'Primary disability / functional limitations'],
     'hardware_details' => [255, 'Hardware'], 'software_version' => [190, 'Software & version']];

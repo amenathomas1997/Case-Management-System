@@ -1,7 +1,7 @@
 {
     "product": "Case Management System",
     "latest": "3.0.21",
-    "released": "2026-10-13",
-    "notes": "Security and accessibility fixes: a calendar address needs your password, and you are emailed when your password, authenticator or calendar address changes. Moved sessions are emailed to both instructors. Closed clients leave the dashboard's expired list. Sites on 3.0.16 or later apply dist/migrations/mig_3.0.21.sql. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16 and 3.0.21 in order. All are safe to re-run.",
+    "released": "2026-10-14",
+    "notes": "Security and accessibility update: clearer navigation and staff user guide; named landmarks; unsaved-change protection; collapsible low-vision controls with account visibility settings; optional expanded dropdown lists and text date entry. Includes round-five audit fixes and offline replay protection. Sites on 3.0.16 or later must apply mig_3.0.21.sql before updating application files. Manual assistive-technology verification remains ongoing.",
     "contact": "Contact Example Agency for the update package."
 }

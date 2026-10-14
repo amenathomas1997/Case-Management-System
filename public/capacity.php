@@ -45,7 +45,7 @@ $tracks = $tq->fetchAll();
 
 page_header('Capacity', $user, 'schedule');
 ?>
-<p><a href="schedule.php">&larr; Back to schedule</a></p>
+<p><a href="schedule.php"><span aria-hidden="true">&larr; </span>Back to schedule</a></p>
 <h1>Capacity planning</h1>
 <div class="page-actions"><a class="btn btn-secondary btn-sm" href="utilization.php">Billable utilization (retrospective)</a></div>
 <?php if ($scoped): ?><p>Committed hours are limited to sessions with your assigned clients. Available-hours targets remain the staff members’ full capacity.</p><?php endif; ?>

@@ -228,7 +228,7 @@ struct ContractSpendSheet: View {
         NavigationStack {
             Form {
                 if let error { ErrorBanner(message: error) }
-                ContractCaptionedField(label: "Amount (required)", text: $amount, keyboard: .decimalPad)
+                ContractCaptionedField(label: "Amount (required, digits, like 1250.00)", shortName: "Amount", text: $amount, keyboard: .decimalPad)
                 DatePicker("Date", selection: $date, displayedComponents: .date)
                 ContractCaptionedField(label: "Memo", text: $memo)
             }
@@ -274,7 +274,7 @@ struct ContractNewSheet: View {
                 ContractCaptionedField(label: "Name (required)", text: $name)
                 ContractCaptionedField(label: "Funder", text: $funder)
                 ContractCaptionedField(label: "Contract number", text: $number)
-                ContractCaptionedField(label: "Budget", text: $amount, keyboard: .decimalPad)
+                ContractCaptionedField(label: "Budget (digits, like 12500.00)", shortName: "Budget", text: $amount, keyboard: .decimalPad)
                 Toggle("Start date", isOn: $hasStart); if hasStart { DatePicker("Start", selection: $start, displayedComponents: .date) }
                 Toggle("End date", isOn: $hasEnd); if hasEnd { DatePicker("End", selection: $end, displayedComponents: .date) }
             }
@@ -307,12 +307,16 @@ struct ContractNewSheet: View {
 /// disappears). The field carries the same name for VoiceOver, so the caption is hidden.
 private struct ContractCaptionedField: View {
     let label: String
+    /// A short name Voice Control users can say ("Budget") when the label also carries the
+    /// input format (3.3.2); the full label is still what VoiceOver reads.
+    var shortName: String? = nil
     @Binding var text: String
     var keyboard: UIKeyboardType = .default
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label).font(.caption).accessibilityHidden(true)
             TextField(label, text: $text).keyboardType(keyboard).accessibilityLabel(label)
+                .accessibilityInputLabels(shortName.map { [$0, label] } ?? [label])
         }
     }
 }

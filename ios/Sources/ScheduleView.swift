@@ -106,7 +106,7 @@ struct ScheduleView: View {
                 // draws it (or says it). Scrolled into view once it exists, then VoiceOver is put on it.
                 .onChange(of: error) { message in
                     guard message != nil else { return }
-                    DispatchQueue.main.async { withAnimation { proxy.scrollTo(Self.errorRow, anchor: .top) } }
+                    DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(Self.errorRow, anchor: .top) } }
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 400_000_000)
                         errorFocused = true

@@ -18,7 +18,7 @@ scope_check_client($client, $user);
 
 if (!ai_feature_enabled('recommend')) {
     page_header('AT recommendations', $user, 'clients');
-    echo '<div class="card"><h1>AT recommendations</h1><p class="muted">The AT recommendation engine is turned off. An administrator can enable it under AI assistant settings.</p><p><a href="client.php?id=' . $cid . '">&larr; Back to ' . h($client['name']) . '</a></p></div>';
+    echo '<div class="card"><h1>AT recommendations</h1><p class="muted">The AT recommendation engine is turned off. An administrator can enable it under AI assistant settings.</p><p><a href="client.php?id=' . $cid . '"><span aria-hidden="true">&larr; </span>Back to ' . h($client['name']) . '</a></p></div>';
     page_footer();
     exit;
 }
@@ -70,7 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) {
 
 page_header('AT recommendations', $user, 'clients');
 ?>
-<p><a href="client.php?id=<?= $cid ?>">&larr; <?= h($client['name']) ?></a></p>
+<p><a href="client.php?id=<?= $cid ?>"><span aria-hidden="true">&larr; </span><?= h($client['name']) ?></a></p>
 <h1>AI assistive-technology recommendations</h1>
 <p class="muted">Draft suggestions from the AI (artificial intelligence) assistant, based on the client's disability, goals and job tasks. Staff review everything; nothing is ordered automatically.
    <?= ai_redaction_on() ? 'Direct identifiers are stripped before sending to the AI provider.' : '' ?></p>

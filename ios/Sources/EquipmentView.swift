@@ -65,6 +65,9 @@ struct EquipmentView: View {
     @State private var scrollTarget: String?
     /// The item just loaned out, put back under VoiceOver once its sheet has gone.
     @State private var loanedItem: Int?
+    /// A reload asked for from the retry button is in flight: the button stays (and keeps
+    /// VoiceOver focus) but is dimmed until the result is known.
+    @State private var retrying = false
 
     var body: some View {
         NavigationStack {
@@ -76,7 +79,8 @@ struct EquipmentView: View {
                             .accessibilityFocused($focusedItem, equals: errorFocus)
                         // A button as well as pull-to-refresh, which needs a drag.
                         if items.isEmpty {
-                            Button { Task { await load() } } label: { Label("Try loading equipment again", systemImage: "arrow.clockwise") }
+                            Button { Task { await load() } } label: { Label(retrying ? "Loading equipment…" : "Try loading equipment again", systemImage: "arrow.clockwise") }
+                                .disabled(retrying)
                         }
                     }
                     if let confirmation {
@@ -179,7 +183,7 @@ struct EquipmentView: View {
                 // neither seen nor heard. Scroll it into view once it exists, then put VoiceOver on it.
                 .onChange(of: error) { message in
                     guard message != nil else { return }
-                    DispatchQueue.main.async { withAnimation { proxy.scrollTo(errorRow, anchor: .top) } }
+                    DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(errorRow, anchor: .top) } }
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 400_000_000)
                         focusedItem = errorFocus
@@ -188,7 +192,7 @@ struct EquipmentView: View {
                 .onChange(of: scrollTarget) { key in
                     guard let key else { return }
                     scrollTarget = nil
-                    DispatchQueue.main.async { withAnimation { proxy.scrollTo(key, anchor: .center) } }
+                    DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(key, anchor: .center) } }
                 }
             }
             .navigationTitle("Equipment")
@@ -270,11 +274,17 @@ struct EquipmentView: View {
     }
 
     private func load() async {
+        // After a failure the banner and its retry button stay in place, keeping VoiceOver
+        // focus, until the reload succeeds; the result is then said (2.4.3, 4.1.3).
+        let retry = error != nil
+        retrying = retry
+        defer { retrying = false }
         do {
-            error = nil
             let response: EquipmentResponse = try await api.call("equipment")
             items = response.equipment
             loaded = true
+            error = nil
+            if retry { announce("Equipment loaded: \(items.count) item\(items.count == 1 ? "" : "s").") }
         } catch {
             showFormError(error.localizedDescription, in: &self.error)
         }
@@ -657,7 +667,7 @@ struct ReservationsView: View {
             // seen nor heard. Scroll it into view once it exists, then put VoiceOver on it.
             .onChange(of: error) { message in
                 guard message != nil else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(errorRow, anchor: .top) } }
+                DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(errorRow, anchor: .top) } }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)
                     focusedReservation = errorFocus
@@ -687,7 +697,13 @@ struct ReservationsView: View {
         sheetResult = nil
     }
     private func load() async {
-        do { error = nil; let r: ReservationsResponse = try await api.call("reservations"); reservations = r.reservations; loaded = true }
+        // The error (and its retry button) stays until a reload succeeds, so VoiceOver focus is
+        // not dropped by the retry itself; a successful retry is said.
+        let retry = error != nil
+        do {
+            let r: ReservationsResponse = try await api.call("reservations"); reservations = r.reservations; loaded = true; error = nil
+            if retry { announce("Reservations loaded: \(reservations.count).") }
+        }
         catch { showFormError(error.localizedDescription, in: &self.error) }
     }
     private func cancel(_ id: Int) async {
@@ -772,7 +788,12 @@ struct ReservationSheet: View {
         return items.filter { $0.status != "Retired" && seen.insert($0.id).inserted }
     }
     private func loadItems() async {
-        do { itemsError = nil; let e: EquipmentResponse = try await api.call("equipment"); items = e.equipment }
+        // The error and its retry button stay until the list loads; a successful retry is said.
+        let retry = itemsError != nil
+        do {
+            let e: EquipmentResponse = try await api.call("equipment"); items = e.equipment; itemsError = nil
+            if retry { announce("Equipment list loaded: \(items.count) item\(items.count == 1 ? "" : "s").") }
+        }
         catch { showFormError("Could not load the equipment list. \(error.localizedDescription)", in: &itemsError) }
     }
     private func submit() async {

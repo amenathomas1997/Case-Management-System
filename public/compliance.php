@@ -171,7 +171,7 @@ page_header('Compliance', $user, 'compliance');
     <tbody>
     <?php foreach ($authRisk as $t): $r = $t['rollup']; ?>
       <tr>
-        <td><a href="track.php?id=<?= (int)$t['id'] ?>"><?= h($t['title']) ?></a><br><span class="muted"><?= h($t['client']) ?></span></td>
+        <td><a href="track.php?id=<?= (int)$t['id'] ?>"><?= h($t['title']) ?><span class="visually-hidden"> for <?= h($t['client']) ?></span></a><br><span class="muted"><?= h($t['client']) ?></span></td>
         <td><?= h($t['auth_number']) ?></td>
         <td><?= fmt_hours($r['hours_worked']) ?> / <?= fmt_hours($r['authorized_hours']) ?>
           <strong<?= $t['pct'] >= 100 ? ' class="field-error"' : '' ?>> (<?= $t['pct'] ?>%)</strong>
@@ -203,7 +203,7 @@ page_header('Compliance', $user, 'compliance');
     <tbody>
     <?php foreach ($reportsDue as $t): ?>
       <tr>
-        <td><a href="track.php?id=<?= (int)$t['id'] ?>"><?= h($t['title']) ?></a><br><span class="muted"><?= h($t['client']) ?></span></td>
+        <td><a href="track.php?id=<?= (int)$t['id'] ?>"><?= h($t['title']) ?><span class="visually-hidden"> for <?= h($t['client']) ?></span></a><br><span class="muted"><?= h($t['client']) ?></span></td>
         <td><?= h(ucfirst($t['report_cadence'])) ?></td>
         <td><?= $t['last_report_at'] ? fmt_date($t['last_report_at']) : 'never' ?></td>
         <?php // Overdue is said in words, not only by colour and weight. ?>

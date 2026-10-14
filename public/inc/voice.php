@@ -577,7 +577,7 @@ function voice_execute(string $do, array $in, array $user): array {
             if ($date > date('Y-m-d')) return ['ok' => false, 'error' => 'That date, ' . voice_say_date($date) . ', is in the future. Hours are logged only once the work has taken place. Nothing was logged.'];
             // The idempotency key fits work_logs.idem_key (36 characters).
             $idem = substr((string)preg_replace('/[^a-f0-9-]/', '', (string)($in['idem'] ?? '')), 0, 36) ?: null;
-            $logsLink = ['url' => 'track.php?id=' . (int)$track['id'] . '#logs', 'url_label' => 'Go to the hours logged on ' . $track['title']];
+            $logsLink = ['url' => 'track.php?id=' . (int)$track['id'] . '#logs', 'url_label' => 'Go to the hours logged on ' . $track['title'] . (!empty($track['client_id']) ? ' for ' . voice_client_name((int)$track['client_id']) : '')];
             $already = ['ok' => true, 'speak' => 'Those hours were already logged.'] + $logsLink;
             $dup = db()->prepare('SELECT id FROM work_logs WHERE idem_key = ?');
             if ($idem !== null) { $dup->execute([$idem]); if ($dup->fetchColumn()) return $already; }
@@ -628,7 +628,7 @@ function voice_execute(string $do, array $in, array $user): array {
             db()->prepare("INSERT INTO smart_goals (track_id, specific_goal, measurable_metric, status) VALUES (?,?,?, 'Not Started')")
                 ->execute([(int)$track['id'], $goal, $metric]);
             audit($uid, 'goal.add', 'track', (int)$track['id'], 'voice');
-            return ['ok' => true, 'speak' => 'Goal added.', 'url' => 'track.php?id=' . (int)$track['id'] . '#goals', 'url_label' => 'Go to the goals on ' . $track['title']];
+            return ['ok' => true, 'speak' => 'Goal added.', 'url' => 'track.php?id=' . (int)$track['id'] . '#goals', 'url_label' => 'Go to the goals on ' . $track['title'] . (!empty($track['client_id']) ? ' for ' . voice_client_name((int)$track['client_id']) : '')];
         case 'check_out_device':
             if (!can('equipment')) return ['ok' => false, 'error' => "You don't have access to equipment."];
             $did = (int)($in['equipment_id'] ?? 0);

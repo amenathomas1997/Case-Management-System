@@ -127,9 +127,9 @@ function eval_html(array $a, array $fields, string $preparedBy, bool $signed = f
     $doc = new AccessibleDocument('Assistive Technology Evaluation Report — ' . $a['client_name']);
     $doc->paragraph(brand('org'));
     $doc->properties([
-        'Client' => $a['client_name'] . ($a['dob'] ? ' (DOB ' . fmt_date($a['dob']) . ')' : ''),
+        'Client' => $a['client_name'] . ($a['dob'] ? ' (date of birth ' . fmt_date($a['dob']) . ')' : ''),
         'Evaluation date' => fmt_date($a['assessment_date']),
-        'VR Counselor' => eval_counselor($a),
+        'Vocational rehabilitation (VR) counselor' => eval_counselor($a),
         'Evaluator' => $preparedBy, 'Primary technology' => $a['primary_tech'],
     ]);
     foreach (['background' => 'Background', 'findings' => 'Evaluation Findings',
@@ -278,7 +278,7 @@ $sigKeep = $sigPosted !== '' && mb_check_encoding($sigPosted, 'UTF-8') && eval_n
 
 page_header('Evaluation report', $user, 'clients');
 ?>
-<p><a href="client.php?id=<?= (int)$a['cid'] ?>&amp;tab=assessments">&larr; Back to <?= h($a['client_name']) ?></a></p>
+<p><a href="client.php?id=<?= (int)$a['cid'] ?>&amp;tab=assessments"><span aria-hidden="true">&larr; </span>Back to <?= h($a['client_name']) ?></a></p>
 <h1>AT evaluation report — <?= h($a['client_name']) ?></h1>
 <p class="muted">Prefilled from the <?= fmt_date($a['assessment_date']) ?> assessment. Edit each section, then download the PDF or email it signed to the counselor.</p>
 

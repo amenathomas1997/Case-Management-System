@@ -128,7 +128,10 @@ struct FollowupsView: View {
     }
 
     private func announceSheetResult() {
-        if let message = sheetResult { announceAfterDismiss(message) }
+        if let message = sheetResult {
+            dueHeaderFocused = true
+            announceAfterDismiss(message)
+        }
         sheetResult = nil
     }
 

@@ -53,7 +53,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_incident'])) {
     elseif (mb_strlen($desc) > 5000) $incErrs['description'] = 'What happened is too long (5,000 characters maximum).';
     if (mb_strlen($location) > 190) $incErrs['location'] = 'Location is too long (190 characters maximum).';
     if (mb_strlen($action) > 5000) $incErrs['action_taken'] = 'Action taken is too long (5,000 characters maximum).';
-    if ($incErrs) { keep_input(); keep_field_errors($incErrs); redirect('incidents.php'); }
+    if ($incErrs) { keep_input(); keep_field_errors($incErrs); redirect('incidents.php#add-h'); }
     try {
         db()->prepare('INSERT INTO incidents (client_id, reported_by, incident_date, location, type, severity, description, action_taken) VALUES (?,?,?,?,?,?,?,?)')
             ->execute([$cid, (int)$user['id'], $date, $location !== '' ? $location : null, $type, $sev, $desc, $action !== '' ? $action : null]);
@@ -62,13 +62,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_incident'])) {
         if ($cid === null || (string)$e->getCode() !== '23000') throw $e;
         keep_input();
         keep_field_errors(['client_id' => 'That client record no longer exists (it may have been merged into another record or removed). Choose the client again, or choose None.']);
-        redirect('incidents.php');
+        redirect('incidents.php#add-h');
     }
     $iid = (int)db()->lastInsertId();
     audit($user['id'], 'incident.add', 'incident', $iid, $type . ' / ' . $sev);
     if (in_array($sev, ['High', 'Critical'], true)) notify_admin_users($sev . ' incident reported (' . $type . ')', 'incidents.php');
     flash('Incident logged.');
-    redirect('incidents.php');
+    redirect('incidents.php#log-h');
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
@@ -93,7 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     } else {
         flash('Only the reporter or an administrator can change that incident.', 'error');
     }
-    redirect($back);
+    redirect($back . '#log-h');
 }
 
 $showClosed = !empty($_GET['all']);
@@ -141,7 +141,8 @@ $sevBadge = fn($s) => '<span class="badge ' . ($s === 'Critical' || $s === 'High
   </form>
 </section>
 
-<div class="table-scroll" tabindex="0" role="region" aria-label="Incidents">
+<h2 id="log-h">Incident log</h2>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Incident log">
 <table>
   <caption class="visually-hidden">Incident log</caption>
   <thead><tr><th scope="col">Date / reported by</th><th scope="col">Type / severity</th><th scope="col">Client</th><th scope="col">What happened</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>

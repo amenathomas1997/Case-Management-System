@@ -89,7 +89,7 @@ $hRates = array_unique(array_map(fn($l) => round((float)($l['hourly_rate'] ?? $f
 $mRates = array_unique(array_map(fn($l) => round((float)($l['mileage_rate'] ?? $fbMileageRate), 3),
     array_filter($logs, fn($l) => (float)$l['mileage'] > 0)));
 sort($hRates); sort($mRates);
-$rateText = (count($hRates) > 1 ? fmt_money($hRates[0]) . '–' . fmt_money(end($hRates)) . '/hr (varies by entry)' : fmt_money($hRates[0] ?? $fbRate) . '/hr')
+$rateText = (count($hRates) > 1 ? fmt_money($hRates[0]) . '–' . fmt_money(end($hRates)) . ' per hour (varies by entry)' : fmt_money($hRates[0] ?? $fbRate) . ' per hour')
     // Mileage rates carry three decimals (0.655): print them in full so rate x miles matches the lines.
     . (count($mRates) > 1 ? ' + ' . fmt_mileage_rate($mRates[0]) . '–' . fmt_mileage_rate(end($mRates)) . '/mile'
         : (($mRates[0] ?? $fbMileageRate) > 0 ? ' + ' . fmt_mileage_rate($mRates[0] ?? $fbMileageRate) . '/mile' : ''));

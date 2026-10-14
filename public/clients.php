@@ -122,9 +122,10 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
   <?php if (!$clients): ?>
     <tr><td colspan="<?= $showArchived ? 7 : 6 ?>" class="muted">No clients match. <a href="client_edit.php">Add your first client</a> or <a href="referrals.php">convert a referral</a>.</td></tr>
   <?php endif; ?>
-  <?php foreach ($clients as $c): ?>
+  <?php $dupNames = array_count_values(array_column($clients, 'name')); // two clients with one name are told apart by record number (2.4.9) ?>
+<?php foreach ($clients as $c): ?>
     <tr>
-      <th scope="row"><a href="client.php?id=<?= (int)$c['id'] ?>"><?= h($c['name']) ?></a></th>
+      <th scope="row"><a href="client.php?id=<?= (int)$c['id'] ?>"><?= h($c['name']) ?><?= ($dupNames[$c['name']] ?? 0) > 1 ? '<span class="visually-hidden"> (record #' . (int)$c['id'] . ')</span>' : '' ?></a></th>
       <td><?= status_badge($c['status']) ?></td>
       <td><?= h($c['instructor'] ?? '—') ?></td>
       <td><?= h($c['counselor_name'] ?? '—') ?><br><span class="muted"><?= h($c['counselor_agency'] ?? '') ?></span></td>
@@ -134,7 +135,7 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
       <td>
         <form method="post" action="clients.php" class="inline-form"><?= csrf_field() ?>
           <input type="hidden" name="client_id" value="<?= (int)$c['id'] ?>">
-          <button type="submit" name="unarchive" value="1" class="btn btn-secondary btn-sm">Restore to active lists<span class="visually-hidden"> — <?= h($c['name']) ?></span></button>
+          <button type="submit" name="unarchive" value="1" class="btn btn-secondary btn-sm">Restore to active lists<span class="visually-hidden"> — <?= h($c['name']) ?><?= ($dupNames[$c['name']] ?? 0) > 1 ? ' (record #' . (int)$c['id'] . ')' : '' ?></span></button>
         </form>
       </td>
       <?php endif; ?>

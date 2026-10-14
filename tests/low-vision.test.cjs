@@ -2,14 +2,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const code = fs.readFileSync(__dirname+'/../public/assets/low-vision.js','utf8');
-function fixture(saved, blocked=false, legacy={}) {
+function fixture(saved, blocked=false, legacy={}, accountHidden=false) {
   const attrs={}, events={}, store=new Map(Object.entries(legacy)); let osChange;
   if(saved!==undefined) store.set('cms_low_vision',saved);
   function element(dataset={}) { return {dataset,attrs:{},events:{},value:'',setAttribute(k,v){this.attrs[k]=v;},addEventListener(k,f){this.events[k]=f;}}; }
   const palettes=['auto','light','dark','black','white','yellow','cream'].map(p=>element({palette:p}));
-  const toggles=['spacing','width','links','motion'].map(k=>element({visionToggle:k}));
+  const toggles=['spacing','width','links','motion','lists'].map(k=>element({visionToggle:k}));
   const size=element(), reset=element(), live=element();
-  const bar={hidden:true,dataset:{saved:'Display updated.'},querySelectorAll:s=>s==='[data-palette]'?palettes:toggles};
+  const bar={hidden:true,dataset:{saved:'Display updated.',accountHidden:String(accountHidden)},querySelectorAll:s=>s==='[data-palette]'?palettes:toggles};
   const mq={matches:false,addEventListener(_,f){osChange=f;}};
   vm.runInNewContext(code,{window:{matchMedia:()=>mq},document:{documentElement:{setAttribute(k,v){attrs[k]=v;}},addEventListener(k,f){events[k]=f;},getElementById:id=>({'low-vision-bar':bar,'vision-live':live,'vision-size':size,'vision-reset':reset}[id])},localStorage:{getItem(k){if(blocked)throw Error();return store.get(k)||null;},setItem(k,v){if(blocked)throw Error();store.set(k,v);}}});
   events.DOMContentLoaded();
@@ -34,3 +34,8 @@ f=fixture(undefined,true);f.toggles[2].events.click();assert.equal(f.attrs['data
 console.log('PASS: Toolbar remains usable when browser storage is blocked');
 f=fixture(undefined,false,{cms_theme:'dark',cms_textsize:'large'});assert.equal(f.attrs['data-theme'],'dark');assert.equal(f.attrs['data-vision-size'],'125');
 console.log('PASS: Existing theme and larger-text preferences migrate');
+
+f=fixture(JSON.stringify({size:'150',palette:'yellow'}),false,{},true);
+assert.equal(f.bar.hidden,true);assert.equal(f.attrs['data-vision-size'],'150');assert.equal(f.attrs['data-vision-palette'],'yellow');
+f.reset.events.click();assert.equal(f.bar.hidden,true);
+console.log('PASS: Account visibility hides the toolbar without disabling preferences or allowing reset to override it');

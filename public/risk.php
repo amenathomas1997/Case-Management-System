@@ -95,7 +95,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) {
 
 page_header('Risk flags', $user, 'ai_tools');
 ?>
-<p><a href="ai_tools.php">&larr; AI tools</a></p>
+<p><a href="ai_tools.php"><span aria-hidden="true">&larr; </span>AI tools</a></p>
 <h1>Outcome risk flags</h1>
 <p class="muted">Operational triage of active clients from engagement and progress signals. Client names are tokenized before sending and restored in the result. This is a prompt to look closer, not a prediction.</p>
 

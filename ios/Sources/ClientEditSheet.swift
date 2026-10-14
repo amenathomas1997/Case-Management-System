@@ -530,7 +530,7 @@ struct ErrorFocusForm<Content: View>: View {
                 guard message != nil else { return }
                 // After this update's layout, so the banner row exists to scroll to.
                 DispatchQueue.main.async {
-                    withAnimation { proxy.scrollTo(FormErrorRow.banner, anchor: .top) }
+                    withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(FormErrorRow.banner, anchor: .top) }
                 }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)

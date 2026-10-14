@@ -81,7 +81,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ask'])) {
 
 page_header('Ask the knowledge base', $user, 'kb');
 ?>
-<p><a href="kb.php" style="display:inline-flex; align-items:center; min-height:2.75rem;">&larr; Knowledge base</a></p>
+<p><a href="kb.php" style="display:inline-flex; align-items:center; min-height:2.75rem;"><span aria-hidden="true">&larr; </span>Knowledge base</a></p>
 <h1>Ask the knowledge base</h1>
 <p class="muted">Answers are grounded in your knowledge-base articles and cite them. It won't answer from outside the articles.</p>
 

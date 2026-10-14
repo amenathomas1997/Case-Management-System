@@ -21,13 +21,25 @@ $notAvailable = function (string $message, ?int $clientId = null, string $tab = 
 
 if (!empty($_GET['sig'])) {
     // Client signature image captured on a work log
-    $stmt = db()->prepare('SELECT w.signature_path, w.signed_name, t.client_id FROM work_logs w JOIN training_tracks t ON t.id = w.track_id WHERE w.id = ?');
+    $stmt = db()->prepare('SELECT w.signature_path, w.signed_name, w.track_id, t.client_id FROM work_logs w JOIN training_tracks t ON t.id = w.track_id WHERE w.id = ?');
     $stmt->execute([(int)$_GET['sig']]);
     $row = $stmt->fetch();
     if (!$row || !$row['signature_path']) $notAvailable('Signature not found. The work log may have been deleted or never signed.');
     scope_check_client_id((int)$row['client_id'], $user);
     $path = cfg('upload_dir') . '/' . basename($row['signature_path']);
     if (!is_file($path)) $notAvailable('The signature file is missing on the server. Ask an administrator to check the uploads folder.', (int)$row['client_id'], 'tracks');
+    if (empty($_GET['raw'])) {
+        // A page around the image, so the signature has a text alternative (the typed name)
+        // and a way back (1.1.1, 2.4.2); the image below is fetched with raw=1.
+        $who = trim((string)($row['signed_name'] ?? ''));
+        page_header('Client signature', $user, 'clients');
+        echo '<h1>Client signature</h1>'
+            . '<p>' . ($who !== '' ? 'Signed by ' . h($who) : 'Signed on the work log') . ' (work log #' . (int)$_GET['sig'] . ').</p>'
+            . '<p><img src="download.php?sig=' . (int)$_GET['sig'] . '&amp;raw=1" alt="Handwritten signature' . ($who !== '' ? ' of ' . h($who) : '') . ', as drawn on the work log" style="max-width:100%; height:auto; border:1px solid var(--border, #ccc); background:#fff;"></p>'
+            . '<p><a href="track.php?id=' . (int)$row['track_id'] . '">Back to the training track</a></p>';
+        page_footer();
+        exit;
+    }
     audit($user['id'], 'signature.view', 'client', (int)$row['client_id'], 'work log #' . (int)$_GET['sig']);
     session_write_close(); // the transfer must not hold the session lock for the user's other tabs
     header('Content-Type: image/png');

@@ -198,7 +198,7 @@ if ($recorded && !in_array((int)$recorded['gid'], array_map(fn($g) => (int)$g['i
 
 page_header('Progress review: ' . $client['name'], $user, 'clients');
 ?>
-<p><a href="client.php?id=<?= $cid ?>">&larr; <?= h($client['name']) ?></a></p>
+<p><a href="client.php?id=<?= $cid ?>"><span aria-hidden="true">&larr; </span><?= h($client['name']) ?></a></p>
 <h1>AI progress review for <?= h($client['name']) ?></h1>
 <p class="muted">The AI reviews recent notes and sessions against each active goal. Staff decide what to record.</p>
 

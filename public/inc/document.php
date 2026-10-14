@@ -30,8 +30,10 @@ final class AccessibleDocument {
         $this->body .= '</tbody></table></div>';
     }
     public function html(): string {
+        $base = function_exists('cfg') ? rtrim((string)cfg('base_url'), '/') . '/' : '';
+        $navigation = '<nav aria-label="CMS navigation"><a href="' . h($base . 'index.php') . '">Dashboard / return to CMS</a> · <a href="' . h($base . 'index.php#main-nav') . '">Main navigation</a></nav>';
         return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
-            . '<title>' . h($this->title) . '</title><style>body{font:1rem/1.6 system-ui,sans-serif;color:#1a1a2e;background:#fff;max-width:70rem;margin:auto;padding:1rem}h1,h2,h3,h4,p,dd,td,th{overflow-wrap:anywhere}p{max-width:75ch}dt{font-weight:bold}dd{margin:0 0 1rem}table{border-collapse:collapse;width:100%}th,td{padding:.6rem;text-align:left;border:1px solid #555;vertical-align:top}caption{text-align:left;font-weight:bold;padding:.6rem}th{background:#eee}.scroll{overflow:auto}:focus-visible{outline:3px solid #1e40af;outline-offset:3px}@media print{.scroll{overflow:visible}}</style></head><body><main><h1>'
+            . '<title>' . h($this->title) . '</title><style>dd,li{max-width:72ch}body{font:1rem/1.6 system-ui,sans-serif;color:#1a1a2e;background:#fff;max-width:70rem;margin:auto;padding:1rem}h1,h2,h3,h4,p,dd,td,th{overflow-wrap:anywhere}p{max-width:75ch}dt{font-weight:bold}dd{margin:0 0 1rem}table{border-collapse:collapse;width:100%}th,td{padding:.6rem;text-align:left;border:1px solid #555;vertical-align:top}caption{text-align:left;font-weight:bold;padding:.6rem}th{background:#eee}.scroll{overflow:auto}:focus-visible{outline:3px solid #1e40af;outline-offset:3px}@media print{.scroll{overflow:visible}}</style></head><body>' . $navigation . '<main aria-label="Main content"><h1>'
             . h($this->title) . '</h1>' . $this->body . '</main></body></html>';
     }
     public function download(string $name): never {

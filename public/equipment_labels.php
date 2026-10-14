@@ -28,7 +28,7 @@ page_header('Equipment QR labels', $user, 'equipment');
   <div class="label">
     <div class="label-qr" data-url="<?= h($url) ?>" data-label="QR code for <?= h($it['name']) ?>"></div>
     <div class="label-text">
-      <strong><a href="equipment.php?scan=<?= (int)$it['id'] ?>"><?= h($it['name']) ?></a></strong>
+      <strong><a class="tap" href="equipment.php?scan=<?= (int)$it['id'] ?>"><?= h($it['name']) ?><?= !empty($it['asset_tag']) ? '<span class="visually-hidden"> (tag ' . h($it['asset_tag']) . ')</span>' : (!empty($it['serial']) ? '<span class="visually-hidden"> (serial ' . h($it['serial']) . ')</span>' : '') ?></a></strong>
       <?php if ($it['serial']): ?><br><span class="muted">Serial number <?= h($it['serial']) ?></span><?php endif; ?>
       <br><span class="muted"><?= h($it['category']) ?></span>
     </div>

@@ -73,7 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['go'])) {
 
 page_header('Translate', $user, 'ai_tools');
 ?>
-<p><a href="ai_tools.php">&larr; AI tools</a></p>
+<p><a href="ai_tools.php"><span aria-hidden="true">&larr; </span>AI tools</a></p>
 <h1>On-demand translation</h1>
 <p class="muted"><strong>The text you paste is sent to the AI provider as-is.</strong> Review machine translations before sending them to a client.</p>
 

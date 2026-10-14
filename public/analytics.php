@@ -88,9 +88,9 @@ page_header('Analytics', $user, 'analytics');
   <p class="muted">Value is hours and mileage at the rates logged plus billable track expenses, as invoiced. The current month is month to date.</p>
   <?php if (!$byMonth): ?><p class="muted">No logged hours or expenses yet.</p>
   <?php else: ?>
-  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="rev-h">
+  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="rev-h-cap">
   <table>
-    <caption class="visually-hidden">Billable hours and value per month, with each month's value as a share of the highest month</caption>
+    <caption class="visually-hidden" id="rev-h-cap">Billable hours and value per month, with each month's value as a share of the highest month</caption>
     <thead><tr><th scope="col">Month</th><th scope="col" class="num">Hours</th><th scope="col" class="num">Value</th><th scope="col" style="width:40%;"><span class="visually-hidden">Share of the highest month</span></th></tr></thead>
     <tbody>
     <?php foreach ($byMonth as $m): $pct = round((float)$m['amt'] / $maxAmt * 100); ?>
@@ -113,9 +113,9 @@ page_header('Analytics', $user, 'analytics');
     <p class="muted">All time. Value includes billable track expenses.</p>
     <?php if (!$byAgency): ?><p class="muted">No data yet.</p>
     <?php else: ?>
-    <div class="table-scroll" tabindex="0" role="region" aria-labelledby="agency-h">
+    <div class="table-scroll" tabindex="0" role="region" aria-labelledby="agency-h-cap">
     <table>
-      <caption class="visually-hidden">Tracks, hours and billable value (including track expenses) by funding agency</caption>
+      <caption class="visually-hidden" id="agency-h-cap">Tracks, hours and billable value (including track expenses) by funding agency</caption>
       <thead><tr><th scope="col">Agency</th><th scope="col" class="num">Tracks</th><th scope="col" class="num">Hours</th><th scope="col" class="num">Value</th></tr></thead>
       <tbody>
       <?php foreach ($byAgency as $a): ?>
@@ -132,9 +132,9 @@ page_header('Analytics', $user, 'analytics');
     <h2 id="pay-h">Invoice status</h2>
     <?php if (!$pay): ?><p class="muted">No invoices yet.</p>
     <?php else: ?>
-    <div class="table-scroll" tabindex="0" role="region" aria-labelledby="pay-h">
+    <div class="table-scroll" tabindex="0" role="region" aria-labelledby="pay-h-cap">
     <table>
-      <caption class="visually-hidden">Number of invoices by status, with the amount billed, the amount actually received and the amount still owed</caption>
+      <caption class="visually-hidden" id="pay-h-cap">Number of invoices by status, with the amount billed, the amount actually received and the amount still owed</caption>
       <thead><tr><th scope="col">Status</th><th scope="col" class="num">Invoices</th><th scope="col" class="num">Billed</th><th scope="col" class="num">Received</th><th scope="col" class="num">Outstanding</th></tr></thead>
       <tbody>
       <?php foreach ($pay as $p): ?>
@@ -146,7 +146,7 @@ page_header('Analytics', $user, 'analytics');
     </table>
     </div>
     <?php endif; ?>
-    <?php if (can('billing')): ?><p><a href="invoices.php">Open invoices</a></p><?php endif; ?>
+    <?php if (can('billing')): ?><p><a href="invoices.php">Open the invoices list</a></p><?php endif; ?>
   </section>
 </div>
 
@@ -210,9 +210,9 @@ $trend = db()->query("SELECT DATE_FORMAT(completed_at,'%Y-%m') ym, COUNT(*) n, A
 
 <section class="card" aria-labelledby="goal-h">
   <h2 id="goal-h">Goal status breakdown</h2>
-  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="goal-h">
+  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="goal-h-cap">
   <table>
-    <caption class="visually-hidden">Number of goals by status</caption>
+    <caption class="visually-hidden" id="goal-h-cap">Number of goals by status</caption>
     <thead><tr><th scope="col">Status</th><th scope="col" class="num">Goals</th></tr></thead>
     <tbody>
     <?php foreach ($goalStats as $g): ?>

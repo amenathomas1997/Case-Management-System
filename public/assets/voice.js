@@ -330,7 +330,7 @@
     if (here && (here === yesBtn || here === noBtn)) return;
     var waiting = !here || here === document.body || here === sendBtn || here === listenBtn || (here === input && !input.value.trim());
     if (waiting && yesBtn) { yesBtn.focus(); yesFocusedAt = Date.now(); return; }
-    setStatus('Waiting for your answer: ' + ctext.textContent + ' Use the Yes, confirm or No button, or type yes or no.');
+    setStatus('Waiting for your answer: ' + ctext.textContent + ' Use the Accept and save or Decline button, or type yes or no.');
   }
 
   // --- Command handling ----------------------------------------------------
@@ -359,13 +359,13 @@
   }
   // While a confirmation waits, what is said or typed answers it (the same
   // confirmed write the Yes button sends), and is never sent to the AI as a new
-  // request. An unclear answer is asked once more, then nothing is saved.
+  // request. An unclear answer pauses listening and preserves the request for review.
   function answerConfirm(text) {
     logMsg('u', text); pushHistory('user', text);
     var a = confirmAnswer(text);
     if (a !== 'unclear') { resolveConfirm(a === 'yes'); return; }
-    if (!pending.askedAgain) { pending.askedAgain = true; earcon('confirm'); speak('Please say yes to confirm, or no to cancel.', afterQuestion); return; }
-    resolveConfirm(false, "I still couldn't tell if that was a yes or a no, so nothing was saved.");
+    setConvo(false);
+    setStatus('Your request is still waiting. Choose Accept and save or Decline, type yes or no, or choose Use microphone to answer again.');
   }
   function handle(transcript) {
     transcript = (transcript || '').trim();
@@ -390,10 +390,13 @@
           // can't duplicate it server-side (used where the table supports it).
           var idem = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
           pending = { do: d.do, params: d.params || {}, idem: idem };
-          ctext.textContent = d.speak; confirmBox.hidden = false; earcon('confirm');
+          // After a typed request the microphone stays closed, so "say yes" would be wrong:
+          // the answer is the Yes or No button, or typed (3.3.2).
+          var prompt = spoken ? d.speak : String(d.speak || '').replace(/\bSay yes to (save|confirm)\.?/i, 'Choose Accept and save or Decline, or type yes or no.');
+          ctext.textContent = prompt; confirmBox.hidden = false; earcon('confirm');
           // Ask the question, then wait for the answer (see afterQuestion).
           if (spoken) speak(d.speak, afterQuestion);
-          else { logMsg('a', d.speak); pushHistory('assistant', d.speak); stopSpeech(); afterQuestion(true); }
+          else { logMsg('a', prompt); pushHistory('assistant', prompt); stopSpeech(); afterQuestion(true); }
         } else {
           // Hands-free answer: speak it. If a page can also show it (or is where a
           // request voice could not finish can be done), the reply offers a named
@@ -503,12 +506,13 @@
         if (rec !== r) return; // stopped on purpose
         // Restarted only once the screen reader has read this, so the microphone does not hear it.
         if (e.error === 'no-speech' && convMode) {
-          // A waiting confirmation is asked once more; a second silence saves nothing.
-          if (pending && !confirmBox.hidden) {
-            if (pending.silentOnce) { resolveConfirm(false, 'I did not hear an answer, so nothing was saved.'); return; }
-            pending.silentOnce = true; earcon('confirm'); speak('Please say yes to confirm, or no to cancel.', afterQuestion); return;
-          }
-          setStatus(STILL_HERE); setTimeout(afterReply, readTime(STILL_HERE)); return;
+          // Silence pauses listening without discarding a draft or repeatedly
+          // reopening the microphone while the user reads the page.
+          setConvo(false);
+          setStatus(pending && !confirmBox.hidden
+            ? 'The microphone is paused. Your request is still waiting: choose Accept and save or Decline, type an answer, or choose Use microphone.'
+            : 'The microphone is paused. Choose Use microphone when you are ready, or type your request.');
+          return;
         }
         setStatus(MIC_ERRORS[e.error] || 'The microphone could not be used. Type your request below, or choose Use microphone to try again.'); input.focus();
       };
@@ -540,7 +544,7 @@
     syncListen();
     try { on ? sessionStorage.setItem(CONVO_KEY, '1') : sessionStorage.removeItem(CONVO_KEY); } catch (e) {}
     if (convMode) { syncMute(); panel.hidden = false; setExpanded(true); if (logEl) logEl.hidden = false; startListen(); }
-    else { stopListen(); stopSpeech(); setStatus('Conversation ended.'); }
+    else { stopListen(true); stopSpeech(); setStatus('Conversation ended.'); }
   }
 
   // --- Mute and spoken-reply toggles -----------------------------------------
@@ -596,11 +600,14 @@
       : 'Speech stopped. The reply remains in the conversation history.');
   });
   panel.addEventListener('keydown', function (event) {
+    if (event.key === 'Tab') stopListen(true);
     if (event.key === 'Escape') { event.preventDefault(); closePanel(); return; }
     if (event.altKey && !event.ctrlKey && !event.metaKey && (event.code === 'KeyL' || event.key === 'l' || event.key === 'L')) {
       event.preventDefault(); listenNow();
     }
   });
+  // Stop capture before a focused control is read aloud by a screen reader.
+  panel.addEventListener('focusin', function () { stopListen(true); });
   function sendTyped() { var t = input.value.trim(); if (!t) { input.focus(); return; } input.value = ''; handle(t); }
   input.addEventListener('keydown', function (e) { if (e.key === 'Enter' && input.value.trim()) { e.preventDefault(); sendTyped(); } });
   sendBtn.addEventListener('click', sendTyped);

@@ -181,7 +181,7 @@ page_header('AI assistant', $user, 'account');
         <p class="hint" id="redact-hint">Removes names, emails, phone numbers, addresses, dates of birth and SSNs from the context, keeping the functional description. Strongly recommended. Voice assistant requests are sent as spoken, except that client names said in full are replaced and emails, phone numbers and SSNs are removed; a first name said alone and dictated note text are sent as said.</p>
       </div>
       <div class="field">
-        <label><input type="checkbox" name="ai_baa_confirmed" value="1" <?= $baaOn ? 'checked' : '' ?>> I have a data-handling agreement (e.g. BAA) with this provider, or send no PHI</label>
+        <label><input type="checkbox" name="ai_baa_confirmed" value="1" <?= $baaOn ? 'checked' : '' ?>> I have a data-handling agreement with this provider (for example a business associate agreement, BAA), or I send it no protected health information (PHI)</label>
         <p class="hint">A reminder for your own records — this box does not change what is sent.</p>
       </div>
     </fieldset>

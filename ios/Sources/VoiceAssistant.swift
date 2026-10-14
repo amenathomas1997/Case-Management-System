@@ -182,7 +182,7 @@ final class SpeechController: NSObject, ObservableObject {
                 let said = note.userInfo?[UIAccessibility.announcementStringValueUserInfoKey] as? String
                 Task { @MainActor in
                     guard let self, let id = self.announcing, said == nil || said == self.announcedText else { return }
-                    self.announcementEnded(id)
+                    self.announcementEnded(id, timedOut: (note.userInfo?[UIAccessibility.announcementWasSuccessfulUserInfoKey] as? Bool) != true)
                 }
             }
     }
@@ -406,7 +406,7 @@ final class SpeechController: NSObject, ObservableObject {
         // Only the fallback timer ended it: VoiceOver may still be reading the question (slow
         // rate, or queued behind other speech), and an open microphone would hear its own
         // "Say yes to save" as the answer. A pending confirmation waits for the buttons instead.
-        if timedOut && pendingConfirm != nil { endLoopAfterSpeaking = true }
+        if timedOut || (repliesViaVoiceOver && pendingConfirm != nil) { endLoopAfterSpeaking = true }
         if phase == .speaking { afterSpeaking() }
     }
 

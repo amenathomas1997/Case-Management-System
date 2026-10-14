@@ -103,7 +103,7 @@ if ($asking) {
 
 page_header('Ask your caseload', $user, 'ai_tools');
 ?>
-<p><a href="ai_tools.php">&larr; AI tools</a></p>
+<p><a href="ai_tools.php"><span aria-hidden="true">&larr; </span>AI tools</a></p>
 <h1>Ask your caseload</h1>
 <p class="muted">Ask a plain-language question about your clients, goals and notes. Client names are never sent to the AI — they're tokenized and restored in the answer. Read-only.</p>
 

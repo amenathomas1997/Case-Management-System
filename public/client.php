@@ -626,7 +626,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_document'])) {
         audit($user['id'], 'document.delete', 'client', $id, 'doc #' . (int)$doc['id'] . ' (to trash)');
         flash('Document moved to the trash — an administrator can restore it for 30 days.');
     }
-    redirect("client.php?id=$id&tab=documents");
+    redirect("client.php?id=$id&tab=documents#docs-h");
 }
 
 /* ---- POST: send (or resend) client portal link ---- */
@@ -1540,7 +1540,7 @@ $documents = $documents->fetchAll();
     <button type="submit" name="add_document" value="1" class="btn btn-primary">Upload</button>
   </form>
 </section>
-<h2>Documents (<?= count($documents) ?>)</h2>
+<h2 id="docs-h">Documents (<?= count($documents) ?>)</h2>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Client documents">
 <table>
   <caption class="visually-hidden">Client documents</caption>
@@ -1549,16 +1549,16 @@ $documents = $documents->fetchAll();
   <?php if (!$documents): ?><tr><td colspan="5" class="muted">No documents yet.</td></tr><?php endif; ?>
   <?php foreach ($documents as $doc): ?>
     <tr>
-      <td><?= h($doc['title']) ?><br><span class="muted"><?= h($doc['orig_name']) ?></span></td>
+      <th scope="row"><?= h($doc['title']) ?><br><span class="muted"><?= h($doc['orig_name']) ?></span></th>
       <td><?= h($doc['category'] === 'Client Upload' ? 'Shared by client' : $doc['category']) ?><?= $doc['category'] === 'Resource' ? '<br><span class="muted">Shared on the client portal</span>' : '' ?></td>
       <td><?= fmt_datetime($doc['created_at']) ?></td>
       <td><?= h($doc['uploader'] ?? ($doc['category'] === 'Client Upload' ? 'The client, on the portal' : 'System')) ?></td>
       <td>
-        <a class="btn btn-secondary btn-sm" href="download.php?doc=<?= (int)$doc['id'] ?>">Download<span class="visually-hidden"> <?= h($doc['title']) ?></span></a>
+        <a class="btn btn-secondary btn-sm" href="download.php?doc=<?= (int)$doc['id'] ?>">Download<span class="visually-hidden"> <?= h($doc['title']) ?> — document #<?= (int)$doc['id'] ?></span></a>
         <form method="post" action="<?= $tabUrl('documents') ?>" class="inline-form"><?= csrf_field() ?>
           <input type="hidden" name="doc_id" value="<?= (int)$doc['id'] ?>">
           <button type="submit" name="del_document" value="1" class="btn btn-danger btn-sm"
-            onclick="return confirm('Move this document to the trash? An administrator can restore it for 30 days.');">Delete<span class="visually-hidden"> <?= h($doc['title']) ?></span></button>
+            onclick="return confirm('Move this document to the trash? An administrator can restore it for 30 days.');">Delete<span class="visually-hidden"> <?= h($doc['title']) ?> — document #<?= (int)$doc['id'] ?></span></button>
         </form>
       </td>
     </tr>

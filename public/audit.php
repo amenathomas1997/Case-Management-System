@@ -135,6 +135,21 @@ $logins = db()->query("SELECT * FROM login_attempts
 
 /** Plain wording for a stored action code such as "equipment.loan" (display only;
  *  the stored codes and the filter are unchanged). Unknown codes are shown as stored. */
+/** The kind of record an entry is about, in words rather than a table name (3.1.3). */
+function audit_entity_label(string $entity): string {
+    static $names = [
+        'client' => 'Client record', 'training_track' => 'Training track', 'track' => 'Training track', 'work_log' => 'Hours entry',
+        'client_note' => 'Case note', 'note' => 'Case note', 'client_documents' => 'Client document', 'client_document' => 'Client document',
+        'invoice' => 'Invoice', 'equipment' => 'Equipment item', 'user' => 'Team member', 'referral' => 'Referral',
+        'access_booking' => 'Accommodation booking', 'incident' => 'Incident', 'contract' => 'Contract', 'cohort' => 'Cohort',
+        'at_record' => 'AT record', 'task' => 'Task', 'message' => 'Message', 'scheduled_session' => 'Scheduled session',
+        'session' => 'Scheduled session', 'homework' => 'Homework', 'smart_goal' => 'Goal', 'goal' => 'Goal', 'track_expense' => 'Expense',
+        'device_request' => 'Device request', 'worksite_assessment' => 'Worksite assessment', 'consent_form' => 'Consent form',
+        'kb_article' => 'Knowledge base article', 'setting' => 'Setting', 'group' => 'Permission group', 'template' => 'Template',
+    ];
+    if ($entity === '') return '';
+    return $names[$entity] ?? ucfirst(str_replace('_', ' ', $entity));
+}
 function audit_action_label(string $code): string {
     static $subjects = [
         'ai' => 'AI assistant', 'at' => 'Assistive technology services', 'assessment' => 'Assessment',
@@ -250,7 +265,7 @@ page_header('Audit log', $user, 'account');
         <td><?= fmt_datetime($e['created_at']) ?></td>
         <td><?= h($e['user_name'] ?? 'System') ?></td>
         <td><?= h(audit_action_label((string)$e['action'])) ?></td>
-        <td><?= h(trim(($e['entity'] ?? '') . ' #' . ($e['entity_id'] ?? ''), ' #')) ?></td>
+        <td><?= h(trim(audit_entity_label((string)($e['entity'] ?? '')) . ' #' . ($e['entity_id'] ?? ''), ' #')) ?></td>
         <td><?= h($e['detail'] ?? '') ?></td>
         <td class="muted"><?= h($e['ip'] ?? '') ?></td>
       </tr>

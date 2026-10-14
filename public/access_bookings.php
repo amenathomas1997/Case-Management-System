@@ -65,7 +65,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_booking'])) {
     foreach (['provider' => [190, 'Provider / agency'], 'location' => [255, 'Location'], 'notes' => [500, 'Notes']] as $k => [$max, $label]) {
         if (mb_strlen($in($k)) > $max) $errors[$k] = $label . ' is too long (' . $max . ' characters maximum).';
     }
-    if ($errors) { keep_input(); keep_field_errors($errors); redirect('access_bookings.php'); }
+    if ($errors) { keep_input(); keep_field_errors($errors); redirect('access_bookings.php#new-h'); }
     $serviceType = in_array($_POST['service_type'] ?? '', BOOKING_TYPES, true) ? $_POST['service_type'] : 'Other';
     $provider = $in('provider') !== '' ? $in('provider') : null;
     $location = $in('location') !== '' ? $in('location') : null;
@@ -113,7 +113,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
             flash('Choose a status for the booking.', 'error');
         }
     }
-    redirect($back);
+    redirect($back . '#bookings-h');
 }
 
 $scoped = caseload_scoped();
@@ -147,7 +147,7 @@ $clients = $cq->fetchAll();
 
 page_header('Accommodation bookings', $user, 'schedule');
 ?>
-<p><a href="schedule.php">&larr; Schedule</a></p>
+<p><a href="schedule.php"><span aria-hidden="true">&larr; </span>Schedule</a></p>
 <h1>Interpreter, CART (real-time captioning) &amp; transport bookings</h1>
 <p class="muted">Schedule communication-access and transportation accommodations for sessions and appointments<?= $scoped ? ' (your caseload)' : '' ?>.
   CART (Communication Access Realtime Translation) is live captioning typed by a trained captioner.</p>
@@ -163,7 +163,7 @@ page_header('Accommodation bookings', $user, 'schedule');
     <?= form_error_summary(['client_id' => 'Client', 'needed_at' => 'When', 'duration_min' => 'Duration (minutes)', 'provider' => 'Provider / agency',
         'location' => 'Location', 'cost' => 'Estimated cost', 'notes' => 'Notes']) ?>
     <div class="grid grid-4">
-      <div class="field"><label for="client_id">Client *</label>
+      <div class="field"><label for="client_id">Client <span aria-hidden="true">*</span><span class="visually-hidden">(required)</span></label>
         <select id="client_id" name="client_id" required <?= field_aria('client_id') ?>>
           <option value="">— Choose —</option>
           <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= old_in('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
@@ -208,6 +208,7 @@ page_header('Accommodation bookings', $user, 'schedule');
 </div>
 <?php if ($truncated): ?><p class="muted">Only the <?= $view === 'upcoming' ? 'next' : 'most recent' ?> 300 bookings are listed here.</p><?php endif; ?>
 
+<h2 id="bookings-h"><?= ['upcoming' => 'Upcoming bookings', 'past' => 'Bookings, including past ones', 'cancelled' => 'Cancelled bookings'][$view] ?></h2>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Accommodation bookings">
 <table>
   <caption class="visually-hidden"><?= ['upcoming' => 'Upcoming accommodation bookings', 'past' => 'Accommodation bookings, including past ones', 'cancelled' => 'Cancelled accommodation bookings'][$view] ?></caption>
@@ -219,7 +220,7 @@ page_header('Accommodation bookings', $user, 'schedule');
     // the same service, so the date tells them apart.
     $which = h($r['client_name']) . ', ' . h($r['service_type']) . ', ' . h(booking_when($r['needed_at'])); ?>
     <tr>
-      <td><?= $r['needed_at'] ? h(booking_when($r['needed_at'])) : '<span class="muted">—</span>' ?><?= $r['duration_min'] ? '<br><span class="muted">' . (int)$r['duration_min'] . ' min</span>' : '' ?></td>
+      <td><?= $r['needed_at'] ? h(booking_when($r['needed_at'])) : '<span class="muted">—</span>' ?><?= $r['duration_min'] ? '<br><span class="muted">' . (int)$r['duration_min'] . ' minutes</span>' : '' ?></td>
       <?php // The client links to their record only for staff who can open it (this page needs only scheduling). ?>
       <td><?php if (can('clients')): ?><a href="client.php?id=<?= (int)$r['cid'] ?>"><?= h($r['client_name']) ?></a><?php else: ?><?= h($r['client_name']) ?><?php endif; ?></td>
       <?php // The booking's notes (access needs, where to meet) are shown with it, line breaks kept. ?>

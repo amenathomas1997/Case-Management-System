@@ -1,8 +1,19 @@
 <?php
 declare(strict_types=1);
+/** The short brand name, with a trailing "AT" (assistive technology) spoken as letters:
+ *  screen readers would otherwise say "at" (3.1.6). */
+function brand_short_html(): string {
+    $short = brand('short');
+    if (preg_match('/^(.*\S) AT$/', $short, $m)) return '<span aria-hidden="true">' . h($short) . '</span><span class="visually-hidden">' . h($m[1]) . ' A T</span>';
+    return h($short);
+}
 require_once __DIR__ . '/accessibility.php';
 
 function page_header(string $title, ?array $user = null, string $active = ''): void {
+    // Public/help/error screens may omit the actor, but signed-in staff still
+    // need their permission-filtered navigation on those screens.
+    if ($user === null && function_exists('current_user')) $user = current_user();
+    $hideVision = $user && function_exists('setting') && setting('user_low_vision_hidden_' . (int)$user['id']) === '1';
     $app = cfg('name');
     // Flashes are taken before the <title> so a failed submit says so there too
     // (2.4.2/3.3.1); a page that already starts its title with 'Error — ' keeps it.
@@ -15,6 +26,10 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script src="assets/low-vision.js?v=<?= h(APP_VERSION) ?>"></script>
+<script src="assets/date-entry.js?v=<?= h(APP_VERSION) ?>" defer></script>
+<script src="assets/select-display.js?v=<?= h(APP_VERSION) ?>" defer></script>
+<script src="assets/navigation.js?v=<?= h(APP_VERSION) ?>" defer></script>
+<script>window.cmsRestoredFields=<?= json_encode(array_keys(($GLOBALS['OLD_INPUT'] ?? []) + (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' ? $_POST : [])), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;</script>
 <title lang="<?= page_lang() === 'es' && !isset(translations()[$title]) ? 'en' : h(page_lang()) ?>"><?= h($titleText) ?> — <?= h($app) ?></title>
 <link rel="stylesheet" href="assets/styles.css?v=<?= h(APP_VERSION) ?>">
 <?php /* Relative, as the stylesheet is: a site installed in a folder (https://example.org/cms)
@@ -33,9 +48,15 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
 </head>
 <body>
 <a class="skip-link" href="#main"><?= t('Skip to main content') ?></a>
-<section id="low-vision-bar" class="vision-bar" aria-labelledby="vision-title" data-saved="<?= h(__('Display updated.')) ?>" hidden>
+<nav class="wrap page-actions cms-page-navigation" aria-label="<?= h(__('Page navigation')) ?>">
+  <a class="btn btn-secondary" href="index.php" data-cms-back><?= t('Go back') ?></a>
+  <a class="btn btn-secondary" href="index.php"><?= t('Dashboard') ?></a>
+  <a class="btn btn-secondary" href="<?= $user ? '#main-nav' : 'index.php#main-nav' ?>" data-cms-menu><?= t('Main navigation') ?></a>
+</nav>
+<section id="low-vision-bar" class="vision-bar" aria-labelledby="vision-title" data-saved="<?= h(__('Display updated.')) ?>" data-account-hidden="<?= $hideVision ? 'true' : 'false' ?>" hidden>
   <div class="wrap">
-    <div class="vision-heading"><h2 class="vision-title" id="vision-title"><?= t('Low-vision controls') ?></h2>
+    <details class="vision-panel"><summary><h2 class="vision-title" id="vision-title"><?= t('Low-vision controls') ?></h2></summary>
+    <div class="vision-heading">
       <a href="#main"><?= t('Skip to main content') ?></a>
       <?php if ($user): ?><button type="button" id="earcon-toggle" aria-pressed="true" hidden>Sound cues</button><?php endif; ?>
       <button type="button" id="vision-reset"><?= t('Reset display') ?></button></div>
@@ -49,55 +70,57 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
         <div><label for="vision-size"><?= t('Text size') ?></label><select id="vision-size">
           <?php foreach ([100,125,150,175,200] as $size): ?><option value="<?= $size ?>"><?= $size ?>%</option><?php endforeach; ?>
         </select></div>
-        <?php foreach (['spacing'=>'More text spacing', 'width'=>'Narrow reading width', 'links'=>'Highlight links', 'motion'=>'Reduce motion'] as $value => $label): ?>
+        <?php foreach (['spacing'=>'More text spacing', 'width'=>'Narrow reading width', 'links'=>'Highlight links', 'motion'=>'Reduce motion', 'lists'=>'Show dropdown choices as lists'] as $value => $label): ?>
         <button type="button" data-vision-toggle="<?= $value ?>" aria-pressed="false"><?= t($label) ?></button>
         <?php endforeach; ?>
       </div>
     </details>
+    </details>
     <span id="vision-live" class="visually-hidden" role="status"></span>
   </div>
 </section>
-<header class="site-header">
+<header class="site-header" aria-label="<?= h(__('Site header')) ?>">
   <div class="wrap header-inner">
     <?php if ($user): ?>
-    <a class="brand" href="index.php"><?= h(brand('short')) ?> <span class="brand-sub"><?= t('Case Management') ?></span></a>
+    <a class="brand" href="index.php"><?= brand_short_html() ?> <span class="brand-sub"><?= t('Case Management') ?></span></a>
     <?php /* The Menu button sits inside the landmark, so a collapsed "Main" navigation
              still holds the control that opens it. */ ?>
     <nav aria-label="<?= h(__('Main')) ?>">
       <button type="button" class="nav-toggle" id="nav-toggle" aria-expanded="false" aria-controls="main-nav" hidden>
         <span class="nav-toggle-bars" aria-hidden="true"></span> <?= t('Menu') ?>
       </button>
-      <ul class="main-nav" id="main-nav">
+      <ul class="main-nav" id="main-nav" tabindex="-1">
         <?php
         $items = [
             ['index.php', 'Dashboard', 'dashboard', null],
-            ['tasks.php', 'Tasks', 'tasks', null],
-            ['workflows.php', 'Action center', 'workflows', null],
-            ['at_services.php', 'AT services', 'at_services', null],
-            ['clients.php', 'Clients', 'clients', 'clients'],
-            ['referrals.php', 'Referrals', 'referrals', 'referrals'],
-            ['portal_requests.php', 'Client requests', 'portal_requests', 'clients'],
-            ['messages.php', 'Messages', 'messages', 'clients'],
-            ['pipeline.php', 'Pipeline', 'pipeline', 'clients'],
-            ['accommodations.php', 'Accommodations', 'accommodations', 'clients'],
-            ['schedule.php', 'Schedule', 'schedule', 'schedule'],
-            ['programs.php', 'Programs', 'programs', 'programs'],
+            ['tasks.php', 'Task list', 'tasks', null],
+            ['workflows.php', 'Daily work & review', 'workflows', null],
+            ['at_services.php', 'Assistive technology services', 'at_services', null],
+            ['clients.php', 'Client records', 'clients', 'clients'],
+            ['referrals.php', 'Incoming referrals', 'referrals', 'referrals'],
+            ['portal_requests.php', 'Client portal requests', 'portal_requests', 'clients'],
+            ['messages.php', 'Client & counselor messages', 'messages', 'clients'],
+            ['pipeline.php', 'Intake progress', 'pipeline', 'clients'],
+            ['accommodations.php', 'Accommodation assessments', 'accommodations', 'clients'],
+            ['schedule.php', 'Session schedule', 'schedule', 'schedule'],
+            ['programs.php', 'Group programs', 'programs', 'programs'],
             ['invoices.php', 'Invoices', 'invoices', 'billing'],
             ['contracts.php', 'Grants & contracts', 'contracts', 'billing'], // own entry: billing-only groups cannot open Compliance, its other link
-            ['equipment.php', 'Equipment', 'equipment', 'equipment'],
+            ['equipment.php', 'Equipment & loans', 'equipment', 'equipment'],
             ['followups.php', 'Device follow-ups', 'followups', 'clients'],
-            ['incidents.php', 'Incidents', 'incidents', 'clients'],
-            ['procurement.php', 'Procurement', 'procurement', 'procurement'],
-            ['compliance.php', 'Compliance', 'compliance', 'clients'],
-            ['analytics.php', 'Analytics', 'analytics', 'analytics'],
-            ['templates.php', 'Templates', 'templates', 'templates'],
-            ['kb.php', 'Knowledge', 'kb', null],
+            ['incidents.php', 'Incident reports', 'incidents', 'clients'],
+            ['procurement.php', 'Device purchases', 'procurement', 'procurement'],
+            ['compliance.php', 'Authorizations & compliance', 'compliance', 'clients'],
+            ['analytics.php', 'Business analytics', 'analytics', 'analytics'],
+            ['templates.php', 'Goal & assessment templates', 'templates', 'templates'],
+            ['kb.php', 'Staff knowledge base', 'kb', null],
             ['ai_tools.php', 'AI tools', 'ai_tools', null],
             ['account.php', 'My Account', 'account', null],
+            ['help.php#staff-guide', 'User guide', 'help', null],
         ];
         $script = basename($_SERVER['SCRIPT_NAME'] ?? '');
         foreach ($items as [$href, $label, $key, $perm]): if ($perm !== null && !can($perm)) continue;
-            $current = $active === $key ? ($script === $href ? 'aria-current="page"' : 'aria-current="true"') : ''; ?>
+            $current = $active === $key ? ($script === explode('#', $href, 2)[0] ? 'aria-current="page"' : 'aria-current="true"') : ''; ?>
         <li><a href="<?= $href ?>" <?= $current ?>><?= h($label) ?></a></li>
         <?php endforeach; ?>
         <?php
@@ -107,11 +130,11 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
             $unreadAlerts = (int)$nq->fetchColumn();
         } catch (Throwable $e) { $unreadAlerts = 0; }
         ?>
-        <li><a href="notifications.php" <?= $active === 'alerts' ? 'aria-current="page"' : '' ?>>Alerts<?= $unreadAlerts ? '<span aria-hidden="true"> (' . $unreadAlerts . ')</span><span class="visually-hidden">, ' . $unreadAlerts . ' unread</span>' : '' ?></a></li>
+        <li><a href="notifications.php" <?= $active === 'alerts' ? 'aria-current="page"' : '' ?>>Notifications<?= $unreadAlerts ? '<span aria-hidden="true"> (' . $unreadAlerts . ')</span><span class="visually-hidden">, ' . $unreadAlerts . ' unread</span>' : '' ?></a></li>
         <?php if (can('clients')): // search.php requires the clients permission ?>
         <li>
           <form method="get" action="search.php" role="search" aria-label="Site search" class="inline-form nav-search">
-            <label for="nav-q" class="visually-hidden">Search everything</label>
+            <label for="nav-q" class="visually-hidden">Search client records and other accessible information</label>
             <input type="search" id="nav-q" name="q" placeholder="Search…" minlength="2">
           </form>
         </li>
@@ -124,7 +147,7 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
       </ul>
     </nav>
     <?php else: ?>
-    <span class="brand"><?= h(brand('short')) ?> <span class="brand-sub"><?= t('Case Management') ?></span></span>
+    <span class="brand"><?= brand_short_html() ?> <span class="brand-sub"><?= t('Case Management') ?></span></span>
     <?php endif; ?>
   </div>
 </header>
@@ -144,7 +167,7 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
 })();
 </script>
 <?php endif; ?>
-<main id="main" class="wrap" tabindex="-1">
+<main id="main" class="wrap" tabindex="-1" aria-label="<?= h(__('Main content')) ?>">
 <?php
     if ($flashes) {
         // Live regions present at page load are often not announced after a
@@ -221,8 +244,8 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
     <p class="vfab-status" role="status" aria-live="polite">Choose Use microphone and speak, or type a request.</p>
     <div class="vfab-log" role="region" tabindex="0" aria-label="Conversation history" hidden></div>
     <div class="vfab-confirm" role="group" aria-labelledby="vfab-ctext" hidden><p class="vfab-ctext" id="vfab-ctext"></p>
-      <button type="button" class="vfab-yes btn btn-primary btn-sm">Yes, confirm</button>
-      <button type="button" class="vfab-no btn btn-secondary btn-sm">No</button></div>
+      <button type="button" class="vfab-yes btn btn-primary btn-sm">Accept and save</button>
+      <button type="button" class="vfab-no btn btn-secondary btn-sm">Decline</button></div>
     <label for="vfab-input" class="visually-hidden">Type a request for the voice assistant</label>
     <div class="vfab-type"><input type="text" id="vfab-input" class="vfab-input" placeholder="Type a request…">
       <button type="button" class="vfab-send btn btn-secondary btn-sm">Send</button></div>
@@ -303,8 +326,13 @@ function page_footer(): void {
   }
 })();
 </script>
-<footer class="site-footer">
+<footer class="site-footer" aria-label="<?= h(__('Site information')) ?>">
   <div class="wrap">
+    <nav class="page-actions" aria-label="<?= h(__('Footer navigation')) ?>">
+      <a class="btn btn-secondary" href="index.php" data-cms-back><?= t('Go back') ?></a>
+      <a class="btn btn-secondary" href="index.php"><?= t('Dashboard') ?></a>
+      <a class="btn btn-secondary" href="index.php#main-nav" data-cms-menu><?= t('Main navigation') ?></a>
+    </nav>
     <p><?= h(cfg('name')) ?> <span aria-hidden="true">&middot;</span> <a href="community_referral.php"><?= t('Referral Form') ?></a>
        <span aria-hidden="true">&middot;</span> <?= $helpLink ?>
        <?php if ($contact !== ''): ?><span aria-hidden="true">&middot;</span> <?= t('Questions? Email') ?> <a href="mailto:<?= h($contact) ?>"><?= h($contact) ?></a><?php endif; ?>

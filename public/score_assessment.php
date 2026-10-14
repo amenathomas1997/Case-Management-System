@@ -34,7 +34,7 @@ if (!empty($_GET['scored'])) {
     // Named for the instrument and client, so two open tabs can be told apart.
     page_header('Scored assessment: ' . $rec['instrument'] . ' — ' . $client['name'], $user, 'clients');
     ?>
-    <p><a href="client.php?id=<?= $cid ?>&tab=assessments">&larr; <?= h($client['name']) ?></a></p>
+    <p><a href="client.php?id=<?= $cid ?>&tab=assessments"><span aria-hidden="true">&larr; </span><?= h($client['name']) ?></a></p>
     <h1><?= h($rec['instrument']) ?></h1>
     <p class="muted"><?= h($client['name']) ?> · <?= fmt_date($rec['assessed_on']) ?> · by <?= h($rec['assessor'] ?? 'Unknown') ?></p>
     <div class="progress-wrap card">
@@ -116,7 +116,7 @@ if ($saving) {
 
 page_header('Scored assessment' . ($instrument ? ': ' . $instrument['name'] : '') . ' — ' . $client['name'], $user, 'clients');
 ?>
-<p><a href="client.php?id=<?= $cid ?>&tab=assessments">&larr; <?= h($client['name']) ?></a></p>
+<p><a href="client.php?id=<?= $cid ?>&tab=assessments"><span aria-hidden="true">&larr; </span><?= h($client['name']) ?></a></p>
 <h1>Scored assessment — <?= h($client['name']) ?></h1>
 
 <?php if (!$instrument): ?>
