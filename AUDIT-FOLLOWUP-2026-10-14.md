@@ -1,6 +1,6 @@
 # Audit follow-up — October 14, 2026
 
-Status: local fixes tested; not deployed. Active source is the clean nested Case-Management-System repository, based on c4d0956. Existing Claude changes were preserved.
+Status: deployed as 3.0.21 on October 14, 2026; see DEPLOYMENT-3.0.21.md for verification and backups. Active source is the clean nested Case-Management-System repository, based on c4d0956. Existing Claude changes were preserved.
 
 ## Website navigation and unsaved changes
 
@@ -53,4 +53,4 @@ WCAG 2.2 AAA remains a target, not a verified conformance claim. The browser che
 
 Standards reviewed: W3C WCAG 2.2 Understanding 3.3.2 (labels/instructions), 3.2.5 (change on request), and the WAI-ARIA APG date picker dialog guidance. Sources: https://www.w3.org/WAI/WCAG22/Understanding/labels-or-instructions ; https://www.w3.org/WAI/WCAG22/Understanding/change-on-request ; https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/examples/datepicker-dialog/ .
 
-All changes remain local and undeployed. Include every new public asset and the staff guide when packaging the release.
+Release update: all new website assets and the staff guide were included in the verified 3.0.21 deployment on October 14, 2026. The iOS changes were not distributed.
