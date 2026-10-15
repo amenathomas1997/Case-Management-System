@@ -2,7 +2,7 @@
 
 3.0.22 was never deployed; 3.0.23 ships everything committed as 3.0.22 plus the final code audit fixes below.
 
-Status: committed, NOT deployed. Production is 3.0.21 (deployed October 14, 2026 from 17ce95e).
+Status: DEPLOYED October 15, 2026 from e17511c (see "Deployment verified" below).
 
 No database migration. Deploy the changed website files only; preserve hosting .htaccess, private configuration, installer lock and custom branding assets. Run the usual read-only checksum comparison against production (expect 3.0.21 = 17ce95e) and back up the docroot before publishing. Includes cron/session_reminders.php (deploy it with the website files). iOS: ios/project.yml is 3.0.23 build 30; distribute through an Xcode Archive to TestFlight.
 
@@ -85,3 +85,14 @@ No high-severity web or API findings. Fixed:
 ## Deploy file list (relative to 3.0.21, live from 17ce95e)
 
 `git diff --name-only 17ce95e HEAD -- public cron`
+
+## Deployment verified
+
+Published October 15, 2026 from commit e17511c with .audit_work/deploy-3.0.23/deploy.sh (SSH key authentication; the deploy key was authorized on the server the same day).
+
+- Production 3.0.21 matched all 41 baseline hashes of the files being replaced before publication.
+- Backups (server-private): /home/cmsuser/casemanagement_private/deploy-3.0.23-20261015-101718/ — website-before.tar.gz and cron-before.tar.gz (gzip integrity checked), htaccess-before.sha256.
+- 46 website and cron files installed; server PHP 8.1.34 syntax check passed for every PHP file; all 46 installed hashes match the release; hosting .htaccess unchanged; branding and configuration untouched. No database migration.
+- Live checks: login, community referral, help and privacy pages 200; api.php without a token 401; updates.json and the sign-in page report 3.0.23; privacy notice shows the operator, address, the governing law and Linode hosting; Spanish footer shows "Aviso de privacidad"; no new error_log entries in the document root.
+- Rollback: tar xzf <backup>/website-before.tar.gz -C /home/cmsuser/public_html/casemanagement && tar xzf <backup>/cron-before.tar.gz -C /home/cmsuser/casemanagement_private
+- iOS 3.0.23 (30) is archived (Xcode Organizer); upload to TestFlight is done by the owner from Organizer.
