@@ -59,9 +59,9 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
 <?php /* Staff shortcuts only: clients on the portal, referral or sign-in pages have no Dashboard or staff menu. */ ?>
 <?php if ($user): ?>
 <nav class="wrap page-actions cms-page-navigation" aria-label="<?= h(__('Page navigation')) ?>">
-  <span class="nav-item"><a class="btn btn-secondary" href="index.php" data-cms-back aria-describedby="hint-back"><?= t('Go back') ?></a><span class="nav-hint" id="hint-back"><?= t('Returns to the page you came from. It does not undo a save.') ?></span></span>
-  <span class="nav-item"><a class="btn btn-secondary" href="index.php" aria-describedby="hint-dashboard"><?= t('Dashboard') ?></a><span class="nav-hint" id="hint-dashboard"><?= t('Your starting page.') ?></span></span>
-  <span class="nav-item"><a class="btn btn-secondary" href="#main-nav" data-cms-menu aria-describedby="hint-menu"><?= t('Go to main menu') ?></a><span class="nav-hint" id="hint-menu"><?= t('Moves to the main menu, grouped by Today, Clients, Services and more.') ?></span></span>
+  <span class="nav-item"><a class="btn btn-secondary" href="index.php" data-cms-back aria-describedby="hint-back"><?= t('Go back') ?></a><span id="hint-back" hidden><?= t('Returns to the page you came from. It does not undo a save.') ?></span><span class="nav-hint" aria-hidden="true"><?= t('Returns to the page you came from. It does not undo a save.') ?></span></span>
+  <span class="nav-item"><a class="btn btn-secondary" href="index.php" aria-describedby="hint-dashboard"><?= t('Dashboard') ?></a><span id="hint-dashboard" hidden><?= t('Your starting page.') ?></span><span class="nav-hint" aria-hidden="true"><?= t('Your starting page.') ?></span></span>
+  <span class="nav-item"><a class="btn btn-secondary" href="#main-nav" data-cms-menu aria-describedby="hint-menu"><?= t('Go to main menu') ?></a><span id="hint-menu" hidden><?= t('Moves to the main menu, grouped by Today, Clients, Services and more.') ?></span><span class="nav-hint" aria-hidden="true"><?= t('Moves to the main menu, grouped by Today, Clients, Services and more.') ?></span></span>
 </nav>
 <?php endif; ?>
 <section id="low-vision-bar" class="vision-bar" aria-labelledby="vision-title" data-saved="<?= h(__('Display updated.')) ?>" data-account-hidden="<?= $hideVision ? 'true' : 'false' ?>" hidden>
@@ -105,8 +105,9 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
       <ul class="main-nav" id="main-nav" tabindex="-1">
         <?php
         // Grouped under headings (H or the heading list jumps between groups); each link
-        // carries a one-sentence hint as its description, read after a pause and shown on
-        // hover or keyboard focus. Groups with no permitted link are left out.
+        // carries a one-sentence hint as its description (a hidden copy, read with the link:
+        // never an extra line), and a separate on-screen copy, hidden from screen readers,
+        // appears on hover or keyboard focus. Groups with no permitted link are left out.
         $script = basename($_SERVER['SCRIPT_NAME'] ?? '');
         $byGroup = [];
         foreach (cms_navigation_items() as $item) if ($item[3] === null || can($item[3])) $byGroup[$item[4]][] = $item;
@@ -116,7 +117,7 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
           <ul aria-labelledby="nav-group-<?= $group ?>">
           <?php foreach ($byGroup[$group] as [$href, $label, $key, , , $hint]):
             $current = $active === $key ? ($script === explode('#', $href, 2)[0] ? 'aria-current="page"' : 'aria-current="true"') : ''; ?>
-            <li class="nav-item"><a href="<?= $href ?>" <?= $current ?> aria-describedby="nav-hint-<?= $key ?>"><?= h($label) ?></a><span class="nav-hint" id="nav-hint-<?= $key ?>"><?= h($hint) ?></span></li>
+            <li class="nav-item"><a href="<?= $href ?>" <?= $current ?> aria-describedby="nav-hint-<?= $key ?>"><?= h($label) ?></a><span id="nav-hint-<?= $key ?>" hidden><?= h($hint) ?></span><span class="nav-hint" aria-hidden="true"><?= h($hint) ?></span></li>
           <?php endforeach; ?>
           </ul>
         </li>
