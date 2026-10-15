@@ -20,7 +20,7 @@ $retYears = (int)(setting('retention_years') ?? '0');
 $ownInstall = $org === 'Example Agency';
 $operator = brand('privacy_operator') ?: ($ownInstall ? 'the maintainer' : '');
 $address = brand('privacy_address') ?: ($ownInstall ? '100 Main Street, Springfield' : '');
-$law = brand('privacy_law') ?: ($ownInstall ? 'Minnesota' : '');
+$law = brand('privacy_law') ?: ($ownInstall ? 'Minnesota privacy law and the federal HIPAA Privacy and Security Rules' : '');
 $hosting = brand('privacy_hosting') ?: ($ownInstall ? 'Linode' : '');
 const PRIVACY_UPDATED = '2026-10-15';
 page_header('Privacy notice', $viewer);
@@ -30,7 +30,7 @@ page_header('Privacy notice', $viewer);
 <?php if ($contact !== ''): ?><p lang="es">Si necesita esta información en español, escríbanos a <?= $mail ?>.</p><?php endif; ?>
 <p>Last updated <?= h(fmt_date(PRIVACY_UPDATED)) ?>.</p>
 <?php if ($operator !== '' || $address !== ''): ?>
-<p><?= h($org) ?><?= $operator !== '' ? ' is run by ' . h($operator) : '' ?><?= $address !== '' ? ', ' . h($address) : '' ?>.<?php if ($law !== ''): ?> We follow <?= h($law) ?> privacy law.<?php endif; ?></p>
+<p><?= h($org) ?><?= $operator !== '' ? ' is run by ' . h($operator) : '' ?><?= $address !== '' ? ', ' . h($address) : '' ?>.<?php if ($law !== ''): ?> We follow <?= h($law) ?>.<?php endif; ?></p>
 <?php endif; ?>
 
 <nav aria-labelledby="privacy-toc-h"><h2 id="privacy-toc-h">On this page</h2>
@@ -43,6 +43,7 @@ page_header('Privacy notice', $viewer);
   <li><a href="#security">How we protect it</a></li>
   <li><a href="#keep">How long we keep it</a></li>
   <li><a href="#choices">Your choices</a></li>
+  <li><a href="#hipaa">Your rights under HIPAA</a></li>
   <li><a href="#iphone">The staff iPhone app</a></li>
   <li><a href="#contact">Questions and requests</a></li>
 </ul></nav>
@@ -139,6 +140,20 @@ page_header('Privacy notice', $viewer);
   <li><strong>Withdraw consent.</strong> A parent or guardian can withdraw a consent at any time by contacting us. This does not undo what was done before.</li>
   <li><strong>Surveys are optional.</strong> You can skip any question.</li>
 </ul>
+</section>
+
+<section aria-labelledby="hipaa"><h2 id="hipaa">Your rights under HIPAA</h2>
+<p>We treat your service and health-related records as protected health information under the federal HIPAA rules. You have the right to:</p>
+<ul>
+  <li><strong>Get a copy of your records.</strong> Ask us in writing; we will provide a copy, usually within 30 days, in the format you ask for where we can.</li>
+  <li><strong>Ask us to correct your records.</strong> If we disagree, we will tell you why in writing and you can add a statement of your own.</li>
+  <li><strong>Know who we have shared your records with</strong>, other than for your treatment, payment and running our services.</li>
+  <li><strong>Ask us to limit</strong> what we share, and to contact you in a particular way or at a particular place. We will say yes to every reasonable request.</li>
+  <li><strong>Get a paper copy of this notice</strong> at any time, even if you agreed to receive it electronically.</li>
+  <li><strong>Choose someone to act for you</strong>, such as a legal guardian or someone with medical power of attorney.</li>
+</ul>
+<p>We never sell your information, and we will ask for your written permission before using it for marketing or for any purpose not described in this notice. You can withdraw that permission at any time. If a breach of your information ever happens, we will tell you.</p>
+<p>If you believe your privacy rights have been violated, you can complain to us (see <a href="#contact">Questions and requests</a>) or to the U.S. Department of Health and Human Services, Office for Civil Rights, at <a href="https://www.hhs.gov/ocr/complaints/">hhs.gov/ocr/complaints</a> or 1-800-368-1019. We will not retaliate against you for complaining.</p>
 </section>
 
 <section aria-labelledby="iphone"><h2 id="iphone">The staff iPhone app</h2>

@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.29' => [
+        'The Service bundle choice on a training track is quieter: plain bundle names as you arrow through, with the chosen bundle\'s categories listed after the field.',
+        'The privacy notice now has a "Your rights under HIPAA" section.',
+    ],
     '3.0.28' => [
         'Clients see “Your progress” in their portal: goals met, hours used, the next session and homework still to do, in plain sentences.',
         'A “New in this version” notice on the Dashboard and a “What\'s new” section in Help list what changed, in caseworker terms.',

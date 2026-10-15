@@ -270,9 +270,9 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
     ?>
     <div class="field">
       <label for="bundle_id">Service bundle</label>
-      <span class="hint" id="bundle-hint">RSA program billed under one label — showing <?= h($clientType) ?> bundles. Each visit is then logged against one of the bundle's categories. Manage bundles on the Templates page.</span>
-      <select id="bundle_id" name="bundle_id" <?= field_aria('bundle_id', 'bundle-hint', 'bundle-desc') ?>>
-        <option value="0">— No bundle: single RSA category (below) —</option>
+      <span class="hint" id="bundle-hint">Bills the RSA program under one label. The chosen bundle's categories are listed after this field.</span>
+      <select id="bundle_id" name="bundle_id" <?= field_aria('bundle_id', 'bundle-hint') ?>>
+        <option value="0">No bundle (choose a single RSA category below)</option>
         <?php if ($keptBundle): ?>
         <option value="<?= (int)$keptBundle['id'] ?>" disabled <?= $currentBundle === (int)$keptBundle['id'] ? 'selected' : '' ?>>
           <?= h($keptBundle['name']) ?> (<?= $keptBundle['active'] ? 'not offered for ' . h($clientType) . ' clients' : 'retired' ?> — kept on this track until you choose another)
@@ -280,15 +280,18 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
         <?php endif; ?>
         <?php foreach ($bundles as $b): ?>
         <option value="<?= (int)$b['id'] ?>" <?= $currentBundle === (int)$b['id'] ? 'selected' : '' ?>>
-          <?= h($b['name']) ?> (<?= count(bundle_categories($b)) ?> categories)
+          <?= h($b['name']) ?>
         </option>
         <?php endforeach; ?>
       </select>
       <?= field_error('bundle_id') ?>
-      <?php /* The chosen bundle's categories exist once, as visible text. It is part of the
-               select's description (read on focus) and sits in a polite live region, so
-               choosing another bundle announces the new list — once, with no hidden copy. */ ?>
-      <div id="bundle-desc" aria-live="polite">
+      <?php /* The chosen bundle's categories, as visible text after the field. Not a live
+               region and not part of the select's description: arrowing through a native
+               select fires a change per option, and announcing the list each time made the
+               field far too chatty for a screen reader. The list is read on request, by
+               moving to it. */ ?>
+      <div id="bundle-desc">
+        <?php if ($descBundles): ?><p class="hint"><?= count($bundles) ?> bundle<?= count($bundles) === 1 ? '' : 's' ?> offered for <?= h($clientType) ?> clients; manage them on the Templates page.</p><?php endif; ?>
         <?php foreach ($descBundles as $b): ?>
         <p class="hint" data-bundle-desc="<?= (int)$b['id'] ?>" <?= $currentBundle === (int)$b['id'] ? '' : 'hidden' ?>><?= h($b['name']) ?>: <?= h(implode(' + ', bundle_categories($b))) ?></p>
         <?php endforeach; ?>
