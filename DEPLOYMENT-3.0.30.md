@@ -7,3 +7,7 @@ Web only; no migration. Production baseline: 3.0.29. Follow-up to the owner's re
 - track.php Matching templates (server-rendered and live-rendered): grouped by area with optgroup, so each option reads as the goal alone; the preview keeps the full "Area — goal" text.
 - federation.php auto-provision group: plain group names and "Off (recommended)"; the label and help carry the explanation.
 - Checked and left alone: the note-format selects (they relabel fields silently), the AI provider select (shows/hides fields), the voice volume select (plays a cue by design).
+
+## Deployment verified
+
+Published October 15, 2026 from 36a3dbe (web only, no migration); baseline 3.0.29 matched; backup deploy-3.0.30-20261015-122829; hashes verified; live pages and version checks passed. Verified before publishing: run_all incl. installer e2e; full_schema 898; audit_regression; security; 134 pages scanned clean.
