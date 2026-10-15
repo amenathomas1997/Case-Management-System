@@ -18,16 +18,18 @@
 #                       the document records stay, pointing at files that are absent)
 #
 # What it does, in order (nothing in production is changed; it is only read):
-#   1. copies the website files to <docroot_dst> and the private directory to
-#      <private_dst> (never backups/, config.php or the Graph token; uploads only
-#      with --with-uploads), then points the copy at its own private directory;
+#   1. copies the website files to <docroot_dst> and, from the private directory,
+#      only cron/ (without logs or dumps) and .htaccess to <private_dst> — never
+#      config.php, the Graph token, backups/, deploy-*/ backups or other files;
+#      uploads only with --with-uploads — then points the copy at it;
 #   2. dumps the production database and loads it into <staging_db_name>
 #      (every table there is dropped first, so running this again refreshes it);
 #   3. scrubs the copy in place: client names become "Client N", emails
 #      clientN@example.invalid, phones and addresses are removed, dates of birth
-#      keep the year only, note bodies and other free text become "[scrubbed]",
-#      guardian and counselor contacts are scrubbed, document file names are kept,
-#      staff names and emails are kept, and every credential — passwords, TOTP,
+#      keep the year only, and every other text column — notes, homework, goals,
+#      titles, document file names, locations, links — becomes "[scrubbed]" unless
+#      staging_scrub.php keeps it (codes, statuses, catalogues, staff names and
+#      emails), so a column added later is scrubbed too; every credential — passwords, TOTP,
 #      passkeys, API tokens, portal/VRC/consent/survey/report tokens, sign-in
 #      codes, reset links — is cleared so nobody can sign in with a production
 #      credential; then a staging administrator is created, whose password is
@@ -66,6 +68,8 @@ DOCROOT_SRC=$1; PRIVATE_SRC=$2; DOCROOT_DST=$3; PRIVATE_DST=$4; STAGING_DB=$5
 
 # ---- Checks before anything is written ----
 for tool in php rsync; do command -v "$tool" >/dev/null 2>&1 || die "$tool is not installed"; done
+SCRUB_PHP="$(cd "$(dirname "$0")" && pwd -P)/staging_scrub.php"
+[ -f "$SCRUB_PHP" ] || die "staging_scrub.php must sit next to this script (it holds the scrub)"
 MYSQL=$(command -v mariadb || command -v mysql || true); [ -n "$MYSQL" ] || die "the mysql (or mariadb) client is not installed"
 MYSQLDUMP=$(command -v mariadb-dump || command -v mysqldump || true); [ -n "$MYSQLDUMP" ] || die "mysqldump (or mariadb-dump) is not installed"
 [ -d "$DOCROOT_SRC" ] || die "docroot_src $DOCROOT_SRC is not a directory"
@@ -120,9 +124,14 @@ printf '<?php\n// Written by make_staging.sh: the private directory of this STAG
 echo "   inc/config_path.php points the copy at $PRIVATE_DST"
 
 echo "== 2. Copying the private directory to $PRIVATE_DST$( [ "$WITH_UPLOADS" = 1 ] && echo ' (with uploads)' || echo ' (without uploads)')"
-RSYNC_PRIVATE=(--exclude 'config.php' --exclude 'graph_token.json' --exclude 'db.cnf' --exclude 'backups/' --exclude 'backups/**' --exclude 'mail_sink/' --exclude 'staging-work.*' --exclude '.DS_Store')
-[ "$WITH_UPLOADS" = 1 ] || RSYNC_PRIVATE+=(--exclude 'uploads/' --exclude 'uploads/**')
-rsync -a "${RSYNC_PRIVATE[@]}" "$PRIVATE_SRC/" "$PRIVATE_DST/"
+# Allowlist: deploy-*/ folders and backups/ hold full production dumps, and logs hold
+# addresses, so only what the copy needs is taken.
+[ -f "$PRIVATE_SRC/.htaccess" ] && cp "$PRIVATE_SRC/.htaccess" "$PRIVATE_DST/.htaccess"
+if [ -d "$PRIVATE_SRC/cron" ]; then
+  rsync -a --delete --exclude '*.log' --exclude '*.log.*' --exclude '*.sql' --exclude '*.sql.gz' --exclude '*.gz' --exclude '*.tgz' --exclude '*.tar' --exclude '*.zip' --exclude '*.json' --exclude '.DS_Store' \
+    "$PRIVATE_SRC/cron/" "$PRIVATE_DST/cron/"
+fi
+[ "$WITH_UPLOADS" = 1 ] && [ -d "$PRIVATE_SRC/uploads" ] && rsync -a --exclude 'backups/' --exclude '.DS_Store' "$PRIVATE_SRC/uploads/" "$PRIVATE_DST/uploads/"
 mkdir -p "$PRIVATE_DST/uploads" "$PRIVATE_DST/backups" "$PRIVATE_DST/mail_sink"
 chmod 750 "$PRIVATE_DST/uploads"; chmod 700 "$PRIVATE_DST/backups" "$PRIVATE_DST/mail_sink"
 if [ -d "$PRIVATE_DST/cron" ]; then
@@ -147,83 +156,8 @@ echo "   loaded; the dump file was deleted"
 echo "== 4. Scrubbing personal data and credentials in $STAGING_DB, creating the staging administrator"
 STAGING_DSN="mysql:host=$STAGING_HOST;${STAGING_PORT:+port=$STAGING_PORT;}dbname=$STAGING_DB;charset=utf8mb4"
 ADMIN_PASSWORD=$(php -r 'echo rtrim(strtr(base64_encode(random_bytes(15)), "+/", "-_"), "=");')
-php -d display_errors=stderr -r '
-$db = new PDO($argv[1], $argv[2], $argv[3], [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-$adminEmail = $argv[4]; $adminHash = password_hash($argv[5], PASSWORD_DEFAULT);
-$cols = [];
-foreach ($db->query("SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = DATABASE()") as $r) $cols[$r[0]][$r[1]] = true;
-$has = fn(string $t, string $c): bool => isset($cols[$t][$c]);
-$tables = array_keys($cols);
-// A random 48-character token per row, unique in practice: no production link keeps working.
-$token = "SUBSTRING(SHA2(CONCAT(id, RAND(), \"staging\"), 256), 1, 48)";
-// Column → replacement, applied only where the table and column exist in this schema.
-$plan = [
-  "clients" => ["name" => "CONCAT(\"Client \", id)", "email" => "CONCAT(\"client\", id, \"@example.invalid\")", "phone" => "NULL", "address" => "NULL",
-    "dob" => "IF(dob IS NULL, NULL, MAKEDATE(YEAR(dob), 1))", "a11y_notes" => "IF(a11y_notes IS NULL, NULL, \"[scrubbed]\")", "school" => "NULL",
-    "counselor_name" => "IF(counselor_name IS NULL OR counselor_name = \"\", counselor_name, CONCAT(\"Counselor \", id))",
-    "counselor_email" => "IF(counselor_email IS NULL OR counselor_email = \"\", counselor_email, CONCAT(\"counselor\", id, \"@example.invalid\"))",
-    "counselor_phone" => "NULL", "guardian_name" => "IF(guardian_name IS NULL, NULL, CONCAT(\"Guardian \", id))",
-    "guardian_email" => "IF(guardian_email IS NULL, NULL, CONCAT(\"guardian\", id, \"@example.invalid\"))", "guardian_phone" => "NULL"],
-  "referrals" => ["client_name" => "CONCAT(\"Referral \", id)", "client_dob" => "IF(client_dob IS NULL, NULL, MAKEDATE(YEAR(client_dob), 1))",
-    "client_phone" => "NULL", "client_email" => "IF(client_email IS NULL, NULL, CONCAT(\"referral\", id, \"@example.invalid\"))", "client_address" => "NULL",
-    "counselor_name" => "CONCAT(\"Counselor \", id)", "counselor_email" => "CONCAT(\"counselor-ref\", id, \"@example.invalid\")", "counselor_phone" => "\"\"",
-    "body" => "\"[scrubbed]\"", "specific_needs" => "IF(specific_needs IS NULL, NULL, \"[scrubbed]\")", "school" => "NULL",
-    "guardian_name" => "IF(guardian_name IS NULL, NULL, CONCAT(\"Guardian \", id))", "guardian_phone" => "NULL"],
-  "client_notes" => ["body" => "\"[scrubbed]\"", "birp_behavior" => "IF(birp_behavior IS NULL, NULL, \"[scrubbed]\")", "birp_intervention" => "IF(birp_intervention IS NULL, NULL, \"[scrubbed]\")",
-    "birp_response" => "IF(birp_response IS NULL, NULL, \"[scrubbed]\")", "birp_plan" => "IF(birp_plan IS NULL, NULL, \"[scrubbed]\")"],
-  "messages" => ["body" => "\"[scrubbed]\""],
-  "surveys" => ["comments" => "IF(comments IS NULL, NULL, \"[scrubbed]\")", "token" => $token],
-  "incidents" => ["description" => "\"[scrubbed]\"", "action_taken" => "IF(action_taken IS NULL, NULL, \"[scrubbed]\")"],
-  "tasks" => ["details" => "IF(details IS NULL, NULL, \"[scrubbed]\")"],
-  "work_logs" => ["description" => "\"[scrubbed]\"", "signed_name" => "NULL"],
-  "worksite_assessments" => ["employer" => "NULL", "worksite_location" => "NULL", "job_tasks" => "IF(job_tasks IS NULL, NULL, \"[scrubbed]\")", "barriers" => "IF(barriers IS NULL, NULL, \"[scrubbed]\")",
-    "recommendations" => "IF(recommendations IS NULL, NULL, \"[scrubbed]\")", "outcome" => "IF(outcome IS NULL, NULL, \"[scrubbed]\")"],
-  "tech_assessments" => ["primary_disability" => "NULL", "summary" => "IF(summary IS NULL, NULL, \"[scrubbed]\")"],
-  "device_requests" => ["justification" => "IF(justification IS NULL, NULL, \"[scrubbed]\")", "notes" => "IF(notes IS NULL, NULL, \"[scrubbed]\")"],
-  "access_bookings" => ["notes" => "IF(notes IS NULL, NULL, \"[scrubbed]\")", "location" => "NULL"],
-  "equipment_loans" => ["notes" => "NULL"],
-  "consent_forms" => ["guardian_name" => "CONCAT(\"Guardian \", client_id)", "guardian_email" => "CONCAT(\"guardian\", client_id, \"@example.invalid\")",
-    "signed_name" => "IF(signed_name IS NULL, NULL, CONCAT(\"Guardian \", client_id))", "sign_ip" => "NULL", "token" => $token],
-  "report_acks" => ["sent_to" => "CONCAT(\"counselor\", client_id, \"@example.invalid\")", "ack_ip" => "NULL", "token" => $token],
-  "audit_log" => ["detail" => "IF(detail IS NULL, NULL, \"[scrubbed]\")", "ip" => "NULL"],
-  "notifications" => ["message" => "\"[scrubbed]\""],
-  "trash" => ["label" => "IF(label IS NULL, NULL, \"[scrubbed]\")", "payload" => "\"{}\""],
-  "at_records" => ["details" => "\"{}\""],
-  "referral_waitlist" => ["availability" => "\"\"", "expertise" => "\"\""],
-  "homework_practice" => ["notes" => "\"\""],
-  "ai_feedback" => ["comment" => "\"\""],
-  "documentation_reviews" => ["rationale" => "\"[scrubbed]\""],
-  // Staff: names and emails kept; every credential cleared (an invalid hash can never verify).
-  "users" => ["password_hash" => "\"!staging\"", "totp_secret" => "NULL", "totp_enabled" => "0", "totp_last_step" => "NULL", "cal_token" => "NULL", "entra_oid" => "NULL"],
-];
-$db->exec("SET FOREIGN_KEY_CHECKS=0");
-foreach ($plan as $table => $columns) {
-  if (!in_array($table, $tables, true)) continue;
-  $set = [];
-  foreach ($columns as $col => $expr) if ($has($table, $col)) $set[] = "`$col` = $expr";
-  if ($set) { $n = $db->exec("UPDATE `$table` SET " . implode(", ", $set)); echo "   $table: $n rows scrubbed\n"; }
-}
-// Nothing issued in production may sign in or open a link here.
-foreach (["api_tokens", "passkeys", "portal_tokens", "vrc_tokens", "password_resets", "login_otps", "login_attempts", "sent_alerts"] as $t) {
-  if (in_array($t, $tables, true)) { $db->exec("DELETE FROM `$t`"); echo "   $t: emptied\n"; }
-}
-if (in_array("settings", $tables, true)) {
-  // Provider secrets and SSO stay in production; AI features are off until an
-  // administrator turns them on here with staging keys.
-  $db->exec("DELETE FROM settings WHERE name IN (\"ai_api_key\", \"entra_enabled\", \"entra_tenant_id\", \"entra_client_id\", \"entra_client_secret\", \"entra_auto_provision_group\") OR name LIKE \"totp_pending_%\"");
-  $db->exec("INSERT INTO settings (name, value) VALUES (\"ai_enabled\", \"0\") ON DUPLICATE KEY UPDATE value = \"0\"");
-}
-$db->exec("SET FOREIGN_KEY_CHECKS=1");
-// The staging administrator (updated on a re-run), in the Administrators group when there is one.
-$group = $db->query("SELECT id FROM `groups` WHERE name = \"Administrators\" LIMIT 1")->fetchColumn();
-$exists = $db->prepare("SELECT id FROM users WHERE email = ?"); $exists->execute([$adminEmail]);
-if ($id = $exists->fetchColumn()) {
-  $db->prepare("UPDATE users SET password_hash = ?, role = \"admin\", is_active = 1, totp_secret = NULL, totp_enabled = 0, group_id = ? WHERE id = ?")->execute([$adminHash, $group ?: null, (int)$id]);
-} else {
-  $db->prepare("INSERT INTO users (name, email, password_hash, role, is_active, group_id) VALUES (\"Staging Administrator\", ?, ?, \"admin\", 1, ?)")->execute([$adminEmail, $adminHash, $group ?: null]);
-}
-echo "   staging administrator: $adminEmail\n";
-' "$STAGING_DSN" "$STAGING_USER" "$STAGING_PASS" "$ADMIN_EMAIL" "$ADMIN_PASSWORD"
+# Deny by default: every text column not on the keep list in staging_scrub.php is scrubbed.
+php -d display_errors=stderr "$SCRUB_PHP" "$STAGING_DSN" "$STAGING_USER" "$STAGING_PASS" "$ADMIN_EMAIL" "$ADMIN_PASSWORD"
 
 echo "== 5. Writing $PRIVATE_DST/config.php for staging"
 ( umask 077; php -r '

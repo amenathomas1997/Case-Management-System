@@ -17,6 +17,7 @@ for suite in tests/*.test.cjs; do run node "$suite"; done
 run php tests/form_messages.php
 run php tests/accessibility.php
 run php tests/breadcrumbs.php
+run php tests/health_checks.php
 run python3 tests/cron_regression.py
 run python3 tests/installer_gate.py
 if [ -n "${CMS_TEST_DSN:-}" ]; then CMS_TEST_DSN="$(printf %s "$CMS_TEST_DSN" | sed -E "s/dbname=[^;]+/dbname=cms_installer_e2e/")" run bash tests/installer_e2e.sh; else echo "== SKIPPED tests/installer_e2e.sh (set CMS_TEST_DSN to run the installer end to end)"; fi

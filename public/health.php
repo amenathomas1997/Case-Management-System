@@ -4,12 +4,14 @@ declare(strict_types=1);
 // 5 minutes and alerting on anything but HTTP 200). JSON only, no sign-in, no
 // session: the database must answer, the watchdog (cron/watchdog.php, every 10
 // minutes) must have run within 2 hours, the daily alerts (cron/daily_alerts.php)
-// within 36 hours, and the newest database backup must be under 48 hours old.
+// within 36 hours (a job with no run yet gets that long from when this endpoint first
+// saw it missing), and the newest database backup must be under 48 hours old.
 // Nothing here names a client, a path or a credential: the version, the check
 // names, and the times of the last runs are all it says.
 // Lightly rate-limited through login_attempts (the shared limiter ledger: a key
 // without "@", success = 1, pruned after 30 days by daily_alerts.php).
 require __DIR__ . '/inc/core.php';
+require __DIR__ . '/inc/health_checks.php';
 
 header('Content-Type: application/json; charset=UTF-8');
 header('Cache-Control: no-store');
@@ -44,19 +46,32 @@ if ($dbOk) {
 
 /* Heartbeats written by the cron scripts (set_setting at the end of a good run) */
 $heartbeat = function (string $key, int $maxAgeSeconds, string $what, string $cron) use ($dbOk, $iso, &$checks): ?string {
-    $raw = $dbOk ? setting($key) : null;
-    $ts = $raw !== null ? strtotime($raw) : false;
-    if ($ts === false) {
-        // Never recorded is not a failure (the jobs write their heartbeat only from this
-        // release on, and a fresh install has not run them yet); staleness is judged once
-        // a first run exists. The backup check and the daily alert email still cover a job
-        // that never starts.
-        $checks[] = ['name' => $what, 'ok' => $dbOk, 'detail' => $dbOk ? "The {$what} ({$cron}) has not recorded a run yet; checked once it has." : 'Not checked: the database did not answer.'];
+    if (!$dbOk) {
+        $checks[] = ['name' => $what, 'ok' => false, 'detail' => 'Not checked: the database did not answer.'];
         return null;
     }
-    $fresh = $ts >= time() - $maxAgeSeconds;
-    $checks[] = ['name' => $what, 'ok' => $fresh, 'detail' => ($fresh ? "The {$what} last ran " : "The {$what} ({$cron}) has not run since ") . date('F j, Y g:i a', $ts) . '.'];
-    return $iso($ts);
+    $raw = setting($key);
+    $ts = $raw !== null ? strtotime($raw) : false;
+    $since = null;
+    if ($ts === false) {
+        // Never recorded: one $maxAgeSeconds of grace from the first time this endpoint
+        // saw it missing (a fresh install, or the release that added the heartbeat),
+        // then it is reported, because a job that never starts cannot warn about itself.
+        $since = strtotime((string)setting($key . '_awaited_since'));
+        if ($since === false) {
+            $since = time();
+            try { set_setting($key . '_awaited_since', date('c', $since)); } catch (Throwable $e) { /* judged from now; recorded next time */ }
+        }
+    }
+    $s = heartbeat_status($ts === false ? null : $ts, $since, $maxAgeSeconds, time());
+    $detail = match ($s['state']) {
+        'fresh' => "The {$what} last ran " . date('F j, Y g:i a', $ts) . '.',
+        'stale' => "The {$what} ({$cron}) has not run since " . date('F j, Y g:i a', $ts) . '.',
+        'waiting' => "The {$what} ({$cron}) has not recorded a run yet; it must by " . date('F j, Y g:i a', $s['deadline']) . '.',
+        'overdue' => "The {$what} ({$cron}) has never recorded a run; it was due by " . date('F j, Y g:i a', $s['deadline']) . '. Check that its cron job is scheduled.',
+    };
+    $checks[] = ['name' => $what, 'ok' => $s['ok'], 'detail' => $detail];
+    return $ts === false ? null : $iso($ts);
 };
 $lastDaily = $heartbeat('heartbeat_daily_alerts', 36 * 3600, 'daily alerts', 'cron/daily_alerts.php');
 $lastWatchdog = $heartbeat('heartbeat_watchdog', 2 * 3600, 'watchdog', 'cron/watchdog.php');

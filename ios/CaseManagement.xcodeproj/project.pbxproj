@@ -115,7 +115,7 @@
 		6A4FE2DE36B30320C058C22A /* EquipmentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EquipmentView.swift; sourceTree = "<group>"; };
 		6B69D2377DCDD583F59162C6 /* FollowupsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowupsView.swift; sourceTree = "<group>"; };
 		6BDEE21DF4CB11527B840DA5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		6EF0D2B71508A87B548B7827 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		6EF0D2B71508A87B548B7827 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		775188868D4A424AE1DA1533 /* ATServicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ATServicesView.swift; sourceTree = "<group>"; };
 		7EEBE1B9872AD80C86E8151F /* CounselorsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CounselorsView.swift; sourceTree = "<group>"; };
 		828AD6B9EB66FA3A3E9D4779 /* ProcurementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcurementView.swift; sourceTree = "<group>"; };
