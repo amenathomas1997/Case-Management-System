@@ -33,7 +33,9 @@ function api_account_reauth(int $userId, $password, string $wrong): ?string {
     if ($r === 'lockout') {
         audit($userId, 'reauth.lockout', 'user', $userId, 'signed out after 5 wrong passwords in 15 minutes (mobile app)');
         db()->prepare('DELETE FROM api_tokens WHERE user_id = ?')->execute([$userId]);
-        fail(API_REAUTH_SIGNED_OUT_MSG, 401);
+        // 403, not 401: the app replays a request after a 401 sign-in, which would resend
+        // the wrong password. Its tokens are gone, so the next request asks for sign-in.
+        fail(API_REAUTH_SIGNED_OUT_MSG, 403);
     }
     return $wrong;
 }
@@ -90,6 +92,7 @@ switch ($action) {
         $r = account_change_password($acctUser, $input['current_password'] ?? '', $input['new_password'] ?? null, $input['confirm_password'] ?? null,
             !empty($input['ack_passkeys']), $acctReauth);
         if (!$r['ok']) api_account_refused($r);
+        api_totp_pending_clear($userId);
         api_throttle_record($acctMailKey);
         // Every app session went with it, this one too.
         out(['ok' => true, 'signed_out' => true, 'message' => $r['message'],
@@ -150,6 +153,7 @@ switch ($action) {
         if ($pwErr !== null) api_account_refused(['errors' => ['password' => $pwErr]]);
         $del = db()->prepare('DELETE FROM api_tokens WHERE user_id = ?');
         $del->execute([$userId]);
+        api_totp_pending_clear($userId);
         $ended = $del->rowCount();
         audit($userId, 'api.logout_all', 'user', $userId, $ended . ' app session(s) ended');
         out(['ok' => true, 'signed_out' => true, 'sessions_ended' => $ended,

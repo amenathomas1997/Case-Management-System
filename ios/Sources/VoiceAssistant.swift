@@ -407,7 +407,7 @@ final class SpeechController: NSObject, ObservableObject {
         // rate, or queued behind other speech), and an open microphone would hear its own
         // "Say yes to save" as the answer. A pending confirmation waits for the buttons instead.
         // Say how to answer, since the question VoiceOver just read asks for a spoken yes.
-        if repliesViaVoiceOver && pendingConfirm != nil && phase == .speaking {
+        if repliesViaVoiceOver && pendingConfirm != nil && phase == .speaking && !timedOut {
             waitForAnswer(because: "Waiting for your answer.")
             return
         }

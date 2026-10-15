@@ -56,7 +56,8 @@ $taskReferral=[];
 if($taskIds){$q=db()->prepare('SELECT id,referral_id FROM tasks WHERE referral_id IS NOT NULL AND id IN ('.implode(',',array_fill(0,count($taskIds),'?')).')');$q->execute($taskIds);foreach($q->fetchAll() as $r)$taskReferral[(int)$r['id']]=(int)$r['referral_id'];}
 $referralTasked=array_flip($taskReferral);$kept=[];
 foreach($items as $item){
-    if($item['kind']==='Referral'&&preg_match('/^referrals\.php\?view=(\d+)$/D',$item['url'],$m)&&isset($referralTasked[(int)$m[1]]))continue;
+    // ...unless the referral carries its own date (a waitlist follow-up), which must stay listed.
+    if($item['kind']==='Referral'&&empty($item['due'])&&preg_match('/^referrals\.php\?view=(\d+)$/D',$item['url'],$m)&&isset($referralTasked[(int)$m[1]]))continue;
     if(preg_match('/^tasks\.php#task-act-(\d+)$/D',$item['url'],$m)&&isset($taskReferral[(int)$m[1]])&&can('referrals'))$item['referral_url']='referrals.php?view='.$taskReferral[(int)$m[1]];
     // Dates inside a title ("received 2026-10-01") read as the rest of the app writes them.
     $item['title']=preg_replace_callback('/\b(\d{4}-\d{2}-\d{2})\b/',fn($d)=>fmt_date($d[1]),$item['title']);

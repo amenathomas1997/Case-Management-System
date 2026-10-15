@@ -1204,7 +1204,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
 ?>
 <h2 id="notes-h">Notes (<?= $notesTotal ?>)</h2>
 <section class="card" aria-labelledby="addnote-h">
-  <h2 class="visually-hidden"><?= $editNote ? 'Edit note' : 'Add a note' ?></h2>
+  <h3 class="visually-hidden"><?= $editNote ? 'Edit note' : 'Add a note' ?></h3>
   <details id="addnote"<?= $noteFormOpen ? ' open' : '' ?>>
   <summary id="addnote-h"><?= $editNote ? 'Edit note' : 'Add a note' ?></summary>
   <?php if ($editNote): ?>

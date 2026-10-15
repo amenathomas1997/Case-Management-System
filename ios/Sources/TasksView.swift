@@ -84,6 +84,7 @@ extension TaskItem {
 /// Today, Upcoming, No due date), with add, edit and complete.
 struct TasksView: View {
     @EnvironmentObject var api: API
+    @State private var completing: Set<Int> = []
     @State private var data: TasksResponse?
     @State private var error: String?
     @State private var showAll = false
@@ -212,6 +213,7 @@ struct TasksView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(task.spoken)
         .accessibilityFocused($focusedTask, equals: task.id)
+        .accessibilityAction { announceRowActions() }
         .accessibilityActions {
             Button(task.isOpen ? "Mark done" : "Reopen") { Task { await setDone(task, reopen: !task.isOpen) } }
             if task.isOpen && !task.automatic { Button("Edit task") { editing = task } }
@@ -226,6 +228,9 @@ struct TasksView: View {
     }
 
     private func setDone(_ task: TaskItem, reopen: Bool) async {
+        // A double tap (or the button and the rotor action together) sends one request.
+        guard !completing.contains(task.id) else { return }
+        completing.insert(task.id); defer { completing.remove(task.id) }
         let order = groups.flatMap(\.tasks).map(\.id)
         let index = order.firstIndex(of: task.id) ?? 0
         error = nil
@@ -320,7 +325,7 @@ struct TaskEditSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }.disabled(busy)
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { DraftStore.clear(key: draftKey, owner: api.userId); dismiss() } }.disabled(busy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(busy ? "Saving…" : "Save") { Task { await save() } }.disabled(busy)
@@ -346,7 +351,8 @@ struct TaskEditSheet: View {
             assignee = api.userId   // the website's form preselects the signed-in person
         }
         if let draft = DraftStore.load(key: draftKey, owner: api.userId),
-           !((draft["title"] ?? "") + (draft["details"] ?? "")).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+           !((draft["title"] ?? "") + (draft["details"] ?? "")).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           draft["title"] != title || draft["details"] != details || draft["due"] != due {
             title = draft["title"] ?? title
             details = draft["details"] ?? details
             due = draft["due"] ?? due
@@ -356,6 +362,10 @@ struct TaskEditSheet: View {
 
     private func saveDraft() {
         guard started else { return }
+        // The task's own saved values are not a draft: keeping them could later restore
+        // stale text over a newer website edit.
+        let loaded = (existing?.title ?? "", existing?.details ?? "", existing?.dueDate ?? "")
+        if (title, details, due) == loaded { DraftStore.clear(key: draftKey, owner: api.userId); return }
         DraftStore.save(["title": title, "details": details, "due": due], key: draftKey, owner: api.userId)
     }
 

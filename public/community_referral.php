@@ -326,6 +326,7 @@ function referral_contact_date(string $ymd): string {
 $sentInfo = $saved && is_array($_SESSION['referral_sent'] ?? null) ? $_SESSION['referral_sent'] : null;
 $sentRef = $sentInfo ? (int)($sentInfo['ref'] ?? 0) : 0;
 $sentBy = $sentInfo ? referral_contact_date((string)($sentInfo['by'] ?? '')) : '';
+unset($_SESSION['referral_sent']);   // shown once: a later visit in this browser doesn't repeat it
 page_header($saved ? 'Referral sent' : ($errors ? 'Error — Community Referral' : 'Community Referral'));
 echo lang_toggle();
 ?>

@@ -19,7 +19,7 @@ page_header('Privacy notice', $viewer);
 ?>
 <h1>Privacy notice</h1>
 <p>This notice explains what information <?= h($org) ?> keeps about you, why, who it is shared with, and the choices you have. It covers this website (including the referral form, the client portal and the counselor portal) and the staff iPhone app.</p>
-<p lang="es">Si necesita esta información en español, escríbanos a <?= $mail ?>.</p>
+<?php if ($contact !== ''): ?><p lang="es">Si necesita esta información en español, escríbanos a <?= $mail ?>.</p><?php endif; ?>
 <p>Last updated <?= h(fmt_date(PRIVACY_UPDATED)) ?>.</p>
 
 <nav aria-labelledby="privacy-toc-h"><h2 id="privacy-toc-h">On this page</h2>

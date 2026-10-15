@@ -105,6 +105,7 @@ struct CohortDetail: View {
                             // and swipe action are) is on the Actions rotor.
                             .accessibilityElement(children: .ignore)
                             .accessibilityLabel(m.name)
+                            .accessibilityAction { announceRowActions() }
                             .accessibilityAction(named: "Remove from cohort") { pendingRemove = m }
                             .accessibilityFocused($focusedMember, equals: m.id)
                             // Confirmed first (not a destructive-role button, which would take the

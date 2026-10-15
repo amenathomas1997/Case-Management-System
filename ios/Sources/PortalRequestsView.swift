@@ -136,6 +136,7 @@ struct PortalRequestsView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(r.spoken)
         .accessibilityFocused($focused, equals: r.id)
+        .accessibilityAction { announceRowActions() }
         .accessibilityActions {
             ForEach(statuses.filter { $0 != r.status }, id: \.self) { s in
                 Button("Mark \(s)") { Task { await setStatus(r, s) } }

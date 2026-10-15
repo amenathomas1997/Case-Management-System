@@ -111,6 +111,7 @@ struct BookingsView: View {
         // is an action on the Actions rotor (Cancel booking is still confirmed first).
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(bookingSpokenLabel(b))
+        .accessibilityAction { announceRowActions() }
         .accessibilityActions {
             ForEach(bookingStatuses.filter { $0 != b.status }, id: \.self) { s in
                 Button(s == "Cancelled" ? "Cancel booking" : "Mark \(s)") {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 extension View {
     /// A stepper as one VoiceOver element: swipe up or down to change it, instead of
@@ -24,5 +25,12 @@ func hoursSpoken(_ hours: Double) -> String {
     let whole = Int(hours), part = hours - Double(whole)
     let fraction = part == 0.25 ? "a quarter" : part == 0.5 ? "a half" : part == 0.75 ? "three quarters" : nil
     if let fraction { return whole == 0 ? "\(fraction) of an hour" : "\(whole) and \(fraction) hours" }
+    if part != 0 { return String(format: "%g hours", hours) }   // e.g. 12.33 hours
     return whole == 1 ? "1 hour" : "\(whole) hours"
+}
+
+/// A double-tap on a row whose only actions are on the Actions rotor: say so, rather than
+/// letting VoiceOver tap whatever button sits at the row's centre.
+func announceRowActions() {
+    UIAccessibility.post(notification: .announcement, argument: "Swipe up or down to choose an action.")
 }

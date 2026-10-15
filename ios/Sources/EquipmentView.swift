@@ -746,6 +746,7 @@ struct ReservationsView: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel([r.itemName, "\(r.clientName), \(r.status)", r.neededFrom.map { "Needed from \(formatDate($0))" }]
                         .compactMap { $0 }.joined(separator: ", "))
+                    .accessibilityAction { announceRowActions() }
                     .accessibilityAction(named: "Cancel reservation") { pendingCancel = r }
                     .accessibilityFocused($focusedReservation, equals: r.id)
                     // Confirmed first: a cancelled waitlist place cannot be given back.

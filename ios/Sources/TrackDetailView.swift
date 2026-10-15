@@ -175,10 +175,12 @@ struct TrackDetailView: View {
                     }
                     Button { showingEditTrack = true } label: { Label("Edit track", systemImage: "pencil") }
                         .accessibilityHint("Title, status, program, authorization, rates and dates.")
+                    // After Edit track, the bar follows the saved authorization, not the one loaded.
+                    let authorized = savedTrack?.authorizedHours ?? track.authorizedHours
                     AuthProgressBar(hoursWorked: track.hoursWorked,
-                                    authorizedHours: track.authorizedHours,
-                                    hoursRemaining: track.hoursRemaining,
-                                    pctUsed: track.pctUsed)
+                                    authorizedHours: authorized,
+                                    hoursRemaining: savedTrack == nil ? track.hoursRemaining : max(0, authorized - track.hoursWorked),
+                                    pctUsed: savedTrack == nil ? track.pctUsed : (authorized > 0 ? track.hoursWorked / authorized * 100 : 0))
                 }
                 Section(goalsLoaded ? "SMART goals (\(goals.count))" : "SMART goals") {
                     if !goalsLoaded {
@@ -1479,7 +1481,7 @@ struct TrackEditSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }.disabled(busy)
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { DraftStore.clear(key: draftKey, owner: api.userId); dismiss() } }.disabled(busy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(busy ? "Saving…" : (trackId == nil ? "Create" : "Save")) { Task { await save() } }
@@ -1490,7 +1492,13 @@ struct TrackEditSheet: View {
                                  asking: $askingDiscard) {
                 DraftStore.clear(key: draftKey, owner: api.userId); dismiss()
             }
-            .onChange(of: fields) { _ in if form != nil { DraftStore.save(fields, key: draftKey, owner: api.userId) } }
+            // Only real edits are kept: the loaded server values are never saved as a "draft",
+            // or a later open could restore them over newer values and re-price work.
+            .onChange(of: fields) { _ in
+                guard form != nil else { return }
+                if fields != original { DraftStore.save(fields, key: draftKey, owner: api.userId) }
+                else { DraftStore.clear(key: draftKey, owner: api.userId) }
+            }
             .task { if form == nil { await load() } }
         }
     }

@@ -187,7 +187,18 @@ case 'save_task': {
     $due = api_date($input, 'due_date', 'Due date');
     $details = api_text($input, 'details', API_TEXT_BYTES, 'Details', true);
     $clientId = (int)($input['client_id'] ?? 0) ?: null;
-    if ($clientId !== null) {
+    // On an edit, a left-out client keeps the task's link, and an unchanged link is not
+    // re-checked (a task delegated about another caseload's client stays editable).
+    $keepLink = false;
+    if ($taskId > 0) {
+        $cur = db()->prepare('SELECT client_id FROM tasks WHERE id = ?');
+        $cur->execute([$taskId]);
+        $currentClient = $cur->fetchColumn();
+        $currentClient = $currentClient === false || $currentClient === null ? null : (int)$currentClient;
+        if (!array_key_exists('client_id', $input)) $clientId = $currentClient;
+        $keepLink = $clientId !== null && $clientId === $currentClient;
+    }
+    if ($clientId !== null && !$keepLink) {
         // Linking a task to a client reveals that client (tasks.php: require_perm + scope check).
         if (!can('clients')) fail('Your account does not have access to client records, so a task cannot be linked to a client.', 403);
         api_require_client($clientId, $userId);
@@ -411,15 +422,17 @@ case 'save_track': {
     }
     $rsaCategory = api_choice($input, 'rsa_category', rsa_all_categories(), 'RSA service category',
         $track && !array_key_exists('service_type', $input) ? ($track['rsa_category'] ?? rsa_default_for($serviceType)) : rsa_default_for($serviceType));
-    $startRaw = trim((string)($input['start_date'] ?? ''));
-    $expRaw = trim((string)($input['expiration_date'] ?? ''));
+    // Left out on an edit = keep the track's dates (blank clears them, as on the page).
+    $startRaw = trim((string)(($track && !array_key_exists('start_date', $input)) ? ($track['start_date'] ?? '') : ($input['start_date'] ?? '')));
+    $expRaw = trim((string)(($track && !array_key_exists('expiration_date', $input)) ? ($track['expiration_date'] ?? '') : ($input['expiration_date'] ?? '')));
     $start = $startRaw !== '' ? $startRaw : null;
     $exp = $expRaw !== '' ? $expRaw : null;
     $maxYear = (int)date('Y') + 5;
     if ($start && !valid_date($start, 2000, $maxYear)) $errors['start_date'] = 'Use a valid start date (YYYY-MM-DD) with a year from 2000 to ' . $maxYear . '.';
     if ($exp && !valid_date($exp, 2000, $maxYear)) $errors['expiration_date'] = 'Use a valid expiration date (YYYY-MM-DD) with a year from 2000 to ' . $maxYear . '.';
     if ($start && $exp && $exp < $start) $errors['expiration_date'] = 'Expiration date must be after the start date.';
-    $mileageRaw = trim((string)($input['mileage_rate'] ?? ''));
+    // Left out on an edit = keep the track's mileage rate (never re-price to $0 by omission).
+    $mileageRaw = trim((string)(($track && !array_key_exists('mileage_rate', $input)) ? ($track['mileage_rate'] ?? '') : ($input['mileage_rate'] ?? '')));
     $mileageRate = $mileageRaw === '' ? 0.0 : (float)$mileageRaw;
     if ($mileageRaw !== '' && (!is_numeric($mileageRaw) || $mileageRate < 0 || $mileageRate > 999.999)) {
         $errors['mileage_rate'] = 'Enter the mileage rate in dollars per mile, from 0 to 999.999 (0 when travel is not billable).';
@@ -578,6 +591,9 @@ case 'request_consent': {
         out(['ok' => true, 'consent' => parity_consent_state($clientId),
             'guardian_name' => $client['guardian_name'] ?? '', 'guardian_email' => $client['guardian_email'] ?? '']);
     }
+    // Each request emails someone outside the agency: at most 10 an hour per staff member.
+    if (api_throttle_count('consent-mail-' . $userId, 3600) >= 10) fail('Too many consent requests in the last hour. Wait a while, then try again.', 429);
+    api_throttle_record('consent-mail-' . $userId);
     // client.php's request_consent handler, step for step.
     $gName = is_string($input['guardian_name'] ?? null) ? trim($input['guardian_name']) : '';
     $gEmail = strtolower(is_string($input['guardian_email'] ?? null) ? trim($input['guardian_email']) : '');

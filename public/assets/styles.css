@@ -489,3 +489,6 @@ body { padding-left: env(safe-area-inset-left, 0); padding-right: env(safe-area-
   .site-header[data-nav="collapsible"] .nav-item:hover > .nav-hint,
   .site-header[data-nav="collapsible"] .nav-item > a:focus-visible + .nav-hint { position: static; max-width: none; width: auto; }
 }
+
+/* The page shortcuts sit inside .nav-item (for their hints) and keep the 44px target. */
+.page-actions > .nav-item > a { min-height: 44px; display: inline-flex; align-items: center; }

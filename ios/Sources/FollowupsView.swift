@@ -113,6 +113,8 @@ struct FollowupsView: View {
         // weeks and Skip (confirmed first, as the button is) are on the Actions rotor.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(f.equipmentName), \(f.clientName), \(f.intervalDays)-day check, \(dueLabel(f.dueDate))")
+        // Double-tap records the check (it opens a form); never a snooze or skip by accident.
+        .accessibilityAction { if due && !acting.contains(f.id) { recording = f } else { announceRowActions() } }
         .accessibilityActions {
             if due && !acting.contains(f.id) {
                 Button("Record") { recording = f }

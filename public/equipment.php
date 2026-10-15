@@ -618,9 +618,9 @@ $invFilters = [
     'repair' => ['In repair', fn(array $i): bool => $i['status'] === 'Repair'],
     'retired' => ['Retired', fn(array $i): bool => $i['status'] === 'Retired'],
 ];
-$invStatus = (string)($_GET['status'] ?? '');
+$invStatus = is_string($_GET['status'] ?? null) ? $_GET['status'] : '';
 if (!isset($invFilters[$invStatus])) $invStatus = '';
-$invQ = mb_substr(trim((string)($_GET['q'] ?? '')), 0, 120);
+$invQ = mb_substr(trim(is_string($_GET['q'] ?? null) ? $_GET['q'] : ''), 0, 120);
 $invUrl = fn(string $status, string $q): string => 'equipment.php' . (($qs = http_build_query(array_filter(['q' => $q, 'status' => $status], fn($v) => $v !== ''))) !== '' ? '?' . $qs : '') . '#inv-h';
 $shown = array_values(array_filter($items, function (array $i) use ($invFilters, $invStatus, $invQ): bool {
     if (!$invFilters[$invStatus][1]($i)) return false;

@@ -301,6 +301,7 @@ struct AccountView: View {
         .accessibilityLabel("Setup key")
         .accessibilityValue(Text(setup.secret).speechSpellsOutCharacters())
         .accessibilityHint("Copy setup key is in the Actions rotor.")
+        .accessibilityAction { announceRowActions() }
         .accessibilityActions {
             Button("Copy setup key") { copySetupKey(setup.secret) }
         }
@@ -619,7 +620,7 @@ struct AccountView: View {
 
 /// What a password change also does, said before it is made (it cannot be undone).
 private func passwordEffects(passkeys: Int, calFeed: Bool) -> String {
-    var effects = ["signs you out on every device, including this app"]
+    var effects = ["signs you out on every device, including this app, and discards unsaved drafts on this iPhone"]
     if passkeys > 0 { effects.append("removes your \(passkeys) passkey\(passkeys == 1 ? "" : "s") (you can add them again afterwards)") }
     if calFeed { effects.append("turns off your calendar subscription address") }
     let last = effects.removeLast()

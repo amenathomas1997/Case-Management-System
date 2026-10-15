@@ -1,8 +1,10 @@
-# Release 3.0.22 — October 15, 2026
+# Release 3.0.23 — October 15, 2026
+
+3.0.22 was never deployed; 3.0.23 ships everything committed as 3.0.22 plus the final code audit fixes below.
 
 Status: committed, NOT deployed. Production is 3.0.21 (deployed October 14, 2026 from 17ce95e).
 
-No database migration. Deploy the changed website files only; preserve hosting .htaccess, private configuration, installer lock and custom branding assets. Run the usual read-only checksum comparison against production (expect 3.0.21 = 17ce95e) and back up the docroot before publishing. Includes cron/session_reminders.php (deploy it with the website files). No iOS distribution: ios/project.yml stays at 3.0.21, and the iOS changes below ship only with a future archive (bump MARKETING_VERSION and the build number when archiving).
+No database migration. Deploy the changed website files only; preserve hosting .htaccess, private configuration, installer lock and custom branding assets. Run the usual read-only checksum comparison against production (expect 3.0.21 = 17ce95e) and back up the docroot before publishing. Includes cron/session_reminders.php (deploy it with the website files). iOS: ios/project.yml is 3.0.23 build 30; distribute through an Xcode Archive to TestFlight.
 
 ## Contents
 
@@ -54,6 +56,22 @@ iPhone app (not distributed):
 - List rows across the app are one VoiceOver stop with their buttons in the Actions rotor (schedule, goals, notes, equipment, reservations, follow-ups, bookings, contracts, homework, incidents, counselors, programs, offline entries); destructive actions keep their confirmations. Trade-off: Voice Control can no longer tap buttons inside those rows by name.
 - Note field before the AI helper; message and follow-up drafts persist; equipment search and sections; schedule grouped Today / Tomorrow / Later.
 
+## User guide, privacy notice, iPhone account settings and parity (third commit)
+
+- Staff guide rewritten as task-based "How do I" topics (68 topics, table of contents) including iPhone, billing, reports, voice, shortcuts and privacy; public help updated.
+- New public privacy notice (privacy.php), linked from every footer and from the iPhone app and its sign-in screen. AI provider, redaction and retention statements are read from live settings. Owner must confirm legal entity, address, jurisdiction, privacy contact, hosting, and HIPAA/FERPA applicability.
+- iPhone Account screen: password, two-step sign-in, passkeys (add on the website), calendar address, app lock and voice settings, offline entries, sign out / sign out everywhere, user guide and privacy. Server: inc/account_actions.php (shared with account.php, behaviour unchanged) and inc/api_account.php.
+- Parity: inc/api_parity.php and iPhone screens for tasks, alerts, portal requests, intake progress, invoices (read-only), add/edit training tracks, consent requests, consents to renew and status history.
+
+## Final code audit (five reviewers over 17ce95e..HEAD) and fixes
+
+No high-severity web or API findings. Fixed:
+- iPhone Edit track and Edit task no longer save the loaded server values as a "draft" (a later open could restore stale values and, for tracks, re-price work); Cancel without changes clears the draft.
+- Track progress bar follows a just-saved authorization; odd fractions of hours are read correctly.
+- API: save_track keeps mileage rate and dates when a field is left out; save_task keeps an unchanged client link (and its scope); consent requests limited to 10 an hour per staff member; reauth lockout answers 403 so the app does not replay a wrong password; pending authenticator setup cleared on password change and sign out everywhere.
+- Rows whose actions are only on the Actions rotor have a safe default double-tap (follow-ups: Record); Tasks Done guarded against double taps; invoices agency rows have unique ids; password change warns that drafts are discarded; voice confirmation hint never interrupts VoiceOver.
+- Web: client Notes heading order; a waitlist follow-up date stays in the action center; array-safe search inputs; referral receipt shown once; help and privacy pages count as client-facing; page shortcut buttons keep 44px targets; session reminders keep "your instructor" in custom wording and list {portal_link} and {contact}.
+
 ## Verification
 
 - PHP syntax check of every production file passed.
@@ -64,6 +82,6 @@ iPhone app (not distributed):
 - Test updates were wording/title only (page markers, the portal's unavailable-feature message, the referral role error).
 - Not done: manual JAWS (Chrome/Edge), NVDA and VoiceOver walkthroughs — especially the grouped menu and hints, collapsed forms, the unsaved-change dialog, the voice confirmation, and the iPhone Actions rotor and adjustable steppers.
 
-## Deploy file list (relative to 3.0.21)
+## Deploy file list (relative to 3.0.21, live from 17ce95e)
 
 `git diff --name-only 17ce95e HEAD -- public cron`

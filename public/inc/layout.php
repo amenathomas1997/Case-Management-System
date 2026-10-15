@@ -13,7 +13,7 @@ require_once __DIR__ . '/navigation.php';
 /** Pages people outside the agency use (clients, families, counselors, referrers). */
 function cms_client_facing_page(): bool {
     return empty($GLOBALS['CMS_PAGE_SIGNED_IN']) && in_array(basename($_SERVER['SCRIPT_NAME'] ?? ''),
-        ['portal.php', 'consent.php', 'survey.php', 'community_referral.php', 'vrc.php', 'ack.php', 'access_bookings.php', 'amendment_request.php'], true);
+        ['portal.php', 'consent.php', 'survey.php', 'community_referral.php', 'vrc.php', 'ack.php', 'access_bookings.php', 'amendment_request.php', 'help.php', 'privacy.php'], true);
 }
 
 function page_header(string $title, ?array $user = null, string $active = '', array $parents = []): void {

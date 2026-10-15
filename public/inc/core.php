@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.22';
+const APP_VERSION = '3.0.23';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -306,7 +306,7 @@ const EMAIL_TEMPLATES = [
         '{name} {code} {org_short}'],
     'session_reminder_client' => ['Session reminder (client)', 'Reminder: your assistive technology training session {day}',
         "Hello {name},\n\nThis is a friendly reminder of your training session with {org}.\n\nWhen: {when}{where}\nInstructor: {instructor}\n\nIf you need to reschedule, please reply to this email or call your instructor.\n\nSee you {day}!\n",
-        '{name} {when} {where} {instructor} {org} {day} {date} {time} {location} {join_link}'],
+        '{name} {when} {where} {instructor} {org} {day} {date} {time} {location} {join_link} {portal_link} {contact}'],
     'report_cover' => ['Report email closing note', '',
         "Please confirm you received this report (one click):\n{ack}\n",
         '{ack}'],

@@ -107,7 +107,7 @@ struct InvoicesView: View {
             if let d = data {
                 Section {
                     LabeledContent("Unbilled work", value: String(format: "$%.2f", d.unbilled))
-                    ForEach(d.outstanding, id: \.fundingAgency) { a in
+                    ForEach(Array(d.outstanding.enumerated()), id: \.offset) { _, a in
                         LabeledContent(a.fundingAgency.isEmpty ? "No agency" : a.fundingAgency,
                                        value: String(format: "$%.2f, %d invoice%@%@", a.amount, a.count, a.count == 1 ? "" : "s",
                                                      a.oldestDays.map { ", oldest \($0) days" } ?? ""))

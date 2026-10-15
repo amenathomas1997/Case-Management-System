@@ -101,13 +101,19 @@ foreach ($sessions as $s) {
             $portalLink = preg_match('/^[a-f0-9]{48}$/D', $portalToken) ? cfg('base_url') . '/portal.php?t=' . $portalToken : '';
             [$subj, $body] = email_template('session_reminder_client', [
                 'name' => $s['client_name'], 'when' => $when, 'where' => $where,
-                'instructor' => $instructor,
+                // A marker for now: the line is dropped below, and prose elsewhere in an
+                // administrator's own wording reads "your instructor" rather than a gap.
+                'instructor' => $instructor !== '' ? $instructor : "\u{1F}instructor\u{1F}",
                 'day' => $day, 'date' => date('l, F j', $startTs), 'time' => date('g:i A T', $startTs),
                 'location' => empty($s['is_remote']) ? (string)($s['location'] ?? '') : '', 'join_link' => $joinLink,
                 'portal_link' => $portalLink, 'contact' => $contact,
             ]);
             // No instructor to name: the "Instructor:" line is left out, not left blank.
-            if ($instructor === '') $body = (string)preg_replace('/^[ \t]*Instructor:[ \t]*\R/mi', '', $body);
+            if ($instructor === '') {
+                $body = (string)preg_replace("/^[ \t]*Instructor:[ \t]*\x{1F}instructor\x{1F}[ \t]*\R/mu", '', $body);
+                $body = str_replace("\u{1F}instructor\u{1F}", 'your instructor', $body);
+                $subj = str_replace("\u{1F}instructor\u{1F}", 'your instructor', $subj);
+            }
             $reschedule = $portalLink !== ''
                 ? 'Need a different time? Use your portal: ' . $portalLink . ($contact !== '' ? "\nOr email us at " . $contact . '.' : '')
                 : 'Need a different time? Reply to this email' . ($contact !== '' ? ' or email us at ' . $contact : '') . '.';

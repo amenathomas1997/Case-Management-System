@@ -50,7 +50,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_goal_tpl'])) {
     // Back to the same search, so the next match is where the user left off.
     $gtBack = ['lib' => 'goals'];
     foreach (['gt_q', 'gt_cat'] as $gtKey) {
-        $gtVal = trim((string)($_POST[$gtKey] ?? ''));
+        $gtVal = trim(is_string($_POST[$gtKey] ?? null) ? $_POST[$gtKey] : '');
         if ($gtVal !== '') $gtBack[$gtKey] = mb_substr($gtVal, 0, 190);
     }
     redirect('templates.php?' . http_build_query($gtBack) . '#goals-h');
@@ -99,7 +99,7 @@ $tplFormFailed = fn(array $fields): bool => array_intersect_key(form_errors(), a
 // The goal library can be very large, so it is searched on demand rather than
 // rendered in full: no rows until a search or an area is chosen. gt_q / gt_cat
 // drive a server-side filter; results are capped.
-$gtQ = trim((string)($_GET['gt_q'] ?? ''));
+$gtQ = trim(is_string($_GET['gt_q'] ?? null) ? $_GET['gt_q'] : '');
 $gtCat = trim((string)($_GET['gt_cat'] ?? ''));
 $gtFiltered = $gtQ !== '' || $gtCat !== '';
 $goalTpls = []; $gtTruncated = false; $goalTplTotal = 0; $goalCats = [];
