@@ -248,8 +248,9 @@ page_header('Accommodations', $user, 'accommodations');
   <form method="post" action="accommodations.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['client_id' => 'Client', 'employer' => 'Employer', 'job_title' => 'Job title', 'assessment_date' => 'Assessment date'],
         ['employer' => 'employer_new', 'job_title' => 'job_title_new', 'assessment_date' => 'assessment_date_new']) ?>
+    <p class="hint">Fields marked * are required.</p>
     <div class="grid grid-4">
-      <div class="field"><label for="client_id">Client *</label>
+      <div class="field"><label for="client_id">Client <?= required_mark() ?></label>
         <select id="client_id" name="client_id" required <?= field_aria('client_id') ?>>
           <option value="">— Choose —</option>
           <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= old_in('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
@@ -274,7 +275,7 @@ page_header('Accommodations', $user, 'accommodations');
     <option value="">All clients</option>
     <?php foreach ($filterClients as $fc): ?><option value="<?= (int)$fc['id'] ?>" <?= $clientFilter === (int)$fc['id'] ? 'selected' : '' ?>><?= h($fc['name']) ?></option><?php endforeach; ?>
   </select>
-  <button type="submit" class="btn btn-secondary btn-sm">Filter</button>
+  <button type="submit" class="btn btn-secondary btn-sm">Apply filters</button>
 </form>
 <?php if ($truncated): ?><p class="muted">Only the 300 most recently updated assessments are listed here. Choose a client or a status above to find an older one.</p><?php endif; ?>
 

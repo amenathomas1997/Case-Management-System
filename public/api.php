@@ -309,13 +309,13 @@ if ($action === 'login') {
     // code from a website sign-in, and the website never redeems this one).
     $codeHash = password_hash($code, PASSWORD_DEFAULT);
     db()->prepare("INSERT INTO login_otps (user_id, code_hash, expires_at, channel) VALUES (?,?, DATE_ADD(NOW(), INTERVAL ? MINUTE), 'api')")
-        ->execute([$user['id'], $codeHash, (int)cfg('otp_expiry_minutes')]);
+        ->execute([$user['id'], $codeHash, ((int)cfg('otp_expiry_minutes') ?: 10)]);
     // login_challenge binds the verify step to THIS password step: it is keyed with
     // the row's own salted code hash, which never leaves the server, so someone who
     // knows only the email (and perhaps a code) cannot redeem another person's row.
     $loginChallenge = api_login_challenge((int)db()->lastInsertId(), $codeHash);
     $sent = send_app_mail($user['email'], 'Your sign-in code: ' . $code,
-        "Your one-time sign-in code for the mobile app is:\n\n    {$code}\n\nIt expires in " . cfg('otp_expiry_minutes') . " minutes.\n");
+        "Your one-time sign-in code for the mobile app is:\n\n    {$code}\n\nIt expires in " . ((int)cfg('otp_expiry_minutes') ?: 10) . " minutes.\n");
     // Without the email and without an authenticator app there is no way to finish
     // signing in, so say so now instead of showing a code screen no code will reach.
     if (!$sent && !($user['totp_enabled'] && $user['totp_secret'])) {
@@ -323,7 +323,7 @@ if ($action === 'login') {
     }
     // code_expires_minutes: the emailed code's lifetime, for the app's sign-in text.
     out(['ok' => true, 'step' => 'otp_required', 'totp_available' => (bool)$user['totp_enabled'], 'email_sent' => $sent,
-         'code_expires_minutes' => (int)cfg('otp_expiry_minutes'), 'login_challenge' => $loginChallenge]);
+         'code_expires_minutes' => ((int)cfg('otp_expiry_minutes') ?: 10), 'login_challenge' => $loginChallenge]);
 }
 
 if ($action === 'verify') {
@@ -369,17 +369,25 @@ if ($action === 'verify') {
         }
     }
 
-    // The challenge from this sign-in's password step. App builds before 3.0.12 do
-    // not send one yet, so a missing challenge is still accepted; a wrong one never is.
+    // The challenge from this sign-in's password step is required: every app build in
+    // use (3.0.12 and later) sends it, so a mailbox or authenticator alone cannot finish
+    // a sign-in the password step did not start.
     $challenge = is_string($input['login_challenge'] ?? null) ? $input['login_challenge'] : '';
     $verified = false;
+    if (!$otp) {
+        // Nothing to test: no sign-in is waiting for this address (or the address is not a
+        // user's). The guess must not count against the address, or anyone who knows a
+        // staff email could lock its two-step sign-in without a password; it counts only
+        // toward the sender's own IP limit.
+        db()->prepare("UPDATE login_attempts SET email = 'verify-anon' WHERE id = ?")->execute([$guessRow]);
+    }
     if ($otp) {
         // Take one of the code's 5 tries before checking the guess (as verify.php): a
         // try counted only after the slow check could be spent many times at once.
         $take = db()->prepare('UPDATE login_otps SET attempts = attempts + 1 WHERE id = ? AND consumed = 0 AND attempts < 5');
         $take->execute([$otp['id']]);
         if ($take->rowCount() === 1
-            && ($challenge === '' || hash_equals(api_login_challenge((int)$otp['id'], (string)$otp['code_hash']), $challenge))) {
+            && $challenge !== '' && hash_equals(api_login_challenge((int)$otp['id'], (string)$otp['code_hash']), $challenge)) {
             $codeOk = ($user['totp_enabled'] && $user['totp_secret'] && totp_verify_once($user['totp_secret'], $code, (int)$user['id']))
                 || password_verify($code, $otp['code_hash']);
             // The try just taken counts toward the row's attempts, hence $tryTaken.

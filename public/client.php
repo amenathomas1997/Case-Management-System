@@ -1139,6 +1139,7 @@ if ($hasA11y): ?>
       <form method="post" action="client.php?id=<?= $id ?>" class="stacked" id="consent-form" novalidate>
         <?= csrf_field() ?>
         <?= form_error_summary(['guardian_name' => 'Guardian name', 'guardian_email' => 'Guardian email'], ['guardian_name' => 'g_name', 'guardian_email' => 'g_email']) ?>
+        <p class="hint">Fields marked * are required.</p>
         <div class="field"><label for="g_name">Guardian name <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
           <input type="text" id="g_name" name="guardian_name" required maxlength="120" value="<?= h(old_in('guardian_name', $client['guardian_name'] ?? '')) ?>" <?= field_aria('guardian_name') ?>>
           <?= field_error('guardian_name') ?></div>
@@ -1219,6 +1220,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     $noteSumAnchors = ['note_content' => 'body'];
     foreach (array_keys($aiHomework ?? []) as $k) { $noteSumLabels['hw_due_' . $k] = 'Homework due date'; $noteSumAnchors['hw_due_' . $k] = 'hwd' . (int)$k; }
     echo form_error_summary($noteSumLabels, $noteSumAnchors); ?>
+    <p class="hint">Fields marked * are required.</p>
     <?php if ($editNote): ?><input type="hidden" name="note_id" value="<?= (int)$editNote['id'] ?>">
     <?php else: // The same key while this note is being written (a refused save, an AI button), a new one after it is saved. ?>
     <input type="hidden" name="idem_key" value="<?= h(preg_match('/^[0-9a-fA-F-]{36}$/D', $noteIn('idem_key')) ? $noteIn('idem_key') : new_note_key()) ?>">
@@ -1478,7 +1480,8 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     <?= csrf_field() ?>
     <?= form_error_summary(['assessment_date' => 'Assessment date', 'primary_disability' => 'Primary disability / needs', 'hardware_details' => 'Hardware details',
         'software_version' => 'Software & version', 'summary' => 'Assessment summary', 'attachment' => 'Report attachment']) ?>
-    <div class="field"><label for="assessment_date">Assessment date *</label>
+    <p class="hint">Fields marked * are required.</p>
+    <div class="field"><label for="assessment_date">Assessment date <?= required_mark() ?></label>
       <input type="date" id="assessment_date" name="assessment_date" required max="<?= date('Y-m-d') ?>" value="<?= h(old_in('assessment_date', date('Y-m-d'))) ?>" <?= field_aria('assessment_date') ?>><?= field_error('assessment_date') ?></div>
     <div class="field"><label for="primary_disability">Primary disability / needs</label>
       <input type="text" id="primary_disability" name="primary_disability" maxlength="190" value="<?= h(old_in('primary_disability')) ?>" <?= field_aria('primary_disability') ?>><?= field_error('primary_disability') ?></div>
@@ -1567,12 +1570,13 @@ $documents = $documents->fetchAll();
   <form method="post" action="<?= $tabUrl('documents') ?>" enctype="multipart/form-data" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['title' => 'Title', 'document' => 'File'], ['title' => 'doc_title']) ?>
+    <p class="hint">Fields marked * are required.</p>
     <div class="field"><label for="doc_title">Title <span class="hint">Defaults to the file name</span></label>
       <input type="text" id="doc_title" name="title" maxlength="190" value="<?= h(old_in('title')) ?>" <?= field_aria('title') ?>><?= field_error('title') ?></div>
     <div class="field"><label for="doc_category">Category</label>
       <select id="doc_category" name="category" aria-describedby="doc-category-hint"><?= select_options(DOC_CATEGORIES, old_in('category') ?: null) ?></select>
       <p class="hint" id="doc-category-hint">Documents filed under Resource are shared on the client's portal, where the client can open and download them. Use another category for internal records.</p></div>
-    <div class="field"><label for="document">File * <span class="hint">PDF, Office, text, or image · 25 MB max</span></label>
+    <div class="field"><label for="document">File <?= required_mark() ?> <span class="hint">PDF, Office, text, or image · 25 MB max</span></label>
       <input type="file" id="document" name="document" required accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.rtf,.csv,.png,.jpg,.jpeg" <?= field_aria('document') ?>><?= field_error('document') ?></div>
     <button type="submit" name="add_document" value="1" class="btn btn-primary">Upload</button>
   </form>

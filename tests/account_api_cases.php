@@ -135,3 +135,13 @@ check($appSessions() === 1, 'After that the password is not tested for 15 minute
 $db->exec("DELETE FROM login_attempts WHERE email LIKE 'reauth:%' OR email LIKE 'acct-mail-%'");
 $db->exec("DELETE FROM settings WHERE name LIKE 'totp_pending_%'");
 $db->exec("UPDATE users SET password_hash='test', totp_enabled=0, totp_secret=NULL, cal_token=NULL, group_id=NULL WHERE id=1");
+
+/* ---- Sign-in codes guessed with no sign-in pending never lock the address ---- */
+$lockEmail=(string)$db->query('SELECT email FROM users WHERE id=1')->fetchColumn();
+$db->exec("DELETE FROM login_attempts WHERE success=0");
+for($i=0;$i<8;$i++)$call('verify',['email'=>$lockEmail,'code'=>'000000'],[],false,'not correct');
+$call('verify',['email'=>$lockEmail,'code'=>'000000'],[],false,'Too many attempts');
+check((int)$db->query("SELECT COUNT(*) FROM login_attempts WHERE email=".$db->quote('verify:'.$lockEmail))->fetchColumn()===0
+    &&(int)$db->query("SELECT COUNT(*) FROM login_attempts WHERE email='verify-anon'")->fetchColumn()===8,
+    'Wrong codes sent with no sign-in pending count against the sender (locked after 8), never against the staff address');
+$db->exec("DELETE FROM login_attempts WHERE email='verify-anon'");

@@ -200,7 +200,7 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
         echo '<script>document.addEventListener("DOMContentLoaded",function(){var a=document.getElementById("flash-messages"),m=document.getElementById("main"),t=null;if(!a)return;'
             . 'try{t=location.hash.length>1?document.getElementById(decodeURIComponent(location.hash.slice(1))):null;}catch(e){}'
             . 'if(t&&m&&t!==m&&m.contains(t)&&!a.contains(t)&&!t.closest("[hidden],details:not([open])")){var w=t.closest("table");if(w){w=w.closest(".table-scroll")||w;w.parentNode.insertBefore(a,w);}else if(t.tagName==="LI"){t.insertBefore(a,t.firstChild);}else{t.parentNode.insertBefore(a,t);}}'
-            . 'a.focus();if(window.Earcon)Earcon.play(' . ($flashErr ? "'error'" : "'success'") . ');});</script>';
+            . 'var s=document.getElementById("form-error-summary")||document.getElementById("form-errors");if(s&&!s.contains(a)){s.insertBefore(a,s.firstChild);a.removeAttribute("tabindex");}else{a.focus();}if(window.Earcon)Earcon.play(' . ($flashErr ? "'error'" : "'success'") . ');});</script>';
     }
     if ($user) {
         $totalSecs = max(120, (int)cfg('session_timeout_minutes') * 60);

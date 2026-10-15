@@ -20,7 +20,7 @@ if (strlen($token) === 48) {
     // active_owner: the assigned instructor only while their account is active.
     $stmt = db()->prepare('SELECT ra.*, c.name AS client_name, au.id AS active_owner, t.title AS track_title
         FROM report_acks ra JOIN clients c ON c.id = ra.client_id LEFT JOIN users au ON au.id = c.assigned_to AND au.is_active = 1
-        LEFT JOIN training_tracks t ON t.id = ra.track_id WHERE ra.token = ?');
+        LEFT JOIN training_tracks t ON t.id = ra.track_id WHERE ra.token = ? AND ra.sent_at > DATE_SUB(NOW(), INTERVAL 180 DAY)');
     $stmt->execute([$token]);
     $ack = $stmt->fetch();
 }
@@ -75,7 +75,10 @@ page_header(!$ack ? 'Confirmation link not recognized' : ($ack['acked_at'] ? 'Re
   <div class="alert alert-error" id="form-errors" tabindex="-1"><span class="visually-hidden">Error: </span>This page was open for a long time, so your confirmation was not recorded yet. Choose Confirm receipt again.</div>
   <script>document.addEventListener("DOMContentLoaded",function(){var e=document.getElementById("form-errors");if(e)e.focus();});</script>
   <?php endif; ?>
-  <p>A training report was emailed to <strong><?= h($ack['sent_to']) ?></strong> on <?= fmt_datetime($ack['sent_at']) ?>.
+  <?php // The address is masked: the link travels by email and may be forwarded.
+        $sentTo = (string)$ack['sent_to']; $at = strpos($sentTo, '@');
+        $maskedTo = $at > 0 ? substr($sentTo, 0, 1) . str_repeat('*', max(1, $at - 1)) . substr($sentTo, $at) : $sentTo; ?>
+  <p>A training report was emailed to <strong><?= h($maskedTo) ?></strong> on <?= fmt_datetime($ack['sent_at']) ?>.
      Choose Confirm receipt to tell us you received it. The confirmation is recorded on the client's file.</p>
   <form method="post" action="ack.php?t=<?= h($token) ?>">
     <?= csrf_field() ?>

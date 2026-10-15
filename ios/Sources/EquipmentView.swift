@@ -685,6 +685,12 @@ struct LogServiceSheet: View {
         guard let costText = checkedAmount(cost) else { showFormError(amountFormatMessage("Cost"), in: &error); return }
         busy = true; error = nil
         do { let _: OKResponse = try await api.call("equipment_service", body: ["equipment_id": itemId, "service_type": type, "service_date": APIDate.day(date), "notes": notes, "cost": costText]); onDone("Service logged."); dismiss() }
+        catch APIError.network {
+            // The request may have arrived: it isn't known whether the service was logged, and
+            // saving it again would log it twice.
+            busy = false
+            showFormError("The connection dropped before the server answered, so it isn't known whether this service was logged. Check the item's service history for \(type) on \(date.formatted(date: .abbreviated, time: .omitted)) before saving it again.", in: &self.error)
+        }
         catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }
@@ -979,6 +985,12 @@ struct AddEquipmentSheet: View {
         busy = true; error = nil
         do { let _: OKResponse = try await api.call("add_equipment", body: ["name": name, "category": category, "serial": serial, "condition": condition, "value": valueText, "maintenance_interval_days": intervalDays, "notes": notes]); onDone(); dismiss() }
         // (confirmation + VoiceOver announce, after the sheet has gone, handled by the parent's AddEquipmentSheet closure)
+        catch APIError.network {
+            // The request may have arrived: it isn't known whether the item was added, and
+            // adding it again would list it twice.
+            busy = false
+            showFormError("The connection dropped before the server answered, so it isn't known whether this item was added. Check the equipment list for “\(name.trimmingCharacters(in: .whitespacesAndNewlines))” before adding it again.", in: &self.error)
+        }
         catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

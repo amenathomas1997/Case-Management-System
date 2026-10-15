@@ -270,8 +270,9 @@ struct ScheduleView: View {
 
     /// The session's meeting link, when it is one the row offers to open.
     private func joinURL(_ session: Session) -> URL? {
+        // https only, as the scheduling field promises: an http link would open unencrypted.
         guard session.isRemote == true, let u = session.meetingUrl, let url = URL(string: u),
-              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return nil }
+              url.scheme?.lowercased() == "https" else { return nil }
         return url
     }
 
@@ -369,15 +370,14 @@ struct ScheduleView: View {
             .padding(.vertical, 4)
             // VoiceOver: the session is one stop, read in full; its buttons are the Actions
             // rotor's entries (swipe up or down, then double-tap), each asking first as on screen.
-            // A double-tap on the row is Mark completed, the most common outcome.
+            // A double-tap on the row only says so (as the Tasks and Bookings rows do): it used to
+            // be Mark completed, which for a tracked session opened the signature sheet, whose
+            // Cancel locks the app — a stray double-tap locked the person out.
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(sessionSummary(session, started: started))
+            .accessibilityHint("Swipe up or down for actions.")
             .accessibilityFocused($focusedSession, equals: session.id)
-            .accessibilityAction {
-                if busy { return }
-                if hasStarted(session, at: Date()) { markCompleted(session) }
-                else { announce("This session can be marked completed once it has started.") }
-            }
+            .accessibilityAction { announceRowActions() }
             .accessibilityActions {
                 if !busy {
                     if started {
@@ -696,12 +696,13 @@ struct NewSessionSheet: View {
         }
     }
 
-    /// A meeting link the server will keep: http(s), with a host, no spaces, 500 characters at
-    /// most. Anything else used to be dropped by the server while the app said "scheduled".
+    /// A meeting link the server will keep: https (as the field's caption promises), with a
+    /// host, no spaces, 500 characters at most. Anything else used to be dropped by the server
+    /// while the app said "scheduled".
     private static func isMeetingLink(_ text: String) -> Bool {
         guard text.count <= 500, !text.contains(where: { $0.isWhitespace }),
-              let url = URL(string: text), let scheme = url.scheme?.lowercased(),
-              scheme == "https" || scheme == "http", let host = url.host, !host.isEmpty else { return false }
+              let url = URL(string: text), url.scheme?.lowercased() == "https",
+              let host = url.host, !host.isEmpty else { return false }
         return true
     }
 

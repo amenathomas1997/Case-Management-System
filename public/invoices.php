@@ -374,7 +374,7 @@ page_header('Invoices', $user, 'invoices');
     <option value="<?= $s ?>" <?= $statusFilter === $s ? 'selected' : '' ?>><?= $s ?></option>
     <?php endforeach; ?>
   </select>
-  <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
+  <button type="submit" class="btn btn-secondary btn-sm">Apply filters</button>
 </form>
 <?php if ($onlyId > 0): ?>
 <p><?= $invoices ? 'Showing one invoice.' : 'That invoice was not found, or it is not on your caseload.' ?> <a href="invoices.php">Show all invoices</a></p>

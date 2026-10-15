@@ -51,7 +51,7 @@ $postedContext = is_string($_POST['context'] ?? null) ? $_POST['context'] : null
 $context = $postedContext ?? recommend_context($client);
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) {
     $ctx = trim((string)$postedContext);
-    if ($ctx === '') { flash('Add some context first.', 'error'); }
+    if ($ctx === '') { set_form_errors(['context' => 'Add some context first.']); }
     else {
         $res = ai_run('recommend',
             ai_system_base() . ' You are an assistive technology (AT) specialist supporting a vocational rehabilitation provider. '
@@ -77,8 +77,9 @@ page_header('AT recommendations', $user, 'clients');
 
 <form method="post" action="recommend.php?client=<?= $cid ?>" class="stacked"><?= csrf_field() ?>
   <div class="field">
+    <?= form_error_summary(['context' => 'Context sent to the AI']) ?>
     <label for="context">Context sent to the AI <span class="hint">edit to add or remove detail</span></label>
-    <textarea id="context" name="context" rows="10"><?= h($context) ?></textarea>
+    <textarea id="context" name="context" rows="10" <?= field_aria('context') ?>><?= h($context) ?></textarea><?= field_error('context') ?>
   </div>
   <button type="submit" name="generate" value="1" class="btn btn-primary">Generate recommendations</button>
 </form>
@@ -95,8 +96,9 @@ page_header('AT recommendations', $user, 'clients');
   <p class="muted">Turn a recommendation into a procurement request for <?= h($client['name']) ?>.</p>
   <form method="post" action="procurement.php" class="stacked"><?= csrf_field() ?>
     <input type="hidden" name="client_id" value="<?= $cid ?>">
+    <p class="hint">Fields marked * are required.</p>
     <div class="grid grid-4">
-      <div class="field"><label for="device_name">Device / technology *</label><input type="text" id="device_name" name="device_name" required maxlength="190"></div>
+      <div class="field"><label for="device_name">Device / technology <?= required_mark() ?></label><input type="text" id="device_name" name="device_name" required maxlength="190"></div>
       <div class="field"><label for="category">Category</label><select id="category" name="category">
         <?php // The values are the stored categories; only the shown names spell out the abbreviations. ?>
         <?php foreach (['Braille Display' => 'Braille Display', 'Screen Reader' => 'Screen Reader', 'Magnifier / CCTV' => 'Video magnifier (CCTV, closed-circuit television)',

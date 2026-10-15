@@ -257,8 +257,9 @@ if (isset($_GET['id'])) {
     <h2 id="budget-h">Budget</h2>
     <form method="post" action="contracts.php" class="stacked" novalidate><?= csrf_field() ?>
       <?= form_error_summary(['budget' => '']) ?>
+      <p class="hint">Fields marked * are required.</p>
       <input type="hidden" name="contract_id" value="<?= $cid ?>">
-      <div class="field"><label for="budget">Budget (USD)</label><input type="text" inputmode="decimal" id="budget" name="budget" maxlength="20" required
+      <div class="field"><label for="budget">Budget (USD) <?= required_mark() ?></label><input type="text" inputmode="decimal" id="budget" name="budget" maxlength="20" required
         value="<?= old_in('set_budget') !== '' ? h(old_in('budget')) : number_format((float)$c['amount'], 2, '.', '') ?>" <?= field_aria('budget') ?>><?= field_error('budget') ?></div>
       <button type="submit" name="set_budget" value="1" class="btn btn-secondary">Save budget</button>
     </form>
@@ -298,9 +299,10 @@ if (isset($_GET['id'])) {
       $oldD = fn(string $k): string => old_in('add_deliverable') !== '' ? h(old_in($k)) : ''; ?>
       <form method="post" action="contracts.php" class="stacked" style="margin-top:1rem" novalidate><?= csrf_field() ?>
         <?= form_error_summary(['title' => '', 'due_date' => '']) ?>
+        <p class="hint">Fields marked * are required.</p>
         <input type="hidden" name="contract_id" value="<?= $cid ?>">
         <div class="grid grid-4">
-          <div class="field"><label for="title">Deliverable *</label><input type="text" id="title" name="title" required maxlength="255" value="<?= $oldD('title') ?>" <?= field_aria('title') ?>><?= field_error('title') ?></div>
+          <div class="field"><label for="title">Deliverable <?= required_mark() ?></label><input type="text" id="title" name="title" required maxlength="255" value="<?= $oldD('title') ?>" <?= field_aria('title') ?>><?= field_error('title') ?></div>
           <div class="field"><label for="due_date">Due date</label><input type="date" id="due_date" name="due_date" value="<?= $oldD('due_date') ?>" <?= field_aria('due_date') ?>><?= field_error('due_date') ?></div>
           <div class="field"><label for="d_notes">Notes</label><input type="text" id="d_notes" name="d_notes" maxlength="500" value="<?= $oldD('d_notes') ?>"></div>
         </div>
@@ -325,9 +327,10 @@ if (isset($_GET['id'])) {
       <?php $oldS = fn(string $k, string $default = ''): string => old_in('add_spend') !== '' ? h(old_in($k)) : $default; ?>
       <form method="post" action="contracts.php" class="stacked" style="margin-top:.5rem" novalidate><?= csrf_field() ?>
         <?= form_error_summary(['spend_amount' => '', 'spent_on' => ''], ['spend_amount' => 'amount_s']) ?>
+        <p class="hint">Fields marked * are required.</p>
         <input type="hidden" name="contract_id" value="<?= $cid ?>">
         <div class="grid grid-4">
-          <div class="field"><label for="amount_s">Amount *</label><input type="text" inputmode="decimal" id="amount_s" name="amount" maxlength="20" required value="<?= $oldS('amount') ?>" <?= field_aria('spend_amount') ?>><?= field_error('spend_amount') ?></div>
+          <div class="field"><label for="amount_s">Amount <?= required_mark() ?></label><input type="text" inputmode="decimal" id="amount_s" name="amount" maxlength="20" required value="<?= $oldS('amount') ?>" <?= field_aria('spend_amount') ?>><?= field_error('spend_amount') ?></div>
           <div class="field"><label for="spent_on">Date</label><input type="date" id="spent_on" name="spent_on" value="<?= $oldS('spent_on', date('Y-m-d')) ?>" <?= field_aria('spent_on') ?>><?= field_error('spent_on') ?></div>
           <div class="field"><label for="memo">Memo</label><input type="text" id="memo" name="memo" maxlength="255" value="<?= $oldS('memo') ?>"></div>
         </div>
@@ -390,8 +393,9 @@ page_header($showClosed ? 'Closed contracts' : 'Contracts', $user, 'contracts');
   $old = fn(string $k): string => old_in('add_contract') !== '' ? h(old_in($k)) : ''; ?>
   <form method="post" action="contracts.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['name' => '', 'amount' => '', 'start_date' => '', 'end_date' => '']) ?>
+    <p class="hint">Fields marked * are required.</p>
     <div class="grid grid-4">
-      <div class="field"><label for="name">Name *</label><input type="text" id="name" name="name" required maxlength="190" value="<?= $old('name') ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
+      <div class="field"><label for="name">Name <?= required_mark() ?></label><input type="text" id="name" name="name" required maxlength="190" value="<?= $old('name') ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
       <div class="field"><label for="funder">Funder</label><input type="text" id="funder" name="funder" maxlength="190" value="<?= $old('funder') ?>"></div>
       <div class="field"><label for="contract_number">Contract #</label><input type="text" id="contract_number" name="contract_number" maxlength="120" value="<?= $old('contract_number') ?>"></div>
       <div class="field"><label for="amount">Budget (USD)</label><input type="text" inputmode="decimal" id="amount" name="amount" maxlength="20" value="<?= $old('amount') ?>" <?= field_aria('amount') ?>><?= field_error('amount') ?></div>

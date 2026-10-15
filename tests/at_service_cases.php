@@ -131,11 +131,13 @@ $call('at_save',['kind'=>'staff_profile','title'=>'Other staff','values'=>['staf
 $call('at_save',['kind'=>'resource','title'=>'Unauthorized library edit','values'=>['goals'=>'test','format'=>'Text','instructions'=>'test']],[],false);
 check(true,'Caseload scope and staff/library edit permissions are enforced');
 $db->exec("UPDATE groups SET perms='billing' WHERE id=999");
-check(count($call('at_catalog')['modules'])===count(at_catalog()),'Billing can access all AT service modules');
-$call('at_profitability');$call('at_detail',[],['id'=>$rate]);$call('at_detail',[],['id'=>$cost]);
-$edit($resource,['instructions'=>'Revised by billing']);
+$billingSees=array_column($call('at_catalog')['modules'],'id');$billingModules=array_keys(array_filter(at_catalog(),fn($d)=>$d['perm']==='billing'));
+check($billingSees===$billingModules&&in_array('cost',$billingSees,true)&&!in_array('rate',$billingSees,true),'Billing sees only the billing AT modules (profitability yes, staff labor rates no)');
+$call('at_profitability');$call('at_detail',[],['id'=>$cost]);
+$call('at_detail',[],['id'=>$rate],false);
+$call('at_save',['kind'=>'resource','id'=>$resource,'title'=>'Revised by billing','values'=>['goals'=>'test','format'=>'Text','instructions'=>'Revised by billing']],[],false);
 $call('at_save',['kind'=>'setup','title'=>'Outside client','values'=>['client_id'=>'4','device'=>'test','settings'=>'test','instructions'=>'test']],[],false);
-check(true,'Billing can edit shared resources and access costs while caseload scope remains enforced');
+check(true,'Billing reads profitability and costs but cannot open staff labor rates, edit the shared library or reach other caseloads');
 $db->exec('UPDATE users SET group_id=NULL WHERE id=1');
 require __DIR__.'/at_extended_cases.php';
 $db->exec("UPDATE settings SET value='1' WHERE name IN ('ai_enabled','ai_feat_draft')");

@@ -40,6 +40,16 @@ $old = fn(string $k) => h(is_string($_POST[$k] ?? null) ? $_POST[$k] : '');
 // A translation spelled the same as the English is still Spanish, so the dictionary
 // entry decides, not a comparison of the two strings.
 $whole = fn(string $x): string => isset(translations()[$x]) ? h(__($x)) : en($x);
+// A hint written as several lines (the built-in referral purpose hint, or an
+// administrator's) is read as a list, one item a line, rather than one long
+// sentence (WCAG 3.1.5). Translated whole, like $whole, or kept in English and marked so.
+$hintBlock = function (string $x, string $id) use ($whole): string {
+    if (!str_contains($x, "\n")) return '<p class="hint" id="' . $id . '">' . $whole($x) . '</p>';
+    $translated = isset(translations()[$x]);
+    $items = '';
+    foreach (explode("\n", $translated ? __($x) : $x) as $line) if (trim($line) !== '') $items .= '<li>' . h(trim($line)) . '</li>';
+    return '<ul class="hint" id="' . $id . '"' . (!$translated && page_lang() !== 'en' ? ' lang="en"' : '') . '>' . $items . '</ul>';
+};
 // By-reference captures: $errors is filled AFTER these helpers are defined.
 $err = function (string $k) use (&$errors): string {
     return isset($errors[$k]) ? '<p class="field-error" id="err-' . $k . '">' . t($errors[$k]) . '</p>' : '';
@@ -77,7 +87,12 @@ $formKey = is_string($_POST['form_key'] ?? null) && preg_match('/^[0-9a-f]{32}$/
 $formSig = hash('sha256', json_encode(array_diff_key($_POST, ['csrf' => 1, 'csrf_uid' => 1, 'form_key' => 1])) ?: '');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (($_POST['website'] ?? '') !== '') { unset($_SESSION['referral_sent']); redirect('community_referral.php?submitted=1'); }
+    // Bot trap (the hidden "fax_contact" field): a filled trap files nothing, and
+    // says so. It never claims success: a password manager or autofill that fills
+    // the field would otherwise show a real person a "Referral sent" page for a
+    // referral nobody received. The typed values are re-shown; the field checks
+    // below still run, so one round trip can fix everything.
+    if (($_POST['fax_contact'] ?? '') !== '') $errors['form'] = 'We could not send this referral. Please check the form and choose Send referral again, or email us.';
     $sent = $_SESSION['referral_form_keys'][$formKey] ?? null;
     if (is_array($sent) && hash_equals((string)($sent['sig'] ?? ''), $formSig)) {
         if (isset($sent['ref'], $sent['by'])) $_SESSION['referral_sent'] = ['ref' => (int)$sent['ref'], 'by' => (string)$sent['by']];
@@ -396,9 +411,11 @@ if ($errors): ?>
 <form method="post" action="community_referral.php?lang=<?= h(page_lang()) ?>" class="stacked" id="referral-form" novalidate>
   <?= csrf_field() ?>
   <input type="hidden" name="form_key" value="<?= h($formKey) ?>">
+  <?php // Bot trap. Named so that no browser or password manager autofills it
+  // (a field called "website" was being filled for real people). ?>
   <div class="honeypot" aria-hidden="true">
-    <label for="website"><?= t('Leave this field empty') ?></label>
-    <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+    <label for="fax_contact"><?= t('Leave this field empty') ?></label>
+    <input type="text" id="fax_contact" name="fax_contact" tabindex="-1" autocomplete="off">
   </div>
 
   <fieldset id="role-group" <?= isset($errors['role']) ? 'aria-describedby="err-role"' : '' ?>>
@@ -410,6 +427,9 @@ if ($errors): ?>
     <?php endforeach; ?>
     <?= $err('role') ?>
   </fieldset>
+  <?php // Filled by the page script when a role is chosen, so a screen reader
+  // hears that the questions below changed (WCAG 4.1.3). ?>
+  <p class="visually-hidden" role="status" id="role-status" data-text="<?= t('Showing the questions for:') ?>"></p>
 
   <fieldset>
     <legend><h2 class="legend-h"><?= t('About you') ?></h2></legend>
@@ -448,14 +468,14 @@ if ($errors): ?>
     <?php // Asked only of counselors and agencies; for anyone else the page script
     // hides and disables it, and the referral is sent as a new referral. ?>
     <div class="field" data-role="counselor agency">
-      <label for="referral_purpose"><?= t('Referral purpose') ?></label>
+      <label for="referral_purpose"><?= t('Referral purpose') ?> <span aria-hidden="true">*</span><span class="visually-hidden"> (<?= t('required') ?>)</span></label>
       <select id="referral_purpose" name="referral_purpose" required <?= $aria('referral_purpose', 'purpose-hint') ?>><?= select_options(referral_options('purposes'), is_string($request['purpose']) ? $request['purpose'] : null) ?></select>
-      <p class="hint" id="purpose-hint"><?= $whole(referral_form_config()['hints']['purpose']['en']) ?></p>
+      <?= $hintBlock(referral_form_config()['hints']['purpose']['en'], 'purpose-hint') ?>
       <?= $err('referral_purpose') ?>
     </div>
     <fieldset class="field" id="requested-services-group" aria-describedby="services-hint<?= isset($errors['requested_services']) ? ' err-requested_services' : '' ?>">
       <legend><?= t('Assistive technology services requested') ?><?= referral_form_config()['min_services'] > 0 ? ' <span aria-hidden="true">*</span><span class="visually-hidden"> (' . t('required: choose at least one') . ')</span>' : '' ?></legend>
-      <p class="hint" id="services-hint"><?= $whole(referral_form_config()['hints']['services']['en']) ?></p>
+      <?= $hintBlock(referral_form_config()['hints']['services']['en'], 'services-hint') ?>
       <?php $pickedServices = $request['service'] !== '' ? explode('; ', $request['service']) : []; ?>
       <?php foreach (referral_options('services') as $svcNum => $svc): $svcHint = referral_service_hint($svc); ?>
       <label class="check"><input type="checkbox" name="requested_services[]" id="svc-<?= (int)$svcNum ?>" value="<?= h($svc) ?>" <?= in_array($svc, $pickedServices, true) ? 'checked' : '' ?>> <?= $whole($svc) ?>
@@ -466,7 +486,7 @@ if ($errors): ?>
     <?php if (referral_options('needs')): ?>
     <fieldset aria-describedby="needs-hint<?= isset($errors['specific_needs']) ? ' err-specific_needs' : '' ?>">
       <legend><?= t('Specific needs (optional)') ?></legend>
-      <p class="hint" id="needs-hint"><?= $whole(referral_form_config()['hints']['needs']['en']) ?></p>
+      <?= $hintBlock(referral_form_config()['hints']['needs']['en'], 'needs-hint') ?>
       <?php foreach (referral_options('needs') as $needNum => $need): ?>
       <label class="check"><input type="checkbox" name="specific_needs[]" id="need-<?= (int)$needNum ?>" value="<?= h($need) ?>" <?= in_array($need, $request['needs'], true) ? 'checked' : '' ?>> <?= $whole($need) ?></label>
       <?php endforeach; ?>
@@ -595,7 +615,18 @@ if ($errors): ?>
         selfText.forEach(function (el) { el.hidden = !self; });
         otherText.forEach(function (el) { el.hidden = self; });
     }
-    radios.forEach(function (r) { r.addEventListener('change', update); r.addEventListener('change', wording); });
+    // After a switch, say which role's questions are now shown (the status
+    // region is polite, so it does not interrupt the radio's own announcement).
+    var status = document.getElementById('role-status');
+    function announce() {
+        var chosen = document.querySelector('[data-role-radio]:checked');
+        var label = chosen && chosen.closest('label');
+        if (!status || !label) return;
+        var name = label.textContent.replace(/\s+/g, ' ').trim();
+        status.textContent = '';
+        setTimeout(function () { status.textContent = status.getAttribute('data-text') + ' ' + name + '.'; }, 50);
+    }
+    radios.forEach(function (r) { r.addEventListener('change', update); r.addEventListener('change', wording); r.addEventListener('change', announce); });
     update();
     wording();
 })();

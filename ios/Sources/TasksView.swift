@@ -382,6 +382,11 @@ struct TaskEditSheet: View {
             DraftStore.clear(key: draftKey, owner: api.userId)
             onSaved(result.message ?? (existing == nil ? "Task added." : "Task saved."))
             dismiss()
+        } catch APIError.network where existing == nil {
+            // The request may have arrived: it isn't known whether the task was added, and
+            // adding it again would list it twice. (Saving an existing task again is harmless.)
+            busy = false
+            showFormError("The connection dropped before the server answered, so it isn't known whether this task was added. Check the task list for “\(trimmed)” before adding it again; your text is kept here.", in: &self.error)
         } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

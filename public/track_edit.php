@@ -246,7 +246,7 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
   <fieldset>
     <legend>Track</legend>
     <div class="field">
-      <label for="title">Track title *</label>
+      <label for="title">Track title <?= required_mark() ?></label>
       <span class="hint" id="title-hint">e.g., “Screen Reader Training — JAWS”, “Independent Living Skills — Kitchen &amp; Home”, or “Braille Literacy”</span>
       <input type="text" id="title" name="title" required maxlength="190" value="<?= $v('title') ?>" <?= field_aria('title', 'title-hint') ?>>
       <?= field_error('title') ?>
@@ -332,22 +332,22 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
   <fieldset>
     <legend>Service authorization</legend>
     <div class="field">
-      <label for="auth_number">Authorization number *</label>
+      <label for="auth_number">Authorization number <?= required_mark() ?></label>
       <input type="text" id="auth_number" name="auth_number" required maxlength="80" value="<?= $v('auth_number') ?>" <?= field_aria('auth_number') ?>>
       <?= field_error('auth_number') ?>
     </div>
     <div class="field">
-      <label for="funding_agency">Funding agency *</label>
+      <label for="funding_agency">Funding agency <?= required_mark() ?></label>
       <input type="text" id="funding_agency" name="funding_agency" required maxlength="190" value="<?= $v('funding_agency', 'State VR') ?>" <?= field_aria('funding_agency') ?>>
       <?= field_error('funding_agency') ?>
     </div>
     <div class="field">
-      <label for="authorized_hours">Authorized hours (total granted) *</label>
+      <label for="authorized_hours">Authorized hours (total granted) <?= required_mark() ?></label>
       <input type="number" id="authorized_hours" name="authorized_hours" step="0.25" min="0.25" required value="<?= $v('authorized_hours') ?>" <?= field_aria('authorized_hours') ?>>
       <?= field_error('authorized_hours') ?>
     </div>
     <div class="field">
-      <label for="hourly_rate">Hourly billing rate (USD) *</label>
+      <label for="hourly_rate">Hourly billing rate (USD) <?= required_mark() ?></label>
       <span class="hint" id="rate-hint">Enter the hourly rate written on this authorization, in dollars and cents</span>
       <input type="number" id="hourly_rate" name="hourly_rate" step="0.01" min="0.01" required value="<?= $v('hourly_rate', '') ?>" <?= field_aria('hourly_rate', 'rate-hint') ?>>
       <?= field_error('hourly_rate') ?>

@@ -77,5 +77,8 @@ function set_task_done(int $id, array $user, bool $done): bool {
         $stmt = db()->prepare("UPDATE tasks t SET status = 'Open', done_at = NULL, done_by = NULL" . $where);
         $stmt->execute(array_merge([$id], $params));
     }
-    return $stmt->rowCount() > 0;
+    $changed = $stmt->rowCount() > 0;
+    // Completing or reopening is audited like adding and deleting (website and app alike).
+    if ($changed && function_exists('audit')) audit((int)$user['id'], $done ? 'task.done' : 'task.reopen', 'task', $id, $done ? 'completed' : 'reopened');
+    return $changed;
 }

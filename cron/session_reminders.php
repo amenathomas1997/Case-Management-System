@@ -36,6 +36,12 @@ if (!function_exists('db')) {
 // is still reminded, so the session can be cancelled. A client email copied from
 // the public referral form (email_verified = 0) is not emailed either until staff
 // confirm it: the instructor's reminder and the administrators' alerts say so.
+// One run at a time: a manual run overlapping the scheduled one would otherwise email
+// every client and instructor twice (reminder_sent is set only after sending).
+if ((int)db()->query("SELECT GET_LOCK(CONCAT('cms_session_reminders_', MD5(DATABASE())), 0)")->fetchColumn() !== 1) {
+    echo "Another session reminders run is still working; this run sent nothing.\n";
+    exit(0);
+}
 $sessions = db()->query("SELECT s.*, c.name AS client_name, c.email AS client_email, c.email_verified AS client_email_verified,
         (c.archived_at IS NULL AND c.status NOT LIKE 'Closed%') AS client_current,
         u.id AS active_staff_id, u.name AS staff_name, u.email AS staff_email,

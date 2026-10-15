@@ -210,8 +210,13 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <?= $sgH(4, 'guide-shortcuts') ?>
 <p>Quick keys take you straight to a page or a form from anywhere on the site, in Forms Mode or not. Hold the browser's access-key modifier and press the key: in Chrome and Edge on Windows, Alt; in Firefox, Alt+Shift; on a Mac, Control+Option. JAWS reads the shortcut with each link or button that has one.</p>
 <ul>
-  <li>1 Dashboard · 2 Task list · 3 Daily work &amp; review · 4 Client records · 5 Session schedule · 6 Client &amp; counselor messages · 7 Equipment &amp; loans · 8 Invoices · 9 Notifications</li>
-  <li>0 Go to main menu · M Skip to main content · S Site search · U User guide · A My Account</li>
+  <li>Today: 1 Dashboard · 2 Task list · 3 Daily work &amp; review (the action center)</li>
+  <li>Clients: 4 Client records · R Incoming referrals · I Intake progress · Q Client portal requests · 6 Client &amp; counselor messages · C Accommodation assessments</li>
+  <li>Services: 5 Session schedule · G Group programs · H Assistive technology services · O Goal &amp; assessment templates</li>
+  <li>Equipment: 7 Equipment &amp; loans · B Device purchases · V Device follow-ups</li>
+  <li>Billing, compliance &amp; reports: 8 Invoices · K Grants &amp; contracts · P Authorizations &amp; compliance · J Incident reports · Y Business analytics</li>
+  <li>Help &amp; account: W Staff knowledge base · X AI tools · U User guide · A My Account · 9 Notifications</li>
+  <li>Getting around: 0 Go to main menu · M Skip to main content · S Site search</li>
   <li>N opens the page's add form: Add a task, Schedule a session, Add a note, Loan an item out, Report an incident, New contract, New device request, or the Add form in a template library.</li>
   <li>T, on a training track, moves to the Log a session form.</li>
 </ul>

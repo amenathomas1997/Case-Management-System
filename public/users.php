@@ -437,10 +437,11 @@ page_header('Users', $user, 'account');
   <form method="post" action="users.php" class="stacked" novalidate>
     <?= csrf_field() ?>
     <input type="hidden" name="uid" value="<?= (int)$edit['id'] ?>">
+    <p class="hint">Fields marked * are required.</p>
     <div class="grid grid-2">
-      <div class="field"><label for="u_name">Full name *</label>
+      <div class="field"><label for="u_name">Full name <?= required_mark() ?></label>
         <input type="text" id="u_name" name="name" required maxlength="120" value="<?= h(old_in('name', $edit['name'])) ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
-      <div class="field"><label for="u_email">Email address * <span class="hint">changing it removes any Microsoft sign-in link; they re-link from My Account after signing in with a password</span></label>
+      <div class="field"><label for="u_email">Email address <?= required_mark() ?> <span class="hint">changing it removes any Microsoft sign-in link; they re-link from My Account after signing in with a password</span></label>
         <input type="email" id="u_email" name="email" required value="<?= h(old_in('email', $edit['email'])) ?>" <?= field_aria('email') ?>><?= field_error('email') ?></div>
       <?php // A rejected save (guard error) refills every field, not just name/email.
             $refilling = old_in('save_user') !== '';
@@ -455,7 +456,7 @@ page_header('Users', $user, 'account');
           <option value="<?= (int)$g['id'] ?>" <?= (int)$selGroup === (int)$g['id'] ? 'selected' : '' ?>><?= h($g['name']) ?></option>
           <?php endforeach; ?>
         </select></div>
-      <div class="field"><label for="u_hours">Weekly available hours *</label>
+      <div class="field"><label for="u_hours">Weekly available hours <?= required_mark() ?></label>
         <span class="hint" id="u_hours-hint">A number from 0 to 80, in half-hour steps (enter 0 for none).</span>
         <input type="number" id="u_hours" name="weekly_hours" required min="0" max="80" step="0.5" value="<?= h(old_in('weekly_hours', (string)(float)$edit['weekly_hours'])) ?>" <?= field_aria('weekly_hours', 'u_hours-hint') ?>><?= field_error('weekly_hours') ?></div>
       <div class="field"><label><input type="checkbox" name="is_active" value="1" <?= $checkedActive ? 'checked' : '' ?>>

@@ -548,7 +548,7 @@ if (isset($_GET['scan'])) {
           <select id="sc_type" name="service_type"><?= select_options(MAINT_TYPES, $oldSc('service_type', 'Maintenance')) ?></select></div>
         <div class="field"><label for="sc_date">Date</label>
           <input type="date" id="sc_date" name="service_date" max="<?= date('Y-m-d') ?>" value="<?= h($oldSc('service_date', date('Y-m-d'))) ?>" <?= field_aria($scKey) ?>><?= field_error($scKey) ?></div>
-        <div class="field"><label for="sc_notes">Notes</label><input type="text" id="sc_notes" name="service_notes" maxlength="500" value="<?= h($oldSc('service_notes')) ?>" <?= field_aria($scNotesKey) ?>><?= field_error($scNotesKey) ?></div>
+        <div class="field"><label for="sc_notes">Service notes</label><input type="text" id="sc_notes" name="service_notes" maxlength="500" value="<?= h($oldSc('service_notes')) ?>" <?= field_aria($scNotesKey) ?>><?= field_error($scNotesKey) ?></div>
         <button type="submit" name="log_service" value="1" class="btn btn-secondary">Log service</button>
       </form>
     </section>
@@ -686,7 +686,7 @@ page_header('Equipment & loans', $user, 'equipment');
     <?= $requiredNote ?>
     <div class="grid grid-4">
       <div class="field">
-        <label for="equipment_id">Item <span aria-hidden="true">*</span></label>
+        <label for="equipment_id">Loan: item <?= required_mark() ?></label>
         <select id="equipment_id" name="equipment_id" required <?= field_aria('loan_equipment_id', 'loan-hold-hint') ?>>
           <option value="">— Available items —</option>
           <?php foreach ($items as $i): if ($i['status'] !== 'Available') continue; ?>
@@ -695,7 +695,7 @@ page_header('Equipment & loans', $user, 'equipment');
         </select><?= field_error('loan_equipment_id') ?>
       </div>
       <div class="field">
-        <label for="lo_client">Client <span aria-hidden="true">*</span></label>
+        <label for="lo_client">Loan: client <?= required_mark() ?></label>
         <select id="lo_client" name="client_id" required <?= field_aria('loan_client_id') ?>>
           <option value="">— Choose —</option>
           <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $oldLoan('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
@@ -703,7 +703,7 @@ page_header('Equipment & loans', $user, 'equipment');
       </div>
       <div class="field"><label for="due_date">Return due</label>
         <input type="date" id="due_date" name="due_date" value="<?= h($oldLoan('due_date', date('Y-m-d', strtotime('+60 days')))) ?>" <?= field_aria('loan_due_date') ?>><?= field_error('loan_due_date') ?></div>
-      <div class="field"><label for="lo_notes">Notes</label>
+      <div class="field"><label for="lo_notes">Loan notes</label>
         <input type="text" id="lo_notes" name="notes" maxlength="255" value="<?= h($oldLoan('notes')) ?>" <?= field_aria('loan_notes') ?>><?= field_error('loan_notes') ?></div>
     </div>
     <button type="submit" name="loan_out" value="1" class="btn btn-primary">Loan out</button>
@@ -720,7 +720,7 @@ page_header('Equipment & loans', $user, 'equipment');
     <?= form_error_summary(['name' => '', 'serial' => '', 'value' => '', 'purchase_date' => '', 'useful_life_months' => '', 'maintenance_interval_days' => '', 'notes' => ''], ['maintenance_interval_days' => 'maint_interval']) ?>
     <?= $requiredNote ?>
     <div class="grid grid-4">
-      <div class="field"><label for="name">Item name <span aria-hidden="true">*</span></label>
+      <div class="field"><label for="name">Item name <?= required_mark() ?></label>
         <input type="text" id="name" name="name" required maxlength="190" value="<?= h($oldItem('name')) ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
       <div class="field"><label for="category">Category</label>
         <select id="category" name="category"><?= select_options(EQUIP_CATEGORIES, $oldItem('category', 'Other')) ?></select></div>
@@ -739,7 +739,7 @@ page_header('Equipment & loans', $user, 'equipment');
       <div class="field"><label for="maint_interval">Service interval</label>
         <span class="hint" id="interval-hint">Whole days between maintenance or calibration, 0 to 3650; blank = none</span>
         <input type="text" inputmode="numeric" id="maint_interval" name="maintenance_interval_days" value="<?= h($oldItem('maintenance_interval_days')) ?>" <?= field_aria('maintenance_interval_days', 'interval-hint') ?>><?= field_error('maintenance_interval_days') ?></div>
-      <div class="field"><label for="notes">Notes</label>
+      <div class="field"><label for="notes">Item notes</label>
         <input type="text" id="notes" name="notes" maxlength="255" value="<?= h($oldItem('notes')) ?>" <?= field_aria('notes') ?>><?= field_error('notes') ?></div>
     </div>
     <button type="submit" name="add_item" value="1" class="btn btn-primary">Add item</button>
@@ -804,7 +804,7 @@ page_header('Equipment & loans', $user, 'equipment');
             <select id="mt-<?= $iid ?>" name="service_type"><?= select_options(MAINT_TYPES, $oldSvc('service_type', 'Maintenance')) ?></select>
             <label for="md-<?= $iid ?>">Date</label>
             <input type="date" id="md-<?= $iid ?>" name="service_date" max="<?= date('Y-m-d') ?>" value="<?= h($oldSvc('service_date', date('Y-m-d'))) ?>" <?= field_aria($svcKey) ?>><?= field_error($svcKey) ?>
-            <label for="mn-<?= $iid ?>">Notes</label>
+            <label for="mn-<?= $iid ?>">Service notes</label>
             <input type="text" id="mn-<?= $iid ?>" name="service_notes" maxlength="500" value="<?= h($oldSvc('service_notes')) ?>" <?= field_aria($snKey) ?>><?= field_error($snKey) ?>
             <label for="mc-<?= $iid ?>">Cost</label>
             <span class="hint" id="mc-hint-<?= $iid ?>">In dollars, for example 125.00; blank if none</span>
@@ -909,14 +909,14 @@ page_header('Equipment & loans', $user, 'equipment');
     <?= form_error_summary(['res_client_id' => '', 'needed_from' => '', 'needed_until' => '', 'res_notes' => ''], ['res_client_id' => 'res_client', 'needed_from' => 'res_from', 'needed_until' => 'res_until', 'res_notes' => 'res_notes']) ?>
     <?= $requiredNote ?>
     <div class="grid grid-4">
-      <div class="field"><label for="res_item">Item <span aria-hidden="true">*</span></label>
+      <div class="field"><label for="res_item">Reserve: item <?= required_mark() ?></label>
         <select id="res_item" name="equipment_id" required>
           <option value="">— Choose —</option>
           <?php foreach ($items as $i): if ($i['status'] === 'Retired') continue; ?>
           <option value="<?= (int)$i['id'] ?>" <?= $oldRes('equipment_id') === (string)$i['id'] ? 'selected' : '' ?>><?= h($i['name']) ?> (<?= h($i['status']) ?>)</option>
           <?php endforeach; ?>
         </select></div>
-      <div class="field"><label for="res_client">Client <span aria-hidden="true">*</span></label>
+      <div class="field"><label for="res_client">Reserve: client <?= required_mark() ?></label>
         <select id="res_client" name="client_id" required <?= field_aria('res_client_id') ?>>
           <option value="">— Choose —</option>
           <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $oldRes('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
@@ -924,7 +924,7 @@ page_header('Equipment & loans', $user, 'equipment');
       <div class="field"><label for="res_from">Needed from</label><input type="date" id="res_from" name="needed_from" value="<?= h($oldRes('needed_from')) ?>" <?= field_aria('needed_from') ?>><?= field_error('needed_from') ?></div>
       <div class="field"><label for="res_until">Needed until</label><input type="date" id="res_until" name="needed_until" value="<?= h($oldRes('needed_until')) ?>" <?= field_aria('needed_until') ?>><?= field_error('needed_until') ?></div>
     </div>
-    <div class="field"><label for="res_notes">Notes</label><input type="text" id="res_notes" name="notes" maxlength="500" value="<?= h($oldRes('notes')) ?>" <?= field_aria('res_notes') ?>><?= field_error('res_notes') ?></div>
+    <div class="field"><label for="res_notes">Reservation notes</label><input type="text" id="res_notes" name="notes" maxlength="500" value="<?= h($oldRes('notes')) ?>" <?= field_aria('res_notes') ?>><?= field_error('res_notes') ?></div>
     <button type="submit" name="add_reservation" value="1" class="btn btn-secondary">Add reservation</button>
   </form>
 </section>

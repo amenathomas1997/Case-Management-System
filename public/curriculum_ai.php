@@ -108,7 +108,7 @@ page_header('Curriculum generator', $user, 'ai_tools');
 <form method="post" action="curriculum_ai.php" class="stacked" novalidate><?= csrf_field() ?>
   <p class="hint">Fields marked * are required.</p>
   <div class="grid grid-4">
-    <div class="field"><label for="tech">Technology <span aria-hidden="true">*</span></label><input type="text" id="tech" name="tech" value="<?= h($tech) ?>" required placeholder="e.g. JAWS, ZoomText, an AAC device" <?= field_aria('tech') ?>><?= field_error('tech') ?></div>
+    <div class="field"><label for="tech">Technology <?= required_mark() ?></label><input type="text" id="tech" name="tech" value="<?= h($tech) ?>" required placeholder="e.g. JAWS, ZoomText, an AAC device" <?= field_aria('tech') ?>><?= field_error('tech') ?></div>
     <div class="field"><label for="level">Learner level</label><select id="level" name="level"><?= select_options(['Beginner', 'Intermediate', 'Advanced'], $level) ?></select></div>
     <div class="field"><label for="focus">Focus / notes</label><input type="text" id="focus" name="focus" value="<?= h($focus) ?>" placeholder="e.g. employment tasks" <?= field_aria('focus') ?>><?= field_error('focus') ?></div>
   </div>
@@ -124,10 +124,10 @@ page_header('Curriculum generator', $user, 'ai_tools');
     <?php // The draft settings ride along so a refused create shows them again. ?>
     <input type="hidden" name="level" value="<?= h($level) ?>">
     <input type="hidden" name="focus" value="<?= h($focus) ?>">
-    <div class="field"><label for="name">Curriculum name <span aria-hidden="true">*</span></label><span class="hint" id="name-hint">Up to 190 characters.</span><input type="text" id="name" name="name" value="<?= h($name) ?>" maxlength="190" required <?= field_aria('name', 'name-hint') ?>><?= field_error('name') ?></div>
+    <div class="field"><label for="name">Curriculum name <?= required_mark() ?></label><span class="hint" id="name-hint">Up to 190 characters.</span><input type="text" id="name" name="name" value="<?= h($name) ?>" maxlength="190" required <?= field_aria('name', 'name-hint') ?>><?= field_error('name') ?></div>
     <?php // Saved with the curriculum (120 characters at most), so a longer description typed for the draft can be shortened here. ?>
     <div class="field"><label for="cur_tech">Technology saved with the curriculum</label><span class="hint" id="cur_tech-hint">Up to 120 characters; starts as the technology you drafted for.</span><input type="text" id="cur_tech" name="tech" value="<?= h($tech) ?>" maxlength="120" <?= field_aria('cur_tech', 'cur_tech-hint') ?>><?= field_error('cur_tech') ?></div>
-    <div class="field"><label for="skills">Skills <span aria-hidden="true">*</span></label><span class="hint" id="skills-hint">One per line, up to 300 characters each — edit freely.</span><textarea id="skills" name="skills" rows="12" required <?= field_aria('skills', 'skills-hint') ?>><?= h($skillsText) ?></textarea><?= field_error('skills') ?></div>
+    <div class="field"><label for="skills">Skills <?= required_mark() ?></label><span class="hint" id="skills-hint">One per line, up to 300 characters each — edit freely.</span><textarea id="skills" name="skills" rows="12" required <?= field_aria('skills', 'skills-hint') ?>><?= h($skillsText) ?></textarea><?= field_error('skills') ?></div>
     <button type="submit" name="create" value="1" class="btn btn-primary">Create curriculum</button>
   </form>
 </section>

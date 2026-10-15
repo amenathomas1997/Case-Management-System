@@ -41,6 +41,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_task'])) {
         }
         $assignee = (int)($_POST['assigned_to'] ?? 0) ?: null;
         if (!$isAdmin) $assignee = (int)$user['id']; // non-admins assign to themselves
+        elseif ($assignee !== null) {
+            // Only an active account: a task given to a deactivated one would never be seen.
+            $au = db()->prepare('SELECT id FROM users WHERE id = ? AND is_active = 1');
+            $au->execute([$assignee]);
+            if (!$au->fetchColumn()) { keep_input(); keep_field_errors(['assigned_to' => 'Choose an active staff member to assign the task to.']); redirect('tasks.php#add-h'); }
+        }
         $saved = add_task($title, trim($_POST['details'] ?? '') ?: null, $clientId, null,
             $due, $assignee, (int)$user['id']);
         if ($saved) {
@@ -152,8 +158,9 @@ $addOpen = array_intersect_key(form_errors(), ['title' => 1, 'due_date' => 1]) |
     <input type="hidden" name="q" value="<?= h($filters['q']) ?>">
     <input type="hidden" name="due" value="<?= h($filters['due']) ?>">
     <?= form_error_summary(['title' => 'What needs doing?', 'due_date' => 'Due date']) ?>
+    <p class="hint">Fields marked * are required.</p>
     <div class="grid grid-2">
-      <div class="field"><label for="title">What needs doing? *</label>
+      <div class="field"><label for="title">What needs doing? <?= required_mark() ?></label>
         <input type="text" id="title" name="title" required maxlength="190" value="<?= h(old_in('title')) ?>" <?= field_aria('title') ?>>
         <?= field_error('title') ?></div>
       <div class="field"><label for="due_date">Due date</label>
@@ -195,7 +202,7 @@ $addOpen = array_intersect_key(form_errors(), ['title' => 1, 'due_date' => 1]) |
   <div class="grid grid-2">
     <div class="field"><label for="task-q">Search task titles and details</label>
       <input type="search" id="task-q" name="q" maxlength="190" value="<?= h($filters['q']) ?>"></div>
-    <div class="field"><label for="task-due">Due date</label>
+    <div class="field"><label for="task-due">Filter: due date</label>
       <select id="task-due" name="due">
         <?php foreach (['any' => 'Any due date', 'overdue' => 'Overdue', 'today' => 'Due today (open)', 'week' => 'Next 7 days (open)', 'none' => 'No due date'] as $value => $label): ?>
         <option value="<?= h($value) ?>" <?= $filters['due'] === $value ? 'selected' : '' ?>><?= h($label) ?></option>

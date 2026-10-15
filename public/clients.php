@@ -108,7 +108,7 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
 </form>
 
 <?php if ($matchCount > count($clients)): ?>
-<p class="alert alert-error">Showing the first <?= count($clients) ?> of <?= number_format($matchCount) ?> matching clients, in name order. Search by name or narrow the filters to find the rest.</p>
+<p class="alert alert-info">Showing the first <?= count($clients) ?> of <?= number_format($matchCount) ?> matching clients, in name order. Search by name or narrow the filters to find the rest.</p>
 <?php endif; ?>
 <div class="table-scroll" tabindex="0" role="region" aria-labelledby="clients-cap">
 <table>

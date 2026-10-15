@@ -85,9 +85,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $fieldErrs) {
             // accepted by the app sign-in, nor an app code here.
             db()->prepare("UPDATE login_otps SET consumed = 1 WHERE user_id = ? AND channel = 'web' AND consumed = 0")->execute([$user['id']]);
             db()->prepare("INSERT INTO login_otps (user_id, code_hash, expires_at, channel) VALUES (?,?, DATE_ADD(NOW(), INTERVAL ? MINUTE), 'web')")
-                ->execute([$user['id'], password_hash($code, PASSWORD_DEFAULT), (int)cfg('otp_expiry_minutes')]);
+                ->execute([$user['id'], password_hash($code, PASSWORD_DEFAULT), ((int)cfg('otp_expiry_minutes') ?: 10)]);
 
-            [$subj, $body] = email_template('otp', ['name' => $user['name'], 'code' => $code, 'minutes' => cfg('otp_expiry_minutes')]);
+            [$subj, $body] = email_template('otp', ['name' => $user['name'], 'code' => $code, 'minutes' => (string)((int)cfg('otp_expiry_minutes') ?: 10)]);
             $sent = send_app_mail($user['email'], $subj, $body);
 
             // A clean session for the new sign-in: nothing an earlier account

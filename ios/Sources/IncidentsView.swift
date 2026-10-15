@@ -313,6 +313,11 @@ struct AddIncidentSheet: View {
             let _: OKResponse = try await api.call("add_incident", body: body)
             // The list announces the result once this sheet has gone.
             onSaved(); dismiss()
+        } catch APIError.network {
+            // The request may have arrived: it isn't known whether the incident was logged, and
+            // logging it again would record it twice.
+            busy = false
+            showFormError("The connection dropped before the server answered, so it isn't known whether this incident was logged. Check the incidents list for \(type) on \(date.formatted(date: .abbreviated, time: .omitted)) before logging it again.", in: &self.error)
         } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

@@ -48,14 +48,17 @@
       bar.querySelectorAll('[data-vision-toggle]').forEach(function (b) { b.setAttribute('aria-pressed', String(prefs[b.dataset.visionToggle])); });
       size.value = prefs.size;
     }
-    function update() {
+    function update(what) {
       apply(); paint();
       try { localStorage.setItem(key, JSON.stringify(prefs)); } catch (e) {}
-      live.textContent = bar.dataset.saved;
+      // Cleared first, then written: an unchanged live message is often not repeated.
+      live.textContent = '';
+      var later = typeof setTimeout === 'function' ? setTimeout : function (f) { f(); };
+      later(function () { live.textContent = (what ? what + '. ' : '') + bar.dataset.saved; }, 50);
     }
-    bar.querySelectorAll('[data-palette]').forEach(function (b) { b.addEventListener('click', function () { prefs.palette = b.dataset.palette; update(); }); });
-    bar.querySelectorAll('[data-vision-toggle]').forEach(function (b) { b.addEventListener('click', function () { var k = b.dataset.visionToggle; prefs[k] = !prefs[k]; update(); }); });
-    size.addEventListener('change', function () { if (sizes.includes(size.value)) { prefs.size = size.value; update(); } });
+    bar.querySelectorAll('[data-palette]').forEach(function (b) { b.addEventListener('click', function () { prefs.palette = b.dataset.palette; update((b.textContent || '').trim()); }); });
+    bar.querySelectorAll('[data-vision-toggle]').forEach(function (b) { b.addEventListener('click', function () { var k = b.dataset.visionToggle; prefs[k] = !prefs[k]; update((b.textContent || '').trim() + (prefs[k] ? ' on' : ' off')); }); });
+    size.addEventListener('change', function () { if (sizes.includes(size.value)) { prefs.size = size.value; update('Text size ' + size.value + '%'); } });
     document.getElementById('vision-reset').addEventListener('click', function () { prefs = Object.assign({}, defaults); update(); });
     paint();
   });

@@ -195,6 +195,7 @@ page_header('Training report', $user, 'clients');
     <?= csrf_field() ?>
     <input type="hidden" name="send_token" value="<?= h($sendToken) ?>">
     <?= form_error_summary(['recipient' => 'Send to', 'intro' => 'Personal message', 'signature' => 'Electronic signature']) ?>
+    <p class="hint">Fields marked * are required.</p>
     <?php // Pressing Enter in a field submits with the form's FIRST submit button. This
           // hidden copy of the send button comes first, so Enter sends (and checks) the
           // report — it never runs the AI draft, which would change the cover note. ?>
@@ -220,7 +221,7 @@ page_header('Training report', $user, 'clients');
       <label><input type="checkbox" name="cc_self" value="1"<?= $ccChecked ? ' checked' : '' ?>> Send a copy to me (<?= h($user['email']) ?>)</label>
     </div>
     <div class="field">
-      <label for="signature">Electronic signature * <span class="hint">Type your full name (<?= h($user['name']) ?>) to sign — the signature and timestamp are included on the report</span></label>
+      <label for="signature">Electronic signature <?= required_mark() ?> <span class="hint">Type your full name (<?= h($user['name']) ?>) to sign — the signature and timestamp are included on the report</span></label>
       <input type="text" id="signature" name="signature" required autocomplete="name" <?= field_aria('signature') ?>>
       <?= field_error('signature') ?>
     </div>

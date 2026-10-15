@@ -74,11 +74,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
     }
     $f = $_FILES['csv'] ?? null;
     if (!$f || ($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
-        flash('Please choose a CSV file to upload.', 'error');
+        keep_field_errors(['csv' => 'Please choose a CSV file to upload.']);
         redirect('equipment_import.php');
     }
     if (($f['size'] ?? 0) > 2 * 1024 * 1024) {
-        flash('That file is larger than 2 MB. Split it into smaller files.', 'error');
+        keep_field_errors(['csv' => 'That file is larger than 2 MB. Split it into smaller files.']);
         redirect('equipment_import.php');
     }
     $fh = fopen($f['tmp_name'], 'r');
@@ -214,7 +214,9 @@ page_header('Import equipment', $user, 'equipment');
   </ol>
   <form method="post" action="equipment_import.php" enctype="multipart/form-data" class="stacked"><?= csrf_field() ?>
     <input type="hidden" name="import_token" value="<?= h(import_form_token()) ?>">
-    <div class="field"><label for="csv">CSV file</label><input type="file" id="csv" name="csv" accept=".csv,text/csv" required></div>
+    <?= form_error_summary(['csv' => 'CSV file']) ?>
+    <p class="hint">Fields marked * are required.</p>
+    <div class="field"><label for="csv">CSV file <?= required_mark() ?></label><input type="file" id="csv" name="csv" accept=".csv,text/csv" required <?= field_aria('csv') ?>><?= field_error('csv') ?></div>
     <div class="field"><label><input type="checkbox" name="dry_run" value="1" checked> Validate only (dry run — don't import yet)</label></div>
     <button type="submit" name="do_import" value="1" class="btn btn-primary">Upload &amp; process</button>
   </form>

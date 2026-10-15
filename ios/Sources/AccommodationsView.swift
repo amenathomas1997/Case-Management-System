@@ -274,6 +274,12 @@ struct WorksiteNewSheet: View {
         guard let cid = selectedClient else { return }
         busy = true; error = nil
         do { let _: OKResponse = try await api.call("add_worksite", body: ["client_id": cid, "employer": employer, "job_title": jobTitle, "assessment_date": APIDate.day(date)]); onDone(); dismiss() }
+        catch APIError.network {
+            // The request may have arrived: it isn't known whether the assessment was created, and
+            // creating it again would list it twice.
+            showFormError("The connection dropped before the server answered, so it isn't known whether this assessment was created. Check the worksite assessments list for \(date.formatted(date: .abbreviated, time: .omitted)) before creating it again.", in: &self.error)
+            busy = false
+        }
         catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
     }
 }

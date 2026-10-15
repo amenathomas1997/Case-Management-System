@@ -343,6 +343,12 @@ function take_flashes(): array {
    give each control aria-invalid + aria-describedby pointing at an inline error,
    and render an error summary of focusable links that jump to each bad field. */
 
+/** The required-field marker for a label: a visual asterisk plus "(required)"
+ *  for screen readers, so every form marks required fields the same way (3.3.2). */
+function required_mark(): string {
+    return '<span aria-hidden="true">*</span><span class="visually-hidden">(required)</span>';
+}
+
 /** Stash per-field errors before an error redirect (post/redirect/get forms). */
 function keep_field_errors(array $errors): void { $_SESSION['field_errors'] = $errors; }
 /** Set per-field errors for a form rendered inline in the same request. */

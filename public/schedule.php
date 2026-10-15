@@ -777,7 +777,7 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
         'notes' => 'Notes', 'meeting_url' => 'Meeting link', 'authorization_ack' => 'Authorization approval']) ?>
     <div class="grid grid-2">
       <div class="field">
-        <label for="client_id">Client <span aria-hidden="true">*</span></label>
+        <label for="client_id">Client <?= required_mark() ?></label>
         <select id="client_id" name="client_id" required <?= field_aria('client_id') ?>>
           <option value="">— Choose a client —</option>
           <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= old_in('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
@@ -797,11 +797,11 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
           foreach ($staff as $s): ?><option value="<?= (int)$s['id'] ?>" <?= (string)$s['id'] === $pickStaff ? 'selected' : '' ?>><?= h($s['name']) ?></option><?php endforeach; ?>
         </select><?= field_error('staff_id') ?>
       </div>
-      <div class="field"><label for="date">Date <span aria-hidden="true">*</span></label>
+      <div class="field"><label for="date">Date <?= required_mark() ?></label>
         <input type="date" id="date" name="date" required min="2000-01-01" max="<?= (int)date('Y') + 5 ?>-12-31" value="<?= h(old_in('date', date('Y-m-d'))) ?>" <?= field_aria('date') ?>><?= field_error('date') ?></div>
-      <div class="field"><label for="time">Start time <span aria-hidden="true">*</span></label>
+      <div class="field"><label for="time">Start time <?= required_mark() ?></label>
         <input type="time" id="time" name="time" required value="<?= h(old_in('time', '10:00')) ?>" <?= field_aria('time') ?>><?= field_error('time') ?></div>
-      <div class="field"><label for="duration">Duration (hours) <span aria-hidden="true">*</span></label>
+      <div class="field"><label for="duration">Duration (hours) <?= required_mark() ?></label>
         <input type="number" id="duration" name="duration" step="0.25" min="0.25" max="12" required value="<?= h(old_in('duration', '1.5')) ?>" <?= field_aria('duration') ?>><?= field_error('duration') ?></div>
       <div class="field"><label for="repeat_weeks">Repeat weekly <span class="hint">1 = single session; e.g., 8 = every week for 8 weeks</span></label>
         <input type="number" id="repeat_weeks" name="repeat_weeks" min="1" max="26" value="<?= h(old_in('repeat_weeks', '1')) ?>" <?= field_aria('repeat_weeks') ?>><?= field_error('repeat_weeks') ?></div>
@@ -859,21 +859,21 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
       <?php endforeach; ?>
     </fieldset>
     <div class="grid grid-4">
-      <div class="field"><label for="g_staff_id">Instructor</label>
+      <div class="field"><label for="g_staff_id">Group session instructor</label>
         <select id="g_staff_id" name="g_staff_id" <?= field_aria('g_staff_id') ?>><?php $pickStaff = old_in('g_staff_id', (string)$user['id']);
           foreach ($staff as $s): ?><option value="<?= (int)$s['id'] ?>" <?= (string)$s['id'] === $pickStaff ? 'selected' : '' ?>><?= h($s['name']) ?></option><?php endforeach; ?></select><?= field_error('g_staff_id') ?></div>
-      <div class="field"><label for="g_date">Date <span aria-hidden="true">*</span></label>
+      <div class="field"><label for="g_date">Group session date <?= required_mark() ?></label>
         <input type="date" id="g_date" name="g_date" required min="2000-01-01" max="<?= (int)date('Y') + 5 ?>-12-31" value="<?= h(old_in('g_date', date('Y-m-d'))) ?>" <?= field_aria('g_date') ?>><?= field_error('g_date') ?></div>
-      <div class="field"><label for="g_time">Start <span aria-hidden="true">*</span></label>
+      <div class="field"><label for="g_time">Group session start time <?= required_mark() ?></label>
         <input type="time" id="g_time" name="g_time" required value="<?= h(old_in('g_time', '10:00')) ?>" <?= field_aria('g_time') ?>><?= field_error('g_time') ?></div>
-      <div class="field"><label for="g_duration">Duration (hours) <span aria-hidden="true">*</span></label>
+      <div class="field"><label for="g_duration">Group session duration (hours) <?= required_mark() ?></label>
         <input type="number" id="g_duration" name="g_duration" step="0.25" min="0.25" max="12" required value="<?= h(old_in('g_duration', '1.5')) ?>" <?= field_aria('g_duration') ?>><?= field_error('g_duration') ?></div>
-      <div class="field"><label for="g_location">Location</label>
+      <div class="field"><label for="g_location">Group session location</label>
         <input type="text" id="g_location" name="g_location" maxlength="190" value="<?= h(old_in('g_location')) ?>" <?= field_aria('g_location') ?>><?= field_error('g_location') ?></div>
-      <div class="field"><label for="g_notes">Notes</label>
+      <div class="field"><label for="g_notes">Group session notes</label>
         <input type="text" id="g_notes" name="g_notes" maxlength="255" value="<?= h(old_in('g_notes')) ?>" <?= field_aria('g_notes') ?>><?= field_error('g_notes') ?></div>
     </div>
-    <div class="field"><label><input type="checkbox" id="g_is_remote" name="g_is_remote" value="1" <?= old_in('g_is_remote') ? 'checked' : '' ?>> Remote / telepractice session</label></div>
+    <div class="field"><label><input type="checkbox" id="g_is_remote" name="g_is_remote" value="1" <?= old_in('g_is_remote') ? 'checked' : '' ?>> Group session is remote / telepractice</label></div>
     <div class="field"><label for="g_meeting_url">Meeting link <span class="hint">https://…; tick Remote above to use it</span></label>
       <input type="url" id="g_meeting_url" name="g_meeting_url" maxlength="500" placeholder="https://" value="<?= h(old_in('g_meeting_url')) ?>" <?= field_aria('g_meeting_url') ?>><?= field_error('g_meeting_url') ?></div>
     <?php if (old_in('add_group_session') !== '' && old_in('g_authorization_hash') !== '' && has_field_error('g_authorization_ack')): ?>
@@ -973,4 +973,8 @@ foreach ($groupsPending as $uid => $members): if (count($members) < 2) continue;
   </tbody>
 </table>
 </div>
+<?php // Arriving at a session row (#s-<id>, from the action center or a portal request)
+// lands on that row's first button, so a screen-reader user starts at the action
+// rather than the top of the page; a closed row has no button and keeps its heading. ?>
+<script>(function(){if(!/^#s-\d+$/.test(location.hash))return;var h=document.getElementById(location.hash.slice(1)),r=h&&h.closest('tr'),b=r&&r.querySelector('button');if(b)b.focus();})();</script>
 <?php page_footer();

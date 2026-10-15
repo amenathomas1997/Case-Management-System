@@ -24,6 +24,14 @@ if (!ai_feature_enabled('intake')) {
 }
 
 $fields = ['primary_disability' => '', 'primary_tech' => 'Other', 'hardware_details' => '', 'software_version' => '', 'summary' => ''];
+// A fresh form starts from what the client record already says (3.3.7): the
+// primary assistive technology on the record, matched to the nearest type, and
+// the disability / limitations from the client's latest assessment. Posted
+// input (below) replaces these.
+foreach (TECH_TYPES as $t) { if (stripos((string)($client['a11y_primary_tech'] ?? ''), $t) !== false) { $fields['primary_tech'] = $t; break; } }
+$lastA = db()->prepare('SELECT primary_disability FROM tech_assessments WHERE client_id = ? AND primary_disability IS NOT NULL ORDER BY assessment_date DESC, id DESC LIMIT 1');
+$lastA->execute([$cid]);
+$fields['primary_disability'] = (string)($lastA->fetchColumn() ?: '');
 $instruments = '';
 $answers = ['goals' => '', 'limitations' => '', 'tried' => '', 'context' => ''];
 $assessDate = date('Y-m-d');
@@ -185,7 +193,7 @@ page_header('Guided intake', $user, 'clients');
     <?php // The intake answers and suggestions ride along so a refused save can show them again. ?>
     <?php foreach ($answers as $k => $v): ?><input type="hidden" name="<?= h($k) ?>" value="<?= h($v) ?>"><?php endforeach; ?>
     <input type="hidden" name="instruments" value="<?= h($instruments) ?>">
-    <div class="field"><label for="assessment_date">Assessment date <span aria-hidden="true">*</span></label><input type="date" id="assessment_date" name="assessment_date" value="<?= h($assessDate) ?>" required max="<?= date('Y-m-d') ?>" <?= field_aria('assessment_date') ?>><?= field_error('assessment_date') ?></div>
+    <div class="field"><label for="assessment_date">Assessment date <?= required_mark() ?></label><input type="date" id="assessment_date" name="assessment_date" value="<?= h($assessDate) ?>" required max="<?= date('Y-m-d') ?>" <?= field_aria('assessment_date') ?>><?= field_error('assessment_date') ?></div>
     <div class="field"><label for="primary_disability">Primary disability / functional limitations <span class="hint">190 characters maximum</span></label><input type="text" id="primary_disability" name="primary_disability" maxlength="190" value="<?= h($fields['primary_disability']) ?>" <?= field_aria('primary_disability') ?>><?= field_error('primary_disability') ?></div>
     <div class="field"><label for="primary_tech">Primary technology recommended</label><select id="primary_tech" name="primary_tech"><?= select_options(TECH_TYPES, $fields['primary_tech']) ?></select></div>
     <div class="field"><label for="hardware_details">Hardware <span class="hint">255 characters maximum</span></label><input type="text" id="hardware_details" name="hardware_details" maxlength="255" value="<?= h($fields['hardware_details']) ?>" <?= field_aria('hardware_details') ?>><?= field_error('hardware_details') ?></div>

@@ -941,7 +941,8 @@ if (!$caseClosed || $thread): ?>
   $pv = fn(string $k, $saved): string => $refill($k) ? old_in($k) : (string)($saved ?? '');
   // Closed until the client wants it; open again when a save came back with a problem.
   $infoOpen = $oldInfo || array_filter(['p_phone', 'p_address', 'p_tech', 'p_notes'], fn($k) => has_field_error($k)); ?>
-  <h2 class="visually-hidden"><?= t('Update my details') ?></h2>
+  <?php // A sub-heading of "My information" (the section's h2), so the outline nests. ?>
+  <h3 class="visually-hidden"><?= t('Update my details') ?></h3>
   <details id="info-details"<?= $infoOpen ? ' open' : '' ?>>
   <summary><?= t('Update my details') ?></summary>
   <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>

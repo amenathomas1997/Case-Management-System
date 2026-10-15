@@ -700,11 +700,10 @@ struct AmendmentView: View {
                                 Link(destination: url) { Label("Email counselor", systemImage: "paperplane") }
                             }
                         }
-                        // The letter names the client: the copy stays on this phone (not Handoff)
-                        // and is cleared from the clipboard after 10 minutes.
+                        // The letter names the client: the copy stays on this phone (not Handoff),
+                        // is cleared from the clipboard after 10 minutes, and at sign-out.
                         Button {
-                            UIPasteboard.general.setItems([["public.utf8-plain-text": letter]],
-                                                          options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(600)])
+                            api.copyProtected(letter)
                             announce("Letter copied. The copy is cleared from the clipboard in 10 minutes.")
                         } label: {
                             Label("Copy letter", systemImage: "doc.on.doc")
@@ -1024,6 +1023,11 @@ struct AddGoalSheet: View {
             // "Goal added." is said by the track screen once this sheet has closed.
             onSaved()
             dismiss()
+        } catch APIError.network {
+            // The request may have arrived: it isn't known whether the goal was added, and
+            // adding it again would list it twice.
+            showFormError("The connection dropped before the server answered, so it isn't known whether this goal was added. Check the track's goals for “\(specific.trimmingCharacters(in: .whitespacesAndNewlines))” before adding it again.", in: &self.error)
+            busy = false
         } catch {
             showFormError(error.localizedDescription, in: &self.error)
             busy = false

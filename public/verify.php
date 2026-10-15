@@ -39,8 +39,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['resend'])) {
         $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         db()->prepare("UPDATE login_otps SET consumed = 1 WHERE user_id = ? AND channel = 'web' AND consumed = 0")->execute([$user['id']]);
         db()->prepare("INSERT INTO login_otps (user_id, code_hash, expires_at, channel) VALUES (?,?, DATE_ADD(NOW(), INTERVAL ? MINUTE), 'web')")
-            ->execute([$user['id'], password_hash($code, PASSWORD_DEFAULT), (int)cfg('otp_expiry_minutes')]);
-        [$subj, $body] = email_template('otp', ['name' => $user['name'], 'code' => $code, 'minutes' => cfg('otp_expiry_minutes')]);
+            ->execute([$user['id'], password_hash($code, PASSWORD_DEFAULT), ((int)cfg('otp_expiry_minutes') ?: 10)]);
+        [$subj, $body] = email_template('otp', ['name' => $user['name'], 'code' => $code, 'minutes' => (string)((int)cfg('otp_expiry_minutes') ?: 10)]);
         $sent = send_app_mail($user['email'], $subj, $body);
         // Requesting a new code extends the sign-in window (WCAG 2.2.1) —
         // the resend cap above still bounds the total attempts.
@@ -179,7 +179,8 @@ page_header(($error ? 'Error — ' : '') . 'Enter verification code');
              maxlength="20" required autocomplete="one-time-code" autofocus
              <?= $error ? 'aria-invalid="true"' : '' ?>
              aria-describedby="<?= $error ? 'code-error ' : '' ?>code-intro code-hint">
-      <span class="hint" id="code-hint">The code expires <?= (int)cfg('otp_expiry_minutes') ?> minutes after it was sent.</span>
+      <?php // 10 minutes is the installer's default (dist/install.php) when the setting is missing. ?>
+      <span class="hint" id="code-hint">The code expires <?= (int)cfg('otp_expiry_minutes') ?: 10 ?> minutes after it was sent.</span>
     </div>
     <button type="submit" class="btn btn-primary">Verify and sign in</button>
   </form>

@@ -482,6 +482,11 @@ struct AddAssessmentSheet: View {
             // "Assessment saved." is said by the section once this sheet has closed.
             onSaved()
             dismiss()
+        } catch APIError.network {
+            // The request may have arrived: it isn't known whether the assessment was saved, and
+            // saving it again would record it twice.
+            showFormError("The connection dropped before the server answered, so it isn't known whether this assessment was saved. Check the client's assessments for \(date.formatted(date: .abbreviated, time: .omitted)) before saving it again.", in: &self.error)
+            busy = false
         } catch {
             showFormError(error.localizedDescription, in: &self.error)
             busy = false

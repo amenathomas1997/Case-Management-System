@@ -355,9 +355,10 @@ if (isset($_GET['id'])) {
         <?php // After a rejected submission the form comes back filled in, with the error on its field.
         $oldQuote = fn(string $k): string => old_in('add_quote') !== '' ? h(old_in($k)) : ''; ?>
         <?= form_error_summary(['vendor' => '', 'amount' => '']) ?>
+        <p class="hint">Fields marked * are required.</p>
         <h3>Add a quote</h3>
         <div class="grid grid-4">
-          <div class="field"><label for="vendor">Vendor *</label><input type="text" id="vendor" name="vendor" required maxlength="190" value="<?= $oldQuote('vendor') ?>" <?= field_aria('vendor') ?>><?= field_error('vendor') ?></div>
+          <div class="field"><label for="vendor">Vendor <?= required_mark() ?></label><input type="text" id="vendor" name="vendor" required maxlength="190" value="<?= $oldQuote('vendor') ?>" <?= field_aria('vendor') ?>><?= field_error('vendor') ?></div>
           <div class="field"><label for="amount">Amount in US dollars <span aria-hidden="true">*</span><span class="visually-hidden">(required)</span></label><input type="number" id="amount" name="amount" step="0.01" min="0" max="99999999.99" required value="<?= $oldQuote('amount') ?>" <?= field_aria('amount') ?>><?= field_error('amount') ?></div>
           <div class="field"><label for="quote_ref">Quote #</label><input type="text" id="quote_ref" name="quote_ref" maxlength="120" value="<?= $oldQuote('quote_ref') ?>"></div>
           <div class="field"><label for="quote_notes">Notes</label><input type="text" id="quote_notes" name="quote_notes" maxlength="500" value="<?= $oldQuote('quote_notes') ?>"></div>
@@ -531,7 +532,7 @@ page_header('Device purchases', $user, 'procurement');
     <option value="">All</option>
     <?php foreach (DR_STATUSES as $s): ?><option value="<?= h($s) ?>" <?= $statusFilter === $s ? 'selected' : '' ?>><?= h($s) ?></option><?php endforeach; ?>
   </select>
-  <button type="submit" class="btn btn-secondary btn-sm">Filter</button>
+  <button type="submit" class="btn btn-secondary btn-sm">Apply filters</button>
 </form>
 
 <div class="table-scroll" tabindex="0" role="region" aria-label="Device requests">
@@ -566,13 +567,14 @@ page_header('Device purchases', $user, 'procurement');
   <form method="post" action="procurement.php" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['client_id' => '', 'device_name' => '', 'justification' => '']) ?>
+    <p class="hint">Fields marked * are required.</p>
     <div class="grid grid-4">
-      <div class="field"><label for="client_id">Client *</label>
+      <div class="field"><label for="client_id">Client <?= required_mark() ?></label>
         <select id="client_id" name="client_id" required <?= field_aria('client_id') ?>>
           <option value="">— Choose —</option>
           <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $oldReq('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
         </select><?= field_error('client_id') ?></div>
-      <div class="field"><label for="device_name">Device / technology *</label><input type="text" id="device_name" name="device_name" required maxlength="190" value="<?= h($oldReq('device_name')) ?>" <?= field_aria('device_name') ?>><?= field_error('device_name') ?></div>
+      <div class="field"><label for="device_name">Device / technology <?= required_mark() ?></label><input type="text" id="device_name" name="device_name" required maxlength="190" value="<?= h($oldReq('device_name')) ?>" <?= field_aria('device_name') ?>><?= field_error('device_name') ?></div>
       <div class="field"><label for="category">Category</label>
         <span class="hint" id="category-hint">CCTV: closed-circuit television (video) magnifier. AAC: augmentative and alternative communication.</span>
         <?php // The values are the stored categories; only the shown names spell out the abbreviations (as in recommend.php). ?>

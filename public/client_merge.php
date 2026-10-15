@@ -237,9 +237,10 @@ page_header('Merge clients', $user, 'clients');
     <p>Keeping <strong><?= h($keep['name']) ?></strong> (#<?= $keepId ?>) and merging in <strong><?= h($dupe['name']) ?></strong> (#<?= $mergeId ?>).
        <a href="client_merge.php">Choose a different pair</a></p>
   <?php else: ?>
+  <p class="hint">Fields marked * are required.</p>
   <div class="grid grid-2">
     <div class="field">
-      <label for="keep">Record to KEEP</label>
+      <label for="keep">Record to KEEP <?= required_mark() ?></label>
       <select id="keep" name="keep" required>
         <option value="">— Choose —</option>
         <?php foreach ($clients as $c): ?>
@@ -248,7 +249,7 @@ page_header('Merge clients', $user, 'clients');
       </select>
     </div>
     <div class="field">
-      <label for="merge">Duplicate to merge IN (will be removed)</label>
+      <label for="merge">Duplicate to merge IN (will be removed) <?= required_mark() ?></label>
       <select id="merge" name="merge" required>
         <option value="">— Choose —</option>
         <?php foreach ($clients as $c): ?>

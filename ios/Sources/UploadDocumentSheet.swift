@@ -243,6 +243,11 @@ struct UploadDocumentSheet: View {
             ])
             onSaved("Document uploaded.")
             dismiss()
+        } catch APIError.network {
+            // The request may have arrived: it isn't known whether the document was saved, and
+            // uploading it again would file it twice.
+            showFormError("The connection dropped before the server answered, so it isn't known whether the document was uploaded. Check the client's documents for “\(filename)” before uploading it again.", in: &self.error)
+            busy = false
         } catch {
             showFormError(error.localizedDescription, in: &self.error)
             busy = false

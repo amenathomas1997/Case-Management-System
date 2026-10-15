@@ -2,7 +2,9 @@
 declare(strict_types=1);
 require_once __DIR__ . '/at_catalog.php';
 
-function at_can(string $permission): bool { return can($permission) || can('billing'); }
+/** The module's own permission only: "billing" used to stand in for every module, which
+ *  let a billing-only account edit staff labor rates and other instructors' profiles. */
+function at_can(string $permission): bool { return can($permission); }
 
 function at_ready(): bool {
     try { db()->query('SELECT id FROM at_records LIMIT 0'); return true; }

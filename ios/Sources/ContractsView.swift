@@ -262,6 +262,12 @@ struct ContractSpendSheet: View {
         guard let amountText = checkedAmount(amount), !amountText.isEmpty else { showFormError(amountFormatMessage("Amount"), in: &error); return }
         busy = true; error = nil
         do { let _: OKResponse = try await api.call("contract_update", body: ["contract_id": contractId, "op": "add_spend", "amount": amountText, "spent_on": APIDate.day(date), "memo": memo]); onDone(); dismiss() }
+        catch APIError.network {
+            // The request may have arrived: it isn't known whether the spending was recorded, and
+            // saving it again would count the money twice against the contract.
+            showFormError("The connection dropped before the server answered, so it isn't known whether this spending was recorded. Check the contract's spending for $\(amountText) on \(date.formatted(date: .abbreviated, time: .omitted)) before saving it again.", in: &self.error)
+            busy = false
+        }
         catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
     }
 }

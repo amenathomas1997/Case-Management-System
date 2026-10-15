@@ -285,6 +285,11 @@ struct BookingEditSheet: View {
             // The presenter confirms once the sheet has gone: closing it moves VoiceOver focus,
             // which would cut off an announcement made here.
             onDone(); dismiss()
+        } catch APIError.network {
+            // The request may have arrived: it isn't known whether the booking was created, and
+            // creating it again would book it twice.
+            busy = false
+            showFormError("The connection dropped before the server answered, so it isn't known whether this booking was created. Check the bookings list for \(serviceType) on \(neededAt.formatted(date: .abbreviated, time: .shortened)) before creating it again.", in: &self.error)
         } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

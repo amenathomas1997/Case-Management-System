@@ -225,7 +225,7 @@ if ($view) {
     foreach ($c->fetchAll() as $d) {
         $visible = can('clients') && (!caseload_scoped() || (int)($d['assigned_to'] ?? 0) === (int)$user['id']);
         if (!$visible) { $hiddenDupes++; continue; }
-        if (count($dupes) < 5) $dupes[] = ['label' => 'Existing client: ' . $d['name'] . ' (' . $d['status'] . ')', 'url' => 'client.php?id=' . (int)$d['id']];
+        if (count($dupes) < 5) $dupes[] = ['label' => 'Existing client: ' . $d['name'] . ' (' . $d['status'] . ')', 'url' => 'client.php?id=' . (int)$d['id'], 'sr' => 'client #' . (int)$d['id']];
     }
     $r2 = db()->prepare("SELECT id, client_name, status, created_at, assigned_to, client_id FROM referrals WHERE id <> ?
         AND (client_name LIKE ? ESCAPE '!' OR (client_phone IS NOT NULL AND client_phone <> '' AND client_phone = ?)
@@ -234,7 +234,7 @@ if ($view) {
     $refShown = 0;
     foreach ($r2->fetchAll() as $d) {
         if (!referral_in_scope($d, $user)) { $hiddenDupes++; continue; }
-        if ($refShown++ < 5) $dupes[] = ['label' => 'Other referral: ' . $d['client_name'] . ' (' . $d['status'] . ', ' . fmt_date($d['created_at']) . ')', 'url' => 'referrals.php?view=' . (int)$d['id']];
+        if ($refShown++ < 5) $dupes[] = ['label' => 'Other referral: ' . $d['client_name'] . ' (' . $d['status'] . ', ' . fmt_date($d['created_at']) . ')', 'url' => 'referrals.php?view=' . (int)$d['id'], 'sr' => 'referral #' . (int)$d['id']];
     }
 }
 
@@ -280,7 +280,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
     <strong>Possible duplicate — check before converting:</strong>
     <ul style="margin:.4rem 0 0;">
       <?php foreach ($dupes as $d): ?>
-      <li><a href="<?= h($d['url']) ?>"><?= h($d['label']) ?></a></li>
+      <li><a href="<?= h($d['url']) ?>"><?= h($d['label']) ?><span class="visually-hidden">, <?= h($d['sr']) ?></span></a></li>
       <?php endforeach; ?>
       <?php if ($hiddenDupes): ?>
       <li><?= $hiddenDupes ?> possible match<?= $hiddenDupes === 1 ? '' : 'es' ?> among records you cannot open. Ask an administrator to check before converting, so the person does not end up with two records.</li>
@@ -391,7 +391,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
     <option value="me" <?= $who === 'me' ? 'selected' : '' ?>>Assigned to me</option>
     <option value="unassigned" <?= $who === 'unassigned' ? 'selected' : '' ?>>Unassigned</option>
   </select>
-  <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
+  <button type="submit" class="btn btn-secondary btn-sm">Apply filters</button>
 </form>
 
 <?php if ($matchCount > count($referrals)): ?>
@@ -425,7 +425,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
           <?php endif; ?></td>
       <td><?= h($r['assigned_name'] ?? '—') ?></td>
       <td><?= status_badge($r['status']) ?></td>
-      <td><a class="btn btn-secondary btn-sm" href="referrals.php?view=<?= (int)$r['id'] ?>">View<span class="visually-hidden"> referral from <?= h($r['counselor_name']) ?> for <?= h($r['client_name']) ?>, received <?= h(substr((string)$r['created_at'], 0, 10)) ?></span></a></td>
+      <td><a class="btn btn-secondary btn-sm" href="referrals.php?view=<?= (int)$r['id'] ?>">View<span class="visually-hidden"> referral from <?= h($r['counselor_name']) ?> for <?= h($r['client_name']) ?>, received <?= h(substr((string)$r['created_at'], 0, 10)) ?>, referral #<?= (int)$r['id'] ?></span></a></td>
     </tr>
   <?php endforeach; ?>
   </tbody>

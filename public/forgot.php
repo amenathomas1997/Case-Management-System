@@ -16,8 +16,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $ip = $_SERVER['REMOTE_ADDR'] ?? '';
     $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = 'pw-reset' AND ip = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)");
     $rl->execute([$ip]);
-    if ((int)$rl->fetchColumn() < 5) {
+    // Also at most 3 an hour for the address itself, whatever the sender's IP: each request
+    // replaces the previous link, so without this a stranger could keep a user's link dead.
+    $akey = 'pw-reset:' . $email;
+    $ra = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)");
+    $ra->execute([$akey]);
+    if ((int)$rl->fetchColumn() < 5 && (strlen($akey) > 190 || (int)$ra->fetchColumn() < 3)) {
         db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?, 'pw-reset', 1)")->execute([$ip]);
+        if (strlen($akey) <= 190) db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?, ?, 1)")->execute([$ip, $akey]);
         $u = db()->prepare('SELECT * FROM users WHERE email = ? AND is_active = 1');
         $u->execute([$email]);
         if ($user = $u->fetch()) {

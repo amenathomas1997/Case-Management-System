@@ -188,8 +188,9 @@ echo lang_toggle();
   <form method="post" action="consent.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['signature' => '']) ?>
+    <p><?= t('Fields marked with an asterisk (') ?><span aria-hidden="true">*</span><span class="visually-hidden"><?= t('asterisk') ?></span><?= t(') are required.') ?></p>
     <div class="field">
-      <label for="signature"><?= t('Electronic signature *') ?> <span class="hint"><?= t('Type your full name (') ?><?= h($form['guardian_name']) ?><?= t(') to sign') ?></span></label>
+      <label for="signature"><?= t('Electronic signature') ?> <span aria-hidden="true">*</span><span class="visually-hidden"> (<?= t('required') ?>)</span> <span class="hint"><?= t('Type your full name (') ?><?= h($form['guardian_name']) ?><?= t(') to sign') ?></span></label>
       <p class="hint" id="sig-hint"><?= t('Capital letters, accents and punctuation do not need to match.') ?></p>
       <input type="text" id="signature" name="signature" required autocomplete="name" value="<?= h($typedSig) ?>" <?= field_aria('signature', 'sig-hint') ?>>
       <?php // The field error, with the exact name to type added after the message. ?>

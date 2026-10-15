@@ -147,7 +147,7 @@ $pageUrl = fn(int $p): string => 'audit.php?' . http_build_query($pageQs + ['pag
 // (the daily caps on "vrc-send-<id>" and "portal-up-<id>"), so the 30-day prune
 // in cron/daily_alerts.php never removes a row a limiter still counts.
 $logins = db()->query("SELECT * FROM login_attempts
-    WHERE success = 0 OR email LIKE '%@%'
+    WHERE (success = 0 OR email LIKE '%@%') AND email NOT LIKE 'pw-reset:%'
     ORDER BY id DESC LIMIT 100")->fetchAll();
 
 /** The kind of record an entry is about, in words rather than a table name (3.1.3). */
@@ -221,6 +221,7 @@ function audit_login_label(string $key): string {
     if (preg_match('/^vrc-fail-(\d+)$/', $key, $m)) return 'Counselor portal code failure (counselor link #' . $m[1] . ')';
     if (str_starts_with($key, 'login:')) return substr($key, 6);
     if (str_starts_with($key, 'verify:')) return 'Sign-in code: ' . substr($key, 7);
+    if ($key === 'verify-anon') return 'Sign-in code sent with no sign-in pending (counted against the sender only)';
     if (str_starts_with($key, 'reauth:')) return 'Password re-check: ' . substr($key, 7);
     return $key;
 }

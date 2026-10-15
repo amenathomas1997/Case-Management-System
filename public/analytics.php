@@ -205,7 +205,9 @@ $trend = db()->query("SELECT DATE_FORMAT(completed_at,'%Y-%m') ym, COUNT(*) n, A
       </div>
       <?php endforeach; ?>
     </div>
-    <table class="visually-hidden">
+    <details>
+      <summary>Show as table</summary>
+    <table>
       <caption>Monthly average satisfaction and Net Promoter Score (last 12 months)</caption>
       <thead><tr><th scope="col">Month</th><th scope="col">Average satisfaction out of 10</th><th scope="col">Net Promoter Score</th><th scope="col">Responses</th></tr></thead>
       <tbody>
@@ -217,6 +219,7 @@ $trend = db()->query("SELECT DATE_FORMAT(completed_at,'%Y-%m') ym, COUNT(*) n, A
       <?php endforeach; ?>
       </tbody>
     </table>
+    </details>
     <style>
     .nps-trend{display:flex;flex-wrap:wrap;gap:.5rem;align-items:flex-end;padding:.5rem 0;min-height:140px}
     .nps-col{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:.2rem;min-width:2.4rem}

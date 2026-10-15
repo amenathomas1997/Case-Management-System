@@ -34,21 +34,26 @@
   (function () {
     if (typeof navigator === 'undefined') return;
     var ua = navigator.userAgent || '', mac = /Mac|iPhone|iPad/.test(navigator.platform || ua);
-    var modifier = mac ? 'Control+Option+' : (/Firefox/.test(ua) ? 'Alt+Shift+' : 'Alt+');
-    document.querySelectorAll('[accesskey]').forEach(function (el, i) {
+    // aria-keyshortcuts uses the ARIA key names (Alt, not Option); the visible hint says what
+    // the keys are called on the keyboard. Screen readers announce aria-keyshortcuts with the
+    // link, so there is no separate description for it (JAWS can also report the access key
+    // itself; one channel keeps each link short).
+    var ariaMod = mac ? 'Control+Alt+' : (/Firefox/.test(ua) ? 'Alt+Shift+' : 'Alt+');
+    var shownMod = mac ? 'Control+Option+' : ariaMod;
+    document.querySelectorAll('[accesskey]').forEach(function (el) {
       var key = el.getAttribute('accesskey'); if (!key) return;
-      var combo = modifier + key.toUpperCase();
-      el.setAttribute('aria-keyshortcuts', combo);
-      var note = document.createElement('span');
-      note.id = 'accesskey-note-' + i; note.hidden = true; note.textContent = 'Shortcut ' + combo + '.';
-      el.insertAdjacentElement('afterend', note);
-      var ids = (el.getAttribute('aria-describedby') || '').trim();
-      el.setAttribute('aria-describedby', ids ? ids + ' ' + note.id : note.id);
+      el.setAttribute('aria-keyshortcuts', ariaMod + key.toUpperCase());
+      var item = el.closest && el.closest('.nav-item'), visual = item && item.querySelector('.nav-hint');
+      if (visual) visual.textContent += ' Shortcut ' + shownMod + key.toUpperCase() + (mac ? ' (with VoiceOver, press Control+Option+Tab first)' : '') + '.';
     });
   })();
-  // Escape dismisses a showing link hint (1.4.13); moving to another link brings hints back.
+  // Escape dismisses a showing link hint (1.4.13), whether it came from keyboard focus or
+  // from the pointer resting on the link; moving to another link brings hints back.
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && document.activeElement && document.activeElement.closest && document.activeElement.closest('.nav-item')) document.documentElement.classList.add('cms-hints-off');
+    if (e.key !== 'Escape') return;
+    var focused = document.activeElement && document.activeElement.closest && document.activeElement.closest('.nav-item');
+    var hovered = document.querySelector('.nav-item:hover');
+    if (focused || hovered || lastHintItem) document.documentElement.classList.add('cms-hints-off');
   });
   ['focusin', 'mouseover'].forEach(function (name) {
     document.addEventListener(name, function (e) {

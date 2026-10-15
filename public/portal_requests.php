@@ -17,7 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     if ($row = $r->fetch()) {
         if (caseload_scoped() && (int)$row['assigned_to'] !== (int)$user['id']) { flash('That request is not on your caseload.', 'error'); redirect('portal_requests.php'); }
         $to = in_array($_POST['to'] ?? '', PREQ_STATUSES, true) ? $_POST['to'] : null;
-        if ($to === null) { flash('Choose a status for the request.', 'error'); redirect('portal_requests.php'); }
+        if ($to === null) { keep_field_errors(['to_' . $id => 'Choose a status for the request.']); redirect('portal_requests.php'); }
         // Saving the status it already has changes nothing, so nothing is audited.
         if ($to === $row['status']) { flash('Request from ' . $row['client_name'] . ' (' . (PREQ_TYPES[$row['type']] ?? 'Request') . ') is already ' . $to . '; nothing was changed.'); redirect('portal_requests.php'); }
         $closed = ['Done', 'Declined'];
@@ -105,8 +105,10 @@ page_header('Client requests', $user, 'portal_requests');
       <td>
         <form method="post" action="portal_requests.php" class="inline-form"><?= csrf_field() ?>
           <input type="hidden" name="id" value="<?= (int)$r['id'] ?>">
+          <?php $toKey = 'to_' . (int)$r['id']; ?>
+          <?= form_error_summary([$toKey => 'Status for ' . $which], [$toKey => 's-' . (int)$r['id']]) ?>
           <label class="visually-hidden" for="s-<?= (int)$r['id'] ?>">Set status for <?= $which ?></label>
-          <select id="s-<?= (int)$r['id'] ?>" name="to"><?= select_options(PREQ_STATUSES, $r['status']) ?></select>
+          <select id="s-<?= (int)$r['id'] ?>" name="to" <?= field_aria($toKey) ?>><?= select_options(PREQ_STATUSES, $r['status']) ?></select><?= field_error($toKey) ?>
           <button type="submit" name="set_status" value="1" class="btn btn-secondary btn-sm">Save<span class="visually-hidden"> status for <?= $which ?></span></button>
         </form>
       </td>

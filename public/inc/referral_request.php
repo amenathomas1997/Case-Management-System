@@ -42,7 +42,8 @@ const REFERRAL_NEEDS = ['Screen readers', 'Magnification', 'Braille devices', 'A
  * back to the built-in lists above, so the public form always works. */
 const REFERRAL_ROLE_KEYS = ['counselor', 'self', 'school', 'medical', 'family', 'agency', 'other'];
 const REFERRAL_DEFAULT_HINTS = [
-    'purpose' => 'Choose New referral for someone new to our services, Additional service for an existing client, or Plan amendment to change the services already planned for an existing client (for example, more hours or a different service).',
+    // One line an item: the form reads a multi-line hint as a list.
+    'purpose' => "New referral: someone new to us.\nAdditional service: an existing client needs another service.\nPlan amendment: change services already planned (for example, more hours).",
     'services' => 'Assistive technology means devices, apps and software that help a person with a disability do everyday tasks, such as screen readers, magnifiers and braille displays. Select every service you are asking for.',
     'needs' => 'Select all that apply, even if they span more than one service. You may leave these blank if you are not sure. Describe any other needs below.',
 ];

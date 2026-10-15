@@ -42,10 +42,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_cohort'])) {
     if ($startIn !== '' && $start === null) $errors['start_date'] = 'Enter the start date as a real date with a year from 2000 to ' . $maxYear . ' (for example 2026-09-15), or leave it blank.';
     if ($endIn !== '' && $end === null) $errors['end_date'] = 'Enter the end date as a real date with a year from 2000 to ' . $maxYear . ' (for example 2026-09-15), or leave it blank.';
     elseif ($start !== null && $end !== null && $end < $start) $errors['end_date'] = 'The end date cannot be before the start date.';
+    $coordinatorId = (int)($_POST['coordinator_id'] ?? 0) ?: null;
+    if ($coordinatorId !== null) {
+        $cu = db()->prepare('SELECT id FROM users WHERE id = ? AND is_active = 1');
+        $cu->execute([$coordinatorId]);
+        if (!$cu->fetchColumn()) $errors['coordinator_id'] = 'Choose an active staff member as the coordinator.';
+    }
     if ($errors) { keep_input(); keep_field_errors($errors); redirect('programs.php'); }
     db()->prepare('INSERT INTO cohorts (name, school, coordinator_id, start_date, end_date, notes) VALUES (?,?,?,?,?,?)')
         ->execute([mb_substr($name, 0, 190), mb_substr(trim($_POST['school'] ?? ''), 0, 190) ?: null,
-            (int)($_POST['coordinator_id'] ?? 0) ?: null, $start, $end,
+            $coordinatorId, $start, $end,
             mb_substr(trim($_POST['notes'] ?? ''), 0, 2000) ?: null]);
     $cid = (int)db()->lastInsertId();
     audit($user['id'], 'cohort.add', 'cohort', $cid, $name);

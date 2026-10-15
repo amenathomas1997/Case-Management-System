@@ -77,8 +77,9 @@ if (isset($_GET['edit']) && can('templates')) {
     <h1><?= $a['id'] ? 'Edit article' : 'New article' ?></h1>
     <form method="post" action="kb.php" class="stacked"><?= csrf_field() ?>
       <input type="hidden" name="id" value="<?= (int)$a['id'] ?>">
+      <p class="hint">Fields marked * are required.</p>
       <div class="grid grid-2">
-        <div class="field"><label for="title">Title *</label><input type="text" id="title" name="title" required maxlength="255" value="<?= h($a['title']) ?>" <?= field_aria('title') ?>><?= field_error('title') ?></div>
+        <div class="field"><label for="title">Title <?= required_mark() ?></label><input type="text" id="title" name="title" required maxlength="255" value="<?= h($a['title']) ?>" <?= field_aria('title') ?>><?= field_error('title') ?></div>
         <div class="field"><label for="category">Category</label><input type="text" id="category" name="category" maxlength="80" value="<?= h($a['category'] ?? '') ?>" placeholder="e.g. JAWS, Device care, Policy" <?= field_aria('category') ?>><?= field_error('category') ?></div>
       </div>
       <div class="field"><label for="body">Content</label>
