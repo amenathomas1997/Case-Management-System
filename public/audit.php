@@ -226,7 +226,7 @@ function audit_login_label(string $key): string {
     return $key;
 }
 
-page_header('Audit log', $user, 'account');
+page_header('Audit log', $user, 'admin', [['admin.php', 'Administration']]);
 ?>
 <h1>Audit log</h1>
 

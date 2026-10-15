@@ -142,7 +142,7 @@ struct DeviceRequestDetail: View {
                         }
                         // VoiceOver: one stop per quote (vendor, notes, amount, whether it is the
                         // recommended one); Pick is on the Actions rotor.
-                        .accessibilityElement(children: .ignore)
+                        .accessibilityElement(children: VoiceOverRows.children)
                         .accessibilityLabel([q.vendor, q.notes.flatMap { $0.isEmpty ? nil : $0 }, money(q.amount),
                                              r.selectedQuoteId == q.id ? "Recommended quote" : nil]
                             .compactMap { $0 }.joined(separator: ", "))

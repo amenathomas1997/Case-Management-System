@@ -174,7 +174,7 @@ $formClient = $refill ? old_in('client_id') : $cfg['client_id'];
 $formEnabled = $refill ? old_in('enabled') === '1' : $cfg['enabled'];
 $formApg = $refill ? old_in('auto_provision_group') : $cfg['auto_provision_group'];
 
-page_header('Federation', $user, 'account');
+page_header('Federation', $user, 'admin', [['admin.php', 'Administration']]);
 ?>
 <h1>Microsoft Entra ID federation</h1>
 <p class="muted">Let your team sign in with their Microsoft work accounts ("Sign in with Microsoft" on the sign-in page). Microsoft handles the password and multi-factor step; this system then matches the verified email address to a user here.</p>
@@ -269,7 +269,7 @@ page_header('Federation', $user, 'account');
       <li>Save, then use <strong>Test connection</strong> to confirm everything checks out before telling your team.</li>
     </ol>
     <h3>How sign-in matching works</h3>
-    <p>A Microsoft account signs in successfully only if an <strong>active user here has the same email address</strong> as the Microsoft account. Check each person's email under <a href="account.php">My Account → team list</a>. Password + emailed-code sign-in keeps working alongside Microsoft sign-in.</p>
+    <p>A Microsoft account signs in successfully only if an <strong>active user here has the same email address</strong> as the Microsoft account. Check each person's email under <a href="account.php">Administration → People & permissions</a>. Password + emailed-code sign-in keeps working alongside Microsoft sign-in.</p>
   </section>
 </div>
 <?php page_footer();

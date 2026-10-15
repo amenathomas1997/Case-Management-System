@@ -32,6 +32,9 @@ struct ScheduleView: View {
     @State private var showingLogHours = false
     @State private var signingSession: Session?
     @State private var loaded = false
+    /// Set while the list is the copy kept on this phone (the server could not be reached):
+    /// when it was saved. Nothing can be changed until a load succeeds.
+    @State private var offlineSince: Date?
     /// Sessions whose outcome (completed, cancelled, no-show) is on its way, so a second tap
     /// can't send it again.
     @State private var completing: Set<Int> = []
@@ -69,6 +72,7 @@ struct ScheduleView: View {
                             .foregroundStyle(Color.brandTeal)
                             .listRowSeparator(.hidden)
                     }
+                    if let offlineSince { OfflineNotice(savedAt: offlineSince).listRowSeparator(.hidden) }
                     if !loaded && error == nil {
                         ProgressView("Loading schedule…")
                     } else if loaded && sessions.isEmpty && error == nil {
@@ -136,6 +140,7 @@ struct ScheduleView: View {
                     Button { showingNewSession = true } label: {
                         Label("New session", systemImage: "plus")
                     }
+                    .disabled(offlineSince != nil)
                 }
                 // Logging hours reads client tracks, which needs the clients
                 // permission — hide the button for schedule-only groups.
@@ -293,7 +298,8 @@ struct ScheduleView: View {
         // each minute, so it appears at the start time with the screen left open.
         TimelineView(.everyMinute) { context in
             let started = hasStarted(session, at: context.date)
-            let busy = completing.contains(session.id)
+            // Read-only while the list is the copy kept on this phone.
+            let busy = completing.contains(session.id) || offlineSince != nil
             VStack(alignment: .leading, spacing: 4) {
                 Text(session.client).font(.body.weight(.semibold))
                 Text(formatDateTime(session.startAt))
@@ -373,7 +379,7 @@ struct ScheduleView: View {
             // A double-tap on the row only says so (as the Tasks and Bookings rows do): it used to
             // be Mark completed, which for a tracked session opened the signature sheet, whose
             // Cancel locks the app — a stray double-tap locked the person out.
-            .accessibilityElement(children: .ignore)
+            .accessibilityElement(children: VoiceOverRows.children)
             .accessibilityLabel(sessionSummary(session, started: started))
             .accessibilityHint("Swipe up or down for actions.")
             .accessibilityFocused($focusedSession, equals: session.id)
@@ -429,11 +435,15 @@ struct ScheduleView: View {
     private func load(reportsFailure: Bool = true) async {
         do {
             error = nil
-            let response: ScheduleListResponse = try await api.call("schedule")
+            // With no signal, the last list the server sent is shown read-only instead.
+            let (response, savedAt): (ScheduleListResponse, Date?) = try await api.callCached("schedule", cacheKey: "schedule")
             sessions = response.sessions
             upcomingTotal = response.upcomingTotal
             upcomingLimit = response.upcomingLimit
             loaded = true
+            offlineSince = savedAt
+            // Reminders follow the schedule as last loaded from the server (not the saved copy).
+            if savedAt == nil { LocalNotifications.shared.scheduleSessions(sessions) }
         } catch {
             if reportsFailure { showFormError(error.localizedDescription, in: &self.error) }
             else { self.error = error.localizedDescription }

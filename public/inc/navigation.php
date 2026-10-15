@@ -8,7 +8,7 @@ declare(strict_types=1);
  *  the page keys N and T; see cms_access_keys(). */
 function cms_navigation_items(): array {
     return [
-        ['index.php', 'Dashboard', 'dashboard', null, 'today', 'Your starting page: caseload totals, expiring authorizations and recent activity.', '1'],
+        ['index.php', 'Dashboard', 'dashboard', null, 'today', 'Your starting page: what is due today, caseload totals, expiring authorizations and recent activity.', '1'],
         ['tasks.php', 'Task list', 'tasks', null, 'today', 'To-do items with an owner and a due date.', '2'],
         ['workflows.php', 'Daily work & review', 'workflows', null, 'today', 'What needs attention today, documentation review, AI briefings and the referral waitlist.', '3'],
         ['clients.php', 'Client records', 'clients', 'clients', 'clients', 'Find a person and open their notes, assessments, training tracks and documents.', '4'],
@@ -26,13 +26,14 @@ function cms_navigation_items(): array {
         ['followups.php', 'Device follow-ups', 'followups', 'clients', 'equipment', 'Check-ins after a loan: is the device still used, is more help needed.', 'v'],
         ['invoices.php', 'Invoices', 'invoices', 'billing', 'money', 'Bill unbilled work, track submitted invoices and record payments.', '8'],
         ['contracts.php', 'Grants & contracts', 'contracts', 'billing', 'money', 'Funding agreements, budgets, deliverables and spending.', 'k'], // own entry: billing-only groups cannot open Compliance, its other link
-        ['compliance.php', 'Authorizations & compliance', 'compliance', 'clients', 'money', 'Authorizations at risk, reports due and consents to renew.', 'p'],
+        ['compliance.php', 'Authorizations & compliance', 'compliance', 'clients', 'money', 'Authorizations at risk, reports due, consents to renew, device follow-ups due and overdue loans.', 'p'],
         ['incidents.php', 'Incident reports', 'incidents', 'clients', 'money', 'Record an incident and follow it to closure.', 'j'],
         ['analytics.php', 'Business analytics', 'analytics', 'analytics', 'money', 'Charts and every report: outcomes, funders, billing, RSA-911 and utilization.', 'y'],
         ['kb.php', 'Staff knowledge base', 'kb', null, 'help', 'Agency how-to articles you can search or ask questions of.', 'w'],
         ['ai_tools.php', 'AI tools', 'ai_tools', null, 'help', 'AI drafting helpers; always check their work before saving.', 'x'],
         ['help.php#staff-guide', 'User guide', 'help', null, 'help', 'How to use this system, including screen reader tips.', 'u'],
         ['account.php', 'My Account', 'account', null, 'help', 'Your password, sign-in security, display settings and calendar feed.', 'a'],
+        ['admin.php', 'Administration', 'admin', 'admin', 'help', 'Team, permissions, sign-in, forms, email, data retention and AI settings.', 'z'],
     ];
 }
 

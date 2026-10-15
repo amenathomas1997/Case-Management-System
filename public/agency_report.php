@@ -1,24 +1,18 @@
 <?php
 // Date-range billing summary per funding agency (quarterly reconciliation for state VR).
 require __DIR__ . '/inc/bootstrap.php';
+require_once __DIR__ . '/inc/report_period.php';
 require __DIR__ . '/inc/layout.php';
 $user = require_login();
 require_perm('billing');
 
 $qStart = date('Y-m-d', strtotime(date('Y') . '-' . (floor((date('n') - 1) / 3) * 3 + 1) . '-01'));
-// Validate dates (matches rsa_report/outcomes/funder_report); prevents an attacker-controlled
-// value from reaching the CSV/filename and enables formula-injection via the exported cell.
-$from = valid_date($_GET['from'] ?? '') ?: $qStart;
-$to = valid_date($_GET['to'] ?? '') ?: date('Y-m-d');
-// Any date the page could not read, or a swapped pair, is said in words on the page
-// (as outcomes.php does), so an unreadable or reversed period never shows an
-// unexplained empty $0 report.
-$periodNotes = [];
-foreach (['from' => ['From', 'the start of this quarter'], 'to' => ['To', 'today']] as $k => [$label, $fallback]) {
-    $raw = $_GET[$k] ?? '';
-    if (!is_string($raw) || (trim($raw) !== '' && valid_date($raw) === null)) $periodNotes[] = 'The ' . $label . ' date could not be read, so ' . $fallback . ' is used.';
-}
-if ($to < $from) { [$from, $to] = [$to, $from]; $periodNotes[] = 'The From date was after the To date, so the two were swapped.'; }
+// The shared period picker (remembered per user); this quarter to date when nothing is
+// chosen. It validates the dates (an attacker-controlled value never reaches the
+// CSV/filename), and any date it could not read, or a swapped pair, is said in words
+// on the page, so an unreadable or reversed period never shows an unexplained empty $0 report.
+$period = report_period($user, $qStart, date('Y-m-d'));
+$from = $period['from']; $to = $period['to']; $periodNotes = $period['notes'];
 $agency = is_string($_GET['agency'] ?? null) ? trim($_GET['agency']) : '';
 
 $rt = report_table('training_tracks', (int)$user['id']);
@@ -138,26 +132,12 @@ page_header('Agency summary', $user, 'analytics');
    Hours and mileage are by session date; expenses (billed on the same invoices) are by expense date and included in the total.</p>
 <?php if ($periodNotes): ?><p><?php foreach ($periodNotes as $i => $pn): ?><?= $i ? ' ' : '' ?><?= h($pn) ?><?php endforeach; ?></p><?php endif; ?>
 
-<form method="get" action="agency_report.php" class="card" role="search" aria-label="Report filters">
-  <div class="grid grid-4">
-    <div class="field"><label for="from">From</label>
-      <input type="date" id="from" name="from" value="<?= h($from) ?>"></div>
-    <div class="field"><label for="to">To</label>
-      <input type="date" id="to" name="to" value="<?= h($to) ?>"></div>
-    <div class="field">
-      <label for="agency">Funding agency</label>
-      <select id="agency" name="agency">
-        <option value="">All agencies</option>
-        <?php foreach ($agencies as $a): ?>
-        <option value="<?= h($a) ?>" <?= $agency === $a ? 'selected' : '' ?>><?= h($a) ?></option>
-        <?php endforeach; ?>
-      </select>
-    </div>
-    <div class="field" style="align-self:end;">
-      <button type="submit" class="btn btn-primary">Run report</button>
-    </div>
-  </div>
-</form>
+<?php
+$agencySelect = '<label for="agency">Funding agency</label><select id="agency" name="agency"><option value="">All agencies</option>';
+foreach ($agencies as $a) $agencySelect .= '<option value="' . h($a) . '"' . ($agency === $a ? ' selected' : '') . '>' . h($a) . '</option>';
+$agencySelect .= '</select>';
+echo report_period_form('agency_report.php', $period, $agencySelect, '', 'Run report');
+?>
 
 <div class="page-actions">
   <a class="btn btn-secondary" href="agency_report.php?from=<?= h($from) ?>&amp;to=<?= h($to) ?>&amp;agency=<?= h(urlencode($agency)) ?>&amp;export=1">Export CSV</a>

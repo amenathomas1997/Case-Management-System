@@ -5,6 +5,7 @@
 // categories and hours, and the closure / employment outcome. Provided as a
 // screen preview plus a spreadsheet-safe CSV to import into the state system.
 require __DIR__ . '/inc/bootstrap.php';
+require_once __DIR__ . '/inc/report_period.php';
 require __DIR__ . '/inc/layout.php';
 $user = require_login();
 require_perm('billing');
@@ -13,11 +14,11 @@ $scoped = caseload_scoped();
 $scopeCond = $scoped ? ' AND c.assigned_to = ?' : '';
 $scopeArg = $scoped ? [(int)$user['id']] : [];
 
-// Default to the current federal fiscal year (Oct 1 – Sep 30).
+// The shared period picker (remembered per user); the current federal fiscal year
+// (Oct 1 – Sep 30) to date when nothing is chosen.
 $fyStart = (date('n') >= 10 ? date('Y') : date('Y') - 1) . '-10-01';
-$from = valid_date($_GET['from'] ?? '') ?: $fyStart;
-$to = valid_date($_GET['to'] ?? '') ?: date('Y-m-d');
-if ($to < $from) [$from, $to] = [$to, $from];
+$period = report_period($user, $fyStart, date('Y-m-d'));
+$from = $period['from']; $to = $period['to'];
 
 // Clients with logged service or a track expense in the period, with funding, RSA
 // categories, hours. Service value = hours and mileage at the logged rates plus the
@@ -153,14 +154,9 @@ page_header('RSA-911 export', $user, 'analytics');
      Closures and employment outcomes are counted for the clients served in the period (the rows below).</p>
 </div>
 
-<form method="get" action="rsa_report.php" class="card" role="search" aria-labelledby="rsa-period-h">
-  <h2 id="rsa-period-h">Reporting period</h2>
-  <div class="grid grid-4">
-    <div class="field"><label for="from">From</label><input type="date" id="from" name="from" value="<?= h($from) ?>"></div>
-    <div class="field"><label for="to">To</label><input type="date" id="to" name="to" value="<?= h($to) ?>"></div>
-    <div class="field" style="align-self:end"><button type="submit" class="btn btn-primary">Run</button></div>
-  </div>
-</form>
+<h2 id="rsa-period-h">Reporting period</h2>
+<?= report_period_form('rsa_report.php', $period) ?>
+<?php if ($period['notes']): ?><p><?= h(implode(' ', $period['notes'])) ?></p><?php endif; ?>
 
 <h2 class="visually-hidden">Totals for this period</h2>
 <div class="grid grid-4">

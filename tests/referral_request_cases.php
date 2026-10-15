@@ -73,6 +73,40 @@ check($code===0 && $err==='' && $multiRow['requested_service']==='Assessment; De
 check(referral_is_preets(['referral_source'=>'school','note_type'=>'Initial Intake']) && !referral_is_preets(['referral_source'=>'school','referral_purpose'=>'New referral','requested_service'=>'Assistive technology training']) && !referral_is_preets(['referral_source'=>'counselor','referral_purpose'=>'New referral','requested_service'=>'Assessment']),'Historical school referrals retain their classification; new school and counselor AT requests are not Pre-ETS');
 $db->exec("DELETE FROM login_attempts WHERE email='referral-portal'");
 
+// The referrer gives a phone or an email: one is enough, none is refused.
+$before=(int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn();
+[$code,$out,$err]=$publicForm([],array_replace($baseReferral,['referrer_phone'=>'','referrer_email'=>'']));
+check($code===0 && $err==='' && str_contains($out,'Give at least one way to reach you.') && (int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn()===$before,'A referral with neither phone nor email is refused');
+[$code,$out,$err]=$publicForm([],array_replace($baseReferral,['referrer_email'=>'']));
+$phoneOnly=$db->query('SELECT * FROM referrals ORDER BY id DESC LIMIT 1')->fetch();
+check($code===0 && $err==='' && (int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn()===$before+1 && (string)$phoneOnly['counselor_email']==='' && $phoneOnly['counselor_phone']==='555-0100','A referral with a phone and no email is saved and confirmed');
+[$code,$out,$err]=$publicForm([],array_replace($baseReferral,['role'=>'self','referrer_email'=>'','income'=>'below_2000','referral_purpose'=>'New referral']));
+$selfPhone=$db->query('SELECT * FROM referrals ORDER BY id DESC LIMIT 1')->fetch();
+check($code===0 && $err==='' && $selfPhone['referral_source']==='self' && $selfPhone['client_email']===null,'A self-referral without an email stores no client email');
+[$code,$out,$err]=$publicForm([],array_replace($baseReferral,['referrer_phone'=>'','referrer_email'=>'not-an-address']));
+check($code===0 && str_contains($out,'enter one valid address'),'An email given without a phone must be a valid address');
+[$code,$out,$err]=$publicForm(['lang'=>'es'],array_replace($baseReferral,['referrer_phone'=>'','referrer_email'=>'']));
+check($code===0 && str_contains($out,'Indique al menos una forma de contactarle.'),'The phone-or-email message is in Spanish on the Spanish form');
+// The language the form was sent in is stored on the referral and copied to the client on conversion.
+[$code,$out,$err]=$publicForm(['lang'=>'es'],$baseReferral);
+$esRef=$db->query('SELECT * FROM referrals ORDER BY id DESC LIMIT 1')->fetch();
+check($code===0 && $err==='' && $esRef['preferred_language']==='es','A referral sent on the Spanish form records Spanish as the preferred language');
+$db->exec("INSERT INTO clients(name,status) VALUES('Language Synthetic','Pending Assessment')"); $langClient=(int)$db->lastInsertId();
+apply_referral_language($langClient,$esRef);
+check($db->query("SELECT preferred_language FROM clients WHERE id=$langClient")->fetchColumn()==='es' && client_lang($langClient)==='es','apply_referral_language() copies the referral language to the client');
+// The client's emails follow their language unless the English wording was customised.
+[$esSubj]=email_template_for_client('portal_link',$langClient,['name'=>'X','link'=>'https://example.invalid/p']);
+check(str_starts_with($esSubj,'Su portal'),'A Spanish-speaking client gets the Spanish portal invitation');
+$db->exec("INSERT INTO settings(name,value) VALUES('tpl_portal_link_subject','Custom English subject') ON DUPLICATE KEY UPDATE value=VALUES(value)");
+[$customSubj]=email_template_for_client('portal_link',$langClient,['name'=>'X','link'=>'https://example.invalid/p']);
+check($customSubj==='Custom English subject','A customised English template is kept for every client');
+$db->exec("DELETE FROM settings WHERE name='tpl_portal_link_subject'");
+[$enSubj]=email_template_for_client('portal_link',['id'=>$langClient,'preferred_language'=>'en'],['name'=>'X','link'=>'https://example.invalid/p']);
+check(str_starts_with($enSubj,'Your '),'An English-speaking client gets the English portal invitation');
+check(when_es(mktime(14,0,0,3,3,2026))==='martes, 3 de marzo a las 2:00 p. m. '.date('T',mktime(14,0,0,3,3,2026)),'Spanish dates read in Spanish');
+$db->exec("DELETE FROM clients WHERE id=$langClient");
+$db->exec("DELETE FROM login_attempts WHERE email='referral-portal'");
+
 // Records submitted by the earlier structured form retain an explicit Pre-ETS choice.
 foreach (['New referral','Plan amendment'] as $oldPurpose) {
     $db->prepare("INSERT INTO referrals(reason,note_type,subject,body,counselor_name,counselor_agency,counselor_email,counselor_phone,client_name,referral_source,referral_purpose,requested_service) VALUES('Synthetic',?,'Historical Pre-ETS','Synthetic note','Referrer','Agency','referrer@example.invalid','555-0100','Historical student','counselor',?,'Pre-ETS')")

@@ -2,6 +2,7 @@
 require __DIR__ . '/inc/bootstrap.php';
 require __DIR__ . '/inc/layout.php';
 require_once __DIR__ . '/inc/at_ai.php';
+require_once __DIR__ . '/inc/workflows.php'; // track_note_create()
 csrf_check();
 $user = require_login();
 require_perm('clients');
@@ -200,13 +201,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
     $rsaOk = $rawRsa === '' || in_array($rawRsa, $offered, true);
     // The description is a TEXT column (65,535 bytes), as the app's API_TEXT_BYTES allows.
     $descTooLong = strlen($desc) > 65535;
+    // The session note, optional: saved with the hours as a free-text case note on
+    // this track (as the Add a note form saves one). Its subject defaults to the
+    // session's date. Both are checked as that form checks them.
+    $sNote = is_string($_POST['session_note'] ?? null) ? trim($_POST['session_note']) : '';
+    $sSubject = is_string($_POST['session_subject'] ?? null) ? trim($_POST['session_subject']) : '';
+    if ($sSubject === '' && $date) $sSubject = 'Session on ' . fmt_date($date);
+    $sNoteTooLong = strlen($sNote) > 65535;
+    $sSubjectTooLong = mb_strlen($sSubject) > 255;
     // Work dated outside the authorization, or on a track that is not Active, is
     // logged only once "Log it anyway" is ticked (the authorization is being
     // renewed or amended); the override is audited.
     $authIssue = ($date && !$futureDate) ? work_authorization_issue($track, $date) : null;
     $authAcked = ($_POST['auth_ack'] ?? '') === '1';
     if (!$date || $futureDate || $hours < 0.01 || $hours > 24 || $mileage < 0 || $mileage > 1000 || $desc === '' || $descTooLong || !$typeOk || !$rsaOk || !$goalOk
-        || ($authIssue !== null && !$authAcked)) {
+        || $sNoteTooLong || ($sNote !== '' && $sSubjectTooLong) || ($authIssue !== null && !$authAcked)) {
         keep_input();
         $lErrs = [];
         if (!$date) $lErrs['work_date'] = 'Enter a valid date with a four-digit year from 2000 on, no later than today.';
@@ -219,11 +228,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
         if ($mileage < 0 || $mileage > 1000) $lErrs['mileage'] = 'Mileage must be a number from 0 to 1000 miles per entry.';
         if ($desc === '') $lErrs['description'] = 'Describe the activity.';
         elseif ($descTooLong) $lErrs['description'] = 'The activity description is too long to save. It can hold 65,535 bytes (accented letters and symbols count as 2 to 4 bytes each); shorten it.';
+        if ($sNote !== '' && $sSubjectTooLong) $lErrs['session_subject'] = 'Keep the session note subject to 255 characters or fewer.';
+        if ($sNoteTooLong) $lErrs['session_note'] = 'The session note is too long to save. A note can hold 65,535 bytes, and accented letters and symbols count as 2 to 4 bytes each. Shorten it, or add the rest as a separate note.';
         keep_field_errors($lErrs);
     } else {
         // The rate snapshot is read under the track's row lock, in one transaction
         // with the insert (track_edit.php re-prices unbilled work under that lock),
         // so a rate saved at this moment either applies here or re-prices this log.
+        // The session note, when there is one, is saved in the same transaction: the
+        // hours and the note are recorded together or not at all.
+        $noteId = null;
         db()->beginTransaction();
         try {
             $rq = db()->prepare('SELECT hourly_rate, mileage_rate FROM training_tracks WHERE id = ? FOR UPDATE');
@@ -239,6 +253,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
                 ->execute([$id, $date, $visitType, $visitRsa, $goalId, $hours, $mileage, $desc, $user['id'],
                     $rates['hourly_rate'], $rates['mileage_rate'], $logKey]);
             $logId = (int)db()->lastInsertId();
+            if ($sNote !== '') {
+                // A free-text case note by the person logging, as the Add a note form
+                // saves one; it carries the form's key too, as that form's note does.
+                $noteId = track_note_create((int)$track['client_id'], $id, $sSubject, assemble_note(['note_type' => 'Case Note', 'body' => $sNote]), (int)$user['id'], $logKey);
+            }
             db()->commit();
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
@@ -250,7 +269,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
         if ($authIssue !== null) {
             audit($user['id'], 'hours.auth_override', 'track', $id, 'log #' . $logId . ' logged anyway: ' . $authIssue);
         }
-        flash('Hours logged.' . ($authIssue !== null ? ' ' . $authIssue . ' They were logged anyway, as you confirmed.' : ''));
+        flash(($noteId !== null ? fmt_hours($hours) . ' logged and the session note saved.' : 'Hours logged.')
+            . ($authIssue !== null ? ' ' . $authIssue . ' They were logged anyway, as you confirmed.' : ''));
         // Documentation reminder: active-training sessions should have homework.
         $hwq = db()->prepare('SELECT COUNT(*) FROM homework WHERE track_id = ?');
         $hwq->execute([$id]);
@@ -258,6 +278,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
             // The save succeeded: a reminder, not an error (no "Error:" prefix or error earcon).
             flash('Reminder: no homework is assigned on this track. Add practice/homework so the session is fully documented.', 'info');
         }
+        // The saved session note is offered for an AI homework draft beside the message.
+        if ($noteId !== null) redirect("track.php?id=$id&saved_note=$noteId#logs");
     }
     redirect("track.php?id=$id#logs");
 }
@@ -464,9 +486,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_track_note'])) {
         // The note and its homework are saved together or not at all.
         db()->beginTransaction();
         try {
-            db()->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-                ->execute([(int)$track['client_id'], $id, $a['type'], $a['format'], $subject, $a['body'], $a['cols'][0], $a['cols'][1], $a['cols'][2], $a['cols'][3], $user['id'], $noteKey]);
-            audit($user['id'], 'note.add', 'client', (int)$track['client_id'], 'track #' . $id . ': ' . $subject);
+            track_note_create((int)$track['client_id'], $id, $subject, $a, (int)$user['id'], $noteKey);
             // Homework captured by the generator attaches to THIS track (shows in the portal).
             $added = save_note_homework((int)$track['client_id'], $id, $_POST, (int)$user['id']);
             db()->commit();
@@ -513,6 +533,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['gen_track_note'])) {
         }
         else flash($g['error'], 'error');
         audit($user['id'], 'ai.draft', 'client', (int)$track['client_id'], 'track note generate (' . $tnFormat . ')');
+    }
+}
+
+/* ---- POST: draft homework from one of this track's notes (no redirect; re-renders
+   with the Assign homework form prefilled). Nothing is saved until Assign. ---- */
+$hwDraft = null;
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['draft_homework'])) {
+    // The note must be on this track (the track's client scope was checked above).
+    $dn = db()->prepare('SELECT * FROM client_notes WHERE id = ? AND track_id = ?');
+    $dn->execute([(int)($_POST['note_id'] ?? 0), $id]);
+    $draftNote = $dn->fetch();
+    if (!$draftNote) flash('That note is not on this track or no longer exists, so no homework was drafted.', 'error');
+    elseif (!function_exists('homework_draft_from_note') || !ai_feature_enabled('homework_draft')) flash('Drafting homework from a note is turned off. An administrator can enable it under AI assistant settings.', 'error');
+    else {
+        $d = homework_draft_from_note($draftNote, $track, (int)$user['id']);
+        if (!$d['ok']) flash($d['error'], 'error');
+        else {
+            $instr = $d['instructions'];
+            if ($d['minutes'] > 0) $instr .= ($instr !== '' ? "\n\n" : '') . 'Practice time: about ' . $d['minutes'] . ' minutes a day.';
+            $hwDraft = ['subject' => (string)$draftNote['subject'], 'minutes' => $d['minutes'], 'due_days' => $d['due_days']];
+            // The Assign homework form reads these as it reads a kept draft.
+            $GLOBALS['OLD_INPUT'] = ['hw_title' => $d['title'], 'hw_instructions' => $instr,
+                'hw_due' => $d['due_days'] > 0 ? date('Y-m-d', strtotime('+' . $d['due_days'] . ' days')) : ''] + ($GLOBALS['OLD_INPUT'] ?? []);
+        }
     }
 }
 
@@ -677,13 +721,26 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
 <section id="logs" class="card" aria-labelledby="logs-h">
   <h2 id="logs-h">Hours &amp; billing tracker</h2>
   <h3 id="log-session-h">Log a session</h3>
+  <?php // Just after hours and a session note were saved together: offer an AI homework draft from that note.
+  $savedNote = null;
+  if (isset($_GET['saved_note']) && function_exists('ai_feature_enabled') && ai_feature_enabled('homework_draft')) {
+      foreach ($notes as $tn) if ((int)$tn['id'] === (int)$_GET['saved_note']) { $savedNote = $tn; break; }
+  }
+  if ($savedNote): ?>
+  <form method="post" action="track.php?id=<?= $id ?>#assign-hw-h" class="inline-form"><?= csrf_field() ?>
+    <input type="hidden" name="note_id" value="<?= (int)$savedNote['id'] ?>">
+    <button type="submit" name="draft_homework" value="1" class="btn btn-secondary btn-sm">Draft homework from this session note<span class="visually-hidden">: <?= h($savedNote['subject']) ?></span></button>
+    <span class="hint">An AI draft of practice for the learner, from the note you just saved. You review it before assigning.</span>
+  </form>
+  <?php endif; ?>
   <?php if ((float)$track['hourly_rate'] <= 0): ?>
   <p class="alert alert-error" role="note">Hours cannot be logged to this track yet because it has no hourly rate. <a href="track_edit.php?id=<?= $id ?>">Enter the hourly billing rate</a> first.</p>
   <?php endif; ?>
   <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate>
     <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['work_date' => 'Date', 'log_auth_ack' => 'Authorization', 'visit_rsa_category' => 'RSA service delivered this visit', 'visit_service_type' => 'Service type',
-        'goal_id' => 'Goal this session advanced', 'hours' => 'Hours worked', 'mileage' => 'Mileage', 'description' => 'Activity description'], ['goal_id' => 'log_goal', 'log_auth_ack' => 'log_auth_ack']) ?>
+        'goal_id' => 'Goal this session advanced', 'hours' => 'Hours worked', 'mileage' => 'Mileage', 'description' => 'Activity description',
+        'session_subject' => 'Session note subject', 'session_note' => 'Session note'], ['goal_id' => 'log_goal', 'log_auth_ack' => 'log_auth_ack']) ?>
     <div class="field"><label for="work_date">Date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <input type="date" id="work_date" name="work_date" accesskey="t" required min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('work_date', date('Y-m-d'))) ?>" <?= field_aria('work_date') ?>><?= field_error('work_date') ?></div>
     <?php // Shown once the date was refused as outside the authorization (or a ticked box is being kept). ?>
@@ -713,6 +770,14 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
       <input type="text" inputmode="decimal" autocomplete="off" id="mileage" name="mileage" value="<?= h(old_in('mileage', '0')) ?>" <?= field_aria('mileage', 'mileage-hint') ?>><?= field_error('mileage') ?></div>
     <div class="field"><label for="description">Activity description <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <textarea id="description" name="description" required rows="3" <?= field_aria('description') ?>><?= h(old_in('description')) ?></textarea><?= field_error('description') ?></div>
+    <?php // The session's case note, written here with its hours (saved together, as
+    // a free-text note on this track). The Add a note form below still takes a
+    // structured note, or one on its own. ?>
+    <div class="field"><label for="session_note">Session note <span class="hint">optional — saved with the hours as a case note on this track</span></label>
+      <span class="hint" id="session_note-hint">What happened in the session: progress, concerns, and the plan for next time. Leave it blank to log the hours only.</span>
+      <textarea id="session_note" name="session_note" rows="4" <?= field_aria('session_note', 'session_note-hint') ?>><?= h(old_in('session_note')) ?></textarea><?= field_error('session_note') ?></div>
+    <div class="field"><label for="session_subject">Session note subject <span class="hint">optional — left blank, it is "Session on" followed by the session date</span></label>
+      <input type="text" id="session_subject" name="session_subject" maxlength="255" value="<?= h(old_in('session_subject')) ?>" <?= field_aria('session_subject') ?>><?= field_error('session_subject') ?></div>
     <button type="submit" name="add_log" value="1" class="btn btn-primary">Log hours</button>
   </form>
 
@@ -858,7 +923,8 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   </details>
   <?= details_open_on_hash('add-track-note') ?>
   <?php if (!$notes): ?><p class="muted">No notes recorded for this track yet.</p><?php endif; ?>
-  <?php foreach ($notes as $tn):
+  <?php $hwDraftOn = function_exists('ai_feature_enabled') && ai_feature_enabled('homework_draft');
+  foreach ($notes as $tn):
     $nfmt = $tn['note_format'] ?? 'free'; if (!isset(NOTE_FORMATS[$nfmt])) $nfmt = 'free';
     $nCols = [$tn['birp_behavior'] ?? '', $tn['birp_intervention'] ?? '', $tn['birp_response'] ?? '', $tn['birp_plan'] ?? ''];
     $isStruct = $nfmt !== 'free' && implode('', $nCols) !== ''; ?>
@@ -876,6 +942,12 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
       <?php endif; ?>
       <?php if (can('admin') || (int)($tn['author_id'] ?? 0) === (int)$user['id']): ?>
         <p><a class="btn btn-secondary btn-sm" href="client.php?id=<?= (int)$track['client_id'] ?>&amp;tab=notes&amp;edit_note=<?= (int)$tn['id'] ?>#addnote-h">Edit<span class="visually-hidden"> note: <?= h($tn['subject']) ?></span></a></p>
+      <?php endif; ?>
+      <?php if ($hwDraftOn): // Drafts homework from this note into the Assign homework form; nothing is saved until Assign. ?>
+      <form method="post" action="track.php?id=<?= $id ?>#assign-hw-h" class="inline-form"><?= csrf_field() ?>
+        <input type="hidden" name="note_id" value="<?= (int)$tn['id'] ?>">
+        <button type="submit" name="draft_homework" value="1" class="btn btn-secondary btn-sm">Draft homework from this note<span class="visually-hidden">: <?= h($tn['subject']) ?></span></button>
+      </form>
       <?php endif; ?>
     </article>
   <?php endforeach; ?>
@@ -1114,7 +1186,11 @@ $expenses->execute([$id]); $expenses = $expenses->fetchAll();
     </tbody>
   </table>
   </div>
-  <h3>Assign homework</h3>
+  <h3 id="assign-hw-h">Assign homework</h3>
+  <?php if ($hwDraft): // The new draft is announced by moving focus to the notice, as the generated note is. ?>
+  <div class="alert alert-success" role="note" id="hw-draft-note" tabindex="-1">Draft from the note "<?= h($hwDraft['subject']) ?>": review and change it before assigning.<?= $hwDraft['due_days'] > 0 ? ' The AI suggests it is due in ' . (int)$hwDraft['due_days'] . ' day' . ($hwDraft['due_days'] === 1 ? '' : 's') . '.' : '' ?> Nothing is saved until you choose Assign.</div>
+  <script>document.addEventListener("DOMContentLoaded",function(){var d=document.getElementById("hw-draft-note");if(d){d.focus();if(window.Earcon)Earcon.play("success");}});</script>
+  <?php endif; ?>
   <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['hw_title' => 'Title', 'hw_instructions' => 'Instructions', 'hw_due' => 'Due date']) ?>

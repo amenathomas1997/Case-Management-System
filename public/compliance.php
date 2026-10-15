@@ -85,6 +85,34 @@ if (can('equipment')) {
     usort($equipDue, fn($a, $b) => strcmp($a['due'], $b['due']));
 }
 
+/* ---- Device follow-ups due (the Device follow-ups page's "Due now" query: pending,
+   due today or earlier, caseload-scoped by the client the device is with) ---- */
+$fuDueQ = db()->prepare("SELECT f.id, f.due_date, f.interval_days, c.name AS client_name, c.id AS cid, e.name AS equipment_name
+    FROM equipment_followups f JOIN clients c ON c.id = f.client_id JOIN equipment e ON e.id = f.equipment_id
+    WHERE f.status = 'Pending' AND f.due_date <= CURDATE()" . $scopeSql . ' ORDER BY f.due_date LIMIT 300');
+$fuDueQ->execute($scopeArg);
+$fuDue = $fuDueQ->fetchAll();
+$fuCnt = db()->prepare("SELECT COUNT(*) FROM equipment_followups f JOIN clients c ON c.id = f.client_id
+    WHERE f.status = 'Pending' AND f.due_date <= CURDATE()" . $scopeSql);
+$fuCnt->execute($scopeArg);
+$fuDueTotal = max((int)$fuCnt->fetchColumn(), count($fuDue));
+
+/* ---- Overdue equipment loans (only if the user manages equipment): the Equipment
+   page's rule — an open loan whose due date has passed. As there, a scoped user
+   still sees the item but not a borrower outside their caseload. ---- */
+$loansOverdue = [];
+if (can('equipment')) {
+    foreach (db()->query("SELECT e.id, e.name, l.due_date, c.name AS borrower, c.id AS borrower_id, c.assigned_to AS borrower_assigned
+            FROM equipment e JOIN equipment_loans l ON l.equipment_id = e.id AND l.returned_at IS NULL
+            LEFT JOIN clients c ON c.id = l.client_id
+            WHERE l.due_date IS NOT NULL AND l.due_date < CURDATE() ORDER BY l.due_date, e.name")->fetchAll() as $l) {
+        if ($scoped && $l['borrower_id'] !== null && (int)$l['borrower_assigned'] !== (int)$user['id']) {
+            $l['borrower'] = null; $l['borrower_id'] = null;
+        }
+        $loansOverdue[] = $l;
+    }
+}
+
 /* ---- Contracts at risk (near end, over budget, or overdue deliverables) ---- */
 $contractsRisk = [];
 if (can('billing')) {
@@ -158,6 +186,8 @@ page_header('Compliance', $user, 'compliance');
   <div class="card stat"><span class="stat-num"><?= can('equipment') ? count($equipDue) : '<span aria-hidden="true">—</span><span class="visually-hidden">Not shown (needs equipment access)</span>' ?></span><span class="stat-label">Equipment service due</span></div>
   <div class="card stat"><span class="stat-num"><?= count(array_filter($authRisk, fn($t) => $t['expired'])) ?></span><span class="stat-label">Expired authorizations</span></div>
   <div class="card stat"><span class="stat-num"><?= count($consentRisk) ?></span><span class="stat-label">Consents to renew</span></div>
+  <div class="card stat"><span class="stat-num"><?= $fuDueTotal ?></span><span class="stat-label">Device follow-ups due</span></div>
+  <div class="card stat"><span class="stat-num"><?= can('equipment') ? count($loansOverdue) : '<span aria-hidden="true">—</span><span class="visually-hidden">Not shown (needs equipment access)</span>' ?></span><span class="stat-label">Overdue equipment loans</span></div>
 </div>
 
 <section class="card" aria-labelledby="auth-h">
@@ -227,6 +257,36 @@ page_header('Compliance', $user, 'compliance');
   <?php foreach ($equipDue as $e): ?>
     <li><a href="equipment.php?scan=<?= (int)$e['id'] ?>"><?= h($e['name']) ?></a> —
       <?= $e['overdue'] ? '<strong class="field-error">overdue since ' . fmt_date($e['due']) . '</strong>' : 'due ' . fmt_date($e['due']) ?></li>
+  <?php endforeach; ?>
+  </ul>
+  <?php endif; ?>
+</section>
+<?php endif; ?>
+
+<section class="card" aria-labelledby="fu-h">
+  <h2 id="fu-h">Device follow-ups due (<?= $fuDueTotal ?>)</h2>
+  <p class="muted">Post-loan checks that a device is still in use, due today or earlier. Record each one on the <a href="followups.php#due-h">Device follow-ups page</a>.</p>
+  <?php if (!$fuDue): ?><p class="muted">No follow-ups are due.</p><?php else: ?>
+  <?php if ($fuDueTotal > count($fuDue)): ?><p>Showing the first <?= count($fuDue) ?> of <?= $fuDueTotal ?> checks due, oldest first.</p><?php endif; ?>
+  <ul>
+  <?php foreach ($fuDue as $f): ?>
+    <li><a href="client.php?id=<?= (int)$f['cid'] ?>"><?= h($f['client_name']) ?></a> — <?= h($f['equipment_name']) ?>, <?= (int)$f['interval_days'] ?>-day check ·
+      <?= $f['due_date'] < $today ? '<strong class="field-error">overdue since ' . fmt_date($f['due_date']) . '</strong>' : 'due today' ?></li>
+  <?php endforeach; ?>
+  </ul>
+  <?php endif; ?>
+</section>
+
+<?php if (can('equipment')): ?>
+<section class="card" aria-labelledby="loans-h">
+  <h2 id="loans-h">Overdue equipment loans (<?= count($loansOverdue) ?>)</h2>
+  <p class="muted">Items out on loan past their return date. Record returns on the <a href="equipment.php?status=overdue#inv-h">Equipment &amp; loans page, filtered to overdue returns</a>.</p>
+  <?php if (!$loansOverdue): ?><p class="muted">No loans are overdue.</p><?php else: ?>
+  <ul>
+  <?php foreach ($loansOverdue as $l): ?>
+    <li><a href="equipment.php?scan=<?= (int)$l['id'] ?>"><?= h($l['name']) ?></a> —
+      <?= $l['borrower_id'] !== null ? 'with <a href="client.php?id=' . (int)$l['borrower_id'] . '">' . h($l['borrower']) . '</a>' : '<span class="muted">with a client outside your caseload</span>' ?> ·
+      <strong class="field-error">overdue since <?= fmt_date($l['due_date']) ?></strong></li>
   <?php endforeach; ?>
   </ul>
   <?php endif; ?>

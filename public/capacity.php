@@ -2,6 +2,7 @@
 // Capacity planning: committed session hours vs available hours per instructor,
 // plus authorized-but-unscheduled hours per active track.
 require __DIR__ . '/inc/bootstrap.php';
+require_once __DIR__ . '/inc/report_period.php';
 require __DIR__ . '/inc/layout.php';
 $user = require_login();
 require_perm('schedule');
@@ -9,11 +10,19 @@ $rs = report_table('scheduled_sessions', (int)$user['id']);
 
 $staff = db()->query('SELECT id, name, weekly_hours FROM users WHERE is_active = 1 ORDER BY name')->fetchAll();
 
+// The shared period picker (remembered per user); this week and the three after it
+// when nothing is chosen. The weeks shown are the Monday-to-Sunday weeks that cover
+// the period, at most 13 (a longer period shows its first 13 weeks and says so).
+$thisMonday = strtotime('monday this week');
+$period = report_period($user, date('Y-m-d', $thisMonday), date('Y-m-d', $thisMonday + 27 * 86400));
 $weeks = [];
-for ($w = 0; $w < 4; $w++) {
-    $start = strtotime('monday this week +' . $w . ' week');
+$start = strtotime('monday this week', strtotime($period['from']));
+$weeksCapped = false;
+while (date('Y-m-d', $start) <= $period['to']) {
+    if (count($weeks) === 13) { $weeksCapped = true; break; }
     $weeks[] = ['start' => date('Y-m-d', $start), 'end' => date('Y-m-d', $start + 6 * 86400),
                 'label' => date('M j', $start) . ' – ' . date('M j', $start + 6 * 86400)];
+    $start = strtotime('+1 week', $start);
 }
 
 // An instructor's committed hours for the week. A group session is stored as one row
@@ -49,9 +58,11 @@ page_header('Capacity', $user, 'schedule');
 <h1>Capacity planning</h1>
 <div class="page-actions"><a class="btn btn-secondary btn-sm" href="utilization.php">Billable utilization (retrospective)</a></div>
 <?php if ($scoped): ?><p>Committed hours are limited to sessions with your assigned clients. Available-hours targets remain the staff members’ full capacity.</p><?php endif; ?>
+<?= report_period_form('capacity.php', $period) ?>
+<?php if ($period['notes'] || $weeksCapped): ?><p><?= h(implode(' ', $period['notes'])) ?><?= $weeksCapped ? ' Only the first 13 weeks of the period are shown; choose a shorter period to see later weeks.' : '' ?></p><?php endif; ?>
 
 <section class="card" aria-labelledby="cap-h">
-  <h2 id="cap-h">Committed vs available hours (next 4 weeks)</h2>
+  <h2 id="cap-h">Committed vs available hours (<?= count($weeks) ?> week<?= count($weeks) === 1 ? '' : 's' ?> from <?= h(fmt_date($weeks[0]['start'])) ?>)</h2>
   <div class="table-scroll" tabindex="0" role="region" aria-labelledby="cap-cap">
   <table>
     <caption class="visually-hidden" id="cap-cap">Booked and available hours per instructor for each of the next 4 weeks</caption>

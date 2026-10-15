@@ -62,6 +62,52 @@ $taskTotals = $tc->fetch();
 $taskCount = (int)$taskTotals['n'];
 $overdueTasks = (int)$taskTotals['overdue'];
 
+/* ---- Today: what is due now, each a link to where it is done, only for the
+   areas this user can open. Counts use the same visibility and filters as the
+   pages they link to (the Task list's Due filters, the Schedule, Messages, Device
+   follow-ups and Client portal requests), so the numbers agree. ---- */
+require_once __DIR__ . '/inc/task_filters.php';
+$todayItems = [];   // each: ['href' => ..., 'text' => ..., 'sub' => [[href, text], ...]]
+$todayTaskCounts = [];
+foreach (['overdue' => 'overdue', 'today' => 'due today'] as $dueKey => $dueLabel) {
+    $tp = $tvParams;
+    $tfSql = task_filter_sql(task_filters(['due' => $dueKey]), $tp);
+    $tcq = db()->prepare('SELECT COUNT(*) FROM tasks t WHERE ' . $tvSql . $tfSql);
+    $tcq->execute($tp);
+    $todayTaskCounts[$dueKey] = (int)$tcq->fetchColumn();
+    if ($todayTaskCounts[$dueKey] > 0) {
+        $n = $todayTaskCounts[$dueKey];
+        $todayItems[] = ['href' => 'tasks.php?due=' . $dueKey, 'text' => $n . ' task' . ($n === 1 ? '' : 's') . ' ' . $dueLabel];
+    }
+}
+if (can('schedule')) {
+    // Today's sessions still open for an outcome, scoped like the Schedule page; each
+    // links to its row there (the Upcoming or Ended-sessions table).
+    $sq = db()->prepare("SELECT s.id, s.start_at, s.end_at, c.name AS client_name, t.title AS track_title
+        FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id LEFT JOIN training_tracks t ON t.id = s.track_id
+        WHERE s.status = 'Scheduled' AND DATE(s.start_at) = CURDATE()" . $scopeAnd . ' ORDER BY s.start_at, s.id');
+    $sq->execute($scopeParams);
+    $todaySessions = $sq->fetchAll();
+    if ($todaySessions) {
+        $n = count($todaySessions);
+        $todayItems[] = ['href' => 'schedule.php#upcoming-h', 'text' => $n . ' session' . ($n === 1 ? '' : 's') . ' today',
+            'sub' => array_map(fn($s) => ['schedule.php#s-' . (int)$s['id'],
+                date('g:i A', strtotime($s['start_at'])) . ' — ' . $s['client_name'] . ($s['track_title'] ? ' (' . $s['track_title'] . ')' : '')
+                . (strtotime($s['end_at']) < time() ? ', ended, awaiting an outcome' : '')], $todaySessions)];
+    }
+}
+if (can('clients')) {
+    $mq = db()->prepare("SELECT COUNT(*) FROM messages m JOIN clients c ON c.id = m.client_id WHERE m.sender <> 'staff' AND m.read_at IS NULL" . $scopeAnd);
+    $mq->execute($scopeParams);
+    if (($n = (int)$mq->fetchColumn()) > 0) $todayItems[] = ['href' => 'messages.php', 'text' => $n . ' unread message' . ($n === 1 ? '' : 's') . ' from clients and counselors'];
+    $fq = db()->prepare("SELECT COUNT(*) FROM equipment_followups f JOIN clients c ON c.id = f.client_id WHERE f.status = 'Pending' AND f.due_date <= CURDATE()" . $scopeAnd);
+    $fq->execute($scopeParams);
+    if (($n = (int)$fq->fetchColumn()) > 0) $todayItems[] = ['href' => 'followups.php#due-h', 'text' => $n . ' device follow-up' . ($n === 1 ? '' : 's') . ' due'];
+    $pq = db()->prepare("SELECT COUNT(*) FROM portal_requests pr JOIN clients c ON c.id = pr.client_id WHERE pr.status = 'New'" . $scopeAnd);
+    $pq->execute($scopeParams);
+    if (($n = (int)$pq->fetchColumn()) > 0) $todayItems[] = ['href' => 'portal_requests.php', 'text' => $n . ' new client portal request' . ($n === 1 ? '' : 's')];
+}
+
 // Same helper as the Invoices page and the app dashboard, so all three agree:
 // hours plus mileage at the snapshot rates plus unbilled expenses, caseload-scoped.
 $unbilled = ['hours' => 0.0, 'total' => 0.0];
@@ -73,22 +119,26 @@ page_header('Dashboard', $user, 'dashboard');
 ?>
 <h1>Caseload Dashboard</h1>
 
-<?php if ($myTasks): ?>
-<section class="card" aria-labelledby="tasks-heading">
-  <h2 id="tasks-heading"><?= $teamTasks ? 'Open tasks, yours and your team\'s' : 'My tasks' ?> (<?= $taskCount ?><?= $overdueTasks ? ', ' . $overdueTasks . ' overdue' : '' ?><?= $taskCount > count($myTasks) ? ' — first ' . count($myTasks) . ' shown' : '' ?>)</h2>
+<section class="card" aria-labelledby="today-heading">
+  <h2 id="today-heading">Today<?= $todayItems ? ' (' . count($todayItems) . ' item' . (count($todayItems) === 1 ? '' : 's') . ')' : '' ?></h2>
+  <?php if (!$todayItems): ?>
+    <p class="muted">Nothing due today.</p>
+  <?php else: ?>
   <ul>
-  <?php foreach ($myTasks as $t): $dl = $t['due_date'] !== null ? (int)$t['days_left'] : null; ?>
-    <li>
-      <?= h($t['title']) ?><?= $t['client_name'] && can('clients') ? ' — <a href="client.php?id=' . (int)$t['client_id'] . '">' . h($t['client_name']) . '</a>' : '' ?><?= $teamTasks && (int)($t['assigned_to'] ?? 0) !== (int)$user['id'] ? ' <span class="muted">(' . ($t['assignee_name'] ? 'assigned to ' . h($t['assignee_name']) : 'unassigned') . ')</span>' : '' ?>
-      <?php if ($dl !== null && $dl < 0): ?> <span class="field-error"><strong><?= abs($dl) ?> day<?= abs($dl) === 1 ? '' : 's' ?> overdue</strong></span>
-      <?php elseif ($dl === 0): ?> <strong>(due today)</strong>
-      <?php elseif ($dl !== null): ?> <span class="muted">(due <?= fmt_date($t['due_date']) ?>)</span><?php endif; ?>
+  <?php foreach ($todayItems as $item): ?>
+    <li><a href="<?= h($item['href']) ?>"><?= h($item['text']) ?></a>
+      <?php if (!empty($item['sub'])): ?>
+      <ul>
+      <?php foreach ($item['sub'] as [$subHref, $subText]): ?>
+        <li><a href="<?= h($subHref) ?>"><?= h($subText) ?></a></li>
+      <?php endforeach; ?>
+      </ul>
+      <?php endif; ?>
     </li>
   <?php endforeach; ?>
   </ul>
-  <p><a href="tasks.php">Open the task list <span aria-hidden="true">→</span></a></p>
+  <?php endif; ?>
 </section>
-<?php endif; ?>
 
 <h2 class="visually-hidden">Caseload at a glance</h2>
 <div class="grid grid-4">
@@ -115,6 +165,23 @@ page_header('Dashboard', $user, 'dashboard');
   </div>
   <?php endif; ?>
 </div>
+
+<?php if ($myTasks): ?>
+<section class="card" aria-labelledby="tasks-heading">
+  <h2 id="tasks-heading"><?= $teamTasks ? 'Open tasks, yours and your team\'s' : 'My tasks' ?> (<?= $taskCount ?><?= $overdueTasks ? ', ' . $overdueTasks . ' overdue' : '' ?><?= $taskCount > count($myTasks) ? ' — first ' . count($myTasks) . ' shown' : '' ?>)</h2>
+  <ul>
+  <?php foreach ($myTasks as $t): $dl = $t['due_date'] !== null ? (int)$t['days_left'] : null; ?>
+    <li>
+      <?= h($t['title']) ?><?= $t['client_name'] && can('clients') ? ' — <a href="client.php?id=' . (int)$t['client_id'] . '">' . h($t['client_name']) . '</a>' : '' ?><?= $teamTasks && (int)($t['assigned_to'] ?? 0) !== (int)$user['id'] ? ' <span class="muted">(' . ($t['assignee_name'] ? 'assigned to ' . h($t['assignee_name']) : 'unassigned') . ')</span>' : '' ?>
+      <?php if ($dl !== null && $dl < 0): ?> <span class="field-error"><strong><?= abs($dl) ?> day<?= abs($dl) === 1 ? '' : 's' ?> overdue</strong></span>
+      <?php elseif ($dl === 0): ?> <strong>(due today)</strong>
+      <?php elseif ($dl !== null): ?> <span class="muted">(due <?= fmt_date($t['due_date']) ?>)</span><?php endif; ?>
+    </li>
+  <?php endforeach; ?>
+  </ul>
+  <p><a href="tasks.php">Open the task list <span aria-hidden="true">→</span></a></p>
+</section>
+<?php endif; ?>
 
 <?php if (can('clients')): ?>
 <section aria-labelledby="expiring-heading" class="card">

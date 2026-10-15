@@ -57,6 +57,28 @@ $messages = fn(int $client): int => (int)$db->query("SELECT COUNT(*) FROM messag
 check($clean($code, $err) && $messages($portalClient) === 1 && $messages($portalOther) === 0, 'A portal message is stored on the link\'s own client and no other' . ($err ? ": $err" : ''));
 [$code, $out, $err] = $anon('portal', ['t' => $expiredPortal], ['send_message' => '1', 'message' => 'Synthetic refused message']);
 check($clean($code, $err) && $messages($portalOther) === 0, 'An expired portal link cannot post a message' . ($err ? ": $err" : ''));
+// One "Ask us something" form: the topic chosen is stored as the request's type.
+[$code, $out, $err] = $anon('portal', ['t' => $validPortal]);
+check($clean($code, $err) && str_contains($out, 'Ask us something') && str_contains($out, 'value="appointment"') && str_contains($out, 'value="device"') && !str_contains($out, 'Request an appointment'),
+    'The portal offers one request form with a topic choice' . ($err ? ": $err" : ''));
+$requests = fn(int $client, string $type): int => (int)$db->query("SELECT COUNT(*) FROM portal_requests WHERE client_id=$client AND type='$type'")->fetchColumn();
+[$code, $out, $err] = $anon('portal', ['t' => $validPortal], ['new_request' => '1', 'req_type' => 'appointment', 'details' => 'Synthetic appointment request']);
+check($clean($code, $err) && $requests($portalClient, 'appointment') === 1, 'An appointment topic is stored as an appointment request' . ($err ? ": $err" : ''));
+[$code, $out, $err] = $anon('portal', ['t' => $validPortal], ['new_request' => '1', 'req_type' => 'device', 'details' => 'Synthetic device request']);
+check($clean($code, $err) && $requests($portalClient, 'device') === 1, 'A device-help topic is stored as a device request' . ($err ? ": $err" : ''));
+[$code, $out, $err] = $anon('portal', ['t' => $validPortal], ['new_request' => '1', 'req_type' => 'other', 'details' => '']);
+check($clean($code, $err) && $requests($portalClient, 'other') === 0, 'A request with no details is refused' . ($err ? ": $err" : ''));
+// Practice is logged from the homework section (one place), with the same validation.
+[$code, $out, $err] = $anon('portal', ['t' => $validPortal], ['log_practice' => '1', 'practice' => 'Synthetic practice', 'minutes' => '15']);
+check($clean($code, $err) && (int)$db->query("SELECT COUNT(*) FROM client_notes WHERE client_id=$portalClient AND subject='Practice logged by client (portal)'")->fetchColumn() === 1,
+    'Practice logged from the homework section is recorded' . ($err ? ": $err" : ''));
+// A client who prefers Spanish gets the portal in Spanish from the first visit.
+$db->exec("UPDATE clients SET preferred_language='es' WHERE id=$portalClient");
+[$code, $out, $err] = $anon('portal', ['t' => $validPortal]);
+check($clean($code, $err) && str_contains($out, '<html lang="es"') && str_contains($out, 'Pregúntenos algo'), 'The portal opens in Spanish for a client who prefers Spanish' . ($err ? ": $err" : ''));
+[$code, $out, $err] = $anon('portal', ['t' => $validPortal, 'lang' => 'en']);
+check($clean($code, $err) && str_contains($out, '<html lang="en"'), 'The language toggle still switches a Spanish-speaking client\'s portal to English' . ($err ? ": $err" : ''));
+$db->exec("UPDATE clients SET preferred_language='en' WHERE id=$portalClient");
 
 /* ---- Counselor portal ---- */
 $vrcEmail = 'vrc-synthetic@example.invalid';

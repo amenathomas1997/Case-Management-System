@@ -51,7 +51,7 @@ check(in_array('Homework support',array_column($items,'kind'),true)&&in_array('W
 check(!array_filter($titles,fn(string $t):bool=>str_contains($t,'Workflow outside client')),'Action center does not expose another caseload');
 $GLOBALS['CURRENT_SCOPED']=false;$GLOBALS['CURRENT_PERMS']=array_keys(PERMISSION_KEYS);
 $titles=array_column(workflow_action_items(['id'=>1]),'title');
-check(count(array_intersect(['Workflow outside client — Workflow outside track','Workflow outside client — Workflow outside homework','Workflow outside client — session ended: mark it completed on the schedule (this logs the hours), then write the session note'],$titles))===3,
+check(count(array_intersect(['Workflow outside client — Workflow outside track','Workflow outside client — Workflow outside homework','Workflow outside client — session ended: record the outcome (mark completed, log hours and add the note)'],$titles))===3,
     'An unscoped action center lists that client\'s expiring authorization, homework support request and missing session outcome');
 $db->exec("UPDATE scheduled_sessions SET status='Cancelled' WHERE id=$outsideSession");
 $db->exec("UPDATE tasks SET status='Done' WHERE auto_key LIKE 'practice:%' AND client_id=$outside");

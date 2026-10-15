@@ -68,7 +68,7 @@ $pager = function (string $where) use ($page, $pages): string {
         . '</nav>';
 };
 
-page_header('Trash' . ($pages > 1 ? ' (page ' . $page . ' of ' . $pages . ')' : ''), $user, 'account');
+page_header('Trash' . ($pages > 1 ? ' (page ' . $page . ' of ' . $pages . ')' : ''), $user, 'admin', [['admin.php', 'Administration']]);
 ?>
 <h1>Trash</h1>
 <p class="muted">Deleted work logs and documents wait here for 30 days before being removed for good by the nightly job.</p>

@@ -65,10 +65,45 @@ check($edited['amended']===true && $edited['repriced']===1 && (float)$db->query(
     && (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action IN ('auth.amend','track.update') AND entity_id=$parTrack")->fetchColumn()===2,
     'Editing a track\'s hours and rate records the amendment, re-prices unbilled work and audits both entries, as track_edit.php does');
 
+/* ---- Referral waitlist and the documentation review queue (workflows.php) ---- */
+$db->exec("INSERT INTO referrals(reason,subject,body,counselor_name,counselor_agency,counselor_email,counselor_phone,client_name) VALUES('Synthetic','Waitlist','Synthetic','Referrer','Agency','referrer@example.invalid','555','Parity waitlist referral')");
+$parRef=(int)$db->lastInsertId();
+$wlItem=fn(array $r)=>array_values(array_filter($r['items'],fn($i)=>$i['referral_id']===$parRef))[0]??null;
+$listed=$wlItem($call('waitlist'));
+check($listed!==null && $listed['status']==='Not waitlisted' && $listed['waitlisted']===false && $listed['received_at']===date('Y-m-d') && $listed['client_name']==='Parity waitlist referral',
+    'waitlist lists an open referral with no entry yet as Not waitlisted, with the day it was received');
+$call('waitlist_update',['referral_id'=>$parRef,'status'=>'Sideways'],[],false,'Status: choose');
+$call('waitlist_update',['referral_id'=>$parRef,'status'=>'Waiting','followup_date'=>'2026-02-31'],[],false,'Follow-up date');
+check((int)$db->query("SELECT COUNT(*) FROM referral_waitlist WHERE referral_id=$parRef")->fetchColumn()===0,'waitlist_update refuses a bad status or follow-up date, naming the field, and saves nothing');
+$savedWl=$call('waitlist_update',['referral_id'=>$parRef,'status'=>'Contacted','followup_date'=>date('Y-m-d',strtotime('+7 days')),'notes'=>'Weekday mornings','expertise'=>'braille']);
+$wlRow=$db->query("SELECT * FROM referral_waitlist WHERE referral_id=$parRef")->fetch();
+check($wlRow && $wlRow['status']==='Contacted' && $wlRow['availability']==='Weekday mornings' && $wlRow['expertise']==='braille' && $wlRow['followup_date']===date('Y-m-d',strtotime('+7 days'))
+    && $savedWl['item']['status']==='Contacted' && $savedWl['item']['notes']==='Weekday mornings'
+    && (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action='referral.waitlist' AND entity_id=$parRef AND detail='Contacted'")->fetchColumn()===1,
+    'waitlist_update saves the entry through workflow_waitlist_save and audits referral.waitlist as the website does');
+$call('waitlist_update',['referral_id'=>$parRef,'status'=>'Ready','version'=>0],[],false,'Someone else saved');
+$call('waitlist_update',['referral_id'=>$parRef,'status'=>'Ready']);
+$wlRow=$db->query("SELECT * FROM referral_waitlist WHERE referral_id=$parRef")->fetch();
+check($wlRow['status']==='Ready' && $wlRow['expertise']==='braille' && $wlRow['availability']==='Weekday mornings' && (int)$wlRow['version']===2,
+    'A stale version is refused; an update without one keeps the fields it leaves out and bumps the version');
+$listed=$wlItem($call('waitlist'));
+check($listed['status']==='Ready' && $listed['followup_date']===date('Y-m-d',strtotime('+7 days')) && $listed['version']===2,'waitlist lists the saved entry');
+$db->exec("INSERT INTO client_notes(client_id,subject,body,author_id) VALUES(1,'','Synthetic review body with a [TODO] left in',1)"); $flaggedNote=(int)$db->lastInsertId();
+$review=array_values(array_filter($call('doc_review')['items'],fn($i)=>$i['note_id']===$flaggedNote))[0]??null;
+check($review!==null && $review['client_id']===1 && $review['client_name']==='Kept synthetic client' && $review['subject']===null
+    && str_contains($review['flagged_for'],'Missing subject') && str_contains($review['flagged_for'],'Unresolved placeholder') && strlen($review['fingerprint'])===64,
+    'doc_review lists a flagged note with its client, flags and fingerprint, as the review queue does');
+$db->exec("DELETE FROM client_notes WHERE id=$flaggedNote");
+
 /* ---- A permission refusal and caseload scope ---- */
 $db->exec("UPDATE `groups` SET perms='schedule',own_caseload_only=0 WHERE id=999; UPDATE users SET group_id=999 WHERE id=1");
 try {
     $call('invoices',[],[],false,'does not have access');
+    $call('waitlist',[],[],false,'does not have access');
+    $call('waitlist_update',['referral_id'=>$parRef,'status'=>'Closed'],[],false,'does not have access');
+    $call('doc_review',[],[],false,'does not have access');
+    check($db->query("SELECT status FROM referral_waitlist WHERE referral_id=$parRef")->fetchColumn()==='Ready',
+        'Without the referrals permission the waitlist is neither listed nor changed, and without the clients permission the review queue is refused');
     $call('save_task',['title'=>'Linked without the clients permission','client_id'=>1],[],false,'cannot be linked to a client');
     check((int)$db->query("SELECT COUNT(*) FROM tasks WHERE title='Linked without the clients permission'")->fetchColumn()===0,
         'Without the billing permission invoices is refused, and without the clients permission a task cannot be linked to a client');

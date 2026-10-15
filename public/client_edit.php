@@ -87,6 +87,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         trim($_POST['a11y_primary_tech'] ?? '') ?: null,
         in_array($_POST['a11y_contact'] ?? '', A11Y_CONTACTS, true) ? $_POST['a11y_contact'] : null,
         $a11yNotes !== '' ? $a11yNotes : null,
+        // The language the portal opens in and the client's emails are sent in.
+        ($_POST['preferred_language'] ?? 'en') === 'es' ? 'es' : 'en',
     ];
     // Automatic progress reports, the counselor portal and email filing use the
     // counselor email only once it is confirmed (counselor_verified). An address
@@ -143,7 +145,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->beginTransaction();
             try {
                 record_status_change((int)$client['id'], $client['status'], $status, $user['id'], trim($_POST['status_note'] ?? '') ?: null);
-                $pdo->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, client_type=?, school=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, counselor_verified=?, email_verified=?'
+                $pdo->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, client_type=?, school=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, preferred_language=?, counselor_verified=?, email_verified=?'
                     . ($unarchive ? ', archived_at=NULL' : '') . ' WHERE id=?')->execute($vals);
                 // A portal link already emailed to the old address stops working when
                 // the address changes: it may belong to someone else now.
@@ -264,7 +266,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 . $ageNote);
             redirect('client.php?id=' . (int)$client['id']);
         } else {
-            db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, counselor_verified, email_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
+            db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, preferred_language, counselor_verified, email_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
             $newId = (int)db()->lastInsertId();
             record_status_change($newId, null, $status, $user['id'], 'Client created');
             audit($user['id'], 'client.create', 'client', $newId, $name);
@@ -419,6 +421,15 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       <select id="a11y_contact" name="a11y_contact">
         <option value="">— No preference recorded —</option>
         <?= select_options(A11Y_CONTACTS, $raw('a11y_contact') ?? $client['a11y_contact'] ?? null) ?>
+      </select>
+    </div>
+    <div class="field">
+      <label for="preferred_language">Preferred language</label>
+      <p class="hint" id="lang-hint">The client's portal opens in this language, and their emails (portal link, session reminders, outcome survey, guardian consent request) are sent in it.</p>
+      <?php $curLang = ($raw('preferred_language') ?? $client['preferred_language'] ?? 'en') === 'es' ? 'es' : 'en'; ?>
+      <select id="preferred_language" name="preferred_language" aria-describedby="lang-hint">
+        <option value="en" <?= $curLang === 'en' ? 'selected' : '' ?>>English</option>
+        <option value="es" <?= $curLang === 'es' ? 'selected' : '' ?> lang="es">Español</option>
       </select>
     </div>
     <div class="field">

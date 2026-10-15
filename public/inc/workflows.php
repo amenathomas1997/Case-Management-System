@@ -11,6 +11,18 @@ function workflow_client(int $id,int $actor): array {
     at_client($id,$actor);
     $q=db()->prepare('SELECT * FROM clients WHERE id=?');$q->execute([$id]);return $q->fetch();
 }
+/** Save a case note attached to a training track, as the track page's Add a note
+ *  form does: the same client_notes columns and the same note.add audit entry.
+ *  $note is assemble_note()'s result. The track page's session record and the
+ *  schedule's completion form call this inside their own transaction, so the
+ *  note is saved with the hours or not at all. Returns the note's id. */
+function track_note_create(int $clientId,int $trackId,string $subject,array $note,int $userId,?string $idemKey=null): int {
+    db()->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+        ->execute([$clientId,$trackId,$note['type'],$note['format'],$subject,$note['body'],$note['cols'][0],$note['cols'][1],$note['cols'][2],$note['cols'][3],$userId,$idemKey]);
+    $noteId=(int)db()->lastInsertId();
+    audit($userId,'note.add','client',$clientId,'track #'.$trackId.': '.$subject);
+    return $noteId;
+}
 function workflow_note_flags(array $n): array {
     $flags=[];
     if (trim((string)$n['subject'])==='') $flags[]='Missing subject';
@@ -85,7 +97,7 @@ function workflow_action_items(array $user): array {
     foreach($tasks as $r)if(!isset($covered[(string)$r['auto_key']]))$add('Task',($r['client_name']!==null&&!str_contains($r['title'],$r['client_name'])?$r['client_name'].' — ':'').$r['title'],$r['due_date'],'tasks.php#task-act-'.(int)$r['id'],2);
     if(can('schedule')){
         $q=db()->query("SELECT s.id,s.start_at,c.name FROM scheduled_sessions s JOIN clients c ON c.id=s.client_id WHERE s.status='Scheduled' AND s.end_at<NOW()".$scope);
-        foreach($q->fetchAll() as $r)$add('Session outcome',$r['name'].' — session ended: mark it completed on the schedule (this logs the hours), then write the session note',substr($r['start_at'],0,10),'schedule.php#s-'.(int)$r['id'],1);
+        foreach($q->fetchAll() as $r)$add('Session outcome',$r['name'].' — session ended: record the outcome (mark completed, log hours and add the note)',substr($r['start_at'],0,10),'schedule.php#s-'.(int)$r['id'],1);
     }
     if(can('referrals')){
         $q=db()->query("SELECT r.id,r.client_name,r.created_at,w.followup_date FROM referrals r LEFT JOIN referral_waitlist w ON w.referral_id=r.id WHERE r.status<>'Converted' AND (w.status IS NULL OR w.status<>'Closed')".(caseload_scoped()?' AND (r.assigned_to IS NULL OR r.assigned_to='.$actor.')':''));

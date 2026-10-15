@@ -133,7 +133,7 @@ struct PortalRequestsView: View {
         }
         .padding(.vertical, 2)
         // One VoiceOver stop per request; each status and the client record are on the Actions rotor.
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: VoiceOverRows.children)
         .accessibilityLabel(r.spoken)
         .accessibilityFocused($focused, equals: r.id)
         .accessibilityAction { announceRowActions() }

@@ -112,6 +112,7 @@ return [
 
     // ---- Client portal copy ----
     'This link has been replaced or no longer works. Email' => 'Este enlace fue reemplazado o ya no funciona. Escriba a',
+    'This link has been replaced or no longer works.' => 'Este enlace fue reemplazado o ya no funciona.',
     'and we will send you a new one.' => 'y le enviaremos uno nuevo.',
     'This link has been replaced or no longer works. Ask your instructor and we will send you a new one.' => 'Este enlace fue reemplazado o ya no funciona. Pregunte a su instructor y le enviaremos uno nuevo.',
     'Your training plan:' => 'Su plan de capacitación:',
@@ -154,6 +155,11 @@ return [
     // ---- Shared ----
     'Referral Form' => 'Formulario de referencia',
     'Questions? Email' => '¿Preguntas? Escriba a',
+    // With a support phone set: "Questions? Call {phone} or email {email}" (support_contact_html()).
+    'Questions?' => '¿Preguntas?',
+    'Call' => 'Llame al',
+    'call' => 'llame al',
+    'or email' => 'o escriba a',
 
     // ---- community_referral.php ----
     'Refer someone to' => 'Referir a alguien a',
@@ -165,6 +171,8 @@ return [
     'We will contact you by' => 'Nos comunicaremos con usted a más tardar el',
     'If you have not heard from us by then, email' => 'Si no ha sabido de nosotros para esa fecha, escriba a',
     'and mention referral' => 'y mencione la referencia número',
+    'If you have not heard from us by then,' => 'Si no ha sabido de nosotros para esa fecha,',
+    'How can we reach you?' => '¿Cómo podemos comunicarnos con usted?',
     'Your cost' => 'Su costo',
     'Based on the income you reported, our services are provided to you at no cost.' => 'Según el ingreso que reportó, nuestros servicios son gratuitos para usted.',
     'Based on the income you reported, our services cost $17.50 per hour of training.' => 'Según el ingreso que reportó, nuestros servicios cuestan $17.50 por hora de capacitación.',
@@ -267,6 +275,7 @@ return [
     'Consent to services' => 'Consentimiento para servicios',
     'Link not recognized' => 'Enlace no reconocido',
     'This consent link is invalid or has been replaced. Please contact' => 'Este enlace de consentimiento no es válido o fue reemplazado. Comuníquese con',
+    'This consent link is invalid or has been replaced.' => 'Este enlace de consentimiento no es válido o fue reemplazado.',
     'for a new one.' => 'para obtener uno nuevo.',
     'Consent recorded — thank you' => 'Consentimiento registrado — gracias',
     'Consent for services' => 'Consentimiento para servicios',
@@ -514,6 +523,7 @@ return [
 
     // ---- survey.php: a link that no longer works, and a survey already answered ----
     'If you would still like to share your feedback, email' => 'Si todavía desea darnos su opinión, escriba a',
+    'If you would still like to share your feedback,' => 'Si todavía desea darnos su opinión,',
     'and we will send you a new link.' => 'y le enviaremos un enlace nuevo.',
     'If you would still like to share your feedback, ask your instructor for a new link.' => 'Si todavía desea darnos su opinión, pida un enlace nuevo a su instructor.',
     'Thank you — we already have your answers.' => 'Gracias — ya tenemos sus respuestas.',

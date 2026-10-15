@@ -20,6 +20,16 @@ extension View {
     }
 }
 
+/// How a list row that is one VoiceOver stop (its buttons on the Actions rotor) exposes its
+/// children. With VoiceOver running the row's parts are ignored, as before. Without it, Voice
+/// Control and Switch Control still need the row's own buttons, so the row only contains them.
+/// RootView re-renders the app when VoiceOver starts or stops (voiceOverStatusDidChange).
+enum VoiceOverRows {
+    static var children: AccessibilityChildBehavior {
+        UIAccessibility.isVoiceOverRunning ? .ignore : .contain
+    }
+}
+
 /// Hours as VoiceOver should say them: "1 and a half hours", not "1.50".
 func hoursSpoken(_ hours: Double) -> String {
     let whole = Int(hours), part = hours - Double(whole)

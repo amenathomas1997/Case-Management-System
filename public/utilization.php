@@ -4,15 +4,16 @@
 // (weekly_hours x weeks), with a utilization rate. Retrospective companion to the
 // forward-looking Capacity page.
 require __DIR__ . '/inc/bootstrap.php';
+require_once __DIR__ . '/inc/report_period.php';
 require __DIR__ . '/inc/layout.php';
 $user = require_login();
 require_perm('analytics');
 $rt = report_table('training_tracks', (int)$user['id']);
 
-// A repeated parameter (from[]=…) arrives as an array; it falls back to the default period.
-$from = valid_date(is_string($_GET['from'] ?? null) ? $_GET['from'] : '') ?: date('Y-m-d', strtotime('-28 days'));
-$to = valid_date(is_string($_GET['to'] ?? null) ? $_GET['to'] : '') ?: date('Y-m-d');
-if ($to < $from) [$from, $to] = [$to, $from];
+// The shared period picker (remembered per user); the last four weeks when nothing is
+// chosen. A repeated parameter (from[]=…) arrives as an array; it falls back to the default.
+$period = report_period($user, date('Y-m-d', strtotime('-28 days')), date('Y-m-d'));
+$from = $period['from']; $to = $period['to'];
 // Calendar days, counted as equipment.php and contracts.php count them: subtracting two
 // local midnights gives a fractional day across a daylight-saving change.
 $days = (new DateTime($from))->diff(new DateTime($to))->days + 1;
@@ -92,12 +93,8 @@ page_header('Utilization', $user, 'analytics');
 <?php if (caseload_scoped()): ?><p>Activity is limited to your assigned clients. Expected hours remain the staff members’ full capacity targets.</p><?php endif;?>
 <p class="muted">Billable service hours delivered against expected capacity (weekly target × weeks in the period). A companion to <a href="capacity.php">Capacity planning</a>.</p>
 
-<form method="get" action="utilization.php" class="page-actions" aria-label="Period">
-  <label for="from">From</label><input type="date" id="from" name="from" value="<?= h($from) ?>">
-  <label for="to">To</label><input type="date" id="to" name="to" value="<?= h($to) ?>">
-  <button type="submit" class="btn btn-secondary btn-sm">Run<span class="visually-hidden"> the utilization report for this period</span></button>
-  <a class="btn btn-secondary btn-sm" href="utilization.php?from=<?= h($from) ?>&amp;to=<?= h($to) ?>&amp;export=1">Download utilization report (CSV)</a>
-</form>
+<?= report_period_form('utilization.php', $period, '', '<a class="btn btn-secondary btn-sm" href="utilization.php?from=' . h($from) . '&amp;to=' . h($to) . '&amp;export=1">Download utilization report (CSV)</a>') ?>
+<?php if ($period['notes']): ?><p><?= h(implode(' ', $period['notes'])) ?></p><?php endif; ?>
 
 <?php $periodText = fmt_date($from) . ' to ' . fmt_date($to); ?>
 <h2 id="util-sum-h">Summary for <?= h($periodText) ?></h2>

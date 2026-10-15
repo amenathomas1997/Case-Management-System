@@ -5,6 +5,10 @@ struct FollowupsView: View {
     @EnvironmentObject var api: API
     @State private var data: FollowupsResponse?
     @State private var error: String?
+    /// Set while the list is the copy kept on this phone (the server could not be reached):
+    /// when it was saved. Snooze and Skip wait for a connection; Record still works, since a
+    /// recorded check is kept on this phone and uploads later.
+    @State private var offlineSince: Date?
     @State private var recording: Followup?
     @State private var skipping: Followup?
     /// A sheet's success message, announced once the sheet has gone (see announceAfterDismiss).
@@ -28,6 +32,7 @@ struct FollowupsView: View {
                     .font(.callout.weight(.medium))
                     .listRowSeparator(.hidden)
             }
+            if let offlineSince { OfflineNotice(savedAt: offlineSince).listRowSeparator(.hidden) }
 
             if let d = data {
                 Section {
@@ -67,9 +72,11 @@ struct FollowupsView: View {
         }
         .navigationTitle("Device follow-ups")
         .sheet(item: $recording, onDismiss: announceSheetResult) { f in
-            RecordFollowupSheet(followup: f) { warning in
-                notice = warning
-                sheetResult = warning ?? "Follow-up recorded."
+            RecordFollowupSheet(followup: f) { message in
+                // The server's warning (recorded without its task), or that it was kept on this
+                // phone to upload later: shown until the next refresh as well as said.
+                notice = message
+                sheetResult = message ?? "Follow-up recorded."
                 Task { await load() }
             }
         }
@@ -111,15 +118,17 @@ struct FollowupsView: View {
         }.padding(.vertical, 1)
         // VoiceOver: one stop per check (device, client, interval, when due); Record, Snooze 2
         // weeks and Skip (confirmed first, as the button is) are on the Actions rotor.
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: VoiceOverRows.children)
         .accessibilityLabel("\(f.equipmentName), \(f.clientName), \(f.intervalDays)-day check, \(dueLabel(f.dueDate))")
         // Double-tap records the check (it opens a form); never a snooze or skip by accident.
         .accessibilityAction { if due && !acting.contains(f.id) { recording = f } else { announceRowActions() } }
         .accessibilityActions {
             if due && !acting.contains(f.id) {
                 Button("Record") { recording = f }
-                Button("Snooze 2 weeks") { Task { await act(f, "snooze") } }
-                Button("Skip") { skipping = f }
+                if offlineSince == nil {
+                    Button("Snooze 2 weeks") { Task { await act(f, "snooze") } }
+                    Button("Skip") { skipping = f }
+                }
             }
         }
     }
@@ -134,11 +143,11 @@ struct FollowupsView: View {
             .accessibilityLabel("Record \(check)")
             .accessibilityInputLabels(["Record", "Record \(check)"])
         Button("Snooze 2 weeks") { Task { await act(f, "snooze") } }.buttonStyle(.bordered).controlSize(.large)
-            .disabled(sending)
+            .disabled(sending || offlineSince != nil)
             .accessibilityLabel("Snooze \(check) two weeks")
             .accessibilityInputLabels(["Snooze", "Snooze 2 weeks", "Snooze \(check) two weeks"])
         Button("Skip") { skipping = f }.buttonStyle(.bordered).controlSize(.large)
-            .disabled(sending)
+            .disabled(sending || offlineSince != nil)
             .accessibilityLabel("Skip \(check)")
             .accessibilityInputLabels(["Skip", "Skip \(check)"])
     }
@@ -183,8 +192,15 @@ struct FollowupsView: View {
     }
 
     private func load() async {
-        do { error = nil; data = try await api.call("followups") }
-        catch { showFormError(error.localizedDescription, in: &self.error) }
+        do {
+            error = nil
+            // With no signal, the last list the server sent is shown instead.
+            let (response, savedAt): (FollowupsResponse, Date?) = try await api.callCached("followups", cacheKey: "followups")
+            data = response
+            offlineSince = savedAt
+            // The 8:00 summary follows the count as last loaded from the server.
+            if savedAt == nil { LocalNotifications.shared.scheduleFollowups(dueCount: response.due.count) }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -340,6 +356,17 @@ struct RecordFollowupSheet: View {
             // is still open is cut off when it closes).
             clearDraft()
             onSaved(r.warning); dismiss()
+        } catch APIError.network {
+            // No signal: the answers are kept on this phone with the offline notes and hours,
+            // and upload automatically (the server records the check then).
+            do {
+                try api.enqueue("save_followup", body: body, label: "Follow-up: \(followup.equipmentName)")
+                clearDraft()
+                onSaved("Follow-up saved offline — will sync when connected. It stays listed as due until then."); dismiss()
+            } catch {
+                busy = false
+                showFormError("Could not save offline. Your answers are still in this form. \(error.localizedDescription)", in: &self.error)
+            }
         } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

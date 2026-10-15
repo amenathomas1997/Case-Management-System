@@ -103,7 +103,7 @@ struct CohortDetail: View {
                             }
                             // VoiceOver: one stop per student; Remove (confirmed first, as the button
                             // and swipe action are) is on the Actions rotor.
-                            .accessibilityElement(children: .ignore)
+                            .accessibilityElement(children: VoiceOverRows.children)
                             .accessibilityLabel(m.name)
                             .accessibilityAction { announceRowActions() }
                             .accessibilityAction(named: "Remove from cohort") { pendingRemove = m }

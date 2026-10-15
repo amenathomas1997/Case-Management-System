@@ -43,6 +43,12 @@ register_translations([
     'AI explanation — check with your instructor' => 'Explicación de IA — consulte con su instructor',
     'This explanation was cut off. Ask your instructor before using it.' => 'Esta explicación quedó incompleta. Pregunte a su instructor antes de usarla.',
     'Your question:' => 'Su pregunta:',
+    'Ask us something' => 'Pregúntenos algo',
+    'What is it about?' => '¿De qué se trata?',
+    'An appointment' => 'Una cita',
+    'Something else' => 'Otra cosa',
+    'Preferred days and times, what you need, or your question.' => 'Los días y horas que prefiere, qué necesita o su pregunta.',
+    'Practiced on your own? Log it here so your instructor can see your progress between sessions.' => '¿Practicó por su cuenta? Regístrelo aquí para que su instructor vea su progreso entre sesiones.',
 ]);
 
 /** The contact details and access needs the portal form edits, as on file, in the
@@ -81,10 +87,7 @@ function portal_upload_max_mb(): int {
 /** A session's day and time in Spanish, for the Spanish confirm dialogs: a native
  *  dialog cannot mark an English date lang="en", so the voice would misread it. */
 function portal_when_es(int $ts): string {
-    $days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
-    $months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-    return $days[(int)date('w', $ts)] . ', ' . (int)date('j', $ts) . ' de ' . $months[(int)date('n', $ts) - 1]
-        . ' a las ' . date('g:i', $ts) . (date('A', $ts) === 'AM' ? ' a. m. ' : ' p. m. ') . date('T', $ts);
+    return when_es($ts); // shared with the Spanish emails (inc/core.php)
 }
 /** Tell the client's instructor about portal activity, or every administrator when
  *  nobody is assigned or the assigned account has been deactivated: an alert to a
@@ -108,6 +111,9 @@ if (strlen($token) === 48) {
     $stmt->execute([$token]);
     $client = $stmt->fetch();
     if ($client) db()->prepare('UPDATE portal_tokens SET last_used_at = NOW() WHERE token = ?')->execute([$token]);
+    // A client who prefers Spanish gets the portal in Spanish from the first visit;
+    // the Español/English toggle (which sets the session language) still decides after that.
+    if ($client && !isset($_SESSION['lang']) && client_lang($client) === 'es') $_SESSION['lang'] = 'es';
 }
 // A closed case keeps its portal readable (history, messages, resources) but sends
 // nothing more: no messages, requests, updates, files or AI explanations.
@@ -270,7 +276,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         // Throttle: 5 requests / 5 minutes / client (server-side).
         $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 5 MINUTE)");
         $rl->execute(['portal-req-' . (int)$client['id']]);
-        $detailsField = $type === 'appointment' ? 'appt_details' : 'req_details';
+        $detailsField = 'req_details'; // one form for every topic (appt_details was its own form before 3.0.27)
         // A referenced session must be this client's own.
         if ($sessionId) {
             $sc = db()->prepare('SELECT id FROM scheduled_sessions WHERE id = ? AND client_id = ?');
@@ -604,10 +610,13 @@ echo lang_toggle();
 if (!$client) {
     // Never a dead end: say who to write to for a new link (the footer's contact).
     $linkContact = (string)(cfg('support_email') ?: cfg('mail_from'));
+    $phoneContact = support_contact_html(); // "Call {phone} or email {email}" once a support phone is set
     echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>'
-        . ($linkContact !== ''
+        . ($phoneContact !== ''
+            ? t('This link has been replaced or no longer works.') . ' ' . $phoneContact . ' ' . t('and we will send you a new one.')
+            : ($linkContact !== ''
             ? t('This link has been replaced or no longer works. Email') . ' <a href="mailto:' . h($linkContact) . '">' . h($linkContact) . '</a> ' . t('and we will send you a new one.')
-            : t('This link has been replaced or no longer works. Ask your instructor and we will send you a new one.'))
+            : t('This link has been replaced or no longer works. Ask your instructor and we will send you a new one.')))
         . '</p></div>';
     page_footer();
     exit;
@@ -748,9 +757,10 @@ $hwStmt = db()->prepare("SELECT h.*, t.title AS track_title FROM homework h JOIN
 $hwStmt->execute([(int)$client['id']]);
 $homework = $hwStmt->fetchAll();
 ?>
-<?php if ($homework): ?>
+<?php if ($homework || !$caseClosed): ?>
 <section class="card" aria-labelledby="hw-h">
   <h2 id="hw-h"><?= t('Practice & homework') ?></h2>
+  <?php if ($homework): ?>
   <ul>
   <?php foreach ($homework as $h_): $hwOwnError = $hwError && $hwError['id'] === (int)$h_['id']; ?>
     <?php // The id brings the client back to this homework (with the message focused) after asking for an explanation. ?>
@@ -792,13 +802,11 @@ $homework = $hwStmt->fetchAll();
     </li>
   <?php endforeach; ?>
   </ul>
-</section>
-<?php endif; ?>
-
-<?php if (!$caseClosed): ?>
-<section class="card" aria-labelledby="prac-h">
-  <h2 id="prac-h"><?= t('Log practice') ?></h2>
-  <p class="muted"><?= t('Practiced on your own? Log it so your instructor can see your progress between sessions.') ?></p>
+  <?php endif; ?>
+  <?php if (!$caseClosed): ?>
+  <?php // Practice on the client's own is logged here, under the homework it goes with. ?>
+  <h3 id="prac-h"><?= t('Log practice') ?></h3>
+  <p class="muted"><?= t('Practiced on your own? Log it here so your instructor can see your progress between sessions.') ?></p>
   <?php $oldPrac = old_in('log_practice') !== ''; // refill only the form that was sent ?>
   <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
@@ -811,6 +819,7 @@ $homework = $hwStmt->fetchAll();
     </div>
     <button type="submit" name="log_practice" value="1" class="btn btn-secondary"><?= t('Log practice') ?></button>
   </form>
+  <?php endif; ?>
 </section>
 <?php endif; ?>
 
@@ -818,34 +827,25 @@ $homework = $hwStmt->fetchAll();
 <?php if (!$caseClosed || $myRequests): ?>
 <section class="card" aria-labelledby="req-h">
   <h2 id="req-h"><?= t('Requests & help') ?></h2>
-  <?php // Both forms post a "details" field; refill (and flag) only the one that was sent.
-  $oldReq = old_in('new_request') !== '' ? old_in('req_type') : ''; ?>
+  <?php $oldReq = old_in('new_request') !== '' ? old_in('req_type') : ''; ?>
   <?php if (!$caseClosed): ?>
   <p class="muted"><?= t('Ask for an appointment, get help with a device, or send another request. Your instructor will follow up.') ?></p>
-  <div class="grid grid-2">
-    <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate><?= csrf_field() ?>
-      <input type="hidden" name="req_type" value="appointment">
-      <?= form_error_summary(['appt_details' => 'Preferred days/times and what you need'], ['appt_details' => 'appt']) ?>
-      <h3><?= t('Request an appointment') ?></h3>
-      <div class="field"><label for="appt"><?= t('Preferred days/times and what you need') ?> <span class="hint"><?= t('(required)') ?></span></label>
-        <p class="hint" id="appt-hint"><?= t('Up to 2,000 characters.') ?></p>
-        <textarea id="appt" name="details" rows="3" required <?= field_aria('appt_details', 'appt-hint') ?>><?= h($oldReq === 'appointment' ? old_in('details') : '') ?></textarea><?= field_error('appt_details') ?></div>
-      <button type="submit" name="new_request" value="1" class="btn btn-primary"><?= t('Send request') ?><span class="visually-hidden"> — <?= t('Request an appointment') ?></span></button>
-    </form>
-    <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate><?= csrf_field() ?>
-      <?= form_error_summary(['req_details' => 'Tell us what you need'], ['req_details' => 'rdetails']) ?>
-      <h3><?= t('Device help or another request') ?></h3>
-      <div class="field"><label for="rtype"><?= t('Type') ?></label>
-        <select id="rtype" name="req_type">
-          <option value="device"><?= h(__('Help with a device')) ?></option>
-          <option value="other" <?= $oldReq === 'other' ? 'selected' : '' ?>><?= h(__('Something else')) ?></option>
-        </select></div>
-      <div class="field"><label for="rdetails"><?= t('Tell us what you need') ?> <span class="hint"><?= t('(required)') ?></span></label>
-        <p class="hint" id="rdetails-hint"><?= t('Up to 2,000 characters.') ?></p>
-        <textarea id="rdetails" name="details" rows="3" required <?= field_aria('req_details', 'rdetails-hint') ?>><?= h(in_array($oldReq, ['device', 'other'], true) ? old_in('details') : '') ?></textarea><?= field_error('req_details') ?></div>
-      <button type="submit" name="new_request" value="1" class="btn btn-secondary"><?= t('Send request') ?><span class="visually-hidden"> — <?= t('Device help or another request') ?></span></button>
-    </form>
-  </div>
+  <?php // One form for every request; the topic chosen is stored as the request's type
+  // (appointment, device help or other), as the two earlier forms stored it. ?>
+  <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['req_details' => 'Tell us what you need'], ['req_details' => 'rdetails']) ?>
+    <h3><?= t('Ask us something') ?></h3>
+    <fieldset class="field">
+      <legend><?= t('What is it about?') ?></legend>
+      <?php foreach (['appointment' => 'An appointment', 'device' => 'Help with a device', 'other' => 'Something else'] as $rtVal => $rtLabel): ?>
+      <div class="field"><label><input type="radio" name="req_type" value="<?= $rtVal ?>" <?= ($oldReq !== '' ? $oldReq : 'appointment') === $rtVal ? 'checked' : '' ?>> <?= t($rtLabel) ?></label></div>
+      <?php endforeach; ?>
+    </fieldset>
+    <div class="field"><label for="rdetails"><?= t('Tell us what you need') ?> <span class="hint"><?= t('(required)') ?></span></label>
+      <p class="hint" id="rdetails-hint"><?= t('Preferred days and times, what you need, or your question.') ?> <?= t('Up to 2,000 characters.') ?></p>
+      <textarea id="rdetails" name="details" rows="3" required <?= field_aria('req_details', 'rdetails-hint') ?>><?= h($oldReq !== '' ? old_in('details') : '') ?></textarea><?= field_error('req_details') ?></div>
+    <button type="submit" name="new_request" value="1" class="btn btn-primary"><?= t('Send request') ?></button>
+  </form>
   <?php endif; ?>
   <?php if ($myRequests): ?>
   <h3><?= t('Your requests') ?></h3>

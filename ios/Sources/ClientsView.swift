@@ -6,6 +6,9 @@ struct ClientsView: View {
     @State private var search = ""
     @State private var error: String?
     @State private var loaded = false
+    /// Set while the list is the copy kept on this phone (the server could not be reached):
+    /// when it was saved.
+    @State private var offlineSince: Date?
     @State private var showingNewClient = false
     /// The result of the last client save, shown here; announced once its sheet has gone.
     @State private var confirmation: String?
@@ -18,6 +21,7 @@ struct ClientsView: View {
                 if let confirmation {
                     Text(confirmation).font(.callout.weight(.medium)).foregroundStyle(Color.brandTeal)
                 }
+                if let offlineSince { OfflineNotice(savedAt: offlineSince).listRowSeparator(.hidden) }
                 if !loaded && error == nil {
                     ProgressView("Loading clients…")
                 } else if loaded && clients.isEmpty && error == nil {
@@ -49,6 +53,7 @@ struct ClientsView: View {
                 Button { confirmation = nil; showingNewClient = true } label: {
                     Label("Add client", systemImage: "person.badge.plus")
                 }
+                .disabled(offlineSince != nil)
             }
             .sheet(isPresented: $showingNewClient, onDismiss: announceSheetResult) {
                 ClientEditSheet(existing: nil) { _, message in
@@ -80,10 +85,20 @@ struct ClientsView: View {
         let q = search
         do {
             error = nil
-            let response: ClientsResponse = try await api.call("clients", query: q.isEmpty ? [:] : ["q": q])
+            // With no signal, the full list as last sent by the server is shown (a search
+            // needs the server, so it is not answered from the saved copy).
+            let response: ClientsResponse
+            let savedAt: Date?
+            if q.isEmpty {
+                (response, savedAt) = try await api.callCached("clients", cacheKey: "clients")
+            } else {
+                response = try await api.call("clients", query: ["q": q])
+                savedAt = nil
+            }
             guard q == search else { return } // a newer keystroke superseded this request
             clients = response.clients
             loaded = true
+            offlineSince = savedAt
             // Focus stays in the search field, so the outcome of a search is spoken.
             if announceResult {
                 announce(clients.isEmpty ? "No clients found." : "\(clients.count) client\(clients.count == 1 ? "" : "s") found.")
@@ -98,7 +113,11 @@ struct ClientsView: View {
 struct ClientDetailView: View {
     @EnvironmentObject var api: API
     let clientId: Int
+    /// A note to put VoiceOver on once the record has loaded (opened from Documentation review).
+    var focusNoteId: Int? = nil
     @State private var detail: ClientDetail?
+    @State private var showingVoice = false
+    @AccessibilityFocusState private var focusedNote: Int?
     @State private var error: String?
     @State private var showingNoteSheet = false
     @State private var editingNote: Note?
@@ -298,8 +317,9 @@ struct ClientDetailView: View {
                         .padding(.vertical, 2)
                         // VoiceOver: the whole note is one stop (its full text, whatever the preview
                         // shows); Edit and the preview's Show full note are on the Actions rotor.
-                        .accessibilityElement(children: .ignore)
+                        .accessibilityElement(children: VoiceOverRows.children)
                         .accessibilityLabel(noteSummary(note))
+                        .accessibilityFocused($focusedNote, equals: note.id)
                         .accessibilityActions {
                             if note.canEdit {
                                 Button("Edit note") { editingNote = note }
@@ -331,6 +351,11 @@ struct ClientDetailView: View {
         }
         .navigationTitle(detail?.client.name ?? "Client")
         .toolbar {
+            // The assistant opened here knows which client is on screen ("read her latest note").
+            if api.aiHas("voice") && api.can("clients") {
+                Button { showingVoice = true } label: { Label("Voice assistant", systemImage: "mic.fill") }
+                    .disabled(detail == nil)
+            }
             Menu {
                 Button { confirmation = nil; showingNoteSheet = true } label: {
                     Label("Add note", systemImage: "square.and.pencil")
@@ -426,8 +451,24 @@ struct ClientDetailView: View {
                 Task { await reload() }
             }
         }
+        .sheet(isPresented: $showingVoice) {
+            VoiceView(context: detail.map { VoiceContext(clientId: clientId, clientName: $0.client.name) })
+        }
         .refreshable { confirmation = nil; await reload(); await loadConsent() }
-        .task { await load(); await loadConsent() }
+        .task { await load(); await loadConsent(); focusFlaggedNote() }
+    }
+
+    /// Opened from Documentation review: VoiceOver goes to the flagged note, or is told where it is.
+    private func focusFlaggedNote() {
+        guard let focusNoteId, detail != nil else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)   // after the list has drawn
+            if shownNotes.contains(where: { $0.id == focusNoteId }) {
+                focusedNote = focusNoteId
+            } else {
+                announce("The flagged note is older than the notes shown. Use Load older notes at the end of the Notes section.")
+            }
+        }
     }
 
     /// The consent state for the Guardian consent section and the Send consent request action.

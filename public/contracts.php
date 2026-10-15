@@ -10,6 +10,13 @@ require_perm('billing');
 
 const DELIVERABLE_STATUSES = ['Pending', 'In Progress', 'Submitted', 'Accepted'];
 
+/** A text field as posted, trimmed; a value that is not a string (an array from
+ *  name[]=x, say) reads as blank, so it is refused on its field, never a 400. */
+function contract_text(string $key, string $default = ''): string {
+    $v = $_POST[$key] ?? $default;
+    return is_string($v) ? trim($v) : '';
+}
+
 function contract_load(int $id): ?array {
     $s = db()->prepare('SELECT * FROM contracts WHERE id = ?');
     $s->execute([$id]);
@@ -67,7 +74,7 @@ function contract_date_script(): string {
 
 /* ---- Create contract ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_contract'])) {
-    $name = trim($_POST['name'] ?? '');
+    $name = contract_text('name');
     $startDate = valid_date($_POST['start_date'] ?? '');
     $endDate = valid_date($_POST['end_date'] ?? '');
     // A budget the page cannot read is refused with the field named, never stored as $0.00.
@@ -80,12 +87,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_contract'])) {
     // Same rule as the app (api.php add_contract), once both dates are in range.
     if (!isset($errs['start_date']) && !isset($errs['end_date']) && $startDate !== null && $endDate !== null && $endDate < $startDate) $errs['end_date'] = 'The end date cannot be before the start date.';
     if ($errs) { keep_input(); keep_field_errors($errs); redirect('contracts.php'); }
+    // The same form sent twice (Enter pressed again while it loads) creates the
+    // contract once; the second answer goes to the contract the first created.
+    $contractKey = web_idem_key($_POST);
+    if (($firstId = web_once_get($contractKey)) !== null) {
+        flash('This contract was already created (the form was sent twice), so it was saved once.', 'info');
+        redirect('contracts.php?id=' . $firstId);
+    }
     db()->prepare('INSERT INTO contracts (name, funder, contract_number, amount, start_date, end_date, notes) VALUES (?,?,?,?,?,?,?)')
-        ->execute([mb_substr($name, 0, 190), mb_substr(trim($_POST['funder'] ?? ''), 0, 190) ?: null,
-            mb_substr(trim($_POST['contract_number'] ?? ''), 0, 120) ?: null, $budget ?? 0.0,
+        ->execute([mb_substr($name, 0, 190), mb_substr(contract_text('funder'), 0, 190) ?: null,
+            mb_substr(contract_text('contract_number'), 0, 120) ?: null, $budget ?? 0.0,
             $startDate, $endDate,
-            mb_substr(trim($_POST['notes'] ?? ''), 0, 2000) ?: null]);
+            mb_substr(contract_text('notes'), 0, 2000) ?: null]);
+    // Capture the id before audit() inserts its own row and replaces it.
     $id = (int)db()->lastInsertId();
+    web_once_set($contractKey, $id);
     audit($user['id'], 'contract.add', 'contract', $id, $name);
     flash('Contract created.');
     redirect('contracts.php?id=' . $id);
@@ -100,15 +116,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['contract_id'])) {
 
     if (isset($_POST['add_deliverable'])) {
         $back .= '#del-h';
-        $title = trim($_POST['title'] ?? '');
+        $title = contract_text('title');
         // A blank (or spaces-only) title passes the browser's "required" check, so say so here.
         $dErrs = [];
         if ($title === '') $dErrs['title'] = 'Enter a deliverable title.';
         if (contract_date_bad('due_date', 25)) $dErrs['due_date'] = 'Due date: ' . contract_date_hint(25);
         if ($dErrs) { keep_input(); keep_field_errors($dErrs); redirect($back); }
         $title = mb_substr($title, 0, 255);
+        // The same form sent twice adds the deliverable once.
+        $delivKey = web_idem_key($_POST);
+        if (web_once_get($delivKey) !== null) {
+            flash('This deliverable was already added (the form was sent twice), so it was saved once.', 'info');
+            redirect($back);
+        }
         db()->prepare('INSERT INTO contract_deliverables (contract_id, title, due_date, notes) VALUES (?,?,?,?)')
-            ->execute([$cid, $title, valid_date($_POST['due_date'] ?? ''), mb_substr(trim($_POST['d_notes'] ?? ''), 0, 500) ?: null]);
+            ->execute([$cid, $title, valid_date($_POST['due_date'] ?? ''), mb_substr(contract_text('d_notes'), 0, 500) ?: null]);
+        // Capture the id before audit() inserts its own row and replaces it.
+        web_once_set($delivKey, (int)db()->lastInsertId());
         audit($user['id'], 'contract.add_deliverable', 'contract', $cid, $title);
         flash('Deliverable added.');
     } elseif (isset($_POST['set_deliverable'])) {
@@ -157,7 +181,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['contract_id'])) {
         $spentOn = valid_date($_POST['spent_on'] ?? '') ?? date('Y-m-d');
         db()->prepare('INSERT INTO contract_spend (contract_id, spent_on, amount, memo, created_by) VALUES (?,?,?,?,?)')
             ->execute([$cid, $spentOn, $spendAmount,
-                mb_substr(trim($_POST['memo'] ?? ''), 0, 255) ?: null, $user['id']]);
+                mb_substr(contract_text('memo'), 0, 255) ?: null, $user['id']]);
         audit($user['id'], 'contract.spend', 'contract', $cid, fmt_money($spendAmount));
         flash('Spend of ' . fmt_money($spendAmount) . ' recorded for ' . fmt_date($spentOn) . '.');
     } elseif (isset($_POST['del_spend'])) {
@@ -297,7 +321,7 @@ if (isset($_GET['id'])) {
       <?php else: ?><p class="muted">No deliverables yet.</p><?php endif; ?>
       <?php // After a rejected submission the form comes back filled in, with the error on its field.
       $oldD = fn(string $k): string => old_in('add_deliverable') !== '' ? h(old_in($k)) : ''; ?>
-      <form method="post" action="contracts.php" class="stacked" style="margin-top:1rem" novalidate><?= csrf_field() ?>
+      <form method="post" action="contracts.php" class="stacked" style="margin-top:1rem" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
         <?= form_error_summary(['title' => '', 'due_date' => '']) ?>
         <p class="hint">Fields marked * are required.</p>
         <input type="hidden" name="contract_id" value="<?= $cid ?>">
@@ -391,7 +415,7 @@ page_header($showClosed ? 'Closed contracts' : 'Contracts', $user, 'contracts');
   <summary accesskey="n" id="new-h">New contract or grant</summary>
   <?php // After a rejected submission the form comes back filled in, with the error on its field.
   $old = fn(string $k): string => old_in('add_contract') !== '' ? h(old_in($k)) : ''; ?>
-  <form method="post" action="contracts.php" class="stacked" novalidate><?= csrf_field() ?>
+  <form method="post" action="contracts.php" class="stacked" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['name' => '', 'amount' => '', 'start_date' => '', 'end_date' => '']) ?>
     <p class="hint">Fields marked * are required.</p>
     <div class="grid grid-4">

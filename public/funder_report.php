@@ -5,14 +5,15 @@
 // score gains, and closures. HTML (accessible), letterhead PDF, and CSV.
 require __DIR__ . '/inc/bootstrap.php';
 require_once __DIR__ . '/inc/document.php';
+require_once __DIR__ . '/inc/report_period.php';
 require __DIR__ . '/inc/layout.php';
 $user = require_login();
 require_perm('analytics');
 $rt = report_table('training_tracks', (int)$user['id']);
 
-$from = valid_date($_GET['from'] ?? '') ?: date('Y') . '-01-01';
-$to = valid_date($_GET['to'] ?? '') ?: date('Y') . '-12-31';
-if ($to < $from) [$from, $to] = [$to, $from];
+// The shared period picker (remembered per user); this year when nothing is chosen.
+$period = report_period($user, date('Y') . '-01-01', date('Y') . '-12-31');
+$from = $period['from']; $to = $period['to'];
 
 $ri = report_table('invoices', (int)$user['id']);
 // The agencies on tracks now (n = how many tracks), plus those snapshotted on invoices,
@@ -220,21 +221,24 @@ page_header('Funder report', $user, 'analytics');
 <h1>Funder outcome report</h1>
 <p class="muted">One renewal-ready report per funding agency: clients served, hours by category, goal achievement, device retention, assessment gains, and closures.</p>
 
-<form method="get" action="funder_report.php" class="page-actions" aria-label="Report filters">
-  <label for="agency">Funding agency</label>
-  <?php // The count is spelled out: agencies known only from invoices have no current tracks. ?>
-  <select id="agency" name="agency"><?php foreach ($agencies as $a): $n = (int)$a['n']; ?><option value="<?= h($a['funding_agency']) ?>" <?= $a['funding_agency'] === $agency ? 'selected' : '' ?>><?= h($a['funding_agency']) ?> — <?= $n === 0 ? 'no current tracks, billed work only' : $n . ' training track' . ($n === 1 ? '' : 's') ?></option><?php endforeach; ?></select>
-  <label for="from">From</label><input type="date" id="from" name="from" value="<?= h($from) ?>">
-  <label for="to">To</label><input type="date" id="to" name="to" value="<?= h($to) ?>">
-  <button type="submit" class="btn btn-secondary btn-sm">Run<span class="visually-hidden"> the funder report for this agency and period</span></button>
-  <?php // The downloads are buttons of this form, so they always use the agency and dates
-        // currently chosen, even when those were changed without pressing Run. ?>
-  <?php if ($agency !== ''): ?>
-  <button type="submit" name="html" value="1" class="btn btn-secondary btn-sm">Download accessible HTML report<span class="visually-hidden"> for the agency and dates chosen above</span></button>
-  <button type="submit" name="pdf" value="1" class="btn btn-secondary btn-sm">Download letterhead PDF<span class="visually-hidden"> for the agency and dates chosen above</span></button>
-  <button type="submit" name="export" value="1" class="btn btn-secondary btn-sm">Download funder report (CSV)<span class="visually-hidden"> for the agency and dates chosen above</span></button>
-  <?php endif; ?>
-</form>
+<?php
+// The count is spelled out: agencies known only from invoices have no current tracks.
+$agencySelect = '<label for="agency">Funding agency</label><select id="agency" name="agency">';
+foreach ($agencies as $a) {
+    $n = (int)$a['n'];
+    $agencySelect .= '<option value="' . h($a['funding_agency']) . '"' . ($a['funding_agency'] === $agency ? ' selected' : '') . '>' . h($a['funding_agency']) . ' — '
+        . ($n === 0 ? 'no current tracks, billed work only' : $n . ' training track' . ($n === 1 ? '' : 's')) . '</option>';
+}
+$agencySelect .= '</select>';
+// The downloads are buttons of this form, so they always use the agency and period
+// currently chosen, even when those were changed without pressing Run.
+$downloads = $agency === '' ? '' :
+    '<button type="submit" name="html" value="1" class="btn btn-secondary btn-sm">Download accessible HTML report<span class="visually-hidden"> for the agency and period chosen above</span></button>'
+    . '<button type="submit" name="pdf" value="1" class="btn btn-secondary btn-sm">Download letterhead PDF<span class="visually-hidden"> for the agency and period chosen above</span></button>'
+    . '<button type="submit" name="export" value="1" class="btn btn-secondary btn-sm">Download funder report (CSV)<span class="visually-hidden"> for the agency and period chosen above</span></button>';
+echo report_period_form('funder_report.php', $period, $agencySelect, $downloads);
+if ($period['notes']) echo '<p>' . h(implode(' ', $period['notes'])) . '</p>';
+?>
 
 <?php if (!$agencies): ?>
   <p class="muted">No funding agencies on record yet. They come from each training track's funding agency.</p>

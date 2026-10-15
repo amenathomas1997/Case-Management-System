@@ -265,7 +265,7 @@ struct EquipmentView: View {
         // VoiceOver: the whole item is one stop (one flick per item). Double-tap opens Service &
         // details; Mark returned or Loan out (the visible button's own code, confirmation
         // included) and Service & details are on the Actions rotor.
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: VoiceOverRows.children)
         .accessibilityLabel(itemSpokenLabel(item))
         .accessibilityHint("Double-tap for service and details. Swipe up or down for actions.")
         .accessibilityAction { detailItem = item }
@@ -749,7 +749,7 @@ struct ReservationsView: View {
                     }
                     // VoiceOver: one stop per reservation; Cancel reservation (confirmed first, as
                     // the button and swipe action are) is on the Actions rotor.
-                    .accessibilityElement(children: .ignore)
+                    .accessibilityElement(children: VoiceOverRows.children)
                     .accessibilityLabel([r.itemName, "\(r.clientName), \(r.status)", r.neededFrom.map { "Needed from \(formatDate($0))" }]
                         .compactMap { $0 }.joined(separator: ", "))
                     .accessibilityAction { announceRowActions() }

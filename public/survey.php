@@ -43,10 +43,13 @@ if (!$survey) {
     echo lang_toggle();
     // Say what to do next, with the footer's contact address.
     $linkContact = (string)(cfg('support_email') ?: cfg('mail_from'));
+    $phoneContact = support_contact_html(false); // "call {phone} or email {email}" once a support phone is set
     echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>' . t('This survey link is invalid or has been removed.') . ' '
-        . ($linkContact !== ''
+        . ($phoneContact !== ''
+            ? t('If you would still like to share your feedback,') . ' ' . $phoneContact . ' ' . t('and we will send you a new link.')
+            : ($linkContact !== ''
             ? t('If you would still like to share your feedback, email') . ' <a href="mailto:' . h($linkContact) . '">' . h($linkContact) . '</a> ' . t('and we will send you a new link.')
-            : t('If you would still like to share your feedback, ask your instructor for a new link.'))
+            : t('If you would still like to share your feedback, ask your instructor for a new link.')))
         . '</p></div>';
     page_footer();
     exit;
@@ -100,6 +103,8 @@ if (!$csrfStale && $_SERVER['REQUEST_METHOD'] === 'POST' && !$survey['completed_
 page_header($survey['completed_at'] ? 'Feedback received' : (($error ? 'Error — ' : '') . 'How did we do?'));
 echo lang_toggle();
 ?>
+<?php /* Each rating is a row of its own (a 44px target), read top to bottom. */ ?>
+<style>.scale-list label{display:flex;align-items:center;gap:.5rem;min-height:2.75rem}</style>
 <div class="card" style="max-width: 36rem; margin: 2rem auto;">
 <?php if ($survey['completed_at']):
   // Just sent from this browser, or a return visit to a survey already answered.
@@ -130,9 +135,10 @@ echo lang_toggle();
       <legend><?= t('1. Overall, how satisfied are you with your training?') ?> <span class="hint"><?= t('(required)') ?></span></legend>
       <p class="hint" id="sat-hint"><?= t('1 = not satisfied · 10 = extremely satisfied') ?></p>
       <?= field_error('satisfaction') ?>
-      <div class="field">
+      <?php // One choice to a line, top to bottom, with the ends of the scale named on 1 and 10. ?>
+      <div class="field scale-list">
         <?php for ($i = 1; $i <= 10; $i++): ?>
-        <label style="display:inline-block; margin-right:.6rem;"><input type="radio" id="sat-<?= $i ?>" name="satisfaction" value="<?= $i ?>" <?= (int)($_POST['satisfaction'] ?? 0) === $i ? 'checked' : '' ?> required> <?= $i ?><?= $i === 1 ? ' <span class="visually-hidden">' . t('(not satisfied)') . '</span>' : ($i === 10 ? ' <span class="visually-hidden">' . t('(extremely satisfied)') . '</span>' : '') ?></label>
+        <label><input type="radio" id="sat-<?= $i ?>" name="satisfaction" value="<?= $i ?>" <?= (int)($_POST['satisfaction'] ?? 0) === $i ? 'checked' : '' ?> required> <?= $i ?><?= $i === 1 ? ' <span class="hint">' . t('(not satisfied)') . '</span>' : ($i === 10 ? ' <span class="hint">' . t('(extremely satisfied)') . '</span>' : '') ?></label>
         <?php endfor; ?>
       </div>
     </fieldset>
@@ -140,9 +146,9 @@ echo lang_toggle();
       <legend><?= t('2. How well did the training meet your goals?') ?> <span class="hint"><?= t('(required)') ?></span></legend>
       <p class="hint" id="goals-hint"><?= t('1 = not at all · 10 = completely') ?></p>
       <?= field_error('goals_met') ?>
-      <div class="field">
+      <div class="field scale-list">
         <?php for ($i = 1; $i <= 10; $i++): ?>
-        <label style="display:inline-block; margin-right:.6rem;"><input type="radio" id="goals-<?= $i ?>" name="goals_met" value="<?= $i ?>" <?= (int)($_POST['goals_met'] ?? 0) === $i ? 'checked' : '' ?> required> <?= $i ?><?= $i === 1 ? ' <span class="visually-hidden">' . t('(not at all)') . '</span>' : ($i === 10 ? ' <span class="visually-hidden">' . t('(completely)') . '</span>' : '') ?></label>
+        <label><input type="radio" id="goals-<?= $i ?>" name="goals_met" value="<?= $i ?>" <?= (int)($_POST['goals_met'] ?? 0) === $i ? 'checked' : '' ?> required> <?= $i ?><?= $i === 1 ? ' <span class="hint">' . t('(not at all)') . '</span>' : ($i === 10 ? ' <span class="hint">' . t('(completely)') . '</span>' : '') ?></label>
         <?php endfor; ?>
       </div>
     </fieldset>

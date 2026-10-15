@@ -372,6 +372,7 @@ function ai_features(): array {
         'kb' => 'Knowledge-base assistant',
         'translate' => 'On-demand translation',
         'curriculum' => 'Curriculum generator',
+        'homework_draft' => 'Homework drafted from a session note',
         'risk' => 'Outcome risk flags',
         'voice' => 'Voice assistant (natural-language commands)',
         'readaloud' => 'Human-voice read-aloud (text-to-speech)',
@@ -610,6 +611,71 @@ function ai_generate_case_note(string $messy, string $fmt, ?array $client, int $
         }
     }
     return ['ok' => true, 'error' => '', 'sections' => $sections, 'questions' => array_slice($questions, 0, 8), 'homework' => array_slice($homework, 0, 10)];
+}
+
+/**
+ * Homework drafted from one session (case) note on a track: what was taught,
+ * what the learner found hard and what to practise, as a short title, numbered
+ * learner-facing steps, suggested practice minutes and days until due. Shared by
+ * track.php (the note list and the Log a session success area) and
+ * workflows.php?view=homework. A draft only: nothing is saved here. The AI use is
+ * logged by ai_run() and audited as the other AI features are. Returns
+ * ['ok', 'title', 'instructions', 'minutes', 'due_days', 'error', 'usage_id'];
+ * when the labelled lines cannot be parsed, the whole reply is the instructions.
+ */
+function homework_draft_from_note(array $note, array $track, int $userId): array {
+    $out = ['ok' => false, 'title' => '', 'instructions' => '', 'minutes' => 0, 'due_days' => 0, 'error' => '', 'usage_id' => 0];
+    if (!ai_feature_enabled('homework_draft')) { $out['error'] = 'Drafting homework from a note is turned off. An administrator can enable it under AI assistant settings.'; return $out; }
+    // The note as the staff member reads it: subject, structured sections, narrative.
+    $parts = [];
+    $subject = trim((string)($note['subject'] ?? ''));
+    if ($subject !== '') $parts[] = 'Subject: ' . $subject;
+    $fmt = (string)($note['note_format'] ?? 'free');
+    $labels = defined('NOTE_FORMATS') && isset(NOTE_FORMATS[$fmt]) && $fmt !== 'free' ? NOTE_FORMATS[$fmt] : null;
+    foreach (['birp_behavior', 'birp_intervention', 'birp_response', 'birp_plan'] as $i => $col) {
+        $v = trim((string)($note[$col] ?? ''));
+        if ($v !== '') $parts[] = ($labels[$i] ?? 'Section ' . ($i + 1)) . ":\n" . $v;
+    }
+    $body = trim((string)($note['body'] ?? ''));
+    if ($body !== '') $parts[] = "Note:\n" . $body;
+    if (count($parts) <= ($subject !== '' ? 1 : 0)) { $out['error'] = 'That note has no text to draft homework from.'; return $out; }
+    $text = implode("\n\n", $parts);
+    if (mb_strlen($text) > 20000) $text = mb_substr($text, 0, 20000);
+    // The client's own identifiers are redacted as the note generator redacts them.
+    $client = null;
+    if (!empty($track['client_id'])) {
+        try { $cq = db()->prepare('SELECT * FROM clients WHERE id = ?'); $cq->execute([(int)$track['client_id']]); $client = $cq->fetch() ?: null; } catch (Throwable $e) { $client = null; }
+    }
+    $sys = ai_system_base()
+        . ' From the session note, draft ONE homework assignment the learner practises before the next session: what was taught, what the learner found hard, and what the note says to practise. '
+        . 'Write for the learner, in the second person, naming the keystrokes, gestures, settings or app features the note names (for example a JAWS or VoiceOver command). '
+        . 'Reply with exactly these labelled lines and nothing else:'
+        . "\nTitle: <a short title, at most 190 characters>"
+        . "\nInstructions:\n1. <first step>\n2. <next step> (as many numbered steps as needed, each on its own line)"
+        . "\nMinutes: <suggested practice minutes per day, a whole number>"
+        . "\nDue in days: <days until it is due, a whole number from 1 to 60>"
+        . ' Never invent goals, devices or outcomes the note does not mention.' . ai_plain_text_rule();
+    $res = ai_run('homework_draft', $sys, 'Training track: ' . trim((string)($track['title'] ?? '')) . "\n\nSession note:\n" . $text, max(900, ai_output_tokens($text, 0.8)), $client, $userId);
+    $out['usage_id'] = (int)($res['usage_id'] ?? 0);
+    audit($userId, 'ai.homework_draft', 'client', (int)($track['client_id'] ?? 0), 'track #' . (int)($track['id'] ?? 0) . ': homework draft from note #' . (int)($note['id'] ?? 0) . ($res['ok'] ? '' : ' (failed)'));
+    if (!$res['ok']) { $out['error'] = (string)$res['error']; return $out; }
+    $reply = trim(str_replace(["\r\n", "\r"], "\n", (string)$res['text']));
+    if ($reply === '') { $out['error'] = 'The AI returned no text. Try again.'; return $out; }
+    // Labelled lines: Title, Instructions (to the next label), Minutes, Due in days.
+    $title = ''; $instr = ''; $minutes = 0; $days = 0;
+    if (preg_match('/^\s*Title:\s*(.*)$/mi', $reply, $m)) $title = trim($m[1]);
+    if (preg_match('/^\s*Instructions:\s*\n?(.*?)(?=^\s*(?:Minutes|Due in days|Title):|\z)/msi', $reply, $m)) $instr = trim($m[1]);
+    if (preg_match('/^\s*Minutes:\s*(\d{1,3})/mi', $reply, $m)) $minutes = (int)$m[1];
+    if (preg_match('/^\s*Due in days:\s*(\d{1,3})/mi', $reply, $m)) $days = (int)$m[1];
+    if ($title === '' && $instr === '') { $instr = $reply; }
+    // Markdown emphasis a model may add is stripped the way plain_text_html() strips it.
+    $strip = fn(string $s): string => trim(preg_replace(['/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/u', '/`([^`\n]+)`/u'], ['$2', '$1'], $s) ?? $s);
+    $out['ok'] = true;
+    $out['title'] = mb_substr($strip($title), 0, 190);
+    $out['instructions'] = $strip($instr);
+    $out['minutes'] = max(0, min(240, $minutes));
+    $out['due_days'] = max(0, min(60, $days));
+    return $out;
 }
 
 function ai_log_usage(string $feature, int $charsIn, int $charsOut, bool $redacted, ?int $actorId = null, ?bool $succeeded = null, ?int $durationMs = null, bool $truncated = false): int {

@@ -97,6 +97,13 @@ if ($saving) {
         // Shown on this same page below, with everything as it was entered.
         set_form_errors($saErrs);
     } else {
+        // The same form sent twice (Enter pressed again while it loads) saves the
+        // assessment once; the second answer is the confirmation of the first.
+        $scoredKey = web_idem_key($_POST);
+        if (web_once_get($scoredKey) !== null) {
+            flash('This scored assessment was already saved (the form was sent twice), so it was saved once.', 'info');
+            redirect('client.php?id=' . $cid . '&tab=assessments');
+        }
         $pct = scored_pct($total, $n, $sMin, $sMax);
         db()->beginTransaction();
         try {
@@ -107,6 +114,7 @@ if ($saving) {
             foreach ($scores as $itId => $sc) $ins->execute([$sid, $itId, $sc]);
             db()->commit();
         } catch (Throwable $e) { db()->rollBack(); throw $e; }
+        web_once_set($scoredKey, $sid);
         audit($user['id'], 'assessment.scored', 'client', $cid, $instrument['name'] . ': ' . $total . '/' . $max);
         flash('Scored assessment saved (' . $total . ($n * $sMin === 0 ? ' of ' . $max : ' on a range of ' . ($n * $sMin) . ' to ' . $max) . ', ' . round($pct) . '%).'
             . (empty($instrument['active']) ? ' This instrument has since been retired, so it is no longer offered for new assessments.' : ''));
@@ -148,7 +156,7 @@ foreach ($items as $it) $errLabels['it-' . (int)$it['id']] = '';
   <h2><?= h($instrument['name']) ?></h2>
   <?php if ($instrument['description']): ?><p class="muted"><?= h($instrument['description']) ?></p><?php endif; ?>
   <form method="post" action="score_assessment.php?client=<?= $cid ?>&instrument=<?= $iid ?>" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary($errLabels) ?>
     <div class="field"><label for="assessed_on">Assessment date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <input type="date" id="assessed_on" name="assessed_on" required max="<?= date('Y-m-d') ?>" value="<?= h($saving ? (is_string($_POST['assessed_on'] ?? null) ? $_POST['assessed_on'] : '') : date('Y-m-d')) ?>" <?= field_aria('assessed_on') ?>>

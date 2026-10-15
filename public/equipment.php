@@ -37,7 +37,9 @@ function equip_amount(string $raw): ?string {
 
 /* Add item */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_item'])) {
-    $name = trim($_POST['name'] ?? '');
+    // A value that is not a string (an array from name[]=x, say) reads as blank,
+    // so it is refused on its field, never a 400.
+    $name = is_string($_POST['name'] ?? null) ? trim($_POST['name']) : '';
     $serial = trim((string)($_POST['serial'] ?? ''));
     $itemNotes = trim((string)($_POST['notes'] ?? ''));
     // Each problem is shown on its own field and the form comes back filled in.

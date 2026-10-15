@@ -470,12 +470,13 @@ $API_ACTION_PERMS = [
     'portal_requests' => 'clients', 'portal_request_update' => 'clients', 'save_track' => 'clients',
     'request_consent' => 'clients', 'consents_due' => 'clients', 'pipeline' => 'clients', 'client_history' => 'clients',
     'invoices' => 'billing',
+    'waitlist' => 'referrals', 'waitlist_update' => 'referrals', 'doc_review' => 'clients',
 ];
 /* Account settings (inc/api_account.php) and the 3.0.22 parity actions (inc/api_parity.php)
    live in their own files; each re-checks what it needs. */
 const API_ACCOUNT_ACTIONS = ['account', 'change_password', 'totp_begin', 'totp_confirm', 'totp_disable', 'cal_feed_show', 'cal_feed_regen', 'remove_passkey', 'logout_all'];
 const API_PARITY_ACTIONS = ['tasks', 'save_task', 'complete_task', 'notifications', 'mark_notifications_read', 'portal_requests', 'portal_request_update',
-    'save_track', 'request_consent', 'consents_due', 'pipeline', 'client_history', 'invoices'];
+    'save_track', 'request_consent', 'consents_due', 'pipeline', 'client_history', 'invoices', 'waitlist', 'waitlist_update', 'doc_review'];
 if (isset($API_ACTION_PERMS[$action]) && !can($API_ACTION_PERMS[$action])) {
     fail('Your account does not have access to that area. Ask an administrator if you need it.', 403);
 }

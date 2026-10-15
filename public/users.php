@@ -413,11 +413,11 @@ if ($edit) {
     if (($counts['reauth:' . $le] ?? 0) >= 5) $lockedOut[] = 'password re-check locked';
 }
 
-page_header('Users', $user, 'account');
+page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
 ?>
 <h1>User management</h1>
 <p class="muted">Edit accounts, recover locked-out users, hand a caseload to someone else, and deactivate or delete accounts.
-   <a href="account.php#housekeeping">Back to My Account</a></p>
+   Adding a team member, quick group and hours changes and permission groups are on <a href="admin.php#people-h">Administration</a>.</p>
 
 <?php if ($edit): ?>
 <section class="card" aria-label="Edit user <?= h($edit['name']) ?>">

@@ -91,7 +91,7 @@ struct IncidentsView: View {
                         // One VoiceOver stop per incident, with the whole description (never cut
                         // short), and each status change in the Actions rotor (the same code as the
                         // status menu, so closing still asks first).
-                        .accessibilityElement(children: .ignore)
+                        .accessibilityElement(children: VoiceOverRows.children)
                         .accessibilityLabel(incidentSpoken(inc))
                         .accessibilityFocused($focusedIncident, equals: inc.id)
                         .accessibilityActions {

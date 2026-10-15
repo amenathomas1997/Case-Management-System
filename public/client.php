@@ -536,6 +536,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assessment'])) {
         keep_field_errors($aErrs);
         redirect("client.php?id=$id&tab=assessments");
     }
+    // The same form sent twice (Enter pressed again while it loads) saves the
+    // assessment once; checked before the attachment is stored, so a repeat
+    // never leaves a second copy of the file on disk.
+    $assessKey = web_idem_key($_POST);
+    if (web_once_get($assessKey) !== null) {
+        flash('This assessment was already saved (the form was sent twice), so it was saved once.', 'info');
+        redirect("client.php?id=$id&tab=assessments");
+    }
     if ($attName !== null) {
         $dir = cfg('upload_dir');
         if (!is_dir($dir)) mkdir($dir, 0750, true);
@@ -556,6 +564,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assessment'])) {
             trim((string)($_POST['summary'] ?? '')) ?: null,
             $attPath, $attName, $user['id'],
         ]);
+        // Capture the id before audit() inserts its own row and replaces it.
+        web_once_set($assessKey, (int)db()->lastInsertId());
     } catch (Throwable $e) {
         // Never leave a client file on disk with no record pointing at it.
         if ($attPath !== null) @unlink(cfg('upload_dir') . '/' . $attPath);
@@ -600,6 +610,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_document'])) {
         keep_field_errors($dErrs);
         redirect("client.php?id=$id&tab=documents");
     }
+    // The same form sent twice stores the document once; checked before the
+    // file is moved, so a repeat never leaves a second copy on disk.
+    $docKey = web_idem_key($_POST);
+    if (web_once_get($docKey) !== null) {
+        flash('This document was already uploaded (the form was sent twice), so it was stored once.', 'info');
+        redirect("client.php?id=$id&tab=documents");
+    }
     // The title defaults to the file name as typed (invalid byte sequences replaced).
     $docTitle = $title !== '' ? $title : mb_scrub($orig, 'UTF-8');
     $dir = cfg('upload_dir');
@@ -613,6 +630,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_document'])) {
     try {
         db()->prepare('INSERT INTO client_documents (client_id, category, title, orig_name, path, uploaded_by) VALUES (?,?,?,?,?,?)')
             ->execute([$id, $category, $docTitle, $origName, $stored, $user['id']]);
+        // Capture the id before audit() inserts its own row and replaces it.
+        web_once_set($docKey, (int)db()->lastInsertId());
     } catch (Throwable $e) {
         // Never leave a client file on disk with no record pointing at it.
         @unlink($dir . '/' . $stored);
@@ -657,7 +676,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_portal'])) {
         redirect("client.php?id=$id");
     }
     $token = bin2hex(random_bytes(24));
-    [$subj, $body] = email_template('portal_link', ['name' => $client['name'], 'link' => cfg('base_url') . '/portal.php?t=' . $token]);
+    [$subj, $body] = email_template_for_client('portal_link', $client, ['name' => $client['name'], 'link' => cfg('base_url') . '/portal.php?t=' . $token]);
     // The new link replaces the old one only once it has been sent, so a mail
     // outage never leaves the client with a dead link and no new one.
     if (!send_app_mail($client['email'], $subj, $body)) {
@@ -712,35 +731,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_consent'])) {
         keep_field_errors($cErrs);
         redirect("client.php?id=$id#consent-form");
     }
+    // The same form sent twice (Enter pressed again while it loads) emails the
+    // guardian once; the second answer is the confirmation of the first.
+    $consentKey = web_idem_key($_POST);
+    if (web_once_get($consentKey) !== null) {
+        flash("The consent form was already emailed to {$gName} (the form was sent twice), so it was sent once.", 'info');
+        redirect("client.php?id=$id");
+    }
     $token = bin2hex(random_bytes(24));
-    db()->prepare('INSERT INTO consent_forms (client_id, guardian_name, guardian_email, token) VALUES (?,?,?,?)')
-        ->execute([$id, $gName, $gEmail, $token]);
-    $newFormId = (int)db()->lastInsertId();
-    [$subj, $body] = email_template('consent_request', ['name' => $gName, 'client' => $client['name'], 'link' => cfg('base_url') . '/consent.php?t=' . $token]);
+    [$subj, $body] = email_template_for_client('consent_request', $client, ['name' => $gName, 'client' => $client['name'], 'link' => cfg('base_url') . '/consent.php?t=' . $token]);
+    // The client row is locked from the insert to the clean-up, so two requests
+    // sent at once run one after the other: each would otherwise email a link
+    // and then delete the other's as "an earlier unsigned one", leaving the
+    // guardian with two emails and no working link. The lock is held while the
+    // email is sent, so the second request waits for the first.
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $lockClient = $pdo->prepare('SELECT id FROM clients WHERE id = ? FOR UPDATE');
+        $lockClient->execute([$id]);
+        $pdo->prepare('INSERT INTO consent_forms (client_id, guardian_name, guardian_email, token) VALUES (?,?,?,?)')
+            ->execute([$id, $gName, $gEmail, $token]);
+        $newFormId = (int)$pdo->lastInsertId();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('Consent request failed: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
+        keep_input();
+        flash('The consent request could not be saved, so nothing was sent — any consent link sent earlier still works. What you typed is still in the form; please try again.', 'error');
+        redirect("client.php?id=$id");
+    }
     if (!send_app_mail($gEmail, $subj, $body)) {
         // Nothing was delivered: drop the new link and leave any earlier one working.
-        db()->prepare('DELETE FROM consent_forms WHERE id = ?')->execute([$newFormId]);
+        $pdo->rollBack();
         keep_input();
         flash('The consent email could not be sent, so nothing was changed — any consent link sent earlier still works. What you typed is still in the form; please try again later.', 'error');
         redirect("client.php?id=$id");
     }
     // Sent: this request replaces earlier unsigned ones, so a link sent to a
     // mistyped address can no longer be signed, and the guardian is recorded.
-    $pdo = db();
-    $pdo->beginTransaction();
+    // The savepoint keeps the sent link's row if that follow-up fails.
     try {
+        $pdo->exec('SAVEPOINT consent_sent');
         $pdo->prepare('DELETE FROM consent_forms WHERE client_id = ? AND signed_at IS NULL AND id <> ?')->execute([$id, $newFormId]);
         $pdo->prepare('UPDATE clients SET guardian_name = ?, guardian_email = ? WHERE id = ?')->execute([$gName, $gEmail, $id]);
         $pdo->commit();
     } catch (Throwable $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
         // The email has gone and its link works: never "nothing was saved", which
         // would invite a second request that turns this link off.
         error_log('Consent follow-up failed: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
+        try {
+            $pdo->exec('ROLLBACK TO SAVEPOINT consent_sent');
+            $pdo->commit();
+        } catch (Throwable $e2) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            error_log('Consent link store failed: ' . get_class($e2) . ' (code ' . $e2->getCode() . ')');
+            audit($user['id'], 'consent.request_failed', 'client', $id, 'to ' . $gEmail . '; emailed, but the link could not be activated');
+            flash("The consent form was emailed to {$gName}, but its link could not be activated, so it will not open. Send it again; any consent link sent earlier still works.", 'error');
+            redirect("client.php?id=$id");
+        }
+        web_once_set($consentKey, $newFormId);
         audit($user['id'], 'consent.request', 'client', $id, 'to ' . $gEmail . '; guardian details not saved to the record');
         flash("The consent form was emailed to {$gName}, and its link works. Do not send it again. Saving the guardian's details to the client record did not finish, so an earlier unsigned consent link may also still work.", 'error');
         redirect("client.php?id=$id");
     }
+    web_once_set($consentKey, $newFormId);
     audit($user['id'], 'consent.request', 'client', $id, 'to ' . $gEmail);
     flash("Consent form emailed to {$gName}.");
     redirect("client.php?id=$id");
@@ -1137,7 +1191,7 @@ if ($hasA11y): ?>
     <details class="mt-1" id="consent-request"<?= isset($GLOBALS['OLD_INPUT']['guardian_email']) || ($_GET['consent'] ?? '') === '1' ? ' open' : '' ?>>
       <summary><?= $pendingConsent ? 'Resend the guardian consent request by email' : ($latestSigned ? 'Request a new guardian consent by email' : 'Request guardian consent by email') ?></summary>
       <form method="post" action="client.php?id=<?= $id ?>" class="stacked" id="consent-form" novalidate>
-        <?= csrf_field() ?>
+        <?= csrf_field() ?><?= web_idem_field() ?>
         <?= form_error_summary(['guardian_name' => 'Guardian name', 'guardian_email' => 'Guardian email'], ['guardian_name' => 'g_name', 'guardian_email' => 'g_email']) ?>
         <p class="hint">Fields marked * are required.</p>
         <div class="field"><label for="g_name">Guardian name <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
@@ -1477,7 +1531,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
   </form>
   <?php endif; ?>
   <form method="post" action="<?= $tabUrl('assessments') ?>" enctype="multipart/form-data" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['assessment_date' => 'Assessment date', 'primary_disability' => 'Primary disability / needs', 'hardware_details' => 'Hardware details',
         'software_version' => 'Software & version', 'summary' => 'Assessment summary', 'attachment' => 'Report attachment']) ?>
     <p class="hint">Fields marked * are required.</p>
@@ -1568,7 +1622,7 @@ $documents = $documents->fetchAll();
 <section class="card" aria-labelledby="adddoc-h">
   <h2 id="adddoc-h">Upload a document</h2>
   <form method="post" action="<?= $tabUrl('documents') ?>" enctype="multipart/form-data" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['title' => 'Title', 'document' => 'File'], ['title' => 'doc_title']) ?>
     <p class="hint">Fields marked * are required.</p>
     <div class="field"><label for="doc_title">Title <span class="hint">Defaults to the file name</span></label>

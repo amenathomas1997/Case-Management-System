@@ -117,6 +117,10 @@ struct AccountView: View {
     @Environment(\.openURL) private var openURL
     @AppStorage(SpeechController.pauseKey) private var pauseSeconds: Double = 1.8
     @AppStorage(SpeechController.viaVoiceOverKey) private var repliesViaVoiceOver = true
+    @AppStorage(SpeechController.autoListenKey) private var voiceAutoListen = true
+    @AppStorage(LocalNotifications.enabledKey) private var notificationsOn = false
+    /// iOS refused reminders (turned off in Settings): shown under the toggle.
+    @State private var notificationsRefused = false
 
     @State private var summary: AccountSummary?
     @State private var error: String?
@@ -158,6 +162,7 @@ struct AccountView: View {
                 ProgressView("Loading your account…")
             }
             deviceSection
+            notificationsSection
             signOutSection
             helpSection
         }
@@ -297,7 +302,7 @@ struct AccountView: View {
             .controlSize(.large)
         }
         .padding(.vertical, 4)
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: VoiceOverRows.children)
         .accessibilityLabel("Setup key")
         .accessibilityValue(Text(setup.secret).speechSpellsOutCharacters())
         .accessibilityHint("Copy setup key is in the Actions rotor.")
@@ -327,7 +332,7 @@ struct AccountView: View {
                         .disabled(busy)
                 }
                 // One VoiceOver stop per passkey; Remove is in the Actions rotor (it still asks first).
-                .accessibilityElement(children: .ignore)
+                .accessibilityElement(children: VoiceOverRows.children)
                 .accessibilityLabel("\(passkey.displayName), \(passkeyDates(passkey))")
                 .accessibilityActions {
                     if !busy { Button("Remove") { removing = passkey } }
@@ -354,7 +359,7 @@ struct AccountView: View {
                     .controlSize(.large)
                 }
                 .padding(.vertical, 4)
-                .accessibilityElement(children: .ignore)
+                .accessibilityElement(children: VoiceOverRows.children)
                 .accessibilityLabel("Calendar address")
                 .accessibilityValue(calAddress)
                 .accessibilityHint("Copy address is in the Actions rotor.")
@@ -409,10 +414,48 @@ struct AccountView: View {
             .accessibilityHint("How long a pause in speech sends what was heard.")
             Toggle("Voice assistant: read replies with VoiceOver", isOn: $repliesViaVoiceOver)
                 .accessibilityHint("When VoiceOver is on, replies are read by VoiceOver and shown on a braille display instead of in the assistant's own voice.")
+            Toggle("Voice assistant: start listening when opened", isOn: $voiceAutoListen)
+                .accessibilityHint("The microphone opens by itself when the assistant opens, so no tap is needed first.")
             NavigationLink { OfflineEntriesView() } label: {
                 LabeledContent("Offline entries", value: api.pendingSync == 0 ? "None waiting" : "\(api.pendingSync) waiting")
             }
         } header: { sectionHeader("This iPhone") }
+    }
+
+    /// Local reminders, scheduled on this iPhone from what the app has already loaded. Off until
+    /// the person turns them on; iOS asks for permission then.
+    private var notificationsSection: some View {
+        Section {
+            Toggle("Reminders on this iPhone", isOn: Binding(get: { notificationsOn }, set: { on in
+                Task { await setNotifications(on) }
+            }))
+            .accessibilityHint("A session starting in 30 minutes, and at 8:00 how many device follow-ups are due today.")
+            if notificationsRefused {
+                Text("iOS is not allowing reminders from this app. Turn on Notifications for CMS in the iPhone's Settings, then turn this on again.")
+                    .font(.callout)
+            }
+        } header: { sectionHeader("Notifications") } footer: {
+            Text("Reminders never name a client, so they are safe on the lock screen. They come from the schedule and follow-ups the app last loaded: open those screens now and then to keep them current. Tapping a reminder opens that screen.")
+                .foregroundStyle(Color.secondaryText)
+        }
+    }
+
+    private func setNotifications(_ on: Bool) async {
+        guard on else {
+            notificationsOn = false
+            notificationsRefused = false
+            LocalNotifications.shared.clearScheduled()
+            announce("Reminders off. Scheduled reminders were removed.")
+            return
+        }
+        let allowed = await LocalNotifications.shared.requestPermission()
+        notificationsRefused = !allowed
+        notificationsOn = allowed
+        if allowed {
+            announce("Reminders on. They are scheduled the next time the schedule and follow-ups load.")
+        } else {
+            showFormError("iOS is not allowing reminders from this app. Turn on Notifications for CMS in the iPhone's Settings, then turn this on again.", in: &error)
+        }
     }
 
     private var signOutSection: some View {

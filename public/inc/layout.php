@@ -104,16 +104,18 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
       </button>
       <ul class="main-nav" id="main-nav" tabindex="-1">
         <?php
-        // Grouped under headings (H or the heading list jumps between groups); each link
-        // carries a one-sentence hint as its description (a hidden copy, read with the link:
-        // never an extra line), and a separate on-screen copy, hidden from screen readers,
-        // appears on hover or keyboard focus. Groups with no permitted link are left out.
+        // Grouped under h3 headings (H or the heading list jumps between groups) below the
+        // page's one h2 before <main>, "Low-vision controls", so the page's h1 is preceded by
+        // a single h2, not seven; each link carries a one-sentence hint as its description
+        // (a hidden copy, read with the link: never an extra line), and a separate on-screen
+        // copy, hidden from screen readers, appears on hover or keyboard focus. Groups with
+        // no permitted link are left out.
         $script = basename($_SERVER['SCRIPT_NAME'] ?? '');
         $byGroup = [];
         foreach (cms_navigation_items() as $item) if ($item[3] === null || can($item[3])) $byGroup[$item[4]][] = $item;
         foreach (cms_navigation_groups() as $group => $groupLabel): if (empty($byGroup[$group])) continue; ?>
         <li class="nav-group">
-          <h2 class="nav-group-title" id="nav-group-<?= $group ?>"><?= h($groupLabel) ?></h2>
+          <h3 class="nav-group-title" id="nav-group-<?= $group ?>"><?= h($groupLabel) ?></h3>
           <ul aria-labelledby="nav-group-<?= $group ?>">
           <?php foreach ($byGroup[$group] as [$href, $label, $key, , , $hint, $accessKey]):
             $current = $active === $key ? ($script === explode('#', $href, 2)[0] ? 'aria-current="page"' : 'aria-current="true"') : ''; ?>
@@ -341,7 +343,9 @@ function page_footer(): void {
     <p><?= h(cms_client_facing_page() ? brand('org') : cfg('name')) ?> <span aria-hidden="true">&middot;</span> <a href="community_referral.php"><?= t('Referral Form') ?></a>
        <span aria-hidden="true">&middot;</span> <?= $helpLink ?>
        <span aria-hidden="true">&middot;</span> <a href="privacy.php"<?= page_lang() === 'es' ? '>' . t('Privacy notice') : ' lang="en">Privacy notice' ?></a>
-       <?php if ($contact !== ''): ?><span aria-hidden="true">&middot;</span> <?= t('Questions? Email') ?> <a href="mailto:<?= h($contact) ?>"><?= h($contact) ?></a><?php endif; ?>
+       <?php // With a support phone set: "Questions? Call {phone} or email {email}". ?>
+       <?php if (($contactLine = support_contact_html()) !== ''): ?><span aria-hidden="true">&middot;</span> <?= t('Questions?') ?> <?= $contactLine ?>
+       <?php elseif ($contact !== ''): ?><span aria-hidden="true">&middot;</span> <?= t('Questions? Email') ?> <a href="mailto:<?= h($contact) ?>"><?= h($contact) ?></a><?php endif; ?>
     </p>
     <?php if (!cms_client_facing_page()): ?><p class="site-version"><?= page_lang() === 'es' ? 'Versión' : 'Version' ?> <?= h(APP_VERSION) ?></p><?php endif; ?>
   </div>

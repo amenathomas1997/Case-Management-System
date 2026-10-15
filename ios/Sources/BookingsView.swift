@@ -109,7 +109,7 @@ struct BookingsView: View {
         .padding(.vertical, 2)
         // VoiceOver: one stop per booking, its status included; each other status from the menu
         // is an action on the Actions rotor (Cancel booking is still confirmed first).
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: VoiceOverRows.children)
         .accessibilityLabel(bookingSpokenLabel(b))
         .accessibilityAction { announceRowActions() }
         .accessibilityActions {

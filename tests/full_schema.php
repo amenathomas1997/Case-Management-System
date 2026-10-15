@@ -300,7 +300,7 @@ try {
         'access_bookings'=>'Accommodation bookings','equipment'=>'Equipment','followups'=>'Device follow-ups','procurement'=>'~Device (request|purchase)|Procurement~',
         'programs'=>'~Cohort|Programs~','contracts'=>'~[Cc]ontract~','invoices'=>'Invoices','analytics'=>'~[Aa]nalytics~','outcomes'=>'Outcome report','compliance'=>'Compliance',
         'incidents'=>'~Incident~','messages'=>'Messages','curriculum'=>'~Competency|Curricul~','templates'=>'~[Tt]emplates~','score_assessment'=>'Scored assessment',
-        'accommodations'=>'~Worksite assessment|Accommodations~','users'=>'Users','account'=>'My Account','audit'=>'Audit log','trash'=>'Trash','client_merge'=>'Merge clients',
+        'accommodations'=>'~Worksite assessment|Accommodations~','users'=>'Users','account'=>'My Account','admin'=>'Administration','audit'=>'Audit log','trash'=>'Trash','client_merge'=>'Merge clients',
         'counselors'=>'Counselor portal','portal_requests'=>'Client requests','email_templates'=>'Email templates','referral_settings'=>'Referral form settings',
         'kb'=>'Synthetic knowledge article','search'=>'Search','utilization'=>'Utilization','agency_report'=>'Agency summary','funder_report'=>'Funder report',
         'rsa_report'=>'RSA-911 export','doc_audit'=>'Documentation audit','risk'=>'Risk flags','ai_tools'=>'AI tools','help'=>'Help and glossary','federation'=>'Federation',
@@ -319,7 +319,7 @@ try {
         if(!preg_match('~<title[^>]*>(.*?)</title>~s',$html,$m))return false;
         return $marker[0]==='~'?preg_match($marker,$m[1])===1:str_contains($m[1],$marker);
     };
-    foreach (['index','clients','client','client_edit','track','track_edit','tasks','referrals','pipeline','schedule','capacity','access_bookings','equipment','followups','procurement','programs','contracts','invoices','analytics','outcomes','compliance','incidents','messages','curriculum','templates','score_assessment','accommodations','users','account','audit','trash','client_merge','counselors','portal_requests','email_templates','referral_settings','kb','search','utilization','agency_report','funder_report','rsa_report','doc_audit','risk','ai_tools','help','federation','report','eval_report','invoice_pdf','client_export','equipment_import','equipment_labels','notifications','community_referral','consent','survey','ack','portal','vrc','login','forgot','reset','verify','ai','intake','recommend','amendment_request','progress_review','translate','remediate','ask','kb_ask','curriculum_ai','workflows','privacy'] as $page) {
+    foreach (['index','clients','client','client_edit','track','track_edit','tasks','referrals','pipeline','schedule','capacity','access_bookings','equipment','followups','procurement','programs','contracts','invoices','analytics','outcomes','compliance','incidents','messages','curriculum','templates','score_assessment','accommodations','users','account','admin','audit','trash','client_merge','counselors','portal_requests','email_templates','referral_settings','kb','search','utilization','agency_report','funder_report','rsa_report','doc_audit','risk','ai_tools','help','federation','report','eval_report','invoice_pdf','client_export','equipment_import','equipment_labels','notifications','community_referral','consent','survey','ack','portal','vrc','login','forgot','reset','verify','ai','intake','recommend','amendment_request','progress_review','translate','remediate','ask','kb_ask','curriculum_ai','workflows','privacy'] as $page) {
         $source=file_get_contents($root . '/public/' . $page . '.php');
         $source=swap_required("require __DIR__ . '/inc/bootstrap.php';", 'require ' . var_export($tmp . '/bootstrap.php',true) . ';', $source, "public/$page.php");
         $source=str_replace('__DIR__',var_export($root . '/public',true),$source);
@@ -832,7 +832,7 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
     $db->exec("INSERT INTO clients (id,name,email,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-client@example.invalid','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL,NULL),(3,'Upgraded client with a blank counselor',NULL,'')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
     check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12, mig_3.0.16 and mig_3.0.21 has exactly the fresh-install schema, defaults included');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=1')->fetchColumn()===3,'The 3.0.21 upgrade keeps every existing client\'s email confirmed');
     $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");

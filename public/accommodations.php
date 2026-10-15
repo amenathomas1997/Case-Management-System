@@ -79,9 +79,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assessment'])) {
     $errors = ($cid <= 0 ? ['client_id' => 'Choose a client.'] : []) + wa_field_errors();
     // The form is novalidate: keep everything that was typed and flag each field.
     if ($errors) { keep_input(); keep_field_errors($errors); redirect('accommodations.php'); }
+    // The same form sent twice (Enter pressed again while it loads) creates the
+    // assessment once; the second answer goes to the one the first created.
+    $waKey = web_idem_key($_POST);
+    if (($firstId = web_once_get($waKey)) !== null) {
+        flash('This worksite assessment was already created (the form was sent twice), so it was saved once.', 'info');
+        redirect('accommodations.php?id=' . $firstId);
+    }
     db()->prepare('INSERT INTO worksite_assessments (client_id, employer, job_title, worksite_location, assessor_id, assessment_date, status) VALUES (?,?,?,?,?,?,?)')
         ->execute([$cid, wa_in('employer'), wa_in('job_title'), wa_in('worksite_location'), $user['id'], wa_date('assessment_date'), 'Scheduled']);
+    // Capture the id before audit() inserts its own row and replaces it.
     $id = (int)db()->lastInsertId();
+    web_once_set($waKey, $id);
     audit($user['id'], 'worksite.add', 'worksite_assessment', $id);
     flash('Worksite assessment created.');
     redirect('accommodations.php?id=' . $id);
@@ -245,7 +254,7 @@ page_header('Accommodations', $user, 'accommodations');
 
 <section class="card" aria-labelledby="new-h">
   <h2 id="new-h">New worksite assessment</h2>
-  <form method="post" action="accommodations.php" class="stacked" novalidate><?= csrf_field() ?>
+  <form method="post" action="accommodations.php" class="stacked" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['client_id' => 'Client', 'employer' => 'Employer', 'job_title' => 'Job title', 'assessment_date' => 'Assessment date'],
         ['employer' => 'employer_new', 'job_title' => 'job_title_new', 'assessment_date' => 'assessment_date_new']) ?>
     <p class="hint">Fields marked * are required.</p>

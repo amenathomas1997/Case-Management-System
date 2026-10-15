@@ -10,6 +10,7 @@ function csrf_field() { return ''; }
 function csrf_token() { return 'synthetic'; }
 function take_flashes() { return []; }
 function ai_feature_enabled($f) { return $f === 'voice'; }
+if (!function_exists('support_contact_html')) { function support_contact_html(bool $capital = true): string { return 'Email <a href="mailto:help@example.test">help@example.test</a>'; } }
 const APP_VERSION = 'test';
 require __DIR__ . '/../public/inc/i18n.php';
 require __DIR__ . '/../public/inc/layout.php';

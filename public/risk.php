@@ -6,10 +6,16 @@
 // clinical prediction. Client names are tokenized (never sent) and restored in
 // the output. Governed by ai_run(); needs the 'analytics' permission.
 require __DIR__ . '/inc/bootstrap.php';
+require_once __DIR__ . '/inc/report_period.php';
 require __DIR__ . '/inc/layout.php';
 csrf_check();
 $user = require_login();
 require_perm('analytics');
+// The shared period picker (remembered per user): the sessions held in the period are
+// one more signal (none in the period is a gap, whatever the last date). This quarter
+// when nothing is chosen.
+$qStart = date('Y-m-d', strtotime(date('Y') . '-' . (floor((date('n') - 1) / 3) * 3 + 1) . '-01'));
+$period = report_period($user, $qStart, date('Y-m-d'));
 
 if (!ai_feature_enabled('risk')) {
     page_header('Risk flags', $user, 'ai_tools');
@@ -32,12 +38,13 @@ $totalActive = (int)$ct->fetchColumn();
 $sql = "SELECT c.id, c.name,
         (SELECT MAX(w.work_date) FROM work_logs w JOIN training_tracks t ON t.id = w.track_id WHERE t.client_id = c.id AND w.work_date <= CURDATE()) AS last_session,
         (SELECT MAX(n.created_at) FROM client_notes n WHERE n.client_id = c.id) AS last_note,
+        (SELECT COUNT(*) FROM work_logs w JOIN training_tracks t ON t.id = w.track_id WHERE t.client_id = c.id AND w.work_date BETWEEN ? AND ?) AS period_sessions,
         (SELECT MIN(t.expiration_date) FROM training_tracks t WHERE t.client_id = c.id AND t.status = 'Active' AND t.expiration_date IS NOT NULL) AS next_exp,
         (SELECT COUNT(*) FROM smart_goals sg JOIN training_tracks t ON t.id = sg.track_id WHERE t.client_id = c.id AND sg.status <> 'Achieved') AS open_goals,
         (SELECT ROUND(AVG(sg.progress_pct)) FROM smart_goals sg JOIN training_tracks t ON t.id = sg.track_id WHERE t.client_id = c.id AND sg.status <> 'Achieved') AS avg_progress"
     . $from . ' ORDER BY last_session, c.name LIMIT 80';
 $st = db()->prepare($sql);
-$st->execute($params);
+$st->execute(array_merge([$period['from'], $period['to']], $params));
 $rows = $st->fetchAll();
 usort($rows, fn($x, $y) => strcasecmp((string)$x['name'], (string)$y['name']));
 $capped = $totalActive > count($rows);
@@ -68,6 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) {
             $ls = $daysSince($r['last_session']); $ln = $daysSince($r['last_note']);
             $ctx .= "C{$cid}: last session " . ($ls === null ? 'never' : "{$ls}d ago")
                 . ", last note " . ($ln === null ? 'never' : "{$ln}d ago")
+                . ", {$r['period_sessions']} sessions in the period"
                 . ", nearest auth expiry " . $expiry($r['next_exp'])
                 . ", {$r['open_goals']} open goals"
                 . ($r['avg_progress'] !== null ? " avg {$r['avg_progress']}% progress" : '') . "\n";
@@ -79,7 +87,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) {
                 . '(e.g. C12), give the specific reason, and suggest one concrete action. Use only the signals provided. This is operational triage, '
                 . 'not a clinical or guaranteed prediction. Give a numbered list with one client per number: the token, the reason, then the action.'
                 . ai_plain_text_rule(),
-            "Today's date: " . $today->format('Y-m-d') . "\nActive-client signals:\n{$ctx}", 1500, null, (int)$user['id']);
+            "Today's date: " . $today->format('Y-m-d') . "\nThe period: " . $period['from'] . ' to ' . $period['to'] . "\nActive-client signals:\n{$ctx}", 1500, null, (int)$user['id']);
         audit($user['id'], 'ai.risk', 'user', (int)$user['id'], count($rows) . ' active clients assessed (client names tokenized)');
         if ($res['ok']) {
             $flags = preg_replace_callback('/\bC(\d+)\b/', fn($m) => $names[(int)$m[1]] ?? $m[0], $res['text']);
@@ -99,6 +107,9 @@ page_header('Risk flags', $user, 'ai_tools');
 <h1>Outcome risk flags</h1>
 <p class="muted">Operational triage of active clients from engagement and progress signals. Client names are tokenized before sending and restored in the result. This is a prompt to look closer, not a prediction.</p>
 
+<?= report_period_form('risk.php', $period) ?>
+<?php if ($period['notes']): ?><p><?= h(implode(' ', $period['notes'])) ?></p><?php endif; ?>
+<p>Sessions in the period are counted from <?= h(fmt_date($period['from'])) ?> to <?= h(fmt_date($period['to'])) ?>; the other signals are as of today.</p>
 <?php if ($capped): ?>
 <p id="cap-note">Only <?= count($rows) ?> of the <?= $totalActive ?> clients in active training fit one assessment: those with no session yet or the longest time since their last session are included and listed below.</p>
 <?php endif; ?>
@@ -120,14 +131,15 @@ page_header('Risk flags', $user, 'ai_tools');
   <div class="table-scroll" tabindex="0" role="region" aria-labelledby="sig-cap">
   <table>
     <caption class="visually-hidden" id="sig-cap">Engagement and progress signals per active client</caption>
-    <thead><tr><th scope="col">Client</th><th scope="col">Days since last session</th><th scope="col">Days since last note</th><th scope="col">Authorization expires</th><th scope="col" class="num">Open goals</th><th scope="col" class="num">Average progress</th></tr></thead>
+    <thead><tr><th scope="col">Client</th><th scope="col">Days since last session</th><th scope="col" class="num">Sessions in period</th><th scope="col">Days since last note</th><th scope="col">Authorization expires</th><th scope="col" class="num">Open goals</th><th scope="col" class="num">Average progress</th></tr></thead>
     <tbody>
-    <?php if (!$rows): ?><tr><td colspan="6" class="muted">No active clients.</td></tr><?php endif; ?>
+    <?php if (!$rows): ?><tr><td colspan="7" class="muted">No active clients.</td></tr><?php endif; ?>
     <?php $days = fn(?int $n, string $never): string => $n === null ? $never : $n . ($n === 1 ? ' day' : ' days'); ?>
     <?php foreach ($rows as $r): $ls = $daysSince($r['last_session']); $ln = $daysSince($r['last_note']); ?>
       <tr>
         <td><a href="client.php?id=<?= (int)$r['id'] ?>"><?= h($r['name']) ?></a></td>
         <td><?= $days($ls, 'No session yet') ?></td>
+        <td class="num"><?= (int)$r['period_sessions'] ?></td>
         <td><?= $days($ln, 'No note yet') ?></td>
         <td><?= $r['next_exp'] ? fmt_date($r['next_exp']) : 'No expiry date' ?></td>
         <td class="num"><?= (int)$r['open_goals'] ?></td>

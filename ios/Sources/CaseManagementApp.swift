@@ -7,11 +7,15 @@ struct CaseManagementApp: App {
     @StateObject private var api = API()
     @StateObject private var lock = AppLock()
 
+    @StateObject private var navigation = AppNavigation.shared
+
     init() {
         // A document left in tmp by a crash or a kill during a preview must not outlive the launch.
         PreviewStore.sweep()
         // An unsaved note or hours draft not touched for two weeks is dropped (PHI).
         DraftStore.expire()
+        // A tapped reminder is handed to AppNavigation, also when the tap launched the app.
+        LocalNotifications.shared.activate()
     }
 
     var body: some Scene {
@@ -19,7 +23,69 @@ struct CaseManagementApp: App {
             RootView()
                 .environmentObject(api)
                 .environmentObject(lock)
+                .environmentObject(navigation)
                 .tint(.brand)
+        }
+    }
+}
+
+/// Where the app should go next, asked for from outside the screens: a tapped reminder
+/// (LocalNotifications) or the voice assistant's "open …". The tab bar follows `tab`; the
+/// Dashboard's stack opens `dashboardRoute`. A request made while the app is locked, or before
+/// the tabs exist, is kept until MainTabs can act on it (and checks the permission for it).
+@MainActor
+final class AppNavigation: ObservableObject {
+    static let shared = AppNavigation()
+
+    enum Tab: Hashable { case dashboard, clients, referrals, schedule, equipment }
+
+    /// A screen under the Dashboard's More tools.
+    enum DashboardRoute: Hashable {
+        case followups, messages, tasks, docReview
+        @MainActor @ViewBuilder var screen: some View {
+            switch self {
+            case .followups: FollowupsView()
+            case .messages: MessagesView()
+            case .tasks: TasksView()
+            case .docReview: DocReviewView()
+            }
+        }
+    }
+
+    /// Somewhere the app can go by itself.
+    enum Destination: Hashable {
+        case tab(Tab)
+        case dashboard(DashboardRoute)
+        static let schedule = Destination.tab(.schedule)
+        static let followups = Destination.dashboard(.followups)
+    }
+
+    @Published var tab: Tab = .dashboard
+    @Published var dashboardRoute: DashboardRoute?
+    /// Waiting for MainTabs (see `apply`).
+    @Published private(set) var pending: Destination?
+
+    func request(_ destination: Destination) { pending = destination }
+
+    /// MainTabs: goes where was asked, if the account may open it; otherwise the request is dropped.
+    func apply(_ api: API) {
+        guard let destination = pending else { return }
+        pending = nil
+        switch destination {
+        case .tab(let target):
+            let allowed: Bool
+            switch target {
+            case .dashboard: allowed = true
+            case .clients: allowed = api.can("clients")
+            case .referrals: allowed = api.can("referrals")
+            case .schedule: allowed = api.can("schedule")
+            case .equipment: allowed = api.can("equipment")
+            }
+            if allowed { tab = target }
+        case .dashboard(let route):
+            guard api.can("clients") else { return }
+            tab = .dashboard
+            dashboardRoute = route
         }
     }
 }
@@ -64,6 +130,11 @@ struct RootView: View {
         .onChange(of: lock.locked) { locked in
             // Unlocking gives the windows underneath back to VoiceOver; sign-in keeps them hidden.
             if !locked { reauth.reassert() }
+        }
+        // VoiceOver started or stopped: every screen observes the API, so this redraws their
+        // rows (VoiceOverRows.children) for the one now running, without rebuilding them.
+        .onReceive(NotificationCenter.default.publisher(for: UIAccessibility.voiceOverStatusDidChangeNotification)) { _ in
+            api.objectWillChange.send()
         }
         .alert("This phone can't lock the app",
                isPresented: Binding(get: { lock.protectionWarning != nil },
@@ -559,6 +630,7 @@ struct LockScreen: View {
 struct MainTabs: View {
     @EnvironmentObject var api: API
     @EnvironmentObject var lock: AppLock
+    @EnvironmentObject var navigation: AppNavigation
     @State private var showingOfflineEntries = false
     /// A sync notice that changed while the app was locked: said once the lock is gone.
     @State private var unannouncedSync: String?
@@ -566,39 +638,52 @@ struct MainTabs: View {
     var body: some View {
         // Tabs mirror the website's permission groups; the server enforces
         // access either way, this just hides what the user can't open.
-        TabView {
+        TabView(selection: $navigation.tab) {
             DashboardView()
                 .tabItem { Label("Dashboard", systemImage: "gauge.medium") }
+                .tag(AppNavigation.Tab.dashboard)
             if api.can("clients") {
                 ClientsView()
                     .tabItem { Label("Clients", systemImage: "person.2") }
+                    .tag(AppNavigation.Tab.clients)
             }
             if api.can("referrals") {
                 ReferralsView()
                     .tabItem { Label("Referrals", systemImage: "tray.and.arrow.down") }
+                    .tag(AppNavigation.Tab.referrals)
             }
             if api.can("schedule") {
                 ScheduleView()
                     .tabItem { Label("Schedule", systemImage: "calendar") }
+                    .tag(AppNavigation.Tab.schedule)
             }
             if api.can("equipment") {
                 EquipmentView()
                     .tabItem { Label("Equipment", systemImage: "shippingbox") }
+                    .tag(AppNavigation.Tab.equipment)
             }
         }
         .task {
             await api.refreshMe()
             await api.flushQueue()
+            // A reminder tapped to launch the app: go there now that the permissions are known.
+            if !lock.locked { navigation.apply(api) }
         }
         .onChange(of: scenePhase) { phase in
             // Coming back to the foreground retries anything written offline.
             if phase == .active { Task { await api.flushQueue() } }
+        }
+        // A tapped reminder or a voice "open …" while the app is unlocked; while locked it
+        // waits for the unlock below.
+        .onChange(of: navigation.pending) { pending in
+            if pending != nil, !lock.locked { navigation.apply(api) }
         }
         .onChange(of: lock.locked) { locked in
             // The tabs are no longer rebuilt on every unlock (which used to re-run the task
             // above), so the name and permission set are refreshed here instead.
             if !locked {
                 Task { await api.refreshMe() }
+                navigation.apply(api)
                 if let message = unannouncedSync {
                     unannouncedSync = nil
                     // After VoiceOver has settled back on the screen (AppLock restores its place).

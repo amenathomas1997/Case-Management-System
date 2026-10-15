@@ -81,6 +81,18 @@ check($xp->query('//main[@aria-label="Main content"]')->length === 1, 'One named
 check($xp->query('//footer[@aria-label="Site information"]')->length === 1, 'One named site-information contentinfo landmark');
 check($xp->query('//form[@role="search" and @aria-label="Site search"]')->length === 1, 'Site search has a named search landmark');
 check($xp->query('//section[@id="low-vision-bar" and @aria-labelledby="vision-title"]')->length === 1, 'Display controls have a heading-named region');
+// Before the page's h1 only one h2 (Low-vision controls) appears; the main-menu groups are
+// h3 headings under it, each still a heading with its id, so H moves between groups.
+check($xp->query('//h2[@id="vision-title"]')->length === 1, 'Low-vision controls is the one h2 before the main content');
+$h1 = $xp->query('//h1')->item(0);
+// (The session-timeout alertdialog's h2 is hidden until it opens, so it is not in the headings list.)
+$beforeH1 = $xp->query('//h2[following::h1 and not(ancestor::*[@role="alertdialog"])]');
+check($h1 !== null && $beforeH1->length === 1 && $beforeH1->item(0)->getAttribute('id') === 'vision-title', 'Only the Low-vision controls h2 precedes the page title');
+$groupHeadings = $xp->query('//ul[@id="main-nav"]//li[contains(@class,"nav-group")]/h3[contains(@class,"nav-group-title") and starts-with(@id,"nav-group-")]');
+check($groupHeadings->length >= 1 && $groupHeadings->length === $xp->query('//ul[@id="main-nav"]//li[contains(@class,"nav-group")]')->length, 'Each main-menu group is headed by an h3 with its id');
+foreach ($groupHeadings as $gh) {
+    check($xp->query('//ul[@id="main-nav"]//ul[@aria-labelledby="' . $gh->getAttribute('id') . '"]')->length === 1, 'Menu group list is named by its h3: ' . $gh->getAttribute('id'));
+}
 $navNames = [];
 foreach ($xp->query('//nav') as $nav) {
     $name = trim($nav->getAttribute('aria-label'));

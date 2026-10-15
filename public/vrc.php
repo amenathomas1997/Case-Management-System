@@ -34,9 +34,11 @@ if (!$vrc) {
     // says whether a link ever existed.
     page_header('Portal link not recognized');
     $contact = (string)(cfg('support_email') ?: cfg('mail_from'));
+    $phoneContact = support_contact_html(); // "Call {phone} or email {email}" once a support phone is set
     echo '<div class="card auth-card"><h1>Link not recognized</h1><p>This portal link is not valid, has expired, or was replaced by a newer one.</p>'
-        . ($contact !== '' ? '<p><a href="mailto:' . h($contact) . '">Email ' . h(brand('short')) . ' for a new portal link</a> (' . h($contact) . ').</p>'
-            : '<p>Contact ' . h(brand('short')) . ' for a new portal link.</p>')
+        . ($phoneContact !== '' ? '<p>' . $phoneContact . ' for a new portal link.</p>'
+            : ($contact !== '' ? '<p><a href="mailto:' . h($contact) . '">Email ' . h(brand('short')) . ' for a new portal link</a> (' . h($contact) . ').</p>'
+            : '<p>Contact ' . h(brand('short')) . ' for a new portal link.</p>'))
         . '</div>';
     page_footer();
     exit;
@@ -329,6 +331,14 @@ page_header('Your caseload');
 <section class="card">
   <h2><?= h($c['name']) ?> <?= status_badge($c['status']) ?></h2>
   <?php
+  // The client's most recent completed session and the next one booked, beside
+  // the hours: a counselor sees at a glance whether training is under way.
+  $lastQ = db()->prepare("SELECT start_at FROM scheduled_sessions WHERE client_id = ? AND status = 'Completed' ORDER BY start_at DESC LIMIT 1");
+  $lastQ->execute([(int)$c['id']]);
+  $lastSession = $lastQ->fetchColumn();
+  $nextQ = db()->prepare("SELECT start_at FROM scheduled_sessions WHERE client_id = ? AND status = 'Scheduled' AND start_at >= NOW() ORDER BY start_at LIMIT 1");
+  $nextQ->execute([(int)$c['id']]);
+  $nextSession = $nextQ->fetchColumn();
   $tracks = db()->prepare("SELECT * FROM training_tracks WHERE client_id = ? ORDER BY status = 'Active' DESC");
   $tracks->execute([(int)$c['id']]);
   foreach ($tracks->fetchAll() as $t):
@@ -341,6 +351,8 @@ page_header('Your caseload');
   <dl class="props">
     <dt>Authorization</dt><dd><?= h($t['auth_number']) ?> · <?= h($t['service_type'] ?? '') ?> · expires <?= fmt_date($t['expiration_date'], true) ?></dd>
     <dt>Hours</dt><dd><?= fmt_hours($r['hours_worked']) ?> used of <?= fmt_hours($r['authorized_hours']) ?> (<?= fmt_hours($r['hours_remaining']) ?> remaining)</dd>
+    <dt>Last session</dt><dd><?= $lastSession ? fmt_date($lastSession) : 'None completed yet' ?></dd>
+    <dt>Next session</dt><dd><?= $nextSession ? fmt_datetime($nextSession) : 'None scheduled' ?></dd>
     <dt>Goals</dt><dd><?= (int)($goals['achieved'] ?? 0) ?> of <?= (int)($goals['total'] ?? 0) ?> achieved</dd>
   </dl>
   <div class="progress-wrap">

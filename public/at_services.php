@@ -67,13 +67,27 @@ page_header(($error||$issueErrors?'Error — ':'').$pageTitle,$user,'at_services
 <?php // Device follow-ups need the clients permission (followups.php), so the link is offered only with it. ?>
 <p><a href="at_services.php">All AT services</a><?php if(can('clients')):?> · <a href="followups.php">Existing loan follow-ups</a><?php endif;?></p>
 <?php if($error&&!$def)echo error_notice($error);?>
+<?php // Where an AT workflow overlaps another module, its description points to that module
+// and the page links there (each link only with the permission that page needs), so the
+// same work is not recorded twice.
+$atSeeAlso=function(string $key):string{
+    $links=match($key){
+        'outcome'=>can('clients')?[['followups.php','Device follow-ups']]:[],
+        'repair'=>can('equipment')?[['equipment.php','Equipment & loans']]:[],
+        'funding'=>array_merge(can('procurement')?[['procurement.php','Device purchases']]:[],can('billing')?[['invoices.php','Invoices']]:[]),
+        'cost','rate'=>can('analytics')?[['analytics.php','Business analytics']]:[],
+        'resource'=>[['kb.php','Knowledge base']],
+        default=>[]};
+    if(!$links)return '';
+    return '<p>See also: '.implode(' · ',array_map(fn($l)=>'<a href="'.h($l[0]).'">'.h($l[1]).'</a>',$links)).'</p>';
+};?>
 <?php if(!$kind):?>
 <div class="grid grid-2">
 <?php foreach(at_catalog() as $key=>$d):if(!at_can($d['perm'])||in_array($key,$contextClient?['trial_option','rate']:['trial_option','learning','license_seat','rate'],true))continue;?>
-<section class="card"><h2><a href="at_services.php?kind=<?=h($key)?><?= $contextClient && $d['client']?'&amp;client_id='.$contextClient:'' ?>"><?=h($d['label'])?></a></h2><p><?=h($d['description'])?></p></section>
+<section class="card"><h2><a href="at_services.php?kind=<?=h($key)?><?= $contextClient && $d['client']?'&amp;client_id='.$contextClient:'' ?>"><?=h($d['label'])?></a></h2><p><?=h($d['description'])?></p><?=$atSeeAlso($key)?></section>
 <?php endforeach;?></div>
 <?php elseif(isset($def)): ?>
-<h2><?=h($def['label'])?></h2><p><?=h($def['description'])?></p>
+<h2><?=h($def['label'])?></h2><p><?=h($def['description'])?></p><?=$atSeeAlso($kind)?>
 <?php
 $values=$record?at_values($record):[];
 foreach(['client_id','parent_id','equipment_id','track_id','request_id'] as $key)if(!$record && !empty($_GET[$key]))$values[$key]=(string)(int)$_GET[$key];

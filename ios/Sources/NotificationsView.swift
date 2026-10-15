@@ -143,7 +143,7 @@ struct NotificationsView: View {
         .buttonStyle(.plain)
         .disabled(target == nil && webURL == nil)
         // One stop: new or read, the message and when; opening and marking read are its actions.
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: VoiceOverRows.children)
         .accessibilityLabel("\(item.unread ? "New. " : "")\(item.message). \(formatDateTime(item.createdAt))")
         .accessibilityHint(target != nil ? "Opens the matching screen." : (webURL != nil ? "Opens the website page in the app." : ""))
         .accessibilityAddTraits(target != nil || webURL != nil ? .isButton : [])

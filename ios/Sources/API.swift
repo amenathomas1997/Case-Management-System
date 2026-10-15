@@ -867,6 +867,31 @@ final class API: ObservableObject {
         }
     }
 
+    /// `call` for a read-only list the app keeps a copy of (the client list, today's schedule,
+    /// due follow-ups): the server's reply is kept on this phone for the signed-in account
+    /// (OfflineCache), and when the server cannot be reached the last copy is returned instead,
+    /// with when it was saved, so the screen can show it read-only. Any other failure is thrown.
+    func callCached<T: Decodable>(_ action: String, query: [String: String] = [:],
+                                  cacheKey: String) async throws -> (value: T, savedAt: Date?) {
+        let owner = userId
+        do {
+            let (data, _) = try await send(action, method: "GET", query: query, body: nil,
+                                           accountChanged: "Your account changed. Please reload this screen.")
+            if let errorBody = try? decoder.decode(APIErrorResponse.self, from: data), !errorBody.ok {
+                throw APIError.server(errorBody.error ?? "Something went wrong.")
+            }
+            let value: T
+            do { value = try decoder.decode(T.self, from: data) }
+            catch { throw APIError.server("Unexpected response from the server.") }
+            if owner > 0, userId == owner { OfflineCache.save(data, key: cacheKey, owner: owner) }
+            return (value, nil)
+        } catch APIError.network {
+            guard let saved = OfflineCache.load(key: cacheKey, owner: owner),
+                  let value = try? decoder.decode(T.self, from: saved.data) else { throw APIError.network }
+            return (value, saved.savedAt)
+        }
+    }
+
     /// Like `call`, but returns the parsed JSON object as a dictionary. Used by
     /// the voice assistant, whose replies carry a free-form `params` object that
     /// doesn't fit a fixed Decodable shape. Honors the same auth + 401 handling.
@@ -921,6 +946,7 @@ final class API: ObservableObject {
             switch action {
             case "add_note": return "Case note"
             case "log_hours": return "Hours"
+            case "save_followup": return "Device follow-up"
             default: return "Entry"
             }
         }
@@ -958,6 +984,11 @@ final class API: ObservableObject {
                 if let v = value("rsa_category") { lines.append("RSA category: \(v)") }
                 if let v = value("mileage"), v != "0" { lines.append("Mileage: \(v)") }
                 if let v = value("description") { lines.append("Description: \(v)") }
+            case "save_followup":
+                if let v = value("in_use") { lines.append("Still in use: \(v == "yes" ? "Yes" : v == "no" ? "No" : "Unknown")") }
+                if let v = value("satisfaction") { lines.append("Satisfaction: \(v) of 5") }
+                if let v = value("barriers") { lines.append("Barriers: \(v)") }
+                if let v = value("notes") { lines.append("Notes: \(v)") }
             default:
                 for key in obj.keys.sorted() where key != "idem_key" {
                     if let v = value(key) { lines.append("\(key): \(v)") }
@@ -1238,8 +1269,11 @@ final class API: ObservableObject {
 
     func signOut() {
         let old = token
-        // Chosen and confirmed: unsaved note and hours drafts go with the account.
+        // Chosen and confirmed: unsaved note and hours drafts go with the account, as do the
+        // lists kept for reading offline and any reminders scheduled from them.
         DraftStore.removeAll(owner: userId)
+        OfflineCache.removeAll(owner: userId)
+        LocalNotifications.shared.clearScheduled()
         clearIdentity()
         guard !old.isEmpty else { return }
         API.revoke(old)

@@ -6,8 +6,9 @@ csrf_check();
 $user = require_login();
 require_perm('admin');
 
+// A key that is not a string (an array from key[]=x, say) means "no template chosen".
 $key = $_REQUEST['key'] ?? '';
-if (!isset(EMAIL_TEMPLATES[$key])) $key = '';
+if (!is_string($key) || !isset(EMAIL_TEMPLATES[$key])) $key = '';
 
 // Placeholders a customised body must keep, or the email loses the thing it
 // exists to deliver (a sign-in code without {code} locks people out).
@@ -40,11 +41,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tpl']) && $key !
     redirect('email_templates.php?key=' . urlencode($key));
 }
 
-page_header('Email templates', $user, 'account');
+page_header('Email templates', $user, 'admin', [['admin.php', 'Administration']]);
 ?>
 <h1>Email templates</h1>
 <p class="muted">Change the wording of the emails this system sends. Words in curly braces like <code>{name}</code> are filled in automatically.
-   Leave a field blank to use the built-in wording. <a href="account.php#housekeeping">Back to My Account</a></p>
+   Leave a field blank to use the built-in wording. <a href="admin.php#forms-h">Back to My Account</a></p>
 
 <div class="grid grid-2">
   <section class="card" aria-label="Template list">

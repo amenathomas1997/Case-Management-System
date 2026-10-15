@@ -145,6 +145,25 @@ function parity_track_number(array $src, string $key, string $label, ?float $def
     return (float)$raw;
 }
 
+/** workflows.php's waitlist statuses. */
+const PARITY_WAITLIST_STATUSES = ['Waiting', 'Contacted', 'Ready', 'Closed'];
+
+/** One waitlist row as the page lists it (a referral with its entry, or none yet). */
+function parity_waitlist_item(array $r): array {
+    return [
+        'referral_id' => (int)$r['id'], 'client_name' => (string)$r['client_name'],
+        'waitlisted' => $r['referral_id'] !== null,
+        // The page shows "Not waitlisted" for a referral with no entry yet.
+        'status' => $r['status'] ?? 'Not waitlisted',
+        'received_at' => substr((string)$r['received_at'], 0, 10),
+        'followup_date' => $r['followup_date'] ?? null,
+        // 'notes' is the entry's free text (its Client availability field), the app's name for it.
+        'notes' => (string)($r['availability'] ?? ''), 'availability' => (string)($r['availability'] ?? ''),
+        'expertise' => (string)($r['expertise'] ?? ''), 'languages' => (string)($r['languages'] ?? ''), 'areas' => (string)($r['areas'] ?? ''),
+        'modality' => (string)($r['modality'] ?? 'Both'), 'version' => (int)($r['version'] ?? 0),
+    ];
+}
+
 switch ($action) {
 
 /* ---------- Tasks (tasks.php, inc/tasks.php, inc/task_filters.php) ---------- */
@@ -608,7 +627,7 @@ case 'request_consent': {
     db()->prepare('INSERT INTO consent_forms (client_id, guardian_name, guardian_email, token) VALUES (?,?,?,?)')
         ->execute([$clientId, $gName, $gEmail, $token]);
     $newFormId = (int)db()->lastInsertId();
-    [$subj, $body] = email_template('consent_request', ['name' => $gName, 'client' => $client['name'], 'link' => cfg('base_url') . '/consent.php?t=' . $token]);
+    [$subj, $body] = email_template_for_client('consent_request', $client, ['name' => $gName, 'client' => $client['name'], 'link' => cfg('base_url') . '/consent.php?t=' . $token]);
     if (!send_app_mail($gEmail, $subj, $body)) {
         db()->prepare('DELETE FROM consent_forms WHERE id = ?')->execute([$newFormId]);
         fail('The consent email could not be sent, so nothing was changed — any consent link sent earlier still works. Please try again later.', 502);
@@ -777,6 +796,70 @@ case 'invoices': {
         'amount' => round((float)$a['amt'], 2), 'oldest_days' => $a['oldest'] !== null ? (int)$a['oldest'] : null], $ag->fetchAll());
     out(['ok' => true, 'invoices' => $items, 'status' => $statusFilter, 'total' => $invTotal, 'page' => $page, 'pages' => $pages,
         'outstanding' => $aging, 'unbilled' => round((float)unbilled_totals($scoped ? $userId : null)['total'], 2)]);
+}
+
+/* ---------- Referral waitlist (workflows.php?view=waitlist, inc/workflows.php) ---------- */
+
+case 'waitlist': {
+    require_once __DIR__ . '/workflows.php';
+    if (!workflows_ready()) fail('Apply migration 3.0.16 to enable workflows.', 503);
+    // The page's query (workflows.php, inline), repeated here: open referrals, oldest
+    // first, closed waitlist entries last; a caseload-scoped user sees unassigned
+    // referrals and their own.
+    $q = db()->prepare("SELECT r.id, r.client_name, r.created_at AS received_at, w.* FROM referrals r LEFT JOIN referral_waitlist w ON w.referral_id = r.id
+        WHERE r.status <> 'Converted'" . (caseload_scoped() ? ' AND (r.assigned_to IS NULL OR r.assigned_to = ?)' : '') . " ORDER BY COALESCE(w.status,'') = 'Closed', r.created_at, r.id");
+    $q->execute(caseload_scoped() ? [$userId] : []);
+    out(['ok' => true, 'items' => array_map('parity_waitlist_item', $q->fetchAll()),
+        'statuses' => PARITY_WAITLIST_STATUSES, 'modalities' => ['In person', 'Remote', 'Both']]);
+}
+
+case 'waitlist_update': {
+    $parityRequirePost();
+    require_once __DIR__ . '/workflows.php';
+    if (!workflows_ready()) fail('Apply migration 3.0.16 to enable workflows.', 503);
+    // workflow_waitlist_save() does the page's validation, caseload check, version
+    // check, task completion and audit (referral.waitlist). The page's form sends every
+    // field; the app may send only what it changes, so a field left out keeps the
+    // entry's saved value, and a left-out version is the saved one (the app has no
+    // stale copy to protect) — a version it does send is checked as on the page.
+    $referralId = (int)($input['referral_id'] ?? 0);
+    if ($referralId <= 0) fail('Choose a referral.', 422);
+    $cur = db()->prepare('SELECT * FROM referral_waitlist WHERE referral_id = ?');
+    $cur->execute([$referralId]);
+    $saved = $cur->fetch() ?: [];
+    $in = ['referral_id' => $referralId, 'version' => array_key_exists('version', $input) ? (int)$input['version'] : (int)($saved['version'] ?? 0)];
+    // 'notes' is the app's name for the entry's free text, the Client availability field.
+    if (array_key_exists('notes', $input) && !array_key_exists('availability', $input)) $input['availability'] = $input['notes'];
+    foreach (['status' => 'Waiting', 'modality' => 'Both', 'expertise' => '', 'languages' => '', 'areas' => '', 'availability' => '', 'followup_date' => ''] as $k => $default) {
+        $in[$k] = array_key_exists($k, $input) ? (is_scalar($input[$k]) || $input[$k] === null ? (string)$input[$k] : $input[$k]) : (string)($saved[$k] ?? $default);
+    }
+    try {
+        workflow_waitlist_save($in, $userId);
+    } catch (DomainException $e) {
+        $msg = $e->getMessage();
+        fail($msg, str_starts_with($msg, 'Someone else saved') ? 409 : ($msg === 'Referral is unavailable on your queue.' ? 404 : ($msg === 'Referral access is required.' ? 403 : 422)));
+    }
+    $row = db()->prepare('SELECT r.id, r.client_name, r.created_at AS received_at, w.* FROM referrals r JOIN referral_waitlist w ON w.referral_id = r.id WHERE r.id = ?');
+    $row->execute([$referralId]);
+    $item = parity_waitlist_item($row->fetch());
+    out(['ok' => true, 'item' => $item, 'message' => 'Waitlist entry saved for ' . $item['client_name'] . '. No client was reassigned and no session was booked.']);
+}
+
+/* ---------- Documentation review queue (workflows.php?view=review) ---------- */
+
+case 'doc_review': {
+    require_once __DIR__ . '/workflows.php';
+    if (!workflows_ready()) fail('Apply migration 3.0.16 to enable workflows.', 503);
+    // workflow_review_notes(): the newest 1,000 notes the user can see (caseload-scoped
+    // as the page), those with unresolved flags. The fingerprint is the note text as
+    // flagged, which a review must quote (workflow_acknowledge_note).
+    $items = [];
+    foreach (workflow_review_notes($userId) as $n) {
+        $items[] = ['client_id' => (int)$n['client_id'], 'client_name' => (string)$n['client_name'], 'note_id' => (int)$n['id'],
+            'subject' => trim((string)$n['subject']) !== '' ? (string)$n['subject'] : null, 'flagged_for' => implode('; ', $n['flags']), 'flags' => $n['flags'],
+            'created_at' => (string)$n['created_at'], 'fingerprint' => workflow_note_fingerprint($n)];
+    }
+    out(['ok' => true, 'items' => $items]);
 }
 
 default:

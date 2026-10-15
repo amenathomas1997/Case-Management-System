@@ -243,6 +243,9 @@ struct ReferralsView: View {
             }
             .navigationTitle("Referrals")
             .toolbar {
+                NavigationLink { WaitlistView() } label: {
+                    Label("Waitlist", systemImage: "list.bullet.clipboard")
+                }
                 // Managing counselor portal access needs the admin permission (as on the server).
                 if api.can("admin") {
                     NavigationLink { CounselorsView() } label: {

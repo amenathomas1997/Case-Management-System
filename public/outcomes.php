@@ -4,6 +4,7 @@
 // at contract renewal. CSV export included.
 require __DIR__ . '/inc/bootstrap.php';
 require_once __DIR__ . '/inc/document.php';
+require_once __DIR__ . '/inc/report_period.php';
 require __DIR__ . '/inc/layout.php';
 $user = require_login();
 require_perm('analytics');
@@ -11,15 +12,10 @@ $rt = report_table('training_tracks', (int)$user['id']);
 $rh = report_table('client_status_history', (int)$user['id']);
 $rs = report_table('surveys', (int)$user['id']);
 
-$from = valid_date($_GET['from'] ?? '') ?: date('Y') . '-01-01';
-$to = valid_date($_GET['to'] ?? '') ?: date('Y') . '-12-31';
+// The shared period picker (remembered per user); this year when nothing is chosen.
 // Any date the page could not read, or a swapped pair, is said in words on the page.
-$periodNotes = [];
-foreach (['from' => ['From', 'the start of this year'], 'to' => ['To', 'the end of this year']] as $k => [$label, $fallback]) {
-    $raw = $_GET[$k] ?? '';
-    if (!is_string($raw) || (trim($raw) !== '' && valid_date($raw) === null)) $periodNotes[] = 'The ' . $label . ' date could not be read, so ' . $fallback . ' is used.';
-}
-if ($to < $from) { [$from, $to] = [$to, $from]; $periodNotes[] = 'The From date was after the To date, so the two were swapped.'; }
+$period = report_period($user, date('Y') . '-01-01', date('Y') . '-12-31');
+$from = $period['from']; $to = $period['to']; $periodNotes = $period['notes'];
 
 /* Clients served: anyone with a logged visit in the period, by client type */
 $served = db()->prepare("SELECT c.client_type, COUNT(DISTINCT c.id) n
@@ -274,18 +270,14 @@ page_header('Outcome report', $user, 'analytics');
 
 <p>Showing <?= h(fmt_date($from)) ?> to <?= h(fmt_date($to)) ?>.<?php foreach ($periodNotes as $pn): ?> <?= h($pn) ?><?php endforeach; ?></p>
 
-<?php // The downloads are buttons of this form, so they always use the dates in the
-      // From and To fields, even when those were changed without pressing Run. ?>
-<form method="get" action="outcomes.php" class="page-actions" aria-label="Report period">
-  <label for="from">From</label><input type="date" id="from" name="from" value="<?= h($from) ?>">
-  <label for="to">To</label><input type="date" id="to" name="to" value="<?= h($to) ?>">
-  <button type="submit" class="btn btn-secondary btn-sm">Run<span class="visually-hidden"> the outcome report for this period</span></button>
-  <button type="submit" name="export" value="1" class="btn btn-secondary btn-sm">Download outcome report (CSV)<span class="visually-hidden"> for the dates in From and To</span></button>
-  <button type="submit" name="html" value="1" class="btn btn-secondary btn-sm">Download accessible HTML report<span class="visually-hidden"> for the dates in From and To</span></button>
-  <button type="submit" name="pdf" value="1" class="btn btn-secondary btn-sm">Download letterhead PDF<span class="visually-hidden"> for the dates in From and To</span></button>
-  <?php if (can('billing')): ?><a class="btn btn-secondary btn-sm" href="rsa_report.php?from=<?= h($from) ?>&amp;to=<?= h($to) ?>">RSA-911 case-service export</a><?php endif; ?>
-  <a class="btn btn-secondary btn-sm" href="funder_report.php?from=<?= h($from) ?>&amp;to=<?= h($to) ?>">Per-funder report pack</a>
-</form>
+<?php // The downloads are buttons of this form, so they always use the period chosen
+      // in it, even when it was changed without pressing Run.
+$downloads = '<button type="submit" name="export" value="1" class="btn btn-secondary btn-sm">Download outcome report (CSV)<span class="visually-hidden"> for the period chosen above</span></button>'
+    . '<button type="submit" name="html" value="1" class="btn btn-secondary btn-sm">Download accessible HTML report<span class="visually-hidden"> for the period chosen above</span></button>'
+    . '<button type="submit" name="pdf" value="1" class="btn btn-secondary btn-sm">Download letterhead PDF<span class="visually-hidden"> for the period chosen above</span></button>'
+    . (can('billing') ? '<a class="btn btn-secondary btn-sm" href="rsa_report.php?from=' . h($from) . '&amp;to=' . h($to) . '">RSA-911 case-service export</a>' : '')
+    . '<a class="btn btn-secondary btn-sm" href="funder_report.php?from=' . h($from) . '&amp;to=' . h($to) . '">Per-funder report pack</a>';
+echo report_period_form('outcomes.php', $period, '', $downloads); ?>
 
 <h2 class="visually-hidden">Outcomes at a glance</h2>
 <div class="grid grid-4">

@@ -57,8 +57,13 @@ if (!$form) {
     // starts in English whatever language the guardian reads.
     echo lang_toggle();
     $linkContact = (string)(cfg('support_email') ?: cfg('mail_from'));
-    echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>' . t('This consent link is invalid or has been replaced. Please contact') . ' '
-        . ($linkContact !== '' ? h(brand('short')) . ' (<a href="mailto:' . h($linkContact) . '">' . h($linkContact) . '</a>)' : h(brand('short'))) . ' ' . t('for a new one.') . '</p></div>';
+    $phoneContact = support_contact_html(); // "Call {phone} or email {email}" once a support phone is set
+    echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>'
+        . ($phoneContact !== ''
+            ? t('This consent link is invalid or has been replaced.') . ' ' . $phoneContact . ' ' . t('for a new one.')
+            : t('This consent link is invalid or has been replaced. Please contact') . ' '
+            . ($linkContact !== '' ? h(brand('short')) . ' (<a href="mailto:' . h($linkContact) . '">' . h($linkContact) . '</a>)' : h(brand('short'))) . ' ' . t('for a new one.'))
+        . '</p></div>';
     page_footer();
     exit;
 }
@@ -132,6 +137,8 @@ $withdrawn = $form['signed_at'] && !empty($form['withdrawn_at']);
 // The contact the footer gives, for withdrawing consent or asking questions.
 $contact = (string)(cfg('support_email') ?: cfg('mail_from'));
 $contactHtml = $contact !== '' ? h(brand('short')) . ' (<a href="mailto:' . h($contact) . '">' . h($contact) . '</a>)' : h(brand('short'));
+// With a support phone set: "contact {org}: call {phone} or email {email}".
+if (support_contact_html(false) !== '') $contactHtml = h(brand('short')) . ': ' . support_contact_html(false);
 // The services asked for on this student's referral, when the record has them: named
 // here rather than assuming the guardian was told about them in a conversation.
 $services = [];

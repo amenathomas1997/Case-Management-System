@@ -104,7 +104,7 @@ $savedProvider = (string)(setting('ai_provider') ?? 'anthropic');
 if (!isset($providers[$savedProvider])) $savedProvider = 'anthropic';
 $savedEnabled = (setting('ai_enabled') ?? '') === '1';
 
-page_header('AI assistant', $user, 'account');
+page_header('AI assistant', $user, 'admin', [['admin.php', 'Administration']]);
 ?>
 <h1>AI drafting assistant</h1>
 <p class="muted">Optional. When enabled, staff see “Draft with AI” buttons that generate editable drafts of reports, evaluations, notes, goals, and case summaries.</p>
@@ -187,7 +187,7 @@ page_header('AI assistant', $user, 'account');
     </fieldset>
 
     <button type="submit" name="save_ai" value="1" class="btn btn-primary">Save settings</button>
-    <a class="btn btn-secondary" href="account.php#housekeeping">Back to My Account</a>
+    <a class="btn btn-secondary" href="admin.php#forms-h">Back to My Account</a>
   </form>
   <p class="muted" style="margin-top:1rem;">Status: <strong><?= $active ? 'Active (' . h($providers[$savedProvider]['label']) . ')' : ($savedEnabled ? 'Enabled, but not fully configured (needs an API key' . ($savedProvider === 'custom' ? ' and base URL' : '') . ')' : 'Off') ?></strong>
     <?= ai_redaction_on() ? ' · <span class="badge badge-closed">Redaction on</span>' : ' · <span class="badge badge-pending">Redaction off</span>' ?></p>

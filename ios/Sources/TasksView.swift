@@ -210,7 +210,7 @@ struct TasksView: View {
         .padding(.vertical, 2)
         // One VoiceOver stop per task; Done / Reopen, Edit and the linked records are on the
         // Actions rotor.
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: VoiceOverRows.children)
         .accessibilityLabel(task.spoken)
         .accessibilityFocused($focusedTask, equals: task.id)
         .accessibilityAction { announceRowActions() }

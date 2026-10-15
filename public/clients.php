@@ -46,8 +46,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['unarchive'])) {
 // A hand-made URL can send these as arrays; only text is a filter.
 $q = trim(is_string($_GET['q'] ?? null) ? $_GET['q'] : '');
 $statusFilter = is_string($_GET['status'] ?? null) ? $_GET['status'] : '';
-$who = is_string($_GET['who'] ?? null) ? $_GET['who'] : '';
 $showArchived = isset($_GET['archived']) && can('admin');
+// Caseload filter: a submitted choice is remembered per user (as My Account keeps
+// per-user settings), so the list opens the same way next time. With no choice
+// saved, staff limited to their own caseload start on "My clients"; everyone
+// else on "Everyone's clients".
+$whoChoices = ['', 'me', 'unassigned'];
+$whoKey = 'clients_filter_' . (int)$user['id'];
+if (is_string($_GET['who'] ?? null)) {
+    $who = in_array($_GET['who'], $whoChoices, true) ? $_GET['who'] : '';
+    if ((setting($whoKey) ?? '') !== $who) set_setting($whoKey, $who);
+} else {
+    $savedWho = setting($whoKey);
+    $who = $savedWho !== null && in_array($savedWho, $whoChoices, true) ? $savedWho : (caseload_scoped() ? 'me' : '');
+}
 
 $sql = 'SELECT c.*, u.name AS instructor, (SELECT COUNT(*) FROM training_tracks t WHERE t.client_id = c.id AND t.status = "Active") AS active_tracks
     FROM clients c LEFT JOIN users u ON u.id = c.assigned_to WHERE 1=1';
@@ -97,7 +109,8 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
     </div>
     <div class="field">
       <label for="who">Caseload</label>
-      <select id="who" name="who">
+      <span class="hint" id="who-hint">Your choice is remembered for the next time you open Client records.</span>
+      <select id="who" name="who" aria-describedby="who-hint">
         <option value="" <?= $who === '' ? 'selected' : '' ?>>Everyone's clients</option>
         <option value="me" <?= $who === 'me' ? 'selected' : '' ?>>My clients</option>
         <option value="unassigned" <?= $who === 'unassigned' ? 'selected' : '' ?>>Unassigned</option>

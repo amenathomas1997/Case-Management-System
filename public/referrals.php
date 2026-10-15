@@ -153,6 +153,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $isCounselor ? $ref['counselor_phone'] : null, $isCounselor ? $ref['counselor_agency'] : null,
         ]);
         $clientId = (int)db()->lastInsertId();
+        apply_referral_language($clientId, $ref);   // Spanish referral form → Spanish client emails
         if (!empty($ref['guardian_name'])) {
             db()->prepare('UPDATE clients SET guardian_name = ?, guardian_phone = ? WHERE id = ?')
                 ->execute([$ref['guardian_name'], $ref['guardian_phone'] ?? null, $clientId]);

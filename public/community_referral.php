@@ -10,6 +10,8 @@ register_translations(['Email us at' => 'Escríbanos a', 'required: choose at le
     'Enter the date of birth as a valid date, from the year 1900 onwards.' => 'Escriba la fecha de nacimiento como una fecha válida, a partir del año 1900.',
     'Their email: enter one valid address, for example name@example.org, or leave it blank.' => 'Correo electrónico de la persona: escriba una sola dirección válida, por ejemplo nombre@ejemplo.org, o déjelo en blanco.',
     'Please also correct the following:' => 'Corrija también lo siguiente:',
+    'Give at least one way to reach you.' => 'Indique al menos una forma de contactarle.',
+    'Your phone or your email (at least one).' => 'Su teléfono o su correo electrónico (al menos uno).',
     'The referral could not be sent because of a problem on our side, and nothing was saved. Everything you typed is still here. Please try again in a few minutes, or email us.'
         => 'No se pudo enviar la referencia por un problema de nuestra parte, y no se guardó nada. Todo lo que escribió sigue aquí. Inténtelo de nuevo en unos minutos o escríbanos.']);
 // A public visitor has no account to sign back into. When the form's token no
@@ -133,7 +135,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // Each message starts with the field's own label, as the page shows it.
-    $required = ['referrer_name' => 'Your name', 'referrer_phone' => 'Your phone'];
+    $required = ['referrer_name' => 'Your name'];
     if ($role !== 'self') $required['client_name'] = 'Their full name';
     foreach ($required as $k => $label) {
         if (trim($_POST[$k] ?? '') === '') $errors[$k] = $label . ' is required.';
@@ -141,9 +143,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Written for this question, so the message matches the visible prompt.
     $bodyLabel = $role === 'self' ? 'What do you need help with?' : 'What does this person need help with?';
     if (trim($_POST['body'] ?? '') === '') $errors['body'] = $bodyLabel . ' Please tell us.';
+    // One way to reach the referrer is enough: a phone or an email (many callers
+    // have no email). An email that is given must be a real address.
     $refEmail = trim($_POST['referrer_email'] ?? '');
-    if ($refEmail === '') $errors['referrer_email'] = 'Your email is required.';
-    elseif (!filter_var($refEmail, FILTER_VALIDATE_EMAIL)) $errors['referrer_email'] = 'Your email: enter one valid address, for example name@example.org.';
+    $refPhone = trim($_POST['referrer_phone'] ?? '');
+    if ($refEmail === '' && $refPhone === '') $errors['referrer_contact'] = 'Give at least one way to reach you.';
+    elseif ($refEmail !== '' && !filter_var($refEmail, FILTER_VALIDATE_EMAIL)) $errors['referrer_email'] = 'Your email: enter one valid address, for example name@example.org.';
     // Bad dates or over-length names would otherwise crash the insert and lose the referral.
     // Same bounds as a staff edit: a mistyped year would reach RSA-911 as an age.
     $dobIn = trim($_POST['client_dob'] ?? '');
@@ -228,7 +233,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($role === 'self') $fee = $income === 'below_2000' ? 0.00 : 17.50;
         $clientName = $role === 'self' ? trim($_POST['referrer_name']) : trim($_POST['client_name']);
         $clientPhone = $role === 'self' ? trim($_POST['referrer_phone']) : (trim($_POST['client_phone'] ?? '') ?: null);
-        $clientEmail = $role === 'self' ? strtolower($refEmail) : (trim($_POST['client_email'] ?? '') ?: null);
+        $clientEmail = $role === 'self' ? (strtolower($refEmail) ?: null) : (trim($_POST['client_email'] ?? '') ?: null);
         // The referral, its contact task and the rate-limit count are saved
         // together or not at all: the page never confirms a referral nobody is
         // asked to follow up.
@@ -240,8 +245,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     counselor_name, counselor_agency, counselor_email, counselor_phone,
                     client_name, client_dob, client_phone, client_email, client_address,
                     referral_source, school, grade_level, guardian_name, guardian_phone,
-                    relationship, contact_first, consent_confirmed, preets_services, income_bracket, quoted_fee, referral_purpose, requested_service, specific_needs)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute([
+                    relationship, contact_first, consent_confirmed, preets_services, income_bracket, quoted_fee, referral_purpose, requested_service, specific_needs, preferred_language)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute([
                 REFERRER_ROLES[$role] . ' referral', $noteType,
                 mb_substr(ucfirst($role) . ' referral: ' . $clientName, 0, 255),
                 // Cap free-text public inputs so an anonymous submitter can't store multi-MB values.
@@ -263,6 +268,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 null, // Historical Pre-ETS data remains readable; new AT referrals never populate it.
                 $role === 'self' ? INCOME_BRACKETS[$income] : null,
                 $fee, $requestFields['referral_purpose'], $requestFields['requested_service'], $requestFields['specific_needs'],
+                // The language the form was sent in: the client it becomes prefers it.
+                page_lang() === 'es' ? 'es' : 'en',
             ]);
             $refId = (int)$pdo->lastInsertId();
             if (!add_task('Contact new referral: ' . $clientName,
@@ -327,6 +334,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $saved = isset($_GET['submitted']);
 $helpContact = (string)(cfg('support_email') ?: cfg('mail_from')); // the same contact as the shared footer
+// "Call {phone} or email {email}" once a support phone is set; '' otherwise (email-only wording below).
+$helpPhoneContact = support_contact_html();
 /** A date such as "Monday, October 20" in the page's language (a Spanish page reads it in Spanish). */
 function referral_contact_date(string $ymd): string {
     $ts = strtotime($ymd);
@@ -354,10 +363,12 @@ echo lang_toggle();
     <?php if ($sentRef > 0): ?> <?= t('Your referral number is') ?> <strong><?= $sentRef ?></strong>.<?php endif; ?></p>
     <?php if ($sentRef > 0 && $sentBy !== ''): ?>
     <p><?= t('We will contact you by') ?> <strong><?= h($sentBy) ?></strong>.
-      <?php if ($helpContact !== ''): ?><?= t('If you have not heard from us by then, email') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a> <?= t('and mention referral') ?> <?= $sentRef ?>.<?php endif; ?></p>
+      <?php if ($helpPhoneContact !== ''): ?><?= t('If you have not heard from us by then,') ?> <?= support_contact_html(false) ?> <?= t('and mention referral') ?> <?= $sentRef ?>.
+      <?php elseif ($helpContact !== ''): ?><?= t('If you have not heard from us by then, email') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a> <?= t('and mention referral') ?> <?= $sentRef ?>.<?php endif; ?></p>
     <?php else: ?>
     <p><?= t('We will contact you within 3 business days.') ?>
-      <?php if ($helpContact !== ''): ?><?= t('If you have not heard from us by then, email') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a>.<?php endif; ?></p>
+      <?php if ($helpPhoneContact !== ''): ?><?= t('If you have not heard from us by then,') ?> <?= support_contact_html(false) ?>.
+      <?php elseif ($helpContact !== ''): ?><?= t('If you have not heard from us by then, email') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a>.<?php endif; ?></p>
     <?php endif; ?>
   </div>
   <script>document.addEventListener('DOMContentLoaded',function(){var s=document.getElementById('referral-sent');if(s)s.focus();if(window.Earcon)Earcon.play('success');});</script>
@@ -376,7 +387,7 @@ echo lang_toggle();
 <h1><?= t('Refer someone to') ?> <?= h(brand('org')) ?></h1>
 <p><?= t('Request assistive technology assessment, training, demonstrations, or recommendations for devices, apps, and software.') ?></p>
 <p><?= t('Use this form to refer yourself or someone else. First, tell us who you are. Then we\'ll show only the questions you need to answer. Fields marked with an asterisk (') ?><span aria-hidden="true">*</span><span class="visually-hidden"><?= t('asterisk') ?></span><?= t(') are required.') ?></p>
-<p><strong><?= t('Need help with this form, or unsure which choice fits?') ?></strong> <?php if ($helpContact !== ''): ?><?= t('Email us at') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a> <?= t('and a person will help you.') ?> <?php endif; ?><?= t('After you send the referral, we will contact you within 3 business days.') ?></p>
+<p><strong><?= t('Need help with this form, or unsure which choice fits?') ?></strong> <?php if ($helpPhoneContact !== ''): ?><?= $helpPhoneContact ?> <?= t('and a person will help you.') ?> <?php elseif ($helpContact !== ''): ?><?= t('Email us at') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a> <?= t('and a person will help you.') ?> <?php endif; ?><?= t('After you send the referral, we will contact you within 3 business days.') ?></p>
 
 <?php // The message is announced by moving focus to it once, so it carries no
 // alert role: a focused live region is read twice by some screen readers.
@@ -395,7 +406,7 @@ if ($errors): ?>
   <ul>
     <?php foreach ($fieldErrors as $k => $msg): ?>
     <?php // Each link lands on the control the message is about (a group's first one).
-    $errAnchors = ['role' => 'role-0', 'income' => 'income-0', 'contact_first' => 'cf-0',
+    $errAnchors = ['role' => 'role-0', 'income' => 'income-0', 'contact_first' => 'cf-0', 'referrer_contact' => 'referrer_phone',
         'consent' => 'consent-box', 'requested_services' => 'svc-0', 'specific_needs' => 'need-0']; ?>
     <?php // A stand-alone link, so it gets the full 44px target height (2.5.5), as in form_error_summary(). ?>
     <li><a href="#<?= h($errAnchors[$k] ?? $k) ?>" style="display:inline-flex; align-items:center; min-height:2.75rem;"><?= t($msg) ?></a></li>
@@ -438,16 +449,23 @@ if ($errors): ?>
       <input type="text" id="referrer_name" name="referrer_name" required maxlength="120" autocomplete="name" value="<?= $old('referrer_name') ?>" <?= $aria('referrer_name') ?>>
       <?= $err('referrer_name') ?>
     </div>
-    <div class="field">
-      <label for="referrer_email"><?= t('Your email') ?> <span aria-hidden="true">*</span></label>
-      <input type="email" id="referrer_email" name="referrer_email" required maxlength="190" autocomplete="email" value="<?= $old('referrer_email') ?>" <?= $aria('referrer_email') ?>>
-      <?= $err('referrer_email') ?>
-    </div>
-    <div class="field">
-      <label for="referrer_phone"><?= t('Your phone') ?> <span aria-hidden="true">*</span></label>
-      <input type="tel" id="referrer_phone" name="referrer_phone" required maxlength="40" autocomplete="tel" value="<?= $old('referrer_phone') ?>" <?= $aria('referrer_phone') ?>>
-      <?= $err('referrer_phone') ?>
-    </div>
+    <?php // A phone or an email: one is enough (not everyone has an email). The
+    // group says so, and the "give one" message sits on the group, naming both fields. ?>
+    <fieldset class="field" id="referrer-contact-group" aria-describedby="contact-hint<?= isset($errors['referrer_contact']) ? ' err-referrer_contact' : '' ?>">
+      <legend><?= t('How can we reach you?') ?> <span aria-hidden="true">*</span><span class="visually-hidden"> (<?= t('required') ?>)</span></legend>
+      <p class="hint" id="contact-hint"><?= t('Your phone or your email (at least one).') ?></p>
+      <?= $err('referrer_contact') ?>
+      <div class="field">
+        <label for="referrer_phone"><?= t('Your phone') ?></label>
+        <input type="tel" id="referrer_phone" name="referrer_phone" maxlength="40" autocomplete="tel" value="<?= $old('referrer_phone') ?>" <?= isset($errors['referrer_contact']) ? 'aria-invalid="true" aria-describedby="err-referrer_contact"' : $aria('referrer_phone') ?>>
+        <?= $err('referrer_phone') ?>
+      </div>
+      <div class="field">
+        <label for="referrer_email"><?= t('Your email') ?></label>
+        <input type="email" id="referrer_email" name="referrer_email" maxlength="190" autocomplete="email" value="<?= $old('referrer_email') ?>" <?= isset($errors['referrer_contact']) ? 'aria-invalid="true" aria-describedby="err-referrer_contact"' : $aria('referrer_email') ?>>
+        <?= $err('referrer_email') ?>
+      </div>
+    </fieldset>
     <div class="field" data-role="counselor school medical agency other">
       <label for="organization"><?= t('Agency / school / practice / organization') ?> <span data-role-req="counselor school medical agency" hidden aria-hidden="true">*</span></label>
       <input type="text" id="organization" name="organization" maxlength="190" autocomplete="organization" value="<?= $old('organization') ?>"

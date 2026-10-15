@@ -104,6 +104,7 @@ struct TrackDetailView: View {
     @State private var showingExpense = false
     @State private var showingReport = false
     @State private var showingLogHours = false
+    @State private var showingVoice = false
     @State private var recordingGoal: Goal?
     /// The status Record progress opens with when it was opened by the status control.
     @State private var recordingStatus: String?
@@ -232,7 +233,7 @@ struct TrackDetailView: View {
                         // VoiceOver: the goal is one stop, read in full; Record progress is the
                         // double-tap, and every control is on the Actions rotor (a status change
                         // still asks first, as the status control does).
-                        .accessibilityElement(children: .ignore)
+                        .accessibilityElement(children: VoiceOverRows.children)
                         .accessibilityLabel(goalSummary(goal))
                         .accessibilityAction { recordingStatus = nil; recordingGoal = goal }
                         .accessibilityActions {
@@ -292,7 +293,7 @@ struct TrackDetailView: View {
                         .padding(.vertical, 2)
                         // VoiceOver: the whole note is one stop (its full text, whatever the preview
                         // shows); Edit and the preview's Show full note are on the Actions rotor.
-                        .accessibilityElement(children: .ignore)
+                        .accessibilityElement(children: VoiceOverRows.children)
                         .accessibilityLabel(noteSummary(note))
                         .accessibilityActions {
                             if note.canEdit {
@@ -348,7 +349,7 @@ struct TrackDetailView: View {
                         .padding(.vertical, 2)
                         // VoiceOver: one stop per expense; Delete (which asks first) is on the
                         // Actions rotor.
-                        .accessibilityElement(children: .ignore)
+                        .accessibilityElement(children: VoiceOverRows.children)
                         .accessibilityLabel("\(expense.amountText), \(expense.description). \(formatDate(expense.expenseDate)). \(expense.isBilled ? "On an invoice" : "Not yet billed")")
                         .accessibilityFocused($focusedExpense, equals: expense.id)
                         .accessibilityActions {
@@ -393,9 +394,21 @@ struct TrackDetailView: View {
         }
         .navigationTitle(savedTrack?.title ?? track.title)
         .toolbar {
+            // The assistant opened here knows which client and track are on screen.
+            if api.aiHas("voice") && api.can("clients") {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showingVoice = true } label: { Label("Voice assistant", systemImage: "mic.fill") }
+                        .disabled(trackClientId == nil)
+                }
+            }
             ToolbarItem(placement: .secondaryAction) {
                 Button { showingEditTrack = true } label: { Label("Edit track", systemImage: "pencil") }
             }
+        }
+        .sheet(isPresented: $showingVoice) {
+            VoiceView(context: trackClientId.map {
+                VoiceContext(clientId: $0, clientName: clientName, trackId: track.id, trackTitle: track.title)
+            })
         }
         .sheet(isPresented: $showingEditTrack, onDismiss: announceSheetResult) {
             TrackEditSheet(trackId: track.id, clientId: nil, clientName: clientName) { message, saved in

@@ -463,7 +463,8 @@ body { padding-left: env(safe-area-inset-left, 0); padding-right: env(safe-area-
 .breadcrumbs [aria-current="page"] { font-weight: 700; }
 .breadcrumb-separator { padding-inline: .25rem; }
 
-/* Main menu groups: a small heading over each group of links. */
+/* Main menu groups: a small h3 heading over each group of links (the class sets its
+   size and margins, so the heading level can change without the element rules showing). */
 .main-nav { align-items: flex-start; }
 .nav-group { display: flex; flex-direction: column; min-width: 0; }
 .nav-group-title { margin: .25rem .8rem 0; font-size: .85rem; font-weight: 700; color: inherit; line-height: 1.3; }

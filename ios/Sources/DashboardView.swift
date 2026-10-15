@@ -3,6 +3,7 @@ import SafariServices
 
 struct DashboardView: View {
     @EnvironmentObject var api: API
+    @EnvironmentObject var navigation: AppNavigation
     @State private var data: DashboardData?
     @State private var error: String?
     @State private var showingVoice = false
@@ -144,6 +145,7 @@ struct DashboardView: View {
                     // Compliance and the voice assistant read client records (the server's
                     // 'clients' permission), like the other client tools below.
                     if api.can("clients") { MoreToolLink(title: "Compliance", systemImage: "checklist") { ComplianceView() } }
+                    if api.can("clients") { MoreToolLink(title: "Documentation review", subtitle: "Notes flagged for review", systemImage: "doc.text.magnifyingglass") { DocReviewView() } }
                     if api.can("clients") { MoreToolLink(title: "Device follow-ups", systemImage: "arrow.triangle.2.circlepath") { FollowupsView() } }
                     if api.can("clients") { MoreToolLink(title: "Messages", systemImage: "bubble.left.and.bubble.right") { MessagesView() } }
                     if api.can("clients") { MoreToolLink(title: "Incidents & safety", systemImage: "exclamationmark.triangle") { IncidentsView() } }
@@ -179,6 +181,11 @@ struct DashboardView: View {
             }
             .navigationTitle(api.userName.isEmpty ? "Dashboard" : "Hi, \(api.userName.components(separatedBy: " ").first ?? "")")
             .navigationDestination(for: Int.self) { id in ClientDetailView(clientId: id) }
+            // Opened from outside the screens: a tapped reminder, or the voice assistant's "open …".
+            .navigationDestination(isPresented: Binding(get: { navigation.dashboardRoute != nil },
+                                                        set: { if !$0 { navigation.dashboardRoute = nil } })) {
+                if let route = navigation.dashboardRoute { route.screen }
+            }
             .toolbar {
                 if api.aiHas("voice") && api.can("clients") {
                     Button { showingVoice = true } label: { Label("Voice assistant", systemImage: "mic.fill") }

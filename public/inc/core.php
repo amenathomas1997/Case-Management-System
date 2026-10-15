@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.26';
+const APP_VERSION = '3.0.27';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -310,6 +310,21 @@ const EMAIL_TEMPLATES = [
     'report_cover' => ['Report email closing note', '',
         "Please confirm you received this report (one click):\n{ack}\n",
         '{ack}'],
+    // Spanish versions of the emails a client or guardian receives, with the same
+    // placeholders. email_template_for_client() sends one when the client's
+    // preferred language is Spanish and the English wording was not customised.
+    'portal_link_es' => ['Client portal invitation (Spanish)', 'Su portal de capacitación de {org_short}',
+        "Hola, {name}:\n\nEste es su enlace personal para ver sus próximas sesiones de capacitación, sus metas y sus recursos:\n\n{link}\n\nMantenga este enlace en privado: cualquier persona que lo tenga puede ver su página de capacitación. Si lo pierde, su instructor puede enviarle uno nuevo (que reemplaza a este).\n",
+        '{name} {link} {org_short} {org}'],
+    'consent_request_es' => ['Guardian consent request (Spanish)', 'Formulario de consentimiento para {client} — {org_short}',
+        "Hola, {name}:\n\n{client} fue referido/a a {org} para recibir servicios. Revise y firme el formulario de consentimiento en este enlace privado:\n\n{link}\n\nToma alrededor de un minuto. ¡Gracias!\n",
+        '{name} {client} {link} {org_short} {org}'],
+    'survey_invite_es' => ['Outcome survey invitation (Spanish)', '¿Cómo fue su capacitación con {org_short}?',
+        "Hola, {name}:\n\n¡Felicidades por completar su capacitación en tecnología de asistencia!\n\nNos gustaría conocer su opinión: tres preguntas rápidas, en menos de un minuto:\n\n{link}\n\nGracias por capacitarse con {org}.\n",
+        '{name} {link} {org_short} {org}'],
+    'session_reminder_client_es' => ['Session reminder (client, Spanish)', 'Recordatorio: su sesión de capacitación en tecnología de asistencia {day}',
+        "Hola, {name}:\n\nLe recordamos su sesión de capacitación con {org}.\n\nCuándo: {when}{where}\nInstructor: {instructor}\n\nSi necesita cambiar la fecha u hora, responda a este correo o llame a su instructor.\n\n¡Nos vemos {day}!\n",
+        '{name} {when} {where} {instructor} {org} {day} {date} {time} {location} {join_link} {portal_link} {contact}'],
 ];
 
 // The placeholder each body must keep to deliver what the email exists for
@@ -319,6 +334,7 @@ const EMAIL_TEMPLATES = [
 const EMAIL_TEMPLATE_REQUIRED = [
     'otp' => '{code}', 'vrc_code' => '{code}',
     'portal_link' => '{link}', 'consent_request' => '{link}', 'survey_invite' => '{link}',
+    'portal_link_es' => '{link}', 'consent_request_es' => '{link}', 'survey_invite_es' => '{link}',
     'report_cover' => '{ack}',
 ];
 
@@ -337,6 +353,84 @@ function email_template(string $key, array $vars): array {
         $body = str_replace('{' . $k . '}', (string)$v, $body);
     }
     return [$subject, $body];
+}
+
+/** The language a client prefers: 'es' (Spanish) or 'en'. $client is the client's
+ *  row (with preferred_language) or id. 'en' for a database without the column
+ *  (mig_3.0.27 not run yet) or an unknown client. */
+function client_lang(array|int $client): string {
+    try {
+        if (is_int($client)) {
+            $q = db()->prepare('SELECT preferred_language FROM clients WHERE id = ?');
+            $q->execute([$client]);
+            $lang = $q->fetchColumn();
+        } else {
+            $lang = $client['preferred_language'] ?? null;
+            if ($lang === null && isset($client['id'])) return client_lang((int)$client['id']);
+        }
+        return $lang === 'es' ? 'es' : 'en';
+    } catch (Throwable $e) {
+        return 'en';
+    }
+}
+
+/** Render the email a client (or their guardian) receives, in the client's language:
+ *  the Spanish template ({key}_es) when the client prefers Spanish and the
+ *  administrator has not customised the English one (a customised English wording
+ *  is theirs for every client, so it is never swapped away); otherwise the English
+ *  one. Same placeholders either way. */
+function email_template_for_client(string $key, array|int $client, array $vars): array {
+    if (client_lang($client) === 'es' && isset(EMAIL_TEMPLATES[$key . '_es'])) {
+        $customSubject = trim((string)setting('tpl_' . $key . '_subject')) !== '';
+        $customBody = trim((string)setting('tpl_' . $key . '_body')) !== '';
+        if (!$customSubject && !$customBody) return email_template($key . '_es', $vars);
+    }
+    return email_template($key, $vars);
+}
+
+/** The language of a converted referral, carried to its client: a referral sent on
+ *  the Spanish public form makes a Spanish-speaking client. For referrals.php to
+ *  call right after the client row is inserted: apply_referral_language($clientId, $ref);
+ *  Nothing happens for a database without the columns (mig_3.0.27 not run yet). */
+function apply_referral_language(int $clientId, array $ref): void {
+    if (($ref['preferred_language'] ?? 'en') !== 'es') return;
+    try {
+        db()->prepare("UPDATE clients SET preferred_language = 'es' WHERE id = ?")->execute([$clientId]);
+    } catch (Throwable $e) {
+        error_log('apply_referral_language: ' . get_class($e));
+    }
+}
+
+/** A date and time in Spanish, for Spanish emails and dialogs (an English date read
+ *  by a Spanish voice is mangled): "martes, 3 de marzo a las 2:00 p. m. CDT".
+ *  $withTime false gives the date alone: "martes, 3 de marzo". */
+function when_es(int $ts, bool $withTime = true): string {
+    $days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+    $months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    $date = $days[(int)date('w', $ts)] . ', ' . (int)date('j', $ts) . ' de ' . $months[(int)date('n', $ts) - 1];
+    return $withTime ? $date . ' a las ' . time_es($ts) : $date;
+}
+/** A time of day in Spanish with its zone: "2:00 p. m. CDT". */
+function time_es(int $ts): string {
+    return date('g:i', $ts) . (date('A', $ts) === 'AM' ? ' a. m. ' : ' p. m. ') . date('T', $ts);
+}
+
+/** The support phone an administrator set (setting support_phone), or ''. */
+function support_phone(): string {
+    return trim((string)setting('support_phone'));
+}
+/** "Call {phone} or email {email}" (HTML, the words in the page language) once an
+ *  administrator has set a support phone; '' while there is none, so each page
+ *  keeps its email-only wording. $capital false gives "call …" mid-sentence. */
+function support_contact_html(bool $capital = true): string {
+    $phone = support_phone();
+    if ($phone === '') return '';
+    $email = trim((string)(cfg('support_email') ?: cfg('mail_from')));
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $email = '';
+    $word = fn(string $s): string => function_exists('__') ? h(__($s)) : h($s);
+    $phoneHtml = '<a href="tel:' . h(preg_replace('/[^0-9+]/', '', $phone) ?: $phone) . '">' . h($phone) . '</a>';
+    return $word($capital ? 'Call' : 'call') . ' ' . $phoneHtml
+        . ($email !== '' ? ' ' . $word('or email') . ' <a href="mailto:' . h($email) . '">' . h($email) . '</a>' : '');
 }
 
 /* ---------- Trash (30-day undo for deletions) ---------- */
@@ -1036,7 +1130,9 @@ function send_outcome_survey(int $clientId): bool {
     $token = bin2hex(random_bytes(24));
     db()->prepare('INSERT INTO surveys (client_id, token) VALUES (?,?)')->execute([$clientId, $token]);
     $surveyId = (int)db()->lastInsertId();
-    [$subj, $body] = email_template('survey_invite', ['name' => $client['name'], 'link' => cfg('base_url') . '/survey.php?t=' . $token]);
+    // In the client's language; the survey page itself opens in it too (lang=).
+    $lang = client_lang($clientId);
+    [$subj, $body] = email_template_for_client('survey_invite', $clientId, ['name' => $client['name'], 'link' => cfg('base_url') . '/survey.php?t=' . $token . ($lang === 'es' ? '&lang=es' : '')]);
     if (send_app_mail($client['email'], $subj, $body)) return true;
     db()->prepare('DELETE FROM surveys WHERE id = ? AND completed_at IS NULL')->execute([$surveyId]);
     return false;
@@ -1056,7 +1152,9 @@ function create_report_ack(int $clientId, int $trackId, string $sentTo): string 
  * agency, bill-to, rates, billing period) is captured on the invoice so a
  * reprint shows what was billed, not the track as later edited.
  */
-function generate_invoice(int $trackId, ?int $userId): ?int {
+/** $until (Y-m-d, never later than today) limits the batch to work and expenses dated
+ *  on or before it; null = everything dated up to today, as before. */
+function generate_invoice(int $trackId, ?int $userId, ?string $until = null): ?int {
     $pdo = db();
     $pdo->beginTransaction();
     try {
@@ -1072,7 +1170,7 @@ function generate_invoice(int $trackId, ?int $userId): ?int {
         // is never billed: it stays unbilled until its date has come. The cutoff is
         // fixed once and bound to every statement, so the totals and the rows marked
         // billed agree even if the transaction runs across midnight.
-        $today = date('Y-m-d');
+        $today = $until !== null ? min($until, date('Y-m-d')) : date('Y-m-d');
         $s = $pdo->prepare('SELECT COALESCE(SUM(w.hours),0) h, COALESCE(SUM(w.mileage),0) m,
             COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate, t.hourly_rate), 2)),0) ha,
             COALESCE(SUM(ROUND(w.mileage * COALESCE(w.mileage_rate, t.mileage_rate), 2)),0) ma,

@@ -49,11 +49,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_cohort'])) {
         if (!$cu->fetchColumn()) $errors['coordinator_id'] = 'Choose an active staff member as the coordinator.';
     }
     if ($errors) { keep_input(); keep_field_errors($errors); redirect('programs.php'); }
+    // The same form sent twice (Enter pressed again while it loads) creates the
+    // cohort once; the second answer goes to the cohort the first created.
+    $cohortKey = web_idem_key($_POST);
+    if (($firstId = web_once_get($cohortKey)) !== null) {
+        flash('This cohort was already created (the form was sent twice), so it was saved once.', 'info');
+        redirect('programs.php?id=' . $firstId);
+    }
     db()->prepare('INSERT INTO cohorts (name, school, coordinator_id, start_date, end_date, notes) VALUES (?,?,?,?,?,?)')
         ->execute([mb_substr($name, 0, 190), mb_substr(trim($_POST['school'] ?? ''), 0, 190) ?: null,
             $coordinatorId, $start, $end,
             mb_substr(trim($_POST['notes'] ?? ''), 0, 2000) ?: null]);
+    // Capture the id before audit() inserts its own row and replaces it.
     $cid = (int)db()->lastInsertId();
+    web_once_set($cohortKey, $cid);
     audit($user['id'], 'cohort.add', 'cohort', $cid, $name);
     flash('Cohort created.');
     redirect('programs.php?id=' . $cid);
@@ -430,7 +439,7 @@ page_header($showArchived ? 'Programs (archived cohorts)' : 'Programs', $user, '
   $oldCohort = old_in('add_cohort') !== '';
   $coordPick = $oldCohort ? (int)old_in('coordinator_id') : (int)$user['id']; ?>
   <form method="post" action="programs.php" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['name' => '', 'start_date' => '', 'end_date' => '']) ?>
     <div class="grid grid-4">
       <div class="field"><label for="name">Cohort name <span aria-hidden="true">*</span><span class="visually-hidden">(required)</span></label><input type="text" id="name" name="name" required maxlength="190" placeholder="e.g. Central HS Fall 2026" value="<?= h($oldCohort ? old_in('name') : '') ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>

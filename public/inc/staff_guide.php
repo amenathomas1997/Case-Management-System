@@ -22,7 +22,9 @@ if (!function_exists('staff_guide_topics')) {
                 'guide-counselor-access' => 'How do I give a VR counselor access?',
             ]],
             'guide-notes' => ['How do I write a case note?', []],
-            'guide-training' => ['How do I set up assessments, tracks, goals and homework?', []],
+            'guide-training' => ['How do I set up assessments, tracks, goals and homework?', [
+                'guide-homework-draft' => 'How do I draft homework from a session note?',
+            ]],
             'guide-sessions' => ['How do I schedule and log a session?', [
                 'guide-log-session' => 'How do I log hours for a session?',
                 'guide-complete-session' => 'How do I complete a session?',
@@ -144,13 +146,13 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <ul>
   <li>Today
     <ul>
-      <li>Dashboard: your starting page, with caseload totals, expiring authorizations and recent activity.</li>
+      <li>Dashboard: your starting page. Its Today section lists what is due now, then caseload totals, expiring authorizations and recent activity.</li>
       <li>Task list: to-do items with an owner and a due date.</li>
       <li>Daily work &amp; review: what needs attention today, plus documentation review, AI briefings, homework support and the referral waitlist.</li>
     </ul></li>
   <li>Clients
     <ul>
-      <li>Client records: find a person and open their notes, assessments, training tracks and documents.</li>
+      <li>Client records: find a person and open their notes, assessments, training tracks and documents. The Caseload filter starts on My clients when your account sees only your own caseload, and remembers your last choice.</li>
       <li>Incoming referrals: new requests for services. Review, assign or turn them into client records.</li>
       <li>Intake progress: where each new client is in intake, so stalled work is easy to spot.</li>
       <li>Client portal requests: appointment and help requests that clients sent from their portal.</li>
@@ -174,7 +176,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
     <ul>
       <li>Invoices: bill unbilled work, track submitted invoices and record payments.</li>
       <li>Grants &amp; contracts: funding agreements, budgets, deliverables and spending.</li>
-      <li>Authorizations &amp; compliance: authorizations at risk, reports due and consents to renew.</li>
+      <li>Authorizations &amp; compliance: authorizations at risk, reports due, consents to renew, device follow-ups due and overdue equipment loans.</li>
       <li>Incident reports: record an incident and follow it to closure.</li>
       <li>Business analytics: charts and every report, such as outcomes, funders, billing, RSA-911 and utilization.</li>
     </ul></li>
@@ -184,6 +186,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
       <li>AI tools: AI drafting helpers. Always check their work before you save it.</li>
       <li>User guide: this page.</li>
       <li>My Account: your password, sign-in security, display settings and calendar feed.</li>
+      <li>Administration (administrators only): team, permissions, sign-in, forms, email, data retention and AI settings.</li>
     </ul></li>
 </ul>
 <p>After the six groups come three more items: Notifications (with the number unread), the Site search box and the Sign out button. Save your work before you sign out.</p>
@@ -215,7 +218,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Services: 5 Session schedule · G Group programs · H Assistive technology services · O Goal &amp; assessment templates</li>
   <li>Equipment: 7 Equipment &amp; loans · B Device purchases · V Device follow-ups</li>
   <li>Billing, compliance &amp; reports: 8 Invoices · K Grants &amp; contracts · P Authorizations &amp; compliance · J Incident reports · Y Business analytics</li>
-  <li>Help &amp; account: W Staff knowledge base · X AI tools · U User guide · A My Account · 9 Notifications</li>
+  <li>Help &amp; account: W Staff knowledge base · X AI tools · U User guide · A My Account · Z Administration · 9 Notifications</li>
   <li>Getting around: 0 Go to main menu · M Skip to main content · S Site search</li>
   <li>N opens the page's add form: Add a task, Schedule a session, Add a note, Loan an item out, Report an incident, New contract, New device request, or the Add form in a template library.</li>
   <li>T, on a training track, moves to the Log a session form.</li>
@@ -262,8 +265,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <p>Site search needs access to Client records. Some pages have their own search or filters, such as the equipment inventory and the task list. A filter only hides rows. Clear it to see everything again.</p>
 
 <?= $sgH(3, 'guide-day') ?>
+<p>Dashboard is the one page to start the day on. Its first section is called Today. Press H to reach it. Each item is a link with a count: overdue tasks, tasks due today, today's sessions (each session is its own link to its row on the schedule), unread messages, device follow-ups due and new client portal requests. You only see the items your permissions cover. If nothing is due, the section says Nothing due today. Caseload at a glance and the other sections follow.</p>
 <ol>
-  <li>Open Dashboard. Check your tasks and any authorizations about to expire.</li>
+  <li>Open Dashboard. Work through the Today section, then check your tasks and any authorizations about to expire.</li>
   <li>Open Daily work &amp; review. The Daily action center opens first.</li>
   <li>Read the summary line. It gives the number of items in each group.</li>
   <li>Press H to move through the groups: Overdue, Due today, This week, Later and No date.</li>
@@ -354,8 +358,16 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <p>A track page starts with On this page links: Service authorization, Log a session, Case notes, SMART goals, Homework and Billable expenses. Billing and statements is collapsed near the top. It holds the billing exports and statements.</p>
 <p>Homework support (in Daily work &amp; review) shows a client's practice updates. If AI is turned on, Draft homework adaptations for review suggests changes. Nothing changes until you save the assignment yourself. A practice update is evidence to review. It does not complete a goal.</p>
 
+<?= $sgH(4, 'guide-homework-draft') ?>
+<p>If AI is turned on, a case note on a track can be turned into a homework draft: a title, numbered practice steps for the learner, and a suggested due date, based on what the note says was taught and practised.</p>
+<ol>
+  <li>On the track page, under Case notes, find the note and choose Draft homework from this note. After you log a session with a session note, the same button, Draft homework from this session note, appears under Log a session. In Homework support, choose a client and use Draft homework from the latest session note beside a track.</li>
+  <li>The page reloads with the Assign homework form filled in and a message that starts “Draft from the note”. Read the title, instructions and due date, and change anything that is wrong or missing.</li>
+  <li>Choose Assign. Nothing is saved until you do.</li>
+</ol>
+
 <?= $sgH(3, 'guide-sessions') ?>
-<p>Scheduling a session is a plan. Logging hours records the work you did. A case note is separate again. Completed work needs hours and a note.</p>
+<p>Scheduling a session is a plan. Logging hours records the work you did. A case note records what happened. Completed work needs hours and a note, and both forms let you write the note in the same place as the hours: they are saved together.</p>
 <ol>
   <li>Open Session schedule.</li>
   <li>Open the collapsed Schedule a session form.</li>
@@ -376,19 +388,21 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>If you like, choose the goal this session advanced.</li>
   <li>Enter hours worked. Use quarter hours, such as 1.5.</li>
   <li>Enter mileage, if any, and an activity description.</li>
-  <li>Choose Log hours.</li>
+  <li>To write the session note at the same time, type it in Session note. It is saved as a free-text case note on the track, with the subject "Session on" and the date, unless you enter a subject. Leave it blank to log the hours only.</li>
+  <li>Choose Log hours. The confirmation says the hours were logged and the session note saved.</li>
 </ol>
-<p>If the date is outside the authorization, you get an error. Tick Log it anyway only if the authorization is being renewed or amended. Do not log hours here for a session you will complete on the schedule. That would log them twice. Billable expenses use Log an expense, further down the track.</p>
+<p>The hours and the note are saved together: if either is refused, nothing is saved and what you typed stays in the form. For a structured note (BIRP, PAIP or SOAP), or a note on its own, use Add a note under Case notes for this track. If the date is outside the authorization, you get an error. Tick Log it anyway only if the authorization is being renewed or amended. Do not log hours here for a session you will complete on the schedule. That would log them twice. Billable expenses use Log an expense, further down the track.</p>
 
 <?= $sgH(4, 'guide-complete-session') ?>
 <ol>
   <li>Open Session schedule.</li>
   <li>Press H to find Ended sessions awaiting an outcome.</li>
   <li>In the session's row, choose an outcome: Completed, Cancelled or No Show.</li>
-  <li>Choose Save, then confirm.</li>
-  <li>Choose Write the session note in the confirmation, and write the note.</li>
+  <li>To write the session note at the same time, open Add the session note now in the same row and type the note. It is shown only for a session linked to a track, and it is saved only with Completed.</li>
+  <li>Choose Save, then confirm. The confirmation says what was logged and that the note was saved.</li>
+  <li>If you did not write the note in the row, choose Write the session note in the confirmation, and write it on the track.</li>
 </ol>
-<p>Completing a session that is linked to a track logs its hours. If hours for that day are already logged, choose “Completed — hours already logged” instead. Choose “Completed — log hours as well” only for a separate visit. If someone else cancels your session or records a No Show, you are told.</p>
+<p>Completing a session that is linked to a track logs its hours, and saves the note you typed in the same step: if the completion is refused, the note is not saved either, and stays in the row. If hours for that day are already logged, choose “Completed — hours already logged” instead. Choose “Completed — log hours as well” only for a separate visit. If someone else cancels your session or records a No Show, you are told.</p>
 
 <?= $sgH(4, 'guide-groups') ?>
 <ol>
@@ -581,6 +595,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 
 <?= $sgH(3, 'guide-ai') ?>
 <p>AI tools in the menu holds the general tools: Accessible content &amp; remediation, Knowledge-base assistant, Ask your caseload, On-demand translation, Curriculum generator and Outcome risk flags. Other AI buttons sit next to notes, assessments, homework and briefings.</p>
+<p>The Curriculum generator drafts a lesson plan: for each lesson, its objectives, numbered Steps to complete the task that name the keystrokes or gestures the learner uses, and How you know it's done. The objectives become the curriculum's skills; the steps stay in the plan text, which you can download.</p>
 <ol>
   <li>Choose the tool for the job.</li>
   <li>Check the client and source material are right.</li>
@@ -652,7 +667,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 </ul>
 
 <?= $sgH(3, 'guide-account') ?>
-<p>Open My Account. Press H to move between its sections:</p>
+<p>Open My Account. It holds only your own settings. Administrators also find an Administration link near the top; agency-wide settings are there (see <a href="#guide-admin">Administration</a>). Press H to move between the sections:</p>
 <ul>
   <li>Display and accessibility settings: choose Show controls or Hide controls for the low-vision controls, then Save display settings. This follows your account. Your display choices stay in place when the controls are hidden.</li>
   <li>Microsoft sign-in: link your Microsoft account, if your agency uses it.</li>
@@ -664,11 +679,19 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <p>To change how pages look, choose Show display options under the Low-vision controls heading. You can pick colors, such as White on black or Yellow on black. Text size and reading options has text size up to 200%, more spacing, narrow width, highlighted links, reduced motion and dropdowns as lists. Reset display brings back the defaults. These choices are saved in this browser.</p>
 
 <?= $sgH(3, 'guide-admin') ?>
-<p>These tasks are for administrators. My Account shows them as extra sections: Team, Permission groups, Sign-in &amp; federation and Housekeeping. Check the user or setting carefully before you save. A link in this guide does not give anyone extra access.</p>
+<p>These tasks are for administrators. Open Administration from the Help &amp; account menu group (quick key Z) or from the link at the top of My Account. The page starts with a list of links to its five sections. Press H to move between them:</p>
+<ul>
+  <li>People &amp; permissions: add a team member, change a member's permission group or weekly hours, see the permission groups and create a group. User management is linked here for everything else.</li>
+  <li>Sign-in &amp; security: Microsoft Entra ID federation, and Check for updates.</li>
+  <li>Forms &amp; email: Referral form settings, Email templates, Counselor portal access, and the Support phone number. The phone number is shown to clients, families and referrers on the public pages as the number to call for help. Leave it blank to show none.</li>
+  <li>Data: Trash, Audit log, Merge duplicate clients, Archived clients, the Annual outcome report and Record retention.</li>
+  <li>AI: the AI assistant settings.</li>
+</ul>
+<p>Check the user or setting carefully before you save. A link in this guide does not give anyone extra access.</p>
 
 <?= $sgH(4, 'guide-audit') ?>
 <ol>
-  <li>In My Account, under Team, choose View audit log.</li>
+  <li>Open Administration. Under Data, choose Audit log.</li>
   <li>The log opens on the last 7 days.</li>
   <li>Filter by team member, action, client record, from date or to date.</li>
   <li>Clear the From date to see every date. Choose Reset filters to the last 7 days to start again.</li>
@@ -681,13 +704,13 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 
 <?= $sgH(4, 'guide-trash') ?>
 <ol>
-  <li>Open My Account and find Housekeeping.</li>
+  <li>Open Administration and find Data.</li>
   <li>Choose Trash (restore deleted items).</li>
   <li>Find the item and restore it.</li>
 </ol>
 
 <?= $sgH(4, 'guide-users') ?>
-<p>The Team section of My Account handles quick changes to groups and hours. For everything else, choose User management (edit / recover / delete) under Housekeeping. There you can edit details, reset passwords, recover two-step sign-in, move a caseload and deactivate a user.</p>
+<p>People &amp; permissions, on the Administration page, handles adding a team member and quick changes to groups and hours. For everything else, choose User management there. On that page you can edit details, reset passwords, recover two-step sign-in, move a caseload and deactivate a user.</p>
 
 <?= $sgH(3, 'guide-privacy') ?>
 <p>Open only the records you need for your work. Never share portal, consent or calendar links, and keep client details out of ordinary email. The <a href="privacy.php">privacy notice</a> explains what we keep, who we share it with and the choices clients have.</p>

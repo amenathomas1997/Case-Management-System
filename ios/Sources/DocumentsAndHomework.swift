@@ -269,7 +269,7 @@ struct HomeworkSection: View {
                 // One VoiceOver stop per item: its details read in order, and Edit and Mark
                 // completed in the Actions rotor (the same code as the visible buttons, so
                 // Mark completed still asks first).
-                .accessibilityElement(children: .ignore)
+                .accessibilityElement(children: VoiceOverRows.children)
                 .accessibilityLabel(homeworkSpoken(item))
                 .accessibilityFocused($focusedStatus, equals: item.id)
                 .accessibilityActions {

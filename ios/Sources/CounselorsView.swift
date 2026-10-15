@@ -130,7 +130,7 @@ struct CounselorsView: View {
                     .padding(.vertical, 4)
                     // One VoiceOver stop per counselor: the details read in order, and the
                     // link buttons in the Actions rotor (the same code, so each still asks first).
-                    .accessibilityElement(children: .ignore)
+                    .accessibilityElement(children: VoiceOverRows.children)
                     .accessibilityLabel(counselorSpoken(counselor))
                     .accessibilityActions {
                         Button(counselor.portalActive ? "Resend / reset link" : (counselor.portalExpired ? "Send a new link" : "Send portal link")) {

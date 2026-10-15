@@ -120,7 +120,7 @@ struct ContractDetail: View {
                             }
                             // VoiceOver: one stop per deliverable (title, due date, status); each
                             // other status from the menu is a "Mark …" action on the Actions rotor.
-                            .accessibilityElement(children: .ignore)
+                            .accessibilityElement(children: VoiceOverRows.children)
                             .accessibilityLabel([del.title, del.dueDate.map { "due \(formatDate($0))" }, "Status: \(del.status)"]
                                 .compactMap { $0 }.joined(separator: ", "))
                             .accessibilityActions {

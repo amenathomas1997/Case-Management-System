@@ -47,9 +47,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_task'])) {
             $au->execute([$assignee]);
             if (!$au->fetchColumn()) { keep_input(); keep_field_errors(['assigned_to' => 'Choose an active staff member to assign the task to.']); redirect('tasks.php#add-h'); }
         }
+        // The same form sent twice (Enter pressed again while it loads) adds the
+        // task once; the second answer is the confirmation of the first.
+        $taskKey = web_idem_key($_POST);
+        if (web_once_get($taskKey) !== null) {
+            flash('This task was already added (the form was sent twice), so it was saved once.', 'info');
+            redirect($returnUrl);
+        }
         $saved = add_task($title, trim($_POST['details'] ?? '') ?: null, $clientId, null,
             $due, $assignee, (int)$user['id']);
         if ($saved) {
+            // Capture the id before audit() inserts its own row and replaces it.
+            web_once_set($taskKey, (int)db()->lastInsertId());
             audit($user['id'], 'task.add', 'task', null, $title);
             flash('Task added.');
         } else {
@@ -153,7 +162,7 @@ $addOpen = array_intersect_key(form_errors(), ['title' => 1, 'due_date' => 1]) |
   <details id="add-task"<?= $addOpen ? ' open' : '' ?>>
   <summary accesskey="n" id="add-h">Add a task</summary>
   <form method="post" action="tasks.php" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <input type="hidden" name="show" value="<?= h($show) ?>">
     <input type="hidden" name="q" value="<?= h($filters['q']) ?>">
     <input type="hidden" name="due" value="<?= h($filters['due']) ?>">

@@ -52,6 +52,12 @@ final class SpeechController: NSObject, ObservableObject {
     @Published var openClientId: Int?
     @Published var openClientName: String?
     @Published var searchQuery: String?
+    /// Set when a reply wants to open a section the app has a screen for (user taps to go).
+    @Published var openSection: VoiceSection?
+    /// The client (and track) on the screen the assistant was opened from, so "her latest
+    /// note" means that client. Sent with every request and told to the interpreter as the
+    /// first turn of the conversation.
+    private(set) var context: VoiceContext?
     /// A write is waiting for yes or no (the Accept / Decline buttons are shown).
     @Published private(set) var awaitingAnswer = false
     /// The waiting write is the retry of one whose reply was lost.
@@ -63,6 +69,8 @@ final class SpeechController: NSObject, ObservableObject {
     /// With VoiceOver on, replies go through VoiceOver (so they also reach a braille display)
     /// instead of the assistant's own voice.
     nonisolated static let viaVoiceOverKey = "voiceRepliesViaVoiceOver"
+    /// The microphone opens by itself when the assistant's screen opens (on unless turned off).
+    nonisolated static let autoListenKey = "voiceAutoListen"
     private var pauseSeconds: Double {
         (UserDefaults.standard.object(forKey: Self.pauseKey) as? Double) ?? 1.8
     }
@@ -187,7 +195,14 @@ final class SpeechController: NSObject, ObservableObject {
             }
     }
 
-    func attach(_ api: API) { self.api = api }
+    func attach(_ api: API, context: VoiceContext? = nil) {
+        self.api = api
+        guard let context, self.context == nil else { return }
+        self.context = context
+        // Said once, as the person's own first words, so the interpreter resolves "her",
+        // "this client" and "this track" to what is on screen.
+        remember(role: "user", text: context.spoken)
+    }
 
     // MARK: - Permissions
 
@@ -612,6 +627,7 @@ final class SpeechController: NSObject, ObservableObject {
     private func interpret(_ text: String, gen: Int) async {
         do {
             var body: [String: Any] = ["transcript": text]
+            if let context { body["context"] = context.params }
             // handle() has just remembered this request, which goes as the transcript: the
             // history is the turns before it.
             let earlier = history.dropLast()
@@ -698,8 +714,8 @@ final class SpeechController: NSObject, ObservableObject {
     private func dispatch(_ r: [String: Any]) {
         let action = (r["action"] as? String) ?? "answer"
         let speak = (r["speak"] as? String) ?? "Okay."
-        // Links offered by an earlier turn go: only this reply's client or search is offered.
-        openClientId = nil; openClientName = nil; searchQuery = nil
+        // Links offered by an earlier turn go: only this reply's client, search or section is offered.
+        openClientId = nil; openClientName = nil; searchQuery = nil; openSection = nil
 
         switch action {
         case "confirm":
@@ -727,7 +743,14 @@ final class SpeechController: NSObject, ObservableObject {
                 searchQuery = q
                 respond(action: action, speak: speak)
             } else if let section = r["section"] as? String, !section.isEmpty {
-                respond(action: "answer", speak: "I can't open \(section) from the assistant. Tap Done, then find it in the app's tabs, under More tools on the Dashboard, or on the website.")
+                // A section the app has a screen for is offered below the conversation, as a
+                // client record is; one it does not have is on the website.
+                if let screen = VoiceSection.from(section) {
+                    openSection = screen
+                    respond(action: action, speak: "To go to \(screen.title), tap Open \(screen.title), below the conversation.")
+                } else {
+                    respond(action: "answer", speak: "I can't open \(section) from the assistant: that page is on the website. Tap Done, then find it under More tools on the Dashboard, or on the website.")
+                }
             } else {
                 respond(action: action, speak: speak)
             }
@@ -858,17 +881,86 @@ struct VoiceTurn: Identifiable {
     let text: String
 }
 
+/// The record the assistant was opened from (a client screen, or one of their tracks).
+struct VoiceContext: Equatable {
+    let clientId: Int
+    let clientName: String
+    var trackId: Int? = nil
+    var trackTitle: String? = nil
+
+    /// Sent with each request (`context`), for a server that reads it.
+    var params: [String: Any] {
+        var p: [String: Any] = ["client_id": clientId, "client_name": clientName]
+        if let trackId { p["track_id"] = trackId }
+        if let trackTitle { p["track_title"] = trackTitle }
+        return p
+    }
+
+    /// Told to the interpreter as the person's first words.
+    var spoken: String {
+        var text = "I'm looking at \(clientName)'s record"
+        if let trackTitle, !trackTitle.isEmpty { text += ", on the training track \(trackTitle)" }
+        return text + "."
+    }
+}
+
+/// A website section the server's "navigate" names that the app has a screen of its own for.
+enum VoiceSection: Equatable {
+    case tab(AppNavigation.Tab)
+    case dashboard(AppNavigation.DashboardRoute)
+
+    /// The server's section name (voice_sections in inc/voice.php), or nil for one the app lacks.
+    static func from(_ section: String) -> VoiceSection? {
+        switch section.lowercased().trimmingCharacters(in: .whitespaces) {
+        case "dashboard": return .tab(.dashboard)
+        case "clients": return .tab(.clients)
+        case "referrals": return .tab(.referrals)
+        case "schedule": return .tab(.schedule)
+        case "equipment": return .tab(.equipment)
+        case "follow-ups", "followups", "device follow-ups": return .dashboard(.followups)
+        case "messages": return .dashboard(.messages)
+        case "tasks": return .dashboard(.tasks)
+        default: return nil
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .tab(.dashboard): return "Dashboard"
+        case .tab(.clients): return "Clients"
+        case .tab(.referrals): return "Referrals"
+        case .tab(.schedule): return "Schedule"
+        case .tab(.equipment): return "Equipment"
+        case .dashboard(.followups): return "Device follow-ups"
+        case .dashboard(.messages): return "Messages"
+        case .dashboard(.tasks): return "Tasks"
+        case .dashboard(.docReview): return "Documentation review"
+        }
+    }
+
+    var destination: AppNavigation.Destination {
+        switch self {
+        case .tab(let tab): return .tab(tab)
+        case .dashboard(let route): return .dashboard(route)
+        }
+    }
+}
+
 // MARK: - UI
 
 struct VoiceView: View {
     @EnvironmentObject var api: API
+    @EnvironmentObject var navigation: AppNavigation
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The client (and track) on the screen this was opened from, if any.
+    var context: VoiceContext? = nil
     @StateObject private var ctrl = SpeechController()
     @State private var started = false
     @State private var typed = ""
     @AppStorage(SpeechController.pauseKey) private var pauseSeconds: Double = 1.8
     @AppStorage(SpeechController.viaVoiceOverKey) private var repliesViaVoiceOver = true
+    @AppStorage(SpeechController.autoListenKey) private var autoListen = true
 
     var body: some View {
         NavigationStack {
@@ -890,7 +982,8 @@ struct VoiceView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
                             if ctrl.log.isEmpty {
-                                Text("Tap the microphone and speak, or type below. Try: “What’s my next appointment?”, “Read me Jane’s latest note”, “Log 2 hours for Jane, screen-reader training”, or “What can you do?”")
+                                Text(context.map { "Asking about \($0.clientName)\($0.trackTitle.map { ", \($0)" } ?? ""). " } ?? ""
+                                     + "Tap the microphone and speak, or type below. Try: “What’s my next appointment?”, “Read me Jane’s latest note”, “Log 2 hours for Jane, screen-reader training”, or “What can you do?”")
                                     .font(.callout).foregroundStyle(Color.secondaryText).padding(.top, 8)
                             }
                             ForEach(ctrl.log) { turn in
@@ -914,6 +1007,19 @@ struct VoiceView: View {
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.large)
+                            }
+                            // A section the app has a screen for: this sheet closes and the app goes there.
+                            if let section = ctrl.openSection {
+                                Button {
+                                    ctrl.cancelAll()
+                                    navigation.request(section.destination)
+                                    dismiss()
+                                } label: {
+                                    Label("Open \(section.title)", systemImage: "arrow.right.circle")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+                                .accessibilityHint("Closes the assistant and opens that screen.")
                             }
                             Color.clear.frame(height: 1).id("bottom")
                         }
@@ -943,8 +1049,18 @@ struct VoiceView: View {
                 }
             }
             .task {
-                ctrl.attach(api)
-                if !started { started = true; _ = await ctrl.requestAccess() }
+                ctrl.attach(api, context: context)
+                if !started {
+                    started = true
+                    let allowed = await ctrl.requestAccess()
+                    // Start listening when opened (Account settings): the microphone opens by
+                    // itself, once VoiceOver has read the title, so a tap is not needed first.
+                    if allowed && autoListen && ctrl.phase == .idle {
+                        // Longer with VoiceOver, so its reading of the title is not heard as the request.
+                        try? await Task.sleep(nanoseconds: UIAccessibility.isVoiceOverRunning ? 2_000_000_000 : 800_000_000)
+                        if ctrl.phase == .idle { ctrl.startListening() }
+                    }
+                }
             }
             .onDisappear { ctrl.cancelAll() }
             // The tabs (and this sheet) now stay alive behind the app lock, so the microphone
@@ -1105,6 +1221,8 @@ struct VoiceView: View {
                 .accessibilityHint("How long a pause in speech sends what was heard.")
                 Toggle("Read replies with VoiceOver", isOn: $repliesViaVoiceOver)
                     .accessibilityHint("When VoiceOver is on, replies are read by VoiceOver and shown on a braille display instead of in the assistant's own voice.")
+                Toggle("Start listening when opened", isOn: $autoListen)
+                    .accessibilityHint("The microphone opens by itself when the assistant opens.")
             }
         }
         .padding(.horizontal)
