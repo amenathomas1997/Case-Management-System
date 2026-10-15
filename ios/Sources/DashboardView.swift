@@ -7,12 +7,24 @@ struct DashboardView: View {
     @State private var data: DashboardData?
     @State private var error: String?
     @State private var showingVoice = false
+    /// Log hours, opened by the "Log hours" Siri shortcut (AppNavigation.quickAction).
+    @State private var showingLogHours = false
     /// Offline entries is on screen: its link stays while it is, or emptying the queue (Retry
     /// now, Discard, or a background sync) would remove the link and pop the screen mid-status.
     @State private var offlineEntriesOpen = false
     /// Unread alerts (the website's Alerts count); nil until known.
     @State private var unreadAlerts: Int?
     @State private var webPage: WebPage?
+
+    private func openQuickAction() {
+        guard let action = navigation.quickAction else { return }
+        navigation.quickAction = nil
+        webPage = nil
+        switch action {
+        case .logHours: showingVoice = false; showingLogHours = true
+        case .voice: showingLogHours = false; showingVoice = true
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -206,12 +218,16 @@ struct DashboardView: View {
                 }
             }
             .sheet(isPresented: $showingVoice) { VoiceView() }
+            .sheet(isPresented: $showingLogHours) { LogHoursView() }
             .sheet(item: $webPage) { page in
                 InAppWebView(url: page.url) { webPage = nil }.ignoresSafeArea()
             }
             .refreshable { await load() }
             .task { await load() }
-            .onAppear { Task { await loadAlertCount() } }
+            .onAppear { Task { await loadAlertCount() }; openQuickAction() }
+            // A Siri shortcut ("Log hours in…", "Open the voice assistant in…"): AppNavigation
+            // has already checked the permission, so the sheet opens as the button would.
+            .onChange(of: navigation.quickAction) { _ in openQuickAction() }
         }
     }
 

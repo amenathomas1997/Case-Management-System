@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.27';
+const APP_VERSION = '3.0.28';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -601,6 +601,21 @@ function send_app_mail(string $to, string $subject, string $body): bool {
     if (!filter_var($to, FILTER_VALIDATE_EMAIL)) {
         error_log('send_app_mail refused a recipient that is not one valid email address.');
         return false;
+    }
+    // A staging copy (dist/make_staging.sh) sets $CONFIG['mail_disabled']: nothing
+    // leaves the server. Each message is kept as a file in $CONFIG['mail_sink'] (a
+    // private directory) so a tester can read a sign-in code there, and the caller is
+    // told it was sent so the page behaves as in production.
+    global $CONFIG;
+    if (!empty($CONFIG['mail_disabled'])) {
+        $sink = (string)($CONFIG['mail_sink'] ?? '');
+        if ($sink !== '' && is_dir($sink) && is_writable($sink)) {
+            @file_put_contents($sink . '/' . date('Ymd-His') . '-' . bin2hex(random_bytes(4)) . '.txt',
+                "To: {$to}\nSubject: {$subject}\nDate: " . date('c') . "\n\n{$body}\n");
+        } else {
+            error_log('send_app_mail: mail is disabled on this copy (mail_disabled); message to a recipient not sent.');
+        }
+        return true;
     }
     // Preferred path: Microsoft Graph (cmswebnotifications mailbox)
     if (graph_cfg() !== null) {

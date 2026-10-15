@@ -1,6 +1,7 @@
 import SwiftUI
 import LocalAuthentication
 import SafariServices
+import WidgetKit
 
 @main
 struct CaseManagementApp: App {
@@ -52,16 +53,22 @@ final class AppNavigation: ObservableObject {
         }
     }
 
+    /// A sheet a Siri shortcut (AppIntents.swift) asks the Dashboard to open.
+    enum QuickAction: Hashable { case logHours, voice }
+
     /// Somewhere the app can go by itself.
     enum Destination: Hashable {
         case tab(Tab)
         case dashboard(DashboardRoute)
+        case quick(QuickAction)
         static let schedule = Destination.tab(.schedule)
         static let followups = Destination.dashboard(.followups)
     }
 
     @Published var tab: Tab = .dashboard
     @Published var dashboardRoute: DashboardRoute?
+    /// A sheet the Dashboard should present now (it sets this back to nil once it has).
+    @Published var quickAction: QuickAction?
     /// Waiting for MainTabs (see `apply`).
     @Published private(set) var pending: Destination?
 
@@ -86,6 +93,15 @@ final class AppNavigation: ObservableObject {
             guard api.can("clients") else { return }
             tab = .dashboard
             dashboardRoute = route
+        case .quick(let action):
+            // The same permissions as the Dashboard's own buttons for these.
+            switch action {
+            case .logHours: guard api.can("clients") else { return }
+            case .voice: guard api.aiHas("voice"), api.can("clients") else { return }
+            }
+            tab = .dashboard
+            dashboardRoute = nil
+            quickAction = action
         }
     }
 }
@@ -117,11 +133,20 @@ struct RootView: View {
             // shown again here, since onChange below does not fire for a value already set.
             if api.reauthRequired { reauth.show(api) }
         }
-        .onChange(of: api.isSignedIn) { lock.signedInChanged($0) }
+        .onChange(of: api.isSignedIn) { signedIn in
+            lock.signedInChanged(signedIn)
+            // Signed out: the home-screen widget's day summary goes with the account.
+            if !signedIn { TodaySnapshot.clear(); WidgetCenter.shared.reloadTimelines(ofKind: TodaySnapshot.widgetKind) }
+        }
         // Website pages opened inside the app (Action center) keep their own cookies: they go
         // whenever the account changes or signs out, so the next person is not signed in to the
         // website as the last one.
-        .onChange(of: api.userId) { _ in SFSafariViewController.DataStore.default.clearWebsiteData() }
+        .onChange(of: api.userId) { _ in
+            SFSafariViewController.DataStore.default.clearWebsiteData()
+            // Another account's day is not this one's: the widget waits for this account's schedule.
+            TodaySnapshot.clear()
+            WidgetCenter.shared.reloadTimelines(ofKind: TodaySnapshot.widgetKind)
+        }
         // An expired session asks for sign-in above everything that is open, instead of
         // replacing it, so nothing typed is lost (see API.expireSession).
         .onChange(of: api.reauthRequired) { needed in

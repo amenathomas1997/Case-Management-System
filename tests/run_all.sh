@@ -19,6 +19,7 @@ run php tests/accessibility.php
 run php tests/breadcrumbs.php
 run python3 tests/cron_regression.py
 run python3 tests/installer_gate.py
+if [ -n "${CMS_TEST_DSN:-}" ]; then CMS_TEST_DSN="$(printf %s "$CMS_TEST_DSN" | sed -E "s/dbname=[^;]+/dbname=cms_installer_e2e/")" run bash tests/installer_e2e.sh; else echo "== SKIPPED tests/installer_e2e.sh (set CMS_TEST_DSN to run the installer end to end)"; fi
 if command -v swiftc >/dev/null 2>&1; then
   run python3 tests/ios_api_regression.py
 else

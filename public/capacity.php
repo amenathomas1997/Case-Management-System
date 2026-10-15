@@ -52,6 +52,40 @@ $tq = db()->prepare("SELECT t.id, t.title, t.authorized_hours, c.name AS client_
 $tq->execute($scoped ? [(int)$user['id']] : []);
 $tracks = $tq->fetchAll();
 
+// Authorized hours versus hours left, by instructor, for the chosen period: the
+// hours authorized on the active tracks of the clients assigned to each instructor,
+// what was logged on them in the period, what is left on those authorizations, the
+// sessions still ahead in the period, and the instructor's available hours (weekly
+// hours × the weeks in the period), so an overload is visible before it happens.
+// A caseload-scoped user sees only their own row.
+$periodDays = (int)round((strtotime($period['to']) - strtotime($period['from'])) / 86400) + 1;
+$periodWeeks = $periodDays / 7;
+$loadStaff = $scoped ? array_values(array_filter($staff, fn($s) => (int)$s['id'] === (int)$user['id'])) : $staff;
+$authQ = db()->prepare("SELECT COALESCE(SUM(t.authorized_hours),0) AS authorized,
+        COALESCE(SUM(wa.h),0) AS worked_all, COALESCE(SUM(wp.h),0) AS worked_period
+    FROM training_tracks t JOIN clients c ON c.id = t.client_id
+    LEFT JOIN (SELECT track_id, SUM(hours) h FROM work_logs GROUP BY track_id) wa ON wa.track_id = t.id
+    LEFT JOIN (SELECT track_id, SUM(hours) h FROM work_logs WHERE work_date BETWEEN ? AND ? GROUP BY track_id) wp ON wp.track_id = t.id
+    WHERE c.assigned_to = ? AND t.status = 'Active' AND c.archived_at IS NULL");
+// Sessions still ahead: one sitting per group session, as the weekly table counts them.
+$aheadQ = db()->prepare("SELECT COALESCE(SUM(mins),0) / 60 FROM (
+        SELECT MAX(TIMESTAMPDIFF(MINUTE, start_at, end_at)) AS mins FROM {$rs} scheduled_sessions
+        WHERE user_id = ? AND status = 'Scheduled' AND start_at >= NOW() AND DATE(start_at) BETWEEN ? AND ?
+        GROUP BY start_at, COALESCE(group_uid, CONCAT('s', id))
+    ) x");
+$load = [];
+foreach ($loadStaff as $s) {
+    $authQ->execute([$period['from'], $period['to'], (int)$s['id']]);
+    $a = $authQ->fetch();
+    $aheadQ->execute([(int)$s['id'], $period['from'], $period['to']]);
+    $ahead = (float)$aheadQ->fetchColumn();
+    $available = round((float)$s['weekly_hours'] * $periodWeeks, 1);
+    $committed = (float)$a['worked_period'] + $ahead;
+    $load[] = ['name' => $s['name'], 'authorized' => (float)$a['authorized'], 'logged' => (float)$a['worked_period'],
+        'remaining' => max(0.0, (float)$a['authorized'] - (float)$a['worked_all']), 'ahead' => $ahead,
+        'available' => $available, 'weekly' => (float)$s['weekly_hours'], 'diff' => round($available - $committed, 1)];
+}
+
 page_header('Capacity', $user, 'schedule');
 ?>
 <p><a href="schedule.php"><span aria-hidden="true">&larr; </span>Back to schedule</a></p>
@@ -115,5 +149,40 @@ page_header('Capacity', $user, 'schedule');
   </table>
   </div>
   <p class="hint">"Unscheduled" hours are authorized and billable but have no session on the calendar yet — schedule them before the authorization expires.</p>
+</section>
+<section class="card" aria-labelledby="load-h">
+  <h2 id="load-h">Authorized hours versus hours left, by instructor and month</h2>
+  <p>For <?= h(fmt_date($period['from'])) ?> to <?= h(fmt_date($period['to'])) ?> (<?= h(rtrim(rtrim(number_format($periodWeeks, 1), '0'), '.')) ?> week<?= abs($periodWeeks - 1.0) < 0.05 ? '' : 's' ?>).<?= $scoped ? ' Only your own row is shown.' : '' ?></p>
+  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="load-cap">
+  <table>
+    <caption id="load-cap">Authorized, logged, remaining, scheduled and available hours for each instructor in the chosen period</caption>
+    <thead><tr><th scope="col">Instructor</th><th scope="col" class="num">Authorized on active tracks</th>
+      <th scope="col" class="num">Logged in period</th><th scope="col" class="num">Remaining on authorizations</th>
+      <th scope="col" class="num">Scheduled ahead in period</th><th scope="col" class="num">Available in period</th></tr></thead>
+    <tbody>
+    <?php if (!$load): ?><tr><td colspan="6" class="muted">No active instructors.</td></tr><?php endif; ?>
+    <?php foreach ($load as $l): ?>
+      <tr>
+        <th scope="row"><?= h($l['name']) ?></th>
+        <td class="num"><?= number_format($l['authorized'], 1) ?></td>
+        <td class="num"><?= number_format($l['logged'], 1) ?></td>
+        <td class="num"><?= number_format($l['remaining'], 1) ?></td>
+        <td class="num"><?= number_format($l['ahead'], 1) ?></td>
+        <td class="num <?= $l['diff'] < 0 ? 'field-error' : '' ?>"><?= number_format($l['available'], 1) ?></td>
+      </tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table>
+  </div>
+  <ul>
+  <?php foreach ($load as $l): ?>
+    <li><?= h($l['name']) ?>:
+      <?php if ($l['weekly'] <= 0): ?>no weekly available hours are set, so capacity cannot be compared (set them on the Administration page).
+      <?php elseif ($l['diff'] < 0): ?><strong>over capacity by <?= h(fmt_hours(-$l['diff'])) ?></strong> for this period (logged plus scheduled hours exceed available hours).
+      <?php else: ?><?= h(fmt_hours($l['diff'])) ?> free in this period after the hours logged and the sessions scheduled.<?php endif; ?>
+    </li>
+  <?php endforeach; ?>
+  </ul>
+  <p class="hint">Authorized, logged and remaining hours are for the active tracks of the clients assigned to each instructor; remaining hours count every hour ever logged on those tracks. Scheduled hours are that instructor's sessions still to come within the period (a group session once). Available hours are the instructor's weekly hours times the weeks in the period. The free or over-capacity figure compares available hours with the hours logged in the period plus the sessions still ahead.</p>
 </section>
 <?php page_footer();

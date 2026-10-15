@@ -21,6 +21,7 @@ if (!function_exists('db')) {
     exit(1);
 }
 require $inc . '/report_builder.php';
+require_once $inc . '/scheduled_reports.php';
 
 // One run at a time: a track is marked only after its report is emailed, so a
 // manual run that overlaps the scheduled one would send each due report (and its
@@ -136,3 +137,41 @@ if ($skipped) {
     }
 }
 echo "Sent {$sent} report(s); skipped " . count($skipped) . ".\n";
+
+// Scheduled summary reports (Administration > Scheduled reports): the outcome
+// report and the funder outcome report, emailed as plain text to the listed
+// addresses on or after the chosen day of the month. Each period is marked sent
+// (its stamp, 2026-09 or 2026-Q3, in a setting) only after a recipient received
+// it, so a second run the same day, or a retried cron, never sends it twice, and
+// a run missed on the chosen day is caught up on the next run that month. Still
+// under the lock taken above. A failure here never affects the exit status of
+// the track reports: it is reported and tried again tomorrow.
+try {
+    $srCfg = scheduled_reports_config();
+    $srPeriod = scheduled_report_period($srCfg['period']);
+    foreach (SCHEDULED_REPORTS as $srKey => $srTitle) {
+        if (!$srCfg[$srKey] || !$srCfg['recipients'] || (int)date('j') < $srCfg['day']) continue;
+        $sentKey = 'scheduled_reports_sent_' . $srKey;
+        if (setting($sentKey) === $srPeriod['stamp']) continue;
+        $body = scheduled_report_text($srTitle, $srPeriod['label'], scheduled_report_sections($srKey, $srPeriod['from'], $srPeriod['to']));
+        $subject = $srTitle . ' for ' . $srPeriod['label'] . ' — ' . brand('org');
+        $ok = []; $failed = [];
+        foreach ($srCfg['recipients'] as $to) {
+            if (send_app_mail($to, $subject, $body)) $ok[] = $to; else $failed[] = $to;
+        }
+        if ($ok) {
+            set_setting($sentKey, $srPeriod['stamp']);
+            audit(null, 'report.scheduled', 'settings', null, $srTitle . ' ' . $srPeriod['stamp'] . ' to ' . count($ok) . ' address(es)' . ($failed ? ', ' . count($failed) . ' failed' : ''));
+        }
+        echo date('Y-m-d H:i:s') . " scheduled {$srTitle} ({$srPeriod['stamp']}): sent to " . count($ok) . ' address(es)' . ($failed ? ', failed for ' . count($failed) : '') . ".\n";
+        if ($failed) {
+            notify_admins('Scheduled ' . strtolower($srTitle) . ': ' . count($failed) . ' address(es) could not be emailed',
+                "The scheduled {$srTitle} for {$srPeriod['label']} could not be delivered to:\n\n- " . implode("\n- ", $failed)
+                . ($ok ? "\n\nIt was delivered to the other " . count($ok) . " address(es), so it will not be resent automatically; forward it from one of them or correct the address under Administration > Scheduled reports.\n"
+                       : "\n\nNobody received it, so it will be tried again on the next run.\n"));
+        }
+    }
+} catch (Throwable $e) {
+    error_log('monthly_reports: scheduled summary reports failed (' . get_class($e) . ' ' . $e->getCode() . ')');
+    echo "The scheduled summary reports could not be prepared; they will be tried again tomorrow.\n";
+}

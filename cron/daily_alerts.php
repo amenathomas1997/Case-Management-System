@@ -290,7 +290,47 @@ if ($alerts) {
         echo count($alerts) . " alert(s) sent to the administrators.\n";
     }
     if ($instructorFailures) echo "{$instructorFailures} case worker alert email(s) failed to send — those alerts will retry on the next run.\n";
-    if (!$adminSent || $adminFailed || $instructorFailures) exit(1);
+    $runFailed = !$adminSent || $adminFailed || $instructorFailures;
 } else {
     echo "No new alerts.\n";
+    $runFailed = false;
 }
+
+// System health notice, once a day: the watchdog (cron/watchdog.php, every 10
+// minutes) has not written its heartbeat for over 2 hours, or the newest database
+// backup (cron/backup.sh) is older than 48 hours. The administrators are told by
+// email so a silent cron failure is noticed; health.php reports the same checks
+// to an external monitor. Recorded only after the email was sent.
+try {
+    $healthKey = 'daily_alerts_health_notice_date';
+    if (setting($healthKey) !== date('Y-m-d')) {
+        $healthProblems = [];
+        $wd = setting('heartbeat_watchdog');
+        $wdAt = $wd !== null ? strtotime($wd) : false;
+        if ($wdAt === false) $healthProblems[] = 'The health watchdog (cron/watchdog.php) has never recorded a run. Check that its cron line is in place (every 10 minutes).';
+        elseif ($wdAt < time() - 2 * 3600) $healthProblems[] = 'The health watchdog (cron/watchdog.php) has not run since ' . date('F j, Y g:i a', $wdAt) . '. Check its cron line (every 10 minutes).';
+        $dumps = glob(dirname((string)cfg('upload_dir')) . '/backups/cms_*.sql.gz') ?: [];
+        rsort($dumps);
+        $newest = $dumps ? (int)filemtime($dumps[0]) : 0;
+        if ($newest < time() - 48 * 3600) {
+            $healthProblems[] = 'The nightly backup has not run since ' . ($newest > 0 ? date('F j, Y g:i a', $newest) : 'this system was installed (no backup file was found)') . '. Check the backup cron line (cron/backup.sh) and the backups directory.';
+        }
+        if ($healthProblems) {
+            if (notify_admins('System health: ' . count($healthProblems) . ' item(s) need attention',
+                    "The daily check on " . date('F j, Y') . " found:\n\n- " . implode("\n- ", $healthProblems)
+                    . "\n\nThis notice is sent at most once a day while the problem lasts. The current status is at " . cfg('base_url') . "/health.php\n")) {
+                set_setting($healthKey, date('Y-m-d'));
+                echo count($healthProblems) . " system health item(s) emailed to the administrators.\n";
+            } else {
+                echo "The system health notice could not be emailed; it will be tried again on the next run.\n";
+            }
+        }
+    }
+} catch (Throwable $e) {
+    error_log('daily_alerts: system health check failed (' . get_class($e) . ' ' . $e->getCode() . ')');
+}
+
+if ($runFailed) exit(1);
+// Heartbeat for health.php: this run completed and everything it had to send was sent.
+try { set_setting('heartbeat_daily_alerts', date('c')); }
+catch (Throwable $e) { error_log('daily_alerts: could not record the heartbeat (' . get_class($e) . ' ' . $e->getCode() . ')'); }

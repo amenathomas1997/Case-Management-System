@@ -6,6 +6,7 @@
 require __DIR__ . '/inc/bootstrap.php';
 require_once __DIR__ . '/inc/document.php';
 require_once __DIR__ . '/inc/report_period.php';
+require_once __DIR__ . '/inc/scheduled_reports.php';
 require __DIR__ . '/inc/layout.php';
 $user = require_login();
 require_perm('analytics');
@@ -19,117 +20,14 @@ $ri = report_table('invoices', (int)$user['id']);
 // The agencies on tracks now (n = how many tracks), plus those snapshotted on invoices,
 // so work billed under an agency a track has since moved away from can still be selected
 // (as on the agency summary).
-$agencies = db()->query("SELECT funding_agency, SUM(n) n FROM (
-        SELECT funding_agency, 1 n FROM {$rt} training_tracks WHERE funding_agency <> ''
-        UNION ALL
-        SELECT DISTINCT funding_agency, 0 FROM {$ri} inv WHERE funding_agency IS NOT NULL AND funding_agency <> ''
-    ) x GROUP BY funding_agency ORDER BY funding_agency")->fetchAll();
+$agencies = funder_agencies($rt, $ri);
 $agency = (string)($_GET['agency'] ?? ($agencies[0]['funding_agency'] ?? ''));
 
-/** Metrics for one funding agency over the period. */
-function funder_metrics(string $agency, string $from, string $to): array {
-    global $rt;
-    $clientsOfAgency = "client_id IN (SELECT DISTINCT client_id FROM {$rt} training_tracks WHERE funding_agency = ?)";
-    // Billed lines count under the agency snapshotted on their invoice (as agency_report.php
-    // and analytics.php attribute them), so editing a track's agency later does not move
-    // work already invoiced; unbilled lines, and older invoices, use the track's.
-    $agencyExpr = 'COALESCE(i.funding_agency, t.funding_agency)';
-    $logs = "work_logs w JOIN {$rt} t ON t.id = w.track_id LEFT JOIN invoices i ON i.id = w.invoice_id";
+// funder_metrics() and funder_stat_rows() live in inc/scheduled_reports.php, shared
+// with the scheduled monthly funder email, so the two always agree.
 
-    $served = db()->prepare("SELECT COUNT(DISTINCT t.client_id) n FROM {$logs} WHERE {$agencyExpr} = ? AND w.work_date BETWEEN ? AND ?");
-    $served->execute([$agency, $from, $to]); $servedTotal = (int)$served->fetchColumn();
-
-    $tot = db()->prepare("SELECT COALESCE(SUM(w.hours),0) hrs, COALESCE(SUM(w.mileage),0) mi,
-            COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate,t.hourly_rate),2) + ROUND(w.mileage * COALESCE(w.mileage_rate,t.mileage_rate),2)),0) val
-        FROM {$logs} WHERE {$agencyExpr} = ? AND w.work_date BETWEEN ? AND ?");
-    $tot->execute([$agency, $from, $to]); $totals = $tot->fetch();
-
-    // Track expenses are billed on the same invoices as the hours and mileage
-    // (generate_invoice), so they are reported beside them — by expense date, under the
-    // agency snapshotted on their invoice — and the total matches the agency billing
-    // summary for the same agency and dates.
-    $exp = db()->prepare("SELECT COALESCE(SUM(e.amount),0) FROM track_expenses e JOIN {$rt} t ON t.id = e.track_id
-        LEFT JOIN invoices i ON i.id = e.invoice_id WHERE {$agencyExpr} = ? AND e.expense_date BETWEEN ? AND ?");
-    $exp->execute([$agency, $from, $to]); $expenses = (float)$exp->fetchColumn();
-
-    // Same value expression as the headline total (hours + mileage, each line rounded
-    // to the cent as the invoices round it), so the category values add up to it.
-    $byCat = db()->prepare("SELECT COALESCE(w.rsa_category, t.rsa_category, 'Uncategorized') cat, COUNT(DISTINCT t.client_id) clients,
-            COALESCE(SUM(w.hours),0) hrs, COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate,t.hourly_rate),2) + ROUND(w.mileage * COALESCE(w.mileage_rate,t.mileage_rate),2)),0) val
-        FROM {$logs} WHERE {$agencyExpr} = ? AND w.work_date BETWEEN ? AND ? GROUP BY cat ORDER BY hrs DESC");
-    $byCat->execute([$agency, $from, $to]); $byCat = $byCat->fetchAll();
-
-    $goals = db()->prepare("SELECT COUNT(*) total, SUM(g.status = 'Achieved') achieved, AVG(g.progress_pct) avgpct
-        FROM smart_goals g JOIN {$rt} t ON t.id = g.track_id
-        WHERE t.funding_agency = ? AND g.created_at BETWEEN ? AND ?");
-    $goals->execute([$agency, $from, $to . ' 23:59:59']); $goals = $goals->fetch();
-
-    $ret = db()->prepare("SELECT COUNT(*) done, SUM(f.in_use = 1) in_use FROM equipment_followups f
-        WHERE f.status = 'Completed' AND f.in_use IS NOT NULL AND f.completed_at BETWEEN ? AND ? AND f.$clientsOfAgency");
-    $ret->execute([$from, $to . ' 23:59:59', $agency]); $ret = $ret->fetch();
-
-    // Average score gain (percentage points) within the period for clients with
-    // >=2 administrations of the same instrument. The sign is flipped for any
-    // "lower is better" instrument so a genuine improvement always reads positive.
-    $gain = db()->prepare("SELECT AVG(gain) FROM (
-        SELECT ((SELECT x.pct FROM client_scored_assessments x WHERE x.client_id = sa.client_id AND x.instrument_id = sa.instrument_id AND x.assessed_on BETWEEN ? AND ? ORDER BY x.assessed_on DESC, x.id DESC LIMIT 1)
-             - (SELECT y.pct FROM client_scored_assessments y WHERE y.client_id = sa.client_id AND y.instrument_id = sa.instrument_id AND y.assessed_on BETWEEN ? AND ? ORDER BY y.assessed_on ASC, y.id ASC LIMIT 1))
-             * (CASE WHEN i.higher_is_better = 0 THEN -1 ELSE 1 END) AS gain,
-             COUNT(*) c
-        FROM client_scored_assessments sa JOIN assessment_instruments i ON i.id = sa.instrument_id
-        WHERE sa.assessed_on BETWEEN ? AND ? AND sa.$clientsOfAgency
-        GROUP BY sa.client_id, sa.instrument_id, i.higher_is_better HAVING c >= 2) z");
-    $gain->execute([$from, $to, $from, $to, $from, $to, $agency]); $avgGain = $gain->fetchColumn();
-    $avgGain = $avgGain === null ? null : (float)$avgGain;
-
-    // Each client counts once, by their LAST status change in the period, and only
-    // if that change closed the case (a closure corrected or reopened in the same
-    // period counts as where it ended up) — so the per-status counts add up. Only a
-    // case closed (moved into a Closed status from an open one) in the period counts,
-    // so correcting an earlier period's closure is not a new closure (as outcomes.php).
-    // Rows carried over from a merged duplicate ('[merged] ' note) are left out.
-    $closures = db()->prepare("SELECT h.new_status, COUNT(*) n FROM client_status_history h
-        WHERE h.new_status LIKE 'Closed%' AND DATE(h.changed_at) BETWEEN ? AND ? AND h.$clientsOfAgency
-          AND (h.note IS NULL OR h.note NOT LIKE '[merged] %')
-          AND NOT EXISTS (SELECT 1 FROM client_status_history h2 WHERE h2.client_id = h.client_id
-              AND DATE(h2.changed_at) BETWEEN ? AND ?
-              AND (h2.note IS NULL OR h2.note NOT LIKE '[merged] %')
-              AND (h2.changed_at > h.changed_at OR (h2.changed_at = h.changed_at AND h2.id > h.id)))
-          AND EXISTS (SELECT 1 FROM client_status_history h3 WHERE h3.client_id = h.client_id
-              AND DATE(h3.changed_at) BETWEEN ? AND ?
-              AND (h3.note IS NULL OR h3.note NOT LIKE '[merged] %')
-              AND h3.new_status LIKE 'Closed%' AND (h3.old_status IS NULL OR h3.old_status NOT LIKE 'Closed%'))
-        GROUP BY h.new_status");
-    $closures->execute([$from, $to, $agency, $from, $to, $from, $to]); $closures = $closures->fetchAll();
-    $closedTotal = (int)array_sum(array_column($closures, 'n'));
-    $rehab = 0; foreach ($closures as $c) if ($c['new_status'] === 'Closed - Rehabilitated') $rehab = (int)$c['n'];
-
-    return compact('servedTotal', 'totals', 'expenses', 'byCat', 'goals', 'ret', 'avgGain', 'closures', 'closedTotal', 'rehab');
-}
-
-$m = $agency !== '' ? funder_metrics($agency, $from, $to) : null;
-$retentionPct = ($m && (int)$m['ret']['done'] > 0) ? round(100 * (int)$m['ret']['in_use'] / (int)$m['ret']['done']) : null;
-$goalPct = ($m && (int)$m['goals']['total'] > 0) ? round(100 * (int)$m['goals']['achieved'] / (int)$m['goals']['total']) : null;
-
-/** Shared row set for exports. */
-function funder_stat_rows(string $agency, string $from, string $to, array $m, ?int $retentionPct, ?int $goalPct): array {
-    $rows = [
-        ['Funding agency', $agency],
-        ['Period', fmt_date($from) . ' to ' . fmt_date($to)],
-        ['Clients served', (string)$m['servedTotal']],
-        ['Service hours', number_format((float)$m['totals']['hrs'], 2) . ' (' . fmt_money((float)$m['totals']['val']) . ' for hours and mileage)'],
-        ['Track expenses', fmt_money($m['expenses'])],
-        ['Total billable value', fmt_money(round((float)$m['totals']['val'] + $m['expenses'], 2)) . ' (hours, mileage and expenses)'],
-        ['Goals achieved', $goalPct === null ? 'n/a' : $goalPct . '% (' . (int)$m['goals']['achieved'] . ' of ' . (int)$m['goals']['total'] . ', avg progress ' . round((float)$m['goals']['avgpct']) . '%)'],
-        ['Device retention (still in use)', $retentionPct === null ? 'n/a' : $retentionPct . '% of ' . (int)$m['ret']['done'] . ' follow-ups'],
-        // A signed number with the unit in the label: "+3" stays a number in the CSV
-        // (csv_cell() passes numeric values), where "+3 points" would gain a formula guard.
-        ['Avg assessment gain (points)', $m['avgGain'] === null ? 'n/a' : sprintf('%+d', (int)round($m['avgGain']))],
-        ['Cases closed', (string)$m['closedTotal']],
-        ['Rehabilitation rate', $m['closedTotal'] ? round($m['rehab'] / $m['closedTotal'] * 100) . '% (' . $m['rehab'] . ' rehabilitated)' : 'n/a'],
-    ];
-    return $rows;
-}
+$m = $agency !== '' ? funder_metrics($agency, $from, $to, $rt) : null;
+[$retentionPct, $goalPct] = $m ? funder_pcts($m) : [null, null];
 
 /* ---- CSV ---- */
 if ($m && isset($_GET['export'])) {

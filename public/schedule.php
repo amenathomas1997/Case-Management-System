@@ -747,7 +747,8 @@ function session_row(array $s, string $csrf): void {
           <?= $s['track_title'] ? '<br><span class="muted">' . h($s['track_title']) . '</span>' : '' ?></td>
       <td><?= h($s['staff_name'] ?? '—') ?></td>
       <td><?php if (!empty($s['is_remote'])): ?><span class="badge badge-active">Remote</span><?= !empty($s['meeting_url']) ? ' <a href="' . h($s['meeting_url']) . '" target="_blank" rel="noopener">Join<span class="visually-hidden"> ' . $which . ' (opens in a new tab)</span></a>' : '' ?><?php else: ?><?= h($s['location'] ?: '—') ?><?php endif; ?></td>
-      <td><?= status_badge($s['status']) ?></td>
+      <td><?= status_badge($s['status']) ?><?php // Checked in from the app (API check_in_session): the time the client arrived.
+          if (!empty($s['checked_in_at'])): ?><br><span class="muted">Arrived <?= date('H:i', strtotime($s['checked_in_at'])) ?><span class="visually-hidden"> for the <?= $which ?></span></span><?php endif; ?></td>
       <td>
         <?php if ($s['status'] === 'Scheduled'): ?>
         <form method="post" action="schedule.php" class="inline-form">

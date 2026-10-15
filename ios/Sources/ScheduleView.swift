@@ -1,4 +1,5 @@
 import SwiftUI
+import WidgetKit
 
 /// GET schedule, with the counts 3.0.12 servers add: the server sends only the next
 /// upcomingLimit upcoming sessions, and upcomingTotal says how many there are in all.
@@ -38,6 +39,13 @@ struct ScheduleView: View {
     /// Sessions whose outcome (completed, cancelled, no-show) is on its way, so a second tap
     /// can't send it again.
     @State private var completing: Set<Int> = []
+    /// Sessions whose check-in is on its way.
+    @State private var checkingIn: Set<Int> = []
+    /// Check-ins recorded from this screen, by session id: when the server confirmed it (its
+    /// time), or Self.offlineCheckIn for one kept on this phone until it syncs. Kept across
+    /// reloads, since a server older than 3.0.28 does not report checked_in_at.
+    @State private var checkedInLocal: [Int: String] = [:]
+    private static let offlineCheckIn = "offline"
     /// A completion (with no track), cancel or no-show waiting for the person to confirm it.
     @State private var pendingOutcome: SessionOutcome?
     /// The result of a sheet (new session, signature), said once the sheet has closed.
@@ -257,11 +265,38 @@ struct ScheduleView: View {
         return start <= now
     }
 
+    /// Check in is offered for today's sessions that have started, or start within 30 minutes,
+    /// and are not checked in yet; not for one that has ended (it needs an outcome instead).
+    private func canCheckIn(_ session: Session, at now: Date) -> Bool {
+        guard session.overdue != true, checkedInText(session) == nil,
+              let start = APIDate.parseDateTimeCentral(session.startAt),
+              Calendar.current.isDate(start, inSameDayAs: now) else { return false }
+        return start <= now.addingTimeInterval(30 * 60)
+    }
+
+    /// "Checked in at 2:05 PM", or that the check-in is waiting on this phone; nil when the
+    /// session is not checked in (as far as this phone knows).
+    private func checkedInText(_ session: Session) -> String? {
+        if let local = checkedInLocal[session.id] {
+            return local == Self.offlineCheckIn ? "Check-in saved offline — will sync when connected" : "Checked in at \(local)"
+        }
+        guard let raw = session.checkedInAt else { return nil }
+        return "Checked in at \(Self.checkInTime(raw))"
+    }
+
+    /// The server's check-in time ("YYYY-MM-DD HH:MM:SS", server time) as this phone's clock
+    /// shows it; the raw value when it can't be read.
+    private static func checkInTime(_ raw: String) -> String {
+        guard let date = APIDate.parseDateTimeCentral(raw) else { return raw }
+        return date.formatted(date: .omitted, time: .shortened)
+    }
+
     /// What the row says to VoiceOver, in reading order: who, when, whether it has ended,
     /// instructor, where (or remote), and whether completing logs hours.
     private func sessionSummary(_ session: Session, started: Bool) -> String {
         var parts = [session.client, formatDateTime(session.startAt)]
         if session.overdue == true { parts.append("Ended — awaiting an outcome") }
+        if let checked = checkedInText(session) { parts.append(checked) }
         if let instructor = session.instructor, !instructor.isEmpty { parts.append("Instructor: \(instructor)") }
         if session.isRemote == true {
             parts.append(joinURL(session) != nil ? "Remote, with an online meeting link" : "Remote")
@@ -300,6 +335,7 @@ struct ScheduleView: View {
             let started = hasStarted(session, at: context.date)
             // Read-only while the list is the copy kept on this phone.
             let busy = completing.contains(session.id) || offlineSince != nil
+            let checkIn = canCheckIn(session, at: context.date)
             VStack(alignment: .leading, spacing: 4) {
                 Text(session.client).font(.body.weight(.semibold))
                 Text(formatDateTime(session.startAt))
@@ -307,6 +343,24 @@ struct ScheduleView: View {
                 // Said in words on the row too, for anyone moving row by row past the heading.
                 if session.overdue == true {
                     Text("Ended — awaiting an outcome").font(.caption.weight(.semibold)).foregroundStyle(Color.secondaryText)
+                }
+                if let checked = checkedInText(session) {
+                    Label(checked, systemImage: "person.crop.circle.badge.checkmark")
+                        .font(.callout.weight(.medium)).foregroundStyle(Color.brandTeal)
+                }
+                // Arriving: check in works offline too (kept on the phone with the notes and hours).
+                if checkIn {
+                    Button {
+                        Task { await self.checkIn(session) }
+                    } label: {
+                        Label("Check in", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .padding(.top, 4)
+                    .disabled(checkingIn.contains(session.id))
+                    .accessibilityLabel("Check in to \(name)")
+                    .accessibilityInputLabels(["Check in", "Check in to \(name)"])
                 }
                 // Every instructor's sessions are listed: say whose this one is.
                 if let instructor {
@@ -385,6 +439,9 @@ struct ScheduleView: View {
             .accessibilityFocused($focusedSession, equals: session.id)
             .accessibilityAction { announceRowActions() }
             .accessibilityActions {
+                if checkIn, !checkingIn.contains(session.id) {
+                    Button("Check in") { Task { await self.checkIn(session) } }
+                }
                 if !busy {
                     if started {
                         Button("Mark completed") { markCompleted(session) }
@@ -397,6 +454,81 @@ struct ScheduleView: View {
                 }
             }
         }
+    }
+
+    /// check_in_session's reply (3.0.28). Tolerant: once the server says ok, a missing time
+    /// must not turn a recorded check-in into an error the person would retry.
+    private struct CheckInResult: Decodable {
+        let checkedInAt: String?
+        let message: String?
+        private enum CodingKeys: String, CodingKey { case ok, checkedInAt, message }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
+                throw DecodingError.dataCorruptedError(forKey: .ok, in: c, debugDescription: "not ok")
+            }
+            checkedInAt = try? c.decodeIfPresent(String.self, forKey: .checkedInAt)
+            message = try? c.decodeIfPresent(String.self, forKey: .message)
+        }
+    }
+
+    /// Check in (check_in_session): records that the session has begun. With no signal the
+    /// check-in is kept on this phone and uploads with the offline notes and hours; one the
+    /// server says is already checked in (409) is shown as checked in.
+    private func checkIn(_ session: Session) async {
+        guard !checkingIn.contains(session.id) else { return }
+        checkingIn.insert(session.id)
+        defer { checkingIn.remove(session.id) }
+        confirmation = nil
+        error = nil
+        let body: [String: Any] = ["session_id": session.id]
+        do {
+            let result: CheckInResult = try await api.call("check_in_session", body: body)
+            let time = result.checkedInAt.map(Self.checkInTime) ?? Date().formatted(date: .omitted, time: .shortened)
+            checkedInLocal[session.id] = time
+            let message = "Checked in at \(time)."
+            confirmation = message
+            announce(message)
+            await load(reportsFailure: false)
+            writeTodaySnapshot()
+        } catch APIError.network {
+            do {
+                try api.enqueue("check_in_session", body: body,
+                                label: "Session check-in, \(formatDateTime(session.startAt))")
+                checkedInLocal[session.id] = Self.offlineCheckIn
+                writeTodaySnapshot()
+                let message = "No connection — check-in saved on this phone, will sync automatically."
+                confirmation = message
+                announce(message)
+            } catch {
+                showFormError("Could not save the check-in offline. \(error.localizedDescription)", in: &self.error)
+            }
+        } catch APIError.server(let message) where message.localizedCaseInsensitiveContains("already") {
+            // Already checked in (from another phone, or an earlier try whose reply was lost).
+            await load(reportsFailure: false)
+            if sessions.first(where: { $0.id == session.id })?.checkedInAt == nil {
+                checkedInLocal[session.id] = Date().formatted(date: .omitted, time: .shortened)
+            }
+            writeTodaySnapshot()
+            confirmation = message
+            announce(message)
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+        }
+    }
+
+    /// The day summary for the home-screen widget and the "Today's sessions" Siri shortcut:
+    /// today's session times and check-ins, never a name (see TodaySnapshot).
+    private func writeTodaySnapshot() {
+        let now = Date()
+        let entries: [TodaySnapshot.Entry] = sessions.compactMap { session in
+            guard let start = APIDate.parseDateTimeCentral(session.startAt),
+                  Calendar.current.isDate(start, inSameDayAs: now) else { return nil }
+            return TodaySnapshot.Entry(start: start, end: APIDate.parseDateTimeCentral(session.endAt),
+                                       checkedIn: checkedInText(session) != nil)
+        }
+        TodaySnapshot(day: TodaySnapshot.dayString(now), sessions: entries, savedAt: now).save()
+        WidgetCenter.shared.reloadTimelines(ofKind: TodaySnapshot.widgetKind)
     }
 
     /// Cancelled or No Show (set_session_status): closes the session without logging hours.
@@ -443,7 +575,12 @@ struct ScheduleView: View {
             loaded = true
             offlineSince = savedAt
             // Reminders follow the schedule as last loaded from the server (not the saved copy).
-            if savedAt == nil { LocalNotifications.shared.scheduleSessions(sessions) }
+            if savedAt == nil {
+                LocalNotifications.shared.scheduleSessions(sessions)
+                // Check-ins the server now reports no longer need this phone's own record.
+                for session in sessions where session.checkedInAt != nil { checkedInLocal[session.id] = nil }
+                writeTodaySnapshot()
+            }
         } catch {
             if reportsFailure { showFormError(error.localizedDescription, in: &self.error) }
             else { self.error = error.localizedDescription }

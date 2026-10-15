@@ -964,6 +964,7 @@ CREATE TABLE `scheduled_sessions` (
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `reminder_sent` tinyint(1) NOT NULL DEFAULT 0,
   `group_uid` char(12) DEFAULT NULL,
+  `checked_in_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `client_id` (`client_id`),
   KEY `idx_user_start` (`user_id`,`start_at`),

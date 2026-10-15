@@ -59,6 +59,7 @@ if (!function_exists('staff_guide_topics')) {
                 'guide-report-rsa' => 'RSA-911 case-service export',
                 'guide-report-utilization' => 'Staff billable utilization',
                 'guide-report-capacity' => 'Capacity planning',
+                'guide-report-scheduled' => 'Scheduled report emails',
                 'guide-report-risk' => 'Outcome risk flags',
                 'guide-client-reports' => 'How do I send a report about one client?',
             ]],
@@ -81,6 +82,7 @@ if (!function_exists('staff_guide_topics')) {
                 'guide-templates' => 'How do I manage templates?',
                 'guide-trash' => 'How do I restore something from the trash?',
                 'guide-users' => 'How do I manage users?',
+                'guide-monitoring' => 'How do I monitor the system?',
             ]],
             'guide-privacy' => ['Privacy and confidentiality', []],
             'guide-problems' => ['What if something goes wrong?', [
@@ -138,6 +140,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>The footer, called Site information. It has the same three buttons, the referral form, this help page, the support email and the version number.</li>
 </ol>
 <p>Go back returns to the page you came from in this site. If there is none, it goes to Dashboard. Going back does not undo a save.</p>
+<p>After the site is updated, the Dashboard starts with a short “New in” notice and a Got it button that hides it. The full list of changes, newest first, is under <a href="#whats-new">What's new in each release</a> on this page.</p>
 <p>A link with a client's name opens that person's record. A track title opens one training plan inside the record. Buttons such as Edit, Review or Open act on the item in the same row. After you follow a link, read the page heading to check where you are.</p>
 <p>Filters and Apply buttons only change what the page shows. They do not change records. Buttons such as Save, Assign, Send and Log do change records. Each form on a page is saved on its own. Read the message that appears after you use one.</p>
 
@@ -583,7 +586,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <?= $sgH(4, 'guide-report-utilization') ?>
 <p>Each staff member's billable hours and value for a period, compared with their expected capacity.</p>
 <?= $sgH(4, 'guide-report-capacity') ?>
-<p>Booked session hours compared with each instructor's available hours. It also shows authorized hours not yet scheduled. Also linked from Session schedule.</p>
+<p>Booked session hours compared with each instructor's available hours. It also shows authorized hours not yet scheduled. The last section, Authorized hours versus hours left, lists for each instructor and the chosen period the hours authorized on their clients' active tracks, the hours logged, the hours remaining, the sessions still ahead and the hours available (weekly hours times the weeks in the period), with one sentence per instructor saying how many hours are free or by how many hours they are over capacity. Also linked from Session schedule.</p>
+<?= $sgH(4, 'guide-report-scheduled') ?>
+<p>An administrator can have the outcome report and the funder outcome report emailed automatically once a month, as plain text, under Scheduled reports on the Administration page: choose the reports, the recipients, the day of the month (1 to 28) and whether each report covers the previous month or the previous quarter. Each send is recorded in the audit log as report.scheduled. The figures are the same as on the report pages.</p>
 <?= $sgH(4, 'guide-report-risk') ?>
 <p>Uses AI to list active clients who may not complete, with a reason and a suggested action. It is only a prompt to review the case.</p>
 <?= $sgH(4, 'guide-client-reports') ?>
@@ -679,12 +684,13 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <p>To change how pages look, choose Show display options under the Low-vision controls heading. You can pick colors, such as White on black or Yellow on black. Text size and reading options has text size up to 200%, more spacing, narrow width, highlighted links, reduced motion and dropdowns as lists. Reset display brings back the defaults. These choices are saved in this browser.</p>
 
 <?= $sgH(3, 'guide-admin') ?>
-<p>These tasks are for administrators. Open Administration from the Help &amp; account menu group (quick key Z) or from the link at the top of My Account. The page starts with a list of links to its five sections. Press H to move between them:</p>
+<p>These tasks are for administrators. Open Administration from the Help &amp; account menu group (quick key Z) or from the link at the top of My Account. The page starts with a list of links to its six sections. Press H to move between them:</p>
 <ul>
   <li>People &amp; permissions: add a team member, change a member's permission group or weekly hours, see the permission groups and create a group. User management is linked here for everything else.</li>
   <li>Sign-in &amp; security: Microsoft Entra ID federation, and Check for updates.</li>
   <li>Forms &amp; email: Referral form settings, Email templates, Counselor portal access, and the Support phone number. The phone number is shown to clients, families and referrers on the public pages as the number to call for help. Leave it blank to show none.</li>
   <li>Data: Trash, Audit log, Merge duplicate clients, Archived clients, the Annual outcome report and Record retention.</li>
+  <li>Scheduled reports: email the outcome report and the funder outcome report automatically each month (see <a href="#guide-report-scheduled">Scheduled report emails</a>).</li>
   <li>AI: the AI assistant settings.</li>
 </ul>
 <p>Check the user or setting carefully before you save. A link in this guide does not give anyone extra access.</p>
@@ -711,6 +717,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 
 <?= $sgH(4, 'guide-users') ?>
 <p>People &amp; permissions, on the Administration page, handles adding a team member and quick changes to groups and hours. For everything else, choose User management there. On that page you can edit details, reset passwords, recover two-step sign-in, move a caseload and deactivate a user.</p>
+
+<?= $sgH(4, 'guide-monitoring') ?>
+<p>The system reports its own health at <?= h(rtrim((string)cfg('base_url'), '/')) ?>/health.php. The address needs no sign-in and holds no client data. It answers HTTP 200 when the database answers, the health watchdog (cron/watchdog.php) has run within the last 2 hours, the daily alerts (cron/daily_alerts.php) within the last 36 hours, and the newest database backup is under 48 hours old; otherwise it answers HTTP 503, and the reply says which check failed. Set up an external monitor such as UptimeRobot to poll that exact address every 5 minutes and alert on any response other than 200. The daily alerts also email the administrators once a day while the watchdog has not run for 2 hours or the nightly backup has not run for 48 hours.</p>
 
 <?= $sgH(3, 'guide-privacy') ?>
 <p>Open only the records you need for your work. Never share portal, consent or calendar links, and keep client details out of ordinary email. The <a href="privacy.php">privacy notice</a> explains what we keep, who we share it with and the choices clients have.</p>

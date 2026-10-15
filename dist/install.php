@@ -136,6 +136,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $brandAccent = field('brand_accent', '#0f766e');
     $mailFrom = field('mail_from');
     $supportEmail = strtolower(field('support_email'));
+    $supportPhone = field('support_phone');
+    // Privacy notice (privacy.php reads these from $CONFIG['brand']): all optional.
+    $privacyOperator = field('privacy_operator');
+    $privacyAddress = field('privacy_address');
+    $privacyLaw = field('privacy_law');
+    $privacyHosting = field('privacy_hosting');
     $adminName = field('admin_name');
     $adminEmail = strtolower(field('admin_email'));
     $adminPass = $_POST['admin_pass'] ?? '';
@@ -161,6 +167,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!filter_var($mailFrom, FILTER_VALIDATE_EMAIL)) $errors[] = 'Mail-from address is invalid.';
     if ($supportEmail !== '' && !filter_var($supportEmail, FILTER_VALIDATE_EMAIL)) $errors[] = 'Public contact email is invalid.';
     if (strlen($adminPass) < 10) $errors[] = 'Admin password must be at least 10 characters.';
+    // The optional contact and privacy-notice fields: free text, only kept short and free of line breaks.
+    foreach (['Operator name' => [$privacyOperator, 190], 'Operator address' => [$privacyAddress, 255],
+              'Governing law' => [$privacyLaw, 120], 'Hosting provider' => [$privacyHosting, 190]] as $label => [$v, $max]) {
+        $len = function_exists('mb_strlen') ? mb_strlen($v, 'UTF-8') : strlen($v);
+        if ($len > $max) $errors[] = "{$label} is {$len} characters long; the most it can be is {$max}.";
+        if (preg_match('/[\r\n]/', $v)) $errors[] = "{$label} must be on one line.";
+    }
+    // The same rule as admin.php's Support phone number field, which can change it later.
+    if ($supportPhone !== '' && (mb_strlen($supportPhone) > 30 || !preg_match('/^[0-9+() \-]*$/', $supportPhone))) {
+        $errors[] = 'Support phone: use only digits, spaces, plus, hyphens and parentheses (30 characters at most), like +1 555 010 2000, or leave it blank.';
+    }
     foreach ([$brandColor, $brandDark, $brandAccent] as $c) {
         if (!preg_match('/^#[0-9a-fA-F]{6}$/', $c)) $errors[] = "Color '{$c}' must be a 6-digit hex value like #1e40af.";
     }
@@ -359,6 +376,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->prepare('INSERT INTO users (name, email, password_hash, role, group_id) VALUES (?,?,?,?,?)')
                 ->execute([$adminName, $adminEmail, password_hash($adminPass, PASSWORD_DEFAULT), 'admin', $adminGroup ?: null]);
             $report[] = "Admin account created for {$adminEmail}.";
+            if ($supportPhone !== '') {
+                // Shown beside the contact email in the page footer and the privacy notice
+                // (core.php support_phone()); an administrator can change it later.
+                $pdo->prepare('INSERT INTO settings (name, value) VALUES (?, ?)')->execute(['support_phone', $supportPhone]);
+                $report[] = "Support phone {$supportPhone} saved (setting support_phone).";
+            }
         } catch (Throwable $e) {
             $errors[] = 'Installation stopped while loading the database: ' . $e->getMessage()
                 . ". The database now holds a partial installation. {$dropHint}"
@@ -378,6 +401,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'name' => $brandName, 'short' => $brandShort, 'org' => $brandOrg,
                 'tagline' => $brandTagline, 'color' => $brandColor,
                 'color_dark' => $brandDark, 'accent' => $brandAccent,
+                // The privacy notice (privacy.php): who runs the service, where, under
+                // which law and on whose servers. Empty: that line is left out of the notice.
+                'privacy_operator' => $privacyOperator, 'privacy_address' => $privacyAddress,
+                'privacy_law' => $privacyLaw, 'privacy_hosting' => $privacyHosting,
             ],
             // token_cache: where the Graph access token is cached, beside this config.
             'graph' => ['tenant_id' => '', 'client_id' => '', 'client_secret' => '', 'sender' => $mailFrom,
@@ -619,8 +646,20 @@ host=<?= htmlspecialchars($dbHost) ?>
       <input id="mail_from" name="mail_from" required autocomplete="off" value="<?= htmlspecialchars(field('mail_from')) ?>">
       <label for="support_email">Public contact email <span class="hint">(optional — shown in the page footer for help requests; leave blank to show the mail-from address, but fill it in if that mailbox is not monitored)</span></label>
       <input id="support_email" name="support_email" type="email" maxlength="190" autocomplete="off" value="<?= htmlspecialchars(field('support_email')) ?>">
+      <label for="support_phone">Support phone <span class="hint">(optional — shown with the contact email in the page footer and the privacy notice, e.g. +1 555 010 2000; can be changed later in Administration)</span></label>
+      <input id="support_phone" name="support_phone" type="tel" maxlength="30" autocomplete="off" value="<?= htmlspecialchars(field('support_phone')) ?>">
       <label for="timezone">Time zone <span class="hint">(your organisation's local time zone, e.g. America/Chicago — every date and time in the app uses it)</span></label>
       <input id="timezone" name="timezone" autocomplete="off" value="<?= htmlspecialchars(field('timezone', 'America/Chicago')) ?>">
+    </fieldset>
+    <fieldset><legend>Privacy notice <span class="hint">(all optional — fills in the privacy page's "who runs this service" lines; leave blank to omit them, or edit them later in config.php)</span></legend>
+      <label for="privacy_operator">Operator <span class="hint">(the person or organisation legally responsible for the data, e.g. “Riverbend Vision Services, Inc.”)</span></label>
+      <input id="privacy_operator" name="privacy_operator" maxlength="190" autocomplete="organization" value="<?= htmlspecialchars(field('privacy_operator')) ?>">
+      <label for="privacy_address">Operator's postal address <span class="hint">(one line, e.g. “12 Main St, Suite 4, Springfield, Illinois 62701”)</span></label>
+      <input id="privacy_address" name="privacy_address" maxlength="255" autocomplete="street-address" value="<?= htmlspecialchars(field('privacy_address')) ?>">
+      <label for="privacy_law">Governing law <span class="hint">(the state or country whose law applies, e.g. “Illinois”)</span></label>
+      <input id="privacy_law" name="privacy_law" maxlength="120" autocomplete="off" value="<?= htmlspecialchars(field('privacy_law')) ?>">
+      <label for="privacy_hosting">Hosting provider <span class="hint">(where the server runs, e.g. “Linode” or “our own data centre in Chicago”)</span></label>
+      <input id="privacy_hosting" name="privacy_hosting" maxlength="190" autocomplete="off" value="<?= htmlspecialchars(field('privacy_hosting')) ?>">
     </fieldset>
     <fieldset><legend>Database (empty MariaDB 10.4+ database)</legend>
       <label for="db_host">Database host</label><input id="db_host" name="db_host" autocomplete="off" value="<?= htmlspecialchars(field('db_host', 'localhost')) ?>">

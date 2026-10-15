@@ -66,4 +66,8 @@ foreach (array_keys($state) as $key) {
     if (!isset($problems[$key])) unset($state[$key]);
 }
 file_put_contents($stateFile, json_encode($state), LOCK_EX);
+// Heartbeat for health.php and the daily alerts: written only when this run
+// completed and the database answered (an unreachable database leaves it stale,
+// which is the point). Never a reason for the watchdog itself to fail.
+try { if (!isset($problems['db'])) set_setting('heartbeat_watchdog', date('c')); } catch (Throwable $e) {}
 echo $problems ? count($problems) . " problem(s), {$alerted} alert(s) sent: " . implode(' | ', $problems) . "\n" : "All healthy.\n";

@@ -12,8 +12,13 @@ with tempfile.TemporaryDirectory(prefix='cms-installer-audit-') as directory:
     assert 'Installer disabled.' in render()
     print('PASS: Installer disabled without an administrator-created marker')
     (Path(directory) / 'install.php.enabled').touch()
-    assert '<form' in render()
+    form = render()
+    assert '<form' in form
     print('PASS: Explicitly enabled fresh installer displays its form')
+    # 3.0.28: the optional contact and privacy-notice fields, each with a hint and none required.
+    for name in ('support_phone', 'privacy_operator', 'privacy_address', 'privacy_law', 'privacy_hosting'):
+        assert f'name="{name}"' in form and 'required' not in form.split(f'name="{name}"')[1].split('>')[0], name
+    print('PASS: Installer offers the optional support phone and privacy-notice fields')
     (Path(directory) / 'install.lock').touch()
     assert 'Installer is locked' in render()
     print('PASS: Installation lock takes precedence over the enable marker')

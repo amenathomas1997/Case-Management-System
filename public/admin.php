@@ -4,6 +4,7 @@
 // updates, forms and email, data retention and housekeeping, and the AI settings.
 // Every section here needs the admin permission; personal settings stay in My Account.
 require __DIR__ . '/inc/bootstrap.php';
+require_once __DIR__ . '/inc/scheduled_reports.php';
 require __DIR__ . '/inc/layout.php';
 csrf_check();
 $user = require_login();
@@ -180,6 +181,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user'])) {
     redirect('admin.php#add-user-h');
 }
 
+/* Scheduled report emails (cron/monthly_reports.php reads these settings) */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_scheduled_reports'])) {
+    $srOutcomes = !empty($_POST['sr_outcomes']);
+    $srFunder = !empty($_POST['sr_funder']);
+    $srRaw = is_string($_POST['sr_recipients'] ?? null) ? trim($_POST['sr_recipients']) : '';
+    $srParsed = scheduled_reports_parse_recipients($srRaw);
+    $srDayRaw = is_string($_POST['sr_day'] ?? null) ? $_POST['sr_day'] : '';
+    $srDay = preg_match('/^\d{1,2}$/', $srDayRaw) ? (int)$srDayRaw : 0;
+    $srPeriod = is_string($_POST['sr_period'] ?? null) ? $_POST['sr_period'] : '';
+    $srErrs = [];
+    if ($srParsed['invalid']) $srErrs['sr_recipients'] = 'These are not valid email addresses: ' . implode(', ', array_map(fn($v) => mb_substr($v, 0, 60), $srParsed['invalid'])) . '. Enter one address per line, for example director@agency.org.';
+    elseif (($srOutcomes || $srFunder) && !$srParsed['valid']) $srErrs['sr_recipients'] = 'Enter at least one email address to send the reports to, or turn both reports off.';
+    elseif (count($srParsed['valid']) > 20) $srErrs['sr_recipients'] = 'Enter at most 20 email addresses.';
+    if ($srDay < 1 || $srDay > 28) $srErrs['sr_day'] = 'Choose a day of the month from 1 to 28.';
+    if (!isset(SCHEDULED_REPORT_PERIODS[$srPeriod])) $srErrs['sr_period'] = 'Choose the period each report covers.';
+    if ($srErrs) {
+        keep_input();
+        keep_field_errors($srErrs);
+        redirect('admin.php#scheduled-h');
+    }
+    set_setting('scheduled_reports_outcomes_enabled', $srOutcomes ? '1' : '0');
+    set_setting('scheduled_reports_funder_enabled', $srFunder ? '1' : '0');
+    set_setting('scheduled_reports_recipients', implode(',', $srParsed['valid']));
+    set_setting('scheduled_reports_day', (string)$srDay);
+    set_setting('scheduled_reports_period', $srPeriod);
+    audit($user['id'], 'settings.scheduled_reports', 'settings', null,
+        'outcomes=' . ($srOutcomes ? 'on' : 'off') . ' funder=' . ($srFunder ? 'on' : 'off') . ' day=' . $srDay . ' period=' . $srPeriod . ' to ' . count($srParsed['valid']) . ' address(es)');
+    flash(($srOutcomes || $srFunder)
+        ? 'Scheduled reports saved: ' . implode(' and ', array_filter([$srOutcomes ? 'the outcome report' : '', $srFunder ? 'the funder outcome report' : ''])) . ' will be emailed on day ' . $srDay . ' of each month for the ' . strtolower(SCHEDULED_REPORT_PERIODS[$srPeriod]) . '.'
+        : 'Scheduled reports saved: both reports are off, so nothing will be emailed.');
+    redirect('admin.php#scheduled-h');
+}
+
 $allGroups = db()->query('SELECT * FROM `groups` ORDER BY name')->fetchAll();
 
 page_header('Administration', $user, 'admin');
@@ -192,6 +226,7 @@ page_header('Administration', $user, 'admin');
     <li><a href="#signin-h">Sign-in &amp; security</a></li>
     <li><a href="#forms-h">Forms &amp; email</a></li>
     <li><a href="#data-h">Data</a></li>
+    <li><a href="#scheduled-h">Scheduled reports</a></li>
     <li><a href="#ai-h">AI</a></li>
   </ul>
 </nav>
@@ -399,6 +434,48 @@ page_header('Administration', $user, 'admin');
     <button type="submit" name="save_retention" value="1" class="btn btn-secondary btn-sm">Save</button>
   </form>
   <p class="hint">Archived records are hidden from daily lists but kept intact until you export and purge them from the archived-clients page.</p>
+</section>
+
+<section class="card" aria-labelledby="scheduled-h">
+  <h2 id="scheduled-h">Scheduled reports</h2>
+  <p class="muted">Email the agency-wide outcome report and the funder outcome report (every funding agency) automatically once a month, as plain text. The figures are the same as on the report pages, so no sign-in is needed to read them. Only people who may see agency-wide figures should be listed.</p>
+  <?php $srCfg = scheduled_reports_config();
+  $srRefill = old_in('save_scheduled_reports') !== '';
+  $srSentOut = setting('scheduled_reports_sent_outcomes'); $srSentFun = setting('scheduled_reports_sent_funder'); ?>
+  <form method="post" action="admin.php" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['sr_recipients' => 'Recipients', 'sr_day' => 'Day of the month', 'sr_period' => 'Period']) ?>
+    <fieldset>
+      <legend>Reports to send</legend>
+      <div class="field"><label><input type="checkbox" name="sr_outcomes" value="1" <?= ($srRefill ? old_in('sr_outcomes') === '1' : $srCfg['outcomes']) ? 'checked' : '' ?>> Outcome report (clients served, hours by category and program, closures, rehabilitation rate)</label></div>
+      <div class="field"><label><input type="checkbox" name="sr_funder" value="1" <?= ($srRefill ? old_in('sr_funder') === '1' : $srCfg['funder']) ? 'checked' : '' ?>> Funder outcome report (one summary per funding agency)</label></div>
+    </fieldset>
+    <div class="field">
+      <label for="sr_recipients">Recipients</label>
+      <span class="hint" id="sr_recipients-hint">One email address per line (commas also work). Each address receives its own copy.</span>
+      <textarea id="sr_recipients" name="sr_recipients" rows="3" <?= field_aria('sr_recipients', 'sr_recipients-hint') ?>><?= h($srRefill ? old_in('sr_recipients') : implode("\n", $srCfg['recipients'])) ?></textarea>
+      <?= field_error('sr_recipients') ?>
+    </div>
+    <div class="field">
+      <label for="sr_day">Day of the month</label>
+      <span class="hint" id="sr_day-hint">1 to 28, so every month has the day. The reports go out with the morning automated run on that day; a run missed that day is caught up on the next run that month.</span>
+      <?php $srDaySel = $srRefill ? old_in('sr_day') : (string)$srCfg['day']; ?>
+      <select id="sr_day" name="sr_day" <?= field_aria('sr_day', 'sr_day-hint') ?>>
+        <?php for ($d = 1; $d <= 28; $d++): ?><option value="<?= $d ?>" <?= $srDaySel === (string)$d ? 'selected' : '' ?>><?= $d ?></option><?php endfor; ?>
+      </select>
+      <?= field_error('sr_day') ?>
+    </div>
+    <div class="field">
+      <label for="sr_period">Period each report covers</label>
+      <span class="hint" id="sr_period-hint">Previous month sends every month; previous quarter sends once a quarter, in the month after it ends.</span>
+      <?php $srPeriodSel = $srRefill ? old_in('sr_period') : $srCfg['period']; ?>
+      <select id="sr_period" name="sr_period" <?= field_aria('sr_period', 'sr_period-hint') ?>>
+        <?php foreach (SCHEDULED_REPORT_PERIODS as $k => $label): ?><option value="<?= h($k) ?>" <?= $srPeriodSel === $k ? 'selected' : '' ?>><?= h($label) ?></option><?php endforeach; ?>
+      </select>
+      <?= field_error('sr_period') ?>
+    </div>
+    <button type="submit" name="save_scheduled_reports" value="1" class="btn btn-primary">Save scheduled reports</button>
+  </form>
+  <p class="hint">Last sent: outcome report <?= $srSentOut !== null ? 'for ' . h($srSentOut) : 'never' ?>; funder outcome report <?= $srSentFun !== null ? 'for ' . h($srSentFun) : 'never' ?>. Each send is recorded in the <a href="audit.php">audit log</a> as “report.scheduled”.</p>
 </section>
 
 <section class="card" aria-labelledby="ai-h">

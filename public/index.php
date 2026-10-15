@@ -2,6 +2,19 @@
 require __DIR__ . '/inc/bootstrap.php';
 require __DIR__ . '/inc/layout.php';
 $user = require_login();
+csrf_check();
+
+// What's new: the current version's release notes (inc/release_notes.php) are offered
+// once per account, until Got it records that this version was seen (one setting per
+// user, as the low-vision preference in account.php). A version with no notes says nothing.
+$releaseNotes = require __DIR__ . '/inc/release_notes.php';
+$newInVersion = $releaseNotes[APP_VERSION] ?? [];
+$seenReleaseKey = 'seen_release_' . (int)$user['id'];
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['seen_release'])) {
+    set_setting($seenReleaseKey, APP_VERSION);
+    redirect('index.php');
+}
+$showWhatsNew = $newInVersion && setting($seenReleaseKey) !== APP_VERSION;
 
 // Every dashboard section respects the viewer's permissions and caseload scope.
 $scoped = caseload_scoped();
@@ -118,6 +131,16 @@ if (can('billing')) {
 page_header('Dashboard', $user, 'dashboard');
 ?>
 <h1>Caseload Dashboard</h1>
+
+<?php if ($showWhatsNew): // Read once in page order, right after the h1 and before Today; not a live region. ?>
+<section class="card alert-info" aria-labelledby="whats-new-heading">
+  <h2 id="whats-new-heading">New in <?= h(APP_VERSION) ?></h2>
+  <p><?= h($newInVersion[0]) ?> <a href="help.php#whats-new">Read what's new<span class="visually-hidden"> in version <?= h(APP_VERSION) ?>, in the user guide</span></a></p>
+  <form method="post" action="index.php" class="inline-form"><?= csrf_field() ?>
+    <button type="submit" name="seen_release" value="1" class="btn btn-sm">Got it<span class="visually-hidden">: hide this notice about version <?= h(APP_VERSION) ?></span></button>
+  </form>
+</section>
+<?php endif; ?>
 
 <section class="card" aria-labelledby="today-heading">
   <h2 id="today-heading">Today<?= $todayItems ? ' (' . count($todayItems) . ' item' . (count($todayItems) === 1 ? '' : 's') . ')' : '' ?></h2>

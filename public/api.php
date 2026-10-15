@@ -435,6 +435,7 @@ $API_ACTION_PERMS = [
     'referrals' => 'referrals', 'referral' => 'referrals', 'assign_referral' => 'referrals',
     'review_referral' => 'referrals', 'convert_referral' => 'referrals',
     'schedule' => 'schedule', 'schedule_session' => 'schedule', 'complete_session' => 'schedule', 'set_session_status' => 'schedule',
+    'check_in_session' => 'schedule',   // 3.0.28, handled in inc/api_parity.php
     // 'staff' is checked in its own case: scheduling, referral assignment and the client form all need it.
     // 'client_choices' likewise: every client picker (schedule, equipment, procurement, clients) needs it;
     // referrals alone gives only the clients converted from referrals the user can see.
@@ -476,7 +477,8 @@ $API_ACTION_PERMS = [
    live in their own files; each re-checks what it needs. */
 const API_ACCOUNT_ACTIONS = ['account', 'change_password', 'totp_begin', 'totp_confirm', 'totp_disable', 'cal_feed_show', 'cal_feed_regen', 'remove_passkey', 'logout_all'];
 const API_PARITY_ACTIONS = ['tasks', 'save_task', 'complete_task', 'notifications', 'mark_notifications_read', 'portal_requests', 'portal_request_update',
-    'save_track', 'request_consent', 'consents_due', 'pipeline', 'client_history', 'invoices', 'waitlist', 'waitlist_update', 'doc_review'];
+    'save_track', 'request_consent', 'consents_due', 'pipeline', 'client_history', 'invoices', 'waitlist', 'waitlist_update', 'doc_review',
+    'check_in_session'];
 if (isset($API_ACTION_PERMS[$action]) && !can($API_ACTION_PERMS[$action])) {
     fail('Your account does not have access to that area. Ask an administrator if you need it.', 403);
 }
@@ -852,8 +854,9 @@ switch ($action) {
         // group_uid and group_size: a sitting of a group session (schedule.php books one
         // row per client under one group_uid), so the app can say it is part of a group.
         // Both are null for a one-to-one session.
+        // checked_in_at (3.0.28): when the client was checked in (check_in_session), else null.
         $sql = "SELECT s.id, s.start_at, s.end_at, s.location, s.notes, s.status, s.track_id, s.is_remote, s.meeting_url,
-                s.group_uid, CASE WHEN s.group_uid IS NULL THEN NULL ELSE
+                s.checked_in_at, s.group_uid, CASE WHEN s.group_uid IS NULL THEN NULL ELSE
                     (SELECT COUNT(*) FROM scheduled_sessions g WHERE g.group_uid = s.group_uid AND g.status <> 'Cancelled') END AS group_size,
                 c.name AS client, u.name AS instructor
             FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id LEFT JOIN users u ON u.id = s.user_id

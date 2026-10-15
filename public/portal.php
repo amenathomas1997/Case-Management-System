@@ -49,7 +49,58 @@ register_translations([
     'Something else' => 'Otra cosa',
     'Preferred days and times, what you need, or your question.' => 'Los días y horas que prefiere, qué necesita o su pregunta.',
     'Practiced on your own? Log it here so your instructor can see your progress between sessions.' => '¿Practicó por su cuenta? Regístrelo aquí para que su instructor vea su progreso entre sesiones.',
+    // "Your progress": one line per training plan, built from these pieces and numbers.
+    'Your progress' => 'Su progreso',
+    'goal met.' => 'meta lograda.',
+    'goals met.' => 'metas logradas.',
+    'No goals set yet.' => 'Todavía no hay metas.',
+    'hour used.' => 'hora usada.',
+    'hours used.' => 'horas usadas.',
+    'Next session:' => 'Próxima sesión:',
+    'No session scheduled yet.' => 'Todavía no hay una sesión programada.',
+    'No homework to do.' => 'No tiene tarea pendiente.',
+    'homework item to do.' => 'tarea pendiente.',
+    'homework items to do.' => 'tareas pendientes.',
 ]);
+
+/** A number of hours without its unit, as fmt_hours() shows it ("3.5", "1,000"). */
+function portal_hours_num(float $n): string {
+    return rtrim(rtrim(number_format($n, 2), '0'), '.');
+}
+/** The "Your progress" line for one active track: goals met, hours used (of the
+ *  hours authorized, when an authorization is entered — the same numbers as the
+ *  staff track page), the next scheduled session and the homework still assigned.
+ *  Plain sentences in the page's language; no percentages. $sessions are the
+ *  client's upcoming sessions in start order. Returns HTML. */
+function portal_progress_line(array $track, array $sessions): string {
+    $tid = (int)$track['id'];
+    $g = db()->prepare("SELECT COUNT(*) AS total, COALESCE(SUM(status = 'Achieved'), 0) AS met FROM smart_goals WHERE track_id = ?");
+    $g->execute([$tid]);
+    $goals = $g->fetch();
+    $goalTotal = (int)$goals['total']; $goalMet = (int)$goals['met'];
+    $r = track_rollup($tid);
+    $used = (float)$r['hours_worked']; $auth = (float)$r['authorized_hours'];
+    $hw = db()->prepare("SELECT COUNT(*) FROM homework WHERE track_id = ? AND status = 'Assigned'");
+    $hw->execute([$tid]);
+    $hwOpen = (int)$hw->fetchColumn();
+    $next = null;
+    foreach ($sessions as $s) if ((int)($s['track_id'] ?? 0) === $tid) { $next = $s; break; }
+
+    $parts = [];
+    $parts[] = $goalTotal === 0 ? t('No goals set yet.')
+        : $goalMet . ' ' . h(__('of')) . ' ' . $goalTotal . ' ' . ($goalTotal === 1 ? t('goal met.') : t('goals met.'));
+    $parts[] = $auth > 0 ? portal_hours_num($used) . ' ' . h(__('of')) . ' ' . portal_hours_num($auth) . ' ' . t('hours used.')
+        : portal_hours_num($used) . ' ' . ($used === 1.0 ? t('hour used.') : t('hours used.'));
+    if ($next) {
+        $ts = strtotime($next['start_at']);
+        // A Spanish page gets a Spanish date; an English date is read in English (en()).
+        $parts[] = t('Next session:') . ' ' . (page_lang() === 'es' ? h(portal_when_es($ts)) : en(date('l, F j \a\t g:i A T', $ts))) . '.';
+    } else {
+        $parts[] = t('No session scheduled yet.');
+    }
+    $parts[] = $hwOpen === 0 ? t('No homework to do.') : $hwOpen . ' ' . ($hwOpen === 1 ? t('homework item to do.') : t('homework items to do.'));
+    return '<strong>' . en((string)$track['title']) . ':</strong> ' . implode(' ', $parts);
+}
 
 /** The contact details and access needs the portal form edits, as on file, in the
  *  form they are compared in. (The email address is not edited here: a portal
@@ -679,6 +730,17 @@ document.addEventListener('submit', function (e) {
   });
 }, true);
 </script>
+
+<?php if ($tracks): // One short line per active training plan; nothing when the client has none. ?>
+<section class="card" aria-labelledby="prog-h">
+  <h2 id="prog-h"><?= t('Your progress') ?></h2>
+  <ul>
+  <?php foreach ($tracks as $t): ?>
+    <li><?= portal_progress_line($t, $sessions) ?></li>
+  <?php endforeach; ?>
+  </ul>
+</section>
+<?php endif; ?>
 
 <section class="card" aria-labelledby="sess-h">
   <h2 id="sess-h"><?= t('Upcoming sessions') ?></h2>

@@ -12,14 +12,17 @@
 		105512E0520973E4DE1BC479 /* UtilizationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED88463141827145F7945DCB /* UtilizationView.swift */; };
 		17910F6BE528E88C84AE022E /* ClientEditSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47AB221E9A180042ED3C6990 /* ClientEditSheet.swift */; };
 		1F8C08B2CC958EC0A4C7D4C0 /* AccessibilityHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = E43B35FD256946A91D63E9A5 /* AccessibilityHelpers.swift */; };
+		208411C9A0F5118B836F8DFF /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBB32C5C81EDD8CC5067041B /* WidgetShared.swift */; };
 		21CE0B27DAEC79AE21A521F0 /* PortalRequestsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2E213D530538ADFF38C897 /* PortalRequestsView.swift */; };
 		23A72AAEFA6F137121D56567 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0EA7B70530855DDC7989821 /* DashboardView.swift */; };
+		2C76023A04981D1A70FADE61 /* AppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66DF903720C7C8E5FEF5CE13 /* AppIntents.swift */; };
 		2D04B71DB81503D9B531E57E /* ContractsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D25D57525AD69C7F3CF9BFC8 /* ContractsView.swift */; };
 		35D6C961E8D154951192A737 /* VoiceAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE55F4B084B791474211097F /* VoiceAssistant.swift */; };
 		3621C4154F60C5EBA4B6011C /* WaitlistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E462ABFBBCD318CCFC39974 /* WaitlistView.swift */; };
 		45795D7978888167B6D3C8C6 /* NotificationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597ABD1562B745DF87A9F42A /* NotificationsView.swift */; };
 		4713CDF7C5C5CBA2BAF24919 /* OfflineCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4E8BA3A634FE9758910CB0 /* OfflineCache.swift */; };
 		4E82CF31C62EED4AB880648A /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3700BEC94013DAD600C8D30B /* SearchView.swift */; };
+		56C38842F3C4307644B8B2A1 /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBB32C5C81EDD8CC5067041B /* WidgetShared.swift */; };
 		5AD03B848A2225905E40A07E /* IncidentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00D936D0F5E76C837C52FA1F /* IncidentsView.swift */; };
 		6F11D87D67FDF1C146CBB8CE /* AIToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB35AEA838959C5BED3A33E6 /* AIToolsView.swift */; };
 		707E53F33B6350EABE6ACBA4 /* PipelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6826FC15B6066A74FA0F98E4 /* PipelineView.swift */; };
@@ -27,11 +30,13 @@
 		7BB80E8BA46799128D203DBB /* ScheduleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AE17F209C5C6222096ADDA9 /* ScheduleView.swift */; };
 		80C6FE18F33E1DF09A87F1DB /* TasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 142F29431CA223E90C3A342F /* TasksView.swift */; };
 		8459C3093B578C5F46FE4156 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FECB3C40972D5FDFE3DAF3C3 /* LoginView.swift */; };
+		89E6A05AB833BC6EF4139698 /* CaseManagementWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1C23C30895CD6A842BF82CBE /* CaseManagementWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		8A9FC68D3D9D3F6018BD7413 /* ATServicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 775188868D4A424AE1DA1533 /* ATServicesView.swift */; };
 		9A2807145F1BD00B73CFF365 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 35919A1AEF73A68E149824AF /* Assets.xcassets */; };
 		9A9A9B53FCE62F3380449352 /* CaseManagementApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D9C88C0F185CD8FAD2D7615 /* CaseManagementApp.swift */; };
 		A5F8AC03009A6B00EE01333A /* EquipmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A4FE2DE36B30320C058C22A /* EquipmentView.swift */; };
 		A6EE88C709493AF5CDDA1A52 /* ReferralsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86FB60BE1EE5F7391D7BDD8E /* ReferralsView.swift */; };
+		AA24536B8207F8F47B952670 /* CaseManagementWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03D0DE35120F004662335AA /* CaseManagementWidget.swift */; };
 		AF72942C2CC0610F37520312 /* InvoicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC7D3CCE583B3B2B541B6D9 /* InvoicesView.swift */; };
 		B3161276770315D1949D3918 /* ComplianceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1373090149217960863FE0EF /* ComplianceView.swift */; };
 		B4E95EDC1BDF3871DC7019B7 /* LocalNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F750449B9E7F6316E9CF482 /* LocalNotifications.swift */; };
@@ -55,6 +60,30 @@
 		FCD15590708A76A9D22E344D /* API.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99277E65950AB5FBC9C9CF40 /* API.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		5C287063A12E06E9AF5B8DFA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 34B89AE649A0C3A1B2EFEE3C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 28E5479A4D4E8AA21DE97A25;
+			remoteInfo = CaseManagementWidget;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		C79B508A467AFE0717E491EC /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				89E6A05AB833BC6EF4139698 /* CaseManagementWidget.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		00A5A9D8EE5CBAC58A3DAB1E /* SignatureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignatureView.swift; sourceTree = "<group>"; };
 		00D936D0F5E76C837C52FA1F /* IncidentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncidentsView.swift; sourceTree = "<group>"; };
@@ -62,6 +91,7 @@
 		098DE9637E1D017320032250 /* BookingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookingsView.swift; sourceTree = "<group>"; };
 		1373090149217960863FE0EF /* ComplianceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComplianceView.swift; sourceTree = "<group>"; };
 		142F29431CA223E90C3A342F /* TasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasksView.swift; sourceTree = "<group>"; };
+		1C23C30895CD6A842BF82CBE /* CaseManagementWidget.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = CaseManagementWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		1D4E8BA3A634FE9758910CB0 /* OfflineCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineCache.swift; sourceTree = "<group>"; };
 		2A5A97A9D97F74DB9471D58D /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
 		2AE17F209C5C6222096ADDA9 /* ScheduleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleView.swift; sourceTree = "<group>"; };
@@ -80,9 +110,11 @@
 		588BF483C54FA2E083C4AFA3 /* KnowledgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnowledgeView.swift; sourceTree = "<group>"; };
 		597ABD1562B745DF87A9F42A /* NotificationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsView.swift; sourceTree = "<group>"; };
 		5C0720962938F1050375F869 /* TrackDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackDetailView.swift; sourceTree = "<group>"; };
+		66DF903720C7C8E5FEF5CE13 /* AppIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntents.swift; sourceTree = "<group>"; };
 		6826FC15B6066A74FA0F98E4 /* PipelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineView.swift; sourceTree = "<group>"; };
 		6A4FE2DE36B30320C058C22A /* EquipmentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EquipmentView.swift; sourceTree = "<group>"; };
 		6B69D2377DCDD583F59162C6 /* FollowupsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowupsView.swift; sourceTree = "<group>"; };
+		6BDEE21DF4CB11527B840DA5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		6EF0D2B71508A87B548B7827 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		775188868D4A424AE1DA1533 /* ATServicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ATServicesView.swift; sourceTree = "<group>"; };
 		7EEBE1B9872AD80C86E8151F /* CounselorsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CounselorsView.swift; sourceTree = "<group>"; };
@@ -97,10 +129,13 @@
 		BB35AEA838959C5BED3A33E6 /* AIToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIToolsView.swift; sourceTree = "<group>"; };
 		BE55F4B084B791474211097F /* VoiceAssistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAssistant.swift; sourceTree = "<group>"; };
 		BF2E213D530538ADFF38C897 /* PortalRequestsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortalRequestsView.swift; sourceTree = "<group>"; };
+		CBB32C5C81EDD8CC5067041B /* WidgetShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetShared.swift; sourceTree = "<group>"; };
 		D25D57525AD69C7F3CF9BFC8 /* ContractsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractsView.swift; sourceTree = "<group>"; };
 		DAC7D3CCE583B3B2B541B6D9 /* InvoicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InvoicesView.swift; sourceTree = "<group>"; };
 		E43B35FD256946A91D63E9A5 /* AccessibilityHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityHelpers.swift; sourceTree = "<group>"; };
 		ED88463141827145F7945DCB /* UtilizationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UtilizationView.swift; sourceTree = "<group>"; };
+		F03D0DE35120F004662335AA /* CaseManagementWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaseManagementWidget.swift; sourceTree = "<group>"; };
+		F8B35BF6B4715F47E4C16CA0 /* CaseManagementWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CaseManagementWidget.entitlements; sourceTree = "<group>"; };
 		FD0B8CDEDAE1F11CAFBBEEC0 /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
 		FECB3C40972D5FDFE3DAF3C3 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -114,6 +149,7 @@
 				2A5A97A9D97F74DB9471D58D /* AccountView.swift */,
 				BB35AEA838959C5BED3A33E6 /* AIToolsView.swift */,
 				99277E65950AB5FBC9C9CF40 /* API.swift */,
+				66DF903720C7C8E5FEF5CE13 /* AppIntents.swift */,
 				35919A1AEF73A68E149824AF /* Assets.xcassets */,
 				775188868D4A424AE1DA1533 /* ATServicesView.swift */,
 				098DE9637E1D017320032250 /* BookingsView.swift */,
@@ -155,6 +191,7 @@
 				ED88463141827145F7945DCB /* UtilizationView.swift */,
 				BE55F4B084B791474211097F /* VoiceAssistant.swift */,
 				3E462ABFBBCD318CCFC39974 /* WaitlistView.swift */,
+				CBB32C5C81EDD8CC5067041B /* WidgetShared.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -163,14 +200,26 @@
 			isa = PBXGroup;
 			children = (
 				86B6703BE951CD983631880B /* CaseManagement.app */,
+				1C23C30895CD6A842BF82CBE /* CaseManagementWidget.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		917513062576ADB03F65D294 /* Widget */ = {
+			isa = PBXGroup;
+			children = (
+				F8B35BF6B4715F47E4C16CA0 /* CaseManagementWidget.entitlements */,
+				F03D0DE35120F004662335AA /* CaseManagementWidget.swift */,
+				6BDEE21DF4CB11527B840DA5 /* Info.plist */,
+			);
+			path = Widget;
 			sourceTree = "<group>";
 		};
 		EC26E13B396ADDFA1F97837B = {
 			isa = PBXGroup;
 			children = (
 				017F2DCC74DFC7A94FB857F3 /* Sources */,
+				917513062576ADB03F65D294 /* Widget */,
 				3557E8FE27564E66B0F0DFD0 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -178,16 +227,35 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		28E5479A4D4E8AA21DE97A25 /* CaseManagementWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C7E782ED9D43B82A82A9926A /* Build configuration list for PBXNativeTarget "CaseManagementWidget" */;
+			buildPhases = (
+				C29CC1CBB13082F0D1FB706E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CaseManagementWidget;
+			packageProductDependencies = (
+			);
+			productName = CaseManagementWidget;
+			productReference = 1C23C30895CD6A842BF82CBE /* CaseManagementWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		FE6A89BC4D40D9769DC13D35 /* CaseManagement */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 9C4F111077E50671B83E6D70 /* Build configuration list for PBXNativeTarget "CaseManagement" */;
 			buildPhases = (
 				3E8E7885EF6E5FD1AE0C1741 /* Sources */,
 				75EA88055A4DDB1EB6B3DD83 /* Resources */,
+				C79B508A467AFE0717E491EC /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				BFB16855B966E61A09BD77BD /* PBXTargetDependency */,
 			);
 			name = CaseManagement;
 			packageProductDependencies = (
@@ -205,6 +273,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					28E5479A4D4E8AA21DE97A25 = {
+						DevelopmentTeam = ;
+						ProvisioningStyle = Automatic;
+					};
 					FE6A89BC4D40D9769DC13D35 = {
 						DevelopmentTeam = ;
 						ProvisioningStyle = Automatic;
@@ -226,6 +298,7 @@
 			projectRoot = "";
 			targets = (
 				FE6A89BC4D40D9769DC13D35 /* CaseManagement */,
+				28E5479A4D4E8AA21DE97A25 /* CaseManagementWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -253,6 +326,7 @@
 				1F8C08B2CC958EC0A4C7D4C0 /* AccessibilityHelpers.swift in Sources */,
 				BCAA369F92E8752DFB1F08DC /* AccommodationsView.swift in Sources */,
 				E3F6F890D066042E9FA926D6 /* AccountView.swift in Sources */,
+				2C76023A04981D1A70FADE61 /* AppIntents.swift in Sources */,
 				075C75FE11EF98845F20AC63 /* BookingsView.swift in Sources */,
 				17910F6BE528E88C84AE022E /* ClientEditSheet.swift in Sources */,
 				CC7E66C5E75D7C7055EC784C /* ClientsView.swift in Sources */,
@@ -291,10 +365,28 @@
 				105512E0520973E4DE1BC479 /* UtilizationView.swift in Sources */,
 				35D6C961E8D154951192A737 /* VoiceAssistant.swift in Sources */,
 				3621C4154F60C5EBA4B6011C /* WaitlistView.swift in Sources */,
+				208411C9A0F5118B836F8DFF /* WidgetShared.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C29CC1CBB13082F0D1FB706E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA24536B8207F8F47B952670 /* CaseManagementWidget.swift in Sources */,
+				56C38842F3C4307644B8B2A1 /* WidgetShared.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		BFB16855B966E61A09BD77BD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 28E5479A4D4E8AA21DE97A25 /* CaseManagementWidget */;
+			targetProxy = 5C287063A12E06E9AF5B8DFA /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		07E0C11CF39E3E38F8035285 /* Debug */ = {
@@ -302,16 +394,17 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 32;
+				CURRENT_PROJECT_VERSION = 33;
 				DEVELOPMENT_TEAM = ;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 3.0.27;
+				MARKETING_VERSION = 3.0.28;
 				PRODUCT_BUNDLE_IDENTIFIER = org.example.cms;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -386,18 +479,61 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 32;
+				CURRENT_PROJECT_VERSION = 33;
 				DEVELOPMENT_TEAM = ;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 3.0.27;
+				MARKETING_VERSION = 3.0.28;
 				PRODUCT_BUNDLE_IDENTIFIER = org.example.cms;
 				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		7191EA807EBEC00597B03B6E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 33;
+				DEVELOPMENT_TEAM = ;
+				INFOPLIST_FILE = Widget/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 3.0.28;
+				PRODUCT_BUNDLE_IDENTIFIER = org.example.cms.widget;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		E296E2CA4DD42E9B516D5864 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 33;
+				DEVELOPMENT_TEAM = ;
+				INFOPLIST_FILE = Widget/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 3.0.28;
+				PRODUCT_BUNDLE_IDENTIFIER = org.example.cms.widget;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
@@ -466,6 +602,15 @@
 			buildConfigurations = (
 				07E0C11CF39E3E38F8035285 /* Debug */,
 				2E548A02AFC428133BB7B48A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C7E782ED9D43B82A82A9926A /* Build configuration list for PBXNativeTarget "CaseManagementWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7191EA807EBEC00597B03B6E /* Debug */,
+				E296E2CA4DD42E9B516D5864 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

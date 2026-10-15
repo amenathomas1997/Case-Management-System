@@ -5,6 +5,7 @@
 require __DIR__ . '/inc/bootstrap.php';
 require_once __DIR__ . '/inc/document.php';
 require_once __DIR__ . '/inc/report_period.php';
+require_once __DIR__ . '/inc/scheduled_reports.php';
 require __DIR__ . '/inc/layout.php';
 $user = require_login();
 require_perm('analytics');
@@ -17,92 +18,13 @@ $rs = report_table('surveys', (int)$user['id']);
 $period = report_period($user, date('Y') . '-01-01', date('Y') . '-12-31');
 $from = $period['from']; $to = $period['to']; $periodNotes = $period['notes'];
 
-/* Clients served: anyone with a logged visit in the period, by client type */
-$served = db()->prepare("SELECT c.client_type, COUNT(DISTINCT c.id) n
-    FROM work_logs w JOIN {$rt} t ON t.id = w.track_id JOIN clients c ON c.id = t.client_id
-    WHERE w.work_date BETWEEN ? AND ? GROUP BY c.client_type");
-$served->execute([$from, $to]);
-$served = $served->fetchAll();
-$servedTotal = array_sum(array_column($served, 'n'));
-
-/* Hours + value by RSA category (value = hours and mileage, each line rounded to the
-   cent as the invoices round it — the same expression as the totals below, so the
-   category values add up to the total service value) */
-$byCat = db()->prepare("SELECT COALESCE(w.rsa_category, t.rsa_category, 'Uncategorized') AS cat,
-        COUNT(DISTINCT t.client_id) clients, COALESCE(SUM(w.hours),0) hrs,
-        COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate, t.hourly_rate), 2) + ROUND(w.mileage * COALESCE(w.mileage_rate, t.mileage_rate), 2)),0) val
-    FROM work_logs w JOIN {$rt} t ON t.id = w.track_id
-    WHERE w.work_date BETWEEN ? AND ? GROUP BY cat ORDER BY hrs DESC");
-$byCat->execute([$from, $to]);
-$byCat = $byCat->fetchAll();
-
-/* Hours by program (bundle name, else the track's single category) */
-$byProg = db()->prepare("SELECT COALESCE(b.name, t.rsa_category, t.service_type, 'Unlabeled') AS program,
-        COUNT(DISTINCT t.client_id) clients, COALESCE(SUM(w.hours),0) hrs
-    FROM work_logs w JOIN {$rt} t ON t.id = w.track_id
-    LEFT JOIN service_bundles b ON b.id = t.bundle_id
-    WHERE w.work_date BETWEEN ? AND ? GROUP BY program ORDER BY hrs DESC");
-$byProg->execute([$from, $to]);
-$byProg = $byProg->fetchAll();
-
-/* Closures in the period from status history. Each client counts once, by their
-   LAST status change in the period, and only if that change closed the case — a
-   closure later corrected to another closed status, or reopened, in the same
-   period counts as where it ended up. A client is counted only when the case was
-   closed (moved into a Closed status from an open one) in the period, so correcting
-   an earlier period's closure to another closed status is not a new closure. Rows
-   carried over from a merged duplicate ('[merged] ' note) are that duplicate's
-   timeline, so they are left out. */
-$finalInPeriod = "DATE(h.changed_at) BETWEEN ? AND ?
-    AND (h.note IS NULL OR h.note NOT LIKE '[merged] %')
-    AND NOT EXISTS (SELECT 1 FROM client_status_history h2 WHERE h2.client_id = h.client_id
-        AND DATE(h2.changed_at) BETWEEN ? AND ?
-        AND (h2.note IS NULL OR h2.note NOT LIKE '[merged] %')
-        AND (h2.changed_at > h.changed_at OR (h2.changed_at = h.changed_at AND h2.id > h.id)))
-    AND EXISTS (SELECT 1 FROM client_status_history h3 WHERE h3.client_id = h.client_id
-        AND DATE(h3.changed_at) BETWEEN ? AND ?
-        AND (h3.note IS NULL OR h3.note NOT LIKE '[merged] %')
-        AND h3.new_status LIKE 'Closed%' AND (h3.old_status IS NULL OR h3.old_status NOT LIKE 'Closed%'))";
-$closures = db()->prepare("SELECT h.new_status, COUNT(*) n
-    FROM {$rh} h
-    WHERE h.new_status LIKE 'Closed%' AND {$finalInPeriod}
-    GROUP BY h.new_status");
-$closures->execute([$from, $to, $from, $to, $from, $to]);
-$closures = $closures->fetchAll();
-// One row per client, so the per-status counts add up to the distinct total.
-$closedTotal = (int)array_sum(array_column($closures, 'n'));
-$rehab = 0;
-foreach ($closures as $c) if ($c['new_status'] === 'Closed - Rehabilitated') $rehab = (int)$c['n'];
-
-/* Average total hours per client closed rehabilitated in the period (same cohort) */
-$avgHours = db()->prepare("SELECT AVG(client_hours) FROM (
-    SELECT h.client_id, (SELECT COALESCE(SUM(w.hours),0) FROM work_logs w
-        JOIN {$rt} t ON t.id = w.track_id WHERE t.client_id = h.client_id) AS client_hours
-    FROM {$rh} h
-    WHERE h.new_status = 'Closed - Rehabilitated' AND {$finalInPeriod}
-    GROUP BY h.client_id) x");
-$avgHours->execute([$from, $to, $from, $to, $from, $to]);
-$avgHours = (float)$avgHours->fetchColumn();
-
-/* Totals */
-$totals = db()->prepare("SELECT COALESCE(SUM(w.hours),0) hrs, COALESCE(SUM(w.mileage),0) mi,
-        COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate, t.hourly_rate), 2) + ROUND(w.mileage * COALESCE(w.mileage_rate, t.mileage_rate), 2)),0) val
-    FROM work_logs w JOIN {$rt} t ON t.id = w.track_id WHERE w.work_date BETWEEN ? AND ?");
-$totals->execute([$from, $to]);
-$totals = $totals->fetch();
-// The value above is hours and mileage. Track expenses dated in the period are billed on
-// the same invoices (generate_invoice) and are in the RSA-911 export's Service Value, so
-// they are shown beside it, with the total of both, and the two reports reconcile.
-$exq = db()->prepare("SELECT COALESCE(SUM(e.amount),0) FROM track_expenses e JOIN {$rt} t ON t.id = e.track_id WHERE e.expense_date BETWEEN ? AND ?");
-$exq->execute([$from, $to]);
-$expenses = (float)$exq->fetchColumn();
-$valueAll = round((float)$totals['val'] + $expenses, 2);
-
-/* Survey results in the period */
-$sv = db()->prepare("SELECT COUNT(*) n, AVG(satisfaction) sat, AVG(goals_met) goals
-    FROM {$rs} surveys WHERE completed_at IS NOT NULL AND DATE(completed_at) BETWEEN ? AND ?");
-$sv->execute([$from, $to]);
-$sv = $sv->fetch();
+/* The numbers (clients served, hours by category and program, closures, totals,
+   expenses, surveys) come from outcome_metrics() in inc/scheduled_reports.php, which
+   the scheduled monthly email uses too, so the two always agree. */
+$m = outcome_metrics($from, $to, $rt, $rh, $rs);
+$served = $m['served']; $servedTotal = $m['servedTotal']; $byCat = $m['byCat']; $byProg = $m['byProg'];
+$closures = $m['closures']; $closedTotal = $m['closedTotal']; $rehab = $m['rehab']; $avgHours = $m['avgHours'];
+$totals = $m['totals']; $expenses = $m['expenses']; $valueAll = $m['valueAll']; $sv = $m['sv'];
 
 /* ---- CSV export ---- */
 if (isset($_GET['export'])) {

@@ -275,7 +275,10 @@ struct Session: Decodable, Identifiable {
     /// True when the session has ended but is still Scheduled (no outcome recorded yet);
     /// nil from a server that does not report it.
     var overdue: Bool?
-    private enum CodingKeys: String, CodingKey { case id, startAt, endAt, location, notes, status, trackId, client, instructor, isRemote, meetingUrl, overdue }
+    /// When the session was checked in ("YYYY-MM-DD HH:MM:SS", server time), nil when it has
+    /// not been, or from a server that does not report it (3.0.28 adds check_in_session).
+    var checkedInAt: String?
+    private enum CodingKeys: String, CodingKey { case id, startAt, endAt, location, notes, status, trackId, client, instructor, isRemote, meetingUrl, overdue, checkedInAt }
     // Tolerant decode: endAt is never displayed, so a null on any row must not blank the
     // whole Schedule tab. Only id is required.
     init(from d: Decoder) throws {
@@ -292,6 +295,8 @@ struct Session: Decodable, Identifiable {
         isRemote = (try? c.decodeIfPresent(Bool.self, forKey: .isRemote)) ?? false
         meetingUrl = try? c.decodeIfPresent(String.self, forKey: .meetingUrl)
         overdue = try? c.decodeIfPresent(Bool.self, forKey: .overdue)
+        let checked = (try? c.decodeIfPresent(String.self, forKey: .checkedInAt))?.trimmingCharacters(in: .whitespaces)
+        checkedInAt = (checked?.isEmpty ?? true) ? nil : checked
     }
 }
 
@@ -947,6 +952,7 @@ final class API: ObservableObject {
             case "add_note": return "Case note"
             case "log_hours": return "Hours"
             case "save_followup": return "Device follow-up"
+            case "check_in_session": return "Session check-in"
             default: return "Entry"
             }
         }
@@ -1121,6 +1127,10 @@ final class API: ObservableObject {
                     }
                     if (200..<300).contains(http.statusCode),
                        let ok = try? decoder.decode(OKResponse.self, from: data), ok.ok {
+                        done.insert(item.id)
+                    } else if http.statusCode == 409, item.action == "check_in_session" {
+                        // Already checked in (from another phone, or an earlier try whose reply
+                        // was lost): the check-in is recorded, so the entry is done.
                         done.insert(item.id)
                     } else if http.statusCode >= 500 || http.statusCode == 429 {
                         // Transient server/rate-limit error: keep the entry and stop; it retries later.

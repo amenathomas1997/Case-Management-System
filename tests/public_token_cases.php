@@ -37,6 +37,19 @@ $expiredPortal = $portalToken($portalOther, date('Y-m-d H:i:s', strtotime('-2 da
 $archivedPortal = $portalToken($portalArchived, null);
 [$code, $out, $err] = $anon('portal', ['t' => $validPortal]);
 check($clean($code, $err) && str_contains($out, 'Portaltest') && !str_contains($out, 'Link not recognized'), 'The client portal opens for a valid link, without a staff session' . ($err ? ": $err" : ''));
+// "Your progress": one line per active track, from the same goal, hours, session and
+// homework rows the staff pages use; only the link's own client's tracks.
+check(!str_contains($out, 'Your progress'), 'The portal shows no progress section for a client with no training track' . ($err ? ": $err" : ''));
+$db->prepare("INSERT INTO training_tracks(client_id,title,auth_number,funding_agency,authorized_hours,hourly_rate) VALUES(?,'Progress synthetic track','PROG-1','State VR',20,95)")->execute([$portalClient]); $progressTrack = (int)$db->lastInsertId();
+$db->prepare("INSERT INTO training_tracks(client_id,title,auth_number,funding_agency,hourly_rate) VALUES(?,'Otherclient synthetic track','PROG-2','State VR',95)")->execute([$portalOther]);
+$db->prepare("INSERT INTO smart_goals(track_id,specific_goal,measurable_metric,status) VALUES(?,'Goal met','m','Achieved'),(?,'Goal open','m','In Progress')")->execute([$progressTrack, $progressTrack]);
+$db->prepare("INSERT INTO homework(track_id,title,assigned_at,status) VALUES(?,'Open homework',CURDATE(),'Assigned'),(?,'Done homework',CURDATE(),'Completed')")->execute([$progressTrack, $progressTrack]);
+$db->prepare("INSERT INTO work_logs(track_id,work_date,hours,description,created_by) VALUES(?,CURDATE(),2.5,'Synthetic progress hours',1)")->execute([$progressTrack]);
+$db->prepare("INSERT INTO scheduled_sessions(client_id,track_id,user_id,start_at,end_at) VALUES(?,?,1,DATE_ADD(NOW(),INTERVAL 3 DAY),DATE_ADD(NOW(),INTERVAL 3 DAY)+INTERVAL 1 HOUR)")->execute([$portalClient, $progressTrack]);
+[$code, $out, $err] = $anon('portal', ['t' => $validPortal]);
+check($clean($code, $err) && str_contains($out, 'Your progress') && str_contains($out, 'Progress synthetic track') && !str_contains($out, 'Otherclient synthetic track')
+    && str_contains($out, '1 of 2 goals met.') && str_contains($out, '2.5 of 20 hours used.') && str_contains($out, 'Next session:') && str_contains($out, '1 homework item to do.'),
+    'The portal progress line gives goals met, hours used of authorized, the next session and open homework for the link\'s own track only' . ($err ? ": $err" : ''));
 foreach (['an expired link' => $expiredPortal, "an archived client's link" => $archivedPortal, 'an unknown link' => str_repeat('ab', 24)] as $what => $token) {
     [$code, $out, $err] = $anon('portal', ['t' => $token]);
     check($clean($code, $err) && str_contains($out, 'Link not recognized') && !str_contains($out, 'Portalother') && !str_contains($out, 'Portalarchived'), "The client portal refuses $what and shows no client" . ($err ? ": $err" : ''));
@@ -75,7 +88,7 @@ check($clean($code, $err) && (int)$db->query("SELECT COUNT(*) FROM client_notes 
 // A client who prefers Spanish gets the portal in Spanish from the first visit.
 $db->exec("UPDATE clients SET preferred_language='es' WHERE id=$portalClient");
 [$code, $out, $err] = $anon('portal', ['t' => $validPortal]);
-check($clean($code, $err) && str_contains($out, '<html lang="es"') && str_contains($out, 'Pregúntenos algo'), 'The portal opens in Spanish for a client who prefers Spanish' . ($err ? ": $err" : ''));
+check($clean($code, $err) && str_contains($out, '<html lang="es"') && str_contains($out, 'Pregúntenos algo') && str_contains($out, 'Su progreso') && str_contains($out, 'metas logradas.'), 'The portal opens in Spanish for a client who prefers Spanish' . ($err ? ": $err" : ''));
 [$code, $out, $err] = $anon('portal', ['t' => $validPortal, 'lang' => 'en']);
 check($clean($code, $err) && str_contains($out, '<html lang="en"'), 'The language toggle still switches a Spanish-speaking client\'s portal to English' . ($err ? ": $err" : ''));
 $db->exec("UPDATE clients SET preferred_language='en' WHERE id=$portalClient");

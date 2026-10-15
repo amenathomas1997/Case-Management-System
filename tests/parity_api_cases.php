@@ -124,3 +124,46 @@ try {
 } finally {
     $db->exec("UPDATE `groups` SET perms='clients;schedule',own_caseload_only=1 WHERE id=999; UPDATE users SET group_id=NULL WHERE id=1");
 }
+
+/* ---- Session check-in (3.0.28): check_in_session and checked_in_at on schedule ---- */
+$addSession=function(int $client,int $minutesFromNow)use($db):int{
+    $db->prepare("INSERT INTO scheduled_sessions(client_id,user_id,start_at,end_at) VALUES(?,1,?,?)")
+        ->execute([$client,date('Y-m-d H:i:s',time()+$minutesFromNow*60),date('Y-m-d H:i:s',time()+($minutesFromNow+60)*60)]);
+    return (int)$db->lastInsertId();
+};
+$soon=$addSession(1,10); $late=$addSession(1,-600); $tooEarly=$addSession(1,45); $tooLate=$addSession(1,-13*60);
+$checkedIn=$call('check_in_session',['session_id'=>$soon]);
+$storedAt=$db->query("SELECT checked_in_at FROM scheduled_sessions WHERE id=$soon")->fetchColumn();
+check($storedAt!==null && $checkedIn['checked_in_at']===$storedAt && abs(strtotime($storedAt)-time())<120
+    && str_contains($checkedIn['message'],'Kept synthetic client checked in at')
+    && (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action='session.checkin' AND entity='session' AND entity_id=$soon")->fetchColumn()===1,
+    'check_in_session records the arrival time once, returns it and audits session.checkin');
+$call('check_in_session',['session_id'=>$soon],[],false,'Already checked in at');
+check($db->query("SELECT checked_in_at FROM scheduled_sessions WHERE id=$soon")->fetchColumn()===$storedAt,'A second check-in answers 409 with the first time and changes nothing');
+$call('check_in_session',['session_id'=>$late]);
+check($db->query("SELECT checked_in_at FROM scheduled_sessions WHERE id=$late")->fetchColumn()!==null,'A session that started within the last 12 hours can still be checked in');
+$call('check_in_session',['session_id'=>$tooEarly],[],false,'check-in opens 30 minutes before');
+$call('check_in_session',['session_id'=>$tooLate],[],false,'more than 12 hours ago');
+check((int)$db->query("SELECT COUNT(*) FROM scheduled_sessions WHERE id IN ($tooEarly,$tooLate) AND checked_in_at IS NOT NULL")->fetchColumn()===0,
+    'Check-in is refused outside the window (more than 30 minutes early or 12 hours late) and nothing is recorded');
+$db->exec("UPDATE scheduled_sessions SET status='Cancelled' WHERE id=$tooLate");
+$call('check_in_session',['session_id'=>$tooLate],[],false,'not found or already closed');
+$call('check_in_session',['session_id'=>0],[],false,'not found or already closed');
+$listed=array_values(array_filter($call('schedule')['sessions'],fn($s)=>$s['id']===$soon))[0]??null;
+$unchecked=array_values(array_filter($call('schedule')['sessions'],fn($s)=>$s['id']===$tooEarly))[0]??null;
+check($listed!==null && $listed['checked_in_at']===$storedAt && $unchecked!==null && array_key_exists('checked_in_at',$unchecked) && $unchecked['checked_in_at']===null,
+    'schedule lists checked_in_at on every session: the time once checked in, null before');
+// Caseload scope: the same rule as the schedule action, so a session that the user's
+// schedule never lists cannot be checked in either.
+$db->exec("UPDATE `groups` SET perms='schedule',own_caseload_only=1 WHERE id=999; UPDATE users SET group_id=999 WHERE id=1");
+try {
+    $outsideSession=$addSession($parOutside,5); $ownSession=$addSession(1,5);
+    $call('check_in_session',['session_id'=>$outsideSession],[],false,'not found or already closed');
+    $call('check_in_session',['session_id'=>$ownSession]);
+    check($db->query("SELECT checked_in_at FROM scheduled_sessions WHERE id=$outsideSession")->fetchColumn()===null
+        && $db->query("SELECT checked_in_at FROM scheduled_sessions WHERE id=$ownSession")->fetchColumn()!==null,
+        'Caseload-scoped staff can check in only their own clients\' sessions');
+} finally {
+    $db->exec("UPDATE `groups` SET perms='clients;schedule',own_caseload_only=1 WHERE id=999; UPDATE users SET group_id=NULL WHERE id=1");
+    $db->exec('DELETE FROM scheduled_sessions WHERE id IN ('.implode(',',[$soon,$late,$tooEarly,$tooLate,$outsideSession??0,$ownSession??0]).')');
+}

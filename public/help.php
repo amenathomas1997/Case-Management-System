@@ -72,7 +72,8 @@ if (!$viewer) echo lang_toggle();
     <?php foreach (staff_guide_topics() as $sgId => [$sgTitle]): ?>
       <li><a href="#<?= h($sgId) ?>"><?= h($sgTitle) ?></a></li>
     <?php endforeach; ?>
-    </ul></li><?php endif; ?>
+    </ul></li>
+  <li><a href="#whats-new">What's new in each release</a></li><?php endif; ?>
   <li><a href="#portal"><?= t('Your client portal') ?></a></li>
   <li><a href="#consent"><?= t('Signing a consent form') ?></a></li>
   <li><a href="#referral"><?= t('The referral form') ?></a></li>
@@ -84,6 +85,20 @@ if (!$viewer) echo lang_toggle();
   <li><a href="privacy.php"><?= t('Privacy notice (separate page)') ?></a></li>
 </ul></nav>
 <?php if ($viewer) require __DIR__ . '/inc/staff_guide.php'; ?>
+<?php if ($viewer): // Staff only (English, like the guide): what changed for a caseworker in each release, newest first.
+    $releaseNotes = require __DIR__ . '/inc/release_notes.php'; ?>
+<section aria-labelledby="whats-new"><h2 id="whats-new">What's new in each release</h2>
+<p>What changed for staff, newest first. You are using version <?= h(APP_VERSION) ?>. The Dashboard shows a short notice for a new version until you choose Got it there.</p>
+<?php foreach ($releaseNotes as $rnVersion => $rnBullets): ?>
+<h3 id="whats-new-<?= h(str_replace('.', '-', (string)$rnVersion)) ?>">Version <?= h((string)$rnVersion) ?><?= (string)$rnVersion === APP_VERSION ? ' (the version you are using)' : '' ?></h3>
+<ul>
+<?php foreach ($rnBullets as $rnBullet): ?>
+  <li><?= h($rnBullet) ?></li>
+<?php endforeach; ?>
+</ul>
+<?php endforeach; ?>
+</section>
+<?php endif; ?>
 <section aria-labelledby="portal"><h2 id="portal"><?= t('Your client portal') ?></h2>
 <p><?= t('Your portal is a private page reached through the link we emailed you. Keep the link to yourself: anyone who has it can see your page. There is no password.') ?></p>
 <p><?= t('The link works for 180 days. Only the newest link works: when we send you a new one, any older link stops working. If your link stops working, contact us for a new one.') ?></p>

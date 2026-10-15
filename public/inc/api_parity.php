@@ -3,7 +3,7 @@ declare(strict_types=1);
 /*
  * App parity actions (3.0.22): tasks, alerts, client portal requests, training
  * tracks, guardian consent, the intake pipeline, status history and the invoice
- * list. Included by api.php (API_PARITY_ACTIONS) after sign-in and the
+ * list; session check-in (3.0.28). Included by api.php (API_PARITY_ACTIONS) after sign-in and the
  * $API_ACTION_PERMS check, in api.php's scope ($action, $input, $userId, out(),
  * fail(), can(), caseload_scoped(), api_require_client(), db(), audit()).
  *
@@ -860,6 +860,36 @@ case 'doc_review': {
             'created_at' => (string)$n['created_at'], 'fingerprint' => workflow_note_fingerprint($n)];
     }
     out(['ok' => true, 'items' => $items]);
+}
+
+/* ---------- Session check-in (3.0.28) ---------- */
+
+case 'check_in_session': {
+    $parityRequirePost();
+    // POST {session_id}: records when the client arrived. The session must be one the
+    // schedule action lists (Scheduled, and on the user's caseload when scoped) and
+    // its start within the check-in window: from 30 minutes before it to 12 hours
+    // after (a late arrival, or a session checked in only once it is over). The
+    // first check-in is kept: a second answers 409 with that time.
+    $sid = (int)($input['session_id'] ?? 0);
+    $st = db()->prepare("SELECT s.id, s.start_at, s.checked_in_at, c.name AS client_name FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
+        WHERE s.id = ? AND s.status = 'Scheduled'" . (caseload_scoped() ? ' AND c.assigned_to = ?' : ''));
+    $st->execute(caseload_scoped() ? [$sid, $userId] : [$sid]);
+    $sess = $st->fetch();
+    if (!$sess) fail('Session not found or already closed.', 404);
+    if ($sess['checked_in_at'] !== null) fail('Already checked in at ' . date('g:i A', strtotime((string)$sess['checked_in_at'])) . '.', 409);
+    $start = strtotime((string)$sess['start_at']);
+    if ($start > time() + 30 * 60) fail('That session starts at ' . date('g:i A', $start) . ' on ' . date('M j', $start) . '; check-in opens 30 minutes before it.', 422);
+    if ($start < time() - 12 * 3600) fail('That session was scheduled more than 12 hours ago, so it can no longer be checked in. Record its outcome instead.', 422);
+    // Claim: two taps, or a colleague checking in meanwhile, record the first arrival only.
+    $claim = db()->prepare('UPDATE scheduled_sessions SET checked_in_at = NOW() WHERE id = ? AND checked_in_at IS NULL');
+    $claim->execute([$sid]);
+    $at = db()->prepare('SELECT checked_in_at FROM scheduled_sessions WHERE id = ?');
+    $at->execute([$sid]);
+    $checkedIn = (string)$at->fetchColumn();
+    if ($claim->rowCount() !== 1) fail('Already checked in at ' . date('g:i A', strtotime($checkedIn)) . '.', 409);
+    audit($userId, 'session.checkin', 'session', $sid, 'mobile');
+    out(['ok' => true, 'checked_in_at' => $checkedIn, 'message' => $sess['client_name'] . ' checked in at ' . date('g:i A', strtotime($checkedIn)) . '.']);
 }
 
 default:

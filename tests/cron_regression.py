@@ -4,6 +4,7 @@ from pathlib import Path
 import gzip
 import hashlib
 import json
+import re
 import os
 import subprocess
 import tempfile
@@ -376,7 +377,8 @@ function cfg($key) { return ['upload_dir'=>getenv('WATCH_UPLOADS'),'base_url'=>'
 class FakeWatchDB { function query($sql) { if (getenv('DB_DOWN')) throw new RuntimeException('Database connection failed (2002)'); return true; } }
 function db() { return new FakeWatchDB; }
 function send_app_mail($to,$subject,$body) { $GLOBALS['sent'][]=$subject; return true; }
-register_shutdown_function(function() { echo "\nSENT:" . json_encode($GLOBALS['sent']); });
+function set_setting($name,$value) { if (getenv('DB_DOWN')) throw new RuntimeException('Database connection failed (2002)'); $GLOBALS['settings'][$name]=$value; }
+register_shutdown_function(function() { echo "\nSENT:" . json_encode($GLOBALS['sent']) . "\nSETTINGS:" . json_encode($GLOBALS['settings'] ?? []); });
 ''')
     watch = path / 'watch_private'
     (watch / 'uploads').mkdir(parents=True)
@@ -388,15 +390,38 @@ register_shutdown_function(function() { echo "\nSENT:" . json_encode($GLOBALS['s
     def watchdog(**extra):
         env = {**os.environ, 'WATCH_UPLOADS': str(watch / 'uploads'), 'DB_DOWN': '', **extra}
         run = subprocess.run(['php', str(path / 'watchdog.php')], env=env, capture_output=True, text=True)
-        output, sent = run.stdout.split('SENT:')
-        return output, json.loads(sent), json.loads((watch / 'watchdog_state.json').read_text())
-    output, sent, state = watchdog()
+        output, rest = run.stdout.split('SENT:')
+        sent, settings = rest.split('SETTINGS:')
+        return output, json.loads(sent), json.loads((watch / 'watchdog_state.json').read_text()), json.loads(settings)
+    output, sent, state, settings = watchdog()
     assert 'CMS health alert: backup' in sent and 'backup' in state
-    output, sent, state = watchdog()
+    # The heartbeat health.php reads is written on every completed run, however many
+    # alerts went out, as an ISO 8601 time; a run whose database is down writes none.
+    assert re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$', settings.get('heartbeat_watchdog', ''))
+    output, sent, state, settings = watchdog()
     assert 'CMS health alert: backup' not in sent and 'backup' in state
     os.utime(old_dump, None)
-    output, sent, state = watchdog()
+    output, sent, state, settings = watchdog()
     assert 'backup' not in state and 'No database backup' not in output
-    output, sent, state = watchdog(DB_DOWN='1')
-    assert 'CMS health alert: db' in sent
-    print('PASS: The watchdog alerts once about a stale backup (not again within six hours), clears it when a fresh one appears, and reports an unreachable database')
+    output, sent, state, settings = watchdog(DB_DOWN='1')
+    assert 'CMS health alert: db' in sent and 'heartbeat_watchdog' not in settings
+    print('PASS: The watchdog alerts once about a stale backup (not again within six hours), clears it when a fresh one appears, reports an unreachable database, and writes its heartbeat only when the database answered')
+
+    # Scheduled report periods and recipients (inc/scheduled_reports.php): pure
+    # functions, run with a stub for the one formatter they use.
+    (path / 'periods.php').write_text(r'''<?php
+function fmt_date($d) { return date('M j, Y', strtotime($d)); }
+require getenv('CMS_ROOT') . '/public/inc/scheduled_reports.php';
+$out = [];
+foreach ([['last_month','2026-10-15'],['last_month','2026-01-03'],['last_quarter','2026-10-01'],['last_quarter','2026-11-28'],['last_quarter','2026-02-10']] as [$p,$d]) $out[] = scheduled_report_period($p, $d);
+$out[] = scheduled_reports_parse_recipients("Director@agency.org, not-an-address\nfinance@agency.org;director@agency.org");
+echo json_encode($out);
+''')
+    run = subprocess.run(['php', str(path / 'periods.php')], env={**os.environ, 'CMS_ROOT': str(root)}, capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    periods = json.loads(run.stdout)
+    assert [(p['from'], p['to'], p['stamp']) for p in periods[:5]] == [
+        ('2026-09-01', '2026-09-30', '2026-09'), ('2025-12-01', '2025-12-31', '2025-12'),
+        ('2026-07-01', '2026-09-30', '2026-Q3'), ('2026-07-01', '2026-09-30', '2026-Q3'), ('2025-10-01', '2025-12-31', '2025-Q4')]
+    assert periods[5] == {'valid': ['director@agency.org', 'finance@agency.org'], 'invalid': ['not-an-address']}
+    print('PASS: Scheduled reports cover the whole previous month or quarter, with one stamp per period, and recipients are validated and de-duplicated')
