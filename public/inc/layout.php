@@ -339,6 +339,7 @@ function page_footer(): void {
     <?php endif; ?>
     <p><?= h(cms_client_facing_page() ? brand('org') : cfg('name')) ?> <span aria-hidden="true">&middot;</span> <a href="community_referral.php"><?= t('Referral Form') ?></a>
        <span aria-hidden="true">&middot;</span> <?= $helpLink ?>
+       <span aria-hidden="true">&middot;</span> <a href="privacy.php"<?= page_lang() === 'es' ? '>' . t('Privacy notice') : ' lang="en">Privacy notice' ?></a>
        <?php if ($contact !== ''): ?><span aria-hidden="true">&middot;</span> <?= t('Questions? Email') ?> <a href="mailto:<?= h($contact) ?>"><?= h($contact) ?></a><?php endif; ?>
     </p>
     <?php if (!cms_client_facing_page()): ?><p class="site-version"><?= page_lang() === 'es' ? 'Versión' : 'Version' ?> <?= h(APP_VERSION) ?></p><?php endif; ?>

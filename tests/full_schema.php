@@ -309,7 +309,7 @@ try {
         'ack'=>'Confirmation link','portal'=>'Portal','vrc'=>'Portal link not recognized','login'=>'redirect','forgot'=>'Forgot password','reset'=>'Reset password',
         'verify'=>'redirect','ai'=>'AI assistant','intake'=>'Guided intake','recommend'=>'AT recommendations','amendment_request'=>'Amendment request',
         'progress_review'=>'Progress review','translate'=>'Translate','remediate'=>'Remediation','ask'=>'Ask your caseload','kb_ask'=>'Ask the knowledge base',
-        'curriculum_ai'=>'Curriculum generator','workflows'=>'Daily action center'];
+        'curriculum_ai'=>'Curriculum generator','workflows'=>'Daily action center','privacy'=>'Privacy notice'];
     $showsOwnContent=function(string $page,string $html)use($pageMarkers):bool{
         $marker=$pageMarkers[$page]??null;
         if($marker===null)return false;
@@ -319,7 +319,7 @@ try {
         if(!preg_match('~<title[^>]*>(.*?)</title>~s',$html,$m))return false;
         return $marker[0]==='~'?preg_match($marker,$m[1])===1:str_contains($m[1],$marker);
     };
-    foreach (['index','clients','client','client_edit','track','track_edit','tasks','referrals','pipeline','schedule','capacity','access_bookings','equipment','followups','procurement','programs','contracts','invoices','analytics','outcomes','compliance','incidents','messages','curriculum','templates','score_assessment','accommodations','users','account','audit','trash','client_merge','counselors','portal_requests','email_templates','referral_settings','kb','search','utilization','agency_report','funder_report','rsa_report','doc_audit','risk','ai_tools','help','federation','report','eval_report','invoice_pdf','client_export','equipment_import','equipment_labels','notifications','community_referral','consent','survey','ack','portal','vrc','login','forgot','reset','verify','ai','intake','recommend','amendment_request','progress_review','translate','remediate','ask','kb_ask','curriculum_ai','workflows'] as $page) {
+    foreach (['index','clients','client','client_edit','track','track_edit','tasks','referrals','pipeline','schedule','capacity','access_bookings','equipment','followups','procurement','programs','contracts','invoices','analytics','outcomes','compliance','incidents','messages','curriculum','templates','score_assessment','accommodations','users','account','audit','trash','client_merge','counselors','portal_requests','email_templates','referral_settings','kb','search','utilization','agency_report','funder_report','rsa_report','doc_audit','risk','ai_tools','help','federation','report','eval_report','invoice_pdf','client_export','equipment_import','equipment_labels','notifications','community_referral','consent','survey','ack','portal','vrc','login','forgot','reset','verify','ai','intake','recommend','amendment_request','progress_review','translate','remediate','ask','kb_ask','curriculum_ai','workflows','privacy'] as $page) {
         $source=file_get_contents($root . '/public/' . $page . '.php');
         $source=swap_required("require __DIR__ . '/inc/bootstrap.php';", 'require ' . var_export($tmp . '/bootstrap.php',true) . ';', $source, "public/$page.php");
         $source=str_replace('__DIR__',var_export($root . '/public',true),$source);
@@ -778,6 +778,8 @@ try {
     require __DIR__.'/public_token_cases.php';
     require __DIR__.'/workflow_cases.php';
     require __DIR__.'/release_3021_cases.php';
+    require __DIR__.'/account_api_cases.php';
+    require __DIR__.'/parity_api_cases.php';
 
     // Upgrade path: mig_3.0.8.sql applied to a database still in the 3.0.7 shape
     // must give exactly the columns, indexes and foreign keys schema_full.sql

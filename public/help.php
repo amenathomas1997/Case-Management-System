@@ -18,10 +18,13 @@ register_translations([
     'The survey' => 'La encuesta',
     'Filling in forms' => 'Cómo llenar formularios',
     'Reading and navigation' => 'Lectura y navegación',
-    'For staff: keeping your work and the voice assistant' => 'Para el personal: conservar su trabajo y el asistente de voz',
+    'Privacy notice (separate page)' => 'Aviso de privacidad (página aparte)',
+    'Getting help' => 'Cómo obtener ayuda',
     'Common terms' => 'Términos comunes',
-    'Your portal is a private page reached through the link we emailed you. Keep the link to yourself: anyone who has it can see your page. There is no password. If the link stops working, contact us for a new one.'
-        => 'Su portal es una página privada a la que se llega con el enlace que le enviamos por correo electrónico. No comparta el enlace: cualquier persona que lo tenga puede ver su página. No hay contraseña. Si el enlace deja de funcionar, comuníquese con nosotros para recibir uno nuevo.',
+    'Your portal is a private page reached through the link we emailed you. Keep the link to yourself: anyone who has it can see your page. There is no password.'
+        => 'Su portal es una página privada a la que se llega con el enlace que le enviamos por correo electrónico. No comparta el enlace: cualquier persona que lo tenga puede ver su página. No hay contraseña.',
+    'The link works for 180 days. Only the newest link works: when we send you a new one, any older link stops working. If your link stops working, contact us for a new one.'
+        => 'El enlace funciona durante 180 días. Solo funciona el enlace más reciente: cuando le enviamos uno nuevo, cualquier enlace anterior deja de funcionar. Si su enlace deja de funcionar, comuníquese con nosotros para recibir uno nuevo.',
     'On the portal you can see your upcoming sessions and your progress, mark practice and homework as done with the button “I\'ve done this”, log practice you did on your own, ask for an appointment or other help, share a document with your instructor, send your instructor a message, and update your contact information.'
         => 'En el portal puede ver sus próximas sesiones y su progreso, marcar la práctica y la tarea como hechas con el botón “Ya lo hice”, registrar la práctica que hizo por su cuenta, pedir una cita u otra ayuda, compartir un documento con su instructor, enviar un mensaje a su instructor y actualizar su información de contacto.',
     'Each form on the portal is sent on its own. After you send one, a message at the top of the page says whether it went through. If the page was open for a long time, it may ask you to send the form again; what you typed is kept.'
@@ -32,8 +35,8 @@ register_translations([
         => 'Después de firmar, la página lo confirma y se guarda un registro en el expediente del estudiante. Puede retirar su consentimiento en cualquier momento comunicándose con nosotros. Un enlace de consentimiento deja de funcionar 60 días después de enviarse; pídanos uno nuevo si el suyo venció.',
     'Anyone can use the referral form to request assistive technology services: a school, a medical provider, an agency, an employer, a family member, or the person themselves. Required fields are marked with an asterisk (*). If something is missing, a list of the problems appears at the top of the form, with a link to each field.'
         => 'Cualquier persona puede usar el formulario de referencia para solicitar servicios de tecnología de asistencia: una escuela, un proveedor médico, una agencia, un empleador, un familiar o la propia persona. Los campos obligatorios están marcados con un asterisco (*). Si falta algo, aparece una lista de los problemas al principio del formulario, con un enlace a cada campo.',
-    'After you send it, the page confirms that it was received, and we will contact you within 3 business days.'
-        => 'Después de enviarlo, la página confirma que se recibió y nos comunicaremos con usted dentro de 3 días hábiles.',
+    'After you send it, the page confirms that it was received. It shows your referral number and the date we will contact you by, which is within 3 business days. Write down the number. If you have not heard from us by that date, email us and mention your referral number.'
+        => 'Después de enviarlo, la página confirma que se recibió. Muestra su número de referencia y la fecha en que nos comunicaremos con usted, dentro de 3 días hábiles. Anote el número. Si no tiene noticias nuestras para esa fecha, escríbanos por correo electrónico e indique su número de referencia.',
     'After training, we may email you a short survey with three questions: how satisfied you are, how well the training met your goals, and any comments. The first two are required; comments are optional. You can answer it once, and your answers go to our team to improve our services.'
         => 'Después de la capacitación, es posible que le enviemos por correo electrónico una breve encuesta de tres preguntas: qué tan satisfecho está, qué tan bien la capacitación cumplió sus metas y cualquier comentario. Las dos primeras son obligatorias; los comentarios son opcionales. Puede responderla una vez, y sus respuestas llegan a nuestro equipo para mejorar nuestros servicios.',
     'Fields marked with an asterisk (*) or with the word (required) are required. Read the label and any instructions beside a field before entering information. Review the entries before choosing Save, Send, or Submit. Changing a list selection does not save it: use the button beside the list.'
@@ -42,31 +45,48 @@ register_translations([
         => 'Si aparece un error, lea el mensaje, corrija el campo indicado e inténtelo de nuevo. Un campo de archivo le permite elegir un archivo de su dispositivo. Después de volver a iniciar sesión o de recargar la página, es posible que tenga que elegir el archivo otra vez.',
     'For dates, use the format shown by your browser or its date picker. Search filters narrow the list; clear the filters to see more results. If you are unsure what a form is asking, contact the office using the email link at the bottom of the page before submitting.'
         => 'Para las fechas, use el formato que muestra su navegador o su selector de fechas. Los filtros de búsqueda acotan la lista; quite los filtros para ver más resultados. Si no está seguro de lo que pide un formulario, comuníquese con la oficina mediante el enlace de correo electrónico al final de la página antes de enviarlo.',
-    'Use the Low-vision controls at the top of each page to choose colors and contrast. Open “Text size and reading options” for text up to 200%, extra spacing, a narrower reading width, highlighted links, and reduced motion. “Reset display” restores the defaults. Preferences are saved in this browser when storage is available. You can also use your browser’s zoom or your device’s high-contrast settings.'
-        => 'Use los Controles para baja visión en la parte superior de cada página para elegir colores y contraste. Abra “Tamaño del texto y opciones de lectura” para agrandar el texto hasta un 200 %, añadir espacio, estrechar el ancho de lectura, resaltar los enlaces y reducir el movimiento. “Restablecer la vista” vuelve a los valores predeterminados. Las preferencias se guardan en este navegador cuando es posible. También puede usar el zoom de su navegador o la configuración de alto contraste de su dispositivo.',
+    'Near the top of each page is the heading “Low-vision controls”. Choose the button “Show display options” under it to choose colors and contrast. Open “Text size and reading options” for text up to 200%, extra spacing, a narrower reading width, highlighted links, and reduced motion. “Reset display” restores the defaults. Preferences are saved in this browser when storage is available. You can also use your browser’s zoom or your device’s high-contrast settings.'
+        => 'Cerca de la parte superior de cada página está el encabezado “Controles para baja visión”. Elija el botón “Mostrar opciones de visualización” que está debajo para elegir colores y contraste. Abra “Tamaño del texto y opciones de lectura” para agrandar el texto hasta un 200 %, añadir espacio, estrechar el ancho de lectura, resaltar los enlaces y reducir el movimiento. “Restablecer la vista” vuelve a los valores predeterminados. Las preferencias se guardan en este navegador cuando es posible. También puede usar el zoom de su navegador o la configuración de alto contraste de su dispositivo.',
     'Press Tab to move forward through links and controls, and Shift+Tab to move back. The “Skip to main content” link moves past the repeated navigation. Scrollable tables can receive keyboard focus so you can use arrow keys to read columns that are off screen.'
         => 'Presione Tab para avanzar por los enlaces y controles, y Mayús+Tab para retroceder. El enlace “Saltar al contenido principal” pasa por alto la navegación repetida. Las tablas desplazables pueden recibir el foco del teclado para que use las flechas y lea las columnas que no se ven en la pantalla.',
+    'If you have a question, or something on this website does not work, email us. The address is at the bottom of every page, after “Questions? Email”. If you use the client portal, you can also send your instructor a message there.'
+        => 'Si tiene una pregunta, o algo de este sitio web no funciona, escríbanos por correo electrónico. La dirección está al final de cada página, después de “¿Preguntas? Escriba a”. Si usa el portal de cliente, también puede enviar un mensaje a su instructor desde allí.',
+    'Tell us the name of the page and what went wrong. If you sent a referral, include your referral number. Please do not email private details, such as medical information or your portal link.'
+        => 'Indíquenos el nombre de la página y qué salió mal. Si envió una referencia, incluya su número de referencia. Por favor, no envíe por correo electrónico datos privados, como información médica o el enlace de su portal.',
+    'Our privacy notice explains what information we keep, why, who we share it with, and your choices.'
+        => 'Nuestro aviso de privacidad explica qué información guardamos, por qué, con quién la compartimos y qué opciones tiene.',
+    'Read the privacy notice'
+        => 'Leer el aviso de privacidad',
 ]);
 // Signed-in staff keep their full navigation.
 page_header('Help and glossary', $viewer, 'help');
+// The staff guide's main topics are listed in this page's contents for signed-in staff.
+if ($viewer) { $staffGuideTopicsOnly = true; require __DIR__ . '/inc/staff_guide.php'; $staffGuideTopicsOnly = false; }
 if (!$viewer) echo lang_toggle();
 ?>
 <h1><?= t('Help and glossary') ?></h1>
 <p><?= t('Use this guide to find your way around, fill in forms, and understand common terms.') ?></p>
 <nav aria-label="<?= h(__('Help topics')) ?>"><ul>
-  <?php if ($viewer): ?><li><a href="#staff-guide">CMS user guide for staff: menu meanings and step-by-step workflows</a></li><?php endif; ?>
+  <?php if ($viewer): ?><li><a href="#staff-guide">CMS user guide for staff</a>
+    <ul>
+    <?php foreach (staff_guide_topics() as $sgId => [$sgTitle]): ?>
+      <li><a href="#<?= h($sgId) ?>"><?= h($sgTitle) ?></a></li>
+    <?php endforeach; ?>
+    </ul></li><?php endif; ?>
   <li><a href="#portal"><?= t('Your client portal') ?></a></li>
   <li><a href="#consent"><?= t('Signing a consent form') ?></a></li>
   <li><a href="#referral"><?= t('The referral form') ?></a></li>
   <li><a href="#survey"><?= t('The survey') ?></a></li>
   <li><a href="#forms"><?= t('Filling in forms') ?></a></li>
   <li><a href="#display"><?= t('Reading and navigation') ?></a></li>
-  <li><a href="#session"><?= t('For staff: keeping your work and the voice assistant') ?></a></li>
   <li><a href="#terms"><?= t('Common terms') ?></a></li>
+  <li><a href="#getting-help"><?= t('Getting help') ?></a></li>
+  <li><a href="privacy.php"><?= t('Privacy notice (separate page)') ?></a></li>
 </ul></nav>
 <?php if ($viewer) require __DIR__ . '/inc/staff_guide.php'; ?>
 <section aria-labelledby="portal"><h2 id="portal"><?= t('Your client portal') ?></h2>
-<p><?= t('Your portal is a private page reached through the link we emailed you. Keep the link to yourself: anyone who has it can see your page. There is no password. If the link stops working, contact us for a new one.') ?></p>
+<p><?= t('Your portal is a private page reached through the link we emailed you. Keep the link to yourself: anyone who has it can see your page. There is no password.') ?></p>
+<p><?= t('The link works for 180 days. Only the newest link works: when we send you a new one, any older link stops working. If your link stops working, contact us for a new one.') ?></p>
 <p><?= t('On the portal you can see your upcoming sessions and your progress, mark practice and homework as done with the button “I\'ve done this”, log practice you did on your own, ask for an appointment or other help, share a document with your instructor, send your instructor a message, and update your contact information.') ?></p>
 <p><?= t('Each form on the portal is sent on its own. After you send one, a message at the top of the page says whether it went through. If the page was open for a long time, it may ask you to send the form again; what you typed is kept.') ?></p>
 </section>
@@ -76,7 +96,7 @@ if (!$viewer) echo lang_toggle();
 </section>
 <section aria-labelledby="referral"><h2 id="referral"><?= t('The referral form') ?></h2>
 <p><?= t('Anyone can use the referral form to request assistive technology services: a school, a medical provider, an agency, an employer, a family member, or the person themselves. Required fields are marked with an asterisk (*). If something is missing, a list of the problems appears at the top of the form, with a link to each field.') ?></p>
-<p><?= t('After you send it, the page confirms that it was received, and we will contact you within 3 business days.') ?></p>
+<p><?= t('After you send it, the page confirms that it was received. It shows your referral number and the date we will contact you by, which is within 3 business days. Write down the number. If you have not heard from us by that date, email us and mention your referral number.') ?></p>
 </section>
 <section aria-labelledby="survey"><h2 id="survey"><?= t('The survey') ?></h2>
 <p><?= t('After training, we may email you a short survey with three questions: how satisfied you are, how well the training met your goals, and any comments. The first two are required; comments are optional. You can answer it once, and your answers go to our team to improve our services.') ?></p>
@@ -87,14 +107,8 @@ if (!$viewer) echo lang_toggle();
 <p><?= t('For dates, use the format shown by your browser or its date picker. Search filters narrow the list; clear the filters to see more results. If you are unsure what a form is asking, contact the office using the email link at the bottom of the page before submitting.') ?></p>
 </section>
 <section aria-labelledby="display"><h2 id="display"><?= t('Reading and navigation') ?></h2>
-<p><?= t('Use the Low-vision controls at the top of each page to choose colors and contrast. Open “Text size and reading options” for text up to 200%, extra spacing, a narrower reading width, highlighted links, and reduced motion. “Reset display” restores the defaults. Preferences are saved in this browser when storage is available. You can also use your browser’s zoom or your device’s high-contrast settings.') ?></p>
+<p><?= t('Near the top of each page is the heading “Low-vision controls”. Choose the button “Show display options” under it to choose colors and contrast. Open “Text size and reading options” for text up to 200%, extra spacing, a narrower reading width, highlighted links, and reduced motion. “Reset display” restores the defaults. Preferences are saved in this browser when storage is available. You can also use your browser’s zoom or your device’s high-contrast settings.') ?></p>
 <p><?= t('Press Tab to move forward through links and controls, and Shift+Tab to move back. The “Skip to main content” link moves past the repeated navigation. Scrollable tables can receive keyboard focus so you can use arrow keys to read columns that are off screen.') ?></p>
-</section>
-<?php // Staff-only topics stay in English, marked as such on a Spanish page (3.1.2).
-$enAttr = page_lang() !== 'en' ? ' lang="en"' : ''; ?>
-<section aria-labelledby="session"><h2 id="session"><?= t('For staff: keeping your work and the voice assistant') ?></h2>
-<p<?= $enAttr ?>>Staff sessions end after <?= max(1, (int)cfg('session_timeout_minutes')) ?> minutes without activity. A warning lets you extend the session. If it has ended, keep the form open, sign in in another tab, and return to the form. Copy important unsaved text before leaving or reloading. Passwords and files are not automatically restored.</p>
-<p<?= $enAttr ?>>The voice assistant also accepts typed requests. Opening it does not start the microphone. Use Stop speaking to stop a spoken reply; the reply remains as text. Escape closes the assistant and stops the conversation.</p>
 </section>
 <?php // Clients and guardians reach this list from the public pages' footer, so it is
 // translated like the sections above: [term, Spanish term, meaning, Spanish meaning].
@@ -203,4 +217,9 @@ register_translations(array_merge(...array_map(fn(array $g): array => [$g[0] => 
   <dt><?= t($term) ?></dt><dd><?= t($meaning) ?></dd>
 <?php endforeach; ?>
 </dl></section>
+<section aria-labelledby="getting-help"><h2 id="getting-help"><?= t('Getting help') ?></h2>
+<p><?= t('If you have a question, or something on this website does not work, email us. The address is at the bottom of every page, after “Questions? Email”. If you use the client portal, you can also send your instructor a message there.') ?></p>
+<p><?= t('Tell us the name of the page and what went wrong. If you sent a referral, include your referral number. Please do not email private details, such as medical information or your portal link.') ?></p>
+<p><?= t('Our privacy notice explains what information we keep, why, who we share it with, and your choices.') ?> <a href="privacy.php"><?= t('Read the privacy notice') ?></a></p>
+</section>
 <?php page_footer();

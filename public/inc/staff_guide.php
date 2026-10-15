@@ -1,124 +1,721 @@
 <?php
 // Included only for signed-in staff by help.php. No client data is included.
-if (!isset($viewer) || !$viewer) return;
+// help.php also reads staff_guide_topics() (with $staffGuideTopicsOnly set) to list
+// the guide's main topics in its own table of contents.
+
+if (!function_exists('staff_guide_topics')) {
+    /** The guide's outline: h3 id => [title, [h4 id => title]]. Headings and both tables of contents are built from it. */
+    function staff_guide_topics(): array {
+        return [
+            'guide-quickstart' => ['Quick start: your first 10 minutes', []],
+            'guide-start' => ['How do I get around?', [
+                'guide-menu' => 'What is in each menu group?',
+                'guide-breadcrumbs' => 'How do I use the breadcrumbs?',
+                'guide-collapsed' => 'How do I open a form that is collapsed?',
+                'guide-shortcuts' => 'Which keyboard and JAWS shortcuts work here?',
+                'guide-dropdowns' => 'How do I use dropdowns with JAWS?',
+                'guide-search' => 'How do I search?',
+            ]],
+            'guide-day' => ['How do I plan my day?', []],
+            'guide-intake' => ['How do I handle a referral?', [
+                'guide-waitlist' => 'How do I use the referral waitlist?',
+                'guide-counselor-access' => 'How do I give a VR counselor access?',
+            ]],
+            'guide-notes' => ['How do I write a case note?', []],
+            'guide-training' => ['How do I set up assessments, tracks, goals and homework?', []],
+            'guide-sessions' => ['How do I schedule and log a session?', [
+                'guide-log-session' => 'How do I log hours for a session?',
+                'guide-complete-session' => 'How do I complete a session?',
+                'guide-groups' => 'How do I run a group session?',
+            ]],
+            'guide-equipment' => ['How do I loan and track equipment?', [
+                'guide-loan' => 'How do I loan an item out?',
+                'guide-return' => 'How do I record a return or a service?',
+                'guide-reserve' => 'How do I reserve an item?',
+                'guide-followup' => 'How do I record a device follow-up?',
+                'guide-purchase' => 'How do I buy a device?',
+                'guide-at-services' => 'How do I record other AT services?',
+            ]],
+            'guide-contact' => ['How do I message clients and use the portal?', [
+                'guide-messages' => 'How do I send a message?',
+                'guide-portal-staff' => 'How do I give a client portal access?',
+                'guide-portal-requests' => 'How do I handle a portal request?',
+                'guide-documents' => 'How do I upload a document?',
+                'guide-consent' => 'How do I request guardian consent?',
+            ]],
+            'guide-billing' => ['How do I bill and record payments?', [
+                'guide-bill-month' => 'How do I bill all unbilled work?',
+                'guide-void' => 'How do I fix a mistake on a draft invoice?',
+                'guide-submit' => 'How do I mark an invoice submitted?',
+                'guide-payment' => 'How do I record a payment?',
+                'guide-contracts' => 'How do I track grants and contracts?',
+            ]],
+            'guide-reports' => ['How do I run reports?', [
+                'guide-report-outcomes' => 'Outcome report',
+                'guide-report-funder' => 'Funder outcome report',
+                'guide-report-agency' => 'Agency billing summary',
+                'guide-report-rsa' => 'RSA-911 case-service export',
+                'guide-report-utilization' => 'Staff billable utilization',
+                'guide-report-capacity' => 'Capacity planning',
+                'guide-report-risk' => 'Outcome risk flags',
+                'guide-client-reports' => 'How do I send a report about one client?',
+            ]],
+            'guide-ai' => ['How do I use AI and the voice assistant?', [
+                'guide-ai-review' => 'How do I check AI work?',
+                'guide-voice' => 'How do I use the voice assistant?',
+            ]],
+            'guide-iphone' => ['How do I use the iPhone app?', [
+                'iphone-signin' => 'How do I sign in?',
+                'iphone-rotor' => 'How do I reach the buttons in a list?',
+                'iphone-steppers' => 'How do I change a number?',
+                'iphone-log-hours' => 'How do I log hours on the iPhone?',
+                'iphone-account' => 'How do I manage my account on the iPhone?',
+                'iphone-offline' => 'What happens when I am offline?',
+                'iphone-limits' => 'What do I still do on the website?',
+            ]],
+            'guide-account' => ['How do I change my account and display settings?', []],
+            'guide-admin' => ['Administration', [
+                'guide-audit' => 'How do I read the audit log?',
+                'guide-templates' => 'How do I manage templates?',
+                'guide-trash' => 'How do I restore something from the trash?',
+                'guide-users' => 'How do I manage users?',
+            ]],
+            'guide-privacy' => ['Privacy and confidentiality', []],
+            'guide-problems' => ['What if something goes wrong?', [
+                'guide-unsaved' => 'What does “Unsaved changes” mean?',
+                'guide-session-expired' => 'What if I am signed out?',
+                'guide-get-help' => 'How do I get help?',
+            ]],
+        ];
+    }
+}
+if (!empty($staffGuideTopicsOnly) || !isset($viewer) || !$viewer) return;
+
+$sgTopics = staff_guide_topics();
+$sgTitles = [];
+foreach ($sgTopics as $sgId => [$sgTitle, $sgSubs]) $sgTitles += [$sgId => $sgTitle] + $sgSubs;
+/** A heading from the outline, so its text always matches the table of contents. */
+$sgH = fn(int $level, string $id): string => '<h' . $level . ' id="' . h($id) . '">' . h($sgTitles[$id]) . '</h' . $level . '>';
+$sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 ?>
 <section aria-labelledby="staff-guide">
 <h2 id="staff-guide">CMS user guide for staff</h2>
-<p>This guide uses the names shown in the website menu. Start with the task you want to do, then follow its steps. Your permission group and assigned caseload determine which links and records you can open. A missing link does not necessarily mean the feature is broken; ask your administrator to check your access.</p>
+<p>This guide shows how to do common tasks. It uses the same names as the website menu. Each topic starts with a question, then short steps.</p>
+<p>You may not see every link. Your permission group and caseload decide what you can open. If a link is missing, ask your administrator to check your access.</p>
 <nav aria-label="Staff guide topics" id="staff-guide-topics"><ul>
-<li><a href="#guide-start">Getting around and understanding links</a></li>
-<li><a href="#guide-menu">What every main menu link means</a></li>
-<li><a href="#guide-day">Start your working day</a></li>
-<li><a href="#guide-intake">Review a referral and find the client record</a></li>
-<li><a href="#guide-notes">Write, edit and save case notes</a></li>
-<li><a href="#guide-training">Assessments, training tracks, goals and homework</a></li>
-<li><a href="#guide-sessions">Session schedule sessions and record delivered hours</a></li>
-<li><a href="#guide-devices">Devices, loans, purchases and AT service records</a></li>
-<li><a href="#guide-contact">Client &amp; counselor messages, client requests, documents and consent</a></li>
-<li><a href="#guide-billing">Billing, contracts and reports</a></li>
-<li><a href="#guide-ai">Use AI and review its work</a></li>
-<li><a href="#guide-admin">Goal &amp; assessment templates, account settings and administration</a></li>
-<li><a href="#guide-problems">Save warnings, errors and getting help</a></li>
+<?php foreach ($sgTopics as $sgId => [$sgTitle, $sgSubs]): ?>
+  <li><a href="#<?= h($sgId) ?>"><?= h($sgTitle) ?></a><?php if ($sgSubs): ?>
+    <ul>
+    <?php foreach ($sgSubs as $sgSubId => $sgSubTitle): ?>
+      <li><a href="#<?= h($sgSubId) ?>"><?= h($sgSubTitle) ?></a></li>
+    <?php endforeach; ?>
+    </ul>
+  <?php endif; ?></li>
+<?php endforeach; ?>
 </ul></nav>
 
-<h3 id="guide-start">Getting around and understanding links</h3>
-<p><strong>Dashboard</strong> returns to your starting page. <strong>Go to main menu</strong> opens and focuses the main menu, including on a narrow screen. <strong>Go back</strong> uses the previous page within this site when available; otherwise it returns to Dashboard. It does not undo a saved change.</p>
-<p>The Breadcrumb navigation near the start of Main content (on staff pages) shows the current page and its parent sections. For example, a training-track editor links back to Dashboard, Client records, the client and the track. Choose a parent to return there; the last item names your current page. This follows the record hierarchy, while Go back returns to the previous same-site page when available. Unsaved-change warnings still apply to breadcrumb links.</p>
-<p>A link with a client's name opens that person's record. A training-track title opens one service or training plan within the record. Links such as Edit, Review or Open act on the item in that row; their screen-reader names may include the client or item for clarity. Read the page heading after following a link to confirm where you are.</p>
-<p>Low-vision controls is a heading near the top of each page. Below it, the Show display options button opens the color, text size and reading settings.</p>
-<p>The main menu is grouped under headings: Today, Clients, Services, Equipment, Billing, compliance &amp; reports, and Help &amp; account. Inside the Main navigation landmark, press H to move from group to group, or L for the next list. Each menu link has a short hint: a screen reader reads it after the link name when you pause or Tab to it, and it appears on screen after a moment when you hover over or Tab to the link. Press Escape to hide a hint.</p>
-<p>Forms that are not needed every time, such as Add a task or Schedule a session, start collapsed. A heading with the form's name comes first, so H finds it; the button after the heading opens the form. It opens by itself when something needs correcting.</p>
-<p>Use the screen reader's landmarks or regions list to jump to Main navigation, Main content, Site search, Low-vision controls or Site information. Use headings to move between sections within a page. The navigation links at the top and bottom have their own named landmarks. With a keyboard, use Tab and Shift+Tab; use Skip to main content to bypass repeated controls.</p>
-<h4 id="guide-dropdowns">Dropdowns and combo boxes with JAWS</h4>
-<p>For an expanded list instead of a collapsed dropdown, open Low-vision controls → Text size and reading options and turn on Show dropdown choices as lists. This applies across the website and is remembered in this browser when storage is available. Tab to a list, enter Forms Mode if necessary, and use the arrow keys to choose. Turn the option off to restore dropdowns. Reset display also restores the default.</p>
-<p>JAWS can read a form using its virtual cursor without sending arrow keys to a dropdown. At a combo box, press Enter to enter Forms Mode, then use Up Arrow or Down Arrow to change the choice. Alternatively, press Alt+Down Arrow to open the choices and Alt+Up Arrow to close them. When navigating with Tab, automatic Forms Mode depends on your JAWS settings.</p>
-<p>A prompt such as Choose a client means no client has been chosen yet. After choosing an item, use the form's Save, Apply or other action button when required. If JAWS continues to announce “unselected” after you choose an item, report the page heading, field label, browser and JAWS version so that specific control can be checked.</p>
+<?= $sgH(3, 'guide-quickstart') ?>
+<ol>
+  <li>Sign in. You start on Dashboard.</li>
+  <li>If you need larger text or other colors, find the heading Low-vision controls near the top. Choose the button Show display options under it.</li>
+  <li>Choose Go to main menu near the top of the page. The menu has six groups. Press H to move from group to group.</li>
+  <li>Open Daily work &amp; review. It lists what needs your attention, grouped by when it is due.</li>
+  <li>Open Client records and choose a client. Press H to move through the sections of their record.</li>
+  <li>Open one of the client's training tracks. Use the On this page links to jump to Log a session.</li>
+  <li>Come back to this guide when you need it. Each topic below starts with a “How do I” question.</li>
+</ol>
+
+<?= $sgH(3, 'guide-start') ?>
+<p>Every staff page has the same parts, in the same order:</p>
+<ol>
+  <li>The Skip to main content link.</li>
+  <li>Page navigation, with three buttons: Go back, Dashboard and Go to main menu.</li>
+  <li>The Low-vision controls heading, with the Show display options button.</li>
+  <li>The site header, with the main menu.</li>
+  <li>Main content. On most pages it starts with the breadcrumbs.</li>
+  <li>The footer, called Site information. It has the same three buttons, the referral form, this help page, the support email and the version number.</li>
+</ol>
+<p>Go back returns to the page you came from in this site. If there is none, it goes to Dashboard. Going back does not undo a save.</p>
+<p>A link with a client's name opens that person's record. A track title opens one training plan inside the record. Buttons such as Edit, Review or Open act on the item in the same row. After you follow a link, read the page heading to check where you are.</p>
+<p>Filters and Apply buttons only change what the page shows. They do not change records. Buttons such as Save, Assign, Send and Log do change records. Each form on a page is saved on its own. Read the message that appears after you use one.</p>
+
+<?= $sgH(4, 'guide-menu') ?>
+<p>The main menu has six groups. Each group has a heading, so H moves from group to group. Each link has a short hint. A screen reader reads the hint after the link name when you pause. On screen, the hint appears when you hover over the link or Tab to it. Press Escape to hide a hint.</p>
+<ul>
+  <li>Today
+    <ul>
+      <li>Dashboard: your starting page, with caseload totals, expiring authorizations and recent activity.</li>
+      <li>Task list: to-do items with an owner and a due date.</li>
+      <li>Daily work &amp; review: what needs attention today, plus documentation review, AI briefings, homework support and the referral waitlist.</li>
+    </ul></li>
+  <li>Clients
+    <ul>
+      <li>Client records: find a person and open their notes, assessments, training tracks and documents.</li>
+      <li>Incoming referrals: new requests for services. Review, assign or turn them into client records.</li>
+      <li>Intake progress: where each new client is in intake, so stalled work is easy to spot.</li>
+      <li>Client portal requests: appointment and help requests that clients sent from their portal.</li>
+      <li>Client &amp; counselor messages: conversations with clients and their VR counselors.</li>
+      <li>Accommodation assessments: worksite and job accommodation assessments and recommendations.</li>
+    </ul></li>
+  <li>Services
+    <ul>
+      <li>Session schedule: upcoming sessions. Completing a session logs its hours.</li>
+      <li>Group programs: group cohorts, membership and attendance.</li>
+      <li>Assistive technology services: device comparisons, setup records, outcomes, repairs and subscriptions.</li>
+      <li>Goal &amp; assessment templates: reusable wording for goals and assessments.</li>
+    </ul></li>
+  <li>Equipment
+    <ul>
+      <li>Equipment &amp; loans: the device inventory. Who has what, loans, returns and service.</li>
+      <li>Device purchases: device requests, from justification to order, delivery and training.</li>
+      <li>Device follow-ups: check-ins after a loan. Is the device still used? Is more help needed?</li>
+    </ul></li>
+  <li>Billing, compliance &amp; reports
+    <ul>
+      <li>Invoices: bill unbilled work, track submitted invoices and record payments.</li>
+      <li>Grants &amp; contracts: funding agreements, budgets, deliverables and spending.</li>
+      <li>Authorizations &amp; compliance: authorizations at risk, reports due and consents to renew.</li>
+      <li>Incident reports: record an incident and follow it to closure.</li>
+      <li>Business analytics: charts and every report, such as outcomes, funders, billing, RSA-911 and utilization.</li>
+    </ul></li>
+  <li>Help &amp; account
+    <ul>
+      <li>Staff knowledge base: your agency's how-to articles. You can search them or ask questions.</li>
+      <li>AI tools: AI drafting helpers. Always check their work before you save it.</li>
+      <li>User guide: this page.</li>
+      <li>My Account: your password, sign-in security, display settings and calendar feed.</li>
+    </ul></li>
+</ul>
+<p>After the six groups come three more items: Notifications (with the number unread), the Site search box and the Sign out button. Save your work before you sign out.</p>
+
+<?= $sgH(4, 'guide-breadcrumbs') ?>
+<p>The breadcrumbs are a short list at the start of Main content. Their landmark is called Breadcrumb. They show where the page sits, starting from Dashboard.</p>
+<p>For example, a training track shows: Dashboard, Client records, the client's name, then the track. The last item is the page you are on. It is not a link.</p>
+<ol>
+  <li>Press R or Semicolon in JAWS to move to the Breadcrumb landmark. You can also press L to move to its list.</li>
+  <li>Choose a parent page to go up one or more levels.</li>
+</ol>
+<p>Breadcrumbs follow how records are organized. Go back follows the pages you visited. If you have unsaved changes, you still get a warning before you leave.</p>
+
+<?= $sgH(4, 'guide-collapsed') ?>
+<p>Some forms start closed, so the lists on the page come first. Examples are Add a task, Schedule a session, Add a note, Add a SMART goal, Loan an item out and Add equipment. Billing and statements on a track and More actions on a device purchase also start closed.</p>
+<ol>
+  <li>Press H to find the form's heading. Most collapsed forms have a heading with the same name.</li>
+  <li>Move to the next item. It is a button with the form's name. JAWS says “collapsed”.</li>
+  <li>Press Enter or Space to open it. JAWS now says “expanded”.</li>
+  <li>Fill in the form and use its own button, such as Add task.</li>
+</ol>
+<p>A form opens by itself when it has an error to fix. It also opens when you follow a link that points to it.</p>
+
+<?= $sgH(4, 'guide-shortcuts') ?>
+<p>These shortcuts work on every page of this site. Letter keys work in the JAWS virtual cursor, not in Forms Mode.</p>
+<ul>
+  <li>Skip to main content: the first link on every page. Press Enter on it to jump past the menu.</li>
+  <li>R or Semicolon: move to the next landmark. Insert+Ctrl+R lists the regions. They include Page navigation, Low-vision controls, Site header, Main (the menu), Site search, Main content, Breadcrumb and Site information. In NVDA, press D.</li>
+  <li>H: move to the next heading. In the menu, H moves from one group to the next. Insert+F6 lists all headings.</li>
+  <li>L: move to the next list. In the menu, each group's links are one list.</li>
+  <li>Tab and Shift+Tab: move forward and back through links and controls.</li>
+  <li>Escape: hide a menu hint that is showing. In the voice assistant, Escape closes it.</li>
+  <li>Alt+L: in the voice assistant, start or continue listening with the microphone.</li>
+  <li>Type date instead: a button next to each date field. Choose it to type or paste the date as YYYY-MM-DD, for example 2026-10-14. Time fields have Type time instead and use 24-hour time, for example 14:30. Choose the picker button to switch back. Switching does not save the form.</li>
+  <li>Enter or Space on a collapsed form's button: open or close the form.</li>
+</ul>
+
+<?= $sgH(4, 'guide-dropdowns') ?>
+<p>You can show dropdown choices as an open list instead of a dropdown:</p>
+<ol>
+  <li>Under the Low-vision controls heading, choose Show display options.</li>
+  <li>Choose Text size and reading options.</li>
+  <li>Turn on Show dropdown choices as lists.</li>
+</ol>
+<p>This setting works on every page. It is remembered in this browser when the browser allows it. Turn it off, or choose Reset display, to bring back normal dropdowns.</p>
+<p>To use a normal dropdown (combo box) with JAWS:</p>
+<ol>
+  <li>Move to the combo box. Press Enter to turn on Forms Mode, if JAWS has not turned it on for you.</li>
+  <li>Press Up Arrow or Down Arrow to change the choice. Or press Alt+Down Arrow to open the list, then Alt+Up Arrow to close it.</li>
+  <li>Press Numpad Plus or Escape to leave Forms Mode.</li>
+  <li>Choose the form's button, such as Save or Apply. Picking a choice does not save it.</li>
+</ol>
+<p>A choice such as “Choose a client” means nothing is picked yet. If JAWS still says “unselected” after you pick a choice, tell us the page heading, the field label, your browser and your JAWS version.</p>
 <p><a href="https://support.freedomscientific.com/SurfsUp/9-Forms.htm">Freedom Scientific: using forms and combo boxes with JAWS</a></p>
-<p>For date fields, use Type date instead to enter or paste a complete date in YYYY-MM-DD format, such as 2026-10-14. Time fields use 24-hour HH:MM; date-and-time fields use YYYY-MM-DDTHH:MM. The instructions appear beside the field. Use the picker button to return to the native control; correct invalid text before switching. Switching does not save the form.</p>
-<p>Filters change which records are displayed. They do not change the records. Save, Assign, Send, Log and similar buttons perform an action. Read confirmation messages after using them. Each form on a page is saved separately.</p>
 
-<h3 id="guide-menu">What every main menu link means</h3>
-<p>The following names match the main menu. Some are available only with the appropriate permissions. In the menu they are grouped under the headings described in Getting around.</p>
-<dl>
-<dt>Dashboard</dt><dd>Your starting overview: tasks, caseload totals, expiring authorizations and recent activity where permitted. Open an item to do the work.</dd>
-<dt>Task list</dt><dd>Individual to-do items with an owner, due date and completion status. Use this for an action someone needs to carry out.</dd>
-<dt>Daily work &amp; review</dt><dd>A work queue and related tools: Daily action center, Documentation review, AI case briefing, Homework support, Referral waitlist and AI quality. A task list records assigned work; this area also highlights records needing attention.</dd>
-<dt>Assistive technology services</dt><dd>Structured assistive technology records, such as device comparisons, setup instructions, post-delivery outcomes, repair support and software subscriptions. These complement the client's notes and training tracks.</dd>
-<dt>Client records</dt><dd>The directory of people receiving services. Open a client to find Overview, Client Notes, Tech Assessments, Training Tracks, Documents and Status History.</dd>
-<dt>Incoming referrals</dt><dd>Incoming requests for services. Review, assign and, when appropriate, convert a referral to a client record.</dd>
-<dt>Client portal requests</dt><dd>Requests sent through the client portal. Review what was requested and update its status; check the relevant schedule or client record before treating the work as completed.</dd>
-<dt>Client &amp; counselor messages</dt><dd>Conversations with a client or counselor. Check both the client and the recipient/channel before sending.</dd>
-<dt>Intake progress</dt><dd>An overview of intake progress, including referrals awaiting action and clients grouped by stage. Use it to find stalled intake work.</dd>
-<dt>Accommodation assessments</dt><dd>Accommodation assessments and recommendations. Record the person's barriers and access needs in the relevant assessment.</dd>
-<dt>Session schedule</dt><dd>Upcoming sessions, group sessions and sessions awaiting an outcome. Use it for planned appointments and recording what happened.</dd>
-<dt>Group programs</dt><dd>Cohorts, group membership, attendance and group-session hours. The page currently includes the heading “Pre-ETS &amp; group programs”; use the programs applicable to your AT service. Access to a group may be restricted by caseload.</dd>
-<dt>Invoices</dt><dd>Billing documents, submission status, payments and outstanding balances. Recording a service and recording payment are separate steps.</dd>
-<dt>Grants &amp; contracts</dt><dd>Funding agreements, budgets, deliverables and spending associated with contracts.</dd>
-<dt>Equipment &amp; loans</dt><dd>The inventory of physical devices, their availability, loans, reservations and service history.</dd>
-<dt>Device follow-ups</dt><dd>Checks after equipment loans: whether the device is being used and whether more support is needed. Post-delivery setup outcomes are a separate Assistive technology services workflow.</dd>
-<dt>Incident reports</dt><dd>Incident records and their follow-up status. Record the event and review its status using the form provided.</dd>
-<dt>Device purchases</dt><dd>Device requests and the purchasing process: justification, authorization, order and delivery.</dd>
-<dt>Authorizations &amp; compliance</dt><dd>Items needing attention, including authorizations at risk, reports due, equipment service, contracts and consent renewals. Open the linked record to resolve the issue.</dd>
-<dt>Business analytics</dt><dd>Business and service summaries, including billable value, invoice status, survey results and goal status. Available detail depends on permissions and caseload.</dd>
-<dt>Goal &amp; assessment templates</dt><dd>Reusable goal templates, assessment templates, service bundles and scored assessment instruments. Templates are starting points that need to be adapted to a client.</dd>
-<dt>Staff knowledge base</dt><dd>The staff knowledge base of reference and how-to articles. This user guide explains the CMS itself; Staff knowledge base holds your organization's reference material.</dd>
-<dt>AI tools</dt><dd>Enabled AI tools for accessible content, knowledge-base questions, caseload questions, translation, curriculum drafting and outcome risk flags. Client-specific AI actions also appear inside client workflows.</dd>
-<dt>My Account</dt><dd>Your sign-in options and calendar subscription, plus team and administrative settings if your permissions allow them.</dd>
-<dt>User guide</dt><dd>This guide and the public help topics and glossary.</dd>
-<dt>Notifications</dt><dd>Notifications requiring your attention. Follow the notification to its related record; an unread count is not a count of all outstanding tasks.</dd>
-<dt>Site search</dt><dd>Search across accessible records. Enter a descriptive term, submit the search and inspect the result's type and name before opening it.</dd>
-<dt>Sign out</dt><dd>Ends your signed-in session. Save your work first; a stale session may require a fresh sign-out confirmation.</dd>
-</dl>
+<?= $sgH(4, 'guide-search') ?>
+<ol>
+  <li>Go to the main menu. The Site search box comes after the menu groups. You can also press R to reach the Site search landmark.</li>
+  <li>Type at least 2 characters, such as part of a name.</li>
+  <li>Press Enter.</li>
+  <li>Results are grouped by type, and each type has a heading. Press H to move between them.</li>
+  <li>Check the type and name before you open a result.</li>
+</ol>
+<p>Site search needs access to Client records. Some pages have their own search or filters, such as the equipment inventory and the task list. A filter only hides rows. Clear it to see everything again.</p>
 
-<h3 id="guide-day">Start your working day</h3>
-<ol><li>Open Dashboard and review your tasks and expiring authorizations.</li><li>Open Daily work &amp; review to inspect other items needing attention. Follow an item's link to the underlying record.</li><li>Open Session schedule to review today's sessions and sessions still awaiting an outcome.</li><li>Check Notifications, Client &amp; counselor messages and Client portal requests for new activity.</li><li>After completing work, update the relevant record and task status. Reading an alert alone does not complete the underlying work.</li></ol>
-<p>To create a task, open Task list, complete Add a task, choose the appropriate owner and due date, and submit the form. Find the saved task in the list and use its completion control when the action is finished.</p>
+<?= $sgH(3, 'guide-day') ?>
+<ol>
+  <li>Open Dashboard. Check your tasks and any authorizations about to expire.</li>
+  <li>Open Daily work &amp; review. The Daily action center opens first.</li>
+  <li>Read the summary line. It gives the number of items in each group.</li>
+  <li>Press H to move through the groups: Overdue, Due today, This week, Later and No date.</li>
+  <li>Follow an item's link to do the work. Items include tasks, referral follow-ups, session outcomes, documentation flags, expiring authorizations, homework and AT service deadlines.</li>
+  <li>Open Session schedule. Check Ended sessions awaiting an outcome first.</li>
+  <li>Check Notifications, Client &amp; counselor messages and Client portal requests.</li>
+</ol>
+<p>Reading an alert does not finish the work. Update the record, then mark the task done.</p>
+<p>The other tools in Daily work &amp; review are links near the top of that page:</p>
+<ul>
+  <li>Documentation review: notes with missing sections or placeholders. See <a href="#guide-notes">How do I write a case note?</a></li>
+  <li>AI case briefing: choose a client and choose Generate. You get a short draft summary of their recent notes, tracks, goals and homework. Check it against the records. It changes nothing.</li>
+  <li>Homework support: choose a client to see their practice updates and homework. See <a href="#guide-training">How do I set up assessments, tracks, goals and homework?</a></li>
+  <li>Referral waitlist: see <a href="#guide-waitlist">How do I use the referral waitlist?</a></li>
+  <li>AI quality: give feedback on recent AI requests.</li>
+</ul>
+<p>To add a task:</p>
+<ol>
+  <li>Open Task list.</li>
+  <li>Open the collapsed Add a task form.</li>
+  <li>Enter the task, choose its owner and set a due date.</li>
+  <li>Choose Add task.</li>
+  <li>When the work is finished, choose Done on that task. Choose Reopen if you need it back.</li>
+</ol>
 
-<h3 id="guide-intake">Review a referral and find the client record</h3>
-<ol><li>Open Incoming referrals and select the referral. Check the person's details, requested assistive technology services and supporting information.</li><li>Assign it to the appropriate staff member and mark it reviewed when appropriate.</li><li>Check whether the person already has a client record before converting the referral. Read the conversion options and confirmation on the page.</li><li>Open the resulting or existing client record and confirm the person's identity and assignment.</li><li>Review Overview for access needs, demographics and consent. Use Tech Assessments and Training Tracks for the next service steps.</li></ol>
-<p>Intake progress helps you see where intake work stands. Daily work &amp; review → Referral waitlist records readiness and follow-up needs. Saving a waitlist entry does not book a session or reassign the client.</p>
+<?= $sgH(3, 'guide-intake') ?>
+<p>Referrals come from the public referral form. The sender sees a referral number and the date we will contact them by. That date is 3 business days later. The system also makes a task to contact the person by then.</p>
+<ol>
+  <li>Open Incoming referrals and choose the referral.</li>
+  <li>Read the person's details and the services they asked for.</li>
+  <li>Assign the referral to a staff member.</li>
+  <li>Contact the person by the date they were given. They may quote their referral number.</li>
+  <li>Search Client records to check whether the person already has a record.</li>
+  <li>Convert the referral to a new client record, or open the existing record.</li>
+  <li>On the Overview tab, check access needs, demographics and consent.</li>
+</ol>
+<p>An email address from the referral form is marked Unverified. Nothing is sent to it until you confirm it with the client. To confirm it, open Edit profile / status on the client record and tick Confirmed with the client.</p>
+<p>Intake progress shows each new client's stage, so you can spot stalled intake work.</p>
 
-<h3 id="guide-notes">Write, edit and save case notes</h3>
-<ol><li>Open Client records, choose the person and select Client Notes. For a note about a particular training track, open Training Tracks, choose the track and find Case notes for this track.</li><li>Choose the appropriate note format and enter the date and text requested by the form. Structured formats divide a note into separate sections; the glossary explains BIRP, SOAP and PAIP.</li><li>If you use Generate structured note, Format with AI or Clean up with AI, review the returned text and correct it. Generating a draft is not the same as saving a note.</li><li>Review any homework items selected for inclusion. Choose Save note, or Save changes when editing an existing note.</li><li>Read the confirmation and check that the note appears in the appropriate client's or track's notes.</li></ol>
-<p>Client Notes holds notes for the overall case; track notes attach to a particular training plan. The client notes list can include track notes; its General only filter hides them. Check the scope before creating a duplicate.</p>
-<p>Documentation review in Daily work &amp; review highlights notes for review. Open the note text, correct it in its record if needed, or enter a rationale when a flag is acceptable. Recording a review is separate from editing the note.</p>
+<?= $sgH(4, 'guide-waitlist') ?>
+<ol>
+  <li>Open Daily work &amp; review, then Referral waitlist.</li>
+  <li>Choose a name. Open referrals are listed oldest first. Closed entries come last.</li>
+  <li>Fill in skills needed, language, service areas, client availability and delivery mode.</li>
+  <li>Choose a status: Waiting, Contacted, Ready or Closed. Add a follow-up date.</li>
+  <li>Choose Save waitlist entry.</li>
+</ol>
+<p>Suggested instructors appear under the form. A suggestion is not an assignment. Saving does not book a session or assign the client. If someone else saved the entry first, you see their version and your own text. Save again only if yours should replace theirs.</p>
 
-<h3 id="guide-training">Assessments, training tracks, goals and homework</h3>
-<ol><li>In a client record, open Tech Assessments. Choose the relevant scored assessment or complete Record a tech assessment. A template can prefill fields; review those fields before saving.</li><li>Open Training Tracks and select or create the appropriate service track. Check its authorization details, dates, rate and allowed hours where applicable.</li><li>In the track's SMART goals section, add a measurable goal, with a target and due date. If a template prefills the form, adapt it to this client before choosing Add goal.</li><li>Use each goal's progress controls and Record action as work progresses.</li><li>In Homework, enter the assignment and requested details, then choose Assign. Review or edit an existing assignment through its available link.</li></ol>
-<p>Daily work &amp; review → Homework support shows practice updates for a selected client and provides links to review assignments. Where AI adaptation is enabled, review its suggestions and save the intended assignment changes explicitly. A client's practice update is evidence to review, not an automatic assessment of goal completion.</p>
-<p>A training track connects goals, notes, hours, homework and billable expenses. A client may have several tracks; confirm the track name before entering service information.</p>
+<?= $sgH(4, 'guide-counselor-access') ?>
+<p>A VR counselor can have a private, read-only view of their own clients. It shows authorizations, hours, goal progress and report history.</p>
+<ol>
+  <li>Open Incoming referrals. Choose the link Manage counselor portal access.</li>
+  <li>Find the counselor in the table.</li>
+  <li>Choose Send portal link. If they already have one, the button is Resend / reset link or Send a new link.</li>
+</ol>
+<p>The counselor needs the link and a code that is emailed to them each time. A link lasts 180 days. Sending a new link turns off the old one. If a counselor leaves or shares the link, choose Turn off link.</p>
 
-<h3 id="guide-sessions">Session schedule sessions and record delivered hours</h3>
-<ol><li>Open Session schedule and complete Schedule a session with the client/track, staff, date, time and other required information.</li><li>Review the session in Upcoming sessions. Use the group-session form only when scheduling a group.</li><li>After the session, record its actual outcome using the available completion/status controls. Read the confirmation for what was recorded.</li><li>Check the track's Hours &amp; billing tracker before manually logging additional hours so the same service is not entered twice.</li><li>For hours not already recorded, complete the track's hours form and choose Log hours. Record billable expenses separately with Log expense where appropriate.</li></ol>
-<p>A planned appointment is not proof that services were delivered. A case note is also separate from the hours record. Verify both for completed work.</p>
-<p>For Group programs, open a cohort, check membership, and use Log a group session to record the session and participating students. Review Hours by activity, per student. Do not also log the same attendance as a second group session elsewhere.</p>
+<?= $sgH(3, 'guide-notes') ?>
+<ol>
+  <li>Open Client records and choose the person.</li>
+  <li>Open the Client Notes tab.</li>
+  <li>Open the collapsed Add a note form.</li>
+  <li>Choose the note format and the date. The glossary explains BIRP, SOAP and PAIP.</li>
+  <li>Type the note.</li>
+  <li>If you like, use Generate structured note, Format with AI or Clean up with AI. Read and fix the result. Your own text is kept under a heading such as “Your text before the AI clean-up”.</li>
+  <li>Choose Save note. When you edit a note, the button is Save changes.</li>
+  <li>Read the message, and check the note is in the list.</li>
+</ol>
+<p>For a note about one training track, open the track. Choose Case notes in the On this page links, then open Add a note. After you complete a session, the confirmation has a link, Write the session note. It opens that form for you.</p>
+<p>The notes list shows the newest 20 notes. Choose Show all notes to see the rest. Client Notes also lists track notes. The General only filter hides them.</p>
+<p>Documentation review (in Daily work &amp; review) checks recent notes for missing sections and placeholders. For each flagged note, do one of these:</p>
+<ul>
+  <li>Choose Open the flagged note, and fix the note.</li>
+  <li>Open Review note text. Type why the flag is acceptable, and choose Record review.</li>
+</ul>
 
-<h3 id="guide-devices">Devices, loans, purchases and AT service records</h3>
-<ol><li>For an existing device, open Equipment &amp; loans and find the item. Check its availability and current borrower.</li><li>Use Loan out to record the client and loan details. A reservation holds a place; it is not the same as an issued loan.</li><li>When the device is physically returned, use Mark returned on the correct loan. Record maintenance with Log service.</li><li>Open Device follow-ups to record use and support needs for due loan checks. Review the confirmation before saving; a recorded follow-up cannot be edited through that form.</li><li>For a purchase, open Device purchases, create a device request, and record the authorization, order and delivery as those events occur.</li></ol>
-<p>Assistive technology services holds additional structured workflows. Open the relevant category, create or select a record, fill in the required fields and choose Save record. Review its saved status and next-action date.</p>
-<ul><li><strong>Device trial comparisons:</strong> define shared goals, add trial options and results, then record the preferred option and rationale.</li><li><strong>Device setup records:</strong> record versions, accessibility settings, recovery instructions and training. Do not store passwords or license keys. An active setup with a delivery date schedules outcome checks.</li><li><strong>Post-delivery outcomes:</strong> open the check linked to the setup and record real-world use, barriers and next steps.</li><li><strong>Repair and loaner support:</strong> record the issue, vendor and repair progress. Use the separate equipment-issue confirmation for a loaner, and return it before closing the repair.</li><li><strong>Software licenses and License assignments:</strong> record purchased seats and renewal responsibilities, then assign available seats to clients.</li><li><strong>Instructor matching:</strong> maintain staff skills and availability, then use the matching filters to find suitable instructors. A match suggestion does not assign a client or book a session.</li><li><strong>Learning library and Assigned learning:</strong> create reusable learning material, then link the appropriate resource to a client and track completion in the assignment.</li><li><strong>Service profitability and Staff labor rates:</strong> authorized administrators and billing staff can review costs and margins and maintain the labor-cost information used by those calculations. Check the source hours and costs before interpreting a margin.</li><li><strong>Device reuse:</strong> document inspection, cleaning, data wiping and repairs before making donated equipment ready for redeployment.</li><li><strong>Authorization to payment:</strong> link funding evidence, the relevant track and invoice, and record the next funding action. A workflow status does not replace the actual invoice/payment record.</li></ul>
+<?= $sgH(3, 'guide-training') ?>
+<ol>
+  <li>In a client record, open the Tech Assessments tab. Use a scored assessment or Record a tech assessment. A template can fill in fields. Check them before you save.</li>
+  <li>Choose Add training track on the client record, or open a track from the Training Tracks tab.</li>
+  <li>Check the track's authorization, dates, hourly rate and allowed hours. You cannot log hours until the track has an hourly rate.</li>
+  <li>On the track, open the collapsed Add a SMART goal form. To use a template, search the templates and choose Prefill form. Change the wording to fit this client.</li>
+  <li>Choose Add goal.</li>
+  <li>As the client makes progress, use the goal's progress controls and choose Record. Open History to see earlier entries.</li>
+  <li>Under Homework, fill in Assign homework and choose Assign.</li>
+</ol>
+<p>A track page starts with On this page links: Service authorization, Log a session, Case notes, SMART goals, Homework and Billable expenses. Billing and statements is collapsed near the top. It holds the billing exports and statements.</p>
+<p>Homework support (in Daily work &amp; review) shows a client's practice updates. If AI is turned on, Draft homework adaptations for review suggests changes. Nothing changes until you save the assignment yourself. A practice update is evidence to review. It does not complete a goal.</p>
 
-<h3 id="guide-contact">Client &amp; counselor messages, client requests, documents and consent</h3>
-<ol><li>For a message, open Client &amp; counselor messages, choose the client and conversation channel, and open the conversation.</li><li>Read the thread, confirm who will receive the reply, then enter and send it. Sending is different from saving an internal case note.</li><li>For a portal request, open Client portal requests, review the request, carry out the appropriate action and update its status.</li><li>To attach a file, open the client's Documents section, enter the required description, choose the file and select Upload. Confirm it appears in the list.</li><li>To request consent or provide portal access, use the relevant controls in the client record and check the recipient details and confirmation.</li></ol>
-<p>Portal and consent links are intended for their recipients. Share them only through the intended workflow. The public help topics below explain how recipients use the portal, sign consent and submit forms.</p>
+<?= $sgH(3, 'guide-sessions') ?>
+<p>Scheduling a session is a plan. Logging hours records the work you did. A case note is separate again. Completed work needs hours and a note.</p>
+<ol>
+  <li>Open Session schedule.</li>
+  <li>Open the collapsed Schedule a session form.</li>
+  <li>Choose the client and the training track. Linking a track means completing the session logs its hours.</li>
+  <li>Choose the instructor, date, start time and duration. To repeat weekly, enter the number of weeks.</li>
+  <li>For a remote session, tick Remote / telepractice session and add the meeting link.</li>
+  <li>Choose Schedule &amp; send calendar invite.</li>
+  <li>If authorization warnings appear, read them. Tick the approval box only if the booking should go ahead.</li>
+</ol>
+<p>The page lists Ended sessions awaiting an outcome, Upcoming sessions and Closed sessions. It also links to Capacity planning and to interpreter, CART and transport bookings.</p>
 
-<h3 id="guide-billing">Billing, contracts and reports</h3>
-<ol><li>Before invoicing, check the track's authorization, delivered hours, expenses and rate. Correct the source records first.</li><li>Open Invoices, select the relevant period/options and generate the appropriate drafts. Review each invoice and its details.</li><li>Use the invoice's status controls to record submission when appropriate. Downloading a document does not itself establish that it was submitted to a funder.</li><li>When money is received, record the payment amount and requested details. Use Record another payment for additional receipts rather than recording the same receipt twice.</li><li>Review Outstanding for submitted or short-paid invoices still awaiting money.</li></ol>
-<p>In Grants &amp; contracts, open the agreement, record its budget and deliverables, and review spending. In Authorizations &amp; compliance, follow the links for authorizations or reports needing attention. Business analytics summarizes recorded activity; billable value is not necessarily cash received.</p>
-<p>For a client report, start with the client's or track's available report links, choose the requested scope, review the output and then download or send using the controls provided. Check the recipient and the content before sending. Access to financial and report information depends on your permissions.</p>
+<?= $sgH(4, 'guide-log-session') ?>
+<p>Use this for work that was not a scheduled session, or for a session with no track.</p>
+<ol>
+  <li>Open the training track.</li>
+  <li>Choose Log a session in the On this page links. The form is near the top.</li>
+  <li>Enter the date and the RSA service delivered.</li>
+  <li>If you like, choose the goal this session advanced.</li>
+  <li>Enter hours worked. Use quarter hours, such as 1.5.</li>
+  <li>Enter mileage, if any, and an activity description.</li>
+  <li>Choose Log hours.</li>
+</ol>
+<p>If the date is outside the authorization, you get an error. Tick Log it anyway only if the authorization is being renewed or amended. Do not log hours here for a session you will complete on the schedule. That would log them twice. Billable expenses use Log an expense, further down the track.</p>
 
-<h3 id="guide-ai">Use AI and review its work</h3>
-<ol><li>Choose the tool for the job. AI tools contains general tools; note, assessment, homework and briefing actions appear beside their related records.</li><li>Confirm the selected client, source material and requested output. Enter a clear request describing the task and relevant constraints.</li><li>Generate the draft. If a tool is absent or disabled, ask an administrator whether it is enabled for your account.</li><li>Compare the result with the source records. Check names, dates, measurements, service details, recommendations and omissions. Do not treat generated text as evidence of an event that was not recorded.</li><li>Edit the draft and use the explicit save, assign or send action only when it is ready. For a voice action, review the confirmation before choosing Accept and save; choose Decline to reject it.</li></ol>
-<p>The Knowledge-base assistant answers from your organization's articles and provides citations. Ask your caseload summarizes accessible client information. Accessible content &amp; remediation helps rewrite or adapt material; On-demand translation drafts translations; Curriculum generator drafts a training plan; Outcome risk flags suggests cases to review. These tools support staff judgment.</p>
-<p>The voice assistant accepts typed requests as well as microphone input. Opening it does not turn on the microphone. Use Stop speaking to stop audio. When listening pauses, inspect any pending confirmation before continuing. AI quality in Daily work &amp; review lets you record feedback on available AI requests.</p>
+<?= $sgH(4, 'guide-complete-session') ?>
+<ol>
+  <li>Open Session schedule.</li>
+  <li>Press H to find Ended sessions awaiting an outcome.</li>
+  <li>In the session's row, choose an outcome: Completed, Cancelled or No Show.</li>
+  <li>Choose Save, then confirm.</li>
+  <li>Choose Write the session note in the confirmation, and write the note.</li>
+</ol>
+<p>Completing a session that is linked to a track logs its hours. If hours for that day are already logged, choose “Completed — hours already logged” instead. Choose “Completed — log hours as well” only for a separate visit. If someone else cancels your session or records a No Show, you are told.</p>
 
-<h3 id="guide-admin">Goal &amp; assessment templates, account settings and administration</h3>
-<p>In Goal &amp; assessment templates, select the type of reusable material, enter its fields and save it. Use templates to prefill client-specific forms, then review the result before saving that client's record. In Staff knowledge base, search for an existing article before adding another, and keep instructions current.</p>
-<p>Low-vision controls starts collapsed. Activate its heading to expand or collapse it. In My Account → Display and accessibility settings, choose Show controls or Hide controls, then Save display settings. This visibility preference follows your account; your existing browser display preferences remain active while the controls are hidden.</p>
-<p>In My Account, use the available sections to change your password, configure an authenticator or passkey, link Microsoft sign-in when enabled, or create a calendar subscription. Keep calendar subscription addresses private.</p>
-<p>Administrators also have team, permission-group and configuration controls. Review the affected user or setting carefully before saving. User access controls which records and functions are available; a guide link does not grant additional permissions. AI settings control enabled features and provider configuration. Retention, updates and other housekeeping actions should be handled by the person responsible for the installation.</p>
+<?= $sgH(4, 'guide-groups') ?>
+<ol>
+  <li>On Session schedule, open the collapsed Schedule a group session form.</li>
+  <li>Choose the clients and details, then choose Schedule group session.</li>
+  <li>After the session, find it under Group sessions awaiting completion.</li>
+  <li>Untick anyone who did not come. They are recorded as No Show, with no hours.</li>
+  <li>Choose Record attendance.</li>
+</ol>
+<p>Group programs holds cohorts and membership. Use Log a group session there for program sessions. Do not log the same attendance in both places.</p>
 
-<h3 id="guide-problems">Save warnings, errors and getting help</h3>
-<ul><li><strong>“Unsaved changes”:</strong> Keep editing returns to the form. Save changes submits an available save action with normal validation. Leave without saving discards unsaved edits when navigation completes. Saving follows the form's normal result and may not take you to the link you originally selected.</li><li><strong>No Save changes option:</strong> return to the form and use its specific action, such as Assign or Send. The warning does not guess which action you want.</li><li><strong>Browser Back, refresh or closing:</strong> the browser may show its own warning. This is not autosave, and a browser or device closing unexpectedly can still lose work.</li><li><strong>Validation error:</strong> read the error summary, follow its field links, correct the values and submit again. A visible draft or filled form is not proof that it was saved.</li><li><strong>Session expired:</strong> keep the form open, copy important text, sign in again in another tab and return. Files may need to be selected again.</li><li><strong>Missing records:</strong> check filters, client/track selection and permissions. Ask an administrator to check your caseload assignment if needed.</li><li><strong>Still unsure:</strong> contact the office using the footer email. Include the page heading, link/button name, what you expected, the exact error and the footer version. Avoid sending client details or private portal links in an ordinary support message.</li></ul>
+<?= $sgH(3, 'guide-equipment') ?>
+<p id="guide-devices">Equipment &amp; loans is the device inventory. The counts at the top are links: Items tracked, On loan, Overdue returns and Service due. Each opens the inventory filtered to those items.</p>
+<ul>
+  <li>To find an item, use Search by item name, serial number or borrower, then choose Search.</li>
+  <li>To filter, use the links in Filter inventory by status: All, Available, On loan, Overdue returns, Service due, In repair or Retired.</li>
+  <li>A line under the filters says how many items are shown.</li>
+</ul>
+
+<?= $sgH(4, 'guide-loan') ?>
+<ol>
+  <li>Open Equipment &amp; loans.</li>
+  <li>Open the collapsed Loan an item out form.</li>
+  <li>Choose the item and the client, and fill in the loan details.</li>
+  <li>Choose Loan out.</li>
+</ol>
+<p>Some items say “held by a reservation”. If you lend one to someone else, the hold moves to the waitlist. The client's instructor and the person who made the hold are told. To add a new item to the inventory, open Add equipment and choose Add item.</p>
+
+<?= $sgH(4, 'guide-return') ?>
+<ol>
+  <li>Open the item. Its name in the inventory is a link.</li>
+  <li>Choose Mark returned, then confirm.</li>
+  <li>To record maintenance, fill in Log a service and choose Log service.</li>
+</ol>
+
+<?= $sgH(4, 'guide-reserve') ?>
+<ol>
+  <li>On Equipment &amp; loans, press H to find Reservations &amp; waitlist.</li>
+  <li>Under Reserve or waitlist an item, choose the item and the client.</li>
+  <li>Enter the dates it is needed, and any notes.</li>
+  <li>Choose Add reservation.</li>
+</ol>
+<p>An available item is held for the client. An item on loan puts the client on its waitlist. When the item is loaned to that client, the reservation is closed for you. A reservation is not a loan.</p>
+
+<?= $sgH(4, 'guide-followup') ?>
+<ol>
+  <li>Open Device follow-ups. Due now comes first.</li>
+  <li>Each due check is a heading with the client and the device. Press H to move between them.</li>
+  <li>Answer Still in use? and the other questions.</li>
+  <li>Choose Save follow-up. Or choose Snooze 2 weeks, or skip.</li>
+</ol>
+<p>Check your answers first. A saved follow-up cannot be changed on that page.</p>
+
+<?= $sgH(4, 'guide-purchase') ?>
+<ol>
+  <li>Open Device purchases.</li>
+  <li>Fill in New device request and choose Create request.</li>
+  <li>Open the request. Fill in the justification of need.</li>
+  <li>Add quotes with Add quote. Choose Mark recommended on the best one.</li>
+  <li>Under Lifecycle, the page shows only the next step. Steps are: Record funding authorization, Record order, Record delivery and Complete training.</li>
+  <li>Use that step's save button. The last one is Mark trained &amp; close.</li>
+</ol>
+<p>Other steps, and Deny or cancel, are under the collapsed More actions.</p>
+
+<?= $sgH(4, 'guide-at-services') ?>
+<p>Open Assistive technology services, or choose AT services and learning on a client record. Pick a category, open or create a record, fill it in and choose Save record. Check its status and next-action date.</p>
+<ul>
+  <li>Device trial comparisons: set shared goals, add trial options and results, then record the preferred option and why.</li>
+  <li>Device setup records: versions, accessibility settings, recovery steps and training. Never store passwords or license keys.</li>
+  <li>Post-delivery outcomes: open the check linked to the setup. Record real-world use, barriers and next steps.</li>
+  <li>Repair and loaner support: the issue, vendor and repair progress. Return any loaner before you close the repair.</li>
+  <li>Software licenses and License assignments: seats bought, renewals, and which client has each seat.</li>
+  <li>Instructor matching: staff skills and availability. A match does not assign a client or book a session.</li>
+  <li>Learning library and Assigned learning: reusable material, linked to a client to track completion.</li>
+  <li>Service profitability and Staff labor rates: costs and margins, for administrators and billing staff.</li>
+  <li>Device reuse: inspection, cleaning, data wiping and repairs before a donated device is used again.</li>
+  <li>Authorization to payment: links funding, the track and the invoice. It does not replace the invoice or payment record.</li>
+</ul>
+
+<?= $sgH(3, 'guide-contact') ?>
+<p>Messages, portal links and consent links go to real people outside the agency. Check who will receive them before you send.</p>
+
+<?= $sgH(4, 'guide-messages') ?>
+<ol>
+  <li>Open Client &amp; counselor messages. Or choose Messages with client on a client record.</li>
+  <li>Choose the client, and choose the client or their VR counselor.</li>
+  <li>Read the conversation. Check who will get your reply.</li>
+  <li>Type your reply and send it.</li>
+</ol>
+<p>A message is not a case note. Write a note as well if the conversation matters to the case.</p>
+
+<?= $sgH(4, 'guide-portal-staff') ?>
+<ol>
+  <li>Open the client record.</li>
+  <li>Choose Send portal link, then confirm.</li>
+</ol>
+<p>The client gets a private link by email. There is no password. The link lasts 180 days. Only the newest link works. Sending a new link turns off every older one.</p>
+<p>The link is not sent to an Unverified email address. Confirm the address first on Edit profile / status. If someone else may have the link, choose Turn off portal link. Text next to the button says until when the link is active, or when it expired.</p>
+<p>An archived record's portal does not open. A closed case's portal is read-only.</p>
+
+<?= $sgH(4, 'guide-portal-requests') ?>
+<ol>
+  <li>Open Client portal requests.</li>
+  <li>Read the request.</li>
+  <li>Do the work, such as booking the session on Session schedule.</li>
+  <li>Update the request's status.</li>
+</ol>
+
+<?= $sgH(4, 'guide-documents') ?>
+<ol>
+  <li>Open the client record, then the Documents tab.</li>
+  <li>Under Upload a document, type a description and choose the file.</li>
+  <li>Choose Upload.</li>
+  <li>Check the file is in the Documents list.</li>
+</ol>
+<p>If the upload fails, choose the file again and resend the form.</p>
+
+<?= $sgH(4, 'guide-consent') ?>
+<ol>
+  <li>Open the client record, on the Overview tab.</li>
+  <li>Open the collapsed Request guardian consent by email.</li>
+  <li>Enter the guardian's name and email.</li>
+  <li>Choose Email consent form, then confirm.</li>
+</ol>
+<p>The guardian signs by typing their full name. The link works for 60 days. A new request turns off any earlier unsigned link. While a request is waiting, the form is called Resend the guardian consent request by email. Authorizations &amp; compliance lists consents that need renewing.</p>
+
+<?= $sgH(3, 'guide-billing') ?>
+<p>Before you bill, check each track's authorization, hours, expenses and rate. Fix mistakes on the track first. Recording work and recording payment are separate steps.</p>
+
+<?= $sgH(4, 'guide-bill-month') ?>
+<ol>
+  <li>Open Invoices.</li>
+  <li>Choose Generate invoices for all unbilled work. The button shows the total amount.</li>
+  <li>Confirm. A draft invoice is made for every track with unbilled work. Those hours are now marked billed.</li>
+  <li>Use the Show filter to pick Draft, then choose Apply.</li>
+  <li>Review each draft invoice.</li>
+</ol>
+<p>Export for QuickBooks (CSV) downloads the invoices for your accounting system.</p>
+
+<?= $sgH(4, 'guide-void') ?>
+<ol>
+  <li>Find the draft invoice in the list.</li>
+  <li>Choose Void draft, then confirm.</li>
+  <li>Fix the hours or expenses on the track.</li>
+  <li>Generate invoices again.</li>
+</ol>
+<p>Voiding makes that work unbilled again. Only a draft can be voided. A submitted or paid invoice has gone to the funder.</p>
+
+<?= $sgH(4, 'guide-submit') ?>
+<ol>
+  <li>Send the invoice to the funder.</li>
+  <li>Choose Mark submitted on that invoice, then confirm.</li>
+</ol>
+<p>This starts the aging clock and cannot be undone. Downloading an invoice does not mark it submitted.</p>
+
+<?= $sgH(4, 'guide-payment') ?>
+<ol>
+  <li>Find the submitted invoice.</li>
+  <li>Enter the check or EFT reference.</li>
+  <li>Enter the amount paid, or tick Paid in full.</li>
+  <li>Choose Mark paid, then confirm.</li>
+</ol>
+<p>A paid invoice cannot go back to Submitted. If it was short-paid, it stays under Outstanding. When more money comes, use Record another payment. Do not enter the same payment twice. To fix an amount, use Correct the amount paid, then Save corrected amount.</p>
+
+<?= $sgH(4, 'guide-contracts') ?>
+<p>Open Grants &amp; contracts and choose the agreement. Record its budget and deliverables, and review spending. Authorizations &amp; compliance lists authorizations at risk and reports due. Follow each link to fix the record.</p>
+
+<?= $sgH(3, 'guide-reports') ?>
+<p>Open Business analytics. The Reports list comes first, then the charts. You see only the reports your permissions allow. Billable value is not the same as cash received.</p>
+<?= $sgH(4, 'guide-report-outcomes') ?>
+<p>Clients served, hours by RSA category and program, closures and the rehabilitation rate for a period. Agencies often ask for it at contract renewal. Exports to CSV.</p>
+<?= $sgH(4, 'guide-report-funder') ?>
+<p>One report for each funding agency. It covers clients served, hours, goals, device retention, assessment gains and closures. View it as a page, a letterhead PDF or CSV.</p>
+<?= $sgH(4, 'guide-report-agency') ?>
+<p>Billing totals for each funding agency over a date range, to reconcile with state VR. Also linked from Invoices.</p>
+<?= $sgH(4, 'guide-report-rsa') ?>
+<p>One row per client served in a period, with the case-service fields state VR asks for. Preview it on screen or download a CSV.</p>
+<?= $sgH(4, 'guide-report-utilization') ?>
+<p>Each staff member's billable hours and value for a period, compared with their expected capacity.</p>
+<?= $sgH(4, 'guide-report-capacity') ?>
+<p>Booked session hours compared with each instructor's available hours. It also shows authorized hours not yet scheduled. Also linked from Session schedule.</p>
+<?= $sgH(4, 'guide-report-risk') ?>
+<p>Uses AI to list active clients who may not complete, with a reason and a suggested action. It is only a prompt to review the case.</p>
+<?= $sgH(4, 'guide-client-reports') ?>
+<ol>
+  <li>Open the client's training track.</li>
+  <li>To send a progress report to the counselor, choose Email report to VRC. Check the content and recipient before you send.</li>
+  <li>For a statement, open the collapsed Billing and statements. Choose Download PDF statement or Download accessible HTML statement. The billing CSV exports are there too.</li>
+</ol>
+
+<?= $sgH(3, 'guide-ai') ?>
+<p>AI tools in the menu holds the general tools: Accessible content &amp; remediation, Knowledge-base assistant, Ask your caseload, On-demand translation, Curriculum generator and Outcome risk flags. Other AI buttons sit next to notes, assessments, homework and briefings.</p>
+<ol>
+  <li>Choose the tool for the job.</li>
+  <li>Check the client and source material are right.</li>
+  <li>Type a clear request.</li>
+  <li>Generate the draft.</li>
+  <li>Check it, edit it, then save, assign or send it yourself.</li>
+</ol>
+<p>If a tool is missing, ask an administrator whether it is turned on for you.</p>
+
+<?= $sgH(4, 'guide-ai-review') ?>
+<p>AI writes drafts. It never saves, sends or changes a record by itself. Before you use a draft, check:</p>
+<ul>
+  <li>Names, dates and numbers match the records.</li>
+  <li>Service details and recommendations are correct.</li>
+  <li>Nothing important is missing.</li>
+  <li>It does not describe anything that did not happen.</li>
+</ul>
+<p>To report a good or bad result, use AI quality in Daily work &amp; review.</p>
+
+<?= $sgH(4, 'guide-voice') ?>
+<ol>
+  <li>Choose the Voice assistant button. It is just before the footer.</li>
+  <li>Type a request and choose Send. Or choose Use microphone, or press Alt+L, and speak.</li>
+  <li>To keep talking back and forth, choose Start conversation. Choose End conversation to stop.</li>
+  <li>Before anything is saved, the assistant asks you to confirm. Choose Accept and save, or Decline. You can also type yes or no.</li>
+</ol>
+<p>Opening the assistant does not turn on the microphone. Stop speaking stops a spoken reply. The reply stays as text in the conversation history. Escape closes the assistant. You can also turn off Sound cues and Spoken replies, and set Loudness.</p>
+
+<?= $sgH(3, 'guide-iphone') ?>
+<p>The iPhone app works with VoiceOver. It covers daily work: clients, tracks, notes, hours, the schedule, Tasks, Notifications, Portal requests, Intake progress and Invoices. Invoices are read-only in the app. The app links to this user guide and to the privacy notice.</p>
+
+<?= $sgH(4, 'iphone-signin') ?>
+<ol>
+  <li>Enter your email address and password. Choose Continue.</li>
+  <li>If you use two-step sign-in, enter the 6-digit code. Choose Verify and sign in.</li>
+</ol>
+<p>If you forget your password, reset it on the website. The app can lock with Face ID or your passcode.</p>
+
+<?= $sgH(4, 'iphone-rotor') ?>
+<p>Each row in a list is one VoiceOver stop. Its buttons are in the Actions rotor.</p>
+<ol>
+  <li>Swipe to the row.</li>
+  <li>Swipe up or down to hear its actions.</li>
+  <li>Double-tap to use the one you want.</li>
+</ol>
+<p>If you hear something else when you swipe up or down, turn the rotor to Actions first.</p>
+
+<?= $sgH(4, 'iphone-steppers') ?>
+<p>Fields such as hours are steppers. Swipe up to increase the value. Swipe down to decrease it.</p>
+
+<?= $sgH(4, 'iphone-log-hours') ?>
+<p>Choose Log hours from a client, a track or the Schedule. The Schedule is grouped into Today, Tomorrow and Later. As on the website, do not log the same session twice.</p>
+
+<?= $sgH(4, 'iphone-account') ?>
+<p>The Account screen lets you change your password, set up two-step sign-in, subscribe to your calendar and sign out everywhere. Passkeys are set up on the website, in My Account.</p>
+
+<?= $sgH(4, 'iphone-offline') ?>
+<p>With no connection, notes and hours you enter are kept on the phone. They are sent when the connection comes back. Do not enter them again. Check later that they appear on the website.</p>
+
+<?= $sgH(4, 'iphone-limits') ?>
+<p>Some work is only on the website:</p>
+<ul>
+  <li>Billing all unbilled work, and other invoice changes.</li>
+  <li>Editing templates.</li>
+  <li>Analytics charts and funder reports.</li>
+  <li>User administration.</li>
+  <li>Equipment import and QR labels.</li>
+  <li>Merging and exporting client records.</li>
+</ul>
+
+<?= $sgH(3, 'guide-account') ?>
+<p>Open My Account. Press H to move between its sections:</p>
+<ul>
+  <li>Display and accessibility settings: choose Show controls or Hide controls for the low-vision controls, then Save display settings. This follows your account. Your display choices stay in place when the controls are hidden.</li>
+  <li>Microsoft sign-in: link your Microsoft account, if your agency uses it.</li>
+  <li>Change password.</li>
+  <li>Authenticator app: an optional second way to sign in.</li>
+  <li>Calendar subscription: a private address for your calendar app. Do not share it.</li>
+  <li>Passkeys: sign in with Face ID, Touch ID, Windows Hello or a password manager.</li>
+</ul>
+<p>To change how pages look, choose Show display options under the Low-vision controls heading. You can pick colors, such as White on black or Yellow on black. Text size and reading options has text size up to 200%, more spacing, narrow width, highlighted links, reduced motion and dropdowns as lists. Reset display brings back the defaults. These choices are saved in this browser.</p>
+
+<?= $sgH(3, 'guide-admin') ?>
+<p>These tasks are for administrators. My Account shows them as extra sections: Team, Permission groups, Sign-in &amp; federation and Housekeeping. Check the user or setting carefully before you save. A link in this guide does not give anyone extra access.</p>
+
+<?= $sgH(4, 'guide-audit') ?>
+<ol>
+  <li>In My Account, under Team, choose View audit log.</li>
+  <li>The log opens on the last 7 days.</li>
+  <li>Filter by team member, action, client record, from date or to date.</li>
+  <li>Clear the From date to see every date. Choose Reset filters to the last 7 days to start again.</li>
+</ol>
+<p>The page has two sections: Activity, and Sign-in attempts (the latest 100).</p>
+
+<?= $sgH(4, 'guide-templates') ?>
+<p>Goal &amp; assessment templates has four libraries. Each one is its own page, with links at the top to switch: SMART goal templates, Assessment templates, Service bundles and Scored assessment instruments. Each page has one list and one add form. The goal library is large, so search it to see templates. Templates are starting points. Staff adapt them for each client.</p>
+<p>Keep the Staff knowledge base current too. Search for an article before you add a new one.</p>
+
+<?= $sgH(4, 'guide-trash') ?>
+<ol>
+  <li>Open My Account and find Housekeeping.</li>
+  <li>Choose Trash (restore deleted items).</li>
+  <li>Find the item and restore it.</li>
+</ol>
+
+<?= $sgH(4, 'guide-users') ?>
+<p>The Team section of My Account handles quick changes to groups and hours. For everything else, choose User management (edit / recover / delete) under Housekeeping. There you can edit details, reset passwords, recover two-step sign-in, move a caseload and deactivate a user.</p>
+
+<?= $sgH(3, 'guide-privacy') ?>
+<p>Open only the records you need for your work. Never share portal, consent or calendar links, and keep client details out of ordinary email. The <a href="privacy.php">privacy notice</a> explains what we keep, who we share it with and the choices clients have.</p>
+
+<?= $sgH(3, 'guide-problems') ?>
+
+<?= $sgH(4, 'guide-unsaved') ?>
+<p>If you try to leave a page with unsaved changes, you get a warning with three choices:</p>
+<ul>
+  <li>Keep editing: go back to the form.</li>
+  <li>Save changes: save the form as normal. You may not go on to the link you chose.</li>
+  <li>Leave without saving: throw away your changes.</li>
+</ul>
+<p>Some forms have no Save changes choice. Go back and use the form's own button, such as Assign or Send. The browser's Back button, refresh or closing the tab may show the browser's own warning. Nothing is saved automatically.</p>
+<p>If an error appears after you submit, read the list of problems at the top. Each one links to its field. Fix the fields and submit again. A filled-in form is not saved until you see the confirmation.</p>
+
+<?= $sgH(4, 'guide-session-expired') ?>
+<p id="session">You are signed out after <?= $sgTimeout ?> minutes without activity. A dialog, Are you still there?, appears first.</p>
+<ul>
+  <li>Choose Stay signed in to keep going.</li>
+  <li>Choose Return to my work to close the dialog.</li>
+</ul>
+<p>If you were signed out:</p>
+<ol>
+  <li>Keep the page open. What you typed is still there.</li>
+  <li>Copy any important text.</li>
+  <li>Choose the link to sign in again in a new tab.</li>
+  <li>Come back to this tab and submit the form.</li>
+</ol>
+<p>Passwords and chosen files are not kept. Choose files again before you submit.</p>
+
+<?= $sgH(4, 'guide-get-help') ?>
+<p>If a record is missing, check the filters, the client or track you chose, and your caseload. Ask an administrator to check your access.</p>
+<p>If you are still stuck, email the office. The address is in the footer. Tell us:</p>
+<ul>
+  <li>The page heading.</li>
+  <li>The link or button you used.</li>
+  <li>What you expected, and the exact error.</li>
+  <li>The version number from the footer.</li>
+</ul>
+<p>Do not put client details or private links in a support email.</p>
 <p><a href="#staff-guide-topics">Back to staff guide topics</a></p>
 </section>

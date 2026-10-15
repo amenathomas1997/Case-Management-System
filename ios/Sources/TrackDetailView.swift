@@ -138,6 +138,10 @@ struct TrackDetailView: View {
     /// The goal whose history VoiceOver's History action opened (the visible History link
     /// navigates on its own).
     @State private var historyGoal: Goal?
+    /// Edit track (save_track): the sheet, and the authorization as last saved here, shown in
+    /// place of the values this screen was opened with.
+    @State private var showingEditTrack = false
+    @State private var savedTrack: TrackFormValues?
     @Environment(\.dynamicTypeSize) private var typeSize
 
     struct PendingGoalStatus {
@@ -158,13 +162,19 @@ struct TrackDetailView: View {
                         .listRowSeparator(.hidden)
                 }
                 Section("Authorization") {
-                    LabeledContent("Service", value: track.serviceType ?? "Assistive Technology")
-                    LabeledContent("Authorization number", value: track.authNumber)
-                    LabeledContent("Status", value: track.status)
-                    LabeledContent("Rate", value: String(format: "$%.2f per hour", track.hourlyRate))
-                    if let expiration = track.expirationDate {
+                    LabeledContent("Service", value: savedTrack?.serviceType ?? track.serviceType ?? "Assistive Technology")
+                    LabeledContent("Authorization number", value: savedTrack?.authNumber ?? track.authNumber)
+                    if let saved = savedTrack {
+                        LabeledContent("Funding agency", value: saved.fundingAgency)
+                        LabeledContent("Authorized hours", value: hoursSpoken(saved.authorizedHours))
+                    }
+                    LabeledContent("Status", value: savedTrack?.status ?? track.status)
+                    LabeledContent("Rate", value: String(format: "$%.2f per hour", savedTrack?.hourlyRate ?? track.hourlyRate))
+                    if let expiration = savedTrack.map({ $0.expirationDate }) ?? track.expirationDate {
                         LabeledContent("Expires", value: formatDate(expiration))
                     }
+                    Button { showingEditTrack = true } label: { Label("Edit track", systemImage: "pencil") }
+                        .accessibilityHint("Title, status, program, authorization, rates and dates.")
                     AuthProgressBar(hoursWorked: track.hoursWorked,
                                     authorizedHours: track.authorizedHours,
                                     hoursRemaining: track.hoursRemaining,
@@ -379,7 +389,18 @@ struct TrackDetailView: View {
                 }
             }
         }
-        .navigationTitle(track.title)
+        .navigationTitle(savedTrack?.title ?? track.title)
+        .toolbar {
+            ToolbarItem(placement: .secondaryAction) {
+                Button { showingEditTrack = true } label: { Label("Edit track", systemImage: "pencil") }
+            }
+        }
+        .sheet(isPresented: $showingEditTrack, onDismiss: announceSheetResult) {
+            TrackEditSheet(trackId: track.id, clientId: nil, clientName: clientName) { message, saved in
+                if let saved { savedTrack = saved }
+                sheetDone(message)
+            }
+        }
         .navigationDestination(isPresented: Binding(get: { historyGoal != nil }, set: { if !$0 { historyGoal = nil } })) {
             if let goal = historyGoal {
                 GoalHistoryView(goalId: goal.id, goalText: goal.specificGoal)
@@ -1330,5 +1351,255 @@ struct SendReportSheet: View {
             showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
+    }
+}
+
+// MARK: - Add or edit a training track (save_track, the website's track_edit.php)
+
+struct TrackBundleChoice: Decodable, Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let categories: [String]
+    /// False for the track's own bundle when it is retired or no longer offered for this client
+    /// type: it stays on the track but cannot be chosen anew.
+    let available: Bool
+}
+struct TrackCadenceChoice: Decodable, Hashable { let value: String; let label: String }
+
+struct TrackFormValues: Decodable {
+    let id: Int
+    let clientId: Int
+    let title: String
+    let serviceType: String
+    let rsaCategory: String?
+    let bundleId: Int?
+    let status: String
+    let reportCadence: String
+    let authNumber: String
+    let fundingAgency: String
+    let authorizedHours: Double
+    let hourlyRate: Double
+    let mileageRate: Double
+    let startDate: String?
+    let expirationDate: String?
+}
+
+struct TrackFormResponse: Decodable {
+    let track: TrackFormValues?
+    let clientName: String?
+    let serviceTypes: [String]
+    let statuses: [String]
+    let cadences: [TrackCadenceChoice]
+    let rsaCategories: [String]
+    let bundles: [TrackBundleChoice]
+}
+
+struct TrackSaveResult: Decodable {
+    let id: Int?
+    let message: String?
+    let duplicate: Bool?
+    let track: TrackFormValues?
+}
+
+/// A number with up to `decimals` places, typed with a period or (one) comma; "" when blank,
+/// nil when it is not in that shape.
+private func trackNumberText(_ raw: String, whole: Int, decimals: Int) -> String? {
+    var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.isEmpty { return "" }
+    if !text.contains("."), text.filter({ $0 == "," }).count == 1 { text = text.replacingOccurrences(of: ",", with: ".") }
+    return text.range(of: "^[0-9]{1,\(whole)}(\\.[0-9]{1,\(decimals)})?$", options: .regularExpression) != nil ? text : nil
+}
+
+private func trackNumberString(_ value: Double, decimals: Int) -> String {
+    let text = String(format: "%.\(decimals)f", value)
+    // 12.50 shows as 12.5 and 12.00 as 12, as typed.
+    guard text.contains(".") else { return text }
+    var trimmed = text
+    while trimmed.hasSuffix("0") { trimmed.removeLast() }
+    if trimmed.hasSuffix(".") { trimmed.removeLast() }
+    return trimmed
+}
+
+/// Create a training track for a client, or edit one: the website's track form, with the same
+/// validation, authorization checks and amendment rules (a new rate also re-prices work not yet
+/// invoiced and Draft invoices, as the server reports). What was typed is kept on this phone
+/// until it is saved.
+struct TrackEditSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    /// The track to edit, or nil for a new track for `clientId`.
+    let trackId: Int?
+    let clientId: Int?
+    let clientName: String
+    let onSaved: (String, TrackFormValues?) -> Void
+
+    @State private var form: TrackFormResponse?
+    @State private var loadError: String?
+    @State private var error: String?
+    @State private var busy = false
+    @State private var askingDiscard = false
+    @State private var original: [String: String] = [:]
+
+    @State private var title = ""
+    @State private var serviceType = "Assistive Technology"
+    @State private var bundleId = 0
+    @State private var rsaCategory = ""
+    @State private var status = "Active"
+    @State private var cadence = "monthly"
+    @State private var authNumber = ""
+    @State private var fundingAgency = "State VR"
+    @State private var hours = ""
+    @State private var rate = ""
+    @State private var mileage = "0"
+    @State private var reason = ""
+    @State private var startDate = ""
+    @State private var expirationDate = ""
+
+    private var draftKey: String { trackId.map { "track-edit-\($0)" } ?? "track-new-\(clientId ?? 0)" }
+
+    private var fields: [String: String] {
+        ["title": title, "service_type": serviceType, "bundle_id": String(bundleId), "rsa_category": rsaCategory, "status": status,
+         "report_cadence": cadence, "auth_number": authNumber, "funding_agency": fundingAgency, "authorized_hours": hours,
+         "hourly_rate": rate, "mileage_rate": mileage, "amendment_reason": reason, "start_date": startDate, "expiration_date": expirationDate]
+    }
+    private var hasChanges: Bool { form != nil && fields != original }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let form {
+                    ErrorFocusForm(error: error) { formBody(form) }
+                } else if let loadError {
+                    List { ErrorBanner(message: loadError); Button("Try again") { Task { await load() } } }
+                } else {
+                    ProgressView("Loading the track form…")
+                }
+            }
+            .navigationTitle(trackId == nil ? "Add training track" : "Edit track")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }.disabled(busy)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(busy ? "Saving…" : (trackId == nil ? "Create" : "Save")) { Task { await save() } }
+                        .disabled(busy || form == nil)
+                }
+            }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: trackId == nil ? "Discard this new track?" : "Discard your changes to this track?",
+                                 asking: $askingDiscard) {
+                DraftStore.clear(key: draftKey, owner: api.userId); dismiss()
+            }
+            .onChange(of: fields) { _ in if form != nil { DraftStore.save(fields, key: draftKey, owner: api.userId) } }
+            .task { if form == nil { await load() } }
+        }
+    }
+
+    @ViewBuilder private func formBody(_ form: TrackFormResponse) -> some View {
+        Section {
+            Text("For \(form.clientName ?? clientName). Fields marked required must be filled in.").font(.callout)
+        }
+        Section("Track") {
+            CaptionedField(label: "Track title (required)", text: $title, prompt: "For example, Screen Reader Training — JAWS")
+            Picker("Service type", selection: $serviceType) { ForEach(form.serviceTypes, id: \.self) { Text($0).tag($0) } }
+            Picker("Service bundle", selection: $bundleId) {
+                Text("No bundle: single RSA category").tag(0)
+                ForEach(form.bundles) { b in Text(b.name).tag(b.id) }
+            }
+            if let chosen = form.bundles.first(where: { $0.id == bundleId }) {
+                Text("\(chosen.name): \(chosen.categories.joined(separator: ", "))").font(.callout).foregroundStyle(Color.secondaryText)
+                if !chosen.available {
+                    Text("This bundle is no longer offered; it stays on this track until you choose another.").font(.callout)
+                }
+            } else {
+                Picker("Single RSA service category", selection: $rsaCategory) {
+                    ForEach(form.rsaCategories, id: \.self) { Text($0).tag($0) }
+                }
+            }
+            Picker("Status", selection: $status) { ForEach(form.statuses, id: \.self) { Text($0).tag($0) } }
+            Picker("Automatic progress reports", selection: $cadence) {
+                ForEach(form.cadences, id: \.value) { Text($0.label).tag($0.value) }
+            }
+        }
+        Section("Service authorization") {
+            CaptionedField(label: "Authorization number (required)", text: $authNumber)
+            CaptionedField(label: "Funding agency (required)", text: $fundingAgency)
+            CaptionedField(label: "Authorized hours, total granted (required)", text: $hours, keyboard: .decimalPad)
+            CaptionedField(label: "Hourly billing rate in dollars (required)", text: $rate, prompt: "For example, 85.00", keyboard: .decimalPad)
+            CaptionedField(label: "Mileage rate in dollars per mile", text: $mileage, prompt: "0 when travel is not billable", keyboard: .decimalPad)
+            if trackId != nil {
+                CaptionedField(label: "Amendment reason", text: $reason, prompt: "Why the authorization changed", lines: 1...3)
+                Text("A new hourly or mileage rate also applies to work on this track not yet invoiced, and re-prices its Draft invoices; submitted and paid invoices keep what they billed.")
+                    .font(.callout).foregroundStyle(Color.secondaryText)
+            }
+            OptionalDayField(title: "Start date", text: $startDate)
+            OptionalDayField(title: "Expiration date", text: $expirationDate)
+        }
+    }
+
+    private func apply(_ values: [String: String]) {
+        title = values["title"] ?? title
+        serviceType = values["service_type"] ?? serviceType
+        bundleId = Int(values["bundle_id"] ?? "") ?? bundleId
+        rsaCategory = values["rsa_category"] ?? rsaCategory
+        status = values["status"] ?? status
+        cadence = values["report_cadence"] ?? cadence
+        authNumber = values["auth_number"] ?? authNumber
+        fundingAgency = values["funding_agency"] ?? fundingAgency
+        hours = values["authorized_hours"] ?? hours
+        rate = values["hourly_rate"] ?? rate
+        mileage = values["mileage_rate"] ?? mileage
+        reason = values["amendment_reason"] ?? reason
+        startDate = values["start_date"] ?? startDate
+        expirationDate = values["expiration_date"] ?? expirationDate
+    }
+
+    private func load() async {
+        loadError = nil
+        var query: [String: String] = [:]
+        if let trackId { query["id"] = String(trackId) } else if let clientId { query["client_id"] = String(clientId) }
+        do {
+            let r: TrackFormResponse = try await api.call("save_track", query: query)
+            if let t = r.track {
+                apply(["title": t.title, "service_type": t.serviceType, "bundle_id": String(t.bundleId ?? 0),
+                       "rsa_category": t.rsaCategory ?? (r.rsaCategories.first ?? ""), "status": t.status, "report_cadence": t.reportCadence,
+                       "auth_number": t.authNumber, "funding_agency": t.fundingAgency,
+                       "authorized_hours": trackNumberString(t.authorizedHours, decimals: 2), "hourly_rate": trackNumberString(t.hourlyRate, decimals: 2),
+                       "mileage_rate": trackNumberString(t.mileageRate, decimals: 3), "start_date": t.startDate ?? "", "expiration_date": t.expirationDate ?? ""])
+            } else {
+                serviceType = r.serviceTypes.contains("Assistive Technology") ? "Assistive Technology" : (r.serviceTypes.first ?? "")
+                rsaCategory = r.rsaCategories.contains("Rehabilitation Technology") ? "Rehabilitation Technology" : (r.rsaCategories.first ?? "")
+            }
+            original = fields
+            form = r
+            if let draft = DraftStore.load(key: draftKey, owner: api.userId), draft != original {
+                apply(draft)
+                announceAfterDismiss("Your unsaved changes to this track were restored.")
+            }
+        } catch { showFormError(error.localizedDescription, in: &loadError) }
+    }
+
+    private func save() async {
+        guard let hoursText = trackNumberText(hours, whole: 5, decimals: 2) else {
+            showFormError("Authorized hours: enter a number such as 40 or 12.5.", in: &error); return
+        }
+        guard let rateText = checkedAmount(rate, maxWholeDigits: 6) else {
+            showFormError(amountFormatMessage("Hourly billing rate", maxWholeDigits: 6), in: &error); return
+        }
+        guard let mileageText = trackNumberText(mileage, whole: 3, decimals: 3) else {
+            showFormError("Mileage rate: enter dollars per mile with up to 3 decimals, such as 0.655, or 0.", in: &error); return
+        }
+        busy = true; error = nil
+        var body: [String: Any] = ["title": title, "service_type": serviceType, "bundle_id": bundleId, "status": status,
+                                   "report_cadence": cadence, "auth_number": authNumber, "funding_agency": fundingAgency,
+                                   "authorized_hours": hoursText, "hourly_rate": rateText, "mileage_rate": mileageText,
+                                   "start_date": startDate, "expiration_date": expirationDate, "rsa_category": rsaCategory]
+        if let trackId { body["id"] = trackId; body["amendment_reason"] = reason } else if let clientId { body["client_id"] = clientId }
+        do {
+            let r: TrackSaveResult = try await api.call("save_track", body: body)
+            DraftStore.clear(key: draftKey, owner: api.userId)
+            onSaved(r.message ?? (trackId == nil ? "Training track created." : "Training track updated."), r.track)
+            dismiss()
+        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

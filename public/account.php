@@ -2,6 +2,7 @@
 require __DIR__ . '/inc/bootstrap.php';
 require __DIR__ . '/inc/layout.php';
 require __DIR__ . '/inc/totp.php';
+require __DIR__ . '/inc/account_actions.php';
 csrf_check();
 $user = require_login();
 
@@ -32,6 +33,18 @@ function account_reauth_error(array $user, $password, string $wrong): ?string {
     return $r === 'locked' ? REAUTH_LOCKED_MSG : $wrong;
 }
 
+/** account_reauth_error() as the password re-check the shared account actions take (inc/account_actions.php). */
+function account_reauth(array $user): callable {
+    return fn($password, string $wrong): ?string => account_reauth_error($user, $password, $wrong);
+}
+
+/** A shared action's field errors under this page's field ids. */
+function account_field_ids(array $errors, array $ids): array {
+    $out = [];
+    foreach ($errors as $field => $message) $out[$ids[$field] ?? $field] = $message;
+    return $out;
+}
+
 /* ---- TOTP: begin setup ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_begin'])) {
     $_SESSION['totp_pending_secret'] = totp_generate_secret();
@@ -40,109 +53,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_begin'])) {
 
 /* ---- TOTP: confirm with a live code ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_confirm'])) {
-    $secret = $_SESSION['totp_pending_secret'] ?? '';
-    // Adding a sign-in method is sensitive: re-confirm the account password
-    // first, as passkey enrolment and disabling the authenticator already do.
-    $pwErr = account_reauth_error($user, $_POST['password'] ?? '', 'Password incorrect — the authenticator app was not enabled.');
-    if (!$secret) {
-        flash('The authenticator setup had ended, so nothing was changed. Choose "Set up authenticator app" to start again.', 'error');
-    } elseif ($pwErr !== null) {
-        // On the field (the password is never refilled, so it is typed again).
-        keep_field_errors(['totp_pw' => $pwErr]);
-    } elseif (totp_verify($secret, is_string($_POST['totp_code'] ?? null) ? $_POST['totp_code'] : '')) {
-        db()->prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1 WHERE id = ?')->execute([$secret, $user['id']]);
+    $r = account_totp_confirm($user, (string)($_SESSION['totp_pending_secret'] ?? ''), $_POST['password'] ?? '', $_POST['totp_code'] ?? '', account_reauth($user));
+    if ($r['ok']) {
         unset($_SESSION['totp_pending_secret']);
-        audit($user['id'], 'totp.enable', 'user', $user['id']);
-        send_app_mail($user['email'], 'An authenticator app was added to your account',
-            "Hello {$user['name']},\n\nAn authenticator app was just set up for your " . cfg('name') . " account. Its codes can be used at sign-in in place of the emailed code.\n\n"
-            . "If this was you, no action is needed. If it was NOT you, disable it under My Account right away, change your password, and tell your administrator.\n");
-        flash('Authenticator app enabled. At sign-in you can now use either an app code or an emailed code.');
+        flash($r['message']);
+    } elseif (isset($r['error'])) {
+        flash($r['error'], 'error');
     } else {
-        keep_field_errors(['totp_code' => 'That code did not match or has expired. Codes change every 30 seconds: enter the code the app shows right now, then choose "Confirm and enable".']);
+        // On the field (the password is never refilled, so it is typed again).
+        keep_field_errors(account_field_ids($r['errors'], ['password' => 'totp_pw', 'code' => 'totp_code']));
     }
     redirect('account.php#totp');
 }
 
 /* ---- TOTP: disable ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_disable'])) {
-    $pwErr = account_reauth_error($user, $_POST['password'] ?? '', 'Password incorrect — authenticator app was not disabled.');
-    if ($pwErr === null) {
-        db()->prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?')->execute([$user['id']]);
-        audit($user['id'], 'totp.disable', 'user', $user['id']);
-        // Tell the account owner, as adding one does: if it was not them, they can react.
-        send_app_mail($user['email'], 'An authenticator app was removed from your account',
-            "Hello {$user['name']},\n\nThe authenticator app was just turned off for your " . cfg('name') . " account. Sign-in codes now arrive by email only.\n\n"
-            . "If this was you, no action is needed. If it was NOT you, change your password under My Account right away (or use \"Forgot your password?\" on the sign-in page), set up the authenticator app again, and tell your administrator.\n");
-        flash('Authenticator app disabled. Sign-in codes will arrive by email only.');
-    } else {
-        keep_field_errors(['td_pw' => $pwErr]);
-    }
+    $r = account_totp_disable($user, $_POST['password'] ?? '', account_reauth($user));
+    if ($r['ok']) flash($r['message']);
+    else keep_field_errors(account_field_ids($r['errors'], ['password' => 'td_pw']));
     redirect('account.php#totp');
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
-    $new = is_string($_POST['new_password'] ?? null) ? $_POST['new_password'] : '';
-    $confirm = is_string($_POST['confirm_password'] ?? null) ? $_POST['confirm_password'] : '';
-    $row = db()->prepare('SELECT cal_token FROM users WHERE id = ?');
-    $row->execute([$user['id']]);
-    $hadCalFeed = (string)$row->fetchColumn() !== '';
-    $pkq = db()->prepare('SELECT COUNT(*) FROM passkeys WHERE user_id = ?');
-    $pkq->execute([$user['id']]);
-    $passkeyCount = (int)$pkq->fetchColumn();
-    // Every problem is named on its own field at once (passwords are never refilled).
-    $pwErrs = [];
-    $pwErr = account_reauth_error($user, $_POST['current_password'] ?? '', 'Your current password was not correct.');
-    if ($pwErr !== null) $pwErrs['current_password'] = $pwErr;
-    if (strlen($new) < 10) $pwErrs['new_password'] = 'The new password must be at least 10 characters.';
-    elseif ($new !== $confirm) $pwErrs['confirm_password'] = 'The confirmation does not match the new password. Type the same new password in both boxes.';
-    // Removing passkeys cannot be undone, so it is confirmed first (3.3.4).
-    if ($passkeyCount > 0 && empty($_POST['ack_passkeys'])) {
-        $pwErrs['ack_passkeys'] = 'Tick the box to confirm that your ' . $passkeyCount . ' passkey' . ($passkeyCount === 1 ? '' : 's')
-            . ' will be removed, or keep your current password.';
-    }
-    if ($pwErrs) {
-        keep_field_errors($pwErrs);
+    $r = account_change_password($user, $_POST['current_password'] ?? '', $_POST['new_password'] ?? null, $_POST['confirm_password'] ?? null,
+        !empty($_POST['ack_passkeys']), account_reauth($user));
+    if (!$r['ok']) {
+        keep_field_errors($r['errors']);
         redirect('account.php#pw-heading');
-    } else {
-        db()->beginTransaction();
-        try {
-        // The calendar-feed address goes too: whoever had the session could
-        // have copied it, and it would keep serving the schedule.
-        db()->prepare('UPDATE users SET password_hash = ?, cal_token = NULL WHERE id = ?')
-            ->execute([password_hash($new, PASSWORD_DEFAULT), $user['id']]);
-        // Changing the password signs the mobile app out everywhere and revokes
-        // enrolled passkeys, matching the reset-password flow (a password change
-        // is often a response to suspected compromise).
-        db()->prepare('DELETE FROM api_tokens WHERE user_id = ?')->execute([$user['id']]);
-        db()->prepare('DELETE FROM passkeys WHERE user_id = ?')->execute([$user['id']]);
-        db()->prepare('UPDATE login_otps SET consumed = 1 WHERE user_id = ?')->execute([$user['id']]);
-        // A reset link emailed before this change must not be able to undo it.
-        db()->prepare('DELETE FROM password_resets WHERE user_id = ?')->execute([$user['id']]);
-        db()->commit();
-        } catch (Throwable $e) {
-            db()->rollBack();
-            throw $e;
-        }
-        audit($user['id'], 'password.change', 'user', (int)$user['id'], 'browser and app sessions revoked'
-            . ($passkeyCount ? ', ' . $passkeyCount . ' passkey(s) removed' : '')
-            . ($hadCalFeed ? ', calendar feed address turned off' : ''));
-        // Tell the account owner what changed: if it was not them, every device
-        // was just signed out and they would otherwise get no explanation.
-        $mailFx = ['you were signed out on every device, including the mobile app'];
-        if ($passkeyCount) $mailFx[] = 'your ' . $passkeyCount . ' passkey' . ($passkeyCount === 1 ? ' was' : 's were') . ' removed';
-        if ($hadCalFeed) $mailFx[] = 'your calendar subscription address was turned off';
-        $mailFxLast = array_pop($mailFx);
-        send_app_mail($user['email'], 'Your password was changed',
-            "Hello {$user['name']},\n\nThe password for your " . cfg('name') . ' account was changed on ' . date('M j, Y \a\t g:i A') . ".\n"
-            . ucfirst(($mailFx ? implode(', ', $mailFx) . ' and ' : '') . $mailFxLast) . ".\n\n"
-            . "If this was you, no action is needed. If it was NOT you, use \"Forgot your password?\" on the sign-in page ("
-            . cfg('base_url') . "/forgot.php) to set a new password right away, and tell your administrator.\n");
-        flash('Your password has been changed. Sign in again on all devices, including the mobile app.'
-            . ($passkeyCount ? ' Your ' . $passkeyCount . ' passkey' . ($passkeyCount === 1 ? ' was' : 's were') . ' removed: add them again under My Account, and remove the old ones from your devices\' saved passwords.' : '')
-            . ($hadCalFeed ? ' Your calendar subscription address was turned off as a precaution: create a new one under My Account and subscribe your calendar to it again.' : ''));
-        redirect('login.php');
     }
-    redirect('account.php');
+    flash($r['message']);
+    redirect('login.php');
 }
 
 /* Admin: check the vendor manifest for a newer version */
@@ -186,56 +126,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retention']) && 
 
 /* Create or replace my calendar-feed address */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cal_regen'])) {
-    // The feed serves only staff with the Scheduling permission (calfeed.php
-    // answers "not found" to anyone else), so an address is never made for others.
-    if (!can('schedule')) {
-        flash('Your account does not have the Scheduling permission, so a calendar address would show nothing. Nothing was changed. Ask an administrator if you need it.', 'error');
-        redirect('account.php#calfeed');
-    }
-    // The address is a lasting key to the schedule (client names and meeting
-    // links; in-person locations are left out of the feed), so the account
-    // password is re-checked first, as for adding an authenticator app or a passkey.
-    $calPw = $_POST['password'] ?? '';
-    $pwErr = account_reauth_error($user, $calPw, $calPw === ''
-        ? 'Enter your account password to create or replace the calendar address.'
-        : 'Password incorrect — the calendar address was not created or replaced.');
-    if ($pwErr !== null) {
-        // On the field (the password is never refilled, so it is typed again).
-        keep_field_errors(['cal_pw' => $pwErr]);
-        redirect('account.php#calfeed');
-    }
-    $hadQ = db()->prepare('SELECT cal_token FROM users WHERE id = ?');
-    $hadQ->execute([$user['id']]);
-    $replaced = (string)$hadQ->fetchColumn() !== '';
-    db()->prepare('UPDATE users SET cal_token = ? WHERE id = ?')
-        ->execute([bin2hex(random_bytes(24)), $user['id']]);
-    audit($user['id'], 'calfeed.regen', 'user', (int)$user['id'], $replaced ? 'address replaced' : 'address created');
-    // Tell the account owner, as adding a sign-in method does: if it was not them, they can react.
-    send_app_mail($user['email'], 'A calendar subscription address was ' . ($replaced ? 'replaced' : 'created') . ' for your account',
-        "Hello {$user['name']},\n\nA private calendar subscription address was just " . ($replaced ? 'replaced' : 'created') . ' for your ' . cfg('name') . " account. "
-        . "Any calendar app subscribed to it shows your scheduled sessions, including client first names and meeting links (in-person locations are left out)."
-        . ($replaced ? ' The previous address no longer works.' : '') . "\n\n"
-        . "If this was you, no action is needed. If it was NOT you, choose \"Replace the address\" under My Account right away (the address that was made then stops working), change your password, and tell your administrator.\n");
-    flash('Your calendar address is ready — copy it into your calendar app as a subscription.');
+    $r = account_cal_regen($user, $_POST['password'] ?? '', account_reauth($user));
+    if (!empty($r['forbidden'])) flash($r['error'], 'error');
+    elseif (!$r['ok']) keep_field_errors(account_field_ids($r['errors'], ['password' => 'cal_pw']));   // on the field (never refilled)
+    else flash($r['message']);
     redirect('account.php#calfeed');
 }
 
 /* Remove one of my passkeys */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_passkey'])) {
-    $pkId = (int)($_POST['passkey_id'] ?? 0);
-    // Its name is read first, so the trail says which passkey went.
-    $pkq = db()->prepare('SELECT name FROM passkeys WHERE id = ? AND user_id = ?');
-    $pkq->execute([$pkId, $user['id']]);
-    $pkName = (string)$pkq->fetchColumn();
-    $pkDel = db()->prepare('DELETE FROM passkeys WHERE id = ? AND user_id = ?');
-    $pkDel->execute([$pkId, $user['id']]);
-    if ($pkDel->rowCount() !== 1) {
-        // A second click, or another open tab: nothing was removed, so nothing is logged.
-        flash('That passkey had already been removed, so nothing changed.', 'error');
-    } else {
-        audit($user['id'], 'passkey.remove', 'user', (int)$user['id'], 'passkey #' . $pkId . ' (' . $pkName . ')');
-        flash('Passkey "' . $pkName . '" removed. You can still sign in with your password and code.');
-    }
+    $r = account_remove_passkey($user, (int)($_POST['passkey_id'] ?? 0));
+    flash($r['ok'] ? $r['message'] : $r['error'], $r['ok'] ? 'success' : 'error');
     redirect('account.php#passkeys');
 }
 

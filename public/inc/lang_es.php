@@ -4,6 +4,7 @@
 return [
     'Breadcrumb' => 'Ruta de navegación',
     'Go to main menu' => 'Ir al menú principal',
+    'Privacy notice' => 'Aviso de privacidad',
     'Show display options' => 'Mostrar opciones de visualización',
     'Show dropdown choices as lists' => 'Mostrar las opciones desplegables como listas',
     'Site header' => 'Encabezado del sitio',

@@ -122,6 +122,14 @@ struct LoginView: View {
                                 .contentShape(Rectangle())
                         }
                         .accessibilityHint("Opens the website in Safari.")
+                        // How the server signed in to here handles personal information, readable
+                        // before signing in.
+                        Link(destination: URL(string: "privacy.php", relativeTo: API.base)!.absoluteURL) {
+                            Text("Privacy policy")
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .accessibilityHint("Opens the website in Safari.")
                     } else {
                         Text(codeInstruction)
                             .foregroundStyle(Color.secondaryText)

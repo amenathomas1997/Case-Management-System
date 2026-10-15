@@ -457,7 +457,17 @@ $API_ACTION_PERMS = [
     'incidents' => 'clients', 'add_incident' => 'clients', 'incident_update' => 'clients',
     'utilization' => 'analytics', 'amendment' => 'clients',
     'voice_command' => 'clients',
+    // Parity additions (3.0.22), handled in inc/api_parity.php. Tasks and notifications,
+    // like their web pages, need only a sign-in.
+    'portal_requests' => 'clients', 'portal_request_update' => 'clients', 'save_track' => 'clients',
+    'request_consent' => 'clients', 'consents_due' => 'clients', 'pipeline' => 'clients', 'client_history' => 'clients',
+    'invoices' => 'billing',
 ];
+/* Account settings (inc/api_account.php) and the 3.0.22 parity actions (inc/api_parity.php)
+   live in their own files; each re-checks what it needs. */
+const API_ACCOUNT_ACTIONS = ['account', 'change_password', 'totp_begin', 'totp_confirm', 'totp_disable', 'cal_feed_show', 'cal_feed_regen', 'remove_passkey', 'logout_all'];
+const API_PARITY_ACTIONS = ['tasks', 'save_task', 'complete_task', 'notifications', 'mark_notifications_read', 'portal_requests', 'portal_request_update',
+    'save_track', 'request_consent', 'consents_due', 'pipeline', 'client_history', 'invoices'];
 if (isset($API_ACTION_PERMS[$action]) && !can($API_ACTION_PERMS[$action])) {
     fail('Your account does not have access to that area. Ask an administrator if you need it.', 403);
 }
@@ -517,6 +527,8 @@ $studentScope = caseload_scoped() ? ' AND c.assigned_to = ' . $userId : '';
 if (str_starts_with($action, 'at_')) {
     require __DIR__ . '/inc/at_api.php';
 }
+if (in_array($action, API_ACCOUNT_ACTIONS, true)) require __DIR__ . '/inc/api_account.php';
+if (in_array($action, API_PARITY_ACTIONS, true)) require __DIR__ . '/inc/api_parity.php';
 
 switch ($action) {
     case 'workflow_actions':

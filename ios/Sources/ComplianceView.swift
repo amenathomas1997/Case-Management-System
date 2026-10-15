@@ -12,6 +12,22 @@ struct ComplianceReport: Decodable, Identifiable {
 struct ComplianceEquip: Decodable, Identifiable {
     let id: Int; let name: String; let due: String; let overdue: Bool
 }
+/// A guardian consent to renew (consents_due, the website's "Consents & releases to renew").
+struct ConsentDueItem: Decodable, Identifiable {
+    let clientId: Int
+    let client: String
+    let guardianName: String
+    /// Expired, Withdrawn, Expiring or Unsigned.
+    let kind: String
+    let label: String
+    let date: String
+    /// A renewal request already sent and not yet signed.
+    let pendingSentAt: String?
+    let action: String
+    var id: Int { clientId }
+}
+struct ConsentsDueResponse: Decodable { let consents: [ConsentDueItem]; let validityDays: Int }
+
 struct ComplianceResponse: Decodable {
     let authRisk: [ComplianceAuth]; let reportsDue: [ComplianceReport]; let equipmentDue: [ComplianceEquip]
 }
@@ -30,6 +46,8 @@ struct ComplianceView: View {
     @State private var data: ComplianceResponse?
     @State private var error: String?
     @State private var stale = false     // the last refresh failed; what is shown may be out of date
+    @State private var consents: ConsentsDueResponse?
+    @State private var consentsFailed = false
 
     var body: some View {
         List {
@@ -75,6 +93,35 @@ struct ComplianceView: View {
                 else { Text("Could not refresh — this list may be out of date.") }
             } }
 
+            if data != nil { Section {
+                if let c = consents?.consents, !c.isEmpty {
+                    ForEach(c) { f in
+                        let when = ["Unsigned": "sent", "Expired": "expired", "Withdrawn": "withdrawn", "Expiring": "expires"][f.kind] ?? ""
+                        let renewal = f.pendingSentAt.map { "Renewal request sent \(formatDate($0)), not yet signed." }
+                        NavigationLink { ClientDetailView(clientId: f.clientId) } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(f.client).font(.body.weight(.semibold))
+                                Text("\(f.label) · \(when) \(formatDate(f.date))").font(.caption)
+                                    .foregroundStyle(f.kind == "Expired" || f.kind == "Withdrawn" ? complianceAlertRed : .primary)
+                                if !f.guardianName.isEmpty { Text("Guardian: \(f.guardianName)").font(.caption) }
+                                if let renewal { Text(renewal).font(.caption) }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(f.client). \(f.label), \(when) \(formatDate(f.date)). \(f.guardianName.isEmpty ? "" : "Guardian \(f.guardianName). ")\(renewal ?? "")")
+                        .accessibilityHint("Opens the client record, where you can \(f.action.lowercased()).")
+                    }
+                } else if consents != nil && !stale && !consentsFailed { Text("No consents need attention.") }
+                else if consentsFailed { Text("Could not refresh — this list may be out of date.") }
+            } header: {
+                Text("Consents to renew\(consents.map { " (\($0.consents.count))" } ?? "")")
+            } footer: {
+                if let days = consents?.validityDays {
+                    Text("Consents within 30 days of their \(days)-day validity, expired or withdrawn, and requests unsigned for over two weeks. Send the renewal from the client's record.")
+                }
+            } }
+
             if let e = data?.equipmentDue, !e.isEmpty {
                 Section("Equipment service due") {
                     ForEach(e) { item in
@@ -97,5 +144,7 @@ struct ComplianceView: View {
     private func load() async {
         do { error = nil; data = try await api.call("compliance"); stale = false }
         catch { showFormError(error.localizedDescription, in: &self.error); stale = true }
+        do { consents = try await api.call("consents_due"); consentsFailed = false }
+        catch { consentsFailed = true }
     }
 }

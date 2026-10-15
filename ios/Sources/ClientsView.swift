@@ -130,6 +130,11 @@ struct ClientDetailView: View {
     @State private var sheetResult: String?
     /// Notes shown in full rather than as a six-line preview.
     @State private var expandedNotes: Set<Int> = []
+    @State private var showingAddTrack = false
+    @State private var showingConsent = false
+    /// The guardian consent as the website's client page shows it (request_consent); nil until
+    /// loaded, or from a server that does not have it.
+    @State private var consent: ConsentStatusResponse?
     @Environment(\.dynamicTypeSize) private var typeSize
 
     private var shownNotes: [Note] { (detail?.notes ?? []) + olderNotes }
@@ -188,9 +193,23 @@ struct ClientDetailView: View {
                     }
                 }
 
+                if let c = consent?.consent {
+                    Section("Guardian consent") {
+                        Text(c.summary)
+                        if c.canRequest {
+                            Button { confirmation = nil; showingConsent = true } label: {
+                                Label(c.requestLabel, systemImage: "envelope")
+                            }
+                        }
+                    }
+                }
+
                 Section("Progress tools") {
                     NavigationLink { ScoredAssessmentsView(clientId: clientId) } label: { Label("Scored assessments", systemImage: "list.number") }
                     NavigationLink { CompetencyView(clientId: clientId) } label: { Label("Curriculum & competency", systemImage: "graduationcap") }
+                    NavigationLink { ClientHistoryView(clientId: clientId, clientName: detail.client.name) } label: {
+                        Label("Status history", systemImage: "clock.arrow.circlepath")
+                    }
                 }
 
                 if api.aiEnabled && (api.aiHas("recommend") || api.aiHas("intake") || api.aiHas("progress")) {
@@ -338,12 +357,37 @@ struct ClientDetailView: View {
                         Label("AI case summary", systemImage: "sparkles")
                     }
                 }
+                Button { confirmation = nil; showingAddTrack = true } label: {
+                    Label("Add training track", systemImage: "plus.rectangle.on.rectangle")
+                }
+                .disabled(detail == nil)
+                // Offered when the website's client page offers it: no current consent, one
+                // expiring within 30 days, a withdrawn one, or a request still waiting.
+                if consent?.consent.canRequest == true {
+                    Button { confirmation = nil; showingConsent = true } label: {
+                        Label("Send consent request", systemImage: "envelope")
+                    }
+                }
             } label: {
                 Label("Actions", systemImage: "ellipsis.circle")
             }
         }
         // Each sheet hands back what to tell the person; it is shown here and said once the
         // sheet has closed (closing it moves VoiceOver focus, which cut off a message said inside).
+        .sheet(isPresented: $showingAddTrack, onDismiss: announceSheetResult) {
+            TrackEditSheet(trackId: nil, clientId: clientId, clientName: detail?.client.name ?? "this client") { message, _ in
+                confirmation = message; sheetResult = message
+                Task { await reload() }
+            }
+        }
+        .sheet(isPresented: $showingConsent, onDismiss: announceSheetResult) {
+            if let consent {
+                ConsentRequestSheet(clientId: clientId, clientName: detail?.client.name ?? "this client", status: consent) { message in
+                    confirmation = message; sheetResult = message
+                    Task { await loadConsent() }
+                }
+            }
+        }
         .sheet(isPresented: $showingAISummary, onDismiss: announceSheetResult) {
             AICaseSummarySheet(clientId: clientId) { message in
                 confirmation = message; sheetResult = message
@@ -382,8 +426,14 @@ struct ClientDetailView: View {
                 Task { await reload() }
             }
         }
-        .refreshable { confirmation = nil; await reload() }
-        .task { await load() }
+        .refreshable { confirmation = nil; await reload(); await loadConsent() }
+        .task { await load(); await loadConsent() }
+    }
+
+    /// The consent state for the Guardian consent section and the Send consent request action.
+    /// A failure leaves both out (the record itself has its own error banner).
+    private func loadConsent() async {
+        consent = try? await api.call("request_consent", query: ["client_id": String(clientId)])
     }
 
     private func announceSheetResult() {
@@ -1110,5 +1160,202 @@ struct AICaseSummarySheet: View {
                 showFormError(error.localizedDescription, in: &self.error); saving = false
             }
         } catch { showFormError(error.localizedDescription, in: &self.error); saving = false }
+    }
+}
+
+// MARK: - Status history and guardian consent (client.php's history tab and consent request)
+
+struct StatusHistoryEntry: Decodable, Identifiable {
+    let id: Int
+    let changedAt: String
+    let oldStatus: String?
+    let newStatus: String
+    let changedBy: String
+    let note: String?
+    private enum CodingKeys: String, CodingKey { case id, changedAt, oldStatus, newStatus, changedBy, note }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        changedAt = (try? c.decode(String.self, forKey: .changedAt)) ?? ""
+        oldStatus = try? c.decodeIfPresent(String.self, forKey: .oldStatus)
+        newStatus = (try? c.decode(String.self, forKey: .newStatus)) ?? ""
+        changedBy = (try? c.decode(String.self, forKey: .changedBy)) ?? "System"
+        note = try? c.decodeIfPresent(String.self, forKey: .note)
+    }
+}
+struct StatusHistoryResponse: Decodable { let history: [StatusHistoryEntry] }
+
+/// The case status history (audit trail): every status change, newest first.
+struct ClientHistoryView: View {
+    @EnvironmentObject var api: API
+    let clientId: Int
+    let clientName: String
+    @State private var history: [StatusHistoryEntry] = []
+    @State private var loaded = false
+    @State private var error: String?
+
+    var body: some View {
+        List {
+            if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
+            if loaded {
+                Section {
+                    if history.isEmpty { Text("No status changes recorded.").foregroundStyle(Color.secondaryText) }
+                    ForEach(history) { h in
+                        let change = "\(h.oldStatus.map { "From \($0) to " } ?? "Set to ")\(h.newStatus)"
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(change).font(.body.weight(.semibold))
+                            Text("\(formatDateTime(h.changedAt)) · by \(h.changedBy)").font(.caption).foregroundStyle(Color.secondaryText)
+                            if let note = h.note { Text(note).font(.callout) }
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(change). \(formatDateTime(h.changedAt)), by \(h.changedBy)\(h.note.map { ". \($0)" } ?? "")")
+                    }
+                } header: {
+                    Text("Status changes (\(history.count))").font(.headline).foregroundStyle(.primary).textCase(nil)
+                        .accessibilityAddTraits(.isHeader)
+                }
+            } else if error == nil {
+                ProgressView("Loading status history…")
+            }
+        }
+        .navigationTitle("Status history")
+        .refreshable { await load() }
+        .task { await load() }
+    }
+
+    private func load() async {
+        do {
+            error = nil
+            let r: StatusHistoryResponse = try await api.call("client_history", query: ["client_id": String(clientId)])
+            history = r.history
+            loaded = true
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
+}
+
+struct ConsentState: Decodable {
+    let state: String
+    let signedName: String?
+    let signedAt: String?
+    let withdrawnAt: String?
+    let expires: String?
+    let pendingSentAt: String?
+    let canRequest: Bool
+    let requestLabel: String
+}
+struct ConsentStatusResponse: Decodable {
+    let consent: ConsentState
+    let guardianName: String?
+    let guardianEmail: String?
+}
+
+extension ConsentState {
+    /// As the client page words it.
+    var summary: String {
+        var parts: [String] = []
+        switch state {
+        case "Withdrawn": parts.append("Withdrawn \(formatDate(withdrawnAt)) (signed by \(signedName ?? "the guardian") on \(formatDate(signedAt)))")
+        case "Expired": parts.append("Expired on \(formatDate(expires)) (signed by \(signedName ?? "the guardian") on \(formatDate(signedAt)))")
+        case "Signed": parts.append("Signed by \(signedName ?? "the guardian") on \(formatDate(signedAt)), valid until \(formatDate(expires))")
+        default: break
+        }
+        if let pendingSentAt { parts.append("Requested \(formatDate(pendingSentAt)), awaiting signature") }
+        return parts.isEmpty ? "No guardian consent on file." : parts.joined(separator: ". ")
+    }
+}
+
+/// Email the guardian consent form, as the client page does: any earlier unsigned consent link
+/// stops working once the new one is sent. The guardian details typed are kept on this phone
+/// until it is sent.
+struct ConsentRequestSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let clientId: Int
+    let clientName: String
+    let status: ConsentStatusResponse
+    let onSent: (String) -> Void
+
+    @State private var name = ""
+    @State private var email = ""
+    @State private var busy = false
+    @State private var error: String?
+    @State private var confirming = false
+    @State private var askingDiscard = false
+    @State private var started = false
+
+    private var draftKey: String { "consent-\(clientId)" }
+    private var hasChanges: Bool { name != (status.guardianName ?? "") || email != (status.guardianEmail ?? "") }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(error: error) {
+                Section {
+                    Text(status.consent.summary)
+                    Text("Sending a new request turns off any earlier consent link that has not been signed.").font(.callout)
+                }
+                Section("Guardian") {
+                    CaptionedField(label: "Guardian name (required)", text: $name)
+                        .textContentType(.name)
+                    CaptionedField(label: "Guardian email (required)", text: $email, keyboard: .emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+            }
+            .navigationTitle(status.consent.requestLabel.contains("Resend") ? "Resend consent request" : "Send consent request")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }.disabled(busy)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(busy ? "Sending…" : "Email consent form") { check() }.disabled(busy)
+                }
+            }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this consent request?", asking: $askingDiscard) {
+                DraftStore.clear(key: draftKey, owner: api.userId); dismiss()
+            }
+            // As the website asks before sending.
+            .confirmationDialog("Email the consent form to \(email.trimmingCharacters(in: .whitespaces))? Any earlier unsigned consent link stops working.",
+                                isPresented: $confirming, titleVisibility: .visible) {
+                Button("Email consent form") { Task { await send() } }
+                Button("Cancel", role: .cancel) {}
+            }
+            .onAppear(perform: start)
+            .onChange(of: name) { _ in saveDraft() }
+            .onChange(of: email) { _ in saveDraft() }
+        }
+    }
+
+    private func start() {
+        guard !started else { return }
+        started = true
+        name = status.guardianName ?? ""
+        email = status.guardianEmail ?? ""
+        if let draft = DraftStore.load(key: draftKey, owner: api.userId) {
+            name = draft["name"] ?? name
+            email = draft["email"] ?? email
+        }
+    }
+
+    private func saveDraft() {
+        guard started else { return }
+        if hasChanges { DraftStore.save(["name": name, "email": email], key: draftKey, owner: api.userId) }
+        else { DraftStore.clear(key: draftKey, owner: api.userId) }
+    }
+
+    private func check() {
+        if name.trimmingCharacters(in: .whitespaces).isEmpty { showFormError("Guardian name: enter the guardian's name.", in: &error); return }
+        if !email.contains("@") { showFormError("Guardian email: enter the guardian's email address in the form name@example.com.", in: &error); return }
+        confirming = true
+    }
+
+    private func send() async {
+        busy = true; error = nil
+        do {
+            let r: TaskSaveResult = try await api.call("request_consent", body: ["client_id": clientId, "guardian_name": name, "guardian_email": email])
+            DraftStore.clear(key: draftKey, owner: api.userId)
+            onSent(r.message ?? "Consent form emailed.")
+            dismiss()
+        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

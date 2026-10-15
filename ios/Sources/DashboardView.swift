@@ -6,10 +6,12 @@ struct DashboardView: View {
     @State private var data: DashboardData?
     @State private var error: String?
     @State private var showingVoice = false
-    @State private var confirmingSignOut = false
     /// Offline entries is on screen: its link stays while it is, or emptying the queue (Retry
     /// now, Discard, or a background sync) would remove the link and pop the screen mid-status.
     @State private var offlineEntriesOpen = false
+    /// Unread alerts (the website's Alerts count); nil until known.
+    @State private var unreadAlerts: Int?
+    @State private var webPage: WebPage?
 
     var body: some View {
         NavigationStack {
@@ -126,6 +128,14 @@ struct DashboardView: View {
                     MoreToolLink(title: "Action center",
                                  subtitle: api.can("clients") && api.aiHas("briefing") ? "Priorities and AI case briefings" : "Priorities",
                                  systemImage: "checklist") { WorkflowActionsView() }
+                    MoreToolLink(title: "Tasks", subtitle: "Follow-ups: overdue, today and upcoming", systemImage: "checkmark.circle") { TasksView() }
+                    MoreToolLink(title: unreadAlerts.map { $0 > 0 ? "Alerts (\($0) new)" : "Alerts" } ?? "Alerts",
+                                 subtitle: "Things that happened while you were away", systemImage: "bell") {
+                        NotificationsView { unreadAlerts = $0 }
+                    }
+                    if api.can("clients") { MoreToolLink(title: "Client portal requests", subtitle: "Appointments, changes and device help clients asked for", systemImage: "tray.full") { PortalRequestsView() } }
+                    if api.can("clients") { MoreToolLink(title: "Intake progress", subtitle: "Referrals and clients by stage", systemImage: "chart.bar.doc.horizontal") { PipelineView() } }
+                    if api.can("billing") { MoreToolLink(title: "Invoices", subtitle: "Read only: status, amounts and balances", systemImage: "doc.plaintext") { InvoicesView() } }
                     // AT services offers only modules the user holds a permission for, so the link
                     // is shown only when at least one of them is available.
                     if api.can("clients") || api.can("equipment") || api.can("schedule") || api.can("admin") || api.can("billing") {
@@ -145,6 +155,12 @@ struct DashboardView: View {
                     if api.can("billing") { MoreToolLink(title: "Grants & contracts", systemImage: "doc.text.magnifyingglass") { ContractsView() } }
                     MoreToolLink(title: "Knowledge base", systemImage: "book") { KnowledgeView() }
                     MoreToolLink(title: "Help and glossary", subtitle: "What the abbreviations and terms mean", systemImage: "questionmark.circle") { GlossaryView() }
+                    if let url = workflowURL("help.php#staff-guide") {
+                        WebPageLink(url: url, page: $webPage) { webToolRow("User guide", subtitle: "The staff guide on the website, opened in the app", systemImage: "book.closed") }
+                    }
+                    if let url = workflowURL("privacy.php") {
+                        WebPageLink(url: url, page: $webPage) { webToolRow("Privacy policy", subtitle: "Opened in the app", systemImage: "hand.raised") }
+                    }
                     if api.aiEnabled { MoreToolLink(title: "AI tools", systemImage: "sparkles") { AIToolsView() } }
                     if api.aiHas("voice") && api.can("clients") {
                         Button { showingVoice = true } label: {
@@ -172,22 +188,42 @@ struct DashboardView: View {
                         Label("Search", systemImage: "magnifyingglass")
                     }
                 }
-                Button("Sign out") { confirmingSignOut = true }
-            }
-            // One stray activation used to sign out on the spot.
-            .confirmationDialog(api.pendingSync > 0
-                                    ? "Sign out? \(api.pendingSync) offline entr\(api.pendingSync == 1 ? "y is" : "ies are") still waiting to sync and will stay on this phone."
-                                    : "Sign out of Case Management System?",
-                                isPresented: $confirmingSignOut, titleVisibility: .visible) {
-                Button("Sign out", role: .destructive) { api.signOut() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Unsaved note and hours drafts on this phone are discarded.")
+                NavigationLink { NotificationsView { unreadAlerts = $0 } } label: {
+                    Label("Alerts", systemImage: (unreadAlerts ?? 0) > 0 ? "bell.badge" : "bell")
+                }
+                .accessibilityLabel("Alerts")
+                .accessibilityValue(unreadAlerts.map { $0 == 0 ? "none new" : "\($0) new" } ?? "")
+                // Sign out is on the Account screen (with password, two-step sign-in and passkeys).
+                NavigationLink { AccountView() } label: {
+                    Label("Account", systemImage: "person.crop.circle")
+                }
             }
             .sheet(isPresented: $showingVoice) { VoiceView() }
+            .sheet(item: $webPage) { page in
+                InAppWebView(url: page.url) { webPage = nil }.ignoresSafeArea()
+            }
             .refreshable { await load() }
             .task { await load() }
+            .onAppear { Task { await loadAlertCount() } }
         }
+    }
+
+    /// A More tools row that opens a website page in the in-app browser.
+    private func webToolRow(_ title: String, subtitle: String, systemImage: String) -> some View {
+        HStack {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                    Text(subtitle).font(.caption).foregroundStyle(Color.secondaryText)
+                }
+            } icon: { Image(systemName: systemImage) }
+            Spacer()
+            Image(systemName: "safari").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
     }
 
     private func load() async {
@@ -197,6 +233,12 @@ struct DashboardView: View {
         } catch {
             self.error = error.localizedDescription
         }
+        await loadAlertCount()
+    }
+
+    /// Unread alerts for the toolbar and More tools; left as it was when it cannot be read.
+    private func loadAlertCount() async {
+        if let r: AlertCount = try? await api.call("notifications", query: ["count_only": "1"]) { unreadAlerts = r.unread }
     }
 }
 
@@ -464,7 +506,7 @@ struct GlossaryView: View {
 // Workflow navigation shares the same permission-filtered API as the website.
 private struct WorkflowActionResponse: Decodable { let items: [WorkflowAction] }
 private struct WorkflowAction: Decodable { let kind: String; let title: String; let due: String?; let url: String }
-private func workflowURL(_ path: String) -> URL? {
+func workflowURL(_ path: String) -> URL? {
     guard let url = URL(string: path, relativeTo: API.base)?.absoluteURL,
           url.scheme == "https", url.host == API.base.host else { return nil }
     return url
@@ -473,12 +515,12 @@ private func workflowURL(_ path: String) -> URL? {
 /// A website page opened from a record link. It is shown inside the app, not in Safari: it stays
 /// under the app lock and the app-switcher cover, closes with sign-out, is not kept in Safari's
 /// history, and its website data is cleared whenever the account changes (RootView).
-private struct WebPage: Identifiable {
+struct WebPage: Identifiable {
     let url: URL
     var id: String { url.absoluteString }
 }
 
-private struct InAppWebView: UIViewControllerRepresentable {
+struct InAppWebView: UIViewControllerRepresentable {
     let url: URL
     let onDone: @MainActor () -> Void
 
@@ -503,7 +545,7 @@ private struct InAppWebView: UIViewControllerRepresentable {
 }
 
 /// A record link: opens the page in InAppWebView and is announced as a link.
-private struct WebPageLink<Content: View>: View {
+struct WebPageLink<Content: View>: View {
     let url: URL
     @Binding var page: WebPage?
     @ViewBuilder let content: () -> Content
@@ -537,7 +579,16 @@ struct WorkflowActionsView: View {
             if !loaded && error == nil { ProgressView("Loading action items…") }
             if loaded && items.isEmpty { Text("No action items found.") }
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                if let url = workflowURL(item.url) {
+                if item.url.hasPrefix("tasks.php") {
+                    // Tasks open in the app's own Tasks screen (add, edit and complete there).
+                    NavigationLink { TasksView() } label: {
+                        VStack(alignment: .leading) {
+                            Text(item.title)
+                            Text(item.kind + (item.due.map { " · " + formatDate($0) + (isOverdue($0) ? " (overdue)" : "") } ?? ""))
+                                .font(.caption).foregroundStyle(Color.secondaryText)
+                        }
+                    }
+                } else if let url = workflowURL(item.url) {
                     WebPageLink(url: url, page: $webPage) {
                         VStack(alignment: .leading) {
                             Text(item.title)
