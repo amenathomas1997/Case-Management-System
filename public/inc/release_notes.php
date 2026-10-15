@@ -6,6 +6,9 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.30' => [
+        'Quieter combo boxes: Area choices on the goal-template pickers are plain names; the track page waits until you settle on an area before searching; matching templates are grouped by area so each option is the goal alone.',
+    ],
     '3.0.29' => [
         'The Service bundle choice on a training track is quieter: plain bundle names as you arrow through, with the chosen bundle\'s categories listed after the field.',
         'The privacy notice now has a "Your rights under HIPAA" section.',

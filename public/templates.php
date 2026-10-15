@@ -284,7 +284,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
       <label for="gt-cat">Area</label>
       <select id="gt-cat" name="gt_cat">
         <option value="">All areas (<?= $goalTplTotal ?>)</option>
-        <?php foreach ($goalCats as $gc): ?><option value="<?= h($gc['category']) ?>" <?= $gtCat === $gc['category'] ? 'selected' : '' ?>><?= h($gc['category']) ?> (<?= (int)$gc['n'] ?>)</option><?php endforeach; ?>
+        <?php foreach ($goalCats as $gc): ?><option value="<?= h($gc['category']) ?>" <?= $gtCat === $gc['category'] ? 'selected' : '' ?>><?= h($gc['category']) ?></option><?php endforeach; ?>
       </select>
     </div>
     <div class="field">

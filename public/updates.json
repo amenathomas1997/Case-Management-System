@@ -1,7 +1,7 @@
 {
     "product": "Case Management System",
-    "latest": "3.0.29",
+    "latest": "3.0.30",
     "released": "2026-10-15",
-    "notes": "Screen-reader and privacy update: the Service bundle choice on the training-track form no longer reads each bundle's full category list as you arrow through it (plain names; the chosen bundle's categories are listed after the field). The privacy notice adds a Your rights under HIPAA section. No database migration for sites on 3.0.28; apply dist/migrations/mig_3.0.28.sql (adds scheduled_sessions.checked_in_at) before updating files; sites below 3.0.27 apply mig_3.0.27.sql first. Sites on 3.0.16 to 3.0.20 apply mig_3.0.21.sql first. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16, 3.0.21, 3.0.27 and 3.0.28 in order; all are safe to re-run.",
+    "notes": "Screen-reader update: quieter combo boxes. The Area choices on the goal-template pickers are plain names (334 of them, no counts); the track page's template search waits until you settle on an area instead of searching and announcing a count on every arrow press; matching goal templates are grouped by area so each option reads as the goal alone; the Microsoft sign-in group choice uses plain group names. Includes 3.0.29 (quieter Service bundle choice; HIPAA rights in the privacy notice). No database migration for sites on 3.0.28 or later; apply dist/migrations/mig_3.0.28.sql (adds scheduled_sessions.checked_in_at) before updating files; sites below 3.0.27 apply mig_3.0.27.sql first. Sites on 3.0.16 to 3.0.20 apply mig_3.0.21.sql first. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16, 3.0.21, 3.0.27 and 3.0.28 in order; all are safe to re-run.",
     "contact": "Contact Example Agency for the update package."
 }

@@ -235,15 +235,15 @@ page_header('Federation', $user, 'admin', [['admin.php', 'Administration']]);
           Enable “Sign in with Microsoft” on the sign-in page</label>
       </div>
       <div class="field">
-        <label for="auto_provision_group">Automatically create accounts for new Microsoft users</label>
+        <label for="auto_provision_group">Automatically create accounts for new Microsoft users, in this group</label>
         <select id="auto_provision_group" name="auto_provision_group" aria-describedby="apg-help">
-          <option value="">Off — only existing users can sign in (recommended)</option>
+          <option value="">Off (recommended)</option>
           <?php foreach ($groups as $g): ?>
           <option value="<?= h($g['name']) ?>" <?= $formApg === $g['name'] ? 'selected' : '' ?>>
-            On — put new users in the “<?= h($g['name']) ?>” group</option>
+            <?= h($g['name']) ?></option>
           <?php endforeach; ?>
         </select>
-        <p class="muted" id="apg-help">When on, anyone in your Microsoft tenant who signs in gets an account here automatically, in the group you pick. Leave off unless you want that.</p>
+        <p class="muted" id="apg-help">Off: only existing users can sign in. A group name: anyone in your Microsoft tenant who signs in gets an account in that group. Leave off unless you want that.</p>
       </div>
       <button type="submit" name="save" value="1" class="btn btn-primary">Save settings</button>
     </form>

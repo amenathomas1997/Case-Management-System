@@ -1059,7 +1059,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
         <select id="tpl-cat" name="tpl_cat">
           <option value="">All areas (<?= $goalTplTotal ?>)</option>
           <?php foreach ($goalCats as $gc): ?>
-          <option value="<?= h($gc['category']) ?>" <?= $tplCat === $gc['category'] ? 'selected' : '' ?>><?= h($gc['category']) ?> (<?= (int)$gc['n'] ?>)</option>
+          <option value="<?= h($gc['category']) ?>" <?= $tplCat === $gc['category'] ? 'selected' : '' ?>><?= h($gc['category']) ?></option>
           <?php endforeach; ?>
         </select>
       </div>
@@ -1071,9 +1071,13 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     <div class="field">
       <label for="goal_tpl">Matching templates</label>
       <select id="goal_tpl" name="goal_tpl" size="8" aria-describedby="tpl-help tpl-preview<?= $tplMissing ? ' tpl-err' : '' ?>"<?= $tplMissing ? ' aria-invalid="true" autofocus' : '' ?>>
-        <?php foreach ($tplResults as $g): ?>
-        <option value="<?= (int)$g['id'] ?>" data-full="<?= h($g['category'] . ' — ' . $g['specific_goal']) ?>"><?= h($g['category'] . ' — ' . mb_strimwidth($g['specific_goal'], 0, 80, '…')) ?></option>
-        <?php endforeach; ?>
+        <?php // Grouped by area: each option is the goal alone; the area is read once per group.
+              $tplGroup = null; foreach ($tplResults as $g):
+              if ($g['category'] !== $tplGroup): if ($tplGroup !== null) echo '</optgroup>'; $tplGroup = $g['category']; ?>
+        <optgroup label="<?= h($tplGroup) ?>">
+        <?php endif; ?>
+        <option value="<?= (int)$g['id'] ?>" data-full="<?= h($g['category'] . ' — ' . $g['specific_goal']) ?>"><?= h(mb_strimwidth($g['specific_goal'], 0, 90, '…')) ?></option>
+        <?php endforeach; if ($tplGroup !== null) echo '</optgroup>'; ?>
       </select>
       <?php if ($tplMissing): ?><p class="field-error" id="tpl-err">Choose a template in Matching templates first, then press Prefill form.</p><?php endif; ?>
       <?php // Options do not wrap, so the highlighted template's full text is shown here. ?>
@@ -1103,11 +1107,16 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     sel.addEventListener('change',showPreview);
     function render(list){
       sel.innerHTML='';
+      // Grouped by area, so each option reads as the goal alone (the group name is
+      // announced once, on entering it) instead of "Area — goal" fifty times over.
+      var groups={};
       list.forEach(function(g){
+        var grp=groups[g.category];
+        if(!grp){grp=document.createElement('optgroup');grp.label=g.category;groups[g.category]=grp;sel.appendChild(grp);}
         var o=document.createElement('option');
-        o.value=g.id; o.textContent=g.category+' — '+g.specific_goal;
-        o.setAttribute('data-full',o.textContent);
-        sel.appendChild(o);
+        o.value=g.id; o.textContent=g.specific_goal;
+        o.setAttribute('data-full',g.category+' — '+g.specific_goal);
+        grp.appendChild(o);
       });
       count.textContent=list.length?(list.length+(list.length>=50?'+ shown — refine to narrow':' shown')):'No matches — try different words';
       if(list.length)sel.selectedIndex=0;
@@ -1123,7 +1132,10 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     }
     function schedule(){clearTimeout(timer);timer=setTimeout(query,250);}
     search.addEventListener('input',schedule);
-    cat.addEventListener('change',query);
+    // A native select fires a change for every arrow press: search (and announce the
+    // count) only once the choice has settled, not 334 times on the way through the areas.
+    cat.addEventListener('change',function(){clearTimeout(timer);timer=setTimeout(query,700);});
+    cat.addEventListener('blur',function(){if(timer){clearTimeout(timer);timer=null;query();}});
     search.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();query();}});
     // No query on load: the server already listed the first matches.
   })();
