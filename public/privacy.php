@@ -14,6 +14,14 @@ $aiOn = ai_enabled();
 $aiProvider = $aiOn ? (ai_providers()[ai_cfg()['provider']]['label'] ?? 'an AI service') : '';
 $redact = ai_redaction_on();
 $retYears = (int)(setting('retention_years') ?? '0');
+// Who runs the service. Another installation sets these in $CONFIG['brand'] (privacy_operator,
+// privacy_address, privacy_law, privacy_hosting); this agency's own details are the default
+// only while the agency name is still Example Agency.
+$ownInstall = $org === 'Example Agency';
+$operator = brand('privacy_operator') ?: ($ownInstall ? 'the maintainer' : '');
+$address = brand('privacy_address') ?: ($ownInstall ? '100 Main Street, Springfield' : '');
+$law = brand('privacy_law') ?: ($ownInstall ? 'Minnesota' : '');
+$hosting = brand('privacy_hosting') ?: ($ownInstall ? 'Linode' : '');
 const PRIVACY_UPDATED = '2026-10-15';
 page_header('Privacy notice', $viewer);
 ?>
@@ -21,6 +29,9 @@ page_header('Privacy notice', $viewer);
 <p>This notice explains what information <?= h($org) ?> keeps about you, why, who it is shared with, and the choices you have. It covers this website (including the referral form, the client portal and the counselor portal) and the staff iPhone app.</p>
 <?php if ($contact !== ''): ?><p lang="es">Si necesita esta información en español, escríbanos a <?= $mail ?>.</p><?php endif; ?>
 <p>Last updated <?= h(fmt_date(PRIVACY_UPDATED)) ?>.</p>
+<?php if ($operator !== '' || $address !== ''): ?>
+<p><?= h($org) ?><?= $operator !== '' ? ' is run by ' . h($operator) : '' ?><?= $address !== '' ? ', ' . h($address) : '' ?>.<?php if ($law !== ''): ?> We follow <?= h($law) ?> privacy law.<?php endif; ?></p>
+<?php endif; ?>
 
 <nav aria-labelledby="privacy-toc-h"><h2 id="privacy-toc-h">On this page</h2>
 <ul>
@@ -74,7 +85,11 @@ page_header('Privacy notice', $viewer);
   <?php if ($aiOn): ?>
   <li><strong><?= h($aiProvider) ?></strong>, the AI service we use for drafting help. See <a href="#ai">AI and voice features</a>.</li>
   <?php endif; ?>
+  <?php if ($hosting !== ''): ?>
+  <li><strong><?= h($hosting) ?></strong>, which provides the server this system runs on. We set up and manage the server ourselves; <?= h($hosting) ?> provides the computer and its connection, not access to our records.</li>
+  <?php else: ?>
   <li><strong>The company that hosts our server</strong>, which stores the system for us.</li>
+  <?php endif; ?>
   <li>Anyone else only when you agree, or when the law requires it.</li>
 </ul>
 </section>
@@ -136,6 +151,6 @@ page_header('Privacy notice', $viewer);
 </section>
 
 <section aria-labelledby="contact"><h2 id="contact">Questions and requests</h2>
-<p>To ask a question, request a copy or correction of your information, or make a complaint, email <?= $mail ?>. We will answer as soon as we can. If we change this notice, we will update the date at the top.</p>
+<p>To ask a question, request a copy or correction of your information, or make a complaint, email <?= $mail ?><?= $operator !== '' ? ', or write to ' . h($operator) . ($address !== '' ? ' at ' . h($address) : '') : '' ?>.<?= $operator !== '' ? ' ' . h($operator) . ' handles privacy requests.' : '' ?> We will answer as soon as we can. If we change this notice, we will update the date at the top.</p>
 </section>
 <?php page_footer();
