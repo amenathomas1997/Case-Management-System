@@ -47,7 +47,11 @@ $heartbeat = function (string $key, int $maxAgeSeconds, string $what, string $cr
     $raw = $dbOk ? setting($key) : null;
     $ts = $raw !== null ? strtotime($raw) : false;
     if ($ts === false) {
-        $checks[] = ['name' => $what, 'ok' => false, 'detail' => $dbOk ? "The {$what} ({$cron}) has not recorded a run yet." : 'Not checked: the database did not answer.'];
+        // Never recorded is not a failure (the jobs write their heartbeat only from this
+        // release on, and a fresh install has not run them yet); staleness is judged once
+        // a first run exists. The backup check and the daily alert email still cover a job
+        // that never starts.
+        $checks[] = ['name' => $what, 'ok' => $dbOk, 'detail' => $dbOk ? "The {$what} ({$cron}) has not recorded a run yet; checked once it has." : 'Not checked: the database did not answer.'];
         return null;
     }
     $fresh = $ts >= time() - $maxAgeSeconds;
