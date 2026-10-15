@@ -133,8 +133,6 @@ $logins = db()->query("SELECT * FROM login_attempts
     WHERE success = 0 OR email LIKE '%@%'
     ORDER BY id DESC LIMIT 100")->fetchAll();
 
-/** Plain wording for a stored action code such as "equipment.loan" (display only;
- *  the stored codes and the filter are unchanged). Unknown codes are shown as stored. */
 /** The kind of record an entry is about, in words rather than a table name (3.1.3). */
 function audit_entity_label(string $entity): string {
     static $names = [
@@ -150,6 +148,8 @@ function audit_entity_label(string $entity): string {
     if ($entity === '') return '';
     return $names[$entity] ?? ucfirst(str_replace('_', ' ', $entity));
 }
+/** Plain wording for a stored action code such as "equipment.loan" (display only;
+ *  the stored codes and the filter are unchanged). Unknown codes are shown as stored. */
 function audit_action_label(string $code): string {
     static $subjects = [
         'ai' => 'AI assistant', 'at' => 'Assistive technology services', 'assessment' => 'Assessment',

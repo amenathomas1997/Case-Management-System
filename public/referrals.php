@@ -425,7 +425,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
           <?php endif; ?></td>
       <td><?= h($r['assigned_name'] ?? '—') ?></td>
       <td><?= status_badge($r['status']) ?></td>
-      <td><a class="btn btn-secondary btn-sm" href="referrals.php?view=<?= (int)$r['id'] ?>">View<span class="visually-hidden"> referral from <?= h($r['counselor_name']) ?> for <?= h($r['client_name']) ?></span></a></td>
+      <td><a class="btn btn-secondary btn-sm" href="referrals.php?view=<?= (int)$r['id'] ?>">View<span class="visually-hidden"> referral from <?= h($r['counselor_name']) ?> for <?= h($r['client_name']) ?>, received <?= h(substr((string)$r['created_at'], 0, 10)) ?></span></a></td>
     </tr>
   <?php endforeach; ?>
   </tbody>

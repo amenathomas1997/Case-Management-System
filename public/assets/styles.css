@@ -454,5 +454,11 @@ body { padding-left: env(safe-area-inset-left, 0); padding-right: env(safe-area-
 .tap, .card dd > a, .card h3 > a, .card h2 > a, .card ul > li > a:first-child, .props dd > a, .fu-head > a { display: inline-flex; align-items: center; min-height: 2.75rem; }
 
 .vision-panel > summary { min-height: 2.75rem; padding: .5rem; cursor: pointer; }
-.vision-panel > summary .vision-title { display: inline; }
 .vision-panel[open] > summary { margin-bottom: .5rem; }
+
+.breadcrumbs { margin-block: 1rem; }
+.breadcrumbs ol { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; list-style: none; padding: 0; margin: 0; }
+.breadcrumbs li { min-width: 0; overflow-wrap: anywhere; }
+.breadcrumbs a { display: inline-block; min-height: 2.75rem; padding: .5rem .25rem; }
+.breadcrumbs [aria-current="page"] { font-weight: 700; }
+.breadcrumb-separator { padding-inline: .25rem; }

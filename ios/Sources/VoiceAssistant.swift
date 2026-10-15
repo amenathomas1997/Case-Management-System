@@ -406,7 +406,12 @@ final class SpeechController: NSObject, ObservableObject {
         // Only the fallback timer ended it: VoiceOver may still be reading the question (slow
         // rate, or queued behind other speech), and an open microphone would hear its own
         // "Say yes to save" as the answer. A pending confirmation waits for the buttons instead.
-        if timedOut || (repliesViaVoiceOver && pendingConfirm != nil) { endLoopAfterSpeaking = true }
+        // Say how to answer, since the question VoiceOver just read asks for a spoken yes.
+        if repliesViaVoiceOver && pendingConfirm != nil && phase == .speaking {
+            waitForAnswer(because: "Waiting for your answer.")
+            return
+        }
+        if timedOut { endLoopAfterSpeaking = true }
         if phase == .speaking { afterSpeaking() }
     }
 

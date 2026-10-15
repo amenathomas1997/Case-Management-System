@@ -360,10 +360,17 @@
   // While a confirmation waits, what is said or typed answers it (the same
   // confirmed write the Yes button sends), and is never sent to the AI as a new
   // request. An unclear answer pauses listening and preserves the request for review.
+  // After that, only a bare yes or no (or the buttons) answers it: anything longer
+  // is a new request, so the waiting write is cancelled rather than saved by an "ok" in it.
   function answerConfirm(text) {
     logMsg('u', text); pushHistory('user', text);
     var a = confirmAnswer(text);
+    if (pending.unclear && !/^\s*(yes|no)[.!]?\s*$/i.test(text)) {
+      resolveConfirm(false, 'That was not a yes or no, so nothing was saved. Make your new request again.');
+      return;
+    }
     if (a !== 'unclear') { resolveConfirm(a === 'yes'); return; }
+    pending.unclear = true;
     setConvo(false);
     setStatus('Your request is still waiting. Choose Accept and save or Decline, type yes or no, or choose Use microphone to answer again.');
   }
@@ -511,7 +518,7 @@
           setConvo(false);
           setStatus(pending && !confirmBox.hidden
             ? 'The microphone is paused. Your request is still waiting: choose Accept and save or Decline, type an answer, or choose Use microphone.'
-            : 'The microphone is paused. Choose Use microphone when you are ready, or type your request.');
+            : 'The microphone is paused and the conversation has ended. Choose Use microphone or Start conversation when you are ready, or type your request.');
           return;
         }
         setStatus(MIC_ERRORS[e.error] || 'The microphone could not be used. Type your request below, or choose Use microphone to try again.'); input.focus();

@@ -126,8 +126,6 @@ if (isset($_GET['export'])) {
             $c && $c['new_status'] === 'Closed - Rehabilitated' ? 'Y' : '',
         ]);
     }
-    write_csv_row($out, []);
-    write_csv_row($out, ['RSA-911 aligned case-service export', csv_cell(cfg('name')), 'Period', $from . ' to ' . $to, 'Generated', date('Y-m-d'), 'By', csv_cell($user['name'])]);
     fclose($out);
     exit;
 }

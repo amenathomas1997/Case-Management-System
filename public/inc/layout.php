@@ -8,11 +8,13 @@ function brand_short_html(): string {
     return h($short);
 }
 require_once __DIR__ . '/accessibility.php';
+require_once __DIR__ . '/navigation.php';
 
-function page_header(string $title, ?array $user = null, string $active = ''): void {
+function page_header(string $title, ?array $user = null, string $active = '', array $parents = []): void {
     // Public/help/error screens may omit the actor, but signed-in staff still
     // need their permission-filtered navigation on those screens.
     if ($user === null && function_exists('current_user')) $user = current_user();
+    $GLOBALS['CMS_PAGE_SIGNED_IN'] = $user !== null; // page_footer shows staff shortcuts to the same audience
     $hideVision = $user && function_exists('setting') && setting('user_low_vision_hidden_' . (int)$user['id']) === '1';
     $app = cfg('name');
     // Flashes are taken before the <title> so a failed submit says so there too
@@ -48,14 +50,19 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
 </head>
 <body>
 <a class="skip-link" href="#main"><?= t('Skip to main content') ?></a>
+<?php /* Staff shortcuts only: clients on the portal, referral or sign-in pages have no Dashboard or staff menu. */ ?>
+<?php if ($user): ?>
 <nav class="wrap page-actions cms-page-navigation" aria-label="<?= h(__('Page navigation')) ?>">
   <a class="btn btn-secondary" href="index.php" data-cms-back><?= t('Go back') ?></a>
   <a class="btn btn-secondary" href="index.php"><?= t('Dashboard') ?></a>
-  <a class="btn btn-secondary" href="<?= $user ? '#main-nav' : 'index.php#main-nav' ?>" data-cms-menu><?= t('Main navigation') ?></a>
+  <a class="btn btn-secondary" href="#main-nav" data-cms-menu><?= t('Go to main menu') ?></a>
 </nav>
+<?php endif; ?>
 <section id="low-vision-bar" class="vision-bar" aria-labelledby="vision-title" data-saved="<?= h(__('Display updated.')) ?>" data-account-hidden="<?= $hideVision ? 'true' : 'false' ?>" hidden>
   <div class="wrap">
-    <details class="vision-panel"><summary><h2 class="vision-title" id="vision-title"><?= t('Low-vision controls') ?></h2></summary>
+    <?php /* The heading stays outside the summary: inside it, it becomes part of a button and drops out of the headings list. */ ?>
+    <h2 class="vision-title" id="vision-title"><?= t('Low-vision controls') ?></h2>
+    <details class="vision-panel"><summary><?= t('Show display options') ?></summary>
     <div class="vision-heading">
       <a href="#main"><?= t('Skip to main content') ?></a>
       <?php if ($user): ?><button type="button" id="earcon-toggle" aria-pressed="true" hidden>Sound cues</button><?php endif; ?>
@@ -91,33 +98,7 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
       </button>
       <ul class="main-nav" id="main-nav" tabindex="-1">
         <?php
-        $items = [
-            ['index.php', 'Dashboard', 'dashboard', null],
-            ['tasks.php', 'Task list', 'tasks', null],
-            ['workflows.php', 'Daily work & review', 'workflows', null],
-            ['at_services.php', 'Assistive technology services', 'at_services', null],
-            ['clients.php', 'Client records', 'clients', 'clients'],
-            ['referrals.php', 'Incoming referrals', 'referrals', 'referrals'],
-            ['portal_requests.php', 'Client portal requests', 'portal_requests', 'clients'],
-            ['messages.php', 'Client & counselor messages', 'messages', 'clients'],
-            ['pipeline.php', 'Intake progress', 'pipeline', 'clients'],
-            ['accommodations.php', 'Accommodation assessments', 'accommodations', 'clients'],
-            ['schedule.php', 'Session schedule', 'schedule', 'schedule'],
-            ['programs.php', 'Group programs', 'programs', 'programs'],
-            ['invoices.php', 'Invoices', 'invoices', 'billing'],
-            ['contracts.php', 'Grants & contracts', 'contracts', 'billing'], // own entry: billing-only groups cannot open Compliance, its other link
-            ['equipment.php', 'Equipment & loans', 'equipment', 'equipment'],
-            ['followups.php', 'Device follow-ups', 'followups', 'clients'],
-            ['incidents.php', 'Incident reports', 'incidents', 'clients'],
-            ['procurement.php', 'Device purchases', 'procurement', 'procurement'],
-            ['compliance.php', 'Authorizations & compliance', 'compliance', 'clients'],
-            ['analytics.php', 'Business analytics', 'analytics', 'analytics'],
-            ['templates.php', 'Goal & assessment templates', 'templates', 'templates'],
-            ['kb.php', 'Staff knowledge base', 'kb', null],
-            ['ai_tools.php', 'AI tools', 'ai_tools', null],
-            ['account.php', 'My Account', 'account', null],
-            ['help.php#staff-guide', 'User guide', 'help', null],
-        ];
+        $items = cms_navigation_items();
         $script = basename($_SERVER['SCRIPT_NAME'] ?? '');
         foreach ($items as [$href, $label, $key, $perm]): if ($perm !== null && !can($perm)) continue;
             $current = $active === $key ? ($script === explode('#', $href, 2)[0] ? 'aria-current="page"' : 'aria-current="true"') : ''; ?>
@@ -168,6 +149,7 @@ function page_header(string $title, ?array $user = null, string $active = ''): v
 </script>
 <?php endif; ?>
 <main id="main" class="wrap" tabindex="-1" aria-label="<?= h(__('Main content')) ?>">
+<?= cms_breadcrumb_html($title, $active, $parents, $user !== null) ?>
 <?php
     if ($flashes) {
         // Live regions present at page load are often not announced after a
@@ -303,6 +285,8 @@ function page_footer(): void {
     // backups and alerts go; the installer sets it to the administrator's
     // sign-in email). Always use APP_VERSION so the footer follows each release.
     $contact = (string)(cfg('support_email') ?: cfg('mail_from'));
+    // Staff shortcuts are not shown to clients on public pages (see page_header).
+    $signedIn = !empty($GLOBALS['CMS_PAGE_SIGNED_IN']);
     ?>
 </main>
 <script>
@@ -328,11 +312,13 @@ function page_footer(): void {
 </script>
 <footer class="site-footer" aria-label="<?= h(__('Site information')) ?>">
   <div class="wrap">
+    <?php if ($signedIn): ?>
     <nav class="page-actions" aria-label="<?= h(__('Footer navigation')) ?>">
       <a class="btn btn-secondary" href="index.php" data-cms-back><?= t('Go back') ?></a>
       <a class="btn btn-secondary" href="index.php"><?= t('Dashboard') ?></a>
-      <a class="btn btn-secondary" href="index.php#main-nav" data-cms-menu><?= t('Main navigation') ?></a>
+      <a class="btn btn-secondary" href="#main-nav" data-cms-menu><?= t('Go to main menu') ?></a>
     </nav>
+    <?php endif; ?>
     <p><?= h(cfg('name')) ?> <span aria-hidden="true">&middot;</span> <a href="community_referral.php"><?= t('Referral Form') ?></a>
        <span aria-hidden="true">&middot;</span> <?= $helpLink ?>
        <?php if ($contact !== ''): ?><span aria-hidden="true">&middot;</span> <?= t('Questions? Email') ?> <a href="mailto:<?= h($contact) ?>"><?= h($contact) ?></a><?php endif; ?>

@@ -963,7 +963,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ai_enabled() && isset($_POST['ai_do
 
 // The title names the open tab as well as the client, so each view is distinct.
 $tabLabels = ['overview' => 'Overview', 'notes' => 'Client Notes', 'assessments' => 'Tech Assessments', 'tracks' => 'Training Tracks', 'documents' => 'Documents', 'history' => 'Status History'];
-page_header($tabLabels[$tab] . ' — ' . $client['name'], $user, 'clients');
+page_header($tabLabels[$tab] . ' — ' . $client['name'], $user, 'clients', $tab === 'overview' ? [] : [['client.php?id=' . (int)$client['id'], $client['name']]]);
 ?>
 <h1><?= h($client['name']) ?> <?= status_badge($client['status']) ?></h1>
 <p class="page-actions"><a href="workflows.php?view=briefing&amp;client_id=<?= (int)$client['id'] ?>">AI case briefing</a><a href="workflows.php?view=homework&amp;client_id=<?= (int)$client['id'] ?>">Homework support</a></p>

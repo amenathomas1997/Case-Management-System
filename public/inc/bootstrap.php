@@ -55,7 +55,7 @@ set_exception_handler(static function (Throwable $e): void {
                 . '<meta name="viewport" content="width=device-width, initial-scale=1">'
                 . '<script src="assets/low-vision.js?v=' . h(APP_VERSION) . '"></script>'
                 . '<title>' . $title . '</title><link rel="stylesheet" href="assets/styles.css?v=' . h(APP_VERSION) . '"></head>'
-                . '<body><nav class="wrap page-actions" aria-label="Page navigation"><a href="index.php">Dashboard</a><a href="index.php#main-nav">Main navigation</a></nav><main class="wrap" aria-label="Main content"><h1>' . $title . '</h1><p>' . $message . '</p>'
+                . '<body><nav class="wrap page-actions" aria-label="Page navigation"><a href="index.php">Dashboard</a><a href="index.php#main-nav">Go to main menu</a></nav><main class="wrap" aria-label="Main content"><h1>' . $title . '</h1><p>' . $message . '</p>'
                 . '<p><a href="' . htmlspecialchars($back, ENT_QUOTES, 'UTF-8') . '">' . $backText . '</a></p></main></body></html>';
         }
     }
@@ -513,7 +513,7 @@ function csrf_refused_page(): never {
         . '<script src="assets/low-vision.js?v=' . h(APP_VERSION) . '"></script>'
         . '<title>Request not completed — ' . h((string)cfg('name')) . '</title>'
         . '<link rel="stylesheet" href="assets/styles.css?v=' . h(APP_VERSION) . '"></head>'
-        . '<body><nav class="wrap page-actions" aria-label="Page navigation"><a href="index.php">Dashboard</a><a href="index.php#main-nav">Main navigation</a></nav><main class="wrap" aria-label="Main content"><h1>Request not completed</h1>'
+        . '<body><nav class="wrap page-actions" aria-label="Page navigation"><a href="index.php">Dashboard</a><a href="index.php#main-nav">Go to main menu</a></nav><main class="wrap" aria-label="Main content"><h1>Request not completed</h1>'
         . '<p>Invalid request token: the form was sent from an out-of-date copy of a page, or from another site, so nothing was saved.</p>'
         . '<p>Go back to the page, reload it, and send the form again. Copy any long text you typed first: reloading can clear it.</p>'
         . '<p><a href="' . h(csrf_return_url()) . '">Go back to the page</a></p></main></body></html>';

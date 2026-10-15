@@ -221,11 +221,14 @@ const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resol
   assert.equal(v.requests.length, 0);
   assert.equal(v.el('.vfab-confirm').hidden, false);
   assert.match(v.el('.vfab-status').textContent, /still waiting/);
-  v.el('.vfab-input').value = 'synthetic nonsense';
+  // After an unclear answer, only a bare yes or no answers: a new request containing
+  // "ok" must cancel the waiting write, never save it.
+  v.el('.vfab-input').value = 'ok open clients';
   v.el('.vfab-send').handlers.click();
+  await settle();
   assert.equal(v.requests.length, 0);
-  assert.equal(v.el('.vfab-confirm').hidden, false);
-  assert.match(v.el('.vfab-status').textContent, /still waiting/);
+  assert.equal(v.el('.vfab-confirm').hidden, true);
+  console.log('PASS: After an unclear answer, a later request is not taken as a yes and nothing is saved');
   v = voiceFixture({local: new Map([['cms_voice_replies', 'off']])});
   v.el('.vfab-btn').handlers.click();
   v.el('.vfab-input').value = 'Add a synthetic note';

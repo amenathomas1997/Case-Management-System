@@ -16,6 +16,7 @@ run() {
 for suite in tests/*.test.cjs; do run node "$suite"; done
 run php tests/form_messages.php
 run php tests/accessibility.php
+run php tests/breadcrumbs.php
 run python3 tests/cron_regression.py
 run python3 tests/installer_gate.py
 if command -v swiftc >/dev/null 2>&1; then

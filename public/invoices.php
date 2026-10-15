@@ -415,7 +415,7 @@ $pageNote = $invTotal > $perPage && $onlyId === 0
   <?php if ($page < $pages): ?><a href="<?= h($pageUrl($page + 1)) ?>">Older invoices<span class="visually-hidden"> (page <?= $page + 1 ?> of <?= $pages ?>)</span></a><?php endif; ?>
 </nav>
 <?php endif; ?>
-<h2 id="inv-list-h"><?= $onlyId > 0 ? 'Requested invoice' : ($listStatus !== '' ? h($listStatus) . ' invoices' : 'All invoices') ?></h2>
+<h2 id="inv-list-h"><?= $onlyId > 0 ? 'Requested invoice' : ($listStatus !== '' ? $listStatus . ' invoices' : 'All invoices') ?></h2>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Invoices list">
 <table>
   <caption class="visually-hidden"><?= $onlyId > 0 ? 'The requested invoice' : ($pageNote !== '' ? 'Invoices ' . $firstShown . ' to ' . $lastShown . ' of ' . $invTotal . ', newest first' : 'Invoices, newest first') ?></caption>

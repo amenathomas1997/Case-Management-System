@@ -232,7 +232,7 @@ $v = fn(string $k, $default = '') => h($_POST[$k] ?? $track[$k] ?? $default);
 // aria-invalid / aria-describedby that ties an error to its control.
 set_form_errors($errors);
 // The stored title (not a refused edit) and the client name, so tabs and headings tell tracks apart.
-page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] . ' — ' . $client['name'] : 'Add training track — ' . $client['name']), $user, 'clients');
+page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] . ' — ' . $client['name'] : 'Add training track — ' . $client['name']), $user, 'clients', array_merge([['client.php?id=' . (int)$client['id'], $client['name']], ['client.php?id=' . (int)$client['id'] . '&tab=tracks', 'Training Tracks']], $track ? [['track.php?id=' . (int)$track['id'], $track['title']]] : []));
 ?>
 <p class="page-actions"><a href="client.php?id=<?= $clientId ?>&amp;tab=tracks"><span aria-hidden="true">&larr; </span>Back to <?= h($client['name']) ?></a></p>
 <h1><?= $track ? 'Edit training track: ' . h($track['title']) . ' for ' . h($client['name']) : 'New training track for ' . h($client['name']) ?></h1>

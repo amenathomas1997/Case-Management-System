@@ -5,7 +5,7 @@ require __DIR__.'/inc/layout.php';
 $user=require_login();csrf_check();$actor=(int)$user['id'];
 $view=is_string($_GET['view']??null)?$_GET['view']:'actions';
 $titles=['actions'=>'Daily action center','review'=>'Documentation review','briefing'=>'AI case briefing','homework'=>'Homework support','waitlist'=>'Referral waitlist','quality'=>'AI quality'];
-if(!isset($titles[$view])){http_response_code(404);page_header('Page not found',$user);echo '<h1>Page not found</h1><p>Choose Dashboard or Main navigation to continue.</p>';page_footer();exit;}
+if(!isset($titles[$view])){http_response_code(404);page_header('Page not found',$user);echo '<h1>Page not found</h1><p>Choose Dashboard or Go to main menu to continue.</p>';page_footer();exit;}
 if(in_array($view,['review','briefing','homework'],true))require_perm('clients');
 if($view==='waitlist')require_perm('referrals');
 $ready=workflows_ready();
@@ -102,7 +102,7 @@ elseif($waitConflict)echo error_notice($error.' The entry as it is now saved is 
 elseif($error!==null)echo error_notice($error);
 ?>
 <p>Open referrals, oldest first; closed waitlist entries are listed last. Matching considers recorded skills, language, service area, mode, and booked capacity. Staff must verify availability and caseload access before assigning. Converted referrals leave this queue.</p>
-<ul><?php foreach($rows as $r):?><li><a href="workflows.php?view=waitlist&amp;referral_id=<?=(int)$r['id']?>"><?=h($r['client_name'])?></a> — <?=h($r['status']??'Not waitlisted')?> · received <?=h(substr($r['received_at'],0,10))?><?= $r['followup_date']?' · follow up '.h($r['followup_date']):'' ?></li><?php endforeach;?></ul>
+<ul><?php foreach($rows as $r):?><li><a href="workflows.php?view=waitlist&amp;referral_id=<?=(int)$r['id']?>"><?=h($r['client_name'])?><span class="visually-hidden">, received <?=h(substr($r['received_at'],0,10))?></span></a> — <?=h($r['status']??'Not waitlisted')?><span aria-hidden="true"> · received <?=h(substr($r['received_at'],0,10))?></span><?= $r['followup_date']?' · follow up '.h($r['followup_date']):'' ?></li><?php endforeach;?></ul>
 <?php if($selected):?><h2 id="wl-h"><?=h($selected['client_name'])?></h2><a href="referrals.php?view=<?=$rid?>">Open referral to review or assign</a>
 <?php if($waitConflict):?><section class="card" aria-labelledby="wl-saved-h"><h3 id="wl-saved-h">Waitlist entry as now saved</h3><ul><?php foreach(['status'=>'Status','modality'=>'Delivery mode','followup_date'=>'Follow-up date','expertise'=>'Skills needed','languages'=>'Language / communication','areas'=>'Service areas','availability'=>'Client availability'] as $k=>$label):?><li><?=h($label)?>: <?=h((string)($selected[$k]??'')!==''?(string)$selected[$k]:'(blank)')?></li><?php endforeach;?></ul></section><?php endif;?>
 <form method="post" class="stacked"><?=csrf_field()?><input type="hidden" name="referral_id" value="<?=$rid?>"><input type="hidden" name="version" value="<?=(int)($waitValues['version']??0)?>">

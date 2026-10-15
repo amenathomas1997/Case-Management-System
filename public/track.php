@@ -537,7 +537,7 @@ $gpDraft = $_SESSION['goal_progress_draft'] ?? null;
 unset($_SESSION['goal_progress_draft']);
 
 // Track titles are generic ("Braille Literacy"), so the title and h1 name the client too.
-page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $track['client_name'], $user, 'clients');
+page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $track['client_name'], $user, 'clients', [['client.php?id=' . (int)$track['client_id'], $track['client_name']], ['client.php?id=' . (int)$track['client_id'] . '&tab=tracks', 'Training Tracks']]);
 ?>
 <p class="page-actions"><a href="client.php?id=<?= (int)$track['client_id'] ?>&amp;tab=tracks"><span aria-hidden="true">&larr; </span>Back to <?= h($track['client_name']) ?></a></p>
 <h1><?= h($track['title']) ?> <span class="visually-hidden">for</span><span aria-hidden="true"> — </span><?= h($track['client_name']) ?> <?= status_badge($track['status']) ?></h1>

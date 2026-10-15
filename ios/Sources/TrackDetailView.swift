@@ -173,7 +173,7 @@ struct TrackDetailView: View {
                         Text("No goals yet.").foregroundStyle(Color.secondaryText)
                     }
                     ForEach(goals) { goal in
-                        let short = "Goal #\(goal.id): \(shortGoalText(goal.specificGoal))"
+                        let short = "\(goalPosition(goal)): \(shortGoalText(goal.specificGoal))"
                         VStack(alignment: .leading, spacing: 4) {
                             Text(goal.specificGoal).font(.body.weight(.medium))
                             Text(goal.measurableMetric).font(.callout).foregroundStyle(Color.secondaryText)
@@ -408,9 +408,15 @@ struct TrackDetailView: View {
         sheetResult = nil
     }
 
+    /// "Goal 2 of 5": the position the user hears in the list, not the database id.
+    private func goalPosition(_ goal: Goal) -> String {
+        guard let i = goals.firstIndex(where: { $0.id == goal.id }) else { return "Goal" }
+        return "Goal \(i + 1) of \(goals.count)"
+    }
+
     private var goalStatusQuestion: String {
         guard let pending = pendingGoalStatus else { return "" }
-        let short = "Goal #\(pending.goal.id): \(shortGoalText(pending.goal.specificGoal))"
+        let short = "\(goalPosition(pending.goal)): \(shortGoalText(pending.goal.specificGoal))"
         let pct = pending.goal.progressPct ?? 0
         switch pending.status {
         case "Achieved": return "Mark “\(short)” achieved? Its progress is recorded as 100%."

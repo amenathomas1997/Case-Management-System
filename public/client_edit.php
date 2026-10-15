@@ -279,7 +279,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $src = $_SERVER['REQUEST_METHOD'] === 'POST' ? $_POST : ($GLOBALS['OLD_INPUT'] ?: null);
 $raw = fn(string $k): ?string => is_string($src[$k] ?? null) ? $src[$k] : null;
 $v = fn(string $k) => h($raw($k) ?? (string)($client[$k] ?? ''));
-page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name'] : 'Add client'), $user, 'clients');
+page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name'] : 'Add client'), $user, 'clients', $client ? [['client.php?id=' . (int)$client['id'], $client['name']]] : []);
 ?>
 <h1><?= $client ? 'Edit ' . h($client['name']) : 'Add client' ?></h1>
 <?php if ($client && $client['archived_at'] !== null): ?>

@@ -29,9 +29,11 @@ final class AccessibleDocument {
         }
         $this->body .= '</tbody></table></div>';
     }
-    public function html(): string {
+    /** Return links only for a copy a signed-in staff member downloads: an emailed or
+     *  zipped document goes outside the organization, where CMS links are useless. */
+    public function html(bool $appLinks = false): string {
         $base = function_exists('cfg') ? rtrim((string)cfg('base_url'), '/') . '/' : '';
-        $navigation = '<nav aria-label="CMS navigation"><a href="' . h($base . 'index.php') . '">Dashboard / return to CMS</a> · <a href="' . h($base . 'index.php#main-nav') . '">Main navigation</a></nav>';
+        $navigation = !$appLinks ? '' : '<nav aria-label="CMS navigation"><a href="' . h($base . 'index.php') . '">Dashboard / return to CMS</a> · <a href="' . h($base . 'index.php#main-nav') . '">Go to main menu</a></nav>';
         return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
             . '<title>' . h($this->title) . '</title><style>dd,li{max-width:72ch}body{font:1rem/1.6 system-ui,sans-serif;color:#1a1a2e;background:#fff;max-width:70rem;margin:auto;padding:1rem}h1,h2,h3,h4,p,dd,td,th{overflow-wrap:anywhere}p{max-width:75ch}dt{font-weight:bold}dd{margin:0 0 1rem}table{border-collapse:collapse;width:100%}th,td{padding:.6rem;text-align:left;border:1px solid #555;vertical-align:top}caption{text-align:left;font-weight:bold;padding:.6rem}th{background:#eee}.scroll{overflow:auto}:focus-visible{outline:3px solid #1e40af;outline-offset:3px}@media print{.scroll{overflow:visible}}</style></head><body>' . $navigation . '<main aria-label="Main content"><h1>'
             . h($this->title) . '</h1>' . $this->body . '</main></body></html>';
@@ -39,7 +41,7 @@ final class AccessibleDocument {
     public function download(string $name): never {
         header('Content-Type: text/html; charset=UTF-8');
         header('Content-Disposition: attachment; filename="' . preg_replace('/[^A-Za-z0-9_.-]/', '_', $name) . '"');
-        echo $this->html();
+        echo $this->html(true);
         exit;
     }
 }

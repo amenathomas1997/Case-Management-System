@@ -18,7 +18,7 @@ function fixture(restored = false) {
     createElement(){return dialog;}, body:{appendChild(){}},addEventListener(n,f){events[n]=f;}};
   const loc = {origin:'https://example.test',href:'https://example.test/client.php?id=1',pathname:'/client.php',search:'?id=1',hash:'',assign(u){visited=u;}};
   const window = {cmsRestoredFields: restored ? ['add_note'] : [],addEventListener(n,f){win[n]=f;},confirm(){return false;}};
-  vm.runInNewContext(source,{document:doc,window,location:loc,Map,Set,Array,JSON,URL,Promise});
+  vm.runInNewContext(source,{document:doc,window,location:loc,Map,Set,Array,JSON,URL,Promise,setTimeout});
   function event(target) { return {target,button:0,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;}}; }
   function link(href,attrs=[]) {const a={href,target:'',hasAttribute:n=>attrs.includes(n)};return {closest:()=>a};}
   return {events,win,controls,field,button,form,other,dialog,event,link,visited:()=>visited,submitted:()=>submitted,focus:()=>focused};
@@ -41,7 +41,8 @@ function fixture(restored = false) {
   f=fixture(true);e=f.event({});f.win.beforeunload(e);assert.equal(e.defaultPrevented,true);
   f=fixture();f.field.value='Changed';e=f.event(f.form);f.events.submit(e);f.win.beforeunload(f.event({}));
   assert.equal(e.defaultPrevented,false);
-  e.defaultPrevented=true;await Promise.resolve();let unload=f.event({});f.win.beforeunload(unload);assert.equal(unload.defaultPrevented,true);
+  // A later submit listener (session-forms.js) refuses after this one ran.
+  await Promise.resolve();e.defaultPrevented=true;await new Promise(r=>setTimeout(r,0));let unload=f.event({});f.win.beforeunload(unload);assert.equal(unload.defaultPrevented,true);
   f=fixture();f.field.value='Changed';e=f.event(f.other);f.events.submit(e);assert.equal(e.defaultPrevented,true);assert.equal(f.dialog.open,true);
   f.events['[data-leave]:click']();unload=f.event({});f.win.beforeunload(unload);assert.equal(unload.defaultPrevented,true);
   f.events.click(f.event(f.link('https://example.test/index.php')));

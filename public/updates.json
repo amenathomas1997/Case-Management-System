@@ -1,7 +1,7 @@
 {
     "product": "Case Management System",
-    "latest": "3.0.21",
-    "released": "2026-10-14",
-    "notes": "Security and accessibility update: clearer navigation and staff user guide; named landmarks; unsaved-change protection; collapsible low-vision controls with account visibility settings; optional expanded dropdown lists and text date entry. Includes round-five audit fixes and offline replay protection. Sites on 3.0.16 or later must apply mig_3.0.21.sql before updating application files. Manual assistive-technology verification remains ongoing.",
+    "latest": "3.0.22",
+    "released": "2026-10-15",
+    "notes": "Accessibility and audit follow-up: breadcrumb navigation on staff pages; staff shortcuts no longer shown on client portal, referral, consent, survey and sign-in pages; Low-vision controls is a heading again; clearer link names; the voice assistant never saves a waiting change after an unclear answer; emailed and exported documents no longer link into the system. No database migration: sites on 3.0.21 update application files only. Sites on 3.0.16 to 3.0.20 apply mig_3.0.21.sql first. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16 and 3.0.21 in order; all are safe to re-run.",
     "contact": "Contact Example Agency for the update package."
 }

@@ -2,6 +2,9 @@
 // Spanish translations for the public-facing pages (referral form, consent,
 // survey, client portal). Keys are the exact English source strings.
 return [
+    'Breadcrumb' => 'Ruta de navegación',
+    'Go to main menu' => 'Ir al menú principal',
+    'Show display options' => 'Mostrar opciones de visualización',
     'Show dropdown choices as lists' => 'Mostrar las opciones desplegables como listas',
     'Site header' => 'Encabezado del sitio',
     'Main content' => 'Contenido principal',

@@ -26,7 +26,7 @@ set_exception_handler(static function (Throwable $e): void {
 /** A titled page for a dead feed address: a calendar app or a browser shows it, so it says what it is (2.4.2). */
 function calfeed_not_found(): string {
     return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Calendar feed not found</title></head>'
-        . '<body><nav aria-label="Page navigation"><a href="index.php">Dashboard</a> · <a href="index.php#main-nav">Main navigation</a> · <a href="account.php">Back to My Account</a></nav><main aria-label="Main content"><h1>Calendar feed not found</h1><p>This calendar address is no longer valid. Sign in to the case management system and create a new calendar subscription from My Account.</p></main></body></html>';
+        . '<body><nav aria-label="Page navigation"><a href="index.php">Dashboard</a> · <a href="index.php#main-nav">Go to main menu</a> · <a href="account.php">Back to My Account</a></nav><main aria-label="Main content"><h1>Calendar feed not found</h1><p>This calendar address is no longer valid. Sign in to the case management system and create a new calendar subscription from My Account.</p></main></body></html>';
 }
 $raw = $_GET['u'] ?? '';
 $token = is_string($raw) ? preg_replace('/[^a-f0-9]/', '', $raw) : '';

@@ -33,7 +33,7 @@
   document.querySelectorAll('[data-cms-back]').forEach(function (a) {
     try {
       var previous = new URL(document.referrer);
-      if (previous.origin === location.origin && previous.href !== location.href && /\.php$/.test(previous.pathname)
+      if (previous.origin === location.origin && previous.href.split('#')[0] !== location.href.split('#')[0] && /\.php$/.test(previous.pathname)
           && !/\/(login|logout|verify|reset|sso|passkey)\.php$/.test(previous.pathname)) a.href = previous.href;
     } catch (e) {}
   });
@@ -100,7 +100,9 @@
     }
     submitting = e.target;
     // Session checks may defer submission. If they refuse it, keep protecting the draft.
-    Promise.resolve().then(function () { if (e.defaultPrevented) { submitting = null; leaving = false; } });
+    // A task, not a microtask: a user's submit runs microtasks between listeners, before
+    // session-forms.js has decided, so only after dispatch is defaultPrevented final.
+    setTimeout(function () { if (e.defaultPrevented && submitting === e.target) { submitting = null; leaving = false; } }, 0);
   });
   window.addEventListener('beforeunload', function (e) {
     if (!leaving && changed(submitting)) { e.preventDefault(); e.returnValue = ''; }

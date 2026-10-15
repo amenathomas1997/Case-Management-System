@@ -161,11 +161,11 @@ function fu_when(array $r): string {
       <p class="fu-when muted"><?= fu_when($r) ?></p>
       <fieldset class="fu-fields">
         <legend class="visually-hidden">Record the <?= (int)$r['interval_days'] ?>-day follow-up for <?= h($fuName) ?></legend>
-        <span class="fu-use" role="radiogroup" aria-label="Still in use?">Still in use?
+        <fieldset class="fu-use"><legend>Still in use? <span class="visually-hidden">(required)</span></legend>
           <label><input type="radio" name="in_use" value="yes" required> Yes</label>
           <label><input type="radio" name="in_use" value="no"> No</label>
           <label><input type="radio" name="in_use" value="unknown"> Unknown</label>
-        </span>
+        </fieldset>
         <label class="fu-sat">Satisfaction
           <select name="satisfaction">
             <option value="">—</option>
@@ -237,7 +237,7 @@ function fu_when(array $r): string {
 .fu-when{margin:0 0 .4rem;font-size:.9rem}
 .fu-fields{border:0;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:.6rem 1rem;align-items:flex-end}
 .fu-fields label{display:flex;flex-direction:column;font-size:.85rem;gap:.15rem}
-.fu-use{font-size:.85rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.fu-use{font-size:.85rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;border:0;margin:0;padding:0}.fu-use legend{float:left;padding:0;margin-right:.5rem}
 .fu-use label{flex-direction:row;align-items:center;gap:.2rem}
 .fu-bar input,.fu-notes input{min-width:14rem}
 .fu-actions{margin-top:.5rem;display:flex;gap:.6rem;align-items:center}

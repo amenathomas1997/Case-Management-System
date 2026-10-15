@@ -8,6 +8,8 @@
     original.forEach(function (_, select) { if (!select.isConnected) original.delete(select); });
     document.querySelectorAll('select').forEach(function (select) {
       if (select.multiple || (!original.has(select) && select.size > 1)) return;
+      // A required choice stays a dropdown: as a list its empty "Choose…" item would count as an answer.
+      if (select.required && !original.has(select)) return;
       var index = select.selectedIndex;
       if (expanded) {
         if (!original.has(select)) original.set(select, select.getAttribute('size'));
