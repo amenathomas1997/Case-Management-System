@@ -236,6 +236,8 @@ struct ReferralsView: View {
                             }
                         }
                         .padding(.vertical, 2)
+                        // One stop per referral, read in order with pauses between the parts.
+                        .accessibilityElement(children: .combine)
                     }
                 }
             }
@@ -330,6 +332,7 @@ struct ReferralDetailView: View {
                         Text(detail.subject).font(.body.weight(.semibold))
                         Text(detail.body).font(.callout)
                     }
+                    .accessibilityElement(children: .combine)
                 }
                 if detail.isSelfReferral {
                     Section("Self-referral") {

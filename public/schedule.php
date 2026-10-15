@@ -611,6 +611,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
             $act = ['Completed' => 'session.complete', 'Cancelled' => 'session.cancel', 'No Show' => 'session.no_show'][$to] ?? 'session.status';
             audit($user['id'], $act, 'session', $sid, 'client #' . (int)$sess['client_id']
                 . ($hours > 0 ? ', ' . fmt_hours($hours) . ' logged' : '') . ($linkLogId ? ', linked to work log #' . $linkLogId . ' (hours already logged)' : ''));
+            // Flash text is escaped, so the "write the session note" link is drawn by the page.
+            if ($to === 'Completed' && $sess['track_id']) {
+                $_SESSION['session_note_link'] = ['track' => (int)$sess['track_id'], 'title' => (string)($sess['track_title'] ?? '')];
+            }
             if ($linkLogId) {
                 flash('Completed: the ' . $which . ', linked to the ' . fmt_hours((float)$linked['hours']) . ' already logged' . $onTrack . '. No more hours were logged.');
             } elseif ($hours > 0) {
@@ -747,11 +751,24 @@ function session_row(array $s, string $csrf): void {
 <?php }
 ?>
 <h1>Session schedule</h1>
+<?php // After a session on a track is completed: the next step, writing its note. It
+// joins the flash confirmation (moved and focused with it); without scripts it stays here.
+$noteLink = $_SESSION['session_note_link'] ?? null; unset($_SESSION['session_note_link']);
+if (is_array($noteLink) && can('clients')): ?>
+<div class="alert alert-info" id="session-note-next"><a href="track.php?id=<?= (int)$noteLink['track'] ?>&amp;write_note=1#add-track-note">Write the session note<?= $noteLink['title'] !== '' ? ' on the training track "' . h($noteLink['title']) . '"' : ' on its training track' ?></a></div>
+<script>(function(){var a=document.getElementById('flash-messages'),p=document.getElementById('session-note-next');if(a&&p)a.appendChild(p);})();</script>
+<?php endif; ?>
 <div class="page-actions"><a class="btn btn-secondary" href="capacity.php">Capacity planning</a>
   <a class="btn btn-secondary" href="access_bookings.php">Interpreter, CART (real-time captioning) and transport bookings</a></div>
 
+<?php // Both booking forms start collapsed so the session lists come first; each opens
+// after its own refused or restored entry, or a link to its heading.
+$addOpen = old_in('add_session') !== '' || array_intersect_key(form_errors(), array_flip(['client_id', 'track_id', 'staff_id', 'date', 'time', 'duration', 'repeat_weeks', 'location', 'notes', 'meeting_url', 'authorization_ack']));
+$groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_errors()), fn($k) => str_starts_with((string)$k, 'g_')); ?>
 <section class="card" aria-labelledby="add-h">
-  <h2 id="add-h">Schedule a session</h2>
+  <h2 class="visually-hidden">Schedule a session</h2>
+  <details id="add-session"<?= $addOpen ? ' open' : '' ?>>
+  <summary id="add-h">Schedule a session</summary>
   <p class="hint">Fields marked with an asterisk (*) are required.</p>
   <form method="post" action="schedule.php" class="stacked" novalidate>
     <?= csrf_field() ?>
@@ -806,10 +823,13 @@ function session_row(array $s, string $csrf): void {
     <button type="submit" name="add_session" value="1" class="btn btn-primary"
       onclick="var w=parseInt(document.getElementById('repeat_weeks').value||'1',10);return w<=1||confirm('Schedule '+w+' weekly sessions? Each must be cancelled individually if plans change.');">Schedule &amp; send calendar invite</button>
   </form>
+  </details>
 </section>
 
 <section class="card" aria-labelledby="group-h">
-  <h2 id="group-h">Schedule a group session</h2>
+  <h2 class="visually-hidden">Schedule a group session</h2>
+  <details id="add-group"<?= $groupOpen ? ' open' : '' ?>>
+  <summary id="group-h">Schedule a group session</summary>
   <p class="muted">One time slot, multiple clients (for example, a Pre-Employment Transition Services (Pre-ETS) workshop). Each client's hours log to their own training track on completion; when a client has more than one active track, choose which one.</p>
   <p class="hint">Fields marked with an asterisk (*) are required.</p>
   <?php // The group form's fields carry a g_ prefix so neither form refills the other after an error.
@@ -862,7 +882,9 @@ function session_row(array $s, string $csrf): void {
     <?php endif; ?>
     <button type="submit" name="add_group_session" value="1" class="btn btn-primary">Schedule group session</button>
   </form>
+  </details>
 </section>
+<script>(function(){var m={'#add-h':'add-session','#group-h':'add-group'},d=document.getElementById(m[location.hash]||'');if(d)d.open=true;})();</script>
 
 <?php
 $groupsPending = [];

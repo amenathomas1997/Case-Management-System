@@ -20,6 +20,7 @@ struct ScheduleView: View {
     @EnvironmentObject var api: API
     @EnvironmentObject private var lock: AppLock
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.openURL) private var openURL
     @State private var sessions: [Session] = []
     /// How many upcoming sessions exist in all, and how many the server sends (nil from an
     /// older server).
@@ -78,6 +79,7 @@ struct ScheduleView: View {
                     // every one of them): each needs an outcome, so its hours are logged or it is closed.
                     let ended = sessions.filter { $0.overdue == true }
                     let upcoming = sessions.filter { $0.overdue != true }
+                    let groups = dayGroups(upcoming)
                     if !ended.isEmpty {
                         Section {
                             ForEach(ended) { session in sessionRow(session) }
@@ -87,15 +89,18 @@ struct ScheduleView: View {
                             Text("Mark each one completed, cancelled or a no-show.")
                         }
                     }
-                    if !upcoming.isEmpty {
+                    // Upcoming sessions by day (Today, Tomorrow, Later), each a heading the
+                    // VoiceOver rotor can jump to.
+                    ForEach(groups, id: \.title) { group in
                         Section {
-                            ForEach(upcoming) { session in sessionRow(session) }
+                            ForEach(group.sessions) { session in sessionRow(session) }
                         } header: {
-                            if !ended.isEmpty { Text("Upcoming") }
+                            Text("\(group.title) (\(group.sessions.count))")
                         } footer: {
                             // Only the next upcomingLimit are sent: said, so the list is not taken
                             // for every booked session.
-                            if let total = upcomingTotal, let limit = upcomingLimit, total > limit {
+                            if group.title == groups.last?.title,
+                               let total = upcomingTotal, let limit = upcomingLimit, total > limit {
                                 Text("Showing the next \(limit) of \(total) upcoming sessions; the rest are on the website's Schedule.")
                             }
                         }
@@ -135,7 +140,7 @@ struct ScheduleView: View {
                 // Logging hours reads client tracks, which needs the clients
                 // permission — hide the button for schedule-only groups.
                 if api.can("clients") {
-                    ToolbarItem(placement: .secondaryAction) {
+                    ToolbarItem(placement: .primaryAction) {
                         Button { showingLogHours = true } label: {
                             Label("Log hours", systemImage: "clock.badge.checkmark")
                         }
@@ -197,10 +202,30 @@ struct ScheduleView: View {
         sheetResult = nil
     }
 
+    /// Upcoming sessions grouped by the day they start on this phone: Earlier (started on a past
+    /// day, not yet ended), Today, Tomorrow and Later, each in the server's order. Empty groups
+    /// are left out; a start that can't be read goes under Later.
+    private func dayGroups(_ list: [Session]) -> [(title: String, sessions: [Session])] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        var buckets: [[Session]] = [[], [], [], []]
+        for session in list {
+            guard let start = APIDate.parseDateTimeCentral(session.startAt) else { buckets[3].append(session); continue }
+            if start < today { buckets[0].append(session) }
+            else if calendar.isDateInToday(start) { buckets[1].append(session) }
+            else if calendar.isDateInTomorrow(start) { buckets[2].append(session) }
+            else { buckets[3].append(session) }
+        }
+        return zip(["Earlier", "Today", "Tomorrow", "Later"], buckets)
+            .filter { !$0.1.isEmpty }
+            .map { (title: $0.0, sessions: $0.1) }
+    }
+
     /// The session VoiceOver should land on once `session`'s row has gone: the next one in the
-    /// list as shown (ended first, then upcoming), else the one before it.
+    /// list as shown (ended first, then upcoming by day), else the one before it.
     private func neighbour(of session: Session) -> Int? {
-        let shown = sessions.filter { $0.overdue == true } + sessions.filter { $0.overdue != true }
+        let shown = sessions.filter { $0.overdue == true }
+            + dayGroups(sessions.filter { $0.overdue != true }).flatMap(\.sessions)
         guard let index = shown.firstIndex(where: { $0.id == session.id }) else { return nil }
         if index + 1 < shown.count { return shown[index + 1].id }
         return index > 0 ? shown[index - 1].id : nil
@@ -227,60 +252,87 @@ struct ScheduleView: View {
         return start <= now
     }
 
+    /// What the row says to VoiceOver, in reading order: who, when, whether it has ended,
+    /// instructor, where (or remote), and whether completing logs hours.
+    private func sessionSummary(_ session: Session, started: Bool) -> String {
+        var parts = [session.client, formatDateTime(session.startAt)]
+        if session.overdue == true { parts.append("Ended — awaiting an outcome") }
+        if let instructor = session.instructor, !instructor.isEmpty { parts.append("Instructor: \(instructor)") }
+        if session.isRemote == true {
+            parts.append(joinURL(session) != nil ? "Remote, with an online meeting link" : "Remote")
+        } else if let location = session.location, !location.isEmpty {
+            parts.append(location)
+        }
+        if session.trackId != nil { parts.append("Completing logs hours automatically") }
+        if !started { parts.append("Can be marked completed once it has started.") }
+        return parts.joined(separator: ". ")
+    }
+
+    /// The session's meeting link, when it is one the row offers to open.
+    private func joinURL(_ session: Session) -> URL? {
+        guard session.isRemote == true, let u = session.meetingUrl, let url = URL(string: u),
+              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return nil }
+        return url
+    }
+
+    /// Mark completed: sessions with a track bill hours — offer the client-signature step first
+    /// (it can be completed without one, or cancelled). Without a track, completing closes the
+    /// session for good, so it asks first, as the other outcomes do.
+    private func markCompleted(_ session: Session) {
+        if session.trackId != nil { signingSession = session }
+        else { pendingOutcome = SessionOutcome(session: session, to: "Completed") }
+    }
+
     @ViewBuilder
     private func sessionRow(_ session: Session) -> some View {
         let instructor = (session.instructor ?? "").isEmpty ? nil : session.instructor
         let name = sessionName(session)
-        VStack(alignment: .leading, spacing: 4) {
-            Text(session.client).font(.body.weight(.semibold))
-                .accessibilityFocused($focusedSession, equals: session.id)
-            Text(formatDateTime(session.startAt))
-                .font(.callout)
-            // Said in words on the row too, for anyone moving row by row past the heading.
-            if session.overdue == true {
-                Text("Ended — awaiting an outcome").font(.caption.weight(.semibold)).foregroundStyle(Color.secondaryText)
-            }
-            // Every instructor's sessions are listed: say whose this one is.
-            if let instructor {
-                Text("Instructor: \(instructor)").font(.callout).foregroundStyle(Color.secondaryText)
-            }
-            if session.isRemote == true {
-                HStack(spacing: 6) {
-                    Text("Remote").font(.caption2.weight(.semibold)).foregroundStyle(Color.brandTeal)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color.brandTeal.opacity(0.15)).clipShape(Capsule())
-                    if let u = session.meetingUrl, let url = URL(string: u),
-                       let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" {
-                        Link("Join online", destination: url).font(.callout)
-                            .accessibilityLabel("Join \(name) online")
-                            .accessibilityInputLabels(["Join online", "Join \(name) online"])
-                    }
+        // As on the website, Completed is offered once the session has started: the server
+        // refuses it before then, after the client may already have signed for it. Checked
+        // each minute, so it appears at the start time with the screen left open.
+        TimelineView(.everyMinute) { context in
+            let started = hasStarted(session, at: context.date)
+            let busy = completing.contains(session.id)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(session.client).font(.body.weight(.semibold))
+                Text(formatDateTime(session.startAt))
+                    .font(.callout)
+                // Said in words on the row too, for anyone moving row by row past the heading.
+                if session.overdue == true {
+                    Text("Ended — awaiting an outcome").font(.caption.weight(.semibold)).foregroundStyle(Color.secondaryText)
                 }
-            } else if let location = session.location, !location.isEmpty {
-                Text(location).font(.callout).foregroundStyle(Color.secondaryText)
-            }
-            if session.trackId != nil {
-                Text("Completing logs hours automatically")
-                    .font(.caption).foregroundStyle(Color.secondaryText)
-            }
-            // As on the website, Completed is offered once the session has started: the server
-            // refuses it before then, after the client may already have signed for it. Checked
-            // each minute, so it appears at the start time with the screen left open.
-            TimelineView(.everyMinute) { context in
-                if hasStarted(session, at: context.date) {
+                // Every instructor's sessions are listed: say whose this one is.
+                if let instructor {
+                    Text("Instructor: \(instructor)").font(.callout).foregroundStyle(Color.secondaryText)
+                }
+                if session.isRemote == true {
+                    HStack(spacing: 6) {
+                        Text("Remote").font(.caption2.weight(.semibold)).foregroundStyle(Color.brandTeal)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.brandTeal.opacity(0.15)).clipShape(Capsule())
+                        if let url = joinURL(session) {
+                            Link("Join online", destination: url).font(.callout)
+                                .accessibilityLabel("Join \(name) online")
+                                .accessibilityInputLabels(["Join online", "Join \(name) online"])
+                        }
+                    }
+                } else if let location = session.location, !location.isEmpty {
+                    Text(location).font(.callout).foregroundStyle(Color.secondaryText)
+                }
+                if session.trackId != nil {
+                    Text("Completing logs hours automatically")
+                        .font(.caption).foregroundStyle(Color.secondaryText)
+                }
+                if started {
                     Button {
-                        // Sessions with a track bill hours — offer the client-signature
-                        // step first (it can be completed without one, or cancelled). Without a track,
-                        // completing closes the session for good, so it asks first, as the other outcomes do.
-                        if session.trackId != nil { signingSession = session }
-                        else { pendingOutcome = SessionOutcome(session: session, to: "Completed") }
+                        markCompleted(session)
                     } label: {
                         Label("Mark completed", systemImage: "checkmark.circle")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)        // 44-point targets (the regular size is about 34)
                     .padding(.top, 4)
-                    .disabled(completing.contains(session.id))
+                    .disabled(busy)
                     .accessibilityLabel("Mark \(name) completed")
                     .accessibilityInputLabels(["Mark completed", "Mark \(name) completed"])
                 } else {
@@ -288,34 +340,57 @@ struct ScheduleView: View {
                         .font(.caption).foregroundStyle(Color.secondaryText)
                         .padding(.top, 4)
                 }
-            }
-            // The other outcomes close the session without logging hours: each asks first.
-            // Stacked at the accessibility text sizes, where side by side they broke mid-word.
-            let outcomeLayout = typeSize.isAccessibilitySize
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-                : AnyLayout(HStackLayout(spacing: 8))
-            outcomeLayout {
-                Button {
-                    pendingOutcome = SessionOutcome(session: session, to: "Cancelled")
-                } label: {
-                    Label("Cancel session", systemImage: "xmark.circle")
+                // The other outcomes close the session without logging hours: each asks first.
+                // Stacked at the accessibility text sizes, where side by side they broke mid-word.
+                let outcomeLayout = typeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                    : AnyLayout(HStackLayout(spacing: 8))
+                outcomeLayout {
+                    Button {
+                        pendingOutcome = SessionOutcome(session: session, to: "Cancelled")
+                    } label: {
+                        Label("Cancel session", systemImage: "xmark.circle")
+                    }
+                    .accessibilityLabel("Cancel \(name)")
+                    .accessibilityInputLabels(["Cancel session", "Cancel \(name)"])
+                    Button {
+                        pendingOutcome = SessionOutcome(session: session, to: "No Show")
+                    } label: {
+                        Label("No-show", systemImage: "person.crop.circle.badge.xmark")
+                    }
+                    .accessibilityLabel("Mark \(name) as a no-show")
+                    .accessibilityInputLabels(["No-show", "Mark \(name) as a no-show"])
                 }
-                .accessibilityLabel("Cancel \(name)")
-                .accessibilityInputLabels(["Cancel session", "Cancel \(name)"])
-                Button {
-                    pendingOutcome = SessionOutcome(session: session, to: "No Show")
-                } label: {
-                    Label("No-show", systemImage: "person.crop.circle.badge.xmark")
-                }
-                .accessibilityLabel("Mark \(name) as a no-show")
-                .accessibilityInputLabels(["No-show", "Mark \(name) as a no-show"])
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .padding(.top, 4)           // 8 points from Mark completed with the row's spacing
+                .disabled(busy)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .padding(.top, 4)           // 8 points from Mark completed with the row's spacing
-            .disabled(completing.contains(session.id))
+            .padding(.vertical, 4)
+            // VoiceOver: the session is one stop, read in full; its buttons are the Actions
+            // rotor's entries (swipe up or down, then double-tap), each asking first as on screen.
+            // A double-tap on the row is Mark completed, the most common outcome.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(sessionSummary(session, started: started))
+            .accessibilityFocused($focusedSession, equals: session.id)
+            .accessibilityAction {
+                if busy { return }
+                if hasStarted(session, at: Date()) { markCompleted(session) }
+                else { announce("This session can be marked completed once it has started.") }
+            }
+            .accessibilityActions {
+                if !busy {
+                    if started {
+                        Button("Mark completed") { markCompleted(session) }
+                    }
+                    Button("Cancel session") { pendingOutcome = SessionOutcome(session: session, to: "Cancelled") }
+                    Button("No-show") { pendingOutcome = SessionOutcome(session: session, to: "No Show") }
+                }
+                if let url = joinURL(session) {
+                    Button("Join online") { openURL(url) }
+                }
+            }
         }
-        .padding(.vertical, 4)
     }
 
     /// Cancelled or No Show (set_session_status): closes the session without logging hours.
@@ -529,9 +604,12 @@ struct NewSessionSheet: View {
                 Stepper(value: $duration, in: 0.25...12, step: 0.25) {
                     Text(String(format: "Duration: %.2f hours", duration))
                 }
+                .voiceOverAdjustable("Duration", value: hoursSpoken(duration), binding: $duration, in: 0.25...12, step: 0.25)
                 Stepper(value: $repeatWeeks, in: 1...26) {
                     Text(repeatWeeks == 1 ? "One session" : "Repeats weekly ×\(repeatWeeks)")
                 }
+                .voiceOverAdjustable("Repeats", value: repeatWeeks == 1 ? "One session only" : "Weekly, \(repeatWeeks) sessions",
+                                     binding: $repeatWeeks, in: 1...26, step: 1)
                 Toggle("Remote session", isOn: $isRemote)
                 // Each name (and the link's format) stays visible above its field once it holds text.
                 if isRemote {

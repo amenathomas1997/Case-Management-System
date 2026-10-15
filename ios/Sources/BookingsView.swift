@@ -74,7 +74,6 @@ struct BookingsView: View {
 
     private func row(_ b: Booking) -> some View {
         HStack(alignment: .top) {
-            // One VoiceOver stop for the booking itself; the status menu is the next stop.
             // Caption text in the primary colour: grey secondary caption text is about 3.4:1.
             VStack(alignment: .leading, spacing: 3) {
                 Text(b.serviceType).font(.body.weight(.semibold))
@@ -84,8 +83,6 @@ struct BookingsView: View {
                 // As on the website: the booking's notes are shown with it, named.
                 if let n = b.notes, !n.isEmpty { Text("Notes: \(n)").font(.caption) }
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityFocused($focusedBooking, equals: b.id)
             Spacer()
             Menu {
                 ForEach(bookingStatuses, id: \.self) { s in
@@ -110,6 +107,28 @@ struct BookingsView: View {
             .accessibilityInputLabels([b.status, "Status of \(b.serviceType) for \(b.clientName)"])
         }
         .padding(.vertical, 2)
+        // VoiceOver: one stop per booking, its status included; each other status from the menu
+        // is an action on the Actions rotor (Cancel booking is still confirmed first).
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(bookingSpokenLabel(b))
+        .accessibilityActions {
+            ForEach(bookingStatuses.filter { $0 != b.status }, id: \.self) { s in
+                Button(s == "Cancelled" ? "Cancel booking" : "Mark \(s)") {
+                    if s == "Cancelled" { pendingCancel = b } else { Task { await setStatus(b, s) } }
+                }
+            }
+        }
+        .accessibilityFocused($focusedBooking, equals: b.id)
+    }
+
+    /// What VoiceOver reads for a booking row, in the order it is shown, then its status.
+    private func bookingSpokenLabel(_ b: Booking) -> String {
+        var parts = [b.serviceType, b.clientName]
+        if let n = b.neededAt { parts.append(formatDateTime(n)) }
+        if let p = b.provider, !p.isEmpty { parts.append(p) }
+        if let n = b.notes, !n.isEmpty { parts.append("Notes: \(n)") }
+        parts.append("Status: \(b.status)")
+        return parts.joined(separator: ", ")
     }
 
     /// Needed within the last day or later (or not dated yet) counts as upcoming, as on the website.
@@ -226,6 +245,7 @@ struct BookingEditSheet: View {
                 DatePicker("When", selection: $neededAt)
                 // Up to a full day, as the server and the website allow.
                 Stepper("Duration: \(duration) min", value: $duration, in: 0...1440, step: 15)
+                    .voiceOverAdjustable("Duration", value: "\(duration) minutes", binding: $duration, in: 0...1440, step: 15)
                 // Captions that stay visible once the fields hold text (a placeholder alone disappears).
                 CaptionedField(label: "Provider / agency", text: $provider)
                 CaptionedField(label: "Location", text: $location)

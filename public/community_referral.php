@@ -8,7 +8,7 @@ register_translations(referral_form_translations());
 register_translations(['Email us at' => 'Escríbanos a', 'required: choose at least one' => 'obligatorio: elija al menos uno',
     'The date of birth cannot be in the future. Please check the year.' => 'La fecha de nacimiento no puede ser una fecha futura. Revise el año.',
     'Enter the date of birth as a valid date, from the year 1900 onwards.' => 'Escriba la fecha de nacimiento como una fecha válida, a partir del año 1900.',
-    'Enter one valid email address for the person, for example name@example.org, or leave it blank.' => 'Escriba un solo correo electrónico válido de la persona, por ejemplo nombre@ejemplo.org, o déjelo en blanco.',
+    'Their email: enter one valid address, for example name@example.org, or leave it blank.' => 'Correo electrónico de la persona: escriba una sola dirección válida, por ejemplo nombre@ejemplo.org, o déjelo en blanco.',
     'Please also correct the following:' => 'Corrija también lo siguiente:',
     'The referral could not be sent because of a problem on our side, and nothing was saved. Everything you typed is still here. Please try again in a few minutes, or email us.'
         => 'No se pudo enviar la referencia por un problema de nuestra parte, y no se guardó nada. Todo lo que escribió sigue aquí. Inténtelo de nuevo en unos minutos o escríbanos.']);
@@ -32,10 +32,6 @@ foreach ($_POST as $k => $v) {
     if (!is_string($v) && !in_array($k, ['preets', 'specific_needs', 'referral_purpose', 'requested_services'], true)) unset($_POST[$k]);
 }
 
-// Only a form from this release posts the structured fields; an older form still
-// open in a browser posts note_type and is accepted as a legacy referral.
-$structured = array_key_exists('referral_purpose', $_POST) || array_key_exists('requested_services', $_POST);
-$request = referral_request_input($_POST);
 $errors = [];
 $old = fn(string $k) => h(is_string($_POST[$k] ?? null) ? $_POST[$k] : '');
 // Administrator-authored options and hints are rendered whole: translated only
@@ -56,6 +52,22 @@ $aria = function (string $k, string $describe = '') use (&$errors): string {
     return (isset($errors[$k]) ? 'aria-invalid="true" ' : '') . 'aria-describedby="' . implode(' ', $ids) . '"';
 };
 $role = $_POST['role'] ?? (is_string($_GET['role'] ?? '') ? ($_GET['role'] ?? '') : '');
+// Only a form from this release posts the structured fields; an older form still
+// open in a browser posts note_type and is accepted as a legacy referral. (The
+// current form sends no note_type, and may send no purpose: see below.)
+$structured = array_key_exists('referral_purpose', $_POST) || array_key_exists('requested_services', $_POST) || !array_key_exists('note_type', $_POST);
+// The referral purpose is asked only of counselors and agencies (who may be adding to
+// an existing plan). Anyone else is making a new referral: when no purpose is sent,
+// it is the option that stands for "New referral" (a purpose that is sent is still
+// checked as before).
+$purposeRoles = ['counselor', 'agency'];
+$requestIn = $_POST;
+if (!array_key_exists('referral_purpose', $requestIn) && !in_array($role, $purposeRoles, true)) {
+    $purposeOptions = referral_options('purposes');
+    $newPurpose = array_values(array_filter($purposeOptions, fn($o) => referral_builtin_label($o, 'purposes', REFERRAL_PURPOSES) === 'New referral'));
+    $requestIn['referral_purpose'] = $newPurpose[0] ?? ($purposeOptions[0] ?? 'New referral');
+}
+$request = referral_request_input($requestIn);
 // One form, one referral: each form carries a key, remembered in this visitor's
 // session (with what was sent) once its referral is saved. A double click, or
 // the same page sent again, then gets the same confirmation instead of filing a
@@ -65,9 +77,12 @@ $formKey = is_string($_POST['form_key'] ?? null) && preg_match('/^[0-9a-f]{32}$/
 $formSig = hash('sha256', json_encode(array_diff_key($_POST, ['csrf' => 1, 'csrf_uid' => 1, 'form_key' => 1])) ?: '');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (($_POST['website'] ?? '') !== '') redirect('community_referral.php?submitted=1');
+    if (($_POST['website'] ?? '') !== '') { unset($_SESSION['referral_sent']); redirect('community_referral.php?submitted=1'); }
     $sent = $_SESSION['referral_form_keys'][$formKey] ?? null;
-    if (is_array($sent) && hash_equals((string)($sent['sig'] ?? ''), $formSig)) redirect('community_referral.php?submitted=1' . (string)($sent['done'] ?? ''));
+    if (is_array($sent) && hash_equals((string)($sent['sig'] ?? ''), $formSig)) {
+        if (isset($sent['ref'], $sent['by'])) $_SESSION['referral_sent'] = ['ref' => (int)$sent['ref'], 'by' => (string)$sent['by']];
+        redirect('community_referral.php?submitted=1' . (string)($sent['done'] ?? ''));
+    }
     if ($csrfStale) $errors['form'] = 'This page was open for a long time, so the referral was not sent yet. Everything you typed is still here. Please review it and choose Send referral again.';
     $ip = $_SERVER['REMOTE_ADDR'] ?? '';
     // One IPv6 connection can rotate freely within its /64 network, so that
@@ -82,7 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors['form'] = 'Too many submissions from this connection. Please try again later or contact us directly.';
     }
 
-    if (!isset(REFERRER_ROLES[$role]) || !in_array($role, referral_form_config()['roles'], true)) $errors['role'] = 'Please choose which best describes you.';
+    if (!isset(REFERRER_ROLES[$role]) || !in_array($role, referral_form_config()['roles'], true)) $errors['role'] = 'I am referring as a…: please choose the one that fits best.';
     // The page script only hides the sections that do not apply to the chosen
     // role, so their inputs still post. Drop them here: answers typed under
     // another role (a relative's date of birth and address, a guardian, a
@@ -102,15 +117,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         foreach ($roleFields as $k => $roles) if (!in_array($role, $roles, true)) unset($_POST[$k]);
     }
 
+    // Each message starts with the field's own label, as the page shows it.
     $required = ['referrer_name' => 'Your name', 'referrer_phone' => 'Your phone'];
-    if ($role !== 'self') $required['client_name'] = "The person's name";
+    if ($role !== 'self') $required['client_name'] = 'Their full name';
     foreach ($required as $k => $label) {
         if (trim($_POST[$k] ?? '') === '') $errors[$k] = $label . ' is required.';
     }
     // Written for this question, so the message matches the visible prompt.
-    if (trim($_POST['body'] ?? '') === '') $errors['body'] = 'Please tell us what help is needed.';
+    $bodyLabel = $role === 'self' ? 'What do you need help with?' : 'What does this person need help with?';
+    if (trim($_POST['body'] ?? '') === '') $errors['body'] = $bodyLabel . ' Please tell us.';
     $refEmail = trim($_POST['referrer_email'] ?? '');
-    if ($refEmail === '' || !filter_var($refEmail, FILTER_VALIDATE_EMAIL)) $errors['referrer_email'] = 'A valid email for you is required.';
+    if ($refEmail === '') $errors['referrer_email'] = 'Your email is required.';
+    elseif (!filter_var($refEmail, FILTER_VALIDATE_EMAIL)) $errors['referrer_email'] = 'Your email: enter one valid address, for example name@example.org.';
     // Bad dates or over-length names would otherwise crash the insert and lose the referral.
     // Same bounds as a staff edit: a mistyped year would reach RSA-911 as an age.
     $dobIn = trim($_POST['client_dob'] ?? '');
@@ -123,44 +141,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // so it must be one real address (never a list of several).
     $clientEmailIn = trim($_POST['client_email'] ?? '');
     if ($clientEmailIn !== '' && mb_strlen($clientEmailIn) <= 190 && !filter_var($clientEmailIn, FILTER_VALIDATE_EMAIL)) {
-        $errors['client_email'] = 'Enter one valid email address for the person, for example name@example.org, or leave it blank.';
+        $errors['client_email'] = 'Their email: enter one valid address, for example name@example.org, or leave it blank.';
     }
     // Every free-text field is checked against its column size in the referrals
     // table, so an over-long value gets a message on that field.
     $limits = [
-        'referrer_name' => [120, 'Your name'], 'client_name' => [120, "The person's name"],
+        'referrer_name' => [120, 'Your name'], 'client_name' => [120, 'Their full name'],
         'referrer_email' => [190, 'Your email'], 'referrer_phone' => [40, 'Your phone'],
-        'organization' => [190, 'The organization name'], 'relationship' => [80, 'Your relationship to the person'],
+        'organization' => [190, 'Agency / school / practice / organization'], 'relationship' => [80, 'Your relationship to the person'],
         'client_phone' => [40, 'Their phone'], 'client_email' => [190, 'Their email'], 'client_address' => [255, 'Their address'],
         'grade_level' => [40, 'Grade level'], 'guardian_name' => [120, 'Parent / guardian name'], 'guardian_phone' => [40, 'Parent / guardian phone'],
-        'body' => [8000, 'The description of the need'],
     ];
     foreach ($limits as $k => [$max, $label]) {
         if (mb_strlen(trim($_POST[$k] ?? '')) > $max) $errors[$k] = $label . ' is too long (' . number_format($max) . ' characters maximum).';
     }
+    if (mb_strlen(trim($_POST['body'] ?? '')) > 8000) $errors['body'] = $bodyLabel . ' Your answer is too long (8,000 characters maximum).';
 
     $organization = trim($_POST['organization'] ?? '');
     $consent = !empty($_POST['consent']);
     $income = $_POST['income'] ?? '';
 
+    $orgRequired = 'Agency / school / practice / organization is required.';
+    $consentRequired = 'Please check the box to confirm: the person (or their guardian) knows about this referral and agrees to be contacted.';
     if ($role === 'counselor') {
-        if ($organization === '') $errors['organization'] = 'Agency / district is required.';
+        if ($organization === '') $errors['organization'] = $orgRequired;
     } elseif ($role === 'self') {
-        if (!isset(INCOME_BRACKETS[$income])) $errors['income'] = 'Please choose your monthly income range.';
+        if (!isset(INCOME_BRACKETS[$income])) $errors['income'] = 'Monthly income: please choose one.';
     } elseif ($role === 'school') {
-        if ($organization === '') $errors['organization'] = 'School / district is required.';
-        if (trim($_POST['guardian_name'] ?? '') === '') $errors['guardian_name'] = "Parent/guardian name is required for student referrals.";
-        if (trim($_POST['guardian_phone'] ?? '') === '') $errors['guardian_phone'] = 'Parent/guardian phone is required for student referrals.';
+        if ($organization === '') $errors['organization'] = $orgRequired;
+        if (trim($_POST['guardian_name'] ?? '') === '') $errors['guardian_name'] = 'Parent / guardian name is required for student referrals.';
+        if (trim($_POST['guardian_phone'] ?? '') === '') $errors['guardian_phone'] = 'Parent / guardian phone is required for student referrals.';
     } elseif ($role === 'medical') {
-        if ($organization === '') $errors['organization'] = 'Practice / clinic name is required.';
-        if (!$consent) $errors['consent'] = 'Please confirm the patient has agreed to be contacted.';
+        if ($organization === '') $errors['organization'] = $orgRequired;
+        if (!$consent) $errors['consent'] = $consentRequired;
     } elseif ($role === 'family') {
         if (trim($_POST['relationship'] ?? '') === '') $errors['relationship'] = 'Your relationship to the person is required.';
-        if (!$consent) $errors['consent'] = 'Please confirm the person knows about this referral.';
-        if (!in_array($_POST['contact_first'] ?? '', ['client','referrer'], true)) $errors['contact_first'] = 'Tell us who we should contact first.';
+        if (!$consent) $errors['consent'] = $consentRequired;
+        if (!in_array($_POST['contact_first'] ?? '', ['client','referrer'], true)) $errors['contact_first'] = 'Who should we contact first? Please choose one.';
     } elseif ($role === 'agency' || $role === 'other') {
-        if ($role === 'agency' && $organization === '') $errors['organization'] = 'Agency / organization name is required.';
-        if (!$consent) $errors['consent'] = 'Please confirm the person is aware of this referral.';
+        if ($role === 'agency' && $organization === '') $errors['organization'] = $orgRequired;
+        if (!$consent) $errors['consent'] = $consentRequired;
     }
 
     if ($structured) $errors = array_merge($errors, $request['errors']);
@@ -249,7 +269,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $done = $fee !== null ? '&fee=' . ($fee > 0 ? 'paid' : 'free') : '';
         // Remembered for this form (newest 20 kept), so the same page sent again
         // is answered with this confirmation instead of a second referral.
-        $_SESSION['referral_form_keys'] = array_slice(($_SESSION['referral_form_keys'] ?? []) + [$formKey => ['sig' => $formSig, 'done' => $done]], -20, null, true);
+        // The reference number and the date we will be in touch by go to the
+        // confirmation through this visitor's session, never the address: a number
+        // in the URL could be changed to look up someone else's referral.
+        $contactBy = business_days_from(3);
+        $_SESSION['referral_form_keys'] = array_slice(($_SESSION['referral_form_keys'] ?? []) + [$formKey => ['sig' => $formSig, 'done' => $done, 'ref' => $refId, 'by' => $contactBy]], -20, null, true);
+        $_SESSION['referral_sent'] = ['ref' => $refId, 'by' => $contactBy];
         // Site-wide ceiling on the alerts (not on the referrals): past it, every
         // referral is still saved with its task, but administrators get one
         // notice instead of a message and email per referral until the hour's
@@ -286,6 +311,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $saved = isset($_GET['submitted']);
+$helpContact = (string)(cfg('support_email') ?: cfg('mail_from')); // the same contact as the shared footer
+/** A date such as "Monday, October 20" in the page's language (a Spanish page reads it in Spanish). */
+function referral_contact_date(string $ymd): string {
+    $ts = strtotime($ymd);
+    if (!$ts) return '';
+    if (page_lang() !== 'es') return date('l, F j', $ts);
+    $days = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+    $months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    return $days[(int)date('w', $ts)] . ' ' . (int)date('j', $ts) . ' de ' . $months[(int)date('n', $ts) - 1];
+}
+// The referral just sent from this browser (its number and the date we will be in
+// touch by), kept in the session by the save above.
+$sentInfo = $saved && is_array($_SESSION['referral_sent'] ?? null) ? $_SESSION['referral_sent'] : null;
+$sentRef = $sentInfo ? (int)($sentInfo['ref'] ?? 0) : 0;
+$sentBy = $sentInfo ? referral_contact_date((string)($sentInfo['by'] ?? '')) : '';
 page_header($saved ? 'Referral sent' : ($errors ? 'Error — Community Referral' : 'Community Referral'));
 echo lang_toggle();
 ?>
@@ -294,7 +334,16 @@ echo lang_toggle();
 <?php // Announced by moving focus to it once (as flash messages are): a status
 // region present at page load is often not read after the redirect. ?>
   <div class="alert alert-success" id="referral-sent" tabindex="-1">
-    <strong><?= t('Thank you — the referral has been received.') ?></strong> <?= t('We will follow up soon.') ?> </div>
+    <p><strong><?= t('Thank you — the referral has been received.') ?></strong>
+    <?php if ($sentRef > 0): ?> <?= t('Your referral number is') ?> <strong><?= $sentRef ?></strong>.<?php endif; ?></p>
+    <?php if ($sentRef > 0 && $sentBy !== ''): ?>
+    <p><?= t('We will contact you by') ?> <strong><?= h($sentBy) ?></strong>.
+      <?php if ($helpContact !== ''): ?><?= t('If you have not heard from us by then, email') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a> <?= t('and mention referral') ?> <?= $sentRef ?>.<?php endif; ?></p>
+    <?php else: ?>
+    <p><?= t('We will contact you within 3 business days.') ?>
+      <?php if ($helpContact !== ''): ?><?= t('If you have not heard from us by then, email') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a>.<?php endif; ?></p>
+    <?php endif; ?>
+  </div>
   <script>document.addEventListener('DOMContentLoaded',function(){var s=document.getElementById('referral-sent');if(s)s.focus();if(window.Earcon)Earcon.play('success');});</script>
   <?php if (($feeResult = $_GET['fee'] ?? '') !== ''): ?>
   <div class="card">
@@ -311,7 +360,6 @@ echo lang_toggle();
 <h1><?= t('Refer someone to') ?> <?= h(brand('org')) ?></h1>
 <p><?= t('Request assistive technology assessment, training, demonstrations, or recommendations for devices, apps, and software.') ?></p>
 <p><?= t('Use this form to refer yourself or someone else. First, tell us who you are. Then we\'ll show only the questions you need to answer. Fields marked with an asterisk (') ?><span aria-hidden="true">*</span><span class="visually-hidden"><?= t('asterisk') ?></span><?= t(') are required.') ?></p>
-<?php $helpContact = (string)(cfg('support_email') ?: cfg('mail_from')); // the same contact as the shared footer ?>
 <p><strong><?= t('Need help with this form, or unsure which choice fits?') ?></strong> <?php if ($helpContact !== ''): ?><?= t('Email us at') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a> <?= t('and a person will help you.') ?> <?php endif; ?><?= t('After you send the referral, we will contact you within 3 business days.') ?></p>
 
 <?php // The message is announced by moving focus to it once, so it carries no
@@ -396,7 +444,9 @@ if ($errors): ?>
 
   <fieldset>
     <legend><h2 class="legend-h"><?= t('What help is needed?') ?></h2></legend>
-    <div class="field">
+    <?php // Asked only of counselors and agencies; for anyone else the page script
+    // hides and disables it, and the referral is sent as a new referral. ?>
+    <div class="field" data-role="counselor agency">
       <label for="referral_purpose"><?= t('Referral purpose') ?></label>
       <select id="referral_purpose" name="referral_purpose" required <?= $aria('referral_purpose', 'purpose-hint') ?>><?= select_options(referral_options('purposes'), is_string($request['purpose']) ? $request['purpose'] : null) ?></select>
       <p class="hint" id="purpose-hint"><?= $whole(referral_form_config()['hints']['purpose']['en']) ?></p>
@@ -426,7 +476,7 @@ if ($errors): ?>
 
   <fieldset data-role="self" id="income-group" <?= isset($errors['income']) ? 'aria-describedby="err-income"' : '' ?>>
     <legend><h2 class="legend-h"><?= t('Monthly income') ?> <span aria-hidden="true">*</span></h2></legend>
-    <p class="hint"><?= t('If you earn less than $2,000 a month, our services are free. If you earn $2,000 or more, training costs $17.50 an hour.') ?></p>
+    <p class="hint"><?= t('Your monthly income, including benefits. This only decides whether training is free. We will confirm with you; nothing is charged now.') ?></p>
     <?php $incomeNum = 0; foreach (INCOME_BRACKETS as $value => $label): ?>
     <div class="field">
       <label><input type="radio" name="income" id="income-<?= $incomeNum++ ?>" value="<?= h($value) ?>" <?= ($_POST['income'] ?? '') === $value ? 'checked' : '' ?> data-req-roles="self">
@@ -530,6 +580,10 @@ if ($errors): ?>
             el.hidden = role === null || el.getAttribute('data-role-req').split(' ').indexOf(role) === -1;
             el.setAttribute('aria-hidden', 'true');
         });
+        // A hidden referral purpose is not sent: the server then files a new referral.
+        var purpose = document.getElementById('referral_purpose');
+        var purposeField = purpose && purpose.closest('[data-role]');
+        if (purpose) purpose.disabled = !!(purposeField && purposeField.hidden);
     }
     // Wording for someone referring themselves (second person) or someone else.
     var selfText = document.querySelectorAll('[data-self-text]');

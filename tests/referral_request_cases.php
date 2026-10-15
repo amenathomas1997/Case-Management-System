@@ -91,7 +91,7 @@ check($code===0 && $err==='' && $custom['requested_service']==='Braille display 
 [$code,$out,$err]=$publicForm([],array_replace($baseReferral,['referral_purpose'=>'New referral','requested_services'=>['Demonstration'],'specific_needs'=>[]]));
 check($code===0 && str_contains($out,'Please choose at least one service') && (int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn()===(int)$custom['id'],'A built-in service that the administrator removed is refused');
 [$code,$out,$err]=$publicForm([],array_replace($baseReferral,['role'=>'medical','referral_purpose'=>'New referral','requested_services'=>['Assessment'],'specific_needs'=>[]]));
-check($code===0 && str_contains($out,'Please choose which best describes you') && !str_contains($out,'value="medical"'),'A referrer kind the administrator switched off is neither offered nor accepted');
+check($code===0 && str_contains($out,'I am referring as a…: please choose the one that fits best') && !str_contains($out,'value="medical"'),'A referrer kind the administrator switched off is neither offered nor accepted');
 [$code,$out,$err]=$publicForm(['lang'=>'es']);
 check($code===0 && str_contains($out,'Configuración de pantalla braille') && str_contains($out,'Elija la ayuda tecnológica') && !str_contains($out,'Necesidades específicas'),'Administrator Spanish labels and hints appear on the translated form');
 [$code,$out,$err]=$renderPage('referral_settings',[]);

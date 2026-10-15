@@ -597,11 +597,45 @@ if ($eids) {
     foreach ($mh->fetchAll() as $row) $maintHist[(int)$row['equipment_id']][] = $row;
 }
 $maintDue = 0;
-foreach ($items as $i) {
-    if ($i['status'] === 'Retired') continue;
-    [, , , $daysLeft] = maint_status($i['last_service_date'], $i['maintenance_interval_days']);
-    if ($daysLeft <= 14) $maintDue++;
+foreach ($items as &$it) {
+    // Due within 14 days or overdue, as the "Service due" card and filter count it.
+    $it['service_due'] = false;
+    if ($it['status'] === 'Retired') continue;
+    [, , , $daysLeft] = maint_status($it['last_service_date'], $it['maintenance_interval_days']);
+    if ($daysLeft <= 14) { $it['service_due'] = true; $maintDue++; }
 }
+unset($it);
+
+// Inventory search and status filter (GET, so a filtered view can be bookmarked and the
+// stat cards can link to it). The counts above and the loan and reservation pickers
+// always use every item; only the inventory table is narrowed.
+$invFilters = [
+    '' => ['All', fn(array $i): bool => true],
+    'available' => ['Available', fn(array $i): bool => $i['status'] === 'Available'],
+    'on_loan' => ['On loan', fn(array $i): bool => $i['status'] === 'On Loan'],
+    'overdue' => ['Overdue returns', fn(array $i): bool => (bool)$i['overdue']],
+    'service_due' => ['Service due', fn(array $i): bool => $i['service_due']],
+    'repair' => ['In repair', fn(array $i): bool => $i['status'] === 'Repair'],
+    'retired' => ['Retired', fn(array $i): bool => $i['status'] === 'Retired'],
+];
+$invStatus = (string)($_GET['status'] ?? '');
+if (!isset($invFilters[$invStatus])) $invStatus = '';
+$invQ = mb_substr(trim((string)($_GET['q'] ?? '')), 0, 120);
+$invUrl = fn(string $status, string $q): string => 'equipment.php' . (($qs = http_build_query(array_filter(['q' => $q, 'status' => $status], fn($v) => $v !== ''))) !== '' ? '?' . $qs : '') . '#inv-h';
+$shown = array_values(array_filter($items, function (array $i) use ($invFilters, $invStatus, $invQ): bool {
+    if (!$invFilters[$invStatus][1]($i)) return false;
+    if ($invQ === '') return true;
+    // Name, serial number (the asset tag) and the borrower; a borrower outside a
+    // scoped user's caseload is already blanked above, so it is never matched.
+    foreach (preg_split('/\s+/u', $invQ, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $word) {
+        $hay = $i['name'] . ' ' . ($i['serial'] ?? '') . ' ' . ($i['borrower'] ?? '');
+        if (mb_stripos($hay, $word) === false) return false;
+    }
+    return true;
+}));
+$invFiltered = $invStatus !== '' || $invQ !== '';
+$loanFailed = array_intersect_key(form_errors(), array_flip(['loan_equipment_id', 'loan_client_id', 'loan_due_date', 'loan_notes'])) !== [];
+$addFailed = array_intersect_key(form_errors(), array_flip(['name', 'serial', 'value', 'purchase_date', 'useful_life_months', 'maintenance_interval_days', 'notes'])) !== [];
 
 // Active reservations / waitlist (caseload-scoped): holds first, then the waitlist in
 // the order it was joined (the order a freed item passes to the next client).
@@ -624,23 +658,25 @@ foreach ($reservations as $rr) $resCount[(int)$rr['equipment_id']] = ($resCount[
 // flags them (without the client) so a hold is never taken over unknowingly.
 $heldIds = array_flip(array_map('intval', db()->query("SELECT DISTINCT er.equipment_id FROM equipment_reservations er WHERE er.status = 'Reserved' AND " . equipment_hold_live_sql('er'))->fetchAll(PDO::FETCH_COLUMN)));
 
-page_header('Equipment', $user, 'equipment');
+page_header('Equipment & loans', $user, 'equipment');
 ?>
-<h1>Equipment &amp; loaners</h1>
+<h1>Equipment &amp; loans</h1>
 <div class="page-actions"><a class="btn btn-secondary btn-sm" href="equipment_labels.php">Print QR labels</a>
   <a class="btn btn-secondary btn-sm" href="equipment_import.php">Import from CSV</a></div>
 <div class="grid grid-4">
-  <div class="card stat"><span class="stat-num"><?= count($items) ?></span><span class="stat-label">Items tracked</span></div>
-  <div class="card stat"><span class="stat-num"><?= $onLoan ?></span><span class="stat-label">On loan</span></div>
-  <div class="card stat"><span class="stat-num"><?= $overdue ?></span><span class="stat-label">Overdue returns</span></div>
-  <div class="card stat"><span class="stat-num"><?= $maintDue ?></span><span class="stat-label">Service due / overdue</span></div>
+  <?php // Each count links to the inventory filtered to those items. ?>
+  <div class="card stat"><a href="<?= h($invUrl('', '')) ?>"><span class="stat-num"><?= count($items) ?></span><span class="stat-label">Items tracked</span></a></div>
+  <div class="card stat"><a href="<?= h($invUrl('on_loan', '')) ?>"><span class="stat-num"><?= $onLoan ?></span><span class="stat-label">On loan</span></a></div>
+  <div class="card stat"><a href="<?= h($invUrl('overdue', '')) ?>"><span class="stat-num"><?= $overdue ?></span><span class="stat-label">Overdue returns</span></a></div>
+  <div class="card stat"><a href="<?= h($invUrl('service_due', '')) ?>"><span class="stat-num"><?= $maintDue ?></span><span class="stat-label">Service due / overdue</span></a></div>
   <div class="card stat"><span class="stat-num"><?= fmt_money($bookTotal) ?></span><span class="stat-label">Current value of equipment</span></div>
 </div>
 <p class="muted">Current value (book value) is what an item cost, reduced by an equal amount each month over its useful life, counted from its purchase date.</p>
 <?php $requiredNote = '<p class="muted">Fields marked with an asterisk (<span aria-hidden="true">*</span><span class="visually-hidden">asterisk</span>) are required.</p>'; ?>
 
-<section class="card" aria-labelledby="loan-h">
-  <h2 id="loan-h">Loan an item out</h2>
+<h2 class="visually-hidden">Loan an item out</h2>
+<details class="card" id="loan"<?= $loanFailed ? ' open' : '' ?>>
+  <summary id="loan-h">Loan an item out</summary>
   <p class="muted" id="loan-hold-hint">Items marked “held by a reservation” are reserved for a client. Lending one to someone else moves that hold to the waitlist and notifies that client's instructor and the staff member who made it.</p>
   <?php // After a refused loan the form comes back as it was filled in, with each error on its field.
   $oldLoan = fn(string $k, string $default = ''): string => old_in('loan_out') !== '' ? old_in($k, $default) : $default; ?>
@@ -672,67 +708,60 @@ page_header('Equipment', $user, 'equipment');
     </div>
     <button type="submit" name="loan_out" value="1" class="btn btn-primary">Loan out</button>
   </form>
-</section>
+</details>
 
-<section class="card" aria-labelledby="res-h">
-  <h2 id="res-h">Reservations &amp; waitlist (<?= count($reservations) ?>)</h2>
-  <p class="muted">Hold an available item for a client, or add them to the waitlist for one that's on loan. When an item is loaned to that client, their reservation is fulfilled automatically.</p>
-  <?php if ($reservations): ?>
-  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="res-cap">
-  <table>
-    <caption class="visually-hidden" id="res-cap">Active holds, then the waitlist in the order it was joined: item, client, hold type and dates needed</caption>
-    <thead><tr><th scope="col">Item</th><th scope="col">Client</th><th scope="col">Hold</th><th scope="col">Needed</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
-    <tbody>
-    <?php foreach ($reservations as $rr):
-      // Why a listed hold no longer keeps the item (equipment_hold_live_sql()), in words.
-      $notCounted = (int)$rr['live'] === 1 ? '' : ($rr['client_archived'] !== null ? 'the client is archived' : (str_starts_with((string)$rr['client_status'], 'Closed') ? 'the client\'s case is closed' : 'the "needed until" date has passed')); ?>
-      <tr>
-        <th scope="row"><?= h($rr['item_name']) ?><br><span class="muted"><?= h($rr['item_status']) ?></span></th>
-        <td><a href="client.php?id=<?= (int)$rr['cid'] ?>"><?= h($rr['client_name']) ?></a></td>
-        <td><?= $rr['status'] === 'Reserved' ? '<span class="badge badge-active">Reserved</span>' : '<span class="badge badge-pending">Waitlist</span>' ?>
-          <br><span class="muted">added <?= fmt_date($rr['created_at'], true) ?></span>
-          <?= $notCounted !== '' ? '<br><strong>' . ($rr['status'] === 'Reserved' ? 'No longer holds the item' : 'Passed over when the item is free') . ': ' . h($notCounted) . '. Cancel it if it is no longer needed.</strong>' : '' ?></td>
-        <td><?= $rr['needed_from'] ? fmt_date($rr['needed_from']) . ($rr['needed_until'] ? ' – ' . fmt_date($rr['needed_until']) : '') : ($rr['needed_until'] ? 'Until ' . fmt_date($rr['needed_until']) : no_date_mark(true)) ?>
-          <?= $rr['notes'] ? '<br><span class="muted">' . h($rr['notes']) . '</span>' : '' ?></td>
-        <td><form method="post" action="equipment.php" class="inline-form"><?= csrf_field() ?>
-          <input type="hidden" name="reservation_id" value="<?= (int)$rr['id'] ?>">
-          <?php // The dialog names the hold and says what each of its buttons does, since its own "Cancel" keeps the reservation. ?>
-          <button type="submit" name="cancel_reservation" value="1" class="btn-link" onclick="return confirm(<?= h((string)json_encode('Cancel the ' . ($rr['status'] === 'Reserved' ? 'reservation' : 'waitlist entry') . ' of ' . $rr['item_name'] . ' for ' . $rr['client_name'] . '? Choose OK to cancel it, or Cancel to keep it.', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)) ?>);">cancel<span class="visually-hidden"> — <?= h($rr['item_name']) ?> for <?= h($rr['client_name']) ?></span></button>
-        </form></td>
-      </tr>
-    <?php endforeach; ?>
-    </tbody>
-  </table>
-  </div>
-  <?php else: ?><p class="muted">No active reservations.</p><?php endif; ?>
-  <?php // After a rejected date the form comes back filled in, with the error on its field.
-  $oldRes = fn(string $k): string => old_in('add_reservation') !== '' ? old_in($k) : ''; ?>
-  <form method="post" action="equipment.php" class="stacked" style="margin-top:1rem"><?= csrf_field() ?>
-    <h3>Reserve or waitlist an item</h3>
-    <?= form_error_summary(['res_client_id' => '', 'needed_from' => '', 'needed_until' => '', 'res_notes' => ''], ['res_client_id' => 'res_client', 'needed_from' => 'res_from', 'needed_until' => 'res_until', 'res_notes' => 'res_notes']) ?>
+<h2 class="visually-hidden">Add equipment</h2>
+<details class="card" id="add"<?= $addFailed ? ' open' : '' ?>>
+  <summary id="add-h">Add equipment</summary>
+  <?php // After a rejected submission the form comes back filled in, with each error on its field.
+  $oldItem = fn(string $k, string $default = ''): string => old_in('add_item') !== '' ? old_in($k, $default) : $default; ?>
+  <form method="post" action="equipment.php" class="stacked" novalidate>
+    <?= csrf_field() ?>
+    <?= form_error_summary(['name' => '', 'serial' => '', 'value' => '', 'purchase_date' => '', 'useful_life_months' => '', 'maintenance_interval_days' => '', 'notes' => ''], ['maintenance_interval_days' => 'maint_interval']) ?>
     <?= $requiredNote ?>
     <div class="grid grid-4">
-      <div class="field"><label for="res_item">Item <span aria-hidden="true">*</span></label>
-        <select id="res_item" name="equipment_id" required>
-          <option value="">— Choose —</option>
-          <?php foreach ($items as $i): if ($i['status'] === 'Retired') continue; ?>
-          <option value="<?= (int)$i['id'] ?>" <?= $oldRes('equipment_id') === (string)$i['id'] ? 'selected' : '' ?>><?= h($i['name']) ?> (<?= h($i['status']) ?>)</option>
-          <?php endforeach; ?>
-        </select></div>
-      <div class="field"><label for="res_client">Client <span aria-hidden="true">*</span></label>
-        <select id="res_client" name="client_id" required <?= field_aria('res_client_id') ?>>
-          <option value="">— Choose —</option>
-          <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $oldRes('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
-        </select><?= field_error('res_client_id') ?></div>
-      <div class="field"><label for="res_from">Needed from</label><input type="date" id="res_from" name="needed_from" value="<?= h($oldRes('needed_from')) ?>" <?= field_aria('needed_from') ?>><?= field_error('needed_from') ?></div>
-      <div class="field"><label for="res_until">Needed until</label><input type="date" id="res_until" name="needed_until" value="<?= h($oldRes('needed_until')) ?>" <?= field_aria('needed_until') ?>><?= field_error('needed_until') ?></div>
+      <div class="field"><label for="name">Item name <span aria-hidden="true">*</span></label>
+        <input type="text" id="name" name="name" required maxlength="190" value="<?= h($oldItem('name')) ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
+      <div class="field"><label for="category">Category</label>
+        <select id="category" name="category"><?= select_options(EQUIP_CATEGORIES, $oldItem('category', 'Other')) ?></select></div>
+      <div class="field"><label for="serial">Serial number</label>
+        <input type="text" id="serial" name="serial" maxlength="120" value="<?= h($oldItem('serial')) ?>" <?= field_aria('serial') ?>><?= field_error('serial') ?></div>
+      <div class="field"><label for="item_condition">Condition</label>
+        <select id="item_condition" name="item_condition"><?= select_options(EQUIP_CONDITIONS, $oldItem('item_condition', 'Good')) ?></select></div>
+      <div class="field"><label for="value">Value (USD)</label>
+        <span class="hint" id="value-hint">Purchase or acquisition cost in dollars, for example 2995.00</span>
+        <input type="text" inputmode="decimal" id="value" name="value" value="<?= h($oldItem('value')) ?>" <?= field_aria('value', 'value-hint') ?>><?= field_error('value') ?></div>
+      <div class="field"><label for="purchase_date">Purchase date</label>
+        <input type="date" id="purchase_date" name="purchase_date" max="<?= date('Y-m-d') ?>" value="<?= h($oldItem('purchase_date')) ?>" <?= field_aria('purchase_date') ?>><?= field_error('purchase_date') ?></div>
+      <div class="field"><label for="useful_life_months">Useful life (months)</label>
+        <span class="hint" id="life-hint">Whole months, 1 to 600, used to work out current value; default 36</span>
+        <input type="text" inputmode="numeric" id="useful_life_months" name="useful_life_months" value="<?= h($oldItem('useful_life_months', '36')) ?>" <?= field_aria('useful_life_months', 'life-hint') ?>><?= field_error('useful_life_months') ?></div>
+      <div class="field"><label for="maint_interval">Service interval</label>
+        <span class="hint" id="interval-hint">Whole days between maintenance or calibration, 0 to 3650; blank = none</span>
+        <input type="text" inputmode="numeric" id="maint_interval" name="maintenance_interval_days" value="<?= h($oldItem('maintenance_interval_days')) ?>" <?= field_aria('maintenance_interval_days', 'interval-hint') ?>><?= field_error('maintenance_interval_days') ?></div>
+      <div class="field"><label for="notes">Notes</label>
+        <input type="text" id="notes" name="notes" maxlength="255" value="<?= h($oldItem('notes')) ?>" <?= field_aria('notes') ?>><?= field_error('notes') ?></div>
     </div>
-    <div class="field"><label for="res_notes">Notes</label><input type="text" id="res_notes" name="notes" maxlength="500" value="<?= h($oldRes('notes')) ?>" <?= field_aria('res_notes') ?>><?= field_error('res_notes') ?></div>
-    <button type="submit" name="add_reservation" value="1" class="btn btn-secondary">Add reservation</button>
+    <button type="submit" name="add_item" value="1" class="btn btn-primary">Add item</button>
   </form>
-</section>
+</details>
 
 <h2 id="inv-h">Inventory (<?= count($items) ?>)</h2>
+<form method="get" action="equipment.php#inv-h" class="inline-form" role="search" aria-label="Search equipment">
+  <?php if ($invStatus !== ''): ?><input type="hidden" name="status" value="<?= h($invStatus) ?>"><?php endif; ?>
+  <label for="inv-q">Search by item name, serial number or borrower</label>
+  <input type="search" id="inv-q" name="q" value="<?= h($invQ) ?>" maxlength="120" autocomplete="off">
+  <button type="submit" class="btn btn-secondary btn-sm">Search</button>
+  <?php if ($invFiltered): ?><a class="btn btn-secondary btn-sm" href="equipment.php#inv-h">Clear search and filter</a><?php endif; ?>
+</form>
+<nav aria-label="Filter inventory by status">
+  <ul class="tab-nav">
+    <?php foreach ($invFilters as $fKey => [$fLabel]): ?>
+    <li><a href="<?= h($invUrl($fKey, $invQ)) ?>" <?= $invStatus === $fKey ? 'aria-current="page"' : '' ?>><?= h($fLabel) ?></a></li>
+    <?php endforeach; ?>
+  </ul>
+</nav>
+<p class="hint" id="inv-count"><?= $invFiltered ? 'Showing ' . count($shown) . ' of ' . count($items) . ' items' . ($invStatus !== '' ? ' — ' . h($invFilters[$invStatus][0]) : '') . ($invQ !== '' ? ' matching “' . h($invQ) . '”' : '') . '.' : 'Showing all ' . count($items) . ' items.' ?></p>
 <div class="table-scroll" tabindex="0" role="region" aria-labelledby="inv-h">
 <table>
   <caption class="visually-hidden">Equipment inventory: condition, status, borrower and maintenance for each item</caption>
@@ -741,8 +770,9 @@ page_header('Equipment', $user, 'equipment');
     <th scope="col">Status</th><th scope="col">With client</th><th scope="col">Maintenance</th><th scope="col"><span class="visually-hidden">Actions</span></th>
   </tr></thead>
   <tbody>
-  <?php if (!$items): ?><tr><td colspan="7" class="muted">No equipment yet — add your first item below.</td></tr><?php endif; ?>
-  <?php foreach ($items as $i): ?>
+  <?php if (!$items): ?><tr><td colspan="7" class="muted">No equipment yet — use “Add equipment” above to add your first item.</td></tr>
+  <?php elseif (!$shown): ?><tr><td colspan="7" class="muted">No items match — try different words or another filter.</td></tr><?php endif; ?>
+  <?php foreach ($shown as $i): ?>
     <tr>
       <th scope="row"><?= h($i['name']) ?><?= $i['serial'] ? '<br><span class="muted">Serial number ' . h($i['serial']) . '</span>' : '' ?></th>
       <td><?= h($i['category']) ?></td>
@@ -841,38 +871,61 @@ page_header('Equipment', $user, 'equipment');
 </table>
 </div>
 
-<section class="card" aria-labelledby="add-h">
-  <h2 id="add-h">Add equipment</h2>
-  <?php // After a rejected submission the form comes back filled in, with each error on its field.
-  $oldItem = fn(string $k, string $default = ''): string => old_in('add_item') !== '' ? old_in($k, $default) : $default; ?>
-  <form method="post" action="equipment.php" class="stacked" novalidate>
-    <?= csrf_field() ?>
-    <?= form_error_summary(['name' => '', 'serial' => '', 'value' => '', 'purchase_date' => '', 'useful_life_months' => '', 'maintenance_interval_days' => '', 'notes' => ''], ['maintenance_interval_days' => 'maint_interval']) ?>
+<section class="card" aria-labelledby="res-h">
+  <h2 id="res-h">Reservations &amp; waitlist (<?= count($reservations) ?>)</h2>
+  <p class="muted">Hold an available item for a client, or add them to the waitlist for one that's on loan. When an item is loaned to that client, their reservation is fulfilled automatically.</p>
+  <?php if ($reservations): ?>
+  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="res-cap">
+  <table>
+    <caption class="visually-hidden" id="res-cap">Active holds, then the waitlist in the order it was joined: item, client, hold type and dates needed</caption>
+    <thead><tr><th scope="col">Item</th><th scope="col">Client</th><th scope="col">Hold</th><th scope="col">Needed</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+    <tbody>
+    <?php foreach ($reservations as $rr):
+      // Why a listed hold no longer keeps the item (equipment_hold_live_sql()), in words.
+      $notCounted = (int)$rr['live'] === 1 ? '' : ($rr['client_archived'] !== null ? 'the client is archived' : (str_starts_with((string)$rr['client_status'], 'Closed') ? 'the client\'s case is closed' : 'the "needed until" date has passed')); ?>
+      <tr>
+        <th scope="row"><?= h($rr['item_name']) ?><br><span class="muted"><?= h($rr['item_status']) ?></span></th>
+        <td><a href="client.php?id=<?= (int)$rr['cid'] ?>"><?= h($rr['client_name']) ?></a></td>
+        <td><?= $rr['status'] === 'Reserved' ? '<span class="badge badge-active">Reserved</span>' : '<span class="badge badge-pending">Waitlist</span>' ?>
+          <br><span class="muted">added <?= fmt_date($rr['created_at'], true) ?></span>
+          <?= $notCounted !== '' ? '<br><strong>' . ($rr['status'] === 'Reserved' ? 'No longer holds the item' : 'Passed over when the item is free') . ': ' . h($notCounted) . '. Cancel it if it is no longer needed.</strong>' : '' ?></td>
+        <td><?= $rr['needed_from'] ? fmt_date($rr['needed_from']) . ($rr['needed_until'] ? ' – ' . fmt_date($rr['needed_until']) : '') : ($rr['needed_until'] ? 'Until ' . fmt_date($rr['needed_until']) : no_date_mark(true)) ?>
+          <?= $rr['notes'] ? '<br><span class="muted">' . h($rr['notes']) . '</span>' : '' ?></td>
+        <td><form method="post" action="equipment.php" class="inline-form"><?= csrf_field() ?>
+          <input type="hidden" name="reservation_id" value="<?= (int)$rr['id'] ?>">
+          <?php // The dialog names the hold and says what each of its buttons does, since its own "Cancel" keeps the reservation. ?>
+          <button type="submit" name="cancel_reservation" value="1" class="btn-link" onclick="return confirm(<?= h((string)json_encode('Cancel the ' . ($rr['status'] === 'Reserved' ? 'reservation' : 'waitlist entry') . ' of ' . $rr['item_name'] . ' for ' . $rr['client_name'] . '? Choose OK to cancel it, or Cancel to keep it.', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)) ?>);">cancel<span class="visually-hidden"> — <?= h($rr['item_name']) ?> for <?= h($rr['client_name']) ?></span></button>
+        </form></td>
+      </tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table>
+  </div>
+  <?php else: ?><p class="muted">No active reservations.</p><?php endif; ?>
+  <?php // After a rejected date the form comes back filled in, with the error on its field.
+  $oldRes = fn(string $k): string => old_in('add_reservation') !== '' ? old_in($k) : ''; ?>
+  <form method="post" action="equipment.php" class="stacked" style="margin-top:1rem"><?= csrf_field() ?>
+    <h3>Reserve or waitlist an item</h3>
+    <?= form_error_summary(['res_client_id' => '', 'needed_from' => '', 'needed_until' => '', 'res_notes' => ''], ['res_client_id' => 'res_client', 'needed_from' => 'res_from', 'needed_until' => 'res_until', 'res_notes' => 'res_notes']) ?>
     <?= $requiredNote ?>
     <div class="grid grid-4">
-      <div class="field"><label for="name">Item name <span aria-hidden="true">*</span></label>
-        <input type="text" id="name" name="name" required maxlength="190" value="<?= h($oldItem('name')) ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
-      <div class="field"><label for="category">Category</label>
-        <select id="category" name="category"><?= select_options(EQUIP_CATEGORIES, $oldItem('category', 'Other')) ?></select></div>
-      <div class="field"><label for="serial">Serial number</label>
-        <input type="text" id="serial" name="serial" maxlength="120" value="<?= h($oldItem('serial')) ?>" <?= field_aria('serial') ?>><?= field_error('serial') ?></div>
-      <div class="field"><label for="item_condition">Condition</label>
-        <select id="item_condition" name="item_condition"><?= select_options(EQUIP_CONDITIONS, $oldItem('item_condition', 'Good')) ?></select></div>
-      <div class="field"><label for="value">Value (USD)</label>
-        <span class="hint" id="value-hint">Purchase or acquisition cost in dollars, for example 2995.00</span>
-        <input type="text" inputmode="decimal" id="value" name="value" value="<?= h($oldItem('value')) ?>" <?= field_aria('value', 'value-hint') ?>><?= field_error('value') ?></div>
-      <div class="field"><label for="purchase_date">Purchase date</label>
-        <input type="date" id="purchase_date" name="purchase_date" max="<?= date('Y-m-d') ?>" value="<?= h($oldItem('purchase_date')) ?>" <?= field_aria('purchase_date') ?>><?= field_error('purchase_date') ?></div>
-      <div class="field"><label for="useful_life_months">Useful life (months)</label>
-        <span class="hint" id="life-hint">Whole months, 1 to 600, used to work out current value; default 36</span>
-        <input type="text" inputmode="numeric" id="useful_life_months" name="useful_life_months" value="<?= h($oldItem('useful_life_months', '36')) ?>" <?= field_aria('useful_life_months', 'life-hint') ?>><?= field_error('useful_life_months') ?></div>
-      <div class="field"><label for="maint_interval">Service interval</label>
-        <span class="hint" id="interval-hint">Whole days between maintenance or calibration, 0 to 3650; blank = none</span>
-        <input type="text" inputmode="numeric" id="maint_interval" name="maintenance_interval_days" value="<?= h($oldItem('maintenance_interval_days')) ?>" <?= field_aria('maintenance_interval_days', 'interval-hint') ?>><?= field_error('maintenance_interval_days') ?></div>
-      <div class="field"><label for="notes">Notes</label>
-        <input type="text" id="notes" name="notes" maxlength="255" value="<?= h($oldItem('notes')) ?>" <?= field_aria('notes') ?>><?= field_error('notes') ?></div>
+      <div class="field"><label for="res_item">Item <span aria-hidden="true">*</span></label>
+        <select id="res_item" name="equipment_id" required>
+          <option value="">— Choose —</option>
+          <?php foreach ($items as $i): if ($i['status'] === 'Retired') continue; ?>
+          <option value="<?= (int)$i['id'] ?>" <?= $oldRes('equipment_id') === (string)$i['id'] ? 'selected' : '' ?>><?= h($i['name']) ?> (<?= h($i['status']) ?>)</option>
+          <?php endforeach; ?>
+        </select></div>
+      <div class="field"><label for="res_client">Client <span aria-hidden="true">*</span></label>
+        <select id="res_client" name="client_id" required <?= field_aria('res_client_id') ?>>
+          <option value="">— Choose —</option>
+          <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $oldRes('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
+        </select><?= field_error('res_client_id') ?></div>
+      <div class="field"><label for="res_from">Needed from</label><input type="date" id="res_from" name="needed_from" value="<?= h($oldRes('needed_from')) ?>" <?= field_aria('needed_from') ?>><?= field_error('needed_from') ?></div>
+      <div class="field"><label for="res_until">Needed until</label><input type="date" id="res_until" name="needed_until" value="<?= h($oldRes('needed_until')) ?>" <?= field_aria('needed_until') ?>><?= field_error('needed_until') ?></div>
     </div>
-    <button type="submit" name="add_item" value="1" class="btn btn-primary">Add item</button>
+    <div class="field"><label for="res_notes">Notes</label><input type="text" id="res_notes" name="notes" maxlength="500" value="<?= h($oldRes('notes')) ?>" <?= field_aria('res_notes') ?>><?= field_error('res_notes') ?></div>
+    <button type="submit" name="add_reservation" value="1" class="btn btn-secondary">Add reservation</button>
   </form>
 </section>
 <?php page_footer();

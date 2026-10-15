@@ -41,7 +41,13 @@ if (!$survey) {
     page_header('Survey');
     // The language switch is offered here too, as on the portal.
     echo lang_toggle();
-    echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>' . t('This survey link is invalid or has been removed.') . '</p></div>';
+    // Say what to do next, with the footer's contact address.
+    $linkContact = (string)(cfg('support_email') ?: cfg('mail_from'));
+    echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>' . t('This survey link is invalid or has been removed.') . ' '
+        . ($linkContact !== ''
+            ? t('If you would still like to share your feedback, email') . ' <a href="mailto:' . h($linkContact) . '">' . h($linkContact) . '</a> ' . t('and we will send you a new link.')
+            : t('If you would still like to share your feedback, ask your instructor for a new link.'))
+        . '</p></div>';
     page_footer();
     exit;
 }
@@ -83,6 +89,8 @@ if (!$csrfStale && $_SERVER['REQUEST_METHOD'] === 'POST' && !$survey['completed_
             notify_admin_users("Outcome survey completed: {$survey['client_name']} rated {$sat}/10", 'client.php?id=' . (int)$survey['client_id'] . '&tab=notes');
             // Announced once on the next page (focused, with an earcon), as on the portal.
             flash_ui('Thank you. Your feedback was sent.');
+            // The page that follows is the receipt for these answers, not a revisit.
+            $_SESSION['survey_just_sent'] = $token;
         }
         redirect('survey.php?t=' . $token);
     }
@@ -93,9 +101,17 @@ page_header($survey['completed_at'] ? 'Feedback received' : (($error ? 'Error �
 echo lang_toggle();
 ?>
 <div class="card" style="max-width: 36rem; margin: 2rem auto;">
-<?php if ($survey['completed_at']): ?>
+<?php if ($survey['completed_at']):
+  // Just sent from this browser, or a return visit to a survey already answered.
+  $justSent = ($_SESSION['survey_just_sent'] ?? '') === $token;
+  unset($_SESSION['survey_just_sent']); ?>
+  <?php if ($justSent): ?>
   <h1><?= t('Thank you!') ?></h1>
   <p><?= t('Your feedback has been recorded. We\'re grateful you took the time — and we wish you every success.') ?></p>
+  <?php else: ?>
+  <h1><?= t('Feedback received') ?></h1>
+  <p><?= t('Thank you — we already have your answers.') ?> <?= t('There is nothing more to do.') ?></p>
+  <?php endif; ?>
 <?php else: ?>
   <h1><?= t('How did we do,') ?> <?= h(explode(' ', $survey['client_name'])[0]) ?>?</h1>
   <p><?= t('You recently completed assistive technology training with') ?> <?= h(brand('short')) ?><?= t('. Three quick questions — it takes under a minute.') ?></p>

@@ -214,7 +214,8 @@ struct AdministerSheet: View {
                 }
                 ForEach(items) { it in
                     VStack(alignment: .leading) {
-                        Text(it.label).font(.callout)
+                        // Read as part of the picker's name ("Score for …"): one stop per item.
+                        Text(it.label).font(.callout).accessibilityHidden(true)
                         Picker("Score", selection: Binding<Int?>(get: { scores[it.id] }, set: { scores[it.id] = $0 })) {
                             Text("Choose a rating").tag(nil as Int?)
                             ForEach(scaleOptions, id: \.value) { Text($0.label).tag($0.value as Int?) }

@@ -163,9 +163,14 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             // unless that homework is no longer listed: then at the top of the page.
             $hq = db()->prepare("SELECT 1 FROM homework h JOIN training_tracks t ON t.id = h.track_id WHERE h.id = ? AND t.client_id = ? AND h.status = 'Assigned'");
             $hq->execute([$hwId, (int)$client['id']]);
-            if (!$hq->fetchColumn()) { flash_ui($hwError, 'error'); redirect('portal.php?t=' . $token . '&lang=' . page_lang()); }
-            $hwError = ['id' => $hwId, 'msg' => $hwError, 'field' => (isset($_POST['hw_practice']) ? 'hw-min-' : 'hw-question-') . $hwId];
-            set_form_errors(['hw_error' => $hwError['msg']]);
+            // A feature that is switched off or not working is not something the client
+            // got wrong: it is said plainly, without "Please fix the following".
+            $hwSystem = in_array($hwError, ['AI explanations are not enabled. Ask your instructor for help.', 'The explanation is not available right now. Ask your instructor.'], true);
+            if ($hwSystem) $hwError = "This feature isn't available right now. Your instructor can help.";
+            if (!$hq->fetchColumn()) { flash_ui($hwError, $hwSystem ? 'info' : 'error'); redirect('portal.php?t=' . $token . '&lang=' . page_lang()); }
+            $hwError = ['id' => $hwId, 'msg' => $hwError, 'field' => (isset($_POST['hw_practice']) ? 'hw-min-' : 'hw-question-') . $hwId, 'system' => $hwSystem];
+            // Only a problem with what was typed marks the field as needing a fix.
+            if (!$hwSystem) set_form_errors(['hw_error' => $hwError['msg']]);
         }
     }
 
@@ -597,7 +602,13 @@ page_header($client ? 'My training' : 'Portal');
 
 echo lang_toggle();
 if (!$client) {
-    echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>' . t('This portal link is invalid or has been replaced. Please contact your instructor for a new link.') . '</p></div>';
+    // Never a dead end: say who to write to for a new link (the footer's contact).
+    $linkContact = (string)(cfg('support_email') ?: cfg('mail_from'));
+    echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>'
+        . ($linkContact !== ''
+            ? t('This link has been replaced or no longer works. Email') . ' <a href="mailto:' . h($linkContact) . '">' . h($linkContact) . '</a> ' . t('and we will send you a new one.')
+            : t('This link has been replaced or no longer works. Ask your instructor and we will send you a new one.'))
+        . '</p></div>';
     page_footer();
     exit;
 }
@@ -712,7 +723,7 @@ document.addEventListener('submit', function (e) {
 <section class="card" aria-labelledby="tr-<?= (int)$t['id'] ?>">
   <?php // Staff write tracks, goals, homework, guides and resources in the English-only
   // staff app, so that text is marked lang="en" on the Spanish page (en()). ?>
-  <h2 id="tr-<?= (int)$t['id'] ?>"><?= en((string)$t['title']) ?></h2>
+  <h2 id="tr-<?= (int)$t['id'] ?>"><?= t('Your training plan:') ?> <?= en((string)$t['title']) ?></h2>
   <?php if ($goals): ?>
   <p><?= $achieved ?> <?= h(__('of')) ?> <?= count($goals) ?> <?= t('goals achieved') ?></p>
   <ul>
@@ -749,7 +760,10 @@ $homework = $hwStmt->fetchAll();
       <?= $h_['instructions'] ? '<br>' . nl2br(en((string)$h_['instructions'])) : '' ?>
       <?php // A refused practice update or question is said here, in the homework it is about,
       // linked to its field; the form below comes back filled in and opened. ?>
-      <?php if ($hwOwnError): ?><?= form_error_summary(['hw_error' => ''], ['hw_error' => $hwError['field']]) ?><?php endif; ?>
+      <?php if ($hwOwnError && !empty($hwError['system'])): // Not the client's mistake: no "Please fix the following". ?>
+      <div class="alert alert-info" tabindex="-1" id="form-error-summary"><p><?= t($hwError['msg']) ?></p></div>
+      <script>document.addEventListener("DOMContentLoaded",function(){var s=document.getElementById("form-error-summary");if(s)s.focus();});</script>
+      <?php elseif ($hwOwnError): ?><?= form_error_summary(['hw_error' => ''], ['hw_error' => $hwError['field']]) ?><?php endif; ?>
       <?php if ($h_['client_reported_at']): ?>
         <br><span class="badge badge-active"><?= t('You marked this done') ?></span>
       <?php elseif (!$caseClosed): ?>
@@ -924,7 +938,12 @@ if (!$caseClosed || $thread): ?>
   $oldInfo = old_in('update_profile') !== '';
   $keptInfo = old_in('p_kept');
   $refill = fn(string $k): bool => $oldInfo && ($keptInfo === '' || str_contains($keptInfo, ',' . $k . ','));
-  $pv = fn(string $k, $saved): string => $refill($k) ? old_in($k) : (string)($saved ?? ''); ?>
+  $pv = fn(string $k, $saved): string => $refill($k) ? old_in($k) : (string)($saved ?? '');
+  // Closed until the client wants it; open again when a save came back with a problem.
+  $infoOpen = $oldInfo || array_filter(['p_phone', 'p_address', 'p_tech', 'p_notes'], fn($k) => has_field_error($k)); ?>
+  <h2 class="visually-hidden"><?= t('Update my details') ?></h2>
+  <details id="info-details"<?= $infoOpen ? ' open' : '' ?>>
+  <summary><?= t('Update my details') ?></summary>
   <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?php // A fingerprint of each value shown, so a save from a page drawn before
@@ -970,6 +989,7 @@ if (!$caseClosed || $thread): ?>
     </fieldset>
     <button type="submit" name="update_profile" value="1" class="btn btn-primary"><?= t('Save my information') ?></button>
   </form>
+  </details>
 </section>
 <?php endif; ?>
 

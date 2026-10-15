@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var forms = Array.from(document.querySelectorAll('main form[method="post"], main form[method="POST"]'));
-  var initial = new Map(), restored = new Set(), leaving = false, submitting = null;
+  var initial = new Map(), restored = new Set(), leaving = false, submitting = null, lastHintItem = null;
   function values(form) {
     return JSON.stringify(Array.from(form.elements).filter(function (e) {
       return e.name && !e.disabled && !/^(hidden|submit|button|reset|image)$/i.test(e.type);
@@ -29,6 +29,16 @@
     list.focus();
   }
   if (location.hash === '#main-nav') menu();
+  // Escape dismisses a showing link hint (1.4.13); moving to another link brings hints back.
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && document.activeElement && document.activeElement.closest && document.activeElement.closest('.nav-item')) document.documentElement.classList.add('cms-hints-off');
+  });
+  ['focusin', 'mouseover'].forEach(function (name) {
+    document.addEventListener(name, function (e) {
+      var item = e.target.closest && e.target.closest('.nav-item');
+      if (item && item !== lastHintItem) { lastHintItem = item; document.documentElement.classList.remove('cms-hints-off'); }
+    });
+  });
   // Use a same-site previous page when known; direct arrivals retain Dashboard as fallback.
   document.querySelectorAll('[data-cms-back]').forEach(function (a) {
     try {

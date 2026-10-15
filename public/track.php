@@ -13,6 +13,16 @@ $track = $stmt->fetch();
 if (!$track) { flash('Training track not found.', 'error'); redirect('clients.php'); }
 scope_check_client_id((int)$track['client_id'], $user);
 
+/* A collapsed <details> opens when the URL's #fragment points inside it, so links
+   and redirects to a heading or field in a closed "Add" form still land there. */
+if (!function_exists('details_open_on_hash')) {
+    function details_open_on_hash(string $id): string {
+        return '<script>(function(){var d=document.getElementById(' . json_encode($id) . ');if(!d)return;'
+            . 'function o(j){var t=null;try{t=location.hash.length>1?document.getElementById(decodeURIComponent(location.hash.slice(1))):null;}catch(e){}'
+            . 'if(t&&d.contains(t)&&!d.open){d.open=true;if(j)t.scrollIntoView();}}o(false);window.addEventListener("hashchange",function(){o(true);});})();</script>';
+    }
+}
+
 /* ---- Goal-template search (shared by the picker and its live JSON endpoint) ----
    Templates are searched on demand so the page never has to render the whole
    library (which is very large). */
@@ -528,6 +538,10 @@ $notes = db()->prepare('SELECT n.*, u.name AS author FROM client_notes n LEFT JO
 $notes->execute([$id]); $notes = $notes->fetchAll();
 
 $r = track_rollup($id);
+// Nothing authorized yet: said in words, never as 0 hours of 0 or a 0% bar.
+$noAuthHours = $r['authorized_hours'] <= 0;
+$noAuthFunds = $r['authorized_funds'] <= 0;
+$noFundsText = $noAuthHours ? 'No authorization entered' : 'No hourly rate entered';
 // An expired authorization is announced whatever the track's status (work logged on a
 // Completed track would still be billed under it); one about to expire, only while Active.
 $authExpired = $track['expiration_date'] && $track['expiration_date'] < date('Y-m-d');
@@ -543,16 +557,33 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
 <h1><?= h($track['title']) ?> <span class="visually-hidden">for</span><span aria-hidden="true"> — </span><?= h($track['client_name']) ?> <?= status_badge($track['status']) ?></h1>
 <div class="page-actions">
   <a class="btn btn-secondary" href="track_edit.php?id=<?= $id ?>">Edit track / authorization</a>
-  <?php if (can('billing')): ?>
-  <a class="btn btn-secondary" href="export.php?track=<?= $id ?>">Export billing CSV</a>
-  <a class="btn btn-secondary" href="export.php?track=<?= $id ?>&amp;layout=table">Export billing CSV as one table (sessions and expenses)</a>
-  <a class="btn btn-secondary" href="invoice_pdf.php?track=<?= $id ?>">Download PDF statement</a>
-  <a class="btn btn-secondary" href="invoice_pdf.php?track=<?= $id ?>&amp;format=html">Download accessible HTML statement</a>
-  <?php endif; ?>
   <?php if (can('reports')): ?>
   <a class="btn btn-secondary" href="report.php?track=<?= $id ?>">Email report to <abbr title="Vocational Rehabilitation counselor">VRC</abbr></a>
   <?php endif; ?>
 </div>
+<?php // The four export/statement variants are kept out of the way until wanted. ?>
+<?php if (can('billing')): ?>
+<details id="billing-exports">
+  <summary>Billing and statements</summary>
+  <div class="page-actions">
+    <a class="btn btn-secondary" href="export.php?track=<?= $id ?>">Export billing CSV</a>
+    <a class="btn btn-secondary" href="export.php?track=<?= $id ?>&amp;layout=table">Export billing CSV as one table (sessions and expenses)</a>
+    <a class="btn btn-secondary" href="invoice_pdf.php?track=<?= $id ?>">Download PDF statement</a>
+    <a class="btn btn-secondary" href="invoice_pdf.php?track=<?= $id ?>&amp;format=html">Download accessible HTML statement</a>
+  </div>
+</details>
+<?php endif; ?>
+<nav aria-labelledby="onpage-h">
+  <p id="onpage-h"><strong>On this page</strong></p>
+  <ul>
+    <li><a href="#authorization">Service authorization</a></li>
+    <li><a href="#log-session-h">Log a session</a></li>
+    <li><a href="#notes">Case notes</a></li>
+    <li><a href="#goals"><abbr title="Specific, Measurable, Attainable, Relevant, Time-bound">SMART</abbr> goals</a></li>
+    <li><a href="#homework">Homework</a></li>
+    <li><a href="#expenses">Billable expenses</a></li>
+  </ul>
+</nav>
 
 <?php if ($expiringSoon): ?>
 <div class="alert alert-error" role="note"><?= $authExpired
@@ -560,7 +591,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     : 'This authorization expires on ' . fmt_date($track['expiration_date']) . '.' ?></div>
 <?php endif; ?>
 
-<section class="card" aria-labelledby="sa-h">
+<section id="authorization" class="card" aria-labelledby="sa-h">
   <h2 id="sa-h">Service authorization</h2>
   <dl class="props">
     <dt>Service type</dt><dd><?= h($track['service_type'] ?? 'Assistive Technology') ?></dd>
@@ -570,11 +601,11 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
       <?php endif; ?></dd>
     <dt>Authorization number</dt><dd><?= h($track['auth_number']) ?></dd>
     <dt>Funding agency</dt><dd><?= h($track['funding_agency']) ?></dd>
-    <dt>Authorized hours</dt><dd><?= fmt_hours($r['authorized_hours']) ?></dd>
+    <dt>Authorized hours</dt><dd><?= $noAuthHours ? 'No authorization entered' : fmt_hours($r['authorized_hours']) ?></dd>
     <dt>Hourly rate</dt><dd><?= fmt_money($r['hourly_rate']) ?>/hr</dd>
     <?php if ($r['mileage_rate'] > 0): ?><dt>Mileage rate</dt><dd><?= fmt_mileage_rate($r['mileage_rate']) ?>/mile</dd><?php endif; ?>
     <dt>Period</dt><dd><?= fmt_date($track['start_date'], true) ?> to <?= fmt_date($track['expiration_date'], true) ?></dd>
-    <dt>Authorized funds</dt><dd><?= fmt_money($r['authorized_funds']) ?></dd>
+    <dt>Authorized funds</dt><dd><?= $noAuthFunds ? $noFundsText : fmt_money($r['authorized_funds']) ?></dd>
   </dl>
   <p class="hint" id="burndown-hint">The burn-down shows the hours and funds used so far against this authorization, and drafts a request for more.</p>
   <p class="page-actions"><a class="btn btn-secondary btn-sm" href="amendment_request.php?track=<?= $id ?>" aria-describedby="burndown-hint">Authorization burn-down &amp; amendment request</a></p>
@@ -619,20 +650,136 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
 <div class="grid grid-4">
   <div class="card stat"><span class="stat-num"><?= fmt_hours($r['hours_worked']) ?></span><span class="stat-label">Total hours worked</span></div>
   <div class="card stat"><span class="stat-num"><?= fmt_money($r['total_billed']) ?></span><span class="stat-label">Value of all logged work, invoiced or not<?= $r['mileage_amount'] > 0 ? ' (including ' . fmt_money($r['mileage_amount']) . ' mileage)' : '' ?></span></div>
+  <?php // With nothing authorized, "0 hours remaining" and "0%" would read as used up. ?>
+  <?php if ($noAuthHours): ?>
+  <div class="card stat"><span class="stat-label">Authorized hours remaining:</span> <strong>No authorization entered</strong> <a href="track_edit.php?id=<?= $id ?>">Edit track<span class="visually-hidden"> to enter the authorized hours</span></a></div>
+  <?php else: ?>
   <div class="card stat"><span class="stat-num"><?= fmt_hours($r['hours_remaining']) ?></span><span class="stat-label">Authorized hours remaining</span></div>
+  <?php endif; ?>
+  <?php if ($noAuthFunds): ?>
+  <div class="card stat"><span class="stat-label">Authorized funds remaining:</span> <strong><?= $noFundsText ?></strong> <a href="track_edit.php?id=<?= $id ?>">Edit track<span class="visually-hidden"> to enter the authorization</span></a></div>
+  <?php else: ?>
   <div class="card stat"><span class="stat-num"><?= fmt_money($r['funds_remaining']) ?></span><span class="stat-label">Authorized funds remaining<?= $r['expenses_amount'] > 0 ? ' (after logged work and ' . fmt_money($r['expenses_amount']) . ' of expenses)' : '' ?></span></div>
+  <?php endif; ?>
 </div>
 
+<?php if ($noAuthHours): ?>
+<p class="card"><strong>Authorization usage:</strong> No authorization entered. <a href="track_edit.php?id=<?= $id ?>">Edit track<span class="visually-hidden"> to enter the authorized hours</span></a></p>
+<?php else: ?>
 <div class="progress-wrap card">
   <label for="prog-main" class="progress-caption">
     <strong>Authorization usage:</strong> <?= fmt_hours($r['hours_worked']) ?> of <?= fmt_hours($r['authorized_hours']) ?> (<?= $r['pct_used'] ?>%)
   </label>
   <progress id="prog-main" class="hours" max="100" value="<?= $r['pct_used'] ?>"><?= $r['pct_used'] ?>%</progress>
 </div>
+<?php endif; ?>
+
+<section id="logs" class="card" aria-labelledby="logs-h">
+  <h2 id="logs-h">Hours &amp; billing tracker</h2>
+  <h3 id="log-session-h">Log a session</h3>
+  <?php if ((float)$track['hourly_rate'] <= 0): ?>
+  <p class="alert alert-error" role="note">Hours cannot be logged to this track yet because it has no hourly rate. <a href="track_edit.php?id=<?= $id ?>">Enter the hourly billing rate</a> first.</p>
+  <?php endif; ?>
+  <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate>
+    <?= csrf_field() ?><?= web_idem_field() ?>
+    <?= form_error_summary(['work_date' => 'Date', 'log_auth_ack' => 'Authorization', 'visit_rsa_category' => 'RSA service delivered this visit', 'visit_service_type' => 'Service type',
+        'goal_id' => 'Goal this session advanced', 'hours' => 'Hours worked', 'mileage' => 'Mileage', 'description' => 'Activity description'], ['goal_id' => 'log_goal', 'log_auth_ack' => 'log_auth_ack']) ?>
+    <div class="field"><label for="work_date">Date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+      <input type="date" id="work_date" name="work_date" required min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('work_date', date('Y-m-d'))) ?>" <?= field_aria('work_date') ?>><?= field_error('work_date') ?></div>
+    <?php // Shown once the date was refused as outside the authorization (or a ticked box is being kept). ?>
+    <?php if (has_field_error('log_auth_ack') || old_in('auth_ack') === '1'): ?>
+    <div class="field"><label><input type="checkbox" id="log_auth_ack" name="auth_ack" value="1"<?= old_in('auth_ack') === '1' ? ' checked' : '' ?> <?= field_aria('log_auth_ack') ?>>
+      Log it anyway (the authorization is being renewed or amended)<span class="visually-hidden">, these hours</span></label><?= field_error('log_auth_ack') ?></div>
+    <?php endif; ?>
+    <?php $visitCats = track_visit_categories($track); ?>
+    <div class="field"><label for="visit_rsa_category">RSA service delivered this visit <span class="hint"><?= count($visitCats) > 1 ? 'Choose which of this program\'s categories was delivered — it drives state reporting' : 'This track bills a single category' ?></span></label>
+      <select id="visit_rsa_category" name="visit_rsa_category" <?= field_aria('visit_rsa_category') ?>><?= select_options($visitCats, old_in('visit_rsa_category') ?: ($visitCats[0] ?? null)) ?></select><?= field_error('visit_rsa_category') ?></div>
+    <div class="field"><label for="visit_service_type">Service type <span class="hint">Internal discipline label</span></label>
+      <select id="visit_service_type" name="visit_service_type" <?= field_aria('visit_service_type') ?>><?= select_options(SERVICE_TYPES, old_in('visit_service_type') ?: ($track['service_type'] ?? 'Assistive Technology')) ?></select><?= field_error('visit_service_type') ?></div>
+    <?php // Also shown when a refused goal must be corrected, so the error has a field to point to.
+    $openGoals = array_filter($goals, fn($g) => $g['status'] !== 'Achieved'); if ($openGoals || has_field_error('goal_id')): ?>
+    <div class="field"><label for="log_goal">Goal this session advanced <span class="hint">optional — shows counselors hours invested per goal</span></label>
+      <select id="log_goal" name="goal_id" <?= field_aria('goal_id') ?>><option value="">— None —</option>
+        <?php foreach ($openGoals as $g): ?>
+        <option value="<?= (int)$g['id'] ?>" <?= old_in('goal_id') === (string)$g['id'] ? 'selected' : '' ?>><?= h(mb_strimwidth($g['specific_goal'], 0, 90, '…')) ?></option>
+        <?php endforeach; ?>
+      </select><?= field_error('goal_id') ?></div>
+    <?php endif; ?>
+    <div class="field"><label for="hours">Hours worked <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+      <span class="hint" id="hours-hint">Decimals allowed, e.g., 1.5</span>
+      <input type="number" id="hours" name="hours" step="0.25" min="0.25" max="24" required value="<?= h(old_in('hours')) ?>" <?= field_aria('hours', 'hours-hint') ?>><?= field_error('hours') ?></div>
+    <div class="field"><label for="mileage">Mileage / travel (miles)</label>
+      <span class="hint" id="mileage-hint">Miles driven for this session, up to 1000</span>
+      <input type="text" inputmode="decimal" autocomplete="off" id="mileage" name="mileage" value="<?= h(old_in('mileage', '0')) ?>" <?= field_aria('mileage', 'mileage-hint') ?>><?= field_error('mileage') ?></div>
+    <div class="field"><label for="description">Activity description <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+      <textarea id="description" name="description" required rows="3" <?= field_aria('description') ?>><?= h(old_in('description')) ?></textarea><?= field_error('description') ?></div>
+    <button type="submit" name="add_log" value="1" class="btn btn-primary">Log hours</button>
+  </form>
+
+  <h3>Log entries (<?= count($logs) ?>)</h3>
+  <?php $unbilledTotal = round($r['unbilled_amount'] + $r['unbilled_expenses'], 2);
+  // What Generate invoice bills now: unbilled entries dated today or earlier (as generate_invoice()).
+  $billableTotal = round($r['billable_amount'] + $r['billable_expenses'], 2); ?>
+  <p>On invoices so far, including drafts: <?= fmt_money($r['invoiced_amount']) ?> (<?= fmt_money($r['submitted_amount']) ?> submitted to the funder or paid). Not yet on an invoice: <?= fmt_money($unbilledTotal) ?><?= $r['unbilled_expenses'] > 0 ? ' (including ' . fmt_money($r['unbilled_expenses']) . ' of expenses)' : '' ?>.<?= $billableTotal < $unbilledTotal ? ' ' . fmt_money(round($unbilledTotal - $billableTotal, 2)) . ' of that is dated after today and is invoiced once its date has come.' : '' ?></p>
+  <?php // Expenses or mileage alone are billable too, so any billable item offers the button. ?>
+  <?php if (($r['billable_hours'] > 0 || $r['billable_mileage'] > 0 || $r['billable_expenses'] > 0) && can('billing')): ?>
+  <form method="post" action="track.php?id=<?= $id ?>" class="inline-form">
+    <?= csrf_field() ?>
+    <button type="submit" name="mark_billed" value="1" class="btn btn-secondary btn-sm"
+      onclick="return confirm('Create an invoice from all unbilled entries and expenses on this track dated today or earlier?');">
+      Generate invoice for <?= fmt_money($billableTotal) ?> unbilled (<?= fmt_hours($r['billable_hours']) ?><?= $r['billable_expenses'] > 0 ? ' and ' . fmt_money($r['billable_expenses']) . ' of expenses' : '' ?>)</button>
+  </form>
+  <?php endif; ?>
+  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="logs-cap">
+  <table>
+    <caption class="visually-hidden" id="logs-cap">Work log entries</caption>
+    <thead><tr>
+      <th scope="col">Date</th><th scope="col">Service</th><th scope="col" class="num">Hours</th><th scope="col" class="num">Mileage</th>
+      <th scope="col">Activity</th><th scope="col" class="num">Amount</th><th scope="col">Billed?</th>
+      <th scope="col">Logged by</th><th scope="col"><span class="visually-hidden">Actions</span></th>
+    </tr></thead>
+    <tbody>
+    <?php if (!$logs): ?><tr><td colspan="9" class="muted">No hours logged yet.</td></tr><?php endif; ?>
+    <?php foreach ($logs as $l): ?>
+      <tr>
+        <td><?= fmt_date($l['work_date']) ?></td>
+        <td><?= h($l['rsa_category'] ?? $l['service_type'] ?? $track['service_type'] ?? '—') ?></td>
+        <td class="num"><?= fmt_hours((float)$l['hours']) ?></td>
+        <td class="num"><?= (float)$l['mileage'] > 0 ? h((string)(float)$l['mileage']) . ' mi' : '—' ?></td>
+        <td><?= h($l['description']) ?></td>
+        <td class="num"><?= fmt_money(log_line_amounts($l, $r['hourly_rate'], $r['mileage_rate'])['total']) ?></td>
+        <td><?= $l['is_billed'] ? 'Yes' : 'No' ?><?php if (!empty($l['signature_path'])): ?><br>
+            <a href="download.php?sig=<?= (int)$l['id'] ?>">Signed<span class="visually-hidden"> — view client signature<?= $l['signed_name'] ? ' by ' . h($l['signed_name']) : '' ?></span></a><?php elseif (($l['signed_name'] ?? '') !== ''): ?><br>
+            Signed by typed name: <?= h($l['signed_name']) ?><?php endif; ?></td>
+        <td><?= h($l['author'] ?? '') ?></td>
+        <td>
+          <?php if (!$l['is_billed']): ?>
+          <form method="post" action="track.php?id=<?= $id ?>" class="inline-form">
+            <?= csrf_field() ?>
+            <input type="hidden" name="log_id" value="<?= (int)$l['id'] ?>">
+            <button type="submit" name="delete_log" value="1" class="btn btn-danger btn-sm"
+              onclick="return confirm('Move this log entry from <?= fmt_date($l['work_date']) ?> to the trash? An administrator can restore it for 30 days.');">
+              Move to trash<span class="visually-hidden"> — log entry from <?= fmt_date($l['work_date']) ?>, <?= fmt_hours((float)$l['hours']) ?>: <?= h(mb_strimwidth($l['description'], 0, 50, '…')) ?></span></button>
+          </form>
+          <?php else: ?><span class="muted">Invoiced</span><?php endif; ?>
+        </td>
+      </tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table>
+  </div>
+</section>
 
 <section id="notes" class="card" aria-labelledby="tnotes-h">
   <h2 id="tnotes-h">Case notes for this track (<?= count($notes) ?>)</h2>
   <p class="muted">Notes recorded here are attached to this training track. General notes that aren't about a specific track belong on the client's <a href="client.php?id=<?= (int)$track['client_id'] ?>&amp;tab=notes">Client Notes</a> tab.</p>
+  <?php // Open when the note was refused, generated or restored, or a link asks for it (write_note=1).
+  $tnOpen = isset($_GET['write_note']) || $tnSections !== null || $tnHomework
+      || array_filter(array_keys(form_errors()), fn($k) => in_array($k, ['subject', 'note_content'], true) || str_starts_with((string)$k, 'tn_hw_due_'))
+      || array_filter(['subject', 'body', 'sec1', 'sec2', 'sec3', 'sec4'], fn($k) => trim(old_in($k)) !== ''); ?>
+  <h3 class="visually-hidden">Add a note</h3>
+  <details id="add-track-note"<?= $tnOpen ? ' open' : '' ?>>
+  <summary>Add a note</summary>
   <form method="post" action="track.php?id=<?= $id ?>#notes" class="stacked" novalidate>
     <?= csrf_field() ?><?= web_idem_field() ?>
     <?php // A refused homework due date links to that row's date field.
@@ -708,6 +855,8 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     sel.addEventListener('change', sync); sync();
   })();
   </script>
+  </details>
+  <?= details_open_on_hash('add-track-note') ?>
   <?php if (!$notes): ?><p class="muted">No notes recorded for this track yet.</p><?php endif; ?>
   <?php foreach ($notes as $tn):
     $nfmt = $tn['note_format'] ?? 'free'; if (!isset(NOTE_FORMATS[$nfmt])) $nfmt = 'free';
@@ -802,7 +951,6 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   </table>
   </div>
 
-  <h3 id="add-goal-h">Add a <abbr title="Specific, Measurable, Attainable, Relevant, Time-bound">SMART</abbr> goal</h3>
   <?php
   // Prefill when a template was chosen (Prefill button), but not when the user
   // only ran a search (the Search button carries tpl_do=search).
@@ -820,7 +968,14 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   // Prefill pressed before a template was chosen: say so at the list instead of
   // reloading to an empty form with no message.
   $tplMissing = ($_GET['tpl_do'] ?? '') === 'prefill' && empty($_GET['goal_tpl']);
+  // Open after a template search or prefill, a refused goal, or a restored draft.
+  $goalOpen = isset($_GET['tpl_do']) || isset($_GET['tpl_q']) || isset($_GET['tpl_cat']) || $goalTpl
+      || array_intersect_key(form_errors(), array_flip(['specific_goal', 'measurable_metric', 'focus_area', 'target_date']))
+      || array_filter(['specific_goal', 'measurable_metric', 'focus_area', 'target_date'], fn($k) => trim(old_in($k)) !== '');
   ?>
+  <h3 class="visually-hidden">Add a SMART goal</h3>
+  <details id="add-goal-h"<?= $goalOpen ? ' open' : '' ?>>
+  <summary>Add a <abbr title="Specific, Measurable, Attainable, Relevant, Time-bound">SMART</abbr> goal</summary>
   <?php if ($goalTplTotal): ?>
   <?php // Search returns to the picker; Prefill lands on the goal form it filled in. ?>
   <form method="get" action="track.php#tpl-picker" class="stacked template-picker" aria-label="Start from a goal template" id="tpl-picker">
@@ -918,103 +1073,10 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
       <select id="goal_status" name="goal_status"><?= select_options(GOAL_STATUSES, old_in('goal_status', 'Not Started')) ?></select></div>
     <button type="submit" name="add_goal" value="1" class="btn btn-primary">Add goal</button>
   </form>
+  </details>
+  <?= details_open_on_hash('add-goal-h') ?>
 </section>
 
-<section id="logs" class="card" aria-labelledby="logs-h">
-  <h2 id="logs-h">Hours &amp; billing tracker</h2>
-  <h3>Log a session</h3>
-  <?php if ((float)$track['hourly_rate'] <= 0): ?>
-  <p class="alert alert-error" role="note">Hours cannot be logged to this track yet because it has no hourly rate. <a href="track_edit.php?id=<?= $id ?>">Enter the hourly billing rate</a> first.</p>
-  <?php endif; ?>
-  <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate>
-    <?= csrf_field() ?><?= web_idem_field() ?>
-    <?= form_error_summary(['work_date' => 'Date', 'log_auth_ack' => 'Authorization', 'visit_rsa_category' => 'RSA service delivered this visit', 'visit_service_type' => 'Service type',
-        'goal_id' => 'Goal this session advanced', 'hours' => 'Hours worked', 'mileage' => 'Mileage', 'description' => 'Activity description'], ['goal_id' => 'log_goal', 'log_auth_ack' => 'log_auth_ack']) ?>
-    <div class="field"><label for="work_date">Date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-      <input type="date" id="work_date" name="work_date" required min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('work_date', date('Y-m-d'))) ?>" <?= field_aria('work_date') ?>><?= field_error('work_date') ?></div>
-    <?php // Shown once the date was refused as outside the authorization (or a ticked box is being kept). ?>
-    <?php if (has_field_error('log_auth_ack') || old_in('auth_ack') === '1'): ?>
-    <div class="field"><label><input type="checkbox" id="log_auth_ack" name="auth_ack" value="1"<?= old_in('auth_ack') === '1' ? ' checked' : '' ?> <?= field_aria('log_auth_ack') ?>>
-      Log it anyway (the authorization is being renewed or amended)<span class="visually-hidden">, these hours</span></label><?= field_error('log_auth_ack') ?></div>
-    <?php endif; ?>
-    <?php $visitCats = track_visit_categories($track); ?>
-    <div class="field"><label for="visit_rsa_category">RSA service delivered this visit <span class="hint"><?= count($visitCats) > 1 ? 'Choose which of this program\'s categories was delivered — it drives state reporting' : 'This track bills a single category' ?></span></label>
-      <select id="visit_rsa_category" name="visit_rsa_category" <?= field_aria('visit_rsa_category') ?>><?= select_options($visitCats, old_in('visit_rsa_category') ?: ($visitCats[0] ?? null)) ?></select><?= field_error('visit_rsa_category') ?></div>
-    <div class="field"><label for="visit_service_type">Service type <span class="hint">Internal discipline label</span></label>
-      <select id="visit_service_type" name="visit_service_type" <?= field_aria('visit_service_type') ?>><?= select_options(SERVICE_TYPES, old_in('visit_service_type') ?: ($track['service_type'] ?? 'Assistive Technology')) ?></select><?= field_error('visit_service_type') ?></div>
-    <?php // Also shown when a refused goal must be corrected, so the error has a field to point to.
-    $openGoals = array_filter($goals, fn($g) => $g['status'] !== 'Achieved'); if ($openGoals || has_field_error('goal_id')): ?>
-    <div class="field"><label for="log_goal">Goal this session advanced <span class="hint">optional — shows counselors hours invested per goal</span></label>
-      <select id="log_goal" name="goal_id" <?= field_aria('goal_id') ?>><option value="">— None —</option>
-        <?php foreach ($openGoals as $g): ?>
-        <option value="<?= (int)$g['id'] ?>" <?= old_in('goal_id') === (string)$g['id'] ? 'selected' : '' ?>><?= h(mb_strimwidth($g['specific_goal'], 0, 90, '…')) ?></option>
-        <?php endforeach; ?>
-      </select><?= field_error('goal_id') ?></div>
-    <?php endif; ?>
-    <div class="field"><label for="hours">Hours worked <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-      <span class="hint" id="hours-hint">Decimals allowed, e.g., 1.5</span>
-      <input type="number" id="hours" name="hours" step="0.25" min="0.25" max="24" required value="<?= h(old_in('hours')) ?>" <?= field_aria('hours', 'hours-hint') ?>><?= field_error('hours') ?></div>
-    <div class="field"><label for="mileage">Mileage / travel (miles)</label>
-      <span class="hint" id="mileage-hint">Miles driven for this session, up to 1000</span>
-      <input type="text" inputmode="decimal" autocomplete="off" id="mileage" name="mileage" value="<?= h(old_in('mileage', '0')) ?>" <?= field_aria('mileage', 'mileage-hint') ?>><?= field_error('mileage') ?></div>
-    <div class="field"><label for="description">Activity description <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-      <textarea id="description" name="description" required rows="3" <?= field_aria('description') ?>><?= h(old_in('description')) ?></textarea><?= field_error('description') ?></div>
-    <button type="submit" name="add_log" value="1" class="btn btn-primary">Log hours</button>
-  </form>
-
-  <h3>Log entries (<?= count($logs) ?>)</h3>
-  <?php $unbilledTotal = round($r['unbilled_amount'] + $r['unbilled_expenses'], 2);
-  // What Generate invoice bills now: unbilled entries dated today or earlier (as generate_invoice()).
-  $billableTotal = round($r['billable_amount'] + $r['billable_expenses'], 2); ?>
-  <p>On invoices so far, including drafts: <?= fmt_money($r['invoiced_amount']) ?> (<?= fmt_money($r['submitted_amount']) ?> submitted to the funder or paid). Not yet on an invoice: <?= fmt_money($unbilledTotal) ?><?= $r['unbilled_expenses'] > 0 ? ' (including ' . fmt_money($r['unbilled_expenses']) . ' of expenses)' : '' ?>.<?= $billableTotal < $unbilledTotal ? ' ' . fmt_money(round($unbilledTotal - $billableTotal, 2)) . ' of that is dated after today and is invoiced once its date has come.' : '' ?></p>
-  <?php // Expenses or mileage alone are billable too, so any billable item offers the button. ?>
-  <?php if (($r['billable_hours'] > 0 || $r['billable_mileage'] > 0 || $r['billable_expenses'] > 0) && can('billing')): ?>
-  <form method="post" action="track.php?id=<?= $id ?>" class="inline-form">
-    <?= csrf_field() ?>
-    <button type="submit" name="mark_billed" value="1" class="btn btn-secondary btn-sm"
-      onclick="return confirm('Create an invoice from all unbilled entries and expenses on this track dated today or earlier?');">
-      Generate invoice for <?= fmt_money($billableTotal) ?> unbilled (<?= fmt_hours($r['billable_hours']) ?><?= $r['billable_expenses'] > 0 ? ' and ' . fmt_money($r['billable_expenses']) . ' of expenses' : '' ?>)</button>
-  </form>
-  <?php endif; ?>
-  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="logs-cap">
-  <table>
-    <caption class="visually-hidden" id="logs-cap">Work log entries</caption>
-    <thead><tr>
-      <th scope="col">Date</th><th scope="col">Service</th><th scope="col" class="num">Hours</th><th scope="col" class="num">Mileage</th>
-      <th scope="col">Activity</th><th scope="col" class="num">Amount</th><th scope="col">Billed?</th>
-      <th scope="col">Logged by</th><th scope="col"><span class="visually-hidden">Actions</span></th>
-    </tr></thead>
-    <tbody>
-    <?php if (!$logs): ?><tr><td colspan="9" class="muted">No hours logged yet.</td></tr><?php endif; ?>
-    <?php foreach ($logs as $l): ?>
-      <tr>
-        <td><?= fmt_date($l['work_date']) ?></td>
-        <td><?= h($l['rsa_category'] ?? $l['service_type'] ?? $track['service_type'] ?? '—') ?></td>
-        <td class="num"><?= fmt_hours((float)$l['hours']) ?></td>
-        <td class="num"><?= (float)$l['mileage'] > 0 ? h((string)(float)$l['mileage']) . ' mi' : '—' ?></td>
-        <td><?= h($l['description']) ?></td>
-        <td class="num"><?= fmt_money(log_line_amounts($l, $r['hourly_rate'], $r['mileage_rate'])['total']) ?></td>
-        <td><?= $l['is_billed'] ? 'Yes' : 'No' ?><?php if (!empty($l['signature_path'])): ?><br>
-            <a href="download.php?sig=<?= (int)$l['id'] ?>">Signed<span class="visually-hidden"> — view client signature<?= $l['signed_name'] ? ' by ' . h($l['signed_name']) : '' ?></span></a><?php elseif (($l['signed_name'] ?? '') !== ''): ?><br>
-            Signed by typed name: <?= h($l['signed_name']) ?><?php endif; ?></td>
-        <td><?= h($l['author'] ?? '') ?></td>
-        <td>
-          <?php if (!$l['is_billed']): ?>
-          <form method="post" action="track.php?id=<?= $id ?>" class="inline-form">
-            <?= csrf_field() ?>
-            <input type="hidden" name="log_id" value="<?= (int)$l['id'] ?>">
-            <button type="submit" name="delete_log" value="1" class="btn btn-danger btn-sm"
-              onclick="return confirm('Move this log entry from <?= fmt_date($l['work_date']) ?> to the trash? An administrator can restore it for 30 days.');">
-              Move to trash<span class="visually-hidden"> — log entry from <?= fmt_date($l['work_date']) ?>, <?= fmt_hours((float)$l['hours']) ?>: <?= h(mb_strimwidth($l['description'], 0, 50, '…')) ?></span></button>
-          </form>
-          <?php else: ?><span class="muted">Invoiced</span><?php endif; ?>
-        </td>
-      </tr>
-    <?php endforeach; ?>
-    </tbody>
-  </table>
-  </div>
-</section>
 <?php
 $hw = db()->prepare('SELECT * FROM homework WHERE track_id = ? ORDER BY status, due_date IS NULL, due_date');
 $hw->execute([$id]); $hw = $hw->fetchAll();

@@ -38,7 +38,6 @@ struct IncidentsView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Text(inc.type).font(.body.weight(.semibold))
-                                    .accessibilityFocused($focusedIncident, equals: inc.id)
                                 severityBadge(inc.severity)
                                 Spacer()
                                 Text(inc.status).font(.caption).foregroundStyle(Color.secondaryText)
@@ -89,6 +88,21 @@ struct IncidentsView: View {
                                 .accessibilityInputLabels(["Status", "Status for \(inc.type)"])
                             }
                         }.padding(.vertical, 2)
+                        // One VoiceOver stop per incident, with the whole description (never cut
+                        // short), and each status change in the Actions rotor (the same code as the
+                        // status menu, so closing still asks first).
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(incidentSpoken(inc))
+                        .accessibilityFocused($focusedIncident, equals: inc.id)
+                        .accessibilityActions {
+                            if inc.canEdit {
+                                ForEach(d.statuses.filter { $0 != inc.status }, id: \.self) { s in
+                                    Button("Mark \(s)") {
+                                        if s == "Closed" && !showClosed { pendingClose = inc } else { Task { await setStatus(inc, s) } }
+                                    }
+                                }
+                            }
+                        }
                     }
                 } else if error == nil { ProgressView() }
             }
@@ -137,6 +151,17 @@ struct IncidentsView: View {
     private func announceSheetResult() {
         if let message = sheetResult { announceAfterDismiss(message) }
         sheetResult = nil
+    }
+
+    /// The incident as VoiceOver reads it: type, severity, status, date, client, location,
+    /// the whole description and the action taken.
+    private func incidentSpoken(_ inc: Incident) -> String {
+        var parts = [inc.type, "\(inc.severity) severity", inc.status, formatDate(inc.incidentDate)]
+        if let client = inc.clientName { parts.append(client) }
+        if let location = inc.location, !location.isEmpty { parts.append(location) }
+        parts.append(inc.description)
+        if let a = inc.actionTaken, !a.isEmpty { parts.append("Action: \(a)") }
+        return parts.joined(separator: ", ")
     }
 
     /// More than 5 lines' worth at the standard text sizes.

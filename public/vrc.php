@@ -324,7 +324,7 @@ page_header('Your caseload');
 <p class="muted">Your clients receiving services from <?= h(brand('org')) ?>.
    <a class="btn btn-secondary btn-sm" href="community_referral.php?role=counselor">Refer a new client</a></p>
 
-<?php if (!$clients): ?><p>No active clients are linked to your email yet.</p><?php endif; ?>
+<?php if (!$clients): ?><p>No active clients are linked to your email yet. Clients you referred appear here once our team confirms them, usually within 2 business days.</p><?php endif; ?>
 <?php foreach ($clients as $c): ?>
 <section class="card">
   <h2><?= h($c['name']) ?> <?= status_badge($c['status']) ?></h2>

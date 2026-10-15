@@ -95,6 +95,8 @@ struct DashboardView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(10)
                                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                                // One stop, as the linked version is.
+                                .accessibilityElement(children: .combine)
                                 // Opening a client record needs the clients permission.
                                 if api.can("clients") {
                                     NavigationLink(value: note.clientId) { row }
@@ -300,8 +302,14 @@ struct OfflineEntriesView: View {
                     .accessibilityElement(children: .combine)
                     // Not selectable: the system Copy would put the client record on the clipboard
                     // with no expiry and offer it to other devices. Copy text below is the way.
+                    // Its buttons are also on the Actions rotor here, so they are reached from the
+                    // text without flicking on (Discard still asks first).
                     Text(entry.readableText)
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityActions {
+                            Button("Copy text") { copy(entry) }
+                            Button("Discard", role: .destructive) { discarding = entry }
+                        }
                     Button { copy(entry) } label: {
                         Label("Copy text", systemImage: "doc.on.doc")
                             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -582,6 +590,7 @@ struct WorkflowBriefingView: View {
                     // Not selectable: the system Copy would keep these client facts on the
                     // clipboard with no expiry and offer them to other devices.
                     Text(item.text)
+                        .accessibilityAction(named: "Copy text") { copy(item.text, what: "\(kind.lowercased()) \(index + 1)") }
                     Button { copy(item.text, what: "\(kind.lowercased()) \(index + 1)") } label: {
                         Label("Copy text", systemImage: "doc.on.doc")
                     }

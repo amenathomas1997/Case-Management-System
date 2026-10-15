@@ -323,6 +323,16 @@ function can_edit_note(array $note, array $user): bool {
     return can('admin') || (int)($note['author_id'] ?? 0) === (int)$user['id'];
 }
 
+/* A collapsed <details> opens when the URL's #fragment points inside it, so links
+   and redirects to a heading or field in a closed "Add" form still land there. */
+if (!function_exists('details_open_on_hash')) {
+    function details_open_on_hash(string $id): string {
+        return '<script>(function(){var d=document.getElementById(' . json_encode($id) . ');if(!d)return;'
+            . 'function o(j){var t=null;try{t=location.hash.length>1?document.getElementById(decodeURIComponent(location.hash.slice(1))):null;}catch(e){}'
+            . 'if(t&&d.contains(t)&&!d.open){d.open=true;if(j)t.scrollIntoView();}}o(false);window.addEventListener("hashchange",function(){o(true);});})();</script>';
+    }
+}
+
 /* A fresh key for one new-note form (client_notes.idem_key, a UUID as the app sends). */
 function new_note_key(): string {
     $b = random_bytes(16);
@@ -1167,19 +1177,36 @@ if ($hasA11y): ?>
   <?php if (!$tracks): ?><p class="muted">No training tracks yet. <a href="track_edit.php?client_id=<?= $id ?>">Add a training track</a>.</p>
   <?php else: foreach ($tracks as $t): $r = track_rollup((int)$t['id']); ?>
     <h3><a href="track.php?id=<?= (int)$t['id'] ?>"><?= h($t['title']) ?></a> <?= status_badge($t['status']) ?></h3>
+    <?php if ($r['authorized_hours'] <= 0): // nothing authorized: said in words, no 0% bar ?>
+    <p><?= fmt_hours($r['hours_worked']) ?> used. No authorization entered. <a href="track_edit.php?id=<?= (int)$t['id'] ?>">Edit track<span class="visually-hidden">: <?= h($t['title']) ?></span></a></p>
+    <?php else: ?>
     <div class="progress-wrap">
       <label for="prog-<?= (int)$t['id'] ?>" class="progress-caption">
         <?= fmt_hours($r['hours_worked']) ?> of <?= fmt_hours($r['authorized_hours']) ?> authorized used
-        (<?= fmt_money($r['total_billed']) ?> logged work value<?= $r['mileage_amount'] > 0 ? ' incl. ' . fmt_money($r['mileage_amount']) . ' mileage' : '' ?>, <?= fmt_money($r['invoiced_amount']) ?> on invoices (incl. drafts), <?= fmt_money($r['submitted_amount'] ?? 0) ?> submitted to funder, <?= fmt_money($r['funds_remaining']) ?> of authorized funds remaining<?= $r['expenses_amount'] > 0 ? ' after ' . fmt_money($r['expenses_amount']) . ' expenses' : '' ?>)
+        (<?= fmt_money($r['total_billed']) ?> logged work value<?= $r['mileage_amount'] > 0 ? ' incl. ' . fmt_money($r['mileage_amount']) . ' mileage' : '' ?>, <?= fmt_money($r['invoiced_amount']) ?> on invoices (incl. drafts), <?= fmt_money($r['submitted_amount'] ?? 0) ?> submitted to funder, <?= $r['authorized_funds'] > 0 ? fmt_money($r['funds_remaining']) . ' of authorized funds remaining' . ($r['expenses_amount'] > 0 ? ' after ' . fmt_money($r['expenses_amount']) . ' expenses' : '') : 'no authorized funds entered' ?>)
       </label>
       <progress id="prog-<?= (int)$t['id'] ?>" class="hours" max="100" value="<?= $r['pct_used'] ?>"><?= $r['pct_used'] ?>%</progress>
     </div>
+    <?php endif; ?>
   <?php endforeach; endif; ?>
 </section>
 
-<?php elseif ($tab === 'notes'): ?>
+<?php elseif ($tab === 'notes'):
+// The notes are what people read first; the note form stays collapsed unless a
+// note is being edited, was refused or restored, or an AI button just filled it.
+$noteFormOpen = $editNote || $noteSrc !== null || $aiSections !== null || $aiNoteDraft !== null || $aiHomework !== null
+    || isset($_GET['new_note'])
+    || array_filter(array_keys(form_errors()), fn($k) => in_array($k, ['subject', 'note_content'], true) || str_starts_with((string)$k, 'hw_due_'));
+// The newest 20 notes, unless all were asked for or one is being edited.
+$notesTotal = count($notes);
+$showAllNotes = isset($_GET['all_notes']) || $editNote !== null || $notesTotal <= 20;
+$notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
+?>
+<h2 id="notes-h">Notes (<?= $notesTotal ?>)</h2>
 <section class="card" aria-labelledby="addnote-h">
-  <h2 id="addnote-h"><?= $editNote ? 'Edit note' : 'Add a client note' ?></h2>
+  <h2 class="visually-hidden"><?= $editNote ? 'Edit note' : 'Add a note' ?></h2>
+  <details id="addnote"<?= $noteFormOpen ? ' open' : '' ?>>
+  <summary id="addnote-h"><?= $editNote ? 'Edit note' : 'Add a note' ?></summary>
   <?php if ($editNote): ?>
     <p class="muted">Editing “<?= h($editNote['subject']) ?>” — the note will be marked as edited. <a href="<?= $tabUrl('notes') ?>">Cancel and write a new note instead</a>.</p>
   <?php else: ?>
@@ -1335,8 +1362,9 @@ if ($hasA11y): ?>
     sel.addEventListener('change', sync); sync();
   })();
   </script>
+  </details>
+  <?= details_open_on_hash('addnote') ?>
 </section>
-<h2>Notes (<?= count($notes) ?>)</h2>
 <?php if ($trackNoteCount > 0): ?>
 <div class="page-actions" role="group" aria-label="Filter notes">
   <a class="btn btn-sm <?= $noteFilter !== 'general' ? 'btn-primary' : 'btn-secondary' ?>" href="<?= $tabUrl('notes') ?>" <?= $noteFilter !== 'general' ? 'aria-current="true"' : '' ?>>All notes</a>
@@ -1344,8 +1372,11 @@ if ($hasA11y): ?>
 </div>
 <?php endif; ?>
 <?php if (!$notes): ?><p class="muted"><?= $noteFilter === 'general' ? 'No general (non-track) notes — all notes here belong to a training track.' : 'No notes recorded yet.' ?></p><?php endif; ?>
-<?php foreach ($notes as $n): ?>
-  <article class="card">
+<?php if (!$showAllNotes): ?>
+<p>Showing the newest 20 of <?= $notesTotal ?> notes. <a href="<?= $tabUrl('notes') ?><?= $noteFilter === 'general' ? '&amp;nf=general' : '' ?>&amp;all_notes=1#notes-h">Show all <?= $notesTotal ?> notes</a></p>
+<?php endif; ?>
+<?php foreach ($notesShown as $n): // id: links (such as documentation review) can land on one note ?>
+  <article class="card" id="note-<?= (int)$n['id'] ?>" tabindex="-1">
     <h3><?= h($n['subject']) ?></h3>
     <?php
     $nfmt = $n['note_format'] ?? 'free'; if (!isset(NOTE_FORMATS[$nfmt])) $nfmt = 'free';
@@ -1372,6 +1403,9 @@ if ($hasA11y): ?>
     <?php endif; ?>
   </article>
 <?php endforeach; ?>
+<?php if (!$showAllNotes): ?>
+<p><a href="<?= $tabUrl('notes') ?><?= $noteFilter === 'general' ? '&amp;nf=general' : '' ?>&amp;all_notes=1#notes-h">Show all <?= $notesTotal ?> notes</a></p>
+<?php endif; ?>
 
 <?php elseif ($tab === 'assessments'): ?>
 <div class="page-actions"><a class="btn btn-secondary btn-sm" href="curriculum.php?client=<?= $id ?>">Curriculum &amp; competency tracking</a>
@@ -1502,20 +1536,23 @@ if ($hasA11y): ?>
 <h2>Training tracks</h2>
 <div class="page-actions"><a class="btn btn-primary" href="track_edit.php?client_id=<?= $id ?>">Add training track</a></div>
 <?php if (!$tracks): ?><p class="muted">No training tracks yet.</p><?php endif; ?>
-<?php foreach ($tracks as $t): $r = track_rollup((int)$t['id']); ?>
+<?php foreach ($tracks as $t): $r = track_rollup((int)$t['id']); $noAuth = $r['authorized_hours'] <= 0;
+  $editAuth = ' <a href="track_edit.php?id=' . (int)$t['id'] . '">Edit track<span class="visually-hidden">: ' . h($t['title']) . '</span></a>'; ?>
   <article class="card">
     <h3><a href="track.php?id=<?= (int)$t['id'] ?>"><?= h($t['title']) ?></a> <?= status_badge($t['status']) ?></h3>
     <dl class="props">
       <dt>Authorization</dt><dd><?= h($t['auth_number']) ?> — <?= h($t['funding_agency']) ?></dd>
       <dt>Period</dt><dd><?= fmt_date($t['start_date']) ?> to <?= fmt_date($t['expiration_date']) ?></dd>
       <dt>Rate</dt><dd><?= fmt_money((float)$t['hourly_rate']) ?>/hr</dd>
-      <dt>Hours</dt><dd><?= fmt_hours($r['hours_worked']) ?> used · <?= fmt_hours($r['hours_remaining']) ?> remaining of <?= fmt_hours($r['authorized_hours']) ?></dd>
-      <dt>Billing</dt><dd><?= fmt_money($r['total_billed']) ?> logged work value<?= $r['mileage_amount'] > 0 ? ' (incl. ' . fmt_money($r['mileage_amount']) . ' mileage)' : '' ?> · <?= fmt_money($r['invoiced_amount']) ?> on invoices (incl. drafts) · <?= fmt_money($r['submitted_amount'] ?? 0) ?> submitted to funder · <?= fmt_money($r['funds_remaining']) ?> of authorized funds remaining<?= $r['expenses_amount'] > 0 ? ' (after ' . fmt_money($r['expenses_amount']) . ' expenses)' : '' ?></dd>
+      <dt>Hours</dt><dd><?= fmt_hours($r['hours_worked']) ?> used · <?= $noAuth ? 'No authorization entered.' . $editAuth : fmt_hours($r['hours_remaining']) . ' remaining of ' . fmt_hours($r['authorized_hours']) ?></dd>
+      <dt>Billing</dt><dd><?= fmt_money($r['total_billed']) ?> logged work value<?= $r['mileage_amount'] > 0 ? ' (incl. ' . fmt_money($r['mileage_amount']) . ' mileage)' : '' ?> · <?= fmt_money($r['invoiced_amount']) ?> on invoices (incl. drafts) · <?= fmt_money($r['submitted_amount'] ?? 0) ?> submitted to funder · <?= $r['authorized_funds'] > 0 ? fmt_money($r['funds_remaining']) . ' of authorized funds remaining' . ($r['expenses_amount'] > 0 ? ' (after ' . fmt_money($r['expenses_amount']) . ' expenses)' : '') : 'No authorized funds entered' ?></dd>
     </dl>
+    <?php if (!$noAuth): ?>
     <div class="progress-wrap">
       <label for="tprog-<?= (int)$t['id'] ?>" class="progress-caption">Authorized hours used: <?= $r['pct_used'] ?>%</label>
       <progress id="tprog-<?= (int)$t['id'] ?>" class="hours" max="100" value="<?= $r['pct_used'] ?>"><?= $r['pct_used'] ?>%</progress>
     </div>
+    <?php endif; ?>
   </article>
 <?php endforeach; ?>
 

@@ -113,33 +113,12 @@ $rows = $st->fetchAll();
 $openCount = count(array_filter($rows, fn($r) => $r['status'] !== 'Closed'));
 $clients = incident_clients($user);
 
-page_header('Incidents', $user, 'incidents');
+page_header('Incident reports', $user, 'incidents');
 $sevBadge = fn($s) => '<span class="badge ' . ($s === 'Critical' || $s === 'High' ? 'badge-hold' : ($s === 'Medium' ? 'badge-pending' : 'badge-closed')) . '">' . h($s) . '</span>';
 ?>
-<h1>Incident &amp; safety log</h1>
+<h1>Incident reports</h1>
 <p class="muted">Record injuries, near misses, equipment failures and other safety events, and track them to closure. <?= $openCount ?> open.</p>
 <div class="page-actions"><a class="btn btn-secondary btn-sm" href="incidents.php<?= $showClosed ? '' : '?all=1' ?>"><?= $showClosed ? 'Hide closed' : 'Show closed' ?></a></div>
-
-<section class="card" aria-labelledby="add-h">
-  <h2 id="add-h">Report an incident</h2>
-  <p class="muted">Fields marked with an asterisk (*) are required. Check the details before you log the incident: afterwards only its status can be changed.</p>
-  <form method="post" action="incidents.php" class="stacked" novalidate><?= csrf_field() ?>
-    <?= form_error_summary(['incident_date' => 'Date', 'type' => 'Type', 'severity' => 'Severity', 'client_id' => 'Client', 'location' => 'Location', 'description' => 'What happened', 'action_taken' => 'Action taken']) ?>
-    <div class="grid grid-4">
-      <div class="field"><label for="incident_date">Date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><input type="date" id="incident_date" name="incident_date" required max="<?= date('Y-m-d') ?>" value="<?= h(old_in('incident_date', date('Y-m-d'))) ?>" <?= field_aria('incident_date') ?>><?= field_error('incident_date') ?></div>
-      <div class="field"><label for="type">Type <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><select id="type" name="type" required <?= field_aria('type') ?>><option value="">Choose a type</option><?php foreach (INCIDENT_TYPES as $t): ?><option<?= old_in('type') === $t ? ' selected' : '' ?>><?= h($t) ?></option><?php endforeach; ?></select><?= field_error('type') ?></div>
-      <div class="field"><label for="severity">Severity <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><select id="severity" name="severity" required <?= field_aria('severity') ?>><option value="">Choose a severity</option><?php foreach (INCIDENT_SEVERITY as $s): ?><option<?= old_in('severity') === $s ? ' selected' : '' ?>><?= h($s) ?></option><?php endforeach; ?></select><?= field_error('severity') ?></div>
-      <div class="field"><label for="client_id">Client <span class="hint">optional</span></label>
-        <select id="client_id" name="client_id" <?= field_aria('client_id') ?>><option value="">— None —</option>
-          <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= old_in('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
-        </select><?= field_error('client_id') ?></div>
-    </div>
-    <div class="field"><label for="location">Location</label><input type="text" id="location" name="location" maxlength="190" value="<?= h(old_in('location')) ?>" <?= field_aria('location') ?>><?= field_error('location') ?></div>
-    <div class="field"><label for="description">What happened? <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><textarea id="description" name="description" rows="3" required <?= field_aria('description') ?>><?= h(old_in('description')) ?></textarea><?= field_error('description') ?></div>
-    <div class="field"><label for="action_taken">Action taken</label><textarea id="action_taken" name="action_taken" rows="2" <?= field_aria('action_taken') ?>><?= h(old_in('action_taken')) ?></textarea><?= field_error('action_taken') ?></div>
-    <button type="submit" name="add_incident" value="1" class="btn btn-primary">Log incident</button>
-  </form>
-</section>
 
 <h2 id="log-h">Incident log</h2>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Incident log">
@@ -182,4 +161,26 @@ $sevBadge = fn($s) => '<span class="badge ' . ($s === 'Critical' || $s === 'High
   </tbody>
 </table>
 </div>
+<?php // The log comes first; the report form is one step away and opens itself after a refused submit. ?>
+<h2 class="visually-hidden">Report an incident</h2>
+<details class="card mt-1"<?= array_intersect_key(form_errors(), array_flip(['incident_date', 'type', 'severity', 'client_id', 'location', 'description', 'action_taken'])) !== [] ? ' open' : '' ?>>
+  <summary id="add-h">Report an incident</summary>
+  <p class="muted">Fields marked with an asterisk (*) are required. Check the details before you log the incident: afterwards only its status can be changed.</p>
+  <form method="post" action="incidents.php" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['incident_date' => 'Date', 'type' => 'Type', 'severity' => 'Severity', 'client_id' => 'Client', 'location' => 'Location', 'description' => 'What happened', 'action_taken' => 'Action taken']) ?>
+    <div class="grid grid-4">
+      <div class="field"><label for="incident_date">Date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><input type="date" id="incident_date" name="incident_date" required max="<?= date('Y-m-d') ?>" value="<?= h(old_in('incident_date', date('Y-m-d'))) ?>" <?= field_aria('incident_date') ?>><?= field_error('incident_date') ?></div>
+      <div class="field"><label for="type">Type <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><select id="type" name="type" required <?= field_aria('type') ?>><option value="">Choose a type</option><?php foreach (INCIDENT_TYPES as $t): ?><option<?= old_in('type') === $t ? ' selected' : '' ?>><?= h($t) ?></option><?php endforeach; ?></select><?= field_error('type') ?></div>
+      <div class="field"><label for="severity">Severity <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><select id="severity" name="severity" required <?= field_aria('severity') ?>><option value="">Choose a severity</option><?php foreach (INCIDENT_SEVERITY as $s): ?><option<?= old_in('severity') === $s ? ' selected' : '' ?>><?= h($s) ?></option><?php endforeach; ?></select><?= field_error('severity') ?></div>
+      <div class="field"><label for="client_id">Client <span class="hint">optional</span></label>
+        <select id="client_id" name="client_id" <?= field_aria('client_id') ?>><option value="">— None —</option>
+          <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= old_in('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
+        </select><?= field_error('client_id') ?></div>
+    </div>
+    <div class="field"><label for="location">Location</label><input type="text" id="location" name="location" maxlength="190" value="<?= h(old_in('location')) ?>" <?= field_aria('location') ?>><?= field_error('location') ?></div>
+    <div class="field"><label for="description">What happened? <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><textarea id="description" name="description" rows="3" required <?= field_aria('description') ?>><?= h(old_in('description')) ?></textarea><?= field_error('description') ?></div>
+    <div class="field"><label for="action_taken">Action taken</label><textarea id="action_taken" name="action_taken" rows="2" <?= field_aria('action_taken') ?>><?= h(old_in('action_taken')) ?></textarea><?= field_error('action_taken') ?></div>
+    <button type="submit" name="add_incident" value="1" class="btn btn-primary">Log incident</button>
+  </form>
+</details>
 <?php page_footer();

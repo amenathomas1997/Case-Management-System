@@ -118,6 +118,16 @@ struct ContractDetail: View {
                                 .accessibilityHint("Opens a menu to change the status.")
                                 .accessibilityInputLabels([del.status, "Status of \(del.title)"])
                             }
+                            // VoiceOver: one stop per deliverable (title, due date, status); each
+                            // other status from the menu is a "Mark …" action on the Actions rotor.
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel([del.title, del.dueDate.map { "due \(formatDate($0))" }, "Status: \(del.status)"]
+                                .compactMap { $0 }.joined(separator: ", "))
+                            .accessibilityActions {
+                                ForEach(deliverableStatuses.filter { $0 != del.status }, id: \.self) { s in
+                                    Button("Mark \(s)") { Task { await update(["op": "set_deliverable", "deliverable_id": del.id, "status": s], done: "\(del.title) marked \(s).") } }
+                                }
+                            }
                         }
                         Button { addDeliverable = true } label: { Label("Add deliverable", systemImage: "plus") }
                     }
@@ -136,6 +146,7 @@ struct ContractDetail: View {
                                 Spacer()
                                 Text(formatDate(s.spentOn)).font(.caption)
                             }
+                            .accessibilityElement(children: .combine)
                         }
                         Button { addSpend = true } label: { Label("Record spend", systemImage: "plus") }
                     }

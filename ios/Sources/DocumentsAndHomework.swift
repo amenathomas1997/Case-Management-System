@@ -228,7 +228,6 @@ struct HomeworkSection: View {
                                 .foregroundStyle(item.status == "Completed" ? Color.brandTeal : Color.orange)
                                 .accessibilityHidden(true)
                             Text(item.status).foregroundStyle(.primary)
-                                .accessibilityFocused($focusedStatus, equals: item.id)
                         }
                         .font(.caption.weight(.semibold))
                     }
@@ -267,6 +266,18 @@ struct HomeworkSection: View {
                     }
                 }
                 .padding(.vertical, 2)
+                // One VoiceOver stop per item: its details read in order, and Edit and Mark
+                // completed in the Actions rotor (the same code as the visible buttons, so
+                // Mark completed still asks first).
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(homeworkSpoken(item))
+                .accessibilityFocused($focusedStatus, equals: item.id)
+                .accessibilityActions {
+                    if item.status == "Assigned" {
+                        Button("Mark completed") { confirmingComplete = item }
+                    }
+                    Button(api.aiHas("draft") ? "Edit or revise with AI" : "Edit") { editing = item }
+                }
             }
             if !tracks.filter({ $0.status == "Active" }).isEmpty {
                 Button {
@@ -292,6 +303,16 @@ struct HomeworkSection: View {
                 Task { await load() }
             }
         }
+    }
+
+    /// The item as VoiceOver reads it: title, status, the client's report, instructions, track and due date.
+    private func homeworkSpoken(_ item: HomeworkItem) -> String {
+        var parts = [item.title, item.status]
+        if let report = item.clientReportText { parts.append(report) }
+        if let instructions = item.instructions, !instructions.isEmpty { parts.append(instructions) }
+        parts.append("Track: \(item.trackTitle)")
+        if item.dueDate != nil { parts.append("Due \(formatDate(item.dueDate))") }
+        return parts.joined(separator: ", ")
     }
 
     private func announceSheetResult() {

@@ -147,6 +147,7 @@ struct KBDetailView: View {
                         if let c = a.category, !c.isEmpty { Text(c).font(.caption).foregroundStyle(Color.secondaryText) }
                         if a.isPublic { Text("Shared with clients").font(.caption.bold()).foregroundStyle(Color.brandTeal) }
                     }
+                    .accessibilityElement(children: .combine)
                     // One element per paragraph, heading or list item, read as the website
                     // reads it ("## " a section heading, "- " or "1. " a list item), so
                     // VoiceOver can move through a long article by heading or a piece at a time.

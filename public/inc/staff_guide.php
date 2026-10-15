@@ -26,6 +26,8 @@ if (!isset($viewer) || !$viewer) return;
 <p>The Breadcrumb navigation near the start of Main content (on staff pages) shows the current page and its parent sections. For example, a training-track editor links back to Dashboard, Client records, the client and the track. Choose a parent to return there; the last item names your current page. This follows the record hierarchy, while Go back returns to the previous same-site page when available. Unsaved-change warnings still apply to breadcrumb links.</p>
 <p>A link with a client's name opens that person's record. A training-track title opens one service or training plan within the record. Links such as Edit, Review or Open act on the item in that row; their screen-reader names may include the client or item for clarity. Read the page heading after following a link to confirm where you are.</p>
 <p>Low-vision controls is a heading near the top of each page. Below it, the Show display options button opens the color, text size and reading settings.</p>
+<p>The main menu is grouped under headings: Today, Clients, Services, Equipment, Billing, compliance &amp; reports, and Help &amp; account. Inside the Main navigation landmark, press H to move from group to group, or L for the next list. Each menu link has a short hint: a screen reader reads it after the link name when you pause or Tab to it, and it appears on screen after a moment when you hover over or Tab to the link. Press Escape to hide a hint.</p>
+<p>Forms that are not needed every time, such as Add a task or Schedule a session, start collapsed. A heading with the form's name comes first, so H finds it; the button after the heading opens the form. It opens by itself when something needs correcting.</p>
 <p>Use the screen reader's landmarks or regions list to jump to Main navigation, Main content, Site search, Low-vision controls or Site information. Use headings to move between sections within a page. The navigation links at the top and bottom have their own named landmarks. With a keyboard, use Tab and Shift+Tab; use Skip to main content to bypass repeated controls.</p>
 <h4 id="guide-dropdowns">Dropdowns and combo boxes with JAWS</h4>
 <p>For an expanded list instead of a collapsed dropdown, open Low-vision controls → Text size and reading options and turn on Show dropdown choices as lists. This applies across the website and is remembered in this browser when storage is available. Tab to a list, enter Forms Mode if necessary, and use the arrow keys to choose. Turn the option off to restore dropdowns. Reset display also restores the default.</p>
@@ -36,7 +38,7 @@ if (!isset($viewer) || !$viewer) return;
 <p>Filters change which records are displayed. They do not change the records. Save, Assign, Send, Log and similar buttons perform an action. Read confirmation messages after using them. Each form on a page is saved separately.</p>
 
 <h3 id="guide-menu">What every main menu link means</h3>
-<p>The following names match the main menu. Some are available only with the appropriate permissions.</p>
+<p>The following names match the main menu. Some are available only with the appropriate permissions. In the menu they are grouped under the headings described in Getting around.</p>
 <dl>
 <dt>Dashboard</dt><dd>Your starting overview: tasks, caseload totals, expiring authorizations and recent activity where permitted. Open an item to do the work.</dd>
 <dt>Task list</dt><dd>Individual to-do items with an owner, due date and completion status. Use this for an action someone needs to carry out.</dd>

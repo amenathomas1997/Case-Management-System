@@ -308,10 +308,10 @@ if (isset($_GET['id'])) {
     $quotes->execute([$rid]);
     $quotes = $quotes->fetchAll();
     $done = in_array($r['status'], ['Trained', 'Denied', 'Cancelled'], true);
-    page_header('Device request: ' . $r['device_name'], $user, 'procurement');
+    page_header('Device purchase: ' . $r['device_name'], $user, 'procurement', [['procurement.php', 'Device purchases']]);
     ?>
     <p><a href="procurement.php"><span aria-hidden="true">&larr; </span>All device requests</a></p>
-    <h1><?= h($r['device_name']) ?> <?= dr_badge($r['status']) ?></h1>
+    <h1>Device purchase: <?= h($r['device_name']) ?> <?= dr_badge($r['status']) ?></h1>
     <p class="muted">For <a href="client.php?id=<?= (int)$r['client_id'] ?>"><?= h($r['client_name']) ?></a>
        <?= $r['category'] ? ' · ' . h($r['category']) : '' ?> · requested by <?= h($r['requester'] ?? 'unknown') ?> <?= fmt_date($r['created_at']) ?></p>
     <div class="page-actions">
@@ -377,8 +377,14 @@ if (isset($_GET['id'])) {
         <dt>Training complete</dt><dd><?= $r['trained_at'] ? fmt_date($r['trained_at']) : '—' ?></dd>
       </dl>
 
-      <?php if (!$done): ?>
-      <div class="grid grid-2">
+      <?php if (!$done):
+      // Every step stays available (each only moves the status forward), but only the
+      // next one for the current status is shown up front; the rest, and closing the
+      // request, are under "More actions", which opens itself after a refused save there.
+      $nextStep = ['Authorized' => 'order', 'Ordered' => 'delivery', 'Delivered' => 'training'][$r['status']] ?? 'authorize';
+      $stepFields = ['authorize' => ['authorized_amount', 'authorized_at'], 'order' => ['ordered_at'], 'delivery' => ['delivered_at', 'warranty_until'], 'training' => ['trained_at', 'confirm_trained']];
+      $lifeForms = [];
+      ob_start(); ?>
         <form method="post" action="procurement.php" class="stacked card"><?= csrf_field() ?>
           <input type="hidden" name="rid" value="<?= $rid ?>">
           <h3>Record funding authorization</h3>
@@ -391,7 +397,7 @@ if (isset($_GET['id'])) {
           <div class="field"><label for="authorized_at">Authorized on</label><input type="date" id="authorized_at" name="authorized_at" max="<?= date('Y-m-d') ?>" value="<?= h($oldAuth('authorized_at', (string)($r['authorized_at'] ?: date('Y-m-d')))) ?>" <?= field_aria('authorized_at') ?>><?= field_error('authorized_at') ?></div>
           <button type="submit" name="authorize" value="1" class="btn btn-primary">Save authorization</button>
         </form>
-
+      <?php $lifeForms['authorize'] = ob_get_clean(); ob_start(); ?>
         <form method="post" action="procurement.php" class="stacked card"><?= csrf_field() ?>
           <input type="hidden" name="rid" value="<?= $rid ?>">
           <h3>Record order</h3>
@@ -401,7 +407,7 @@ if (isset($_GET['id'])) {
           <div class="field"><label for="ordered_at">Ordered on</label><input type="date" id="ordered_at" name="ordered_at" max="<?= date('Y-m-d') ?>" value="<?= h($oldOrder('ordered_at', (string)($r['ordered_at'] ?: date('Y-m-d')))) ?>" <?= field_aria('ordered_at') ?>><?= field_error('ordered_at') ?></div>
           <button type="submit" name="record_order" value="1" class="btn btn-primary">Save order</button>
         </form>
-
+      <?php $lifeForms['order'] = ob_get_clean(); ob_start(); ?>
         <form method="post" action="procurement.php" class="stacked card"><?= csrf_field() ?>
           <input type="hidden" name="rid" value="<?= $rid ?>">
           <h3>Record delivery</h3>
@@ -414,7 +420,7 @@ if (isset($_GET['id'])) {
           <?php if (can('equipment')): ?><div class="field"><label><input type="checkbox" name="add_to_inventory" value="1"<?= old_in('record_delivery') !== '' && old_in('add_to_inventory') === '1' ? ' checked' : '' ?>> Also add to the loaner inventory</label></div><?php endif; ?>
           <button type="submit" name="record_delivery" value="1" class="btn btn-primary">Save delivery</button>
         </form>
-
+      <?php $lifeForms['delivery'] = ob_get_clean(); ob_start(); ?>
         <form method="post" action="procurement.php" class="stacked card"><?= csrf_field() ?>
           <input type="hidden" name="rid" value="<?= $rid ?>">
           <h3>Complete training</h3>
@@ -431,6 +437,16 @@ if (isset($_GET['id'])) {
           <button type="submit" name="record_training" value="1" class="btn btn-primary">Mark trained &amp; close</button>
           <?php endif; ?>
         </form>
+      <?php $lifeForms['training'] = ob_get_clean();
+      $moreFailed = false;
+      foreach ($stepFields as $stepKey => $fields) {
+          if ($stepKey !== $nextStep && array_intersect_key(form_errors(), array_flip($fields)) !== []) $moreFailed = true;
+      } ?>
+      <?= $lifeForms[$nextStep] ?>
+      <details class="mt-1"<?= $moreFailed ? ' open' : '' ?>>
+      <summary>More actions<span class="visually-hidden"> for this request: other lifecycle steps, deny or cancel</span></summary>
+      <div class="grid grid-2">
+        <?php foreach ($lifeForms as $stepKey => $formHtml) if ($stepKey !== $nextStep) echo $formHtml; ?>
       </div>
 
       <?php // The outcome is an explicit choice, so pressing Enter in the reason field
@@ -446,6 +462,7 @@ if (isset($_GET['id'])) {
         <div class="field"><label for="notes">Reason (optional)</label><input type="text" id="notes" name="notes" maxlength="500" value="<?= h($r['notes'] ?? '') ?>"></div>
         <button type="submit" class="btn btn-danger">Close request</button>
       </form>
+      </details>
       <?= dr_date_script() ?>
       <?php else: ?>
       <p class="muted">This request is closed (<?= h($r['status']) ?>).</p>
@@ -496,9 +513,9 @@ $cq = db()->prepare("SELECT id, name FROM clients WHERE status NOT LIKE 'Closed%
 $cq->execute($scoped ? [(int)$user['id']] : []);
 $clients = $cq->fetchAll();
 
-page_header('Procurement', $user, 'procurement');
+page_header('Device purchases', $user, 'procurement');
 ?>
-<h1>Device funding &amp; procurement</h1>
+<h1>Device purchases</h1>
 <p class="muted">Track each client's device from request through quotes, funding authorization, ordering, delivery, and training<?= $scoped ? ' (your caseload)' : '' ?>.</p>
 
 <div class="grid grid-4">
@@ -507,35 +524,6 @@ page_header('Procurement', $user, 'procurement');
   <div class="card stat"><span class="stat-num"><?= $authorized ?></span><span class="stat-label">Authorized / in progress</span></div>
   <div class="card stat"><span class="stat-num"><?= count($rows) ?></span><span class="stat-label">Shown</span></div>
 </div>
-
-<section class="card" aria-labelledby="new-h">
-  <h2 id="new-h">New device request</h2>
-  <?php // After a rejected submission the form comes back filled in, with each error on its field.
-  $oldReq = fn(string $k, string $default = ''): string => old_in('add_request') !== '' ? old_in($k, $default) : $default; ?>
-  <form method="post" action="procurement.php" class="stacked" novalidate>
-    <?= csrf_field() ?>
-    <?= form_error_summary(['client_id' => '', 'device_name' => '', 'justification' => '']) ?>
-    <div class="grid grid-4">
-      <div class="field"><label for="client_id">Client *</label>
-        <select id="client_id" name="client_id" required <?= field_aria('client_id') ?>>
-          <option value="">— Choose —</option>
-          <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $oldReq('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
-        </select><?= field_error('client_id') ?></div>
-      <div class="field"><label for="device_name">Device / technology *</label><input type="text" id="device_name" name="device_name" required maxlength="190" value="<?= h($oldReq('device_name')) ?>" <?= field_aria('device_name') ?>><?= field_error('device_name') ?></div>
-      <div class="field"><label for="category">Category</label>
-        <span class="hint" id="category-hint">CCTV: closed-circuit television (video) magnifier. AAC: augmentative and alternative communication.</span>
-        <?php // The values are the stored categories; only the shown names spell out the abbreviations (as in recommend.php). ?>
-        <select id="category" name="category" aria-describedby="category-hint"><?php $catSel = $oldReq('category', 'Other');
-          foreach (DR_CATEGORIES as $cv): $cl = ['Magnifier / CCTV' => 'Video magnifier (CCTV, closed-circuit television)', 'AAC Device' => 'Communication device (AAC, augmentative and alternative communication)'][$cv] ?? $cv; ?>
-          <option value="<?= h($cv) ?>"<?= $cv === $catSel ? ' selected' : '' ?>><?= h($cl) ?></option>
-        <?php endforeach; ?></select></div>
-    </div>
-    <div class="field"><label for="justification">Justification of need</label>
-      <span class="hint" id="just-hint">Why this device is needed for the vocational goal</span>
-      <textarea id="justification" name="justification" rows="3" maxlength="4000" <?= field_aria('justification', 'just-hint') ?>><?= h($oldReq('justification')) ?></textarea><?= field_error('justification') ?></div>
-    <button type="submit" name="add_request" value="1" class="btn btn-primary">Create request</button>
-  </form>
-</section>
 
 <form method="get" action="procurement.php" class="page-actions" role="search" aria-label="Filter requests">
   <label for="status">Status</label>
@@ -569,4 +557,34 @@ page_header('Procurement', $user, 'procurement');
   </tbody>
 </table>
 </div>
+<?php // The list comes first; the new-request form opens itself after a refused submit. ?>
+<h2 class="visually-hidden">New device request</h2>
+<details class="card mt-1"<?= array_intersect_key(form_errors(), array_flip(['client_id', 'device_name', 'justification'])) !== [] ? ' open' : '' ?>>
+  <summary id="new-h">New device request</summary>
+  <?php // After a rejected submission the form comes back filled in, with each error on its field.
+  $oldReq = fn(string $k, string $default = ''): string => old_in('add_request') !== '' ? old_in($k, $default) : $default; ?>
+  <form method="post" action="procurement.php" class="stacked" novalidate>
+    <?= csrf_field() ?>
+    <?= form_error_summary(['client_id' => '', 'device_name' => '', 'justification' => '']) ?>
+    <div class="grid grid-4">
+      <div class="field"><label for="client_id">Client *</label>
+        <select id="client_id" name="client_id" required <?= field_aria('client_id') ?>>
+          <option value="">— Choose —</option>
+          <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $oldReq('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
+        </select><?= field_error('client_id') ?></div>
+      <div class="field"><label for="device_name">Device / technology *</label><input type="text" id="device_name" name="device_name" required maxlength="190" value="<?= h($oldReq('device_name')) ?>" <?= field_aria('device_name') ?>><?= field_error('device_name') ?></div>
+      <div class="field"><label for="category">Category</label>
+        <span class="hint" id="category-hint">CCTV: closed-circuit television (video) magnifier. AAC: augmentative and alternative communication.</span>
+        <?php // The values are the stored categories; only the shown names spell out the abbreviations (as in recommend.php). ?>
+        <select id="category" name="category" aria-describedby="category-hint"><?php $catSel = $oldReq('category', 'Other');
+          foreach (DR_CATEGORIES as $cv): $cl = ['Magnifier / CCTV' => 'Video magnifier (CCTV, closed-circuit television)', 'AAC Device' => 'Communication device (AAC, augmentative and alternative communication)'][$cv] ?? $cv; ?>
+          <option value="<?= h($cv) ?>"<?= $cv === $catSel ? ' selected' : '' ?>><?= h($cl) ?></option>
+        <?php endforeach; ?></select></div>
+    </div>
+    <div class="field"><label for="justification">Justification of need</label>
+      <span class="hint" id="just-hint">Why this device is needed for the vocational goal</span>
+      <textarea id="justification" name="justification" rows="3" maxlength="4000" <?= field_aria('justification', 'just-hint') ?>><?= h($oldReq('justification')) ?></textarea><?= field_error('justification') ?></div>
+    <button type="submit" name="add_request" value="1" class="btn btn-primary">Create request</button>
+  </form>
+</details>
 <?php page_footer();

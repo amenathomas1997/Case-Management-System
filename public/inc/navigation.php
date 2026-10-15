@@ -1,42 +1,50 @@
 <?php
 declare(strict_types=1);
 
-/** Shared menu labels and permission requirements for navigation and breadcrumbs. */
+/** Shared menu labels, permission requirements, groups and pause hints for navigation and breadcrumbs.
+ *  Each item: [href, label, active key, permission or null, group key, hint]. */
 function cms_navigation_items(): array {
     return [
-        ['index.php', 'Dashboard', 'dashboard', null],
-        ['tasks.php', 'Task list', 'tasks', null],
-        ['workflows.php', 'Daily work & review', 'workflows', null],
-        ['at_services.php', 'Assistive technology services', 'at_services', null],
-        ['clients.php', 'Client records', 'clients', 'clients'],
-        ['referrals.php', 'Incoming referrals', 'referrals', 'referrals'],
-        ['portal_requests.php', 'Client portal requests', 'portal_requests', 'clients'],
-        ['messages.php', 'Client & counselor messages', 'messages', 'clients'],
-        ['pipeline.php', 'Intake progress', 'pipeline', 'clients'],
-        ['accommodations.php', 'Accommodation assessments', 'accommodations', 'clients'],
-        ['schedule.php', 'Session schedule', 'schedule', 'schedule'],
-        ['programs.php', 'Group programs', 'programs', 'programs'],
-        ['invoices.php', 'Invoices', 'invoices', 'billing'],
-        ['contracts.php', 'Grants & contracts', 'contracts', 'billing'], // own entry: billing-only groups cannot open Compliance, its other link
-        ['equipment.php', 'Equipment & loans', 'equipment', 'equipment'],
-        ['followups.php', 'Device follow-ups', 'followups', 'clients'],
-        ['incidents.php', 'Incident reports', 'incidents', 'clients'],
-        ['procurement.php', 'Device purchases', 'procurement', 'procurement'],
-        ['compliance.php', 'Authorizations & compliance', 'compliance', 'clients'],
-        ['analytics.php', 'Business analytics', 'analytics', 'analytics'],
-        ['templates.php', 'Goal & assessment templates', 'templates', 'templates'],
-        ['kb.php', 'Staff knowledge base', 'kb', null],
-        ['ai_tools.php', 'AI tools', 'ai_tools', null],
-        ['account.php', 'My Account', 'account', null],
-        ['help.php#staff-guide', 'User guide', 'help', null],
+        ['index.php', 'Dashboard', 'dashboard', null, 'today', 'Your starting page: caseload totals, expiring authorizations and recent activity.'],
+        ['tasks.php', 'Task list', 'tasks', null, 'today', 'To-do items with an owner and a due date.'],
+        ['workflows.php', 'Daily work & review', 'workflows', null, 'today', 'What needs attention today, documentation review, AI briefings and the referral waitlist.'],
+        ['clients.php', 'Client records', 'clients', 'clients', 'clients', 'Find a person and open their notes, assessments, training tracks and documents.'],
+        ['referrals.php', 'Incoming referrals', 'referrals', 'referrals', 'clients', 'New requests for services: review, assign or turn into a client record.'],
+        ['pipeline.php', 'Intake progress', 'pipeline', 'clients', 'clients', 'Where each new client is in intake, so stalled work is easy to spot.'],
+        ['portal_requests.php', 'Client portal requests', 'portal_requests', 'clients', 'clients', 'Appointment and help requests clients sent from their portal.'],
+        ['messages.php', 'Client & counselor messages', 'messages', 'clients', 'clients', 'Conversations with clients and their VR counselors.'],
+        ['accommodations.php', 'Accommodation assessments', 'accommodations', 'clients', 'clients', 'Worksite and job accommodation assessments and recommendations.'],
+        ['schedule.php', 'Session schedule', 'schedule', 'schedule', 'services', 'Upcoming sessions; mark sessions completed to log their hours.'],
+        ['programs.php', 'Group programs', 'programs', 'programs', 'services', 'Group cohorts, membership and attendance.'],
+        ['at_services.php', 'Assistive technology services', 'at_services', null, 'services', 'Device comparisons, setup instructions, outcomes, repairs and subscriptions.'],
+        ['templates.php', 'Goal & assessment templates', 'templates', 'templates', 'services', 'Reusable goal and assessment wording for training tracks.'],
+        ['equipment.php', 'Equipment & loans', 'equipment', 'equipment', 'equipment', 'Device inventory: who has what, loans, returns and service.'],
+        ['procurement.php', 'Device purchases', 'procurement', 'procurement', 'equipment', 'Device requests from justification through order, delivery and training.'],
+        ['followups.php', 'Device follow-ups', 'followups', 'clients', 'equipment', 'Check-ins after a loan: is the device still used, is more help needed.'],
+        ['invoices.php', 'Invoices', 'invoices', 'billing', 'money', 'Bill unbilled work, track submitted invoices and record payments.'],
+        ['contracts.php', 'Grants & contracts', 'contracts', 'billing', 'money', 'Funding agreements, budgets, deliverables and spending.'], // own entry: billing-only groups cannot open Compliance, its other link
+        ['compliance.php', 'Authorizations & compliance', 'compliance', 'clients', 'money', 'Authorizations at risk, reports due and consents to renew.'],
+        ['incidents.php', 'Incident reports', 'incidents', 'clients', 'money', 'Record an incident and follow it to closure.'],
+        ['analytics.php', 'Business analytics', 'analytics', 'analytics', 'money', 'Charts and every report: outcomes, funders, billing, RSA-911 and utilization.'],
+        ['kb.php', 'Staff knowledge base', 'kb', null, 'help', 'Agency how-to articles you can search or ask questions of.'],
+        ['ai_tools.php', 'AI tools', 'ai_tools', null, 'help', 'AI drafting helpers; always check their work before saving.'],
+        ['help.php#staff-guide', 'User guide', 'help', null, 'help', 'How to use this system, including screen reader tips.'],
+        ['account.php', 'My Account', 'account', null, 'help', 'Your password, sign-in security, display settings and calendar feed.'],
     ];
+}
+
+/** Menu groups in order: key => visible heading. */
+function cms_navigation_groups(): array {
+    return ['today' => 'Today', 'clients' => 'Clients', 'services' => 'Services', 'equipment' => 'Equipment',
+        'money' => 'Billing, compliance & reports', 'help' => 'Help & account'];
 }
 
 /** Parents come from records already authorized by the page, never browser history. */
 function cms_breadcrumb_html(string $title, string $active, array $parents, bool $signedIn): string {
     $script = basename($_SERVER['SCRIPT_NAME'] ?? '');
     $crumbs = [];
-    if ($signedIn && $script !== 'index.php') $crumbs[] = ['index.php', 'Dashboard'];
+    // The Dashboard is the root: it has no breadcrumb of its own.
+    if ($signedIn && $script !== 'index.php' && $active !== 'dashboard') $crumbs[] = ['index.php', 'Dashboard'];
     if ($signedIn) foreach (cms_navigation_items() as [$href, $label, $key, $permission]) {
         if ($key !== $active || $key === 'dashboard' || ($permission !== null && !can($permission))) continue;
         $section = explode('#', $href, 2)[0];

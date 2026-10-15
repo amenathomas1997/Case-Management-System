@@ -113,9 +113,13 @@ struct ClientEditSheet: View {
                     // with the confirmation beside it (as the counselor email on the website).
                     if offersEmailConfirmation {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Email not yet confirmed").font(.callout.weight(.semibold))
-                            Text("This address came from the public referral form and has not been checked, so no session reminders, outcome survey or portal invitation go to it yet. Confirm it with the client first. Typing a different address also confirms the new one.")
-                                .font(.caption).foregroundStyle(Color.secondaryText)
+                            // The heading and its explanation as one stop.
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Email not yet confirmed").font(.callout.weight(.semibold))
+                                Text("This address came from the public referral form and has not been checked, so no session reminders, outcome survey or portal invitation go to it yet. Confirm it with the client first. Typing a different address also confirms the new one.")
+                                    .font(.caption).foregroundStyle(Color.secondaryText)
+                            }
+                            .accessibilityElement(children: .combine)
                             Toggle("Confirmed with the client", isOn: $confirmEmail)
                                 .accessibilityHint("Confirms \(email.trimmingCharacters(in: .whitespacesAndNewlines)) as the client's email address when you save.")
                         }
@@ -372,6 +376,15 @@ struct AssessmentsSection: View {
                     }
                 }
                 .padding(.vertical, 2)
+                // One VoiceOver stop per assessment, with the whole summary (never cut short);
+                // Show full summary only changes what is drawn, so it is not needed here.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel([heading, a.primaryDisability,
+                                     a.hardwareDetails.map { "Hardware: \($0)" },
+                                     a.softwareVersion.map { "Software: \($0)" },
+                                     a.summary]
+                    .compactMap { $0 }.filter { !$0.isEmpty && $0 != "Hardware: " && $0 != "Software: " }
+                    .joined(separator: ", "))
             }
             Button { showingAdd = true } label: { Label("Record assessment", systemImage: "plus") }
         }

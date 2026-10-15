@@ -61,6 +61,7 @@ struct AIResultCard: View {
             if let caption {
                 Text(caption).font(.caption.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
+                    .accessibilityAction(named: "Copy result") { copyResult() }
                     .accessibilityFocused($focus, equals: .result)
             }
             if incomplete {
@@ -87,8 +88,7 @@ struct AIResultCard: View {
             // this device, is cleared from the clipboard after 10 minutes, and is cleared at
             // sign-out while it is still the clipboard's latest item (API.copyProtected).
             Button {
-                api.copyProtected(text)
-                announce("Result copied. The copy is cleared from the clipboard in 10 minutes.")
+                copyResult()
             } label: { Label("Copy result", systemImage: "doc.on.doc").frame(minHeight: 44).contentShape(Rectangle()) }
                 .buttonStyle(.borderless)
         }
@@ -104,7 +104,18 @@ struct AIResultCard: View {
         }
     }
 
-    @ViewBuilder private func blockView(_ block: AIResultBlock) -> some View {
+    /// The Copy result button's code; also a named action on every part of the result, so
+    /// VoiceOver can copy from wherever it is without flicking to the end of the card.
+    private func copyResult() {
+        api.copyProtected(text)
+        announce("Result copied. The copy is cleared from the clipboard in 10 minutes.")
+    }
+
+    private func blockView(_ block: AIResultBlock) -> some View {
+        blockContent(block).accessibilityAction(named: "Copy result") { copyResult() }
+    }
+
+    @ViewBuilder private func blockContent(_ block: AIResultBlock) -> some View {
         switch block.kind {
         case .heading:
             Text(block.text).font(.callout.weight(.bold))

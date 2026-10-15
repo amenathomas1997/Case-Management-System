@@ -160,7 +160,7 @@ try{
     [$code,$html,$err]=$anon('portal',['t'=>$workflowToken]);
     check($clean($code,$err)&&str_contains($html,'Minutes practiced')&&!str_contains($html,'Ask AI to explain'),'With AI on for staff, the portal offers no AI explanation until client-facing AI is turned on');
     [$code,$html,$err]=$anon('portal',['t'=>$workflowToken],$explain);
-    check($clean($code,$err)&&str_contains($html,'AI explanations are not enabled')&&!str_contains($html,'Synthetic plain-language explanation'),'A portal request for an AI explanation is refused while client-facing AI is off');
+    check($clean($code,$err)&&str_contains($html,'This feature isn')&&!str_contains($html,'Synthetic plain-language explanation'),'A portal request for an AI explanation is refused while client-facing AI is off');
     $db->exec("INSERT INTO settings(`name`,value) VALUES('ai_feat_portal_homework','1') ON DUPLICATE KEY UPDATE value='1'");
     [$code,$html,$err]=$anon('portal',['t'=>$workflowToken]);
     check($clean($code,$err)&&str_contains($html,'Ask AI to explain'),'Once client-facing AI is turned on, the portal offers an explanation');

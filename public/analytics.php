@@ -66,11 +66,31 @@ $avgRow = db()->query("SELECT AVG(track_hours) avg_hours FROM (
     WHERE EXISTS (SELECT 1 FROM smart_goals g2 WHERE g2.track_id = t.id AND g2.status = 'Achieved')
       AND EXISTS (SELECT 1 FROM work_logs w2 WHERE w2.track_id = t.id)) x")->fetch();
 
-page_header('Analytics', $user, 'analytics');
+/* Every report page, each listed only when this account can open it (the same
+   permission checks those pages make). */
+$reports = array_filter([
+    ['outcomes.php', 'Outcome report', 'Clients served, hours by RSA category and program, closures and the rehabilitation rate for a period, as agencies ask for at contract renewal; exports to CSV.', can('analytics')],
+    ['funder_report.php', 'Funder outcome report', 'One report per funding agency with clients served, hours, goal achievement, device retention, assessment score gains and closures; as a page, letterhead PDF or CSV.', can('analytics')],
+    ['agency_report.php', 'Agency billing summary', 'Billing totals per funding agency for a date range, for quarterly reconciliation with state VR.', can('billing')],
+    ['rsa_report.php', 'RSA-911 case-service export', 'One row per client served in a period with the case-service fields state VR asks for, to preview on screen or download as CSV.', can('billing')],
+    ['utilization.php', 'Staff billable utilization', "Each staff member's billable hours and value for a period against their expected capacity, with a utilization rate.", can('analytics')],
+    ['capacity.php', 'Capacity planning', 'Committed session hours against available hours per instructor, plus authorized hours not yet scheduled on active tracks.', can('schedule')],
+    ['risk.php', 'Outcome risk flags', 'Uses the AI assistant to rank active clients who may be at risk of not completing, with the reason and a suggested action.', can('analytics') && function_exists('ai_feature_enabled') && ai_feature_enabled('risk')],
+], fn(array $r): bool => $r[3]);
+
+page_header('Business analytics', $user, 'analytics');
 ?>
 <h1>Business analytics</h1>
-<div class="page-actions"><a class="btn btn-secondary" href="outcomes.php">Annual outcome report</a>
-  <a class="btn btn-secondary" href="utilization.php">Staff billable utilization</a></div>
+<?php if ($reports): ?>
+<section class="card" aria-labelledby="reports-h">
+  <h2 id="reports-h">Reports</h2>
+  <ul>
+    <?php foreach ($reports as [$rHref, $rLabel, $rWhat]): ?>
+    <li><a href="<?= h($rHref) ?>"><?= h($rLabel) ?></a>: <?= h($rWhat) ?></li>
+    <?php endforeach; ?>
+  </ul>
+</section>
+<?php endif; ?>
 
 <div class="grid grid-4">
   <div class="card stat"><span class="stat-num"><?= $goalTotal ? round($goalAchieved / $goalTotal * 100) : 0 ?>%</span>

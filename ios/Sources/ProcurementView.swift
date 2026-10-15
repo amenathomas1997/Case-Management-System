@@ -123,7 +123,6 @@ struct DeviceRequestDetail: View {
                         layout {
                             VStack(alignment: .leading) {
                                 Text(q.vendor)
-                                    .accessibilityFocused($focusedQuote, equals: q.id)
                                 if let n = q.notes, !n.isEmpty { Text(n).font(.caption).foregroundStyle(Color.secondaryText) }
                             }
                             if !typeSize.isAccessibilitySize { Spacer() }
@@ -141,6 +140,20 @@ struct DeviceRequestDetail: View {
                                 .accessibilityInputLabels(["Pick", "Pick \(q.vendor) quote"])
                             }
                         }
+                        // VoiceOver: one stop per quote (vendor, notes, amount, whether it is the
+                        // recommended one); Pick is on the Actions rotor.
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel([q.vendor, q.notes.flatMap { $0.isEmpty ? nil : $0 }, money(q.amount),
+                                             r.selectedQuoteId == q.id ? "Recommended quote" : nil]
+                            .compactMap { $0 }.joined(separator: ", "))
+                        .accessibilityActions {
+                            if r.selectedQuoteId != q.id && r.status != "Trained" && r.status != "Denied" && r.status != "Cancelled" {
+                                Button("Pick") {
+                                    Task { await update(["op": "select_quote", "quote_id": q.id], done: "\(q.vendor) quote recommended.", focusQuote: q.id) }
+                                }
+                            }
+                        }
+                        .accessibilityFocused($focusedQuote, equals: q.id)
                     }
                     // The server refuses a new quote on a closed request (reopen it first).
                     if r.status != "Trained" && r.status != "Denied" && r.status != "Cancelled" {

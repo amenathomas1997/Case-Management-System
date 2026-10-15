@@ -103,6 +103,7 @@ struct TrackDetailView: View {
     @State private var showingAddGoal = false
     @State private var showingExpense = false
     @State private var showingReport = false
+    @State private var showingLogHours = false
     @State private var recordingGoal: Goal?
     /// The status Record progress opens with when it was opened by the status control.
     @State private var recordingStatus: String?
@@ -134,6 +135,9 @@ struct TrackDetailView: View {
     @State private var pendingGoalStatus: PendingGoalStatus?
     /// Notes shown in full rather than as a six-line preview.
     @State private var expandedNotes: Set<Int> = []
+    /// The goal whose history VoiceOver's History action opened (the visible History link
+    /// navigates on its own).
+    @State private var historyGoal: Goal?
     @Environment(\.dynamicTypeSize) private var typeSize
 
     struct PendingGoalStatus {
@@ -213,6 +217,21 @@ struct TrackDetailView: View {
                             }
                         }
                         .padding(.vertical, 3)
+                        // VoiceOver: the goal is one stop, read in full; Record progress is the
+                        // double-tap, and every control is on the Actions rotor (a status change
+                        // still asks first, as the status control does).
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(goalSummary(goal))
+                        .accessibilityAction { recordingStatus = nil; recordingGoal = goal }
+                        .accessibilityActions {
+                            Button("Record progress") { recordingStatus = nil; recordingGoal = goal }
+                            if !savingGoals.contains(goal.id) {
+                                ForEach(goalStatuses.filter { $0 != goal.status }, id: \.self) { status in
+                                    Button("Mark \(status)") { statusBinding(for: goal).wrappedValue = status }
+                                }
+                            }
+                            Button("History") { historyGoal = goal }
+                        }
                     }
                     Button { showingAddGoal = true } label: { Label("Add goal", systemImage: "plus") }
                 }
@@ -259,6 +278,20 @@ struct TrackDetailView: View {
                             }
                         }
                         .padding(.vertical, 2)
+                        // VoiceOver: the whole note is one stop (its full text, whatever the preview
+                        // shows); Edit and the preview's Show full note are on the Actions rotor.
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(noteSummary(note))
+                        .accessibilityActions {
+                            if note.canEdit {
+                                Button("Edit note") { editingTrackNote = note }
+                            }
+                            if mayTruncate(note.body, lines: 6, accessibilitySize: typeSize.isAccessibilitySize) {
+                                Button(open ? "Show less" : "Show full note") {
+                                    if open { expandedNotes.remove(note.id) } else { expandedNotes.insert(note.id) }
+                                }
+                            }
+                        }
                     }
                     // The server sends the newest 50 notes on the track: say so rather than imply that
                     // is all of them.
@@ -286,8 +319,6 @@ struct TrackDetailView: View {
                                 Text("\(formatDate(expense.expenseDate)) · \(expense.isBilled ? "On an invoice" : "Not yet billed")")
                                     .font(.caption).foregroundStyle(Color.secondaryText)
                             }
-                            .accessibilityElement(children: .combine)
-                            .accessibilityFocused($focusedExpense, equals: expense.id)
                             Spacer()
                             // An expense already on an invoice stays (the invoice totals would no longer match).
                             if !expense.isBilled {
@@ -303,9 +334,25 @@ struct TrackDetailView: View {
                             }
                         }
                         .padding(.vertical, 2)
+                        // VoiceOver: one stop per expense; Delete (which asks first) is on the
+                        // Actions rotor.
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(expense.amountText), \(expense.description). \(formatDate(expense.expenseDate)). \(expense.isBilled ? "On an invoice" : "Not yet billed")")
+                        .accessibilityFocused($focusedExpense, equals: expense.id)
+                        .accessibilityActions {
+                            if !expense.isBilled && !deletingExpenseBusy {
+                                Button("Delete expense", role: .destructive) { deletingExpense = expense }
+                            }
+                        }
                     }
                 }
                 Section("Actions") {
+                    // Opens with this track chosen (its unsaved entry, if any, comes back with it).
+                    if api.can("clients") {
+                        Button { showingLogHours = true } label: {
+                            Label("Log hours on this track", systemImage: "clock.badge.checkmark")
+                        }
+                    }
                     // Sending the report needs the 'reports' permission (as on the website).
                     if api.can("reports") {
                         Button { showingReport = true } label: {
@@ -333,6 +380,11 @@ struct TrackDetailView: View {
             }
         }
         .navigationTitle(track.title)
+        .navigationDestination(isPresented: Binding(get: { historyGoal != nil }, set: { if !$0 { historyGoal = nil } })) {
+            if let goal = historyGoal {
+                GoalHistoryView(goalId: goal.id, goalText: goal.specificGoal)
+            }
+        }
         .confirmationDialog("Delete the expense \(deletingExpense?.summary ?? "")? It moves to the trash, where an administrator can restore it for 30 days.",
                             isPresented: Binding(get: { deletingExpense != nil }, set: { if !$0 { deletingExpense = nil } }),
                             titleVisibility: .visible, presenting: deletingExpense) { expense in
@@ -372,6 +424,10 @@ struct TrackDetailView: View {
                 }
             }
         }
+        // The form says its own results and stays open for another entry.
+        .sheet(isPresented: $showingLogHours) {
+            LogHoursView(initialTrackId: track.id)
+        }
         .sheet(isPresented: $showingAddGoal, onDismiss: announceSheetResult) {
             AddGoalSheet(trackId: track.id) { sheetDone("Goal added."); Task { await load() } }
         }
@@ -406,6 +462,25 @@ struct TrackDetailView: View {
     private func announceSheetResult() {
         if let message = sheetResult { announceAfterDismiss(message) }
         sheetResult = nil
+    }
+
+    /// A goal row as VoiceOver reads it: position, objective, how it is measured, target,
+    /// then progress and status.
+    private func goalSummary(_ goal: Goal) -> String {
+        var parts = ["\(goalPosition(goal)): \(goal.specificGoal)"]
+        if !goal.measurableMetric.isEmpty { parts.append("Measured by: \(goal.measurableMetric)") }
+        if let target = goal.targetDate { parts.append("Target: \(formatDate(target))") }
+        parts.append("\(goal.progressPct ?? 0) percent, \(goal.status)")
+        return parts.joined(separator: ". ")
+    }
+
+    /// A track note as VoiceOver reads it: subject, type, format, date, then the whole text.
+    private func noteSummary(_ note: Note) -> String {
+        var parts = [note.subject, note.noteType]
+        if let fmt = note.noteFormat, fmt != "free" { parts.append("Format: \(noteFormatDescription(fmt))") }
+        parts.append(formatDateTime(note.createdAt))
+        parts.append(note.body)
+        return parts.joined(separator: ". ")
     }
 
     /// "Goal 2 of 5": the position the user hears in the list, not the database id.
@@ -760,8 +835,8 @@ struct GoalProgressSheet: View {
                     Stepper(value: pctBinding, in: 0...100, step: 1) {
                         Text("Progress: \(Int(pct))%")
                     }
-                    .accessibilityLabel("Progress percent, in steps of 1")
-                    .accessibilityValue("\(Int(pct)) percent")
+                    .voiceOverAdjustable("Progress percent, in steps of 1", value: "\(Int(pct)) percent",
+                                         binding: pctBinding, in: 0...100, step: 1)
                     Slider(value: pctBinding, in: 0...100, step: 1)
                         .accessibilityLabel("Progress percent")
                         .accessibilityValue("\(Int(pct)) percent")

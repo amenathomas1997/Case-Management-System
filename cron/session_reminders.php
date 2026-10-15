@@ -40,9 +40,10 @@ $sessions = db()->query("SELECT s.*, c.name AS client_name, c.email AS client_em
         (c.archived_at IS NULL AND c.status NOT LIKE 'Closed%') AS client_current,
         u.id AS active_staff_id, u.name AS staff_name, u.email AS staff_email,
         (u.id IS NOT NULL AND (g.id IS NULL OR g.own_caseload_only = 0 OR c.assigned_to = u.id)) AS staff_sees_client,
-        a.name AS assignee_name, a.email AS assignee_email
+        a.name AS assignee_name, a.email AS assignee_email, pt.token AS portal_token
     FROM scheduled_sessions s
     JOIN clients c ON c.id = s.client_id
+    LEFT JOIN portal_tokens pt ON pt.client_id = c.id AND (pt.expires_at IS NULL OR pt.expires_at > NOW())
     LEFT JOIN users u ON u.id = s.user_id AND u.is_active = 1
     LEFT JOIN `groups` g ON g.id = u.group_id
     LEFT JOIN users a ON a.id = c.assigned_to AND a.is_active = 1
@@ -55,6 +56,13 @@ $mark = db()->prepare('UPDATE scheduled_sessions SET reminder_sent = 1 WHERE id 
 // be told that a session today is tomorrow's.
 $sameDay = fn(string $text): string => (string)preg_replace_callback('/\btomorrow\b/i',
     fn(array $m): string => ctype_upper($m[0][0]) ? 'Today' : 'today', $text);
+// The contact address the public pages' footer gives.
+$contact = trim((string)(cfg('support_email') ?: cfg('mail_from')));
+if (!filter_var($contact, FILTER_VALIDATE_EMAIL)) $contact = '';
+// The built-in wording told the client to "call your instructor" without a number.
+// It is replaced with the ways the client can actually reach us: their portal (when
+// they have a working link) and the contact address.
+$rescheduleOld = 'If you need to reschedule, please reply to this email or call your instructor.';
 foreach ($sessions as $s) {
     $startTs = strtotime($s['start_at']);
     // Most sessions are tomorrow's; one booked or moved after the last run can be today's.
@@ -86,12 +94,24 @@ foreach ($sessions as $s) {
             // {when} and {where} keep their English labels for templates written
             // before 3.0.21; {date}, {time}, {location} and {join_link} are the bare
             // values, so a body written in another language can carry its own labels.
+            // The instructor is named only when one is visible to this client; the
+            // organization's name is never given as the instructor.
+            $instructor = $staffSees ? trim((string)($s['staff_name'] ?? '')) : '';
+            $portalToken = (string)($s['portal_token'] ?? '');
+            $portalLink = preg_match('/^[a-f0-9]{48}$/D', $portalToken) ? cfg('base_url') . '/portal.php?t=' . $portalToken : '';
             [$subj, $body] = email_template('session_reminder_client', [
                 'name' => $s['client_name'], 'when' => $when, 'where' => $where,
-                'instructor' => ($staffSees ? $s['staff_name'] : null) ?? brand('short'),
+                'instructor' => $instructor,
                 'day' => $day, 'date' => date('l, F j', $startTs), 'time' => date('g:i A T', $startTs),
                 'location' => empty($s['is_remote']) ? (string)($s['location'] ?? '') : '', 'join_link' => $joinLink,
+                'portal_link' => $portalLink, 'contact' => $contact,
             ]);
+            // No instructor to name: the "Instructor:" line is left out, not left blank.
+            if ($instructor === '') $body = (string)preg_replace('/^[ \t]*Instructor:[ \t]*\R/mi', '', $body);
+            $reschedule = $portalLink !== ''
+                ? 'Need a different time? Use your portal: ' . $portalLink . ($contact !== '' ? "\nOr email us at " . $contact . '.' : '')
+                : 'Need a different time? Reply to this email' . ($contact !== '' ? ' or email us at ' . $contact : '') . '.';
+            $body = str_replace($rescheduleOld, $reschedule, $body);
             if ($day === 'today') { $subj = $sameDay($subj); $body = $sameDay($body); }
             $allSent = send_app_mail($s['client_email'], $subj, $body) && $allSent;
         }

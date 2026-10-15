@@ -62,14 +62,15 @@ struct CompetencyView: View {
                         Section("Skills") {
                             ForEach(skills) { s in
                                 VStack(alignment: .leading) {
-                                    Text(s.skill).font(.callout)
+                                    // Both read as part of the picker's name: one stop per skill.
+                                    Text(s.skill).font(.callout).accessibilityHidden(true)
                                     // Primary, not secondary: grey caption text is about 3.4:1 on a white row.
-                                    if let at = s.assessedAt { Text("Last rated \(formatDate(at))").font(.caption2) }
+                                    if let at = s.assessedAt { Text("Last rated \(formatDate(at))").font(.caption2).accessibilityHidden(true) }
                                     Picker("Level", selection: Binding(get: { levels[s.id] ?? 0 }, set: { levels[s.id] = $0; statusLine = nil })) {
                                         ForEach(0..<5, id: \.self) { Text(competencyLevels[$0]).tag($0) }
                                     }
                                     .pickerStyle(.menu)
-                                    .accessibilityLabel("Level for \(s.skill)")
+                                    .accessibilityLabel("Level for \(s.skill)" + (s.assessedAt.map { ", last rated \(formatDate($0))" } ?? ""))
                                     // Locked while saving: the reload after the save would quietly put
                                     // back a level changed in the meantime.
                                     .disabled(busy)

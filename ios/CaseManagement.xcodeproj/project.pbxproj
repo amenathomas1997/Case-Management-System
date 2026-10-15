@@ -11,6 +11,7 @@
 		0E5D0A313CFF54D8F5879DF3 /* CompetencyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFF872EC8C10701EBC03261F /* CompetencyView.swift */; };
 		105512E0520973E4DE1BC479 /* UtilizationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED88463141827145F7945DCB /* UtilizationView.swift */; };
 		17910F6BE528E88C84AE022E /* ClientEditSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47AB221E9A180042ED3C6990 /* ClientEditSheet.swift */; };
+		1F8C08B2CC958EC0A4C7D4C0 /* AccessibilityHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = E43B35FD256946A91D63E9A5 /* AccessibilityHelpers.swift */; };
 		23A72AAEFA6F137121D56567 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0EA7B70530855DDC7989821 /* DashboardView.swift */; };
 		2D04B71DB81503D9B531E57E /* ContractsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D25D57525AD69C7F3CF9BFC8 /* ContractsView.swift */; };
 		35D6C961E8D154951192A737 /* VoiceAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE55F4B084B791474211097F /* VoiceAssistant.swift */; };
@@ -78,6 +79,7 @@
 		BB35AEA838959C5BED3A33E6 /* AIToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIToolsView.swift; sourceTree = "<group>"; };
 		BE55F4B084B791474211097F /* VoiceAssistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAssistant.swift; sourceTree = "<group>"; };
 		D25D57525AD69C7F3CF9BFC8 /* ContractsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractsView.swift; sourceTree = "<group>"; };
+		E43B35FD256946A91D63E9A5 /* AccessibilityHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityHelpers.swift; sourceTree = "<group>"; };
 		ED88463141827145F7945DCB /* UtilizationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UtilizationView.swift; sourceTree = "<group>"; };
 		FD0B8CDEDAE1F11CAFBBEEC0 /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
 		FECB3C40972D5FDFE3DAF3C3 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
@@ -87,6 +89,7 @@
 		017F2DCC74DFC7A94FB857F3 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				E43B35FD256946A91D63E9A5 /* AccessibilityHelpers.swift */,
 				3F5ABE5F52628FE66F1801C8 /* AccommodationsView.swift */,
 				BB35AEA838959C5BED3A33E6 /* AIToolsView.swift */,
 				99277E65950AB5FBC9C9CF40 /* API.swift */,
@@ -217,6 +220,7 @@
 				6F11D87D67FDF1C146CBB8CE /* AIToolsView.swift in Sources */,
 				FCD15590708A76A9D22E344D /* API.swift in Sources */,
 				8A9FC68D3D9D3F6018BD7413 /* ATServicesView.swift in Sources */,
+				1F8C08B2CC958EC0A4C7D4C0 /* AccessibilityHelpers.swift in Sources */,
 				BCAA369F92E8752DFB1F08DC /* AccommodationsView.swift in Sources */,
 				075C75FE11EF98845F20AC63 /* BookingsView.swift in Sources */,
 				17910F6BE528E88C84AE022E /* ClientEditSheet.swift in Sources */,

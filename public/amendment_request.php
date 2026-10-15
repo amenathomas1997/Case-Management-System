@@ -97,7 +97,9 @@ $suggestFunds = $weeklySpend > 0 ? max(50.0, ceil($weeklySpend * 4 / 50) * 50) :
 
 /** The baseline (no-AI) letter, with real names filled in. */
 function baseline_letter(array $track, float $worked, float $auth, float $remaining, int $pct, ?string $runOut, ?string $expDate, int $suggestAdd, array $user, ?array $funds = null, bool $outlastsExpiry = false, bool $expired = false): string {
-    $cn = $track['counselor_name'] ?: 'Counselor';
+    $cn = trim((string)($track['counselor_name'] ?? '')) ?: 'Counselor';
+    // "of the 40 authorized hours": the number alone, as fmt_hours() adds its own unit.
+    $authNum = rtrim(rtrim(number_format($auth, 2), '0'), '.');
     $L = [];
     $L[] = 'Dear ' . $cn . ',';
     $L[] = '';
@@ -115,7 +117,7 @@ function baseline_letter(array $track, float $worked, float $auth, float $remain
         $L[] = 'To continue services without interruption, I am requesting an amendment of approximately ' . fmt_money($funds['suggest']) . ' in additional authorized funds'
             . ($expDate ? ', and an extension of the authorization period as appropriate' : '') . '. The remaining goals and the justification for continued services are documented in the case file and can be shared on request.';
     } else {
-        $L[] = 'As of today, ' . fmt_hours($worked) . ' of the ' . fmt_hours($auth) . ' authorized hours have been used (' . $pct . '%), leaving ' . fmt_hours($remaining) . ' remaining.'
+        $L[] = 'As of today, ' . fmt_hours($worked) . ' of the ' . $authNum . ' authorized ' . ($authNum === '1' ? 'hour' : 'hours') . ' have been used (' . $pct . '%), leaving ' . fmt_hours($remaining) . ' remaining.'
             . ($runOut ? ' At the current rate of service, the authorized hours are projected to be exhausted around ' . $runOut . '.'
                 : ($outlastsExpiry ? ' At the current rate of service, the authorization period ends before the authorized hours would be used up.' : ''))
             . ($expDate ? ($expired ? ' The authorization expired on ' : ' The authorization expires ') . $expDate . '.' : '');
@@ -127,7 +129,7 @@ function baseline_letter(array $track, float $worked, float $auth, float $remain
     $L[] = 'Please let me know if you need any additional information to process this amendment. Thank you for your support of ' . $track['client'] . '.';
     $L[] = '';
     $L[] = 'Sincerely,';
-    $L[] = $user['name'] . ' — ' . cfg('name');
+    $L[] = $user['name'] . ' — ' . brand('org');
     return implode("\n", $L);
 }
 
@@ -158,7 +160,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ai_draft']) && ai_fea
             : ($outlastsExpiry ? "- At the current pace the authorization period ends before the " . ($fundsLimit ? 'funds' : 'hours') . " are used up\n" : ''))
         . ($expDate ? ($expired ? "- Authorization already expired on: " : "- Authorization expires: ") . $expDate . "\n" : '')
         . ($fundsLimit ? "- Requesting about " . fmt_money($suggestFunds) . " in additional authorized funds" : "- Requesting about " . $suggestAdd . " additional hours") . ($expDate ? " and a period extension" : "") . ".\n"
-        . "- Counselor: [COUNSELOR]\n- Prepared by: [STAFF] at " . cfg('name') . "\n";
+        . "- Counselor: [COUNSELOR]\n- Prepared by: [STAFF] at " . brand('org') . "\n";
     $sys = ai_system_base() . ' Write a brief, professional authorization amendment request letter to a vocational rehabilitation counselor. '
         . 'Use [CLIENT] wherever the individual\'s name belongs, [COUNSELOR] for the counselor\'s name and [STAFF] for the sender\'s name, exactly as written — do not invent names. '
         . 'Facts only; no promises of outcomes. Keep it under 200 words.';

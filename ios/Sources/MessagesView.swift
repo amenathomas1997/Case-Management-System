@@ -35,8 +35,9 @@ struct MessagesView: View {
     @State private var loaded = false
     @State private var error: String?
     @State private var picking = false
-    /// Unsent replies by client and channel, kept here (in memory only, for as long as the
-    /// Messages screen is open) so going back from a thread does not lose what was typed.
+    /// Unsent replies by client and channel, kept here while the Messages screen is open so
+    /// going back from a thread does not lose what was typed. Each thread also keeps its
+    /// replies on this phone (DraftStore), so closing the app or a forced sign-in does not.
     @State private var drafts: [String: String] = [:]
 
     var body: some View {
@@ -68,6 +69,13 @@ struct MessagesView: View {
                                 .accessibilityLabel(summary.unreadLabel)
                         }
                     }
+                    // One stop, name and unread first: what decides whether to open it.
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel([t.clientName,
+                                         t.unread > 0 ? summary.unreadLabel : nil,
+                                         "\(t.total) message\(t.total == 1 ? "" : "s")",
+                                         t.lastAt.map { "last \(formatDateTime($0))" }]
+                        .compactMap { $0 }.joined(separator: ", "))
                 }
             }
         }
@@ -192,6 +200,24 @@ struct MessageThreadView: View {
         let key = "\(clientId)|\(ch)"
         let value: String? = text.isEmpty ? nil : text
         if let sharedDrafts { sharedDrafts.wrappedValue[key] = value } else { localDrafts[key] = value }
+        // Kept on this phone as it is typed; an empty reply removes the saved one.
+        DraftStore.save(["body": text], key: storedDraftKey(ch), owner: api.userId)
+    }
+
+    /// The unsent reply on this phone (DraftStore), per client and channel. Cleared once sent.
+    private func storedDraftKey(_ ch: String) -> String { "message-\(clientId)-\(ch)" }
+
+    /// Puts back the replies kept on this phone that are not already in the box. Returns what
+    /// to say about the channel shown, if its reply was put back.
+    private func restoreStoredDrafts() -> String? {
+        var restoredShown = false
+        for ch in ["client", "counselor"] where draftText(ch).isEmpty {
+            guard let text = DraftStore.load(key: storedDraftKey(ch), owner: api.userId)?["body"],
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            setDraft(ch, text)
+            if ch == channel { restoredShown = true }
+        }
+        return restoredShown ? "Your unsent message to \(recipient) was restored in the message box." : nil
     }
     private var draft: Binding<String> {
         Binding(get: { draftText(channel) }, set: { setDraft(channel, $0) })
@@ -260,7 +286,12 @@ struct MessageThreadView: View {
         }
         .navigationTitle(clientName)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load(focusNewest: true) }
+        .task {
+            let restored = restoreStoredDrafts()
+            await load(focusNewest: true)
+            // Said once VoiceOver has moved to the newest message, which would cut it off.
+            if let restored { announce(restored) }
+        }
     }
 
     private func bubble(_ m: ThreadMessage) -> some View {

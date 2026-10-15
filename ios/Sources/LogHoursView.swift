@@ -3,6 +3,13 @@ import SwiftUI
 struct LogHoursView: View {
     @EnvironmentObject var api: API
     @Environment(\.dismiss) private var dismiss
+    /// The track to choose when the form opens (from a track's screen, or a client with one
+    /// active track); 0 = none. Its draft, if any, is restored as on choosing it by hand.
+    var initialTrackId = 0
+    /// Opened from a client's record: the track list offers only that client's tracks; 0 = all.
+    var clientId = 0
+    /// initialTrackId is chosen once, on the first load, never again over the person's choice.
+    @State private var appliedInitialTrack = false
     @State private var tracks: [TrackOption] = []
     @State private var selectedTrack: Int?
     @State private var serviceType = "Assistive Technology"
@@ -11,6 +18,9 @@ struct LogHoursView: View {
     @State private var selectedGoal: Int?
     @State private var date = Date()
     @State private var hours = 1.0
+    /// The hours as typed, kept in step with the stepper: a value within its range and steps
+    /// moves the stepper, and the stepper rewrites it.
+    @State private var hoursText = "1"
     @State private var mileage = ""
     @State private var descriptionText = ""
     @State private var busy = false
@@ -61,7 +71,7 @@ struct LogHoursView: View {
                 }
                 Picker("Training track", selection: $selectedTrack) {
                     Text("Choose…").tag(nil as Int?)
-                    ForEach(tracks) { track in
+                    ForEach(shownTracks) { track in
                         Text("\(track.client) — \(track.title)").tag(track.id as Int?)
                     }
                 }
@@ -114,6 +124,15 @@ struct LogHoursView: View {
                 Stepper(value: $hours, in: Self.hoursRange, step: 0.25) {
                     Text(String(format: "Hours: %.2f", hours))
                 }
+                .voiceOverAdjustable("Hours", value: hoursSpoken(hours), binding: $hours, in: Self.hoursRange, step: 0.25)
+                // The same value typed directly, for an amount far from the stepper's start.
+                CaptionedField(label: "Hours, typed (0.25 to 24, in quarter hours)", text: $hoursText,
+                               prompt: "Hours, like 1.5", keyboard: .decimalPad)
+                    .accessibilityHint("Type the hours instead of using the stepper. Logged as the stepper shows them.")
+                if hoursTextProblem {
+                    Text("Enter 0.25 to 24 hours in quarter hours, like 1.5 or 2.75. The stepper shows what will be logged.")
+                        .font(.caption).foregroundStyle(Color.secondaryText)
+                }
                 // Each name stays visible above its field once it holds text.
                 CaptionedField(label: "Mileage (optional, 0 to 1000 miles)", text: $mileage, keyboard: .decimalPad)
                 CaptionedField(label: "What did you work on? (required)", text: $descriptionText,
@@ -144,6 +163,15 @@ struct LogHoursView: View {
                     Button("Done") { if hasEntry { askingDiscard = true } else { dismiss() } }
                         .disabled(busy)
                 }
+                // The same Log hours as the button at the end of the form, where the other forms
+                // keep their save: reached in a flick or two instead of past every field.
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Log") { Task { await submit() } }
+                        .disabled(busy || selectedTrack == nil || trimmedDescription.isEmpty)
+                        .accessibilityLabel("Log hours")
+                        .accessibilityValue(busy ? "Saving hours" : "")
+                        .accessibilityInputLabels(["Log", "Log hours"])
+                }
             }
             .discardChangesGuard(hasChanges: hasEntry, busy: busy, question: "Discard the hours entry you have not logged?",
                                  asking: $askingDiscard) {
@@ -152,7 +180,13 @@ struct LogHoursView: View {
             }
             .onChange(of: descriptionText) { _ in saveDraft() }
             .onChange(of: mileage) { _ in saveDraft() }
-            .onChange(of: hours) { _ in saveDraft() }
+            .onChange(of: hours) { newValue in
+                if Self.parsedHours(hoursText) != newValue { hoursText = Self.hoursString(newValue) }
+                saveDraft()
+            }
+            .onChange(of: hoursText) { newValue in
+                if let typed = Self.parsedHours(newValue), typed != hours { hours = typed }
+            }
             .onChange(of: date) { _ in
                 // The authorization problem was for the date it was sent with.
                 clearAuthorizationIssue()
@@ -231,6 +265,44 @@ struct LogHoursView: View {
 
     private static let hoursRange = 0.25...24.0
 
+    /// Typed hours the stepper could show (0.25 to 24, in quarter hours; a comma may be the
+    /// decimal point), or nil.
+    private static func parsedHours(_ raw: String) -> Double? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
+        guard text.range(of: "^[0-9]{1,2}(\\.[0-9]{1,2})?$|^\\.[0-9]{1,2}$", options: .regularExpression) != nil,
+              let value = Double(text), hoursRange.contains(value),
+              (value * 4).rounded() == value * 4 else { return nil }
+        return value
+    }
+
+    private static func hoursString(_ value: Double) -> String {
+        String(format: "%g", value)
+    }
+
+    /// Something typed in the hours field that is not what the stepper shows.
+    private var hoursTextProblem: Bool {
+        Self.parsedHours(hoursText) != hours
+    }
+
+    /// The tracks the picker offers: a client's own when opened from their record (all of
+    /// them if none of the list is marked with that client, as a list kept offline may not be).
+    private var shownTracks: [TrackOption] {
+        guard clientId > 0 else { return tracks }
+        let own = tracks.filter { $0.clientId == clientId }
+        return own.isEmpty && !tracks.contains(where: { $0.clientId != nil }) ? tracks : own
+    }
+
+    /// Chooses initialTrackId once the tracks have loaded (the first load only).
+    private func applyInitialTrack() {
+        guard !appliedInitialTrack, initialTrackId > 0 else { return }
+        appliedInitialTrack = true
+        if shownTracks.contains(where: { $0.id == initialTrackId }) {
+            if selectedTrack == nil { selectedTrack = initialTrackId }
+        } else {
+            announce("This training track can't take hours right now (it may not be Active). Choose a track.")
+        }
+    }
+
     /// 1 January 2000 through today: the server refuses a work date in the future.
     private static var dateRange: ClosedRange<Date> {
         let calendar = Calendar.current
@@ -276,6 +348,7 @@ struct LogHoursView: View {
                 selectedTrack = nil
                 rsaCategory = ""
             }
+            applyInitialTrack()
         } catch APIError.network {
             // No signal: offer the tracks kept on this phone, so the hours can be queued and
             // sync later (the server checks the track and caseload again then).
@@ -287,6 +360,7 @@ struct LogHoursView: View {
             }
             tracks = cached
             if !tracks.contains(where: { $0.id == selectedTrack }) { selectedTrack = nil; rsaCategory = "" }
+            applyInitialTrack()
             let notice = "No connection — showing the training tracks saved on this phone, which may be out of date. Hours logged now are saved here and sync automatically."
             if tracksNotice != notice { announce(notice) }
             tracksNotice = notice
@@ -297,6 +371,11 @@ struct LogHoursView: View {
 
     private func submit() async {
         guard let trackId = selectedTrack else { return }
+        // Typed hours the stepper could not take are reported, never logged as the stepper's value.
+        guard !hoursTextProblem else {
+            showFormError("Hours: enter 0.25 to 24 hours in quarter hours, like 1.5 or 2.75, in digits. Use a period or comma for the decimal point; or use the hours stepper.", in: &error)
+            return
+        }
         // Mileage is billable: something typed that isn't a number is reported, never logged as 0.
         // Checked against the server's limits (0 to 1000 miles, stored to one decimal place)
         // here, so an offline entry is not refused at sync, where it could only be discarded.

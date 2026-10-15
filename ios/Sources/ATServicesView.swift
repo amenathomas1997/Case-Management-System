@@ -709,22 +709,30 @@ struct ATProfitabilityView: View {
                 ForEach(groupLabels, id: \.self) { label in
                     let members = rows.filter { (grouping == "Service" ? $0.service : $0.contract) == label }
                     Section(label) {
-                        Text("Invoiced: \(members.reduce(0) { $0 + $1.invoiced }, specifier: "%.2f")")
-                        Text("Received: \(members.reduce(0) { $0 + $1.received }, specifier: "%.2f")")
-                        Text("Direct cost: \(members.reduce(0) { $0 + $1.cost }, specifier: "%.2f")")
-                        Text("Margin: \(members.reduce(0) { $0 + $1.margin }, specifier: "%.2f")")
-                        Text("Hours without labor rates: \(members.reduce(0) { $0 + $1.unpricedHours }, specifier: "%.1f")")
+                        // One VoiceOver stop for the group's figures.
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Invoiced: \(members.reduce(0) { $0 + $1.invoiced }, specifier: "%.2f")")
+                            Text("Received: \(members.reduce(0) { $0 + $1.received }, specifier: "%.2f")")
+                            Text("Direct cost: \(members.reduce(0) { $0 + $1.cost }, specifier: "%.2f")")
+                            Text("Margin: \(members.reduce(0) { $0 + $1.margin }, specifier: "%.2f")")
+                            Text("Hours without labor rates: \(members.reduce(0) { $0 + $1.unpricedHours }, specifier: "%.1f")")
+                        }
+                        .accessibilityElement(children: .combine)
                     }
                 }
             } else { ForEach(rows) { row in
                 Section(row.client + " / " + row.title) {
-                    Text(row.service + " · " + row.funder)
-                    Text("Invoiced: \(row.invoiced, specifier: "%.2f") · Received: \(row.received, specifier: "%.2f")")
-                    Text("Direct cost: \(row.cost, specifier: "%.2f") · Margin: \(row.margin, specifier: "%.2f")")
-                    // In words with an icon in the text colour: system orange text is about 2.2:1.
-                    if row.unpricedHours > 0 {
-                        Label { Text("Missing labor rates for \(row.unpricedHours, specifier: "%.1f") hours") } icon: { Image(systemName: "exclamationmark.triangle") }
+                    // One VoiceOver stop for the track's figures.
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(row.service + " · " + row.funder)
+                        Text("Invoiced: \(row.invoiced, specifier: "%.2f") · Received: \(row.received, specifier: "%.2f")")
+                        Text("Direct cost: \(row.cost, specifier: "%.2f") · Margin: \(row.margin, specifier: "%.2f")")
+                        // In words with an icon in the text colour: system orange text is about 2.2:1.
+                        if row.unpricedHours > 0 {
+                            Label { Text("Missing labor rates for \(row.unpricedHours, specifier: "%.1f") hours") } icon: { Image(systemName: "exclamationmark.triangle").accessibilityHidden(true) }
+                        }
                     }
+                    .accessibilityElement(children: .combine)
                 }
             } }
         }.navigationTitle("Profitability").task { await load() }.refreshable { await load() }

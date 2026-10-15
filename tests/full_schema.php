@@ -297,9 +297,9 @@ try {
     $db->exec("INSERT INTO kb_articles (id,title,body) VALUES (1,'Synthetic knowledge article','Synthetic article body')");
     $pageMarkers = ['index'=>'Dashboard','clients'=>'Clients','client'=>'Kept synthetic client','client_edit'=>'Edit Kept synthetic client','track'=>'Synthetic track',
         'track_edit'=>'Synthetic track','tasks'=>'Tasks','referrals'=>'Referrals','pipeline'=>'Pipeline','schedule'=>'Schedule','capacity'=>'Capacity',
-        'access_bookings'=>'Accommodation bookings','equipment'=>'Equipment','followups'=>'Device follow-ups','procurement'=>'~Device request|Procurement~',
-        'programs'=>'~Cohort|Programs~','contracts'=>'Contract','invoices'=>'Invoices','analytics'=>'Analytics','outcomes'=>'Outcome report','compliance'=>'Compliance',
-        'incidents'=>'Incidents','messages'=>'Messages','curriculum'=>'~Competency|Curricul~','templates'=>'Templates','score_assessment'=>'Scored assessment',
+        'access_bookings'=>'Accommodation bookings','equipment'=>'Equipment','followups'=>'Device follow-ups','procurement'=>'~Device (request|purchase)|Procurement~',
+        'programs'=>'~Cohort|Programs~','contracts'=>'~[Cc]ontract~','invoices'=>'Invoices','analytics'=>'~[Aa]nalytics~','outcomes'=>'Outcome report','compliance'=>'Compliance',
+        'incidents'=>'~Incident~','messages'=>'Messages','curriculum'=>'~Competency|Curricul~','templates'=>'~[Tt]emplates~','score_assessment'=>'Scored assessment',
         'accommodations'=>'~Worksite assessment|Accommodations~','users'=>'Users','account'=>'My Account','audit'=>'Audit log','trash'=>'Trash','client_merge'=>'Merge clients',
         'counselors'=>'Counselor portal','portal_requests'=>'Client requests','email_templates'=>'Email templates','referral_settings'=>'Referral form settings',
         'kb'=>'Synthetic knowledge article','search'=>'Search','utilization'=>'Utilization','agency_report'=>'Agency summary','funder_report'=>'Funder report',

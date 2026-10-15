@@ -36,6 +36,8 @@ struct FollowupsView: View {
                         statPill("\(d.abandoned)", "No longer used")
                         statPill("\(d.completed)", "Checks done")
                     }
+                    // The three figures are one VoiceOver stop.
+                    .accessibilityElement(children: .combine)
                 } footer: {
                     Text("Post-provision checks that loaned assistive technology is still being used. Scheduled automatically after a device goes out.")
                 }
@@ -57,6 +59,7 @@ struct FollowupsView: View {
                                 Text("\(f.clientName) · \(f.status)\(f.inUse != nil ? (f.inUse == 1 ? " · in use" : " · not in use") : "")")
                                     .font(.caption).foregroundStyle(Color.secondaryText)
                             }.padding(.vertical, 1)
+                            .accessibilityElement(children: .combine)
                         }
                     }
                 }
@@ -106,6 +109,17 @@ struct FollowupsView: View {
                 .padding(.top, 2)
             }
         }.padding(.vertical, 1)
+        // VoiceOver: one stop per check (device, client, interval, when due); Record, Snooze 2
+        // weeks and Skip (confirmed first, as the button is) are on the Actions rotor.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(f.equipmentName), \(f.clientName), \(f.intervalDays)-day check, \(dueLabel(f.dueDate))")
+        .accessibilityActions {
+            if due && !acting.contains(f.id) {
+                Button("Record") { recording = f }
+                Button("Snooze 2 weeks") { Task { await act(f, "snooze") } }
+                Button("Skip") { skipping = f }
+            }
+        }
     }
 
     @ViewBuilder private func dueButtons(_ f: Followup) -> some View {
@@ -192,6 +206,41 @@ struct RecordFollowupSheet: View {
     /// "No" also adds a case note and a task, and a recorded follow-up cannot be changed, so
     /// that answer is confirmed first (as on the website).
     @State private var confirmingNotInUse = false
+    /// The answers typed earlier were put back from this phone's draft when the sheet opened.
+    @State private var restoredDraft = false
+
+    /// The follow-up's unsaved answers are kept on this phone as they are typed (DraftStore), so
+    /// a forced sign-in or the app being closed does not lose them. Cleared once it is recorded
+    /// or discarded.
+    private var draftKey: String { "followup-\(followup.id)" }
+
+    private func saveDraft() {
+        var fields = ["barriers": barriers, "notes": notes]
+        // The choices travel only with text: a draft with nothing typed is removed.
+        if hasTypedText {
+            fields["in_use"] = inUse ?? "unanswered"
+            fields["satisfaction"] = String(satisfaction)
+        }
+        DraftStore.save(fields, key: draftKey, owner: api.userId)
+    }
+
+    private func restoreDraft() {
+        guard !hasTypedText, let draft = DraftStore.load(key: draftKey, owner: api.userId) else { return }
+        let savedBarriers = draft["barriers"] ?? ""
+        let savedNotes = draft["notes"] ?? ""
+        guard !(savedBarriers + savedNotes).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        barriers = savedBarriers
+        notes = savedNotes
+        if let answer = draft["in_use"], ["yes", "no", ""].contains(answer) { inUse = answer }
+        if let rating = draft["satisfaction"].flatMap(Int.init), (0...5).contains(rating) { satisfaction = rating }
+        restoredDraft = true
+        // Said after the sheet has opened: its arrival moves VoiceOver focus.
+        announceAfterDismiss("Your unsaved follow-up for this device was restored.")
+    }
+
+    private func clearDraft() {
+        DraftStore.clear(key: draftKey, owner: api.userId)
+    }
 
     /// Typed text that closing the sheet would throw away.
     private var hasTypedText: Bool {
@@ -203,6 +252,10 @@ struct RecordFollowupSheet: View {
         NavigationStack {
             Form {
                 if let error { ErrorBanner(message: error) }
+                if restoredDraft {
+                    Text("Your unsaved follow-up from earlier was restored. Cancel, then Discard, removes it.")
+                        .font(.callout)
+                }
                 Section(followup.equipmentName) {
                     Text(followup.clientName).foregroundStyle(Color.secondaryText)
                     // A segmented picker shows (and speaks) no label of its own. No segment is
@@ -248,9 +301,14 @@ struct RecordFollowupSheet: View {
             .accessibilityAction(.escape) { requestClose() }
             .confirmationDialog("Discard this follow-up? What you typed will be lost.",
                                 isPresented: $confirmingDiscard, titleVisibility: .visible) {
-                Button("Discard follow-up", role: .destructive) { dismiss() }
+                Button("Discard follow-up", role: .destructive) { clearDraft(); dismiss() }
                 Button("Keep editing", role: .cancel) {}
             }
+            .onChange(of: barriers) { _ in saveDraft() }
+            .onChange(of: notes) { _ in saveDraft() }
+            .onChange(of: inUse) { _ in saveDraft() }
+            .onChange(of: satisfaction) { _ in saveDraft() }
+            .onAppear { restoreDraft() }
         }
     }
 
@@ -278,6 +336,7 @@ struct RecordFollowupSheet: View {
             let r: SaveFollowupResponse = try await api.call("save_followup", body: body)
             // The list announces the result once this sheet has gone (a message posted while it
             // is still open is cut off when it closes).
+            clearDraft()
             onSaved(r.warning); dismiss()
         } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }

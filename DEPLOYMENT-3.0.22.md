@@ -2,7 +2,7 @@
 
 Status: committed, NOT deployed. Production is 3.0.21 (deployed October 14, 2026 from 17ce95e).
 
-No database migration. Deploy the changed website files only; preserve hosting .htaccess, private configuration, installer lock and custom branding assets. Run the usual read-only checksum comparison against production (expect 3.0.21 = 17ce95e) and back up the docroot before publishing. No iOS distribution: ios/project.yml stays at 3.0.21, and the two iOS fixes below ship only with a future archive.
+No database migration. Deploy the changed website files only; preserve hosting .htaccess, private configuration, installer lock and custom branding assets. Run the usual read-only checksum comparison against production (expect 3.0.21 = 17ce95e) and back up the docroot before publishing. Includes cron/session_reminders.php (deploy it with the website files). No iOS distribution: ios/project.yml stays at 3.0.21, and the iOS changes below ship only with a future archive (bump MARKETING_VERSION and the build number when archiving).
 
 ## Contents
 
@@ -21,13 +21,48 @@ Production audit of the ChatGPT/Codex work since c4d0956 (three reviewers; no hi
 - RSA-911 CSV no longer appends a trailer row after the data; invoice list heading no longer double-escapes; audit.php docblock order; release notes keep the migration chain.
 - iOS (not distributed): VoiceOver confirmations say how to answer; goals read "Goal 2 of 5" instead of database ids.
 
+## Usability and screen-reader update (second commit)
+
+Full user-experience audit (staff daily work, client-facing pages, admin, iPhone app), then safe quick wins — ordering, wording, defaults and collapsing; no schema, permission or save-logic changes.
+
+Navigation and structure:
+- Main menu grouped under headings: Today, Clients, Services, Equipment, Billing, compliance & reports, Help & account (cms_navigation_groups()). Each menu link and the top shortcuts have a one-sentence hint as the link's description (read by screen readers after the name; shown visually after a pause on hover or keyboard focus; Escape hides it).
+- Forms that start collapsed (Add a task, Schedule a session, Add a note, Add equipment, etc.) have a heading before them so H still finds them; they open themselves on errors, restored drafts or a matching #link.
+- Staff guide documents the menu groups, hints and collapsed forms.
+
+Staff pages:
+- Training track: "On this page" links; Log a session moved up after the totals; billing exports and the SMART-goal template picker collapsed; "No authorization entered" instead of 0 hours / 0%.
+- Lists before add-forms on Tasks, Schedule and client Notes; Notes show the newest 20 with Show all.
+- After completing a session, a link to write its note on the track.
+- Daily action center grouped by Overdue / Due today / This week / Later / No date, readable dates, duplicate referral items merged; documentation review links straight to the flagged note; Homework support has its own accurate note.
+
+Admin pages:
+- Templates split into four libraries (?lib=); the goal library lists rows only after a search or area choice.
+- Equipment: search (name, serial, borrower) and status filters; loan/add forms collapsed; stat cards link to filtered views.
+- Lists first on Incidents, Contracts and Device purchases; purchase detail shows only the next lifecycle step (others under More actions); detail headings name the record type with breadcrumbs.
+- Business analytics lists every report the viewer can open; audit log filters by user, action and dates (default last 7 days).
+- Page headings match menu names (Equipment & loans, Incident reports, Device purchases, Business analytics, Goal & assessment templates).
+
+Client-facing pages:
+- Referral confirmation shows the referral number and the date to expect contact; Referral purpose asked only of counselors and agencies (others file a new referral); error messages start with their field labels; plainer income hint.
+- Client pages show the organization name without "Case Management" or the version.
+- Clearer expired-link messages (portal, survey, reset), "Your training plan" headings, a friendlier unavailable-feature message, Update my details collapsed, consent wording and contact, counselor-portal empty state, amendment letter grammar and signature, session reminders point to the portal and contact email.
+
+iPhone app (not distributed):
+- Log hours from a client or a track (preselected), as a primary Schedule toolbar button and with a Log button at the top; hours can be typed.
+- Every stepper is one adjustable VoiceOver element (swipe up or down) — AccessibilityHelpers.swift.
+- List rows across the app are one VoiceOver stop with their buttons in the Actions rotor (schedule, goals, notes, equipment, reservations, follow-ups, bookings, contracts, homework, incidents, counselors, programs, offline entries); destructive actions keep their confirmations. Trade-off: Voice Control can no longer tap buttons inside those rows by name.
+- Note field before the AI helper; message and follow-up drafts persist; equipment search and sections; schedule grouped Today / Tomorrow / Later.
+
 ## Verification
 
 - PHP syntax check of every production file passed.
 - tests/run_all.sh passed (Node, PHP, Python and Swift API checks, including the new breadcrumb test).
 - Local cms_audit_test: full_schema 823, audit_regression 61 and security 63 assertions passed.
-- iOS simulator build succeeded.
-- Not done: manual JAWS (Chrome/Edge), NVDA and VoiceOver walkthroughs of the breadcrumbs, the low-vision heading, the unsaved-change dialog and the voice confirmation.
+- iOS: clean simulator build succeeded with no warnings; ios_api_regression passed.
+- Rendered all 128 page snapshots: no duplicate ids, every hint description resolves, no same-named links to different places except identical synthetic test records. Visual check of the grouped menu and a hint in Chrome.
+- Test updates were wording/title only (page markers, the portal's unavailable-feature message, the referral role error).
+- Not done: manual JAWS (Chrome/Edge), NVDA and VoiceOver walkthroughs — especially the grouped menu and hints, collapsed forms, the unsaved-change dialog, the voice confirmation, and the iPhone Actions rotor and adjustable steppers.
 
 ## Deploy file list (relative to 3.0.21)
 

@@ -133,15 +133,19 @@ function due_note(?int $daysLeft): string {
 }
 ?>
 <h1>Tasks</h1>
-<p class="muted">Follow-ups and compliance timers. New referrals automatically get a "make contact" task due in 3 business days; converting one adds a "schedule assessment" task.</p>
+<p class="muted">Referral tasks are added for you: "make contact" when a referral arrives (due in 3 business days) and "schedule assessment" when it is converted.</p>
 
 <div class="page-actions">
   <a class="btn <?= $show !== 'all' ? 'btn-primary' : 'btn-secondary' ?>" href="tasks.php?<?= h(http_build_query(array_replace($filters, ['show' => 'open']))) ?>" <?= $show !== 'all' ? 'aria-current="true"' : '' ?>>Open tasks</a>
   <a class="btn <?= $show === 'all' ? 'btn-primary' : 'btn-secondary' ?>" href="tasks.php?<?= h(http_build_query(array_replace($filters, ['show' => 'all']))) ?>" <?= $show === 'all' ? 'aria-current="true"' : '' ?>>Everything (including done)</a>
 </div>
 
+<?php // Collapsed so the list comes first; open after a refused or restored entry (or a #add-h link).
+$addOpen = array_intersect_key(form_errors(), ['title' => 1, 'due_date' => 1]) || old_in('title') !== '' || old_in('details') !== ''; ?>
 <section class="card" aria-labelledby="add-h">
-  <h2 id="add-h">Add a task</h2>
+  <h2 class="visually-hidden">Add a task</h2>
+  <details id="add-task"<?= $addOpen ? ' open' : '' ?>>
+  <summary id="add-h">Add a task</summary>
   <form method="post" action="tasks.php" class="stacked" novalidate>
     <?= csrf_field() ?>
     <input type="hidden" name="show" value="<?= h($show) ?>">
@@ -182,6 +186,8 @@ function due_note(?int $daysLeft): string {
     });
   });
   </script>
+  </details>
+  <script>(function(){var d=document.getElementById('add-task');if(location.hash==='#add-h'&&d)d.open=true;})();</script>
 </section>
 
 <form method="get" action="tasks.php" class="card" role="search" aria-label="Filter tasks">

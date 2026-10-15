@@ -68,6 +68,10 @@ struct EquipmentView: View {
     /// A reload asked for from the retry button is in flight: the button stays (and keeps
     /// VoiceOver focus) but is dimmed until the result is known.
     @State private var retrying = false
+    /// Narrows the list on this phone (the server sends every item).
+    @State private var search = ""
+    /// The item whose Service & details page VoiceOver opened from its row (the row's default action).
+    @State private var detailItem: EquipmentItem?
 
     var body: some View {
         NavigationStack {
@@ -96,86 +100,18 @@ struct EquipmentView: View {
                         Text("No equipment tracked yet. Use Add equipment to add an item.")
                             .foregroundStyle(Color.secondaryText)
                     }
-                    ForEach(keyedItems, id: \.key) { entry in
-                        let item = entry.item
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                // A heading, so the rotor moves from item to item.
-                                Text(item.name).font(.body.weight(.semibold))
-                                    .accessibilityAddTraits(.isHeader)
-                                    .accessibilityFocused($focusedItem, equals: item.id)
-                                Spacer()
-                                Text(item.status)
-                                    .font(.caption.weight(.semibold))
-                                    .padding(.horizontal, 8).padding(.vertical, 3)
-                                    .background((item.status == "Available" ? Color.brandTeal : Color.brand).opacity(0.15), in: Capsule())
-                                    .foregroundStyle(item.status == "Available" ? Color.brandTeal : Color.brand)
-                            }
-                            // Detail lines in the 7:1 secondary-text colour (system secondary is about 3.4:1).
-                            // The condition is shown with or without a serial, so an item that needs
-                            // repair never looks ready to lend.
-                            let details = [item.serial.flatMap { $0.isEmpty ? nil : "Serial \($0)" },
-                                           item.itemCondition.isEmpty ? nil : "Condition: \(item.itemCondition)"].compactMap { $0 }
-                            if !details.isEmpty {
-                                Text(details.joined(separator: " · ")).font(.caption).foregroundStyle(Color.secondaryText)
-                            }
-                            if item.held && item.status == "Available" {
-                                Label("Held by a reservation", systemImage: "calendar.badge.clock")
-                                    .font(.caption).foregroundStyle(Color.secondaryText)
-                            }
-                            if item.borrower != nil {
-                                // Overdue is said in words and with an icon, not only shown in red; the
-                                // red is Color.alertRed (system red text was 3.6:1).
-                                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                                    if item.overdue {
-                                        Image(systemName: "exclamationmark.triangle.fill").accessibilityHidden(true)
-                                    }
-                                    Text(loanLine(item))
-                                        .font(.callout)
-                                        .fontWeight(item.overdue ? .semibold : .regular)
-                                }
-                                .foregroundStyle(item.overdue ? Color.alertRed : Color.secondaryText)
-                            }
-                            // A loan outside the user's caseload is masked (no borrower id) and the
-                            // server refuses its return, so no button is offered for it. Any open loan
-                            // can be returned, whatever the item's status says. Both buttons are large
-                            // controls (44 points or more) and keep their visible words speakable.
-                            if let loanId = item.loanId, item.borrowerId != nil {
-                                Button {
-                                    pendingReturn = item
-                                } label: {
-                                    Label("Mark returned", systemImage: "arrow.uturn.backward.circle")
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.large)
-                                .padding(.top, 4)
-                                .disabled(returning.contains(loanId))
-                                .accessibilityLabel("Mark \(item.name) returned")
-                                .accessibilityInputLabels(["Mark returned", "Mark \(item.name) returned"])
-                            } else if item.status == "Available" {
-                                Button {
-                                    loaningItem = item
-                                } label: {
-                                    Label("Loan out", systemImage: "arrow.up.forward.circle")
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.large)
-                                .padding(.top, 4)
-                                .accessibilityLabel("Loan \(item.name) out")
-                                .accessibilityInputLabels(["Loan out", "Loan \(item.name) out"])
-                            }
-                            NavigationLink { EquipmentDetailView(itemId: item.id, itemName: item.name) } label: {
-                                Text("Service & details").font(.body)
-                                    .frame(minHeight: 44, alignment: .leading)
-                                    .contentShape(Rectangle())
-                            }
-                            // Names the item, so the links in the list are told apart.
-                            .accessibilityLabel("Service and details for \(item.name)")
-                            .accessibilityInputLabels(["Service & details", "Service and details for \(item.name)"])
+                    if loaded && !items.isEmpty && !trimmedSearch.isEmpty && shownItems.isEmpty {
+                        Text("No equipment matches “\(trimmedSearch)”.")
+                            .foregroundStyle(Color.secondaryText)
+                    }
+                    // By where each item is (Overdue, On loan, Available, then the rest), each a
+                    // heading the VoiceOver rotor can jump to.
+                    ForEach(itemGroups, id: \.title) { group in
+                        Section {
+                            ForEach(group.entries, id: \.key) { entry in itemRow(entry) }
+                        } header: {
+                            Text("\(group.title) (\(group.entries.count))")
                         }
-                        .padding(.vertical, 4)
-                        .accessibilityElement(children: .contain)
-                        .id(entry.key)
                     }
                 }
                 // The banner is the list's first row: a failed return from an item further down
@@ -195,7 +131,12 @@ struct EquipmentView: View {
                     DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(key, anchor: .center) } }
                 }
             }
+            .navigationDestination(isPresented: Binding(get: { detailItem != nil }, set: { if !$0 { detailItem = nil } })) {
+                if let item = detailItem { EquipmentDetailView(itemId: item.id, itemName: item.name) }
+            }
             .navigationTitle("Equipment")
+            .searchable(text: $search, prompt: "Search name, serial, borrower")
+            .onChange(of: search) { _ in Task { await searchChanged() } }
             .refreshable { confirmation = nil; await load() }
             .task { await load() }
             .toolbar { ToolbarItem(placement: .primaryAction) { Button { showingAdd = true } label: { Image(systemName: "plus") }.accessibilityLabel("Add equipment") } }
@@ -243,6 +184,155 @@ struct EquipmentView: View {
         }
     }
 
+
+    /// One item: its name (a heading), status, details, loan and actions.
+    @ViewBuilder
+    private func itemRow(_ entry: KeyedEquipmentItem) -> some View {
+        let item = entry.item
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(item.name).font(.body.weight(.semibold))
+                Spacer()
+                Text(item.status)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background((item.status == "Available" ? Color.brandTeal : Color.brand).opacity(0.15), in: Capsule())
+                    .foregroundStyle(item.status == "Available" ? Color.brandTeal : Color.brand)
+            }
+            // Detail lines in the 7:1 secondary-text colour (system secondary is about 3.4:1).
+            // The condition is shown with or without a serial, so an item that needs
+            // repair never looks ready to lend.
+            let details = [item.serial.flatMap { $0.isEmpty ? nil : "Serial \($0)" },
+                           item.itemCondition.isEmpty ? nil : "Condition: \(item.itemCondition)"].compactMap { $0 }
+            if !details.isEmpty {
+                Text(details.joined(separator: " · ")).font(.caption).foregroundStyle(Color.secondaryText)
+            }
+            if item.held && item.status == "Available" {
+                Label("Held by a reservation", systemImage: "calendar.badge.clock")
+                    .font(.caption).foregroundStyle(Color.secondaryText)
+            }
+            if item.borrower != nil {
+                // Overdue is said in words and with an icon, not only shown in red; the
+                // red is Color.alertRed (system red text was 3.6:1).
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    if item.overdue {
+                        Image(systemName: "exclamationmark.triangle.fill").accessibilityHidden(true)
+                    }
+                    Text(loanLine(item))
+                        .font(.callout)
+                        .fontWeight(item.overdue ? .semibold : .regular)
+                }
+                .foregroundStyle(item.overdue ? Color.alertRed : Color.secondaryText)
+            }
+            // A loan outside the user's caseload is masked (no borrower id) and the
+            // server refuses its return, so no button is offered for it. Any open loan
+            // can be returned, whatever the item's status says. Both buttons are large
+            // controls (44 points or more) and keep their visible words speakable.
+            if let loanId = item.loanId, item.borrowerId != nil {
+                Button {
+                    pendingReturn = item
+                } label: {
+                    Label("Mark returned", systemImage: "arrow.uturn.backward.circle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .padding(.top, 4)
+                .disabled(returning.contains(loanId))
+                .accessibilityLabel("Mark \(item.name) returned")
+                .accessibilityInputLabels(["Mark returned", "Mark \(item.name) returned"])
+            } else if item.status == "Available" {
+                Button {
+                    loaningItem = item
+                } label: {
+                    Label("Loan out", systemImage: "arrow.up.forward.circle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .padding(.top, 4)
+                .accessibilityLabel("Loan \(item.name) out")
+                .accessibilityInputLabels(["Loan out", "Loan \(item.name) out"])
+            }
+            NavigationLink { EquipmentDetailView(itemId: item.id, itemName: item.name) } label: {
+                Text("Service & details").font(.body)
+                    .frame(minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            // Names the item, so the links in the list are told apart.
+            .accessibilityLabel("Service and details for \(item.name)")
+            .accessibilityInputLabels(["Service & details", "Service and details for \(item.name)"])
+        }
+        .padding(.vertical, 4)
+        // VoiceOver: the whole item is one stop (one flick per item). Double-tap opens Service &
+        // details; Mark returned or Loan out (the visible button's own code, confirmation
+        // included) and Service & details are on the Actions rotor.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(itemSpokenLabel(item))
+        .accessibilityHint("Double-tap for service and details. Swipe up or down for actions.")
+        .accessibilityAction { detailItem = item }
+        .accessibilityActions {
+            if let loanId = item.loanId, item.borrowerId != nil {
+                if !returning.contains(loanId) {
+                    Button("Mark returned") { pendingReturn = item }
+                }
+            } else if item.status == "Available" {
+                Button("Loan out") { loaningItem = item }
+            }
+            Button("Service and details") { detailItem = item }
+        }
+        .accessibilityFocused($focusedItem, equals: item.id)
+        .id(entry.key)
+    }
+
+    /// What VoiceOver reads for an item row: name, status, details, hold and loan, in the
+    /// order they are shown.
+    private func itemSpokenLabel(_ item: EquipmentItem) -> String {
+        var parts = [item.name, item.status]
+        if let s = item.serial, !s.isEmpty { parts.append("Serial \(s)") }
+        if !item.itemCondition.isEmpty { parts.append("Condition: \(item.itemCondition)") }
+        if item.held && item.status == "Available" { parts.append("Held by a reservation") }
+        if item.borrower != nil { parts.append(loanLine(item)) }
+        return parts.filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+
+    private var trimmedSearch: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// The items matching the search, by name, category, serial or tag, borrower, status or
+    /// condition (all of them when nothing is typed).
+    private var shownItems: [KeyedEquipmentItem] {
+        let q = trimmedSearch
+        guard !q.isEmpty else { return keyedItems }
+        return keyedItems.filter { entry in
+            let i = entry.item
+            return [i.name, i.category, i.serial ?? "", i.borrower ?? "", i.status, i.itemCondition]
+                .contains { $0.localizedCaseInsensitiveContains(q) }
+        }
+    }
+
+    /// The shown items in sections: Overdue, On loan, Available, then any other status (in
+    /// repair, retired and the like) under "Not available". Empty sections are left out.
+    private var itemGroups: [(title: String, entries: [KeyedEquipmentItem])] {
+        var buckets: [[KeyedEquipmentItem]] = [[], [], [], []]
+        for entry in shownItems {
+            let item = entry.item
+            if item.overdue { buckets[0].append(entry) }
+            else if item.borrower != nil || item.loanId != nil { buckets[1].append(entry) }
+            else if item.status == "Available" { buckets[2].append(entry) }
+            else { buckets[3].append(entry) }
+        }
+        return zip(["Overdue", "On loan", "Available", "Not available"], buckets)
+            .filter { !$0.1.isEmpty }
+            .map { (title: $0.0, entries: $0.1) }
+    }
+
+    /// Waits for a pause in typing, then says how many items match: focus stays in the field.
+    private func searchChanged() async {
+        let q = search
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        guard q == search, loaded, !trimmedSearch.isEmpty else { return }
+        let n = shownItems.count
+        announce(n == 0 ? "No equipment found." : "\(n) item\(n == 1 ? "" : "s") found.")
+    }
+
     private func announceSheetResult() {
         if let message = sheetResult { announceAfterDismiss(message) }
         sheetResult = nil
@@ -265,7 +355,7 @@ struct EquipmentView: View {
     /// take focus: it is scrolled into view first. After a failed reload the error banner has
     /// focus instead.
     private func reveal(_ itemId: Int, saying message: String) async {
-        if error == nil, let key = keyedItems.first(where: { $0.item.id == itemId })?.key {
+        if error == nil, let key = shownItems.first(where: { $0.item.id == itemId })?.key {
             scrollTarget = key
             try? await Task.sleep(nanoseconds: 400_000_000)
             focusedItem = itemId
@@ -504,6 +594,8 @@ struct EquipmentDetailView: View {
                             if let c = m.cost { Text("Cost \(money(c))").font(.caption).foregroundStyle(Color.secondaryText) }
                             if let n = m.notes, !n.isEmpty { Text(n).font(.callout) }
                         }
+                        // One stop per service entry.
+                        .accessibilityElement(children: .combine)
                     }
                 }
             }
@@ -638,8 +730,6 @@ struct ReservationsView: View {
                 ForEach(reservations) { r in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(r.itemName).font(.body.weight(.semibold))
-                            .accessibilityAddTraits(.isHeader)
-                            .accessibilityFocused($focusedReservation, equals: r.id)
                         // The 7:1 secondary-text colour (system secondary is about 3.4:1).
                         Text("\(r.clientName) · \(r.status)").font(.caption).foregroundStyle(Color.secondaryText)
                         if let f = r.neededFrom { Text("Needed from \(formatDate(f))").font(.caption).foregroundStyle(Color.secondaryText) }
@@ -651,7 +741,13 @@ struct ReservationsView: View {
                             .accessibilityLabel("Cancel reservation of \(r.itemName) for \(r.clientName)")
                             .accessibilityInputLabels(["Cancel reservation", "Cancel reservation of \(r.itemName) for \(r.clientName)"])
                     }
-                    .accessibilityElement(children: .contain)
+                    // VoiceOver: one stop per reservation; Cancel reservation (confirmed first, as
+                    // the button and swipe action are) is on the Actions rotor.
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel([r.itemName, "\(r.clientName), \(r.status)", r.neededFrom.map { "Needed from \(formatDate($0))" }]
+                        .compactMap { $0 }.joined(separator: ", "))
+                    .accessibilityAction(named: "Cancel reservation") { pendingCancel = r }
+                    .accessibilityFocused($focusedReservation, equals: r.id)
                     // Confirmed first: a cancelled waitlist place cannot be given back.
                     .swipeActions(allowsFullSwipe: false) {
                         Button { pendingCancel = r } label: {

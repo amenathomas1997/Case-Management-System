@@ -13,7 +13,6 @@ register_translations([
     'You are signing as the parent or guardian of' => 'Usted firma como padre, madre o tutor de',
     'The name on this form is' => 'El nombre en este formulario es',
     'When you sign, you agree that:' => 'Al firmar, usted acepta que:',
-    'We may give this student the services we told you about.' => 'Podemos darle a este estudiante los servicios que le explicamos.',
     "We may talk with the student's school." => 'Podemos hablar con la escuela del estudiante.',
     'If needed, we may also talk with the state agency that helps people with disabilities find work.' => 'Si es necesario, también podemos hablar con la agencia estatal que ayuda a las personas con discapacidades a encontrar trabajo.',
     'We share records only to plan services and to send reports the law requires.' => 'Compartimos expedientes solo para planificar servicios y para enviar los informes que exige la ley.',
@@ -57,7 +56,9 @@ if (!$form) {
     // The language switch is offered here too, as on the portal: a fresh browser
     // starts in English whatever language the guardian reads.
     echo lang_toggle();
-    echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>' . t('This consent link is invalid or has been replaced. Please contact') . ' ' . h(brand('short')) . ' ' . t('for a new one.') . '</p></div>';
+    $linkContact = (string)(cfg('support_email') ?: cfg('mail_from'));
+    echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>' . t('This consent link is invalid or has been replaced. Please contact') . ' '
+        . ($linkContact !== '' ? h(brand('short')) . ' (<a href="mailto:' . h($linkContact) . '">' . h($linkContact) . '</a>)' : h(brand('short'))) . ' ' . t('for a new one.') . '</p></div>';
     page_footer();
     exit;
 }
@@ -128,6 +129,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$form['signed_at']) {
 // or the form. A withdrawn one never says that nothing more is needed: staff may
 // have sent a newer request to sign.
 $withdrawn = $form['signed_at'] && !empty($form['withdrawn_at']);
+// The contact the footer gives, for withdrawing consent or asking questions.
+$contact = (string)(cfg('support_email') ?: cfg('mail_from'));
+$contactHtml = $contact !== '' ? h(brand('short')) . ' (<a href="mailto:' . h($contact) . '">' . h($contact) . '</a>)' : h(brand('short'));
+// The services asked for on this student's referral, when the record has them: named
+// here rather than assuming the guardian was told about them in a conversation.
+$services = [];
+if (!$form['signed_at']) {
+    try {
+        $sq = db()->prepare("SELECT requested_service FROM referrals WHERE client_id = ? AND requested_service IS NOT NULL AND requested_service <> '' ORDER BY created_at DESC, id DESC LIMIT 1");
+        $sq->execute([(int)$form['client_id']]);
+        $services = array_values(array_filter(array_map('trim', explode('; ', (string)$sq->fetchColumn())), fn($x) => $x !== '' && $x !== 'Not sure'));
+    } catch (Throwable $e) { $services = []; }
+    // An administrator's Spanish for each service label, as on the referral form.
+    if ($services) register_translations(referral_form_translations());
+}
+// A stored service label: translated when the dictionary has the whole label, else kept in English and marked so.
+$whole = fn(string $x): string => isset(translations()[$x]) ? h(__($x)) : en($x);
 page_header($withdrawn ? 'Consent withdrawn' : ($form['signed_at'] ? 'Consent recorded' : (form_errors() || $staleSig !== null ? 'Error — Consent to services' : 'Consent to services')));
 echo lang_toggle();
 ?>
@@ -135,10 +153,12 @@ echo lang_toggle();
 <?php if ($withdrawn): ?>
   <h1><?= t('Consent withdrawn') ?></h1>
   <p><?= t('This consent was withdrawn on') ?> <?= en(fmt_date($form['withdrawn_at'])) ?>. <?= t('It had been signed by') ?> <strong><?= h($form['signed_name']) ?></strong> <?= h(__('on')) ?> <?= en(fmt_date($form['signed_at'])) ?>.</p>
-  <p><?= t('If you received a newer consent request, please use the link in that email. Otherwise, contact') ?> <?= h(brand('short')) ?>.</p>
+  <p><?= t('If you received a newer consent request, please use the link in that email. Otherwise, contact') ?> <?= $contactHtml ?>.</p>
 <?php elseif ($form['signed_at']): ?>
   <h1><?= t('Consent recorded — thank you') ?></h1>
   <p><?= t('Signed by') ?> <strong><?= h($form['signed_name']) ?></strong> <?= h(__('on')) ?> <?= en(fmt_datetime($form['signed_at'])) ?><?= t('. A record has been placed in') ?> <?= h($form['client_name']) ?><?= t('\'s file. No further action is needed.') ?></p>
+  <p><?= t('You can print or save this page for your records.') ?></p>
+  <p><?= t('You can take back (withdraw) your consent at any time. To do that, contact') ?> <?= $contactHtml ?>.</p>
 <?php else: ?>
   <h1><?= t('Consent for services —') ?> <?= h($form['client_name']) ?></h1>
   <p><?= h(brand('org')) ?> <?= t('teaches people to use devices and software that help with vision loss. We also teach everyday living skills, offer counseling, and help students get ready for jobs.') ?></p>
@@ -147,13 +167,18 @@ echo lang_toggle();
   <p><?= t('You are signing as the parent or guardian of') ?> <strong><?= h($form['client_name']) ?></strong>. <?= t('The name on this form is') ?> <strong><?= h($form['guardian_name']) ?></strong>.</p>
   <p><?= t('When you sign, you agree that:') ?></p>
   <ul>
-    <li><?= t('We may give this student the services we told you about.') ?></li>
+    <?php if ($services): ?>
+    <li><?= t('We may give this student the services requested for them:') ?>
+      <ul><?php foreach ($services as $svc): ?><li><?= $whole($svc) ?></li><?php endforeach; ?></ul></li>
+    <?php else: ?>
+    <li><?= t('We may give this student the services described at the top of this page. We will explain each one before it starts.') ?></li>
+    <?php endif; ?>
     <li><?= t("We may talk with the student's school.") ?></li>
     <li><?= t('If needed, we may also talk with the state agency that helps people with disabilities find work.') ?></li>
     <li><?= t('We share records only to plan services and to send reports the law requires.') ?></li>
     <li><?= t('We may contact you about scheduling and progress.') ?></li>
   </ul>
-  <p><?= t('You can take back (withdraw) your consent at any time. To do that, contact') ?> <?= h(brand('short')) ?>.</p>
+  <p><?= t('You can take back (withdraw) your consent at any time. To do that, contact') ?> <?= $contactHtml ?>.</p>
   <?php $typedSig = $staleSig ?? (is_string($_SESSION[$sigKey] ?? null) ? $_SESSION[$sigKey] : ''); unset($_SESSION[$sigKey]); ?>
   <?php if ($staleSig !== null): // Announced once, by moving focus to it (no alert role). ?>
   <div class="alert alert-error" id="form-errors" tabindex="-1"><span class="visually-hidden"><?= t('Error:') ?> </span><?= t('This page was open for a long time, so your signature was not sent yet. Your typed name is still in the box. Please check it and choose Sign and submit again.') ?></div>

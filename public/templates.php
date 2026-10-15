@@ -7,10 +7,10 @@ require_perm('templates');
 
 /** A refused add form: keep what was typed and name each bad field (the page's
  *  error summary takes focus and links to it), then return to that form. */
-function tpl_refuse(array $errors, string $anchor): never {
+function tpl_refuse(array $errors, string $anchor, string $lib): never {
     keep_input();
     keep_field_errors($errors);
-    redirect('templates.php#' . $anchor);
+    redirect('templates.php?lib=' . $lib . '#' . $anchor);
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_goal_tpl'])) {
@@ -25,12 +25,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_goal_tpl'])) {
     if ($goal === '') $errs['specific_goal'] = 'A specific objective is required.';
     if ($metric === '') $errs['measurable_metric'] = 'Measurable criteria are required.';
     if (mb_strlen($focus) > 190) $errs['focus_area'] = 'Keep the focus area to 190 characters or fewer.';
-    if ($errs) tpl_refuse($errs, 'add-goal-tpl-h');
+    if ($errs) tpl_refuse($errs, 'add-goal-tpl-h', 'goals');
     db()->prepare('INSERT INTO goal_templates (category, specific_goal, measurable_metric, focus_area) VALUES (?,?,?,?)')
         ->execute([$cat, $goal, $metric, $focus ?: null]);
     audit($user['id'], 'goal_template.add', 'goal_template', (int)db()->lastInsertId(), $cat . ': ' . $goal);
     flash('Goal template added.');
-    redirect('templates.php');
+    redirect('templates.php?lib=goals');
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_goal_tpl'])) {
     $gtId = (int)($_POST['id'] ?? 0);
@@ -47,7 +47,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_goal_tpl'])) {
     } else {
         flash('That goal template no longer exists. It may already have been deleted.', 'error');
     }
-    redirect('templates.php');
+    // Back to the same search, so the next match is where the user left off.
+    $gtBack = ['lib' => 'goals'];
+    foreach (['gt_q', 'gt_cat'] as $gtKey) {
+        $gtVal = trim((string)($_POST[$gtKey] ?? ''));
+        if ($gtVal !== '') $gtBack[$gtKey] = mb_substr($gtVal, 0, 190);
+    }
+    redirect('templates.php?' . http_build_query($gtBack) . '#goals-h');
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assess_tpl'])) {
     $name = trim($_POST['name'] ?? '');
@@ -58,13 +64,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assess_tpl'])) {
     elseif (mb_strlen($name) > 190) $errs['name'] = 'Keep the template name to 190 characters or fewer.';
     if (mb_strlen($hardware) > 255) $errs['hardware_details'] = 'Keep the hardware details to 255 characters or fewer.';
     if (mb_strlen($software) > 190) $errs['software_version'] = 'Keep the software and version to 190 characters or fewer.';
-    if ($errs) tpl_refuse($errs, 'add-assess-tpl-h');
+    if ($errs) tpl_refuse($errs, 'add-assess-tpl-h', 'assessments');
     $tech = in_array($_POST['primary_tech'] ?? '', TECH_TYPES, true) ? $_POST['primary_tech'] : 'Screen Reader';
     db()->prepare('INSERT INTO assessment_templates (name, primary_tech, hardware_details, software_version, summary) VALUES (?,?,?,?,?)')
         ->execute([$name, $tech, $hardware ?: null, $software ?: null, trim($_POST['summary'] ?? '') ?: null]);
     audit($user['id'], 'assessment_template.add', 'assessment_template', (int)db()->lastInsertId(), $name);
     flash('Assessment template added.');
-    redirect('templates.php');
+    redirect('templates.php?lib=assessments');
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_assess_tpl'])) {
     $atId = (int)($_POST['id'] ?? 0);
@@ -79,29 +85,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_assess_tpl'])) {
     } else {
         flash('That assessment template no longer exists. It may already have been deleted.', 'error');
     }
-    redirect('templates.php');
+    redirect('templates.php?lib=assessments');
 }
+
+// Each library is its own view (?lib=), so a screen reader user lands on one
+// table and one add form rather than all four. A bare templates.php is the goal library.
+$libs = ['goals' => 'SMART goal templates', 'assessments' => 'Assessment templates', 'bundles' => 'Service bundles', 'instruments' => 'Scored assessment instruments'];
+$lib = (string)($_GET['lib'] ?? 'goals');
+if (!isset($libs[$lib])) $lib = 'goals';
+/** True when the refused add form names one of these fields, so its <details> opens. */
+$tplFormFailed = fn(array $fields): bool => array_intersect_key(form_errors(), array_flip($fields)) !== [];
 
 // The goal library can be very large, so it is searched on demand rather than
-// rendered in full. gt_q / gt_cat drive a server-side filter; results are capped.
+// rendered in full: no rows until a search or an area is chosen. gt_q / gt_cat
+// drive a server-side filter; results are capped.
 $gtQ = trim((string)($_GET['gt_q'] ?? ''));
 $gtCat = trim((string)($_GET['gt_cat'] ?? ''));
-$gtWhere = []; $gtArgs = [];
-if ($gtCat !== '') { $gtWhere[] = 'category = ?'; $gtArgs[] = $gtCat; }
-// Each word must match somewhere, so multi-word searches narrow the list.
-foreach (array_slice(preg_split('/\s+/', $gtQ, -1, PREG_SPLIT_NO_EMPTY) ?: [], 0, 6) as $gtWord) {
-    $gtWhere[] = '(specific_goal LIKE ? OR category LIKE ? OR measurable_metric LIKE ? OR focus_area LIKE ?)';
-    $like = '%' . $gtWord . '%'; array_push($gtArgs, $like, $like, $like, $like);
+$gtFiltered = $gtQ !== '' || $gtCat !== '';
+$goalTpls = []; $gtTruncated = false; $goalTplTotal = 0; $goalCats = [];
+if ($lib === 'goals') {
+    if ($gtFiltered) {
+        $gtWhere = []; $gtArgs = [];
+        if ($gtCat !== '') { $gtWhere[] = 'category = ?'; $gtArgs[] = $gtCat; }
+        // Each word must match somewhere, so multi-word searches narrow the list.
+        foreach (array_slice(preg_split('/\s+/', $gtQ, -1, PREG_SPLIT_NO_EMPTY) ?: [], 0, 6) as $gtWord) {
+            $gtWhere[] = '(specific_goal LIKE ? OR category LIKE ? OR measurable_metric LIKE ? OR focus_area LIKE ?)';
+            $like = '%' . $gtWord . '%'; array_push($gtArgs, $like, $like, $like, $like);
+        }
+        $gtSql = 'SELECT * FROM goal_templates' . ($gtWhere ? ' WHERE ' . implode(' AND ', $gtWhere) : '')
+            . ' ORDER BY category, specific_goal LIMIT 201';
+        $gtStmt = db()->prepare($gtSql); $gtStmt->execute($gtArgs);
+        $goalTpls = $gtStmt->fetchAll();
+        $gtTruncated = count($goalTpls) > 200; if ($gtTruncated) array_pop($goalTpls);
+    }
+    $goalTplTotal = (int)db()->query('SELECT COUNT(*) FROM goal_templates')->fetchColumn();
+    $goalCats = db()->query('SELECT category, COUNT(*) n FROM goal_templates GROUP BY category ORDER BY category')->fetchAll();
 }
-$gtSql = 'SELECT * FROM goal_templates' . ($gtWhere ? ' WHERE ' . implode(' AND ', $gtWhere) : '')
-    . ' ORDER BY category, specific_goal LIMIT 201';
-$gtStmt = db()->prepare($gtSql); $gtStmt->execute($gtArgs);
-$goalTpls = $gtStmt->fetchAll();
-$gtTruncated = count($goalTpls) > 200; if ($gtTruncated) array_pop($goalTpls);
-$goalTplTotal = (int)db()->query('SELECT COUNT(*) FROM goal_templates')->fetchColumn();
-$goalCats = db()->query('SELECT category, COUNT(*) n FROM goal_templates GROUP BY category ORDER BY category')->fetchAll();
 
-$assessTpls = db()->query('SELECT * FROM assessment_templates ORDER BY name')->fetchAll();
+$assessTpls = $lib === 'assessments' ? db()->query('SELECT * FROM assessment_templates ORDER BY name')->fetchAll() : [];
 
 /* ---- Service bundles ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_bundle'])) {
@@ -117,25 +138,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_bundle'])) {
     if ($errs) {
         // The ticked categories are a list, which keep_input() leaves out.
         $_SESSION['tpl_bundle_cats'] = $cats;
-        tpl_refuse($errs, 'add-bundle-h');
+        tpl_refuse($errs, 'add-bundle-h', 'bundles');
     }
     db()->prepare('INSERT INTO service_bundles (name, client_type, categories, description) VALUES (?,?,?,?)')
         ->execute([$name, $ctype, implode(';', $cats), $bDesc ?: null]);
     audit($user['id'], 'bundle.add', 'bundle', (int)db()->lastInsertId(), $name);
     flash('Service bundle added.');
-    redirect('templates.php#bundles');
+    redirect('templates.php?lib=bundles#bundles-h');
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_bundle'])) {
     // The button posts the state it asks for, so a stale page or a double submit
     // can never flip the bundle back; only a real change is audited.
     $bid = (int)($_POST['id'] ?? 0);
     $to = $_POST['to'] ?? '';
-    if (!in_array($to, ['active', 'retired'], true)) { flash('That request was incomplete — reload the page and try again.', 'error'); redirect('templates.php#bundles'); }
+    if (!in_array($to, ['active', 'retired'], true)) { flash('That request was incomplete — reload the page and try again.', 'error'); redirect('templates.php?lib=bundles#bundles-h'); }
     $active = $to === 'active' ? 1 : 0;
     $bn = db()->prepare('SELECT name, active FROM service_bundles WHERE id = ?');
     $bn->execute([$bid]);
     $b = $bn->fetch();
-    if (!$b) { flash('That service bundle no longer exists.', 'error'); redirect('templates.php#bundles'); }
+    if (!$b) { flash('That service bundle no longer exists.', 'error'); redirect('templates.php?lib=bundles#bundles-h'); }
     $up = db()->prepare('UPDATE service_bundles SET active = ? WHERE id = ? AND active <> ?');
     $up->execute([$active, $bid, $active]);
     if ($up->rowCount() === 1) {
@@ -146,7 +167,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_bundle'])) {
     } else {
         flash('Bundle “' . $b['name'] . '” was already ' . ($active ? 'active' : 'retired') . ' — nothing changed.');
     }
-    redirect('templates.php#bundles');
+    redirect('templates.php?lib=bundles#bundles-h');
 }
 
 /* ---- Scored assessment instruments ---- */
@@ -174,7 +195,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_instrument'])) {
     foreach ($lines as $n => $lab) {
         if (mb_strlen($lab) > 255) { $errs['instrument_items'] = 'Item ' . ($n + 1) . ' is longer than 255 characters — shorten it or split it into two items.'; break; }
     }
-    if ($errs) tpl_refuse($errs, 'add-instrument-h');
+    if ($errs) tpl_refuse($errs, 'add-instrument-h', 'instruments');
     db()->beginTransaction();
     try {
         db()->prepare('INSERT INTO assessment_instruments (name, description, scale_min, scale_max, scale_labels, higher_is_better) VALUES (?,?,?,?,?,?)')->execute([$name, $desc, $sMin, $sMax, $sLabels, (int)$direction]);
@@ -185,18 +206,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_instrument'])) {
     } catch (Throwable $e) { db()->rollBack(); throw $e; }
     audit($user['id'], 'instrument.add', 'instrument', $iid, $name . ' (' . count($lines) . ' items, ' . ($direction === '1' ? 'higher' : 'lower') . ' is better)');
     flash('Assessment instrument added.');
-    redirect('templates.php#instruments');
+    redirect('templates.php?lib=instruments#instr-h');
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_instrument'])) {
     // Explicit target state, as for bundles: a stale page can't flip it back.
     $iid = (int)($_POST['id'] ?? 0);
     $to = $_POST['to'] ?? '';
-    if (!in_array($to, ['active', 'inactive'], true)) { flash('That request was incomplete — reload the page and try again.', 'error'); redirect('templates.php#instruments'); }
+    if (!in_array($to, ['active', 'inactive'], true)) { flash('That request was incomplete — reload the page and try again.', 'error'); redirect('templates.php?lib=instruments#instr-h'); }
     $active = $to === 'active' ? 1 : 0;
     $in = db()->prepare('SELECT name FROM assessment_instruments WHERE id = ?');
     $in->execute([$iid]);
     $iname = $in->fetchColumn();
-    if ($iname === false) { flash('That instrument no longer exists.', 'error'); redirect('templates.php#instruments'); }
+    if ($iname === false) { flash('That instrument no longer exists.', 'error'); redirect('templates.php?lib=instruments#instr-h'); }
     $up = db()->prepare('UPDATE assessment_instruments SET active = ? WHERE id = ? AND active <> ?');
     $up->execute([$active, $iid, $active]);
     if ($up->rowCount() === 1) {
@@ -205,7 +226,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_instrument']))
     } else {
         flash('Instrument “' . $iname . '” was already ' . ($active ? 'active' : 'inactive') . ' — nothing changed.');
     }
-    redirect('templates.php#instruments');
+    redirect('templates.php?lib=instruments#instr-h');
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_instrument'])) {
     $iid = (int)($_POST['id'] ?? 0);
@@ -230,26 +251,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_instrument'])) {
             flash('That instrument no longer exists.', 'error');
         }
     }
-    redirect('templates.php#instruments');
+    redirect('templates.php?lib=instruments#instr-h');
 }
-$instruments = db()->query('SELECT i.*, (SELECT COUNT(*) FROM assessment_instrument_items WHERE instrument_id = i.id) AS n,
-    (SELECT COUNT(*) FROM client_scored_assessments WHERE instrument_id = i.id) AS used FROM assessment_instruments i ORDER BY i.name')->fetchAll();
+$instruments = $lib === 'instruments' ? db()->query('SELECT i.*, (SELECT COUNT(*) FROM assessment_instrument_items WHERE instrument_id = i.id) AS n,
+    (SELECT COUNT(*) FROM client_scored_assessments WHERE instrument_id = i.id) AS used FROM assessment_instruments i ORDER BY i.name')->fetchAll() : [];
 
-$bundles = db()->query('SELECT * FROM service_bundles ORDER BY active DESC, client_type, name')->fetchAll();
+$bundles = $lib === 'bundles' ? db()->query('SELECT * FROM service_bundles ORDER BY active DESC, client_type, name')->fetchAll() : [];
 // Categories ticked on an "Add bundle" form that was refused (see add_bundle).
 $keptBundleCats = is_array($_SESSION['tpl_bundle_cats'] ?? null) ? $_SESSION['tpl_bundle_cats'] : [];
 unset($_SESSION['tpl_bundle_cats']);
 
-page_header('Templates', $user, 'templates');
+page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates');
 ?>
-<h1>Templates</h1>
+<h1>Goal &amp; assessment templates</h1>
 <p class="muted">Reusable SMART goals and assessment structures. Apply them from a training track's goal form or a client's assessment form.</p>
 <div class="page-actions"><a class="btn btn-secondary btn-sm" href="curriculum.php">Training curricula</a></div>
+<nav aria-label="Template libraries">
+  <ul class="tab-nav">
+    <?php foreach ($libs as $libKey => $libLabel): ?>
+    <li><a href="templates.php?lib=<?= h($libKey) ?>" <?= $lib === $libKey ? 'aria-current="page"' : '' ?>><?= h($libLabel) ?></a></li>
+    <?php endforeach; ?>
+  </ul>
+</nav>
 
-<section class="card" aria-labelledby="goals-h">
+<?php if ($lib === 'goals'): ?>
+<section id="goals" class="card" aria-labelledby="goals-h">
   <h2 id="goals-h">SMART goal templates (<?= $goalTplTotal ?>)</h2>
   <?php // The fragment brings a search back to this section; the count below then takes focus. ?>
-  <form method="get" action="templates.php#goals-h" class="grid grid-2" aria-label="Search goal templates">
+  <form method="get" action="templates.php#goals-h" class="grid grid-2" role="search" aria-label="Search goal templates">
+    <input type="hidden" name="lib" value="goals">
     <div class="field">
       <label for="gt-cat">Area</label>
       <select id="gt-cat" name="gt_cat">
@@ -262,22 +292,21 @@ page_header('Templates', $user, 'templates');
       <div class="inline-form">
         <input type="search" id="gt-search" name="gt_q" value="<?= h($gtQ) ?>" placeholder="e.g. JAWS email, cane travel, Excel" autocomplete="off">
         <button type="submit" class="btn btn-secondary btn-sm">Search</button>
-        <?php if ($gtQ !== '' || $gtCat !== ''): ?><a class="btn btn-secondary btn-sm" href="templates.php#goals-h">Clear goal template filters</a><?php endif; ?>
+        <?php if ($gtFiltered): ?><a class="btn btn-secondary btn-sm" href="templates.php?lib=goals#goals-h">Clear goal template filters</a><?php endif; ?>
       </div>
     </div>
   </form>
   <?php // A search reloads the page, so a live region (already filled at load) would not
         // be announced: after a search the count is focused once instead. ?>
   <p class="hint" id="gt-count" tabindex="-1">
-    <?php if ($gtQ !== '' || $gtCat !== ''): ?>
+    <?php if ($gtFiltered): ?>
       <?= $gtTruncated ? 'Showing the first 200 matches — refine your search to narrow.' : (count($goalTpls) . ' ' . (count($goalTpls) === 1 ? 'match' : 'matches')) ?>
     <?php else: ?>
-      Showing the first <?= count($goalTpls) ?> of <?= $goalTplTotal ?> — search or pick an area to find a specific template.
+      There <?= $goalTplTotal === 1 ? 'is 1 goal template' : 'are ' . $goalTplTotal . ' goal templates' ?>. Search or choose an area to list them.
     <?php endif; ?>
   </p>
-  <?php if ($gtQ !== '' || $gtCat !== ''): ?>
+  <?php if ($gtFiltered): ?>
   <script>document.addEventListener('DOMContentLoaded',function(){if(document.getElementById('flash-messages')||document.getElementById('form-error-summary'))return;var c=document.getElementById('gt-count');if(c)c.focus();});</script>
-  <?php endif; ?>
   <div class="table-scroll" tabindex="0" role="region" aria-labelledby="goals-cap">
   <table id="goal-tpl-table">
     <caption class="visually-hidden" id="goals-cap">SMART goal templates by category</caption>
@@ -296,6 +325,8 @@ page_header('Templates', $user, 'templates');
         <td>
           <form method="post" action="templates.php" class="inline-form"><?= csrf_field() ?>
             <input type="hidden" name="id" value="<?= (int)$g['id'] ?>">
+            <input type="hidden" name="gt_q" value="<?= h($gtQ) ?>">
+            <input type="hidden" name="gt_cat" value="<?= h($gtCat) ?>">
             <button type="submit" name="del_goal_tpl" value="1" class="btn btn-danger btn-sm"
               onclick="return confirm(<?= h((string)json_encode('Delete the goal template "' . $gtName . '" permanently? This cannot be undone.', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)) ?>);">Delete permanently<span class="visually-hidden"> — goal template <?= h($gtName) ?></span></button>
           </form>
@@ -305,8 +336,11 @@ page_header('Templates', $user, 'templates');
     </tbody>
   </table>
   </div>
-  <h3 id="add-goal-tpl-h">Add a goal template</h3>
-  <form method="post" action="templates.php" class="stacked" novalidate>
+  <?php endif; ?>
+  <h3 class="visually-hidden">Add a goal template</h3>
+  <details class="mt-1"<?= $tplFormFailed(['category', 'specific_goal', 'measurable_metric', 'focus_area']) ? ' open' : '' ?>>
+  <summary id="add-goal-tpl-h">Add a goal template</summary>
+  <form method="post" action="templates.php?lib=goals" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['category' => 'Category', 'specific_goal' => 'Specific objective', 'measurable_metric' => 'Measurable criteria', 'focus_area' => 'Focus area']) ?>
     <div class="field"><label for="category">Category *</label>
@@ -320,9 +354,12 @@ page_header('Templates', $user, 'templates');
       <input type="text" id="focus_area" name="focus_area" maxlength="190" value="<?= h(old_in('focus_area')) ?>" <?= field_aria('focus_area') ?>><?= field_error('focus_area') ?></div>
     <button type="submit" name="add_goal_tpl" value="1" class="btn btn-primary">Add goal template</button>
   </form>
+  </details>
 </section>
+<?php endif; ?>
 
-<section class="card" aria-labelledby="assess-h">
+<?php if ($lib === 'assessments'): ?>
+<section id="assessments" class="card" aria-labelledby="assess-h">
   <h2 id="assess-h">Assessment templates (<?= count($assessTpls) ?>)</h2>
   <div class="table-scroll" tabindex="0" role="region" aria-labelledby="assess-cap">
   <table>
@@ -347,8 +384,10 @@ page_header('Templates', $user, 'templates');
     </tbody>
   </table>
   </div>
-  <h3 id="add-assess-tpl-h">Add an assessment template</h3>
-  <form method="post" action="templates.php" class="stacked" novalidate>
+  <h3 class="visually-hidden">Add an assessment template</h3>
+  <details class="mt-1"<?= $tplFormFailed(['name', 'hardware_details', 'software_version']) ? ' open' : '' ?>>
+  <summary id="add-assess-tpl-h">Add an assessment template</summary>
+  <form method="post" action="templates.php?lib=assessments" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['name' => 'Template name', 'hardware_details' => 'Hardware details', 'software_version' => 'Software & version']) ?>
     <div class="field"><label for="name">Template name *</label>
@@ -363,7 +402,10 @@ page_header('Templates', $user, 'templates');
       <textarea id="summary" name="summary" rows="6"><?= h(old_in('summary')) ?></textarea></div>
     <button type="submit" name="add_assess_tpl" value="1" class="btn btn-primary">Add assessment template</button>
   </form>
+  </details>
 </section>
+<?php endif; ?>
+<?php if ($lib === 'bundles'): ?>
 <section id="bundles" class="card" aria-labelledby="bundles-h">
   <h2 id="bundles-h">Service bundles (<?= count($bundles) ?>)</h2>
   <p class="muted">RSA program packages billed under one label. A track picks a bundle; each visit is then logged against one of its categories. Pre-ETS bundles appear only for Pre-ETS clients, VR bundles for VR clients. Retiring a bundle stops offering it for new tracks; tracks that already use it keep it until someone chooses a different bundle.</p>
@@ -391,8 +433,10 @@ page_header('Templates', $user, 'templates');
   </table>
   </div>
 
-  <h3 id="add-bundle-h">Add a service bundle</h3>
-  <form method="post" action="templates.php" class="stacked" novalidate>
+  <h3 class="visually-hidden">Add a service bundle</h3>
+  <details class="mt-1"<?= $tplFormFailed(['bundle_name', 'bundle_description', 'bundle_categories']) ? ' open' : '' ?>>
+  <summary id="add-bundle-h">Add a service bundle</summary>
+  <form method="post" action="templates.php?lib=bundles" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['bundle_name' => 'Bundle name', 'bundle_description' => 'Description', 'bundle_categories' => 'RSA categories'], ['bundle_categories' => 'bcat-0']) ?>
     <div class="field"><label for="bundle_name">Bundle name (billing label) *</label>
@@ -413,8 +457,11 @@ page_header('Templates', $user, 'templates');
     </fieldset>
     <button type="submit" name="add_bundle" value="1" class="btn btn-primary">Add bundle</button>
   </form>
+  </details>
 </section>
+<?php endif; ?>
 
+<?php if ($lib === 'instruments'): ?>
 <section id="instruments" class="card" aria-labelledby="instr-h">
   <h2 id="instr-h">Scored assessment instruments (<?= count($instruments) ?>)</h2>
   <p class="muted">Structured rating instruments that staff administer on a client's Assessments tab and re-administer over time to show progress. Each item is rated on the instrument's own scale; scores are normalized to a percent so trends compare fairly, and each instrument says whether a higher rating means better or worse, so the funder report counts an improvement as a gain. Includes seeded AT-outcome tools (device satisfaction, psychosocial impact, person–technology match).</p>
@@ -423,7 +470,7 @@ page_header('Templates', $user, 'templates');
     <caption class="visually-hidden" id="instr-cap">Scored assessment instruments with item count, scale, use and status</caption>
     <thead><tr><th scope="col">Name</th><th scope="col" class="num">Items</th><th scope="col">Scale</th><th scope="col" class="num">In use</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
     <tbody>
-    <?php if (!$instruments): ?><tr><td colspan="6" class="muted">None yet — add one below.</td></tr><?php endif; ?>
+    <?php if (!$instruments): ?><tr><td colspan="6" class="muted">None yet — use “Add an instrument” below.</td></tr><?php endif; ?>
     <?php foreach ($instruments as $ins): ?>
       <tr>
         <th scope="row"><?= h($ins['name']) ?><?= $ins['description'] ? '<br><span class="muted">' . h($ins['description']) . '</span>' : '' ?></th>
@@ -449,8 +496,10 @@ page_header('Templates', $user, 'templates');
     </tbody>
   </table>
   </div>
-  <h3 id="add-instrument-h">Add an instrument</h3>
-  <form method="post" action="templates.php" class="stacked" novalidate>
+  <h3 class="visually-hidden">Add an instrument</h3>
+  <details class="mt-1"<?= $tplFormFailed(['instrument_name', 'instrument_desc', 'scale_min', 'scale_max', 'scale_labels', 'higher_is_better', 'instrument_items']) ? ' open' : '' ?>>
+  <summary id="add-instrument-h">Add an instrument</summary>
+  <form method="post" action="templates.php?lib=instruments" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['instrument_name' => 'Name', 'instrument_desc' => 'Description', 'scale_min' => 'Lowest rating', 'scale_max' => 'Highest rating', 'scale_labels' => 'Rating labels', 'higher_is_better' => 'Higher ratings mean', 'instrument_items' => 'Items'], ['higher_is_better' => 'hib-1']) ?>
     <div class="field"><label for="instrument_name">Name *</label>
@@ -480,5 +529,7 @@ page_header('Templates', $user, 'templates');
       <textarea id="instrument_items" name="instrument_items" rows="6" required <?= field_aria('instrument_items', 'instrument_items-hint') ?>><?= h(old_in('instrument_items')) ?></textarea><?= field_error('instrument_items') ?></div>
     <button type="submit" name="add_instrument" value="1" class="btn btn-primary">Add instrument</button>
   </form>
+  </details>
 </section>
+<?php endif; ?>
 <?php page_footer();

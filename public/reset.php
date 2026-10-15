@@ -14,7 +14,9 @@ if (strlen($token) === 64) {
 
 if (!$row) {
     page_header('Reset password');
-    echo '<div class="card auth-card"><h1>Link expired or invalid</h1><p>Request a new one from the <a href="forgot.php">forgot password page</a>.</p></div>';
+    // The way forward is the link itself, named for what it does.
+    echo '<div class="card auth-card"><h1>Link expired or invalid</h1><p>Reset links work once, for a limited time.</p>'
+        . '<p><a class="btn btn-primary" href="forgot.php">Request a new reset link</a></p></div>';
     page_footer();
     exit;
 }

@@ -219,10 +219,10 @@ if (isset($_GET['id'])) {
         $ended = (bool)$endDiff->invert;
         $daysToEnd = (int)$endDiff->days;
     }
-    page_header('Contract: ' . $c['name'], $user, 'contracts');
+    page_header('Grant or contract: ' . $c['name'], $user, 'contracts', [['contracts.php', 'Grants & contracts']]);
     ?>
     <p><a href="contracts.php"><span aria-hidden="true">&larr; </span>All contracts</a></p>
-    <h1><?= h($c['name']) ?> <?= $c['status'] === 'Active' ? '' : '<span class="badge badge-hold">Closed</span>' ?></h1>
+    <h1>Grant or contract: <?= h($c['name']) ?> <?= $c['status'] === 'Active' ? '' : '<span class="badge badge-hold">Closed</span>' ?></h1>
     <p class="muted"><?= $c['funder'] ? h($c['funder']) . ' · ' : '' ?><?= $c['contract_number'] ? '#' . h($c['contract_number']) . ' · ' : '' ?>
       <?= $c['start_date'] ? fmt_date($c['start_date']) : '' ?><?= $c['end_date'] ? ' – ' . fmt_date($c['end_date']) : '' ?></p>
     <div class="page-actions">
@@ -353,26 +353,6 @@ page_header($showClosed ? 'Closed contracts' : 'Contracts', $user, 'contracts');
 <h1>Grants &amp; contracts<?= $showClosed ? ' — closed' : '' ?></h1>
 <p class="muted">Track each funding contract's budget, spend-down, and deliverables so nothing is over-spent or missed at renewal.</p>
 
-<section class="card" aria-labelledby="new-h">
-  <h2 id="new-h">New contract / grant</h2>
-  <?php // After a rejected submission the form comes back filled in, with the error on its field.
-  $old = fn(string $k): string => old_in('add_contract') !== '' ? h(old_in($k)) : ''; ?>
-  <form method="post" action="contracts.php" class="stacked" novalidate><?= csrf_field() ?>
-    <?= form_error_summary(['name' => '', 'amount' => '', 'start_date' => '', 'end_date' => '']) ?>
-    <div class="grid grid-4">
-      <div class="field"><label for="name">Name *</label><input type="text" id="name" name="name" required maxlength="190" value="<?= $old('name') ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
-      <div class="field"><label for="funder">Funder</label><input type="text" id="funder" name="funder" maxlength="190" value="<?= $old('funder') ?>"></div>
-      <div class="field"><label for="contract_number">Contract #</label><input type="text" id="contract_number" name="contract_number" maxlength="120" value="<?= $old('contract_number') ?>"></div>
-      <div class="field"><label for="amount">Budget (USD)</label><input type="text" inputmode="decimal" id="amount" name="amount" maxlength="20" value="<?= $old('amount') ?>" <?= field_aria('amount') ?>><?= field_error('amount') ?></div>
-    </div>
-    <div class="grid grid-4">
-      <div class="field"><label for="start_date">Start</label><input type="date" id="start_date" name="start_date" value="<?= $old('start_date') ?>" <?= field_aria('start_date') ?>><?= field_error('start_date') ?></div>
-      <div class="field"><label for="end_date">End</label><input type="date" id="end_date" name="end_date" value="<?= $old('end_date') ?>" <?= field_aria('end_date') ?>><?= field_error('end_date') ?></div>
-    </div>
-    <button type="submit" name="add_contract" value="1" class="btn btn-primary">Create contract</button>
-  </form>
-</section>
-
 <h2 id="list-h"><?= $showClosed ? 'Closed contracts' : 'Active contracts' ?></h2>
 <div class="page-actions">
   <a class="btn btn-secondary btn-sm" href="contracts.php<?= $showClosed ? '' : '?closed=1' ?>"><?= $showClosed ? 'Show active' : 'Show closed' ?></a>
@@ -402,5 +382,26 @@ page_header($showClosed ? 'Closed contracts' : 'Contracts', $user, 'contracts');
   </tbody>
 </table>
 </div>
+<?php // The list comes first; the new-contract form opens itself after a refused submit. ?>
+<h2 class="visually-hidden">New contract or grant</h2>
+<details class="card mt-1"<?= array_intersect_key(form_errors(), array_flip(['name', 'amount', 'start_date', 'end_date'])) !== [] ? ' open' : '' ?>>
+  <summary id="new-h">New contract or grant</summary>
+  <?php // After a rejected submission the form comes back filled in, with the error on its field.
+  $old = fn(string $k): string => old_in('add_contract') !== '' ? h(old_in($k)) : ''; ?>
+  <form method="post" action="contracts.php" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['name' => '', 'amount' => '', 'start_date' => '', 'end_date' => '']) ?>
+    <div class="grid grid-4">
+      <div class="field"><label for="name">Name *</label><input type="text" id="name" name="name" required maxlength="190" value="<?= $old('name') ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
+      <div class="field"><label for="funder">Funder</label><input type="text" id="funder" name="funder" maxlength="190" value="<?= $old('funder') ?>"></div>
+      <div class="field"><label for="contract_number">Contract #</label><input type="text" id="contract_number" name="contract_number" maxlength="120" value="<?= $old('contract_number') ?>"></div>
+      <div class="field"><label for="amount">Budget (USD)</label><input type="text" inputmode="decimal" id="amount" name="amount" maxlength="20" value="<?= $old('amount') ?>" <?= field_aria('amount') ?>><?= field_error('amount') ?></div>
+    </div>
+    <div class="grid grid-4">
+      <div class="field"><label for="start_date">Start</label><input type="date" id="start_date" name="start_date" value="<?= $old('start_date') ?>" <?= field_aria('start_date') ?>><?= field_error('start_date') ?></div>
+      <div class="field"><label for="end_date">End</label><input type="date" id="end_date" name="end_date" value="<?= $old('end_date') ?>" <?= field_aria('end_date') ?>><?= field_error('end_date') ?></div>
+    </div>
+    <button type="submit" name="add_contract" value="1" class="btn btn-primary">Create contract</button>
+  </form>
+</details>
 <?= contract_date_script() ?>
 <?php page_footer();

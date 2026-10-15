@@ -105,6 +105,7 @@ struct ClientDetailView: View {
     @State private var showingEditClient = false
     @State private var showingUpload = false
     @State private var showingAISummary = false
+    @State private var showingLogHours = false
     /// Bumped on every refresh after the first load, so the sections that load on their own
     /// (assessments, homework, documents) reload too — after an upload, a note with homework,
     /// or pull-to-refresh.
@@ -276,6 +277,20 @@ struct ClientDetailView: View {
                             }
                         }
                         .padding(.vertical, 2)
+                        // VoiceOver: the whole note is one stop (its full text, whatever the preview
+                        // shows); Edit and the preview's Show full note are on the Actions rotor.
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(noteSummary(note))
+                        .accessibilityActions {
+                            if note.canEdit {
+                                Button("Edit note") { editingNote = note }
+                            }
+                            if mayTruncate(note.body, lines: 6, accessibilitySize: typeSize.isAccessibilitySize) {
+                                Button(open ? "Show less" : "Show full note") {
+                                    if open { expandedNotes.remove(note.id) } else { expandedNotes.insert(note.id) }
+                                }
+                            }
+                        }
                     }
                     // The record carries the newest 50 notes; older ones are fetched on request.
                     if let total = detail.notesTotal, shownNotes.count < total {
@@ -309,6 +324,15 @@ struct ClientDetailView: View {
                 Button { confirmation = nil; showingUpload = true } label: {
                     Label("Upload document", systemImage: "camera.on.rectangle")
                 }
+                // Logging hours reads the tracks list, which needs the clients permission (as on
+                // Schedule). Opens with this client's only active track chosen, or offers just
+                // their tracks.
+                if api.can("clients") {
+                    Button { confirmation = nil; showingLogHours = true } label: {
+                        Label("Log hours", systemImage: "clock.badge.checkmark")
+                    }
+                    .disabled(detail == nil)
+                }
                 if api.aiHas("draft") {
                     Button { confirmation = nil; showingAISummary = true } label: {
                         Label("AI case summary", systemImage: "sparkles")
@@ -340,6 +364,12 @@ struct ClientDetailView: View {
                 Task { await reload() }
             }
         }
+        // The form says its own results and stays open for another entry; the record reloads
+        // once it closes, so the tracks' hours are up to date.
+        .sheet(isPresented: $showingLogHours, onDismiss: { Task { await reload() } }) {
+            let active = (detail?.tracks ?? []).filter { $0.status == "Active" }
+            LogHoursView(initialTrackId: active.count == 1 ? active[0].id : 0, clientId: clientId)
+        }
         .sheet(isPresented: $showingNoteSheet, onDismiss: announceSheetResult) {
             AddNoteSheet(clientId: clientId, tracks: detail?.tracks ?? [], existing: nil) { message in
                 confirmation = message; sheetResult = message
@@ -359,6 +389,20 @@ struct ClientDetailView: View {
     private func announceSheetResult() {
         if let message = sheetResult { announceAfterDismiss(message) }
         sheetResult = nil
+    }
+
+    /// A note row as VoiceOver reads it: subject; type, date and author; format and track;
+    /// when it was edited; then the whole text.
+    private func noteSummary(_ note: Note) -> String {
+        var parts = [note.subject, "\(note.noteType), \(formatDateTime(note.createdAt)), \(note.author ?? "System")"]
+        if let fmt = note.noteFormat, fmt != "free" { parts.append("Format: \(noteFormatDescription(fmt))") }
+        if let tt = note.trackTitle, !tt.isEmpty { parts.append("Track: \(tt)") }
+        if let updated = note.updatedAt {
+            let editedBy: String = note.editor.map { " by \($0)" } ?? ""
+            parts.append("Edited \(formatDateTime(updated))\(editedBy)")
+        }
+        parts.append(note.body)
+        return parts.joined(separator: ". ")
     }
 
     /// `olderDepth`: how many older notes to fetch again (default: as many as are open now).
@@ -516,6 +560,8 @@ struct AddNoteSheet: View {
     @State private var askingDiscard = false
     /// A new note's text was put back from this phone's draft when the sheet opened.
     @State private var restoredDraft = false
+    /// The "Generate from messy notes" group, folded away until opened.
+    @State private var showingGenerator = false
 
     /// A new note's unsaved text is kept on this phone as it is typed (DraftStore), so a forced
     /// sign-in or the app being closed does not lose it. Cleared once it is saved, queued
@@ -611,7 +657,7 @@ struct AddNoteSheet: View {
             questions = r.questions
             homework = r.homework
             if hwTrackId == 0 { hwTrackId = activeTracks.first?.id ?? 0 }
-            // The draft fills in further down the form with nothing moving: say what arrived.
+            // The draft fills in higher up the form with nothing moving: say what arrived.
             var summary = "\(r.format) sections drafted."
             if wasFree && structured && !body_.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 summary += " The text you typed in Note is kept as the narrative, saved after the sections."
@@ -647,26 +693,6 @@ struct AddNoteSheet: View {
                         }
                     }
                     CaptionedField(label: "Subject (required)", text: $subject, prompt: "Subject")
-                }
-
-                // Generator: paste messy notes → structured draft.
-                if existing == nil && api.aiHas("draft") {
-                    Section("Generate from messy notes") {
-                        Text("Paste your raw session notes; the assistant drafts the \(structured ? noteFormat : "BIRP") sections, asks about anything missing, and pulls out homework.")
-                            .font(.caption).foregroundStyle(Color.secondaryText)
-                        TextField("Paste raw notes here", text: $messy, axis: .vertical).lineLimit(3...10)
-                        Button { Task { await generate() } } label: {
-                            Label(genBusy ? "Generating…" : "Generate structured note", systemImage: "wand.and.stars")
-                        }.disabled(genBusy || messy.isEmpty)
-                    }
-                }
-
-                if !questions.isEmpty {
-                    Section {
-                        ForEach(questions, id: \.self) { q in
-                            Label(q, systemImage: "questionmark.circle").font(.callout)
-                        }
-                    } header: { Text("Before you save — double-check") }
                 }
 
                 if structured {
@@ -710,6 +736,32 @@ struct AddNoteSheet: View {
                             }.disabled(aiBusy)
                         }
                     }
+                }
+
+                // Generator: paste messy notes → structured draft. After the note itself, folded
+                // away until wanted, so Subject leads straight to the note's text.
+                if existing == nil && api.aiHas("draft") {
+                    Section {
+                        DisclosureGroup(isExpanded: $showingGenerator) {
+                            Text("Paste your raw session notes; the assistant drafts the \(structured ? noteFormat : "BIRP") sections above, asks about anything missing, and pulls out homework.")
+                                .font(.caption).foregroundStyle(Color.secondaryText)
+                            TextField("Paste raw notes here", text: $messy, axis: .vertical).lineLimit(3...10)
+                            Button { Task { await generate() } } label: {
+                                Label(genBusy ? "Generating…" : "Generate structured note", systemImage: "wand.and.stars")
+                            }.disabled(genBusy || messy.isEmpty)
+                        } label: {
+                            Label("Generate from messy notes", systemImage: "wand.and.stars")
+                        }
+                        .accessibilityHint("Shows a box for raw notes the assistant turns into a structured note.")
+                    }
+                }
+
+                if !questions.isEmpty {
+                    Section {
+                        ForEach(questions, id: \.self) { q in
+                            Label(q, systemImage: "questionmark.circle").font(.callout)
+                        }
+                    } header: { Text("Before you save — double-check") }
                 }
 
                 if !homework.isEmpty {

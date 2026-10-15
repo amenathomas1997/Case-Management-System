@@ -91,6 +91,8 @@ struct SearchView: View {
                 Text(subtitle).font(.caption).foregroundStyle(Color.secondaryText)
             }
         }
+        // One stop per result, title then details (a hit that opens nothing included).
+        .accessibilityElement(children: .combine)
     }
 
     /// `submitted`: the person pressed Search, so a query too short to send is said, not

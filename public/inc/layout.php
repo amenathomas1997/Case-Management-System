@@ -10,6 +10,12 @@ function brand_short_html(): string {
 require_once __DIR__ . '/accessibility.php';
 require_once __DIR__ . '/navigation.php';
 
+/** Pages people outside the agency use (clients, families, counselors, referrers). */
+function cms_client_facing_page(): bool {
+    return empty($GLOBALS['CMS_PAGE_SIGNED_IN']) && in_array(basename($_SERVER['SCRIPT_NAME'] ?? ''),
+        ['portal.php', 'consent.php', 'survey.php', 'community_referral.php', 'vrc.php', 'ack.php', 'access_bookings.php', 'amendment_request.php'], true);
+}
+
 function page_header(string $title, ?array $user = null, string $active = '', array $parents = []): void {
     // Public/help/error screens may omit the actor, but signed-in staff still
     // need their permission-filtered navigation on those screens.
@@ -53,9 +59,9 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
 <?php /* Staff shortcuts only: clients on the portal, referral or sign-in pages have no Dashboard or staff menu. */ ?>
 <?php if ($user): ?>
 <nav class="wrap page-actions cms-page-navigation" aria-label="<?= h(__('Page navigation')) ?>">
-  <a class="btn btn-secondary" href="index.php" data-cms-back><?= t('Go back') ?></a>
-  <a class="btn btn-secondary" href="index.php"><?= t('Dashboard') ?></a>
-  <a class="btn btn-secondary" href="#main-nav" data-cms-menu><?= t('Go to main menu') ?></a>
+  <span class="nav-item"><a class="btn btn-secondary" href="index.php" data-cms-back aria-describedby="hint-back"><?= t('Go back') ?></a><span class="nav-hint" id="hint-back"><?= t('Returns to the page you came from. It does not undo a save.') ?></span></span>
+  <span class="nav-item"><a class="btn btn-secondary" href="index.php" aria-describedby="hint-dashboard"><?= t('Dashboard') ?></a><span class="nav-hint" id="hint-dashboard"><?= t('Your starting page.') ?></span></span>
+  <span class="nav-item"><a class="btn btn-secondary" href="#main-nav" data-cms-menu aria-describedby="hint-menu"><?= t('Go to main menu') ?></a><span class="nav-hint" id="hint-menu"><?= t('Moves to the main menu, grouped by Today, Clients, Services and more.') ?></span></span>
 </nav>
 <?php endif; ?>
 <section id="low-vision-bar" class="vision-bar" aria-labelledby="vision-title" data-saved="<?= h(__('Display updated.')) ?>" data-account-hidden="<?= $hideVision ? 'true' : 'false' ?>" hidden>
@@ -98,11 +104,22 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
       </button>
       <ul class="main-nav" id="main-nav" tabindex="-1">
         <?php
-        $items = cms_navigation_items();
+        // Grouped under headings (H or the heading list jumps between groups); each link
+        // carries a one-sentence hint as its description, read after a pause and shown on
+        // hover or keyboard focus. Groups with no permitted link are left out.
         $script = basename($_SERVER['SCRIPT_NAME'] ?? '');
-        foreach ($items as [$href, $label, $key, $perm]): if ($perm !== null && !can($perm)) continue;
+        $byGroup = [];
+        foreach (cms_navigation_items() as $item) if ($item[3] === null || can($item[3])) $byGroup[$item[4]][] = $item;
+        foreach (cms_navigation_groups() as $group => $groupLabel): if (empty($byGroup[$group])) continue; ?>
+        <li class="nav-group">
+          <h2 class="nav-group-title" id="nav-group-<?= $group ?>"><?= h($groupLabel) ?></h2>
+          <ul aria-labelledby="nav-group-<?= $group ?>">
+          <?php foreach ($byGroup[$group] as [$href, $label, $key, , , $hint]):
             $current = $active === $key ? ($script === explode('#', $href, 2)[0] ? 'aria-current="page"' : 'aria-current="true"') : ''; ?>
-        <li><a href="<?= $href ?>" <?= $current ?>><?= h($label) ?></a></li>
+            <li class="nav-item"><a href="<?= $href ?>" <?= $current ?> aria-describedby="nav-hint-<?= $key ?>"><?= h($label) ?></a><span class="nav-hint" id="nav-hint-<?= $key ?>"><?= h($hint) ?></span></li>
+          <?php endforeach; ?>
+          </ul>
+        </li>
         <?php endforeach; ?>
         <?php
         try {
@@ -128,7 +145,8 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
       </ul>
     </nav>
     <?php else: ?>
-    <span class="brand"><?= brand_short_html() ?> <span class="brand-sub"><?= t('Case Management') ?></span></span>
+    <?php /* Clients and counselors are not "cases": their pages show the organization's name only. */ ?>
+    <span class="brand"><?= brand_short_html() ?><?php if (!cms_client_facing_page()): ?> <span class="brand-sub"><?= t('Case Management') ?></span><?php endif; ?></span>
     <?php endif; ?>
   </div>
 </header>
@@ -319,11 +337,11 @@ function page_footer(): void {
       <a class="btn btn-secondary" href="#main-nav" data-cms-menu><?= t('Go to main menu') ?></a>
     </nav>
     <?php endif; ?>
-    <p><?= h(cfg('name')) ?> <span aria-hidden="true">&middot;</span> <a href="community_referral.php"><?= t('Referral Form') ?></a>
+    <p><?= h(cms_client_facing_page() ? brand('org') : cfg('name')) ?> <span aria-hidden="true">&middot;</span> <a href="community_referral.php"><?= t('Referral Form') ?></a>
        <span aria-hidden="true">&middot;</span> <?= $helpLink ?>
        <?php if ($contact !== ''): ?><span aria-hidden="true">&middot;</span> <?= t('Questions? Email') ?> <a href="mailto:<?= h($contact) ?>"><?= h($contact) ?></a><?php endif; ?>
     </p>
-    <p class="site-version"><?= page_lang() === 'es' ? 'Versión' : 'Version' ?> <?= h(APP_VERSION) ?></p>
+    <?php if (!cms_client_facing_page()): ?><p class="site-version"><?= page_lang() === 'es' ? 'Versión' : 'Version' ?> <?= h(APP_VERSION) ?></p><?php endif; ?>
   </div>
 </footer>
 </body>

@@ -128,6 +128,18 @@ struct CounselorsView: View {
                         .padding(.top, 4)
                     }
                     .padding(.vertical, 4)
+                    // One VoiceOver stop per counselor: the details read in order, and the
+                    // link buttons in the Actions rotor (the same code, so each still asks first).
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(counselorSpoken(counselor))
+                    .accessibilityActions {
+                        Button(counselor.portalActive ? "Resend / reset link" : (counselor.portalExpired ? "Send a new link" : "Send portal link")) {
+                            pendingSend = counselor
+                        }
+                        if counselor.portalActive && !revoking.contains(counselor.email) {
+                            Button("Turn off link") { pendingRevoke = counselor }
+                        }
+                    }
                 }
             }
             .onChange(of: revealConfirmation) { _ in proxy.scrollTo("counselorConfirmation", anchor: .top) }
@@ -166,6 +178,21 @@ struct CounselorsView: View {
             }
             Button("Keep link", role: .cancel) { pendingRevoke = nil }
         }
+    }
+
+    /// The counselor as VoiceOver reads it: name, portal status, agency and clients, email, link dates.
+    private func counselorSpoken(_ counselor: CounselorRow) -> String {
+        var parts = [counselor.displayName,
+                     counselor.portalActive ? "Portal active" : (counselor.portalExpired ? "Portal expired" : "Not invited"),
+                     "\(counselor.agency ?? "No agency"), \(counselor.clients) client\(counselor.clients == 1 ? "" : "s")"]
+        if counselor.displayName != counselor.email { parts.append(counselor.email) }
+        if counselor.portalActive, let expires = counselor.portalExpiresAt {
+            parts.append("Link expires \(formatDate(expires))")
+        } else if counselor.portalExpired {
+            parts.append("Link expired\(counselor.portalExpiresAt.map { " \(formatDate($0))" } ?? ""); the counselor needs a new link")
+        }
+        if let used = counselor.lastUsedAt { parts.append("Last opened \(formatDateTime(used))") }
+        return parts.joined(separator: ", ")
     }
 
     private func load() async {

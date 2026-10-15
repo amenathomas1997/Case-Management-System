@@ -93,7 +93,7 @@ struct CohortDetail: View {
                     Section {
                         ForEach(d.members) { m in
                             HStack {
-                                Text(m.name).accessibilityFocused($focusedMember, equals: m.id)
+                                Text(m.name)
                                 Spacer()
                                 // A visible single-tap way to remove, as well as the swipe action below.
                                 Button("Remove") { pendingRemove = m }
@@ -101,6 +101,12 @@ struct CohortDetail: View {
                                     .accessibilityLabel("Remove \(m.name) from the cohort")
                                     .accessibilityInputLabels(["Remove", "Remove \(m.name)"])
                             }
+                            // VoiceOver: one stop per student; Remove (confirmed first, as the button
+                            // and swipe action are) is on the Actions rotor.
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(m.name)
+                            .accessibilityAction(named: "Remove from cohort") { pendingRemove = m }
+                            .accessibilityFocused($focusedMember, equals: m.id)
                             // Confirmed first (not a destructive-role button, which would take the
                             // row off screen before the user has confirmed).
                             .swipeActions(allowsFullSwipe: false) {
@@ -138,6 +144,7 @@ struct CohortDetail: View {
                                 Text(s.activity).font(.body.weight(.semibold))
                                 Text("\(formatDate(s.sessionDate)) · \(s.durationMin) min · \(s.presentN) present").font(.caption).foregroundStyle(Color.secondaryText)
                             }
+                            .accessibilityElement(children: .combine)
                         }
                     }
                 } else if error == nil { ProgressView() }
