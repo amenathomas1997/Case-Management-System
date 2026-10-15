@@ -145,7 +145,7 @@ $addOpen = array_intersect_key(form_errors(), ['title' => 1, 'due_date' => 1]) |
 <section class="card" aria-labelledby="add-h">
   <h2 class="visually-hidden">Add a task</h2>
   <details id="add-task"<?= $addOpen ? ' open' : '' ?>>
-  <summary id="add-h">Add a task</summary>
+  <summary accesskey="n" id="add-h">Add a task</summary>
   <form method="post" action="tasks.php" class="stacked" novalidate>
     <?= csrf_field() ?>
     <input type="hidden" name="show" value="<?= h($show) ?>">

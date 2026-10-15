@@ -1,7 +1,7 @@
 {
     "product": "Case Management System",
-    "latest": "3.0.24",
+    "latest": "3.0.25",
     "released": "2026-10-15",
-    "notes": "Screen-reader fix: menu and shortcut link hints are read with the link itself, with no extra line to arrow past; the on-screen hint still appears on hover or keyboard focus. Includes everything in 3.0.23. No database migration: sites on 3.0.21 or later update application files only. Sites on 3.0.16 to 3.0.20 apply mig_3.0.21.sql first. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16 and 3.0.21 in order; all are safe to re-run.",
+    "notes": "Quick keys: Alt (Chrome/Edge), Alt+Shift (Firefox) or Control+Option (Mac) plus 1-9 open Dashboard, Task list, Daily work, Client records, Schedule, Messages, Equipment, Invoices and Notifications; 0 main menu, M main content, S search, U user guide, A My Account; N opens the page's add form and T the Log a session form. Screen readers hear the shortcut with each link. Includes everything in 3.0.24. No database migration: sites on 3.0.21 or later update application files only. Sites on 3.0.16 to 3.0.20 apply mig_3.0.21.sql first. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16 and 3.0.21 in order; all are safe to re-run.",
     "contact": "Contact Example Agency for the update package."
 }

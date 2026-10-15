@@ -1206,7 +1206,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
 <section class="card" aria-labelledby="addnote-h">
   <h3 class="visually-hidden"><?= $editNote ? 'Edit note' : 'Add a note' ?></h3>
   <details id="addnote"<?= $noteFormOpen ? ' open' : '' ?>>
-  <summary id="addnote-h"><?= $editNote ? 'Edit note' : 'Add a note' ?></summary>
+  <summary accesskey="n" id="addnote-h"><?= $editNote ? 'Edit note' : 'Add a note' ?></summary>
   <?php if ($editNote): ?>
     <p class="muted">Editing “<?= h($editNote['subject']) ?>” — the note will be marked as edited. <a href="<?= $tabUrl('notes') ?>">Cancel and write a new note instead</a>.</p>
   <?php else: ?>

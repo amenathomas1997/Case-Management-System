@@ -768,7 +768,7 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
 <section class="card" aria-labelledby="add-h">
   <h2 class="visually-hidden">Schedule a session</h2>
   <details id="add-session"<?= $addOpen ? ' open' : '' ?>>
-  <summary id="add-h">Schedule a session</summary>
+  <summary accesskey="n" id="add-h">Schedule a session</summary>
   <p class="hint">Fields marked with an asterisk (*) are required.</p>
   <form method="post" action="schedule.php" class="stacked" novalidate>
     <?= csrf_field() ?>

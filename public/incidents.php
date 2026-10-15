@@ -164,7 +164,7 @@ $sevBadge = fn($s) => '<span class="badge ' . ($s === 'Critical' || $s === 'High
 <?php // The log comes first; the report form is one step away and opens itself after a refused submit. ?>
 <h2 class="visually-hidden">Report an incident</h2>
 <details class="card mt-1"<?= array_intersect_key(form_errors(), array_flip(['incident_date', 'type', 'severity', 'client_id', 'location', 'description', 'action_taken'])) !== [] ? ' open' : '' ?>>
-  <summary id="add-h">Report an incident</summary>
+  <summary accesskey="n" id="add-h">Report an incident</summary>
   <p class="muted">Fields marked with an asterisk (*) are required. Check the details before you log the incident: afterwards only its status can be changed.</p>
   <form method="post" action="incidents.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['incident_date' => 'Date', 'type' => 'Type', 'severity' => 'Severity', 'client_id' => 'Client', 'location' => 'Location', 'description' => 'What happened', 'action_taken' => 'Action taken']) ?>

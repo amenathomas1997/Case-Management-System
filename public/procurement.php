@@ -560,7 +560,7 @@ page_header('Device purchases', $user, 'procurement');
 <?php // The list comes first; the new-request form opens itself after a refused submit. ?>
 <h2 class="visually-hidden">New device request</h2>
 <details class="card mt-1"<?= array_intersect_key(form_errors(), array_flip(['client_id', 'device_name', 'justification'])) !== [] ? ' open' : '' ?>>
-  <summary id="new-h">New device request</summary>
+  <summary accesskey="n" id="new-h">New device request</summary>
   <?php // After a rejected submission the form comes back filled in, with each error on its field.
   $oldReq = fn(string $k, string $default = ''): string => old_in('add_request') !== '' ? old_in($k, $default) : $default; ?>
   <form method="post" action="procurement.php" class="stacked" novalidate>

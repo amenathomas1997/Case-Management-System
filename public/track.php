@@ -685,7 +685,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     <?= form_error_summary(['work_date' => 'Date', 'log_auth_ack' => 'Authorization', 'visit_rsa_category' => 'RSA service delivered this visit', 'visit_service_type' => 'Service type',
         'goal_id' => 'Goal this session advanced', 'hours' => 'Hours worked', 'mileage' => 'Mileage', 'description' => 'Activity description'], ['goal_id' => 'log_goal', 'log_auth_ack' => 'log_auth_ack']) ?>
     <div class="field"><label for="work_date">Date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-      <input type="date" id="work_date" name="work_date" required min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('work_date', date('Y-m-d'))) ?>" <?= field_aria('work_date') ?>><?= field_error('work_date') ?></div>
+      <input type="date" id="work_date" name="work_date" accesskey="t" required min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('work_date', date('Y-m-d'))) ?>" <?= field_aria('work_date') ?>><?= field_error('work_date') ?></div>
     <?php // Shown once the date was refused as outside the authorization (or a ticked box is being kept). ?>
     <?php if (has_field_error('log_auth_ack') || old_in('auth_ack') === '1'): ?>
     <div class="field"><label><input type="checkbox" id="log_auth_ack" name="auth_ack" value="1"<?= old_in('auth_ack') === '1' ? ' checked' : '' ?> <?= field_aria('log_auth_ack') ?>>
@@ -779,7 +779,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
       || array_filter(['subject', 'body', 'sec1', 'sec2', 'sec3', 'sec4'], fn($k) => trim(old_in($k)) !== ''); ?>
   <h3 class="visually-hidden">Add a note</h3>
   <details id="add-track-note"<?= $tnOpen ? ' open' : '' ?>>
-  <summary>Add a note</summary>
+  <summary accesskey="n">Add a note</summary>
   <form method="post" action="track.php?id=<?= $id ?>#notes" class="stacked" novalidate>
     <?= csrf_field() ?><?= web_idem_field() ?>
     <?php // A refused homework due date links to that row's date field.

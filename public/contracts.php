@@ -385,7 +385,7 @@ page_header($showClosed ? 'Closed contracts' : 'Contracts', $user, 'contracts');
 <?php // The list comes first; the new-contract form opens itself after a refused submit. ?>
 <h2 class="visually-hidden">New contract or grant</h2>
 <details class="card mt-1"<?= array_intersect_key(form_errors(), array_flip(['name', 'amount', 'start_date', 'end_date'])) !== [] ? ' open' : '' ?>>
-  <summary id="new-h">New contract or grant</summary>
+  <summary accesskey="n" id="new-h">New contract or grant</summary>
   <?php // After a rejected submission the form comes back filled in, with the error on its field.
   $old = fn(string $k): string => old_in('add_contract') !== '' ? h(old_in($k)) : ''; ?>
   <form method="post" action="contracts.php" class="stacked" novalidate><?= csrf_field() ?>

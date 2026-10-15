@@ -88,6 +88,10 @@ foreach ($xp->query('//nav') as $nav) {
     $navNames[] = $name;
 }
 check($xp->query('//main[@id="main" and @tabindex="-1"]')->length === 1, 'Skip-link destination accepts keyboard focus');
+$seen = [];
+foreach ($xp->query('//*[@accesskey]') as $el) { $k = strtolower($el->getAttribute('accesskey')); check(!isset($seen[$k]), 'Access key used once on the page: ' . $k); $seen[$k] = true; }
+check(isset($seen['1'], $seen['0'], $seen['m'], $seen['s'], $seen['9']), 'Quick keys reach Dashboard, main menu, main content, search and notifications');
+check(!isset($seen['n'], $seen['t']) && !array_intersect_key(cms_access_keys(), ['n' => 1, 't' => 1]), 'N and T are left free for each page\'s own add and log forms');
 check($xp->query('//button[contains(@class,"vfab-stop")]')->length === 1, 'Speech output has an explicit stop control');
 check($xp->query('//button[contains(@class,"vfab-listen")]')->length === 1, 'Microphone has an explicit activation control');
 check($xp->query('//footer//a[@href="help.php" and @lang="en"]')->length === 1, 'Shared help is consistently available and language-labelled');

@@ -339,7 +339,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
   <?php endif; ?>
   <h3 class="visually-hidden">Add a goal template</h3>
   <details class="mt-1"<?= $tplFormFailed(['category', 'specific_goal', 'measurable_metric', 'focus_area']) ? ' open' : '' ?>>
-  <summary id="add-goal-tpl-h">Add a goal template</summary>
+  <summary accesskey="n" id="add-goal-tpl-h">Add a goal template</summary>
   <form method="post" action="templates.php?lib=goals" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['category' => 'Category', 'specific_goal' => 'Specific objective', 'measurable_metric' => 'Measurable criteria', 'focus_area' => 'Focus area']) ?>
@@ -386,7 +386,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
   </div>
   <h3 class="visually-hidden">Add an assessment template</h3>
   <details class="mt-1"<?= $tplFormFailed(['name', 'hardware_details', 'software_version']) ? ' open' : '' ?>>
-  <summary id="add-assess-tpl-h">Add an assessment template</summary>
+  <summary accesskey="n" id="add-assess-tpl-h">Add an assessment template</summary>
   <form method="post" action="templates.php?lib=assessments" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['name' => 'Template name', 'hardware_details' => 'Hardware details', 'software_version' => 'Software & version']) ?>
@@ -435,7 +435,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
 
   <h3 class="visually-hidden">Add a service bundle</h3>
   <details class="mt-1"<?= $tplFormFailed(['bundle_name', 'bundle_description', 'bundle_categories']) ? ' open' : '' ?>>
-  <summary id="add-bundle-h">Add a service bundle</summary>
+  <summary accesskey="n" id="add-bundle-h">Add a service bundle</summary>
   <form method="post" action="templates.php?lib=bundles" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['bundle_name' => 'Bundle name', 'bundle_description' => 'Description', 'bundle_categories' => 'RSA categories'], ['bundle_categories' => 'bcat-0']) ?>
@@ -498,7 +498,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
   </div>
   <h3 class="visually-hidden">Add an instrument</h3>
   <details class="mt-1"<?= $tplFormFailed(['instrument_name', 'instrument_desc', 'scale_min', 'scale_max', 'scale_labels', 'higher_is_better', 'instrument_items']) ? ' open' : '' ?>>
-  <summary id="add-instrument-h">Add an instrument</summary>
+  <summary accesskey="n" id="add-instrument-h">Add an instrument</summary>
   <form method="post" action="templates.php?lib=instruments" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['instrument_name' => 'Name', 'instrument_desc' => 'Description', 'scale_min' => 'Lowest rating', 'scale_max' => 'Highest rating', 'scale_labels' => 'Rating labels', 'higher_is_better' => 'Higher ratings mean', 'instrument_items' => 'Items'], ['higher_is_better' => 'hib-1']) ?>

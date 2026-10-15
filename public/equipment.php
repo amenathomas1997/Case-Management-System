@@ -676,7 +676,7 @@ page_header('Equipment & loans', $user, 'equipment');
 
 <h2 class="visually-hidden">Loan an item out</h2>
 <details class="card" id="loan"<?= $loanFailed ? ' open' : '' ?>>
-  <summary id="loan-h">Loan an item out</summary>
+  <summary accesskey="n" id="loan-h">Loan an item out</summary>
   <p class="muted" id="loan-hold-hint">Items marked “held by a reservation” are reserved for a client. Lending one to someone else moves that hold to the waitlist and notifies that client's instructor and the staff member who made it.</p>
   <?php // After a refused loan the form comes back as it was filled in, with each error on its field.
   $oldLoan = fn(string $k, string $default = ''): string => old_in('loan_out') !== '' ? old_in($k, $default) : $default; ?>

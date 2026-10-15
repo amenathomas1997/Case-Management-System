@@ -55,13 +55,13 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
 <meta name="apple-mobile-web-app-title" content="<?= h(brand('short')) ?>">
 </head>
 <body>
-<a class="skip-link" href="#main"><?= t('Skip to main content') ?></a>
+<a class="skip-link" href="#main" accesskey="m"><?= t('Skip to main content') ?></a>
 <?php /* Staff shortcuts only: clients on the portal, referral or sign-in pages have no Dashboard or staff menu. */ ?>
 <?php if ($user): ?>
 <nav class="wrap page-actions cms-page-navigation" aria-label="<?= h(__('Page navigation')) ?>">
   <span class="nav-item"><a class="btn btn-secondary" href="index.php" data-cms-back aria-describedby="hint-back"><?= t('Go back') ?></a><span id="hint-back" hidden><?= t('Returns to the page you came from. It does not undo a save.') ?></span><span class="nav-hint" aria-hidden="true"><?= t('Returns to the page you came from. It does not undo a save.') ?></span></span>
   <span class="nav-item"><a class="btn btn-secondary" href="index.php" aria-describedby="hint-dashboard"><?= t('Dashboard') ?></a><span id="hint-dashboard" hidden><?= t('Your starting page.') ?></span><span class="nav-hint" aria-hidden="true"><?= t('Your starting page.') ?></span></span>
-  <span class="nav-item"><a class="btn btn-secondary" href="#main-nav" data-cms-menu aria-describedby="hint-menu"><?= t('Go to main menu') ?></a><span id="hint-menu" hidden><?= t('Moves to the main menu, grouped by Today, Clients, Services and more.') ?></span><span class="nav-hint" aria-hidden="true"><?= t('Moves to the main menu, grouped by Today, Clients, Services and more.') ?></span></span>
+  <span class="nav-item"><a class="btn btn-secondary" href="#main-nav" data-cms-menu accesskey="0" aria-describedby="hint-menu"><?= t('Go to main menu') ?></a><span id="hint-menu" hidden><?= t('Moves to the main menu, grouped by Today, Clients, Services and more.') ?></span><span class="nav-hint" aria-hidden="true"><?= t('Moves to the main menu, grouped by Today, Clients, Services and more.') ?></span></span>
 </nav>
 <?php endif; ?>
 <section id="low-vision-bar" class="vision-bar" aria-labelledby="vision-title" data-saved="<?= h(__('Display updated.')) ?>" data-account-hidden="<?= $hideVision ? 'true' : 'false' ?>" hidden>
@@ -115,9 +115,9 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
         <li class="nav-group">
           <h2 class="nav-group-title" id="nav-group-<?= $group ?>"><?= h($groupLabel) ?></h2>
           <ul aria-labelledby="nav-group-<?= $group ?>">
-          <?php foreach ($byGroup[$group] as [$href, $label, $key, , , $hint]):
+          <?php foreach ($byGroup[$group] as [$href, $label, $key, , , $hint, $accessKey]):
             $current = $active === $key ? ($script === explode('#', $href, 2)[0] ? 'aria-current="page"' : 'aria-current="true"') : ''; ?>
-            <li class="nav-item"><a href="<?= $href ?>" <?= $current ?> aria-describedby="nav-hint-<?= $key ?>"><?= h($label) ?></a><span id="nav-hint-<?= $key ?>" hidden><?= h($hint) ?></span><span class="nav-hint" aria-hidden="true"><?= h($hint) ?></span></li>
+            <li class="nav-item"><a href="<?= $href ?>" <?= $current ?><?= $accessKey !== '' ? ' accesskey="' . $accessKey . '"' : '' ?> aria-describedby="nav-hint-<?= $key ?>"><?= h($label) ?></a><span id="nav-hint-<?= $key ?>" hidden><?= h($hint) ?></span><span class="nav-hint" aria-hidden="true"><?= h($hint) ?></span></li>
           <?php endforeach; ?>
           </ul>
         </li>
@@ -129,12 +129,12 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
             $unreadAlerts = (int)$nq->fetchColumn();
         } catch (Throwable $e) { $unreadAlerts = 0; }
         ?>
-        <li><a href="notifications.php" <?= $active === 'alerts' ? 'aria-current="page"' : '' ?>>Notifications<?= $unreadAlerts ? '<span aria-hidden="true"> (' . $unreadAlerts . ')</span><span class="visually-hidden">, ' . $unreadAlerts . ' unread</span>' : '' ?></a></li>
+        <li><a href="notifications.php" accesskey="9" <?= $active === 'alerts' ? 'aria-current="page"' : '' ?>>Notifications<?= $unreadAlerts ? '<span aria-hidden="true"> (' . $unreadAlerts . ')</span><span class="visually-hidden">, ' . $unreadAlerts . ' unread</span>' : '' ?></a></li>
         <?php if (can('clients')): // search.php requires the clients permission ?>
         <li>
           <form method="get" action="search.php" role="search" aria-label="Site search" class="inline-form nav-search">
             <label for="nav-q" class="visually-hidden">Search client records and other accessible information</label>
-            <input type="search" id="nav-q" name="q" placeholder="Search…" minlength="2">
+            <input type="search" id="nav-q" name="q" placeholder="Search…" minlength="2" accesskey="s">
           </form>
         </li>
         <?php endif; ?>

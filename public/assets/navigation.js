@@ -29,6 +29,23 @@
     list.focus();
   }
   if (location.hash === '#main-nav') menu();
+  // Access keys: say the real key combination for this browser with each control (a hidden
+  // description, read with the link or button, never a separate line) and as aria-keyshortcuts.
+  (function () {
+    if (typeof navigator === 'undefined') return;
+    var ua = navigator.userAgent || '', mac = /Mac|iPhone|iPad/.test(navigator.platform || ua);
+    var modifier = mac ? 'Control+Option+' : (/Firefox/.test(ua) ? 'Alt+Shift+' : 'Alt+');
+    document.querySelectorAll('[accesskey]').forEach(function (el, i) {
+      var key = el.getAttribute('accesskey'); if (!key) return;
+      var combo = modifier + key.toUpperCase();
+      el.setAttribute('aria-keyshortcuts', combo);
+      var note = document.createElement('span');
+      note.id = 'accesskey-note-' + i; note.hidden = true; note.textContent = 'Shortcut ' + combo + '.';
+      el.insertAdjacentElement('afterend', note);
+      var ids = (el.getAttribute('aria-describedby') || '').trim();
+      el.setAttribute('aria-describedby', ids ? ids + ' ' + note.id : note.id);
+    });
+  })();
   // Escape dismisses a showing link hint (1.4.13); moving to another link brings hints back.
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && document.activeElement && document.activeElement.closest && document.activeElement.closest('.nav-item')) document.documentElement.classList.add('cms-hints-off');
