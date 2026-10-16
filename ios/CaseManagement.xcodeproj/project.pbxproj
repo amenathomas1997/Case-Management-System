@@ -397,14 +397,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = ;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 3.0.31;
+				MARKETING_VERSION = 3.0.32;
 				PRODUCT_BUNDLE_IDENTIFIER = org.example.cms;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -482,14 +482,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = ;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 3.0.31;
+				MARKETING_VERSION = 3.0.32;
 				PRODUCT_BUNDLE_IDENTIFIER = org.example.cms;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -501,7 +501,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = ;
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -509,7 +509,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 3.0.31;
+				MARKETING_VERSION = 3.0.32;
 				PRODUCT_BUNDLE_IDENTIFIER = org.example.cms.widget;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -522,7 +522,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = ;
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -530,7 +530,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 3.0.31;
+				MARKETING_VERSION = 3.0.32;
 				PRODUCT_BUNDLE_IDENTIFIER = org.example.cms.widget;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;

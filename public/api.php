@@ -960,7 +960,7 @@ switch ($action) {
         $miles = round(api_number($input, 'mileage', 'Mileage') ?? 0.0, 1);
         if ($miles < 0 || $miles > 1000) fail('Mileage must be between 0 and 1000 miles. Nothing was changed.', 422);
         if ($miles > 0 && $hours <= 0) fail('Miles are logged with the session\'s hours: enter the hours worked, or clear the miles. Nothing was changed.', 422);
-        $sNote = api_text($input, 'session_note', API_TEXT_BYTES, 'The session note');
+        $sNote = api_text($input, 'session_note', API_TEXT_BYTES, 'The session note', true);
         if ($sNote !== '' && !$sess['track_id']) {
             fail('No training track is linked to this session, so its note cannot be saved with it. Nothing was changed. Clear the note and complete the session, then add the note on the client\'s record.', 422);
         }
@@ -1122,7 +1122,7 @@ switch ($action) {
         // The session note (optional), saved with the hours as a free-text case note on
         // the track, as the website's Record a session saves one; its subject defaults
         // to the session's date.
-        $sNote = api_text($input, 'session_note', API_TEXT_BYTES, 'The session note');
+        $sNote = api_text($input, 'session_note', API_TEXT_BYTES, 'The session note', true);
         $sSubject = api_text($input, 'session_subject', 255, 'The session note subject');
         if ($sSubject === '') $sSubject = 'Session on ' . fmt_date($date);
         // Idempotency: a replayed offline entry (same key) is acknowledged, not

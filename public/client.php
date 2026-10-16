@@ -756,7 +756,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_consent'])) {
         // (0 for none); a page opened before 3.0.32 does not send it and is not checked.
         $seen = $_POST['consent_seen'] ?? null;
         if (is_string($seen) && ctype_digit($seen)) {
-            $nq = $pdo->prepare('SELECT id, guardian_name, sent_at FROM consent_forms WHERE client_id = ? AND signed_at IS NULL ORDER BY id DESC LIMIT 1');
+            $nq = $pdo->prepare('SELECT id, guardian_name, sent_at FROM consent_forms WHERE client_id = ? AND signed_at IS NULL ORDER BY sent_at DESC, id DESC LIMIT 1');
             $nq->execute([$id]);
             $newest = $nq->fetch();
             if ($newest && (int)$newest['id'] !== (int)$seen) {
@@ -1161,7 +1161,7 @@ if ($hasA11y): ?>
       <dt>Address</dt><dd><?= h($client['address'] ?? '—') ?></dd>
       <dt>Client since</dt><dd><?= fmt_date($client['created_at']) ?></dd>
       <?php
-      $consents = db()->prepare('SELECT * FROM consent_forms WHERE client_id = ? ORDER BY sent_at DESC');
+      $consents = db()->prepare('SELECT * FROM consent_forms WHERE client_id = ? ORDER BY sent_at DESC, id DESC');
       $consents->execute([$id]);
       $consents = $consents->fetchAll();
       // A signed consent is current for consent_validity_days (the setting the

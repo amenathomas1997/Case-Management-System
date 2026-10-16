@@ -67,7 +67,7 @@ const PARITY_PREQ_TYPES = ['appointment' => 'Appointment', 'reschedule' => 'Resc
 
 /** client.php's guardian consent state for one client (Demographics). */
 function parity_consent_state(int $clientId): array {
-    $consents = db()->prepare('SELECT * FROM consent_forms WHERE client_id = ? ORDER BY sent_at DESC');
+    $consents = db()->prepare('SELECT * FROM consent_forms WHERE client_id = ? ORDER BY sent_at DESC, id DESC');
     $consents->execute([$clientId]);
     $consents = $consents->fetchAll();
     $consentDays = (int)(setting('consent_validity_days') ?: 365);
@@ -637,7 +637,7 @@ case 'request_consent': {
         // none). A request sent since then is not replaced unseen.
         $seen = $input['consent_seen'] ?? null;
         if (is_int($seen) || (is_string($seen) && ctype_digit($seen))) {
-            $nq = $pdo->prepare('SELECT id, guardian_name, sent_at FROM consent_forms WHERE client_id = ? AND signed_at IS NULL ORDER BY id DESC LIMIT 1');
+            $nq = $pdo->prepare('SELECT id, guardian_name, sent_at FROM consent_forms WHERE client_id = ? AND signed_at IS NULL ORDER BY sent_at DESC, id DESC LIMIT 1');
             $nq->execute([$clientId]);
             $newest = $nq->fetch();
             if ($newest && (int)$newest['id'] !== (int)$seen) {

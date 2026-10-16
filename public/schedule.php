@@ -988,9 +988,12 @@ foreach ($groupsPending as $uid => $members): if (count($members) < 2) continue;
         <span class="muted">(<?= $m['track_id'] ? 'hours logged to ' . ($m['track_title'] ? h($m['track_title']) : 'their training track') : 'no training track, so no hours are logged' ?>)</span></div>
       <?php endforeach; ?>
     </fieldset>
-    <?php $gDefault = $members[0]['track_id'] ? schedule_hours($members[0]) : 0.0; ?>
+    <?php // Prefilled from the first member on a track (a member without one logs no hours);
+    // blank when none is, which means each client's own scheduled length.
+    $gFirst = current(array_filter($members, fn($m) => !empty($m['track_id'])));
+    $gDefault = $gFirst ? rtrim(rtrim(number_format(schedule_hours($gFirst), 2, '.', ''), '0'), '.') : ''; ?>
     <div class="field"><label for="gh-<?= h($uid) ?>">Hours for each client who attended<span class="visually-hidden"> the group session of <?= $gWhen ?></span></label>
-      <input type="text" inputmode="decimal" autocomplete="off" id="gh-<?= h($uid) ?>" name="g_hours" value="<?= h(rtrim(rtrim(number_format($gDefault, 2, '.', ''), '0'), '.')) ?>"></div>
+      <input type="text" inputmode="decimal" autocomplete="off" id="gh-<?= h($uid) ?>" name="g_hours" value="<?= h($gDefault) ?>"></div>
     <button type="submit" name="complete_group" value="1" class="btn btn-secondary btn-sm"
       onclick="var b=this.form.querySelectorAll('.att-box'),a=0,p=0,g=this.form.querySelector('[name=g_hours]'),hv=g&&g.value.trim()!==''?g.value.trim():'',none=hv!==''&&!(Number(hv.replace(',','.'))>0);b.forEach(function(x){if(x.checked){a++;if(x.getAttribute('data-bill')==='1')p++;}});return confirm('Record attendance for this group session? '+a+' of '+b.length+' clients attended and will be marked Completed'+(none?', with no hours logged. ':', and '+p+' of them will have '+(hv!==''?hv+' hours':'hours')+' logged to their training track and billed. ')+(b.length-a)+' will be recorded as No Show, with no hours logged.');">Record attendance and complete<span class="visually-hidden"> — group session of <?= $gWhen ?>, <?= count($members) ?> clients</span></button>
   </form>

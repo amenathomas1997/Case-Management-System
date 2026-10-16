@@ -619,13 +619,16 @@ struct ScheduleView: View {
                 /// The hours were logged outside the track's authorization (expired, not yet
                 /// started, or the track not Active): the server's sentence saying so (3.0.21).
                 let warning: String?
-                private enum CodingKeys: String, CodingKey { case ok, hoursLogged, warning }
+                /// The session note was saved with the completion (3.0.32 servers; false from older ones, which ignore it).
+                let noteSaved: Bool
+                private enum CodingKeys: String, CodingKey { case ok, hoursLogged, warning, noteSaved }
                 init(from decoder: Decoder) throws {
                     let c = try decoder.container(keyedBy: CodingKeys.self)
                     guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
                         throw DecodingError.dataCorruptedError(forKey: .ok, in: c, debugDescription: "not ok")
                     }
                     hoursLogged = (try? c.decode(Double.self, forKey: .hoursLogged)) ?? 0
+                    noteSaved = (try? c.decode(Bool.self, forKey: .noteSaved)) ?? false
                     let text = (try? c.decodeIfPresent(String.self, forKey: .warning))?
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     warning = (text?.isEmpty ?? true) ? nil : text
@@ -641,7 +644,10 @@ struct ScheduleView: View {
                 if !details.note.isEmpty { body["session_note"] = details.note }
             }
             let result: CompleteResult = try await api.call("complete_session", body: body)
-            let noteSaid = (details?.note.isEmpty == false) ? " The session note was saved." : ""
+            // Said from the server's answer: a server before 3.0.32 drops the note (and the miles).
+            let noteTyped = details?.note.isEmpty == false
+            let noteSaid = result.noteSaved ? " The session note was saved."
+                : (noteTyped ? " The session note was not saved: this server is older than the app. Add it on the website." : "")
             let done: String = (result.hoursLogged > 0
                 ? String(format: "Completed — %.2f hours logged for %@.", result.hoursLogged, session.client)
                 : "Session marked completed.") + noteSaid
@@ -1026,6 +1032,8 @@ struct CompleteSessionSheet: View {
                 .accessibilityValue(busy ? "Saving" : "")
             }
             .navigationTitle("Complete session")
+            // Nothing typed is lost to a swipe down: Cancel is the way out.
+            .interactiveDismissDisabled(busy || !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !milesText.isEmpty)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }.disabled(busy)

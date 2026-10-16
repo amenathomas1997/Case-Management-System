@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.32' => [
+        'On the iPhone, completing a session asks for the hours (the scheduled length unless you change it), miles and the session note before the client signs. Group sessions on the website take one Hours field for everyone who attended.',
+        'Forms that create something (incidents, device requests, homework, message replies, equipment, new clients and others) save once even if Enter is pressed twice. A guardian consent request is not sent if another one was sent since you opened the page.',
+    ],
     '3.0.31' => [
         'One form for a session: on a training track, Record a session saves the hours, the session note, or both, and the note can be free text, BIRP, PAIP or SOAP, with Generate structured note. On the schedule, Mark completed lets you change the hours, add miles and write the note in the same row.',
         'Microsoft sign-in links your account by its email the first time, with no extra step. A client email from a referral form gets reminders and portal links straight away.',
