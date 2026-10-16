@@ -35,6 +35,15 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_agency
         if (!preg_match('/^\d{1,3}$/', $str('terms_days')) || (int)$str('terms_days') > 365) $errs['terms_days' . $sfx] = 'Enter the days to pay as a whole number from 0 to 365, or leave it blank.';
         else $terms = (int)$str('terms_days');
     }
+    // The rates you charge this agency (4.2.0); blank uses the rate on each authorization.
+    $money = function (string $k, float $max, int $dec) use ($str, &$errs, $sfx): ?float {
+        $raw = str_replace(['$', ','], '', $str($k));
+        if ($raw === '') return null;
+        if (!is_numeric($raw) || (float)$raw < 0 || (float)$raw > $max) { $errs[$k . $sfx] = 'Enter the rate in dollars, such as ' . ($dec === 2 ? '40.00' : '0.655') . ', or leave it blank.'; return null; }
+        return round((float)$raw, $dec);
+    };
+    $hourly = $money('hourly_rate', 999999.99, 2);
+    $mileage = $money('mileage_rate', 999.999, 3);
     $billTo = $str('bill_to');
     if (mb_strlen($billTo) > 500) $errs['bill_to' . $sfx] = 'Keep the billing address to 500 characters or fewer.';
     $notes = $str('notes');
@@ -57,12 +66,12 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_agency
         keep_field_errors($errs);
         redirect($back);
     }
-    $vals = [$name, $state, $zone, $domains ? implode(', ', $domains) : null, $vendor !== '' ? $vendor : null, $terms, $billTo !== '' ? $billTo : null, $notes !== '' ? $notes : null, $active];
+    $vals = [$name, $state, $zone, $domains ? implode(', ', $domains) : null, $vendor !== '' ? $vendor : null, $terms, $hourly, $mileage, $billTo !== '' ? $billTo : null, $notes !== '' ? $notes : null, $active];
     $pdo = db();
     $pdo->beginTransaction();
     try {
         if ($old) {
-            $pdo->prepare('UPDATE funding_agencies SET name = ?, state = ?, time_zone = ?, email_domains = ?, vendor_number = ?, terms_days = ?, bill_to = ?, notes = ?, is_active = ? WHERE id = ?')
+            $pdo->prepare('UPDATE funding_agencies SET name = ?, state = ?, time_zone = ?, email_domains = ?, vendor_number = ?, terms_days = ?, hourly_rate = ?, mileage_rate = ?, bill_to = ?, notes = ?, is_active = ? WHERE id = ?')
                 ->execute([...$vals, $aid]);
             // A new name follows on its tracks and draft invoices; sent invoices keep the name they were sent with.
             if ($old['name'] !== $name) {
@@ -70,7 +79,7 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_agency
                 $pdo->prepare("UPDATE invoices SET funding_agency = ? WHERE funding_agency = ? AND status = 'Draft'")->execute([$name, $old['name']]);
             }
         } else {
-            $pdo->prepare('INSERT INTO funding_agencies (name, state, time_zone, email_domains, vendor_number, terms_days, bill_to, notes, is_active) VALUES (?,?,?,?,?,?,?,?,?)')->execute($vals);
+            $pdo->prepare('INSERT INTO funding_agencies (name, state, time_zone, email_domains, vendor_number, terms_days, hourly_rate, mileage_rate, bill_to, notes, is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
             $aid = (int)$pdo->lastInsertId();
             // Tracks typed with a different capitalisation take the listed spelling.
             $pdo->prepare('UPDATE training_tracks SET funding_agency = ? WHERE funding_agency = ? AND BINARY funding_agency <> BINARY ?')->execute([$name, $name, $name]);
@@ -110,6 +119,10 @@ function agency_fields(array $a, string $sfx, bool $mine): string {
       <input type="text" id="<?= $id('vendor_number') ?>" name="vendor_number" maxlength="80" value="<?= h($val('vendor_number')) ?>" <?= field_aria('vendor_number' . $sfx) ?>><?= field_error('vendor_number' . $sfx) ?></div>
     <div class="field"><label for="<?= $id('terms_days') ?>">Days it has to pay an invoice</label>
       <input type="number" id="<?= $id('terms_days') ?>" name="terms_days" min="0" max="365" step="1" value="<?= h($val('terms_days')) ?>" <?= field_aria('terms_days' . $sfx) ?>><?= field_error('terms_days' . $sfx) ?></div>
+    <div class="field"><label for="<?= $id('hourly_rate') ?>">Your hourly rate for this agency (dollars)</label>
+      <input type="text" inputmode="decimal" id="<?= $id('hourly_rate') ?>" name="hourly_rate" maxlength="10" value="<?= h($val('hourly_rate')) ?>" <?= field_aria('hourly_rate' . $sfx) ?>><?= field_error('hourly_rate' . $sfx) ?></div>
+    <div class="field"><label for="<?= $id('mileage_rate') ?>">Your mileage rate for this agency (dollars a mile)</label>
+      <input type="text" inputmode="decimal" id="<?= $id('mileage_rate') ?>" name="mileage_rate" maxlength="8" value="<?= h($val('mileage_rate')) ?>" <?= field_aria('mileage_rate' . $sfx) ?>><?= field_error('mileage_rate' . $sfx) ?></div>
     <div class="field"><label for="<?= $id('bill_to') ?>">Billing address for invoices</label>
       <textarea id="<?= $id('bill_to') ?>" name="bill_to" rows="3" maxlength="500" <?= field_aria('bill_to' . $sfx) ?>><?= h($val('bill_to')) ?></textarea><?= field_error('bill_to' . $sfx) ?></div>
     <div class="field"><label for="<?= $id('notes') ?>">Notes</label>
@@ -141,6 +154,7 @@ page_header('Funding agencies', $user, 'admin', [['admin.php', 'Administration']
       (int)$a['active_tracks'] . ' active track' . ((int)$a['active_tracks'] === 1 ? '' : 's'),
       $a['vendor_number'] ? 'Vendor number ' . $a['vendor_number'] : 'Vendor number from Billing details',
       $a['terms_days'] !== null ? 'Pays in ' . (int)$a['terms_days'] . ' days' : '',
+      $a['hourly_rate'] !== null ? fmt_money((float)$a['hourly_rate']) . ' an hour' : 'Rate from each authorization',
   ]))) ?>.</p>
   <details<?= $mine ? ' open' : '' ?>><summary>Edit <?= h($a['name']) ?></summary>
   <form method="post" action="funding_agencies.php" class="stacked" novalidate><?= csrf_field() ?>

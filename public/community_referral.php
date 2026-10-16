@@ -24,7 +24,7 @@ if (!$csrfStale) csrf_check();
 
 // Referral alerts (in-app and email) sent per hour across all senders; see the save below.
 const REFERRAL_ALERTS_PER_HOUR = 30;
-// The fee rule comes from Administration > Billing details (billing_settings()):
+// The fee rule comes from Administration > Pricing rules (billing_settings(), pricing_settings()):
 // {threshold} and {rate} are filled in after translation by fee_copy().
 const INCOME_BRACKETS = [
     'below_2000' => 'Below {threshold} per month',
@@ -32,7 +32,7 @@ const INCOME_BRACKETS = [
 ];
 function fee_copy(string $s): string {
     $b = billing_settings();
-    return str_replace(['{threshold}', '{rate}'], ['$' . number_format($b['private_threshold'], 0), '$' . number_format($b['private_rate'], 2)], $s);
+    return str_replace(['{threshold}', '{rate}', '{age}'], ['$' . number_format($b['private_threshold'], 0), '$' . number_format($b['private_rate'], 2), (string)pricing_settings()['youth_age']], $s);
 }
 // Preserve the multi-select and structured fields for explicit validation; drop other arrays so a
 // crafted request (e.g. role[]=x) can't cause type errors.
@@ -186,13 +186,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $organization = trim($_POST['organization'] ?? '');
     $consent = !empty($_POST['consent']);
     $income = $_POST['income'] ?? '';
+    $vrCase = is_string($_POST['vr_case'] ?? null) ? $_POST['vr_case'] : '';
+    // Who answers the pricing questions, and which ones, come from the Pricing rules (4.2.0).
+    $pricing = pricing_settings();
+    $askPricing = pricing_asks_role($role);
+    if (!$askPricing || !$pricing['vr_first']) $vrCase = '';
+    if (!$askPricing || !$pricing['sliding_on']) $income = '';
+    if ($askPricing && $pricing['vr_first'] && !isset(VR_CASE_ANSWERS[$vrCase])) $errors['vr_case'] = 'Open VR case: please choose one.';
+    if ($askPricing && $pricing['sliding_on'] && !isset(INCOME_BRACKETS[$income])) $errors['income'] = 'Monthly income: please choose one.';
 
     $orgRequired = 'Agency / school / practice / organization is required.';
     $consentRequired = 'Please check the box to confirm: the person (or their guardian) knows about this referral and agrees to be contacted.';
     if ($role === 'counselor') {
         if ($organization === '') $errors['organization'] = $orgRequired;
     } elseif ($role === 'self') {
-        if (!isset(INCOME_BRACKETS[$income])) $errors['income'] = 'Monthly income: please choose one.';
+        // Income and an open VR case are checked below, for every role the Pricing rules ask.
     } elseif ($role === 'school') {
         if ($organization === '') $errors['organization'] = $orgRequired;
         if (trim($_POST['guardian_name'] ?? '') === '') $errors['guardian_name'] = 'Parent / guardian name is required for student referrals.';
@@ -235,8 +243,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'agency' => $organization,
             default => $organization !== '' ? $organization : 'Employer/other',
         };
+        // The fee quoted by the Pricing rules (4.2.0): billed to VR for an open VR case, else
+        // free below the income limit, else the personal rate. Roles not asked are quoted nothing.
         $fee = null;
-        if ($role === 'self') $fee = $income === 'below_2000' ? 0.00 : billing_settings()['private_rate'];
+        if ($askPricing) $fee = pricing_quote($vrCase, $income === 'below_2000');
         $clientName = $role === 'self' ? trim($_POST['referrer_name']) : trim($_POST['client_name']);
         $clientPhone = $role === 'self' ? trim($_POST['referrer_phone']) : (trim($_POST['client_phone'] ?? '') ?: null);
         $clientEmail = $role === 'self' ? (strtolower($refEmail) ?: null) : (trim($_POST['client_email'] ?? '') ?: null);
@@ -272,13 +282,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 in_array($_POST['contact_first'] ?? '', ['client','referrer'], true) ? $_POST['contact_first'] : null,
                 $consent ? 1 : 0,
                 null, // Historical Pre-ETS data remains readable; new AT referrals never populate it.
-                $role === 'self' ? mb_substr(fee_copy(INCOME_BRACKETS[$income]), 0, 30) : null,
+                $askPricing && isset(INCOME_BRACKETS[$income]) ? mb_substr(fee_copy(INCOME_BRACKETS[$income]), 0, 30) : null,
                 $fee, $requestFields['referral_purpose'], $requestFields['requested_service'], $requestFields['specific_needs'],
                 // The language the form was sent in: the client it becomes prefers it.
                 page_lang() === 'es' ? 'es' : 'en',
             ]);
             $refId = (int)$pdo->lastInsertId();
             // The state the person lives in (4.1.0), carried to the client with its time zone.
+            if ($askPricing && isset(VR_CASE_ANSWERS[$vrCase])) $pdo->prepare('UPDATE referrals SET vr_case_open = ? WHERE id = ?')->execute([$vrCase, $refId]);
             if (($refState = us_state(is_string($_POST['client_state'] ?? null) ? $_POST['client_state'] : null)) !== null) {
                 $pdo->prepare('UPDATE referrals SET client_state = ? WHERE id = ?')->execute([$refState, $refId]);
             }
@@ -298,7 +309,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     if (!$errors && $refSaved) {
-        $done = $fee !== null ? '&fee=' . ($fee > 0 ? 'paid' : 'free') : '';
+        // flat: the personal rate with no income asked; for=other: someone else's referral.
+        $done = ($fee !== null ? '&fee=' . ($fee > 0 ? ($pricing['sliding_on'] ? 'paid' : 'flat') : 'free') : ($askPricing && $vrCase === 'yes' && $pricing['vr_first'] ? '&fee=vr' : ''))
+            . (($fee !== null || $vrCase === 'yes') && $role !== 'self' ? '&for=other' : '');
         // Remembered for this form (newest 20 kept), so the same page sent again
         // is answered with this confirmation instead of a second referral.
         // The reference number and the date we will be in touch by go to the
@@ -385,10 +398,15 @@ echo lang_toggle();
   <?php if (($feeResult = $_GET['fee'] ?? '') !== ''): ?>
   <div class="card">
     <h2><?= t('Your cost') ?></h2>
-    <?php if ($feeResult === 'free'): ?>
-      <p><strong><?= t('Based on the income you reported, our services are provided to you at no cost.') ?></strong></p>
+    <?php $forOther = ($_GET['for'] ?? '') === 'other'; ?>
+    <?php if ($feeResult === 'vr'): ?>
+      <p><strong><?= t('Because there is an open VR case, training is billed to the VR agency at its rate. Ask the VR counselor to send us an authorization.') ?></strong></p>
+    <?php elseif ($feeResult === 'free'): ?>
+      <p><strong><?= $forOther ? t('Based on the income reported, training is free for the person.') : t('Based on the income you reported, our services are provided to you at no cost.') ?></strong></p>
+    <?php elseif ($feeResult === 'flat'): ?>
+      <p><strong><?= fee_copy(t('Our services cost {rate} per hour of training.')) ?></strong> <?= t('We\'ll go over the details when we call — no payment is needed now.') ?></p>
     <?php else: ?>
-      <p><strong><?= fee_copy(t('Based on the income you reported, our services cost {rate} per hour of training.')) ?></strong> <?= t('We\'ll go over the details when we call — no payment is needed now.') ?></p>
+      <p><strong><?= $forOther ? fee_copy(t('Based on the income reported, training costs {rate} per hour.')) : fee_copy(t('Based on the income you reported, our services cost {rate} per hour of training.')) ?></strong> <?= t('We\'ll go over the details when we call — no payment is needed now.') ?></p>
     <?php endif; ?>
   </div>
   <?php endif; ?>
@@ -416,7 +434,7 @@ if ($errors): ?>
   <ul>
     <?php foreach ($fieldErrors as $k => $msg): ?>
     <?php // Each link lands on the control the message is about (a group's first one).
-    $errAnchors = ['role' => 'role-0', 'income' => 'income-0', 'contact_first' => 'cf-0', 'referrer_contact' => 'referrer_phone',
+    $errAnchors = ['role' => 'role-0', 'income' => 'income-0', 'vr_case' => 'vrcase-0', 'contact_first' => 'cf-0', 'referrer_contact' => 'referrer_phone',
         'consent' => 'consent-box', 'requested_services' => 'svc-0', 'specific_needs' => 'need-0']; ?>
     <?php // A stand-alone link, so it gets the full 44px target height (2.5.5), as in form_error_summary(). ?>
     <li><a href="#<?= h($errAnchors[$k] ?? $k) ?>" style="display:inline-flex; align-items:center; min-height:2.75rem;"><?= t($msg) ?></a></li>
@@ -523,17 +541,34 @@ if ($errors): ?>
     <?php endif; ?>
   </fieldset>
 
-  <fieldset data-role="self" id="income-group" <?= isset($errors['income']) ? 'aria-describedby="err-income"' : '' ?>>
+  <?php // The pricing questions (4.2.0): who is asked, and which questions, come from Pricing rules.
+  $pr = pricing_settings();
+  $askRoles = $pr['ask'] === 'all' ? 'self school medical family other' : 'self';
+  $asksOthers = $pr['ask'] === 'all'; ?>
+  <?php if ($pr['vr_first']): ?>
+  <fieldset data-role="<?= h($askRoles) ?>" id="vrcase-group" <?= isset($errors['vr_case']) ? 'aria-describedby="err-vr_case"' : '' ?>>
+    <legend><h2 class="legend-h"><?php if ($asksOthers): // worded for whoever is filling it in, as the request box is ?><span data-self-text<?= $role === 'self' ? '' : ' hidden' ?>><?= t('Do you have an open case with a vocational rehabilitation (VR) agency?') ?></span><span data-other-text<?= $role === 'self' ? ' hidden' : '' ?>><?= t('Does the person have an open case with a vocational rehabilitation (VR) agency?') ?></span><?php else: ?><?= t('Do you have an open case with a vocational rehabilitation (VR) agency?') ?><?php endif; ?> <span aria-hidden="true">*</span></h2></legend>
+    <?php $vrNum = 0; foreach (VR_CASE_ANSWERS as $value => $label): ?>
+    <div class="field"><label><input type="radio" name="vr_case" id="vrcase-<?= $vrNum++ ?>" value="<?= h($value) ?>" <?= ($_POST['vr_case'] ?? '') === $value ? 'checked' : '' ?> data-req-roles="<?= h($askRoles) ?>"> <?= t($label) ?></label></div>
+    <?php endforeach; ?>
+    <?= $err('vr_case') ?>
+  </fieldset>
+  <?php endif; ?>
+  <?php if ($pr['sliding_on']): ?>
+  <fieldset data-role="<?= h($askRoles) ?>" id="income-group" <?= isset($errors['income']) ? 'aria-describedby="err-income"' : '' ?>>
     <legend><h2 class="legend-h"><?= t('Monthly income') ?> <span aria-hidden="true">*</span></h2></legend>
-    <p class="hint"><?= t('Your monthly income, including benefits. This only decides whether training is free. We will confirm with you; nothing is charged now.') ?></p>
+    <p class="hint"><?= fee_copy(t($asksOthers
+        ? ($pr['youth_age'] > 0 ? 'The person\'s monthly income, including benefits, or their parents\' income if they are under {age}. This only decides whether training is free. We will confirm with you; nothing is charged now.' : 'The person\'s monthly income, including benefits. This only decides whether training is free. We will confirm with you; nothing is charged now.')
+        : ($pr['youth_age'] > 0 ? 'Your monthly income, including benefits. If you are under {age}, give your parents\' income instead. This only decides whether training is free. We will confirm with you; nothing is charged now.' : 'Your monthly income, including benefits. This only decides whether training is free. We will confirm with you; nothing is charged now.'))) ?></p>
     <?php $incomeNum = 0; foreach (INCOME_BRACKETS as $value => $label): ?>
     <div class="field">
-      <label><input type="radio" name="income" id="income-<?= $incomeNum++ ?>" value="<?= h($value) ?>" <?= ($_POST['income'] ?? '') === $value ? 'checked' : '' ?> data-req-roles="self">
+      <label><input type="radio" name="income" id="income-<?= $incomeNum++ ?>" value="<?= h($value) ?>" <?= ($_POST['income'] ?? '') === $value ? 'checked' : '' ?> data-req-roles="<?= h($askRoles) ?>">
         <?= fee_copy(t($label)) ?> — <strong><?= fee_copy(t($value === 'below_2000' ? 'free' : '{rate} per hour')) ?></strong></label>
     </div>
     <?php endforeach; ?>
     <?= $err('income') ?>
   </fieldset>
+  <?php endif; ?>
 
   <fieldset data-role="counselor school medical family agency other">
     <legend><h2 class="legend-h"><?= t('About the person you\'re referring') ?></h2></legend>

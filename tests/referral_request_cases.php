@@ -80,7 +80,7 @@ check($code===0 && $err==='' && str_contains($out,'Give at least one way to reac
 [$code,$out,$err]=$publicForm([],array_replace($baseReferral,['referrer_email'=>'']));
 $phoneOnly=$db->query('SELECT * FROM referrals ORDER BY id DESC LIMIT 1')->fetch();
 check($code===0 && $err==='' && (int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn()===$before+1 && (string)$phoneOnly['counselor_email']==='' && $phoneOnly['counselor_phone']==='555-0100','A referral with a phone and no email is saved and confirmed');
-[$code,$out,$err]=$publicForm([],array_replace($baseReferral,['role'=>'self','referrer_email'=>'','income'=>'below_2000','referral_purpose'=>'New referral']));
+[$code,$out,$err]=$publicForm([],array_replace($baseReferral,['role'=>'self','referrer_email'=>'','income'=>'below_2000','vr_case'=>'no','referral_purpose'=>'New referral']));
 $selfPhone=$db->query('SELECT * FROM referrals ORDER BY id DESC LIMIT 1')->fetch();
 check($code===0 && $err==='' && $selfPhone['referral_source']==='self' && $selfPhone['client_email']===null,'A self-referral without an email stores no client email');
 [$code,$out,$err]=$publicForm([],array_replace($baseReferral,['referrer_phone'=>'','referrer_email'=>'not-an-address']));

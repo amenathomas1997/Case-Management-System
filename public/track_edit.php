@@ -43,6 +43,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($agency === '') $agency = $billingMode === 'private' ? 'Private pay' : 'No charge';
         if ($billingMode === 'none') $rate = 0.0;
     }
+    // A VR track with no rate typed charges the agency's own rate (Funding agencies, 4.2.0).
+    if ($isVr && !$track && $rate <= 0 && trim((string)($_POST['hourly_rate'] ?? '')) === '' && ($agencyRate = agency_hourly_rate($agency)) !== null) $rate = $agencyRate;
     $amtRaw = is_string($_POST['authorized_amount'] ?? null) ? str_replace([',', '$'], '', trim($_POST['authorized_amount'])) : '';
     $authAmount = $amtRaw === '' || !$isVr ? null : (is_numeric($amtRaw) ? round((float)$amtRaw, 2) : -1.0);
     if ($authAmount !== null && ($authAmount < 0 || $authAmount > 99999999.99)) $errors['authorized_amount'] = 'Enter the authorized dollar amount in dollars and cents, such as 4500.00, or leave it blank to use the authorized hours at the hourly rate.';
@@ -61,11 +63,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pend->execute([$id, $id, $id]);
         if ((int)$pend->fetchColumn() > 0) $errors['billing_mode'] = 'Who pays cannot change while this track has work not yet invoiced or a Draft invoice: that work would be re-priced. Invoice it (or void the Draft) first, or start a new track for the new arrangement.';
     }
-    if ($billingMode !== 'none' && $rate <= 0) $errors['hourly_rate'] = 'Hourly rate must be greater than zero.' . ($billingMode === 'private' ? ' The private-pay fee is ' . fmt_money(billing_settings()['private_rate']) . ' an hour (Administration > Billing details).' : '');
+    if ($billingMode !== 'none' && $rate <= 0) $errors['hourly_rate'] = 'Hourly rate must be greater than zero.' . ($billingMode === 'private' ? ' The personal rate is ' . fmt_money(billing_settings()['private_rate']) . ' an hour (Administration > Pricing rules).' : '');
     elseif ($rate > 999999.99) $errors['hourly_rate'] = 'Hourly rate must be 999,999.99 or less.';
     if (mb_strlen($reason) > 255) $errors['amendment_reason'] = 'Keep the amendment reason to 255 characters or fewer.';
     $status = in_array($_POST['status'] ?? '', TRACK_STATUSES, true) ? $_POST['status'] : 'Active';
     $serviceType = in_array($_POST['service_type'] ?? '', SERVICE_TYPES, true) ? $_POST['service_type'] : 'Assistive Technology';
+    // Free or personal-rate training set up for someone with an open VR case (Pricing rules,
+    // 4.2.0): refused, or saved with a warning, as the administrator chose.
+    $pricingConflict = pricing_mode_conflict($clientId, $billingMode, $track ?: null, $status);
+    if ($pricingConflict && $pricingConflict['block']) $errors['billing_mode'] ??= $pricingConflict['message'];
     // Program: either a service bundle (validated against the client's type) or a single RSA category.
     // A track keeps its current bundle even after the bundle is retired or stops
     // matching the client type: it shows as a disabled, selected option, which the
@@ -92,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($start && $exp && $exp < $start) $errors['expiration_date'] = 'Expiration date must be after the start date.';
 
     $mileageRaw = trim((string)($_POST['mileage_rate'] ?? ''));
-    $mileageRate = $mileageRaw === '' ? 0.0 : (float)$mileageRaw;
+    $mileageRate = $mileageRaw === '' ? ($isVr && !$track ? (agency_mileage_rate($agency) ?? 0.0) : 0.0) : (float)$mileageRaw;
     if ($mileageRaw !== '' && (!is_numeric($mileageRaw) || $mileageRate < 0 || $mileageRate > 999.999)) {
         $errors['mileage_rate'] = 'Enter the mileage rate in dollars per mile, from 0 to 999.999 (0 when travel is not billable).';
     }
@@ -238,6 +244,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 . ($repriced ? ' ' . $repriced . ' work log entr' . ($repriced === 1 ? 'y' : 'ies') . ' not yet invoiced or on a draft invoice now use' . ($repriced === 1 ? 's' : '') . ' the new rate.' : '')
                 . ($retotalled ? ' ' . ($retotalled === 1 ? '1 draft invoice was' : $retotalled . ' draft invoices were') . ' re-totalled at the new rate.' : '')
                 . ($headerUpdated ? ' ' . ($headerUpdated === 1 ? '1 draft invoice now shows' : $headerUpdated . ' draft invoices now show') . ' the new authorization number and funding agency.' : ''));
+            if ($pricingConflict) flash($pricingConflict['message'], 'info');
             redirect('track.php?id=' . (int)$track['id']);
         } else {
             // The same form sent twice (Enter pressed again while it loads) creates
@@ -258,6 +265,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $incAuth = (int)($_POST['incoming_auth'] ?? 0);
             if ($incAuth > 0) incoming_authorization_handled($incAuth, 'Track created', $newTrackId, (int)$user['id'], $clientId);
             flash('Training track created.');
+            if ($pricingConflict) flash($pricingConflict['message'], 'info');
             redirect('track.php?id=' . $newTrackId);
         }
     }
@@ -279,6 +287,8 @@ if (!$track) {
     $qf->execute([$clientId]);
     $fee = $qf->fetchColumn();
     if ($fee !== false) { $newMode = (float)$fee > 0 ? 'private' : 'none'; $newRate = (float)$fee > 0 ? number_format((float)$fee, 2, '.', '') : ''; }
+    // An open VR case is billed at the VR rate (Pricing rules, 4.2.0), whatever was quoted.
+    if (pricing_settings()['vr_first'] && client_open_vr_case($clientId)) { $newMode = 'vr'; $newRate = ''; }
 }
 $curMode = (string)($_POST['billing_mode'] ?? $track['billing_mode'] ?? $newMode);
 // The shared helpers render the error summary, each inline error, and the
@@ -418,7 +428,7 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
     </div>
     <div class="field">
       <label for="hourly_rate">Hourly billing rate (USD)</label>
-      <span class="hint" id="rate-hint">The rate on the authorization, or the private-pay fee (<?= fmt_money(billing_settings()['private_rate']) ?> an hour). Not used for No charge.</span>
+      <span class="hint" id="rate-hint">The rate on the authorization (left blank, the agency's own rate), or the personal rate (<?= fmt_money(billing_settings()['private_rate']) ?> an hour). Not used for No charge.</span>
       <input type="number" id="hourly_rate" name="hourly_rate" step="0.01" min="0" value="<?= $v('hourly_rate', $newRate) ?>" <?= field_aria('hourly_rate', 'rate-hint') ?>>
       <?= field_error('hourly_rate') ?>
     </div>

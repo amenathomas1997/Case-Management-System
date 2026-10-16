@@ -427,6 +427,8 @@ case 'save_track': {
     // track_edit.php's billing rules (3.0.34): left out, a track keeps its mode (a new one is VR).
     $billingMode = api_choice($input, 'billing_mode', array_keys(BILLING_MODES), 'Who pays', $track['billing_mode'] ?? 'vr');
     $isVr = $billingMode === 'vr';
+    // A new VR track with no rate sent charges the agency's own rate (4.2.0), as on the website.
+    if ($isVr && !$track && $rate <= 0 && trim((string)($input['hourly_rate'] ?? '')) === '' && ($agencyRate = agency_hourly_rate($agency)) !== null) $rate = $agencyRate;
     if (!$isVr) {
         if ($agency === '') $agency = $billingMode === 'private' ? 'Private pay' : 'No charge';
         if ($billingMode === 'none') $rate = 0.0;
@@ -456,6 +458,10 @@ case 'save_track': {
     // one that is not on the list is refused (the page falls back silently, the app is told).
     $status = api_choice($input, 'status', TRACK_STATUSES, 'Status', $track['status'] ?? 'Active');
     $serviceType = api_choice($input, 'service_type', SERVICE_TYPES, 'Service type', $track['service_type'] ?? 'Assistive Technology');
+    // As on the website (Pricing rules, 4.2.0): an open VR case refuses, or warns about, free or personal rate.
+    $pricingConflict = pricing_mode_conflict($clientId, $billingMode, $track ?: null, (string)$status);
+    if ($pricingConflict && $pricingConflict['block']) $errors['billing_mode'] ??= $pricingConflict['message'];
+    $pricingNote = $pricingConflict && !$pricingConflict['block'] ? ' ' . $pricingConflict['message'] : '';
     $currentBundleId = $track ? ((int)($track['bundle_id'] ?? 0) ?: null) : null;
     $bundleId = ($track && !array_key_exists('bundle_id', $input)) ? $currentBundleId : ((int)($input['bundle_id'] ?? 0) ?: null);
     if ($bundleId !== null) {
@@ -480,7 +486,7 @@ case 'save_track': {
     if ($start && $exp && $exp < $start) $errors['expiration_date'] = 'Expiration date must be after the start date.';
     // Left out on an edit = keep the track's mileage rate (never re-price to $0 by omission).
     $mileageRaw = trim((string)(($track && !array_key_exists('mileage_rate', $input)) ? ($track['mileage_rate'] ?? '') : ($input['mileage_rate'] ?? '')));
-    $mileageRate = $mileageRaw === '' ? 0.0 : (float)$mileageRaw;
+    $mileageRate = $mileageRaw === '' ? ($isVr && !$track ? (agency_mileage_rate($agency) ?? 0.0) : 0.0) : (float)$mileageRaw;
     if ($mileageRaw !== '' && (!is_numeric($mileageRaw) || $mileageRate < 0 || $mileageRate > 999.999)) {
         $errors['mileage_rate'] = 'Enter the mileage rate in dollars per mile, from 0 to 999.999 (0 when travel is not billable).';
     }
@@ -505,7 +511,7 @@ case 'save_track': {
         $newTrackId = (int)db()->lastInsertId();
         track_mark_ended($newTrackId, $status);
         audit($userId, 'track.create', 'track', $newTrackId, $title . ' (auth ' . $authNumber . ')');
-        out(['ok' => true, 'id' => $newTrackId, 'message' => 'Training track created.']);
+        out(['ok' => true, 'id' => $newTrackId, 'message' => 'Training track created.' . $pricingNote]);
     }
 
     // An edit: track_edit.php's transaction, amendment record, alert resets, re-pricing of
@@ -623,7 +629,7 @@ case 'save_track': {
         'message' => 'Training track updated.' . ($amended ? ' The authorization change was recorded in the amendment history.' : '')
             . ($repriced ? ' ' . $repriced . ' work log entr' . ($repriced === 1 ? 'y' : 'ies') . ' not yet invoiced or on a draft invoice now use' . ($repriced === 1 ? 's' : '') . ' the new rate.' : '')
             . ($retotalled ? ' ' . ($retotalled === 1 ? '1 draft invoice was' : $retotalled . ' draft invoices were') . ' re-totalled at the new rate.' : '')
-            . ($headerUpdated ? ' ' . ($headerUpdated === 1 ? '1 draft invoice now shows' : $headerUpdated . ' draft invoices now show') . ' the new authorization number and funding agency.' : '')]);
+            . ($headerUpdated ? ' ' . ($headerUpdated === 1 ? '1 draft invoice now shows' : $headerUpdated . ' draft invoices now show') . ' the new authorization number and funding agency.' : '') . $pricingNote]);
 }
 
 /* ---------- Guardian consent (client.php, compliance.php) ---------- */

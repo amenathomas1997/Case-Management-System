@@ -131,6 +131,18 @@ function agency_vendor_number(?string $agency): string {
     return $a && trim((string)$a['vendor_number']) !== '' ? trim((string)$a['vendor_number']) : billing_settings()['vendor_number'];
 }
 
+/** The hourly rate you charge this agency (4.2.0), or null when none is set. */
+function agency_hourly_rate(?string $agency): ?float {
+    $a = agency_find($agency);
+    return $a && $a['hourly_rate'] !== null && (float)$a['hourly_rate'] > 0 ? (float)$a['hourly_rate'] : null;
+}
+
+/** The mileage rate you charge this agency (4.2.0), or null when none is set. */
+function agency_mileage_rate(?string $agency): ?float {
+    $a = agency_find($agency);
+    return $a && $a['mileage_rate'] !== null ? (float)$a['mileage_rate'] : null;
+}
+
 /** The agency's billing address lines (printed under its name on an invoice). */
 function agency_bill_to_lines(?string $agency): array {
     $a = agency_find($agency);

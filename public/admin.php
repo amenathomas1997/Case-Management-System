@@ -60,7 +60,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_billing'])) {
     $in = fn(string $k): string => trim(is_string($_POST[$k] ?? null) ? $_POST[$k] : '');
     $v = ['vendor_number' => $in('billing_vendor_number'), 'tax_id' => $in('billing_tax_id'), 'remit_to' => $in('billing_remit_to'),
         'phone' => $in('billing_phone'), 'email' => strtolower($in('billing_email')), 'terms_days' => $in('billing_terms_days'),
-        'private_rate' => $in('billing_private_rate'), 'private_threshold' => str_replace(',', '', $in('billing_private_threshold'))];
+        // The fee fields moved to Pricing rules (4.2.0); a post that still carries them is accepted.
+        'private_rate' => isset($_POST['billing_private_rate']) ? $in('billing_private_rate') : number_format(billing_settings()['private_rate'], 2, '.', ''),
+        'private_threshold' => isset($_POST['billing_private_threshold']) ? str_replace(',', '', $in('billing_private_threshold')) : number_format(billing_settings()['private_threshold'], 2, '.', '')];
     $bErrs = [];
     if (mb_strlen($v['vendor_number']) > 40) $bErrs['billing_vendor_number'] = 'Keep the vendor number to 40 characters or fewer.';
     if ($v['tax_id'] !== '' && !preg_match('/^[0-9-]{9,11}$/', $v['tax_id'])) $bErrs['billing_tax_id'] = 'Enter the tax ID (EIN) as 9 digits, with or without the hyphen, such as 12-3456789, or leave it blank.';
@@ -506,13 +508,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
     </div>
     <div class="field"><label for="billing_terms_days">Payment terms (days after the invoice is submitted)</label>
       <input type="text" inputmode="numeric" id="billing_terms_days" name="billing_terms_days" maxlength="3" value="<?= h($bv('terms_days', (string)$bs['terms_days'])) ?>" <?= field_aria('billing_terms_days') ?>><?= field_error('billing_terms_days') ?></div>
-    <h3 id="private-fee-h">Private-pay fee</h3>
-    <div class="grid grid-2">
-      <div class="field"><label for="billing_private_rate">Private-pay hourly fee (dollars)</label>
-        <input type="text" inputmode="decimal" id="billing_private_rate" name="billing_private_rate" maxlength="7" value="<?= h($bv('private_rate', number_format($bs['private_rate'], 2, '.', ''))) ?>" <?= field_aria('billing_private_rate') ?>><?= field_error('billing_private_rate') ?></div>
-      <div class="field"><label for="billing_private_threshold">Free below this monthly income (dollars)</label>
-        <input type="text" inputmode="decimal" id="billing_private_threshold" name="billing_private_threshold" maxlength="10" value="<?= h($bv('private_threshold', number_format($bs['private_threshold'], 0, '.', ''))) ?>" <?= field_aria('billing_private_threshold') ?>><?= field_error('billing_private_threshold') ?></div>
-    </div>
+    <p>The personal rate, the sliding fee and the other pricing rules are on <a href="pricing.php">Pricing rules</a>.</p>
     <button type="submit" name="save_billing" value="1" class="btn btn-secondary btn-sm">Save billing details</button>
   </form>
 </section>
@@ -527,6 +523,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
     <a class="btn btn-secondary" href="outcomes.php">Annual outcome report</a>
     <a class="btn btn-secondary" href="vendors.php">Vendor agreements</a>
     <a class="btn btn-secondary" href="funding_agencies.php">Funding agencies</a>
+    <a class="btn btn-secondary" href="pricing.php">Pricing rules</a>
     <a class="btn btn-secondary" href="privacy_incidents.php">Privacy incidents</a>
   </div>
   <h3 id="notelock-h">Case note lock</h3>

@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.2.0' => [
+        'Pricing rules (Administration) puts every pricing rule on one page: the personal hourly rate, free training below a monthly income, a parent\'s income for a youth under an age you set, whether an open VR case is always billed at the VR rate, and who the referral form asks. Any business using the system can set its own.',
+        'Each VR agency can have its own hourly and mileage rate (Funding agencies), for example $40 an hour for one state and $80 for another. A new VR track with no rate typed charges its agency\'s rate, and Pricing rules lists every agency\'s rate.',
+        'The referral form asks people referring themselves whether they have an open VR case. Someone who does is quoted the VR rate, not free or the personal rate, and a new track for them starts as VR. Setting up free or personal-rate training for them shows a warning.',
+    ],
     '4.1.0' => [
         'Referrals from VR agencies in other states. Administration, Funding agencies keeps each agency\'s state, its clients\' usual time zone, the email domains its authorizations come from, the vendor number it gave you, its payment terms and its billing address. Its invoices use them, and its authorization emails are recognised.',
         'Each client has a State and a Time zone on their edit page; the public referral form asks for the state. A client in another time zone gets their reminders, calendar invitations, portal and letters in their own time, and the schedule shows "Client\'s time" beside yours.',

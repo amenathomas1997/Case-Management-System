@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.1.0';
+const APP_VERSION = '4.2.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1710,3 +1710,5 @@ require_once __DIR__ . '/voice_more.php';
 require_once __DIR__ . '/api_more.php';
 // Funding agencies in other states, client time zones (4.1.0).
 require_once __DIR__ . '/agencies.php';
+// Pricing rules set on screen (4.2.0).
+require_once __DIR__ . '/pricing.php';

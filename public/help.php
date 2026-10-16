@@ -109,10 +109,12 @@ if (!$viewer) echo lang_toggle();
 <ol>
   <li>Open Administration, Funding agencies, Add an agency. Use the agency's name exactly as it should print on invoices.</li>
   <li>Choose its state and the usual time zone of its clients. Enter the email domain its counselors write from (for example blind.state.ia.us), so its authorization emails are matched to it.</li>
-  <li>Enter the vendor number it gave you, the days it has to pay, and the address invoices go to. Anything left blank uses Billing details.</li>
+  <li>Enter the vendor number it gave you, your hourly and mileage rates for it, the days it has to pay, and the address invoices go to. Anything left blank uses Billing details, or the rate on each authorization.</li>
   <li>On each track, type the agency's name as Funding agency. A name typed differently in capitals is saved with the listed spelling; a new name appears under "On tracks but not set up" until you add it.</li>
 </ol>
 <p>Set each client's State on their edit page; their time zone follows unless you choose another. Their reminders, calendar invitations, portal and letters then give times in their own zone, and the schedule shows "Client's time" beside yours. Taking clients in another state may also need you to be an approved vendor there; check each agency's rules.</p>
+<h3 id="admin-pricing">Setting your pricing rules</h3>
+<p>Open Administration, Pricing rules. Set the personal hourly rate; whether training is free below a monthly income, and that income; the age under which a parent's income is used (0 for never); whether someone with an open VR case is always billed at the VR rate; what happens when staff set up free or personal-rate training for them (warn, refuse or say nothing); and who the public referral form asks about income and an open VR case. Each VR agency's own hourly and mileage rates (for example $40 an hour for one state and $60 for another) are set on Funding agencies and listed on Pricing rules; a new VR track with no rate typed uses its agency's rate.</p>
 <h3 id="admin-misfiled">An email filed to the wrong client</h3>
 <p>Email sent to the CMS mailbox is filed as a case note when the subject names exactly one client. If it went to the wrong record, open that note, copy its text into a note on the right client, then correct the wrong note with an addendum saying it was misfiled (notes lock after 30 days and keep their history). Email that could not be placed waits in the "Needs review (CMS)" folder of the mailbox.</p>
 <h3 id="admin-groups">Permission groups</h3>

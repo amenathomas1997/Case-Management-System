@@ -350,9 +350,14 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
     <?php if ($src === 'self'): ?>
     <dt>Source</dt><dd><strong>Self-referral</strong></dd>
     <dt>Income</dt><dd><?= h($view['income_bracket'] ?? '—') ?></dd>
-    <dt>Fee determination</dt><dd><strong><?= (float)($view['quoted_fee'] ?? 0) > 0 ? '$' . number_format((float)$view['quoted_fee'], 2) . ' per hour of training' : 'Free' ?></strong></dd>
+    <?php if (!empty($view['vr_case_open'])): // 4.2.0 ?><dt>Open VR case</dt><dd><?= h(VR_CASE_ANSWERS[$view['vr_case_open']] ?? $view['vr_case_open']) ?></dd><?php endif; ?>
+    <dt>Fee determination</dt><dd><strong><?= $view['quoted_fee'] === null ? (($view['vr_case_open'] ?? '') === 'yes' ? 'The VR rate, billed to their VR agency' : 'Not quoted') : ((float)$view['quoted_fee'] > 0 ? '$' . number_format((float)$view['quoted_fee'], 2) . ' per hour of training' : 'Free') ?></strong></dd>
     <?php elseif ($src !== 'counselor'): ?>
     <dt>Source</dt><dd><strong><?= h(ucfirst($src)) ?> referral</strong></dd>
+    <?php if (!empty($view['vr_case_open']) || $view['quoted_fee'] !== null): // asked by the Pricing rules (4.2.0) ?>
+    <dt>Open VR case</dt><dd><?= h(VR_CASE_ANSWERS[$view['vr_case_open'] ?? ''] ?? 'Not asked') ?></dd>
+    <dt>Fee determination</dt><dd><strong><?= $view['quoted_fee'] === null ? (($view['vr_case_open'] ?? '') === 'yes' ? 'The VR rate, billed to their VR agency' : 'Not quoted') : ((float)$view['quoted_fee'] > 0 ? '$' . number_format((float)$view['quoted_fee'], 2) . ' per hour of training' : 'Free') ?></strong><?= $view['income_bracket'] ? ' (' . h($view['income_bracket']) . ')' : '' ?></dd>
+    <?php endif; ?>
     <dt>Referred by</dt><dd><?= h($view['counselor_name']) ?> — <?= h($view['counselor_agency']) ?><br>
       <?= $refMail ?> · <?= h($view['counselor_phone']) ?></dd>
     <?php if ($src === 'school'): ?>
@@ -484,7 +489,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
       <td><?php $rsrc = $r['referral_source'] ?? 'counselor'; ?>
           <?php if ($rsrc === 'self'): ?>
             <span class="badge badge-pending">Self-referral</span><br>
-            <span class="muted"><?= (float)($r['quoted_fee'] ?? 0) > 0 ? '$' . number_format((float)$r['quoted_fee'], 2) . ' per hour' : 'Free' ?> · <?= h($r['income_bracket'] ?? '') ?></span>
+            <span class="muted"><?= $r['quoted_fee'] === null ? (($r['vr_case_open'] ?? '') === 'yes' ? 'VR rate' : 'Not quoted') : ((float)$r['quoted_fee'] > 0 ? '$' . number_format((float)$r['quoted_fee'], 2) . ' per hour' : 'Free') ?> · <?= h($r['income_bracket'] ?? '') ?></span>
           <?php elseif ($rsrc !== 'counselor'): ?>
             <span class="badge badge-active"><?= h(ucfirst($rsrc)) ?></span><br>
             <?= h($r['counselor_name']) ?> <span class="muted">· <?= h($r['counselor_agency']) ?></span>
