@@ -31,6 +31,8 @@ $m = $agency !== '' ? funder_metrics($agency, $from, $to, $rt) : null;
 
 /* ---- CSV ---- */
 if ($m && isset($_GET['export'])) {
+    // Every bulk export is recorded (3.0.36 privacy follow-up).
+    audit((int)$user['id'], 'report.export', 'client', null, 'Funder report CSV ' . $agency . ' ' . $from . ' to ' . $to);
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="funder_' . preg_replace('/[^A-Za-z0-9]+/', '_', $agency) . '_' . $from . '_' . $to . '.csv"');
     $out = fopen('php://output', 'w'); fwrite($out, "\xEF\xBB\xBF");
@@ -107,6 +109,7 @@ if ($m && isset($_GET['pdf'])) {
     // Built as a string and sent with this page's own headers: FPDF's download output
     // replaces the app's Cache-Control: no-store with a cacheable one.
     $bytes = $pdf->Output('S');
+    audit((int)$user['id'], 'report.export', 'client', null, 'Funder report PDF ' . $agency . ' ' . $from . ' to ' . $to);
     header('Content-Type: application/pdf');
     header('Content-Disposition: attachment; filename="funder_report_' . $from . '_' . $to . '.pdf"');
     echo $bytes;

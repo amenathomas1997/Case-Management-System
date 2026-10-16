@@ -11,6 +11,8 @@ $stmt->execute([$id]);
 $client = $stmt->fetch();
 if (!$client) { flash('Client not found.', 'error'); redirect('clients.php'); }
 scope_check_client($client, $user);
+// Who opened the file is recorded (once per person per client in 30 minutes).
+if ($_SERVER['REQUEST_METHOD'] === 'GET') record_client_view((int)$user['id'], $id, 'client page');
 
 $tab = $_GET['tab'] ?? 'overview';
 if (!in_array($tab, ['overview','notes','assessments','tracks','documents','history'], true)) $tab = 'overview';
@@ -19,6 +21,11 @@ if (!in_array($tab, ['overview','notes','assessments','tracks','documents','hist
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['purge_client'])) {
     if (!can('admin') || $client['archived_at'] === null) {
         flash('Only archived records can be purged, and only by an administrator.', 'error');
+        redirect("client.php?id=$id");
+    }
+    // A hold, an open incident or an unpaid invoice keeps the record (3.0.37).
+    if ($blockers = client_purge_blockers($id)) {
+        flash('This record was not purged: ' . implode(', ', $blockers) . '.', 'error');
         redirect("client.php?id=$id");
     }
     $pdo = db();
@@ -667,9 +674,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_document'])) {
 /* ---- POST: delete client document (goes to the 30-day trash; the stored
         file stays on disk until the trash entry is restored or purged) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_document'])) {
-    $d = db()->prepare('SELECT id, title FROM client_documents WHERE id = ? AND client_id = ?');
+    $d = db()->prepare('SELECT id, title, category FROM client_documents WHERE id = ? AND client_id = ?');
     $d->execute([(int)$_POST['doc_id'], $id]);
-    if ($doc = $d->fetch()) {
+    $doc = $d->fetch();
+    // Authorizations, IPEs and releases are deleted only by an administrator (3.0.37).
+    if ($doc && in_array($doc['category'], KEY_DOCUMENT_CATEGORIES, true) && !can('admin')) {
+        flash('Only an administrator can delete ' . ['Authorization' => 'an authorization', 'IPE' => 'an IPE', 'Release' => 'a release'][$doc['category']] . ' document.', 'error');
+        redirect("client.php?id=$id&tab=documents#docs-h");
+    }
+    if ($doc) {
         trash_row('client_documents', (int)$doc['id'], (int)$user['id'], 'Document: ' . $doc['title'] . ' (' . $client['name'] . ')');
         audit($user['id'], 'document.delete', 'client', $id, 'doc #' . (int)$doc['id'] . ' (to trash)');
         flash('Document moved to the trash — an administrator can restore it for 30 days.');
@@ -887,6 +900,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['send_release']) || i
         flash('The release form was emailed to ' . $relIn['signer_name'] . ' to sign.');
     }
     redirect("client.php?id=$id#releases-h");
+}
+/* ---- POST: privacy notice given, and record holds (3.0.37) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['record_notice'])) {
+    $how = in_array($_POST['notice_how'] ?? '', PRIVACY_NOTICE_METHODS, true) ? $_POST['notice_how'] : '';
+    if ($how === '') { flash('Choose how the privacy notice was given.', 'error'); redirect("client.php?id=$id#records-h"); }
+    db()->prepare('UPDATE clients SET privacy_notice_at = NOW(), privacy_notice_by = ?, privacy_notice_how = ? WHERE id = ?')->execute([$user['id'], $how, $id]);
+    audit($user['id'], 'client.privacy_notice', 'client', $id, $how);
+    flash('Recorded: privacy notice given (' . mb_strtolower($how) . ').');
+    redirect("client.php?id=$id#records-h");
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['place_hold']) || isset($_POST['lift_hold']))) {
+    if (!can('admin')) { flash('Only an administrator can place or lift a hold.', 'error'); redirect("client.php?id=$id#records-h"); }
+    $holdErr = client_set_hold($id, isset($_POST['place_hold']) ? (is_string($_POST['hold_reason'] ?? null) ? $_POST['hold_reason'] : '') : null, (int)$user['id']);
+    if ($holdErr !== null) {
+        if (isset($_POST['place_hold'])) { keep_input(); keep_field_errors(['hold_reason' => $holdErr]); }
+        else flash($holdErr, 'error');
+    } else {
+        flash(isset($_POST['place_hold']) ? 'Hold placed. The record will not be archived, purged or emptied from the trash until the hold is lifted.' : 'Hold lifted.');
+    }
+    redirect("client.php?id=$id#records-h");
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['withdraw_release'])) {
     if (release_withdraw((int)($_POST['release_id'] ?? 0), $id, (int)$user['id'])) {
@@ -1233,6 +1266,12 @@ if ($hasA11y): ?>
         <?php endif; ?></dd>
       <dt>Phone</dt><dd><?= h($client['phone'] ?? '—') ?></dd>
       <dt>Address</dt><dd><?= h($client['address'] ?? '—') ?></dd>
+      <?php if (!empty($client['guardian_name']) || !empty($client['guardian_phone']) || !empty($client['guardian_email'])): // 3.0.37 ?>
+      <dt>Guardian</dt><dd><?= h($client['guardian_name'] ?: '—') ?>
+        <?php $gTel = preg_replace('/[^0-9+]/', '', (string)($client['guardian_phone'] ?? '')); ?>
+        <?php if (!empty($client['guardian_phone'])): ?><br><?= $gTel !== '' ? '<a href="tel:' . h($gTel) . '">' . h($client['guardian_phone']) . '</a>' : h($client['guardian_phone']) ?><?php endif; ?>
+        <?php if (!empty($client['guardian_email']) && filter_var($client['guardian_email'], FILTER_VALIDATE_EMAIL)): ?><br><a href="mailto:<?= h($client['guardian_email']) ?>"><?= h($client['guardian_email']) ?></a><?php endif; ?></dd>
+      <?php endif; ?>
       <dt>Client since</dt><dd><?= fmt_date($client['created_at']) ?></dd>
       <?php
       $consents = db()->prepare('SELECT * FROM consent_forms WHERE client_id = ? ORDER BY sent_at DESC, id DESC');
@@ -1388,6 +1427,35 @@ $relDefaultSigner = !empty($client['guardian_name']) && !empty($client['dob']) &
     </form>
   </details>
   <?= details_open_on_hash('release-form') ?>
+</section>
+<?php $hold = client_hold($id); ?>
+<section class="card" aria-labelledby="records-h">
+  <h2 id="records-h">Record keeping</h2>
+  <dl class="props">
+    <dt>Privacy notice</dt>
+    <dd><?php if (!empty($client['privacy_notice_at'])): ?>Given <?= fmt_date($client['privacy_notice_at']) ?> (<?= h(mb_strtolower((string)$client['privacy_notice_how'])) ?>).<?php else: ?>Not recorded. The notice is at <a href="privacy.php">the privacy notice page</a>.<?php endif; ?></dd>
+    <dt>Hold</dt>
+    <dd><?= $hold ? '<strong>On hold</strong> since ' . fmt_date($hold['hold_at']) . ($hold['hold_by_name'] ? ', placed by ' . h($hold['hold_by_name']) : '') . ': ' . h($hold['hold_reason']) . '. It will not be archived, purged or emptied from the trash.' : 'None.' ?></dd>
+  </dl>
+  <form method="post" action="client.php?id=<?= $id ?>" class="inline-form"><?= csrf_field() ?>
+    <label for="notice_how">Privacy notice given</label>
+    <select id="notice_how" name="notice_how"><?= select_options(PRIVACY_NOTICE_METHODS, null) ?></select>
+    <button type="submit" name="record_notice" value="1" class="btn btn-secondary btn-sm">Record notice given</button>
+  </form>
+  <?php if (can('admin')): ?>
+  <?php if ($hold): ?>
+  <form method="post" action="client.php?id=<?= $id ?>" class="inline-form"><?= csrf_field() ?>
+    <button type="submit" name="lift_hold" value="1" class="btn btn-secondary btn-sm">Lift hold</button>
+  </form>
+  <?php else: ?>
+  <form method="post" action="client.php?id=<?= $id ?>" class="inline-form" novalidate><?= csrf_field() ?>
+    <label for="hold_reason">Hold reason</label>
+    <input type="text" id="hold_reason" name="hold_reason" maxlength="255" value="<?= h(old_in('hold_reason')) ?>" <?= field_aria('hold_reason') ?>>
+    <button type="submit" name="place_hold" value="1" class="btn btn-secondary btn-sm">Place hold</button>
+    <?= field_error('hold_reason') ?>
+  </form>
+  <?php endif; ?>
+  <?php endif; ?>
 </section>
 <section class="card" aria-labelledby="tr-sum-h">
   <h2 id="tr-sum-h">Training tracks summary</h2>
@@ -1833,11 +1901,13 @@ $documents = $documents->fetchAll();
       <td><?= h($doc['uploader'] ?? ($doc['category'] === 'Client Upload' ? 'The client, on the portal' : 'System')) ?></td>
       <td>
         <a class="btn btn-secondary btn-sm" href="download.php?doc=<?= (int)$doc['id'] ?>">Download<span class="visually-hidden"> <?= h($doc['title']) ?> — document #<?= (int)$doc['id'] ?></span></a>
+        <?php if (can('admin') || !in_array($doc['category'], KEY_DOCUMENT_CATEGORIES, true)): ?>
         <form method="post" action="<?= $tabUrl('documents') ?>" class="inline-form"><?= csrf_field() ?>
           <input type="hidden" name="doc_id" value="<?= (int)$doc['id'] ?>">
           <button type="submit" name="del_document" value="1" class="btn btn-danger btn-sm"
             onclick="return confirm('Move this document to the trash? An administrator can restore it for 30 days.');">Delete<span class="visually-hidden"> <?= h($doc['title']) ?> — document #<?= (int)$doc['id'] ?></span></button>
         </form>
+        <?php endif; ?>
       </td>
     </tr>
   <?php endforeach; ?>

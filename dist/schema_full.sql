@@ -122,7 +122,8 @@ CREATE TABLE `audit_log` (
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `idx_created` (`created_at`),
-  KEY `idx_user` (`user_id`)
+  KEY `idx_user` (`user_id`),
+  KEY `idx_entity` (`entity`,`entity_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `auth_amendments`;
@@ -295,6 +296,12 @@ CREATE TABLE `clients` (
   `guardian_name` varchar(120) DEFAULT NULL,
   `guardian_phone` varchar(40) DEFAULT NULL,
   `guardian_email` varchar(190) DEFAULT NULL,
+  `privacy_notice_at` datetime DEFAULT NULL,
+  `privacy_notice_by` int(10) unsigned DEFAULT NULL,
+  `privacy_notice_how` varchar(30) DEFAULT NULL,
+  `hold_at` datetime DEFAULT NULL,
+  `hold_by` int(10) unsigned DEFAULT NULL,
+  `hold_reason` varchar(255) DEFAULT NULL,
   `archived_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_assigned_to` (`assigned_to`),

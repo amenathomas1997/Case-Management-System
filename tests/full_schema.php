@@ -668,7 +668,8 @@ try {
     $db->exec("INSERT INTO referrals(reason,subject,body,counselor_name,counselor_agency,counselor_email,counselor_phone,client_name,client_id) VALUES('Synthetic','Synthetic','Synthetic','Synthetic counselor','Synthetic agency','counselor@example.invalid','555-0100','Purge synthetic client',$purged)"); $purgeReferral=(int)$db->lastInsertId();
     // Earlier audit entries about the client and about one of its records, quoting the name.
     $db->prepare("INSERT INTO audit_log(user_id,action,entity,entity_id,detail) VALUES(1,'client.update','client',?,'Purge synthetic client renamed'),(1,'referral.review','referral',?,'Purge synthetic client referral reviewed')")->execute([$purged,$purgeReferral]);
-    $db->exec("INSERT INTO incidents(client_id,incident_date,location,description,action_taken) VALUES($purged,'2026-01-02','Purge synthetic home','Purge synthetic client fell','Called the guardian of Purge synthetic client')"); $incident=(int)$db->lastInsertId();
+    // Closed: an open incident blocks a purge (3.0.37, tests/privacy_followup_cases.php).
+    $db->exec("INSERT INTO incidents(client_id,incident_date,location,description,action_taken,status) VALUES($purged,'2026-01-02','Purge synthetic home','Purge synthetic client fell','Called the guardian of Purge synthetic client','Closed')"); $incident=(int)$db->lastInsertId();
     $db->prepare("INSERT INTO trash(entity,entity_id,label,payload,deleted_by) VALUES('client_notes',999999,'Synthetic purged note',?,1)")->execute([json_encode(['id'=>999999,'client_id'=>$purged,'subject'=>'Synthetic'])]); $purgeTrash=(int)$db->lastInsertId();
     [$code,$out,$err]=$renderPage('client',['id'=>$purged],['purge_client'=>'1']);
     check($code===0 && (int)$db->query("SELECT COUNT(*) FROM clients WHERE id=$purged")->fetchColumn()===0
@@ -792,6 +793,7 @@ try {
     require __DIR__.'/billing_cases.php';
     require __DIR__.'/case_outcomes_cases.php';
     require __DIR__.'/records_privacy_cases.php';
+    require __DIR__.'/privacy_followup_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 
@@ -846,7 +848,7 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
     $db->exec("INSERT INTO clients (id,name,email,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-client@example.invalid','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL,NULL),(3,'Upgraded client with a blank counselor',NULL,'')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
     check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12, mig_3.0.16 and mig_3.0.21 has exactly the fresh-install schema, defaults included');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=1')->fetchColumn()===3,'The 3.0.21 upgrade keeps every existing client\'s email confirmed');
     $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");

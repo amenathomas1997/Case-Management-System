@@ -320,6 +320,7 @@ $reports = db()->prepare("SELECT ra.sent_at, ra.acked_at, c.name AS client_name,
 $reports->execute([strtolower($vrc['counselor_email'])]);
 $reports = $reports->fetchAll();
 
+foreach ($clients as $c) record_client_view(null, (int)$c['id'], 'counselor portal (' . $vrc['counselor_email'] . ')');
 page_header('Your caseload');
 ?>
 <h1>Welcome, <?= h($vrc['counselor_name']) ?></h1>

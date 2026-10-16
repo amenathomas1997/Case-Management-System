@@ -668,7 +668,8 @@ switch ($action) {
     case 'client':
         $id = (int)($_GET['id'] ?? 0);
         api_require_client($id, $userId);
-        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes FROM clients WHERE id = ?');
+        record_client_view($userId, $id, 'iPhone app');
+        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email FROM clients WHERE id = ?');
         $c->execute([$id]);
         $client = $c->fetch();
         if (!$client) fail('Client not found.', 404);
@@ -1274,13 +1275,14 @@ switch ($action) {
             'a11y_format' => [40, 'Preferred format'], 'a11y_primary_tech' => [120, 'Primary assistive technology'],
             'a11y_contact' => [40, 'Preferred contact method'], 'a11y_notes' => [API_TEXT_BYTES, 'Accessibility notes'],
             'school' => [190, 'School'],
+            'guardian_name' => [120, 'Guardian name'], 'guardian_phone' => [40, 'Guardian phone'], 'guardian_email' => [190, 'Guardian email'],
         ];
         $keep = function (string $k) use ($input, $old, $limits) {
             if (!array_key_exists($k, $input)) return $old[$k] ?? null;
             return api_text($input, $k, $limits[$k][0], $limits[$k][1], $k === 'a11y_notes') ?: null;
         };
         // A new or changed address must be a real one (an untouched legacy value never blocks other edits).
-        foreach (['email' => 'email', 'counselor_email' => 'counselor email'] as $emailKey => $emailLabel) {
+        foreach (['email' => 'email', 'counselor_email' => 'counselor email', 'guardian_email' => 'guardian email'] as $emailKey => $emailLabel) {
             $emailValue = $keep($emailKey);
             if ($emailValue !== null && $emailValue !== ($old[$emailKey] ?? null) && !filter_var($emailValue, FILTER_VALIDATE_EMAIL)) {
                 fail('Enter a valid ' . $emailLabel . ' address.', 422);
@@ -1394,6 +1396,9 @@ switch ($action) {
                 $vals[] = $cid;
                 db()->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, client_type=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, counselor_verified=?, school=?, email_verified=?'
                     . ($unarchive ? ', archived_at=NULL' : '') . ' WHERE id=?')->execute($vals);
+                // Guardian details (3.0.37): a field the app did not send keeps its value.
+                db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=? WHERE id=?')
+                    ->execute([$keep('guardian_name'), $keep('guardian_phone'), $keep('guardian_email'), $cid]);
                 // A portal link already emailed to the old address stops working when the
                 // address changes: it may belong to someone else now (client_edit.php).
                 if (trim((string)($old['email'] ?? '')) !== '' && strcasecmp((string)($clientEmail ?? ''), trim((string)$old['email'])) !== 0) {
@@ -1439,6 +1444,8 @@ switch ($action) {
             } else {
                 db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, counselor_verified, school, email_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
                 $cid = (int)db()->lastInsertId();
+                db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=? WHERE id=?')
+                    ->execute([$keep('guardian_name'), $keep('guardian_phone'), $keep('guardian_email'), $cid]);
                 record_status_change($cid, null, $status, $userId, 'Client created (mobile)');
                 if ($closing) client_closure_record($cid, $status, $closureData, $userId);
             }
@@ -3602,6 +3609,7 @@ switch ($action) {
     case 'track_notes': {
         $trackId = (int)($_GET['track_id'] ?? 0);
         $cid = api_require_track($trackId, $userId);
+        record_client_view($userId, $cid, 'iPhone app');
         // As the 'client' action: 50 at a time, newest first; notes_total says how many
         // exist and ?notes_offset=50, 100, … fetches the older ones.
         $notesOffset = max(0, (int)($_GET['notes_offset'] ?? 0));

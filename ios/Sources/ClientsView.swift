@@ -202,6 +202,16 @@ struct ClientDetailView: View {
                             LabeledContent("Counselor email", value: counselorEmail)
                         }
                     }
+                    if let guardian = detail.client.guardianName, !guardian.isEmpty {
+                        LabeledContent("Guardian", value: guardian)
+                    }
+                    if let gPhone = detail.client.guardianPhone, !gPhone.isEmpty {
+                        if let url = telURL(gPhone) {
+                            Link(destination: url) { LabeledContent("Guardian phone", value: gPhone) }
+                        } else {
+                            LabeledContent("Guardian phone", value: gPhone)
+                        }
+                    }
                 }
 
                 if hasAccessNeeds(detail.client) {

@@ -28,6 +28,7 @@ $totals = $m['totals']; $expenses = $m['expenses']; $valueAll = $m['valueAll']; 
 
 /* ---- CSV export ---- */
 if (isset($_GET['export'])) {
+    audit((int)$user['id'], 'report.export', 'client', null, 'Outcome report CSV ' . $from . ' to ' . $to);
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="outcomes_' . $from . '_' . $to . '.csv"');
     $out = fopen('php://output', 'w');
@@ -93,6 +94,7 @@ if (isset($_GET['html'])) {
 
 /* ---- Letterhead PDF ---- */
 if (isset($_GET['pdf'])) {
+    audit((int)$user['id'], 'report.export', 'client', null, 'Outcome report PDF ' . $from . ' to ' . $to);
     require __DIR__ . '/inc/app_pdf.php';
     // Strict false check: the string "0" is falsy, and a count of 0 must still print.
     $tx = function (?string $s): string { $r = iconv('UTF-8', 'ISO-8859-1//TRANSLIT', $s ?? ''); return $r === false ? '' : $r; };

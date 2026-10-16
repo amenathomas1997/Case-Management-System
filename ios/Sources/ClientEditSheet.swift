@@ -26,6 +26,9 @@ struct ClientEditSheet: View {
     @State private var counselorAgency = ""
     @State private var counselorEmail = ""
     @State private var counselorPhone = ""
+    @State private var guardianName = ""
+    @State private var guardianPhone = ""
+    @State private var guardianEmail = ""
     @State private var staff: [StaffMember] = []
     /// The staff list could not be loaded: said, with a retry, instead of a picker with no names.
     @State private var staffError: String?
@@ -61,6 +64,9 @@ struct ClientEditSheet: View {
         _counselorAgency = State(initialValue: existing.counselorAgency ?? "")
         _counselorEmail = State(initialValue: existing.counselorEmail ?? "")
         _counselorPhone = State(initialValue: existing.counselorPhone ?? "")
+        _guardianName = State(initialValue: existing.guardianName ?? "")
+        _guardianPhone = State(initialValue: existing.guardianPhone ?? "")
+        _guardianEmail = State(initialValue: existing.guardianEmail ?? "")
         _clientType = State(initialValue: existing.clientType ?? "VR")
         _a11yScreenReader = State(initialValue: existing.a11yScreenReader ?? false)
         _a11yFormat = State(initialValue: existing.a11yFormat ?? "")
@@ -95,14 +101,16 @@ struct ClientEditSheet: View {
     private var values: [String] {
         [name, phone, email, address, status, statusNote, counselorName, counselorAgency,
          counselorEmail, counselorPhone, String(assignedTo), clientType, a11yScreenReader ? "1" : "0",
-         a11yFormat, a11yPrimaryTech, a11yContact, a11yNotes, confirmEmail ? "1" : "0"]
+         a11yFormat, a11yPrimaryTech, a11yContact, a11yNotes, confirmEmail ? "1" : "0",
+         guardianName, guardianPhone, guardianEmail]
     }
     /// The same fields as the form opens with them (see init and the property defaults).
     private static func values(of c: ClientInfo?) -> [String] {
         [c?.name ?? "", c?.phone ?? "", c?.email ?? "", c?.address ?? "", c?.status ?? "Pending Assessment", "",
          c?.counselorName ?? "", c?.counselorAgency ?? "", c?.counselorEmail ?? "", c?.counselorPhone ?? "",
          String(c?.assignedTo ?? 0), c?.clientType ?? "VR", (c?.a11yScreenReader ?? false) ? "1" : "0",
-         c?.a11yFormat ?? "", c?.a11yPrimaryTech ?? "", c?.a11yContact ?? "", c?.a11yNotes ?? "", "0"]
+         c?.a11yFormat ?? "", c?.a11yPrimaryTech ?? "", c?.a11yContact ?? "", c?.a11yNotes ?? "", "0",
+         c?.guardianName ?? "", c?.guardianPhone ?? "", c?.guardianEmail ?? ""]
     }
     private var hasChanges: Bool { values != Self.values(of: existing) }
     @State private var askingDiscard = false
@@ -188,6 +196,11 @@ struct ClientEditSheet: View {
                     CaptionedField(label: "Agency / district", text: $counselorAgency)
                     CaptionedField(label: "Counselor email", text: $counselorEmail, keyboard: .emailAddress).textInputAutocapitalization(.never)
                     CaptionedField(label: "Counselor phone", text: $counselorPhone, keyboard: .phonePad)
+                }
+                Section("Parent or guardian") {
+                    CaptionedField(label: "Guardian name", text: $guardianName)
+                    CaptionedField(label: "Guardian phone", text: $guardianPhone, keyboard: .phonePad)
+                    CaptionedField(label: "Guardian email", text: $guardianEmail, keyboard: .emailAddress).textInputAutocapitalization(.never)
                 }
                 Section("Case type") {
                     Picker("Client type", selection: $clientType) { ForEach(clientTypes, id: \.self) { Text($0) } }
@@ -277,6 +290,7 @@ struct ClientEditSheet: View {
                 "status": status, "status_note": statusNote, "assigned_to": assignedTo,
                 "counselor_name": counselorName, "counselor_agency": counselorAgency,
                 "counselor_email": counselorEmail, "counselor_phone": counselorPhone,
+                "guardian_name": guardianName, "guardian_phone": guardianPhone, "guardian_email": guardianEmail,
                 "client_type": clientType, "a11y_screen_reader": a11yScreenReader ? 1 : 0,
                 "a11y_format": a11yFormat, "a11y_primary_tech": a11yPrimaryTech,
                 "a11y_contact": a11yContact, "a11y_notes": a11yNotes,

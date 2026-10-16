@@ -129,6 +129,22 @@ foreach (db()->query("SELECT id, name, assigned_to FROM clients WHERE status = '
         $wc['assigned_to'] ? (int)$wc['assigned_to'] : null, null, 'wait-' . (int)$wc['id'] . '-' . date('Ymd'));
 }
 
+// Turning 18 (3.0.37): a client with a guardian on file who turns 18 within two weeks
+// (or did in the last month) gets one task, ever: their guardian's consent stops
+// covering them, and they sign their own release of information.
+foreach (db()->query("SELECT id, name, dob, assigned_to FROM clients
+    WHERE archived_at IS NULL AND status NOT LIKE 'Closed%' AND dob IS NOT NULL AND COALESCE(guardian_name, '') <> ''
+      AND DATE_ADD(dob, INTERVAL 18 YEAR) BETWEEN DATE_SUB(CURDATE(), INTERVAL 30 DAY) AND DATE_ADD(CURDATE(), INTERVAL 14 DAY)")->fetchAll() as $ad) {
+    $key = 'turns18-' . (int)$ad['id'];
+    $seen = db()->prepare('SELECT COUNT(*) FROM tasks WHERE auto_key = ?');
+    $seen->execute([$key]);
+    if ((int)$seen->fetchColumn() > 0) continue;
+    $on = date('F j, Y', strtotime($ad['dob'] . ' +18 years'));
+    add_task('Turns 18: ' . $ad['name'],
+        'This client turns 18 on ' . $on . '. Their guardian\'s consent no longer covers them as an adult: ask them to sign their own release of information on the client page, and check who should now get reports and reminders.',
+        (int)$ad['id'], null, business_days_from(3), $ad['assigned_to'] ? (int)$ad['assigned_to'] : null, null, $key);
+}
+
 // Equipment maintenance: open a task when a scheduled item is due (or overdue)
 // for service. One open task per item at a time (idempotent via auto_key/day).
 // A task is closed here once it no longer applies: a service was logged after the
@@ -167,7 +183,7 @@ foreach (db()->query("SELECT id, name, last_service_date, maintenance_interval_d
 $retYears = (int)(setting('retention_years') ?? '0');
 if ($retYears > 0) {
     $arch = db()->prepare("UPDATE clients c SET c.archived_at = NOW()
-        WHERE c.archived_at IS NULL AND c.status LIKE 'Closed%'
+        WHERE c.archived_at IS NULL AND c.status LIKE 'Closed%' AND c.hold_at IS NULL
           AND (SELECT MAX(h.changed_at) FROM client_status_history h WHERE h.client_id = c.id) < DATE_SUB(NOW(), INTERVAL ? YEAR)");
     $arch->execute([$retYears]);
     if ($arch->rowCount() > 0) {
@@ -189,9 +205,12 @@ foreach ($overdueTasks as $ot) {
 // Purge trash entries older than 30 days (deleting stored files for documents).
 // One entry that cannot be purged (a row locked by a restore in progress, a
 // damaged payload) is retried tomorrow and never stops the alerts below.
-foreach (db()->query("SELECT id FROM trash WHERE deleted_at < DATE_SUB(NOW(), INTERVAL 30 DAY)")->fetchAll() as $tr) {
+// Key documents (Authorization, IPE, Release) and anything of a client on hold are
+// kept for an administrator to purge by hand (3.0.37); each automatic purge is audited.
+foreach (db()->query("SELECT id, entity, label, payload FROM trash WHERE deleted_at < DATE_SUB(NOW(), INTERVAL 30 DAY)")->fetchAll() as $tr) {
     try {
-        purge_trash((int)$tr['id'], true);
+        if (!trash_auto_purge_allowed($tr)) continue;
+        if (purge_trash((int)$tr['id'], true) !== null) audit(null, 'trash.purge_auto', 'trash', (int)$tr['id'], mb_substr((string)$tr['label'], 0, 200));
     } catch (Throwable $e) {
         error_log('daily_alerts: could not purge a trash entry (' . get_class($e) . ' ' . $e->getCode() . ')');
     }

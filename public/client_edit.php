@@ -26,7 +26,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'school' => [190, 'School / district'], 'status_note' => [255, 'Reason for status change'],
         'counselor_name' => [120, 'Counselor name'], 'counselor_agency' => [190, 'Agency / district'],
         'counselor_email' => [190, 'Counselor email'], 'counselor_phone' => [40, 'Counselor phone'],
-        'a11y_primary_tech' => [120, 'Primary assistive technology']];
+        'a11y_primary_tech' => [120, 'Primary assistive technology'],
+        'guardian_name' => [120, 'Guardian name'], 'guardian_phone' => [40, 'Guardian phone'], 'guardian_email' => [190, 'Guardian email']];
     foreach ($limits as $k => [$max, $label]) {
         if (is_string($_POST[$k] ?? null) && mb_strlen(trim($_POST[$k])) > $max) {
             $errors[$k] = $label . ' is too long (' . number_format($max) . ' characters maximum).';
@@ -41,7 +42,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     // A new or changed address must be a real one (an untouched stored value never blocks other edits).
     foreach (['email' => 'Enter a valid email address, for example name@example.org.',
-              'counselor_email' => 'Enter a valid counselor email address, for example name@agency.gov.'] as $k => $msg) {
+              'counselor_email' => 'Enter a valid counselor email address, for example name@agency.gov.',
+              'guardian_email' => 'Enter a valid guardian email address, for example name@example.org.'] as $k => $msg) {
         $in = trim(is_string($_POST[$k] ?? null) ? $_POST[$k] : '');
         if (!isset($errors[$k]) && $in !== '' && $in !== (string)($client[$k] ?? '') && !filter_var($in, FILTER_VALIDATE_EMAIL)) $errors[$k] = $msg;
     }
@@ -75,6 +77,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($closureErrs) { $errors += $closureErrs; set_form_errors($errors); }
     }
     $clientType = in_array($_POST['client_type'] ?? '', CLIENT_TYPES, true) ? $_POST['client_type'] : 'VR';
+    // Guardian details (3.0.37): saved with their own statement, after the main save.
+    $gIn = fn(string $k): ?string => (is_string($_POST[$k] ?? null) && trim($_POST[$k]) !== '') ? trim($_POST[$k]) : null;
+    $guardianVals = [$gIn('guardian_name'), $gIn('guardian_phone'), $gIn('guardian_email')];
     $vals = [
         $name,
         valid_date($dobIn),
@@ -155,6 +160,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($closing) client_closure_record((int)$client['id'], $status, $closureData, (int)$user['id']);
                 $pdo->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, client_type=?, school=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, preferred_language=?, counselor_verified=?, email_verified=?'
                     . ($unarchive ? ', archived_at=NULL' : '') . ' WHERE id=?')->execute($vals);
+                $pdo->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=? WHERE id=?')->execute([...$guardianVals, (int)$client['id']]);
                 // A portal link already emailed to the old address stops working when
                 // the address changes: it may belong to someone else now.
                 if (trim((string)($client['email'] ?? '')) !== '' && strcasecmp((string)($emailIn ?? ''), trim((string)$client['email'])) !== 0) {
@@ -283,6 +289,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, preferred_language, counselor_verified, email_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
             $newId = (int)db()->lastInsertId();
+            db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=? WHERE id=?')->execute([...$guardianVals, $newId]);
             web_once_set($clientKey, $newId);
             record_status_change($newId, null, $status, $user['id'], 'Client created');
             if ($closing) client_closure_record($newId, $status, $closureData, (int)$user['id']);
@@ -446,6 +453,16 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
     <?php endif; ?>
     <div class="field"><label for="counselor_phone">Counselor phone</label>
       <input type="tel" id="counselor_phone" name="counselor_phone" value="<?= $v('counselor_phone') ?>" <?= field_aria('counselor_phone') ?>><?= field_error('counselor_phone') ?></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Parent or guardian</legend>
+    <div class="field"><label for="guardian_name">Guardian name</label>
+      <input type="text" id="guardian_name" name="guardian_name" maxlength="120" value="<?= $v('guardian_name') ?>" <?= field_aria('guardian_name') ?>><?= field_error('guardian_name') ?></div>
+    <div class="field"><label for="guardian_phone">Guardian phone</label>
+      <input type="tel" id="guardian_phone" name="guardian_phone" maxlength="40" value="<?= $v('guardian_phone') ?>" <?= field_aria('guardian_phone') ?>><?= field_error('guardian_phone') ?></div>
+    <div class="field"><label for="guardian_email">Guardian email</label>
+      <input type="email" id="guardian_email" name="guardian_email" maxlength="190" value="<?= $v('guardian_email') ?>" <?= field_aria('guardian_email') ?>><?= field_error('guardian_email') ?></div>
   </fieldset>
 
   <fieldset>

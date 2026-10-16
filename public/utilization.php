@@ -66,6 +66,7 @@ if (isset($byUser[0])) {
 }
 
 if (isset($_GET['export'])) {
+    audit((int)$user['id'], 'report.export', 'client', null, 'Utilization CSV ' . $from . ' to ' . $to);
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="utilization_' . $from . '_' . $to . '.csv"');
     $out = fopen('php://output', 'w'); fwrite($out, "\xEF\xBB\xBF");

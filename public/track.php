@@ -13,6 +13,7 @@ $stmt->execute([$id]);
 $track = $stmt->fetch();
 if (!$track) { flash('Training track not found.', 'error'); redirect('clients.php'); }
 scope_check_client_id((int)$track['client_id'], $user);
+if ($_SERVER['REQUEST_METHOD'] === 'GET') record_client_view((int)$user['id'], (int)$track['client_id'], 'training track');
 
 /* A collapsed <details> opens when the URL's #fragment points inside it, so links
    and redirects to a heading or field in a closed "Add" form still land there. */

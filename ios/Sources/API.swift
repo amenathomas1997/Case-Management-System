@@ -155,6 +155,10 @@ struct ClientInfo: Decodable {
     /// False while the client's email came from the public referral form and staff have not
     /// confirmed it yet; nil from a server that does not report it.
     var emailVerified: Bool?
+    /// Parent or guardian (3.0.37); nil from an older server.
+    var guardianName: String?
+    var guardianPhone: String?
+    var guardianEmail: String?
 }
 
 let clientTypes = ["VR", "Pre-ETS"]

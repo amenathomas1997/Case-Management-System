@@ -279,3 +279,91 @@ function release_withdraw(int $id, int $clientId, int $actor): bool {
     audit($actor, 'release.withdraw', 'client', $clientId, 'release #' . $id);
     return true;
 }
+
+/* ---------- Who opened a client's file ---------- */
+
+/**
+ * Record that a client's file was opened ('client.view' in the audit log), at most once per
+ * person per client in 30 minutes so the log stays readable. $userId is null for the
+ * client's own portal or a counselor's portal; $where says which (shown in the detail).
+ */
+function record_client_view(?int $userId, int $clientId, string $where): void {
+    if ($clientId <= 0) return;
+    try {
+        $q = db()->prepare("SELECT 1 FROM audit_log WHERE action = 'client.view' AND entity = 'client' AND entity_id = ?
+            AND user_id <=> ? AND detail = ? AND created_at > DATE_SUB(NOW(), INTERVAL 30 MINUTE) LIMIT 1");
+        $q->execute([$clientId, $userId, $where]);
+        if ($q->fetchColumn()) return;
+    } catch (Throwable $e) {
+        return; // never stops a page from opening
+    }
+    audit($userId, 'client.view', 'client', $clientId, $where);
+}
+
+/* ---------- Record holds and safer deletion (3.0.37) ---------- */
+
+/** Document categories only an administrator may delete, and that the nightly job never purges from the trash. */
+const KEY_DOCUMENT_CATEGORIES = ['Authorization', 'IPE', 'Release'];
+
+/** The hold on a client record ([at, by_name, reason]), or null when there is none. */
+function client_hold(int $clientId): ?array {
+    try {
+        $q = db()->prepare('SELECT c.hold_at, c.hold_reason, u.name AS hold_by_name FROM clients c LEFT JOIN users u ON u.id = c.hold_by WHERE c.id = ? AND c.hold_at IS NOT NULL');
+        $q->execute([$clientId]);
+        return $q->fetch() ?: null;
+    } catch (PDOException $e) {
+        return null; // mig_3.0.37 not run yet
+    }
+}
+
+/** Place (reason given) or lift (reason null) a hold. Returns an error, or null. */
+function client_set_hold(int $clientId, ?string $reason, int $actor): ?string {
+    if ($reason !== null) {
+        $reason = trim($reason);
+        if ($reason === '') return 'Say why the record is on hold.';
+        if (mb_strlen($reason) > 255) return 'Keep the reason to 255 characters or fewer.';
+        $u = db()->prepare('UPDATE clients SET hold_at = NOW(), hold_by = ?, hold_reason = ? WHERE id = ? AND hold_at IS NULL');
+        $u->execute([$actor, $reason, $clientId]);
+        if ($u->rowCount() !== 1) return 'This record is already on hold.';
+        audit($actor, 'client.hold', 'client', $clientId, 'placed: ' . $reason);
+        return null;
+    }
+    $u = db()->prepare('UPDATE clients SET hold_at = NULL, hold_by = NULL, hold_reason = NULL WHERE id = ? AND hold_at IS NOT NULL');
+    $u->execute([$clientId]);
+    if ($u->rowCount() !== 1) return 'This record is not on hold.';
+    audit($actor, 'client.hold', 'client', $clientId, 'lifted');
+    return null;
+}
+
+/** Why a client record may not be purged now, or [] when it may. */
+function client_purge_blockers(int $clientId): array {
+    $out = [];
+    if ($h = client_hold($clientId)) $out[] = 'it is on hold (' . $h['hold_reason'] . ')';
+    $q = db()->prepare("SELECT COUNT(*) FROM incidents WHERE client_id = ? AND status <> 'Closed'");
+    $q->execute([$clientId]);
+    if ((int)$q->fetchColumn() > 0) $out[] = 'it has an open incident';
+    $q = db()->prepare("SELECT COUNT(*) FROM invoices i JOIN training_tracks t ON t.id = i.track_id WHERE t.client_id = ? AND i.status = 'Submitted'");
+    $q->execute([$clientId]);
+    if ((int)$q->fetchColumn() > 0) $out[] = 'it has an unpaid invoice';
+    return $out;
+}
+
+/**
+ * Whether the nightly job may purge this trash entry: never a key document (an
+ * administrator purges those by hand) and never anything of a client on hold.
+ */
+function trash_auto_purge_allowed(array $row): bool {
+    $p = json_decode((string)$row['payload'], true);
+    if (!is_array($p)) return true;
+    if ($row['entity'] === 'client_documents' && in_array($p['category'] ?? '', KEY_DOCUMENT_CATEGORIES, true)) return false;
+    $clientId = (int)($p['client_id'] ?? 0);
+    if ($clientId === 0 && !empty($p['track_id'])) {
+        $q = db()->prepare('SELECT client_id FROM training_tracks WHERE id = ?');
+        $q->execute([(int)$p['track_id']]);
+        $clientId = (int)$q->fetchColumn();
+    }
+    return $clientId === 0 || client_hold($clientId) === null;
+}
+
+/** How a client was given the privacy notice. */
+const PRIVACY_NOTICE_METHODS = ['In person', 'By email', 'By mail', 'In the portal', 'Read aloud by phone'];

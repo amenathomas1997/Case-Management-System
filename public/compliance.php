@@ -206,6 +206,24 @@ try {
     $releaseRisk = []; $noRelease = []; // mig_3.0.36 not run yet
 }
 
+// Minors and Pre-ETS students with no guardian consent ever requested (3.0.37).
+$mq = db()->prepare("SELECT c.id AS cid, c.name AS client, c.dob, c.client_type FROM clients c
+    WHERE c.archived_at IS NULL AND c.status NOT LIKE 'Closed%'" . $scopeSql . "
+      AND ((c.dob IS NOT NULL AND c.dob > DATE_SUB(CURDATE(), INTERVAL 18 YEAR)) OR c.client_type = 'Pre-ETS')
+      AND NOT EXISTS (SELECT 1 FROM consent_forms f WHERE f.client_id = c.id)
+    ORDER BY c.name");
+$mq->execute($scopeArg);
+$minorsNoConsent = $mq->fetchAll();
+// Open clients with no privacy notice recorded (3.0.37).
+try {
+    $pq = db()->prepare("SELECT c.id AS cid, c.name AS client FROM clients c WHERE c.archived_at IS NULL AND c.status NOT LIKE 'Closed%'" . $scopeSql . " AND c.privacy_notice_at IS NULL ORDER BY c.name");
+    $pq->execute($scopeArg);
+    $noNotice = $pq->fetchAll();
+} catch (PDOException $e) { $noNotice = []; }
+// Listed once: a minor with nothing on file is under this heading, not also under "no release".
+$minorIds = array_flip(array_map('intval', array_column($minorsNoConsent, 'cid')));
+$noRelease = array_values(array_filter($noRelease, fn($c) => !isset($minorIds[(int)$c['cid']])));
+
 page_header('Compliance', $user, 'compliance');
 ?>
 <h1>Authorization &amp; compliance</h1>
@@ -221,7 +239,7 @@ page_header('Compliance', $user, 'compliance');
   <div class="card stat"><span class="stat-num"><?= can('equipment') ? count($equipDue) : '<span aria-hidden="true">—</span><span class="visually-hidden">Not shown (needs equipment access)</span>' ?></span><span class="stat-label">Equipment service due</span></div>
   <div class="card stat"><span class="stat-num"><?= count(array_filter($authRisk, fn($t) => $t['expired'])) ?></span><span class="stat-label">Expired authorizations</span></div>
   <div class="card stat"><span class="stat-num"><?= count($consentRisk) ?></span><span class="stat-label">Consents to renew</span></div>
-  <div class="card stat"><span class="stat-num"><?= count($releaseRisk) + count($noRelease) ?></span><span class="stat-label">Releases to renew or request</span></div>
+  <div class="card stat"><span class="stat-num"><?= count($releaseRisk) + count($noRelease) + count($minorsNoConsent) ?></span><span class="stat-label">Releases and consents to request</span></div>
   <div class="card stat"><span class="stat-num"><?= $fuDueTotal ?></span><span class="stat-label">Device follow-ups due</span></div>
   <div class="card stat"><span class="stat-num"><?= can('equipment') ? count($loansOverdue) : '<span aria-hidden="true">—</span><span class="visually-hidden">Not shown (needs equipment access)</span>' ?></span><span class="stat-label">Overdue equipment loans</span></div>
 </div>
@@ -371,9 +389,17 @@ page_header('Compliance', $user, 'compliance');
   <?php endif; ?>
 </section>
 <section class="card" aria-labelledby="release-h">
-  <h2 id="release-h">Releases of information (<?= count($releaseRisk) + count($noRelease) ?>)</h2>
+  <h2 id="release-h">Releases of information (<?= count($releaseRisk) + count($noRelease) + count($minorsNoConsent) ?>)</h2>
   <p class="muted">An adult client's release is valid for <?= release_validity_days() ?> days. Listed: the newest release for each recipient when it expires within 30 days, has expired or was withdrawn, and open clients with no current release or guardian consent. Request one from the client's page.</p>
-  <?php if (!$releaseRisk && !$noRelease): ?><p class="muted">No releases need attention.</p><?php endif; ?>
+  <?php if (!$releaseRisk && !$noRelease && !$minorsNoConsent): ?><p class="muted">No releases need attention.</p><?php endif; ?>
+  <?php if ($minorsNoConsent): ?>
+  <h3>Minors and Pre-ETS students with no guardian consent requested (<?= count($minorsNoConsent) ?>)</h3>
+  <ul>
+  <?php foreach ($minorsNoConsent as $c): ?>
+    <li><a href="client.php?id=<?= (int)$c['cid'] ?>&amp;consent=1#consent-request"><?= h($c['client']) ?></a><?= $c['dob'] ? ', born ' . fmt_date($c['dob']) : '' ?><?= $c['client_type'] === 'Pre-ETS' ? ', Pre-ETS' : '' ?></li>
+  <?php endforeach; ?>
+  </ul>
+  <?php endif; ?>
   <?php if ($releaseRisk): ?>
   <h3>Expiring, expired or withdrawn (<?= count($releaseRisk) ?>)</h3>
   <ul>
@@ -392,4 +418,12 @@ page_header('Compliance', $user, 'compliance');
   </ul>
   <?php endif; ?>
 </section>
+<?php if ($noNotice): ?>
+<section class="card" aria-labelledby="notice-h">
+  <h2 id="notice-h">Privacy notice not recorded (<?= count($noNotice) ?>)</h2>
+  <details><summary>Show the <?= count($noNotice) ?> open client<?= count($noNotice) === 1 ? '' : 's' ?></summary>
+  <ul><?php foreach ($noNotice as $c): ?><li><a href="client.php?id=<?= (int)$c['cid'] ?>#records-h"><?= h($c['client']) ?></a></li><?php endforeach; ?></ul>
+  </details>
+</section>
+<?php endif; ?>
 <?php page_footer();

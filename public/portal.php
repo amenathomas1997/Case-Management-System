@@ -655,6 +655,7 @@ if ($client && is_array($_SESSION['hw_explanation'] ?? null) && ($_SESSION['hw_e
     $homeworkExplanation = $_SESSION['hw_explanation'];
 }
 unset($_SESSION['hw_explanation']);
+if ($client) record_client_view(null, (int)$client['id'], 'client portal');
 page_header($client ? 'My training' : 'Portal');
 
 echo lang_toggle();
