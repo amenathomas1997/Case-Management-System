@@ -97,11 +97,19 @@ jobs:
     # failure here does not fail the workflow (macOS minutes are also billed at
     # a higher rate on private repositories).
     name: iOS simulator build (optional)
-    runs-on: macos-15
+    runs-on: macos-26
     continue-on-error: true
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+
+      # The app uses SDK features newer than a runner's default Xcode (for example
+      # AVAudioSession's allowBluetoothHFP), so the newest installed Xcode is used.
+      - name: Use the newest Xcode on the runner
+        run: |
+          newest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          xcodebuild -version
 
       - name: Install XcodeGen
         run: brew install xcodegen
