@@ -1,0 +1,191 @@
+<?php
+declare(strict_types=1);
+// Referral outcomes and case closure (3.0.35). A referral that does not become a client is
+// Closed with a reason, and the referrer is emailed the outcome automatically (owner
+// decision, 2026-10-16), with the reference number and a general reason only. A referral for
+// someone already on file is attached to their record, which is reopened when it was closed
+// (the recommended default). A case closes with a reason from the agreed list and an
+// optional outcome. The website, the app's API and voice all use these.
+
+/** Referral close reasons => the general phrase the referrer's email gives (never the note). */
+const REFERRAL_CLOSE_REASONS = [
+    'Declined services' => 'the person decided not to go ahead with services',
+    'Not eligible' => 'the request is outside the services we can provide',
+    'Withdrawn' => 'the referral was withdrawn',
+    'Unable to reach' => 'we were not able to reach the person after several attempts',
+    'Duplicate' => 'it repeats a referral we have already received',
+    'Referred elsewhere' => 'the person was referred to another provider',
+    'Other' => 'we are not able to provide this service at this time',
+];
+
+/** Case closure reasons (owner's list, 2026-10-16). 'Not recorded' is only written for a
+ *  closure from an older app build or voice, which do not ask. */
+const CLOSURE_REASONS = ['Employed', 'Goals met', 'Declined further services', 'Unable to contact', 'Moved away',
+    'Health or medical', 'Not eligible', 'Transferred to another provider', 'Other'];
+
+/** A referral's reference number, as the referrer is told it. */
+function referral_ref(int $id): string {
+    return 'REF-' . str_pad((string)$id, 5, '0', STR_PAD_LEFT);
+}
+
+/**
+ * Close an open referral (New or Reviewed) with a reason, and email the referrer the
+ * outcome. Returns ['error' => ?string, 'emailed' => bool]. The contact task is completed
+ * and a waitlist entry is closed with it.
+ */
+function referral_close(int $id, string $reason, string $note, int $actor): array {
+    if (!isset(REFERRAL_CLOSE_REASONS[$reason])) return ['error' => 'Choose a reason from the list.', 'emailed' => false];
+    $note = trim($note);
+    if ($reason === 'Other' && $note === '') return ['error' => 'Give a short note for Other.', 'emailed' => false];
+    if (mb_strlen($note) > 255) return ['error' => 'Keep the note to 255 characters or fewer.', 'emailed' => false];
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $q = $pdo->prepare('SELECT * FROM referrals WHERE id = ? FOR UPDATE');
+        $q->execute([$id]);
+        $ref = $q->fetch();
+        if (!$ref || !in_array($ref['status'], ['New', 'Reviewed'], true)) {
+            $pdo->rollBack();
+            return ['error' => 'Only an open referral can be closed' . ($ref ? '; this one is ' . $ref['status'] . '.' : '.'), 'emailed' => false];
+        }
+        $pdo->prepare("UPDATE referrals SET status = 'Closed', closed_reason = ?, closed_note = ?, closed_at = NOW(), closed_by = ? WHERE id = ?")
+            ->execute([$reason, $note !== '' ? $note : null, $actor, $id]);
+        $pdo->prepare("UPDATE referral_waitlist SET status = 'Closed' WHERE referral_id = ?")->execute([$id]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+    complete_task_by_key('ref-contact-' . $id, $actor);
+    // The outcome goes to whoever sent the referral, automatically: no client details.
+    $emailed = false;
+    $to = trim((string)$ref['counselor_email']);
+    if (filter_var($to, FILTER_VALIDATE_EMAIL)) {
+        [$subj, $body] = email_template('referral_closed', ['ref' => referral_ref($id), 'date' => fmt_date($ref['created_at']), 'reason' => REFERRAL_CLOSE_REASONS[$reason]]);
+        if (send_app_mail($to, $subj, $body)) {
+            $emailed = true;
+            db()->prepare('UPDATE referrals SET outcome_emailed_at = NOW() WHERE id = ?')->execute([$id]);
+        }
+    }
+    audit($actor, 'referral.close', 'referral', $id, $reason . ($note !== '' ? ': ' . mb_substr($note, 0, 150) : '') . ($emailed ? '; outcome emailed to the referrer' : '; no outcome email sent'));
+    return ['error' => null, 'emailed' => $emailed];
+}
+
+/** Reopen a Closed referral (closed by mistake): back to New. */
+function referral_reopen(int $id, int $actor): ?string {
+    $st = db()->prepare("UPDATE referrals SET status = 'New', closed_reason = NULL, closed_note = NULL, closed_at = NULL, closed_by = NULL WHERE id = ? AND status = 'Closed'");
+    $st->execute([$id]);
+    if ($st->rowCount() !== 1) return 'Only a closed referral can be reopened.';
+    audit($actor, 'referral.reopen', 'referral', $id, null);
+    return null;
+}
+
+/**
+ * Attach an open referral to a client already on file, instead of creating a new record.
+ * A closed or archived client is reopened to Pending Assessment, with a history note citing
+ * the referral. The intake note goes on their record, the contact task is completed and a
+ * follow-up task is opened. Returns ['error' => ?string, 'reopened' => bool].
+ */
+function referral_attach(int $id, int $clientId, int $actor): array {
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $q = $pdo->prepare('SELECT * FROM referrals WHERE id = ? FOR UPDATE');
+        $q->execute([$id]);
+        $ref = $q->fetch();
+        if (!$ref || !in_array($ref['status'], ['New', 'Reviewed'], true)) {
+            $pdo->rollBack();
+            return ['error' => 'Only an open referral can be attached' . ($ref ? '; this one is ' . $ref['status'] . '.' : '.'), 'reopened' => false];
+        }
+        $c = $pdo->prepare('SELECT * FROM clients WHERE id = ? FOR UPDATE');
+        $c->execute([$clientId]);
+        $client = $c->fetch();
+        if (!$client) { $pdo->rollBack(); return ['error' => 'That client record no longer exists.', 'reopened' => false]; }
+        $reopen = $client['archived_at'] !== null || str_starts_with((string)$client['status'], 'Closed');
+        if ($reopen) {
+            record_status_change($clientId, (string)$client['status'], 'Pending Assessment', $actor, 'Reopened: referred again (' . referral_ref($id) . ')');
+            $pdo->prepare("UPDATE clients SET status = 'Pending Assessment', archived_at = NULL WHERE id = ?")->execute([$clientId]);
+        }
+        $intake = referral_intake_note($ref);
+        $pdo->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,?)')
+            ->execute([$clientId, 'Intake', $intake['subject'], $intake['body'], $actor]);
+        $pdo->prepare("UPDATE referrals SET status = 'Converted', client_id = ?, assigned_to = COALESCE(assigned_to, ?) WHERE id = ?")
+            ->execute([$clientId, $client['assigned_to'], $id]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+    complete_task_by_key('ref-contact-' . $id, $actor);
+    add_task('Follow up the new referral for ' . $client['name'], 'Referral ' . referral_ref($id) . ' was attached to this record' . ($reopen ? ', which was reopened' : '') . '. Contact the person and plan the next step.',
+        $clientId, null, date('Y-m-d', strtotime('+3 days')), $client['assigned_to'] !== null ? (int)$client['assigned_to'] : $actor, $actor, 'reref-' . $id);
+    audit($actor, 'referral.attach', 'client', $clientId, 'referral #' . $id . ($reopen ? '; record reopened to Pending Assessment' : ''));
+    return ['error' => null, 'reopened' => $reopen];
+}
+
+/**
+ * The closure details typed with a Closed status: [data, errors]. $src keys are
+ * closure_reason, closure_note, closure_employed ('yes', 'no' or ''), closure_employer,
+ * closure_job_title, closure_job_start, closure_hours, closure_wage, closure_independence.
+ */
+function closure_input(array $src): array {
+    $s = fn(string $k): string => trim(is_string($src[$k] ?? null) ? $src[$k] : '');
+    $e = [];
+    $reason = $s('closure_reason'); $note = $s('closure_note');
+    if (!in_array($reason, CLOSURE_REASONS, true)) $e['closure_reason'] = 'Choose why the case is closing.';
+    if ($reason === 'Other' && $note === '') $e['closure_note'] = 'Give a short note for Other.';
+    if (mb_strlen($note) > 255) $e['closure_note'] = 'Keep the note to 255 characters or fewer.';
+    $emp = $s('closure_employed');
+    $employed = $emp === 'yes' ? 1 : ($emp === 'no' ? 0 : null);
+    $start = $s('closure_job_start');
+    $startOk = $start === '' ? null : valid_date($start, 2000, (int)date('Y') + 1);
+    if ($start !== '' && $startOk === null) $e['closure_job_start'] = 'Enter the job start date as a real date, or leave it blank.';
+    $num = function (string $k, float $max, string $what) use ($s, &$e): ?float {
+        $v = str_replace([',', '$'], '', $s($k));
+        if ($v === '') return null;
+        if (!is_numeric($v) || (float)$v < 0 || (float)$v > $max) { $e[$k] = "Enter the $what as a number from 0 to " . rtrim(rtrim(number_format($max, 2, '.', ''), '0'), '.') . ', or leave it blank.'; return null; }
+        return round((float)$v, 2);
+    };
+    $hours = $num('closure_hours', 80, 'hours a week');
+    $wage = $num('closure_wage', 999.99, 'hourly wage');
+    foreach (['closure_employer' => 190, 'closure_job_title' => 120, 'closure_independence' => 500] as $k => $max) {
+        if (mb_strlen($s($k)) > $max) $e[$k] = "Keep it to $max characters or fewer.";
+    }
+    return [[
+        'reason' => $reason, 'note' => $note !== '' ? $note : null, 'employed' => $employed,
+        'employer' => $s('closure_employer') ?: null, 'job_title' => $s('closure_job_title') ?: null, 'job_start' => $startOk,
+        'hours_per_week' => $hours, 'hourly_wage' => $wage, 'independence_outcome' => $s('closure_independence') ?: null,
+    ], $e];
+}
+
+/** Record a case closure (call it in the status change's transaction). */
+function client_closure_record(int $clientId, string $status, array $d, ?int $actor): void {
+    db()->prepare('INSERT INTO client_closures (client_id, status, reason, note, employed, employer, job_title, job_start, hours_per_week, hourly_wage, independence_outcome, closed_by)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')->execute([$clientId, $status, $d['reason'], $d['note'], $d['employed'], $d['employer'], $d['job_title'],
+        $d['job_start'], $d['hours_per_week'], $d['hourly_wage'], $d['independence_outcome'], $actor]);
+}
+
+/** The latest closure recorded for a client, or null. */
+function client_last_closure(int $clientId): ?array {
+    $q = db()->prepare('SELECT * FROM client_closures WHERE client_id = ? ORDER BY closed_at DESC, id DESC LIMIT 1');
+    $q->execute([$clientId]);
+    return $q->fetch() ?: null;
+}
+
+/** Loose ends to settle before (or after) closing a case: one sentence each, with a link. */
+function closure_checklist(int $clientId): array {
+    $one = function (string $sql) use ($clientId) { $q = db()->prepare($sql); $q->execute([$clientId]); return $q->fetchColumn(); };
+    $items = [];
+    $n = (int)$one("SELECT COUNT(*) FROM training_tracks WHERE client_id = ? AND status = 'Active'");
+    if ($n) $items[] = [$n . ' training track' . ($n === 1 ? ' is' : 's are') . ' still Active: mark them Completed or Cancelled.', 'client.php?id=' . $clientId . '#tracks'];
+    $amt = (float)$one("SELECT COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate, t.hourly_rate), 2) + ROUND(w.mileage * COALESCE(w.mileage_rate, t.mileage_rate), 2)), 0)
+        FROM work_logs w JOIN training_tracks t ON t.id = w.track_id WHERE t.client_id = ? AND w.is_billed = 0 AND t.billing_mode <> 'none'");
+    if ($amt > 0) $items[] = [fmt_money($amt) . ' of work is not yet invoiced.', 'invoices.php'];
+    $n = (int)$one('SELECT COUNT(*) FROM equipment_loans WHERE client_id = ? AND returned_at IS NULL');
+    if ($n) $items[] = [$n . ' loaned item' . ($n === 1 ? ' is' : 's are') . ' still out.', 'equipment.php'];
+    $n = (int)$one("SELECT COUNT(*) FROM scheduled_sessions WHERE client_id = ? AND status = 'Scheduled' AND start_at > NOW()");
+    if ($n) $items[] = [$n . ' future session' . ($n === 1 ? ' is' : 's are') . ' still scheduled: cancel ' . ($n === 1 ? 'it' : 'them') . ' on the Schedule.', 'schedule.php'];
+    $n = (int)$one("SELECT COUNT(*) FROM invoices i JOIN training_tracks t ON t.id = i.track_id WHERE t.client_id = ? AND " . INVOICE_OPEN_SQL);
+    if ($n) $items[] = [$n . ' invoice' . ($n === 1 ? ' is' : 's are') . ' still awaiting payment.', 'invoices.php'];
+    return $items;
+}

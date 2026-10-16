@@ -375,7 +375,7 @@ function status_badge(string $status): string {
         'On Hold' => 'badge-hold', 'Closed - Rehabilitated' => 'badge-closed',
         'Closed - Other' => 'badge-closed',
         'Active' => 'badge-active', 'Completed' => 'badge-closed', 'Cancelled' => 'badge-hold',
-        'New' => 'badge-pending', 'Reviewed' => 'badge-active', 'Converted' => 'badge-closed',
+        'New' => 'badge-pending', 'Reviewed' => 'badge-active', 'Converted' => 'badge-closed', 'Closed' => 'badge-closed',
         'Not Started' => 'badge-pending', 'In Progress' => 'badge-active', 'Achieved' => 'badge-closed',
         'Scheduled' => 'badge-active', 'No Show' => 'badge-hold',
         'Waitlist' => 'badge-hold', 'Assigned' => 'badge-active',

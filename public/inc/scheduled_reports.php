@@ -121,7 +121,20 @@ function outcome_metrics(string $from, string $to, string $rt = 'training_tracks
     $sv->execute([$from, $to]);
     $sv = $sv->fetch();
 
-    return compact('served', 'servedTotal', 'byCat', 'byProg', 'closures', 'closedTotal', 'rehab', 'avgHours', 'totals', 'expenses', 'valueAll', 'sv');
+    /* Why cases closed in the period, and employment at closure (3.0.35): each client's
+       latest closure recorded in the period (client_closures). */
+    $closureReasons = [];
+    $employedAtClosure = 0;
+    try {
+        $cr = db()->prepare("SELECT cc.reason, COUNT(*) n, SUM(cc.employed = 1) employed FROM client_closures cc
+            WHERE DATE(cc.closed_at) BETWEEN ? AND ?
+              AND EXISTS (SELECT 1 FROM {$rh} hx WHERE hx.client_id = cc.client_id)
+              AND cc.id = (SELECT MAX(c2.id) FROM client_closures c2 WHERE c2.client_id = cc.client_id AND DATE(c2.closed_at) BETWEEN ? AND ?)
+            GROUP BY cc.reason ORDER BY n DESC, cc.reason");
+        $cr->execute([$from, $to, $from, $to]);
+        foreach ($cr->fetchAll() as $row) { $closureReasons[] = ['reason' => $row['reason'], 'n' => (int)$row['n']]; $employedAtClosure += (int)$row['employed']; }
+    } catch (PDOException $e) { /* before mig_3.0.35 */ }
+    return compact('served', 'servedTotal', 'byCat', 'byProg', 'closures', 'closedTotal', 'rehab', 'avgHours', 'totals', 'expenses', 'valueAll', 'sv', 'closureReasons', 'employedAtClosure');
 }
 
 /**

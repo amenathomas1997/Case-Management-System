@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.35' => [
+        'A referral that will not become a client is closed with a reason, and the person who sent it is emailed the outcome. A referral for someone already on file is attached to their record (a closed record is reopened), so no second record is made.',
+        'Closing a case asks why it closed and, if you know it, the employment or independence outcome, and lists anything still open on the record. A due progress report now opens a task for you to add a short narrative and send it.',
+    ],
     '3.0.34' => [
         'Invoices take part payments with the date the money came in, write-offs with a reason, and can be closed as Denied or Void: their hours go back to unbilled so you can fix them and invoice again. Your vendor number, remit-to address and due date print on every invoice.',
         'Hours, mileage and expenses outside an authorization (its dates, its hours or its dollars) are refused until the authorization is amended on the track, with a message saying how far over it would go.',

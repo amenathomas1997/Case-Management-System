@@ -434,6 +434,7 @@ $API_ACTION_PERMS = [
     'send_report' => 'reports',
     'referrals' => 'referrals', 'referral' => 'referrals', 'assign_referral' => 'referrals',
     'review_referral' => 'referrals', 'convert_referral' => 'referrals',
+    'close_referral' => 'referrals', 'reopen_referral' => 'referrals', 'attach_referral' => 'referrals',
     'schedule' => 'schedule', 'schedule_session' => 'schedule', 'complete_session' => 'schedule', 'set_session_status' => 'schedule',
     'check_in_session' => 'schedule',   // 3.0.28, handled in inc/api_parity.php
     // 'staff' is checked in its own case: scheduling, referral assignment and the client form all need it.
@@ -1272,6 +1273,19 @@ switch ($action) {
             fail('The date of birth cannot be in the future. Check the year.', 422);
         }
         $statusNote = api_text($input, 'status_note', 255, 'Status note');
+        // A closure records why (3.0.35): app builds that send closure_reason are checked as
+        // the website checks it; older builds, which do not ask, record 'Not recorded'.
+        $closing = str_starts_with($status, 'Closed') && (($old['status'] ?? null) !== $status);
+        $closureData = null;
+        if ($closing) {
+            if (array_key_exists('closure_reason', $input)) {
+                [$closureData, $closureErrs] = closure_input(array_map(fn($v) => is_scalar($v) ? (string)$v : '', $input));
+                if ($closureErrs) out(['ok' => false, 'error' => implode(' ', $closureErrs), 'errors' => $closureErrs], 422);
+            } else {
+                $closureData = ['reason' => 'Not recorded', 'note' => 'Closed from an app version that does not ask the reason', 'employed' => null, 'employer' => null,
+                    'job_title' => null, 'job_start' => null, 'hours_per_week' => null, 'hourly_wage' => null, 'independence_outcome' => null];
+            }
+        }
         // Caseload-scoped users always own the clients they save. Everyone else may
         // unassign (0) or pick an active staff member; an id that is not an active
         // user would hide the client from every caseload.
@@ -1343,7 +1357,8 @@ switch ($action) {
         db()->beginTransaction();
         try {
             if ($isUpdate) {
-                record_status_change($cid, $old['status'], $status, $userId, $statusNote ?: 'Updated from mobile');
+                record_status_change($cid, $old['status'], $status, $userId, $statusNote ?: ($closing ? 'Closed: ' . $closureData['reason'] . ' (mobile)' : 'Updated from mobile'));
+                if ($closing) client_closure_record($cid, $status, $closureData, $userId);
                 $vals[] = $cid;
                 db()->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, client_type=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, counselor_verified=?, school=?, email_verified=?'
                     . ($unarchive ? ', archived_at=NULL' : '') . ' WHERE id=?')->execute($vals);
@@ -1393,6 +1408,7 @@ switch ($action) {
                 db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, counselor_verified, school, email_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
                 $cid = (int)db()->lastInsertId();
                 record_status_change($cid, null, $status, $userId, 'Client created (mobile)');
+                if ($closing) client_closure_record($cid, $status, $closureData, $userId);
             }
             db()->commit();
         } catch (Throwable $e) {
@@ -2146,9 +2162,10 @@ switch ($action) {
         $params = [];
         // Optional filters, as on the website (referrals.php): ?status=open|converted|all
         // (all when absent) and ?q= text in the name, reason or counselor.
-        $refStatus = api_choice($_GET, 'status', ['open', 'converted', 'all'], 'Status', 'all');
+        $refStatus = api_choice($_GET, 'status', ['open', 'converted', 'closed', 'all'], 'Status', 'all');
         if ($refStatus === 'open') $sql .= " AND r.status IN ('New','Reviewed')";
         elseif ($refStatus === 'converted') $sql .= " AND r.status = 'Converted'";
+        elseif ($refStatus === 'closed') $sql .= " AND r.status = 'Closed'";
         $refQ = trim((string)($_GET['q'] ?? ''));
         if ($refQ !== '') {
             $sql .= ' AND (r.client_name LIKE ? OR r.reason LIKE ? OR r.counselor_name LIKE ?)';
@@ -2186,9 +2203,10 @@ switch ($action) {
             OR (email IS NOT NULL AND email <> '' AND email = ?)) LIMIT 20");
         $dc->execute([$nameLike, $ref['client_phone'] ?? '', $ref['client_email'] ?? '']);
         $clientShown = 0;
+        $dupClients = []; // the clients a repeat referral can be attached to (attach_referral, 3.0.35)
         foreach ($dc->fetchAll() as $d) {
             if (!can('clients') || (caseload_scoped() && (int)($d['assigned_to'] ?? 0) !== $userId)) { $hiddenDupes++; continue; }
-            if ($clientShown++ < 5) $dupes[] = 'Existing client: ' . $d['name'] . ' (' . $d['status'] . ')';
+            if ($clientShown++ < 5) { $dupes[] = 'Existing client: ' . $d['name'] . ' (' . $d['status'] . ')'; $dupClients[] = ['id' => (int)$d['id'], 'name' => (string)$d['name'], 'status' => (string)$d['status']]; }
         }
         $dr = db()->prepare("SELECT id, client_name, status, created_at, assigned_to, client_id FROM referrals WHERE id <> ?
             AND (client_name LIKE ? ESCAPE '!' OR (client_phone IS NOT NULL AND client_phone <> '' AND client_phone = ?)
@@ -2204,7 +2222,8 @@ switch ($action) {
         }
         // Existing mobile builds display body; include structured details there too.
         if (referral_request_summary($ref) !== '') $ref['body'] = referral_request_summary($ref) . "\n\n" . $ref['body'];
-        out(['ok' => true, 'referral' => $ref, 'possible_duplicates' => $dupes]);
+        $ref['reference'] = referral_ref((int)$ref['id']);
+        out(['ok' => true, 'referral' => $ref, 'possible_duplicates' => $dupes, 'duplicate_clients' => $dupClients, 'close_reasons' => array_keys(REFERRAL_CLOSE_REASONS)]);
 
     case 'staff':
         // Needed to schedule, to assign a referral and to assign a client.
@@ -2271,6 +2290,34 @@ switch ($action) {
         $rr->execute([$rid]);
         if ($rr->rowCount() === 1) audit($userId, 'referral.review', 'referral', $rid, 'mobile');
         out(['ok' => true]);
+
+    /* Referral outcomes (3.0.35, inc/case_outcomes.php): close with a reason (the referrer is
+       emailed the outcome), reopen, or attach to a client already on file. */
+    case 'close_referral':
+    case 'reopen_referral':
+    case 'attach_referral': {
+        $rid = (int)($input['id'] ?? 0);
+        $rq = db()->prepare('SELECT assigned_to, status, client_id FROM referrals WHERE id = ?');
+        $rq->execute([$rid]);
+        $rRow = $rq->fetch();
+        if (!$rRow) fail('Referral not found.', 404);
+        if (!api_referral_in_scope($rRow, $userId)) fail('That referral is assigned to someone else.', 403);
+        if ($action === 'close_referral') {
+            $res = referral_close($rid, (string)($input['reason'] ?? ''), api_text($input, 'note', 255, 'The note'), $userId);
+            if ($res['error'] !== null) fail($res['error'], 422);
+            out(['ok' => true, 'emailed' => $res['emailed']]);
+        }
+        if ($action === 'reopen_referral') {
+            if (($why = referral_reopen($rid, $userId)) !== null) fail($why, 409);
+            out(['ok' => true]);
+        }
+        if (!can('clients')) fail('Attaching a referral to a client needs the client records permission.', 403);
+        $cid = (int)($input['client_id'] ?? 0);
+        api_require_client($cid, $userId);
+        $res = referral_attach($rid, $cid, $userId);
+        if ($res['error'] !== null) fail($res['error'], 409);
+        out(['ok' => true, 'client_id' => $cid, 'reopened' => $res['reopened']]);
+    }
 
     case 'convert_referral':
         $id = (int)($input['id'] ?? 0);

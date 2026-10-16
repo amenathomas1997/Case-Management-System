@@ -39,6 +39,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('referrals.php');
     }
 
+    /* Close an open referral with a reason; the referrer is emailed the outcome (3.0.35). */
+    if (isset($_POST['close_referral'])) {
+        $reason = is_string($_POST['close_reason'] ?? null) ? $_POST['close_reason'] : '';
+        $note = is_string($_POST['close_note'] ?? null) ? $_POST['close_note'] : '';
+        $res = referral_close($id, $reason, $note, (int)$user['id']);
+        if ($res['error'] !== null) {
+            keep_input();
+            keep_field_errors([isset(REFERRAL_CLOSE_REASONS[$reason]) ? 'close_note' : 'close_reason' => $res['error']]);
+            redirect('referrals.php?view=' . $id . '#close-h');
+        }
+        flash('Referral ' . referral_ref($id) . ' closed: ' . $reason . '.' . ($res['emailed'] ? ' The referrer was emailed the outcome (no client details).' : ' No outcome email was sent: the referral has no usable email address, or the email could not be sent.'));
+        redirect('referrals.php');
+    }
+    if (isset($_POST['reopen_referral'])) {
+        $why = referral_reopen($id, (int)$user['id']);
+        flash($why ?? 'Referral ' . referral_ref($id) . ' reopened as New.', $why ? 'error' : 'success');
+        redirect('referrals.php?view=' . $id);
+    }
+    /* Attach to a client already on file (a repeat referral): no new record (3.0.35). */
+    if (isset($_POST['attach_referral'])) {
+        require_perm('clients');
+        $cid = (int)($_POST['client_id'] ?? 0);
+        $cl = db()->prepare('SELECT id, name, assigned_to FROM clients WHERE id = ?');
+        $cl->execute([$cid]);
+        $target = $cl->fetch();
+        if (!$target || (caseload_scoped() && (int)($target['assigned_to'] ?? 0) !== (int)$user['id'])) { flash('That client record is not one you can attach to.', 'error'); redirect('referrals.php?view=' . $id); }
+        $res = referral_attach($id, $cid, (int)$user['id']);
+        if ($res['error'] !== null) { flash($res['error'], 'error'); redirect('referrals.php?view=' . $id); }
+        flash('Referral ' . referral_ref($id) . ' attached to ' . $target['name'] . '\'s record' . ($res['reopened'] ? ', which was reopened to Pending Assessment' : '') . '. Its intake note is on the record, and a follow-up task was created.');
+        redirect('client.php?id=' . $cid);
+    }
+
     if (isset($_POST['assign'])) {
         $assigneeId = (int)($_POST['assigned_to'] ?? 0);
         if ($assigneeId === 0) {
@@ -224,7 +256,7 @@ if ($view) {
     foreach ($c->fetchAll() as $d) {
         $visible = can('clients') && (!caseload_scoped() || (int)($d['assigned_to'] ?? 0) === (int)$user['id']);
         if (!$visible) { $hiddenDupes++; continue; }
-        if (count($dupes) < 5) $dupes[] = ['label' => 'Existing client: ' . $d['name'] . ' (' . $d['status'] . ')', 'url' => 'client.php?id=' . (int)$d['id'], 'sr' => 'client #' . (int)$d['id']];
+        if (count($dupes) < 5) $dupes[] = ['label' => 'Existing client: ' . $d['name'] . ' (' . $d['status'] . ')', 'url' => 'client.php?id=' . (int)$d['id'], 'sr' => 'client #' . (int)$d['id'], 'client_id' => (int)$d['id'], 'name' => $d['name']];
     }
     $r2 = db()->prepare("SELECT id, client_name, status, created_at, assigned_to, client_id FROM referrals WHERE id <> ?
         AND (client_name LIKE ? ESCAPE '!' OR (client_phone IS NOT NULL AND client_phone <> '' AND client_phone = ?)
@@ -243,11 +275,12 @@ $staff = array_values(array_filter(db()->query('SELECT id, name, role, group_id 
 $who = $_GET['who'] ?? '';
 // Open (New or Reviewed) referrals by default, so finished work cannot push
 // waiting referrals off the list.
-$statusShow = in_array($_GET['status'] ?? '', ['open', 'converted', 'all'], true) ? $_GET['status'] : 'open';
+$statusShow = in_array($_GET['status'] ?? '', ['open', 'converted', 'closed', 'all'], true) ? $_GET['status'] : 'open';
 $sql = 'SELECT r.*, u.name AS assigned_name FROM referrals r LEFT JOIN users u ON u.id = r.assigned_to WHERE 1=1';
 $params = [];
 if ($statusShow === 'open') $sql .= " AND r.status IN ('New','Reviewed')";
 elseif ($statusShow === 'converted') $sql .= " AND r.status = 'Converted'";
+elseif ($statusShow === 'closed') $sql .= " AND r.status = 'Closed'";
 if ($who === 'me') { $sql .= ' AND r.assigned_to = ?'; $params[] = $user['id']; }
 elseif ($who === 'unassigned') { $sql .= ' AND r.assigned_to IS NULL'; }
 if (caseload_scoped()) {
@@ -279,7 +312,14 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
     <strong>Possible duplicate — check before converting:</strong>
     <ul style="margin:.4rem 0 0;">
       <?php foreach ($dupes as $d): ?>
-      <li><a href="<?= h($d['url']) ?>"><?= h($d['label']) ?><span class="visually-hidden">, <?= h($d['sr']) ?></span></a></li>
+      <li><a href="<?= h($d['url']) ?>"><?= h($d['label']) ?><span class="visually-hidden">, <?= h($d['sr']) ?></span></a>
+        <?php if (!empty($d['client_id']) && in_array($view['status'], ['New', 'Reviewed'], true)): // a repeat referral joins the record already on file ?>
+        <form method="post" action="referrals.php" class="inline-form"><?= csrf_field() ?>
+          <input type="hidden" name="id" value="<?= (int)$view['id'] ?>"><input type="hidden" name="client_id" value="<?= (int)$d['client_id'] ?>">
+          <button type="submit" name="attach_referral" value="1" class="btn btn-secondary btn-sm"
+            onclick="return confirm(<?= h(json_encode('Attach this referral to ' . $d['name'] . '\'s existing record instead of creating a new one? A closed record is reopened to Pending Assessment.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">Attach to this client<span class="visually-hidden">: <?= h($d['name']) ?></span></button>
+        </form>
+        <?php endif; ?></li>
       <?php endforeach; ?>
       <?php if ($hiddenDupes): ?>
       <li><?= $hiddenDupes ?> possible match<?= $hiddenDupes === 1 ? '' : 'es' ?> among records you cannot open. Ask an administrator to check before converting, so the person does not end up with two records.</li>
@@ -288,7 +328,12 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
   </div>
   <?php endif; ?>
   <dl class="props">
+    <dt>Reference</dt><dd><?= h(referral_ref((int)$view['id'])) ?></dd>
     <dt>Received</dt><dd><?= fmt_datetime($view['created_at']) ?></dd>
+    <?php if ($view['status'] === 'Closed'): ?>
+    <dt>Closed</dt><dd><?= fmt_datetime($view['closed_at']) ?>: <?= h((string)$view['closed_reason']) ?><?= $view['closed_note'] ? ' (' . h($view['closed_note']) . ')' : '' ?>.
+      <?= $view['outcome_emailed_at'] ? 'The referrer was emailed the outcome on ' . fmt_datetime($view['outcome_emailed_at']) . '.' : 'No outcome email was sent.' ?></dd>
+    <?php endif; ?>
     <dt>Reason</dt><dd><?= h($view['reason']) ?></dd>
     <?php if (!empty($view['referral_purpose'])): ?>
     <dt>Referral purpose</dt><dd><?= h($view['referral_purpose']) ?></dd>
@@ -356,7 +401,12 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
       <button type="submit" name="mark_reviewed" value="1" class="btn btn-secondary">Mark as reviewed</button>
     </form>
     <?php endif; ?>
-    <?php if ($view['status'] !== 'Converted'): ?>
+    <?php if ($view['status'] === 'Closed'): ?>
+    <form method="post" action="referrals.php" class="inline-form"><?= csrf_field() ?>
+      <input type="hidden" name="id" value="<?= (int)$view['id'] ?>">
+      <button type="submit" name="reopen_referral" value="1" class="btn btn-secondary">Reopen this referral</button>
+    </form>
+    <?php elseif ($view['status'] !== 'Converted'): ?>
     <form method="post" action="referrals.php" class="inline-form"><?= csrf_field() ?>
       <input type="hidden" name="id" value="<?= (int)$view['id'] ?>">
       <?php if (in_array($view['referral_source'] ?? 'counselor', ['counselor', ''], true) && trim((string)$view['counselor_email']) !== ''): ?>
@@ -374,6 +424,23 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
       <a class="btn btn-primary" href="client.php?id=<?= (int)$view['client_id'] ?>">Open client record</a>
     <?php endif; ?>
   </div>
+  <?php if (in_array($view['status'], ['New', 'Reviewed'], true)): // not becoming a client: closed with a reason ?>
+  <details<?= has_field_error('close_reason') || has_field_error('close_note') ? ' open' : '' ?>>
+    <summary id="close-h">Close without creating a client</summary>
+    <form method="post" action="referrals.php" class="stacked" novalidate><?= csrf_field() ?>
+      <input type="hidden" name="id" value="<?= (int)$view['id'] ?>">
+      <?= form_error_summary(['close_reason' => 'Reason', 'close_note' => 'Note']) ?>
+      <div class="field"><label for="close_reason">Reason</label>
+        <select id="close_reason" name="close_reason" <?= field_aria('close_reason') ?>><option value="">Choose a reason</option>
+          <?php foreach (array_keys(REFERRAL_CLOSE_REASONS) as $cr): ?><option value="<?= h($cr) ?>"<?= old_in('close_reason') === $cr ? ' selected' : '' ?>><?= h($cr) ?></option><?php endforeach; ?>
+        </select><?= field_error('close_reason') ?></div>
+      <div class="field"><label for="close_note">Note for the record (required for Other; never emailed)</label>
+        <input type="text" id="close_note" name="close_note" maxlength="255" value="<?= h(old_in('close_note')) ?>" <?= field_aria('close_note') ?>><?= field_error('close_note') ?></div>
+      <p class="hint">The referrer is emailed the outcome with the reference number and a general reason, and no client details.</p>
+      <button type="submit" name="close_referral" value="1" class="btn btn-danger">Close referral</button>
+    </form>
+  </details>
+  <?php endif; ?>
 </section>
 <?php endif; ?>
 
@@ -382,6 +449,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
   <select id="ref-status" name="status">
     <option value="open" <?= $statusShow === 'open' ? 'selected' : '' ?>>Open (New or Reviewed)</option>
     <option value="converted" <?= $statusShow === 'converted' ? 'selected' : '' ?>>Converted</option>
+    <option value="closed" <?= $statusShow === 'closed' ? 'selected' : '' ?>>Closed without a client</option>
     <option value="all" <?= $statusShow === 'all' ? 'selected' : '' ?>>All statuses</option>
   </select>
   <label for="who">Show</label>
@@ -398,7 +466,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
 <?php endif; ?>
 <div class="table-scroll" tabindex="0" role="region" aria-labelledby="referrals-cap">
 <table>
-  <caption class="visually-hidden" id="referrals-cap"><?= ['open' => 'Open referrals', 'converted' => 'Converted referrals', 'all' => 'Referrals'][$statusShow] ?>, newest first<?= $matchCount > count($referrals) ? ' (newest ' . count($referrals) . ' of ' . number_format($matchCount) . ')' : '' ?></caption>
+  <caption class="visually-hidden" id="referrals-cap"><?= ['open' => 'Open referrals', 'converted' => 'Converted referrals', 'closed' => 'Closed referrals', 'all' => 'Referrals'][$statusShow] ?>, newest first<?= $matchCount > count($referrals) ? ' (newest ' . count($referrals) . ' of ' . number_format($matchCount) . ')' : '' ?></caption>
   <thead><tr>
     <th scope="col">Received</th><th scope="col">Client</th><th scope="col">Reason</th>
     <th scope="col">Referred by</th><th scope="col">Assigned to</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th>

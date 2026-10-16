@@ -148,13 +148,21 @@ struct ReferralDetailResponse: Decodable {
     /// Existing clients or other referrals that may be the same person ("Existing client: …"),
     /// sent beside the referral: empty when nothing matches, nil from a server that does not check.
     let possibleDuplicates: [String]?
-    private enum CodingKeys: String, CodingKey { case referral, possibleDuplicates }
+    /// 3.0.35 servers: the clients on file this referral can be attached to, and the reasons a
+    /// referral can be closed with (empty from older servers, which offer neither).
+    let duplicateClients: [DuplicateClient]
+    let closeReasons: [String]
+    private enum CodingKeys: String, CodingKey { case referral, possibleDuplicates, duplicateClients, closeReasons }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         referral = try c.decode(ReferralDetail.self, forKey: .referral)
         possibleDuplicates = try? c.decodeIfPresent([String].self, forKey: .possibleDuplicates)
+        duplicateClients = (try? c.decodeIfPresent([DuplicateClient].self, forKey: .duplicateClients)) ?? []
+        closeReasons = (try? c.decodeIfPresent([String].self, forKey: .closeReasons)) ?? []
     }
 }
+
+struct DuplicateClient: Decodable, Identifiable { let id: Int; let name: String; let status: String }
 
 struct StaffMember: Decodable, Identifiable {
     let id: Int
@@ -180,6 +188,7 @@ func statusColor(_ status: String) -> Color {
     case "New": return .orange
     case "Reviewed": return .brand
     case "Converted": return .brandTeal
+    case "Closed": return .secondary
     default: return .secondary
     }
 }
@@ -284,6 +293,11 @@ struct ReferralDetailView: View {
     @State private var detail: ReferralDetail?
     /// The server's duplicate check for this referral (nil from a server that does not check).
     @State private var duplicates: [String]?
+    @State private var duplicateClients: [DuplicateClient] = []
+    @State private var closeReasons: [String] = []
+    @State private var closeReason = ""
+    @State private var closeNote = ""
+    @State private var attachTarget: DuplicateClient?
     @State private var staff: [StaffMember] = []
     @State private var error: String?
     @State private var confirmation: String?
@@ -416,6 +430,32 @@ struct ReferralDetailView: View {
                         Text("Converted to a client record ✓").foregroundStyle(Color.brandTeal)
                     }
                 }
+                // A repeat referral joins the record already on file (3.0.35 servers).
+                if (detail.status == "New" || detail.status == "Reviewed") && !duplicateClients.isEmpty {
+                    Section("Already on file") {
+                        ForEach(duplicateClients) { dc in
+                            Button("Attach to \(dc.name) (\(dc.status))") { attachTarget = dc }
+                                .disabled(busy)
+                                .accessibilityHint("Adds this referral to their existing record instead of creating a new one. A closed record is reopened.")
+                        }
+                    }
+                }
+                // Not becoming a client: closed with a reason; the referrer is emailed the outcome.
+                if (detail.status == "New" || detail.status == "Reviewed") && !closeReasons.isEmpty {
+                    Section("Close without creating a client") {
+                        Picker("Reason", selection: $closeReason) {
+                            Text("Choose a reason").tag("")
+                            ForEach(closeReasons, id: \.self) { Text($0).tag($0) }
+                        }
+                        CaptionedField(label: "Note for the record (required for Other; never emailed)", text: $closeNote)
+                        Button("Close referral") { Task { await closeReferral() } }
+                            .disabled(busy || closeReason.isEmpty)
+                            .accessibilityHint("The referrer is emailed the outcome with the reference number and a general reason, and no client details.")
+                    }
+                }
+                if detail.status == "Closed" {
+                    Section { Button("Reopen this referral") { Task { await reopenReferral() } }.disabled(busy) }
+                }
             } else if error == nil && !handedOff {
                 ProgressView()
             }
@@ -435,6 +475,13 @@ struct ReferralDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(convertNote)
+        }
+        .confirmationDialog("Attach this referral to \(attachTarget?.name ?? "this client")'s existing record instead of creating a new one?",
+                            isPresented: Binding(get: { attachTarget != nil }, set: { if !$0 { attachTarget = nil } }), titleVisibility: .visible) {
+            Button("Attach to the existing record") { if let t = attachTarget { Task { await attach(t) } } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("A closed record is reopened to Pending Assessment, with the referral's intake note.")
         }
         .refreshable { await load() }
         .task { await load() }
@@ -505,6 +552,8 @@ struct ReferralDetailView: View {
             let response: ReferralDetailResponse = try await api.call("referral", query: ["id": String(referralId)])
             detail = response.referral
             duplicates = response.possibleDuplicates
+            duplicateClients = response.duplicateClients
+            closeReasons = response.closeReasons
             if staff.isEmpty {
                 let s: StaffResponse = try await api.call("staff")
                 staff = s.staff
@@ -547,6 +596,46 @@ struct ReferralDetailView: View {
             onChanged()
         } catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
+    }
+
+    private func closeReferral() async {
+        busy = true
+        defer { busy = false }
+        do {
+            error = nil
+            struct CloseResult: Decodable { let emailed: Bool? }
+            let result: CloseResult = try await api.call("close_referral", body: ["id": referralId, "reason": closeReason, "note": closeNote])
+            let said = "Referral closed: \(closeReason)." + (result.emailed == true ? " The referrer was emailed the outcome." : " No outcome email was sent.")
+            closeReason = ""; closeNote = ""
+            await load()
+            onChanged()
+            await confirmAfterReload(said)
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
+
+    private func reopenReferral() async {
+        busy = true
+        defer { busy = false }
+        do {
+            error = nil
+            let _: OKResponse = try await api.call("reopen_referral", body: ["id": referralId])
+            await load()
+            onChanged()
+            await confirmAfterReload("Referral reopened as New.")
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
+
+    private func attach(_ target: DuplicateClient) async {
+        busy = true
+        defer { busy = false }
+        do {
+            error = nil
+            struct AttachResult: Decodable { let reopened: Bool? }
+            let result: AttachResult = try await api.call("attach_referral", body: ["id": referralId, "client_id": target.id])
+            await load()
+            onChanged()
+            await confirmAfterReload("Referral attached to \(target.name)'s record" + (result.reopened == true ? ", which was reopened to Pending Assessment." : "."))
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 
     private func review() async {

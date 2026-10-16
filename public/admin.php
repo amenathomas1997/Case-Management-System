@@ -207,6 +207,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user'])) {
 }
 
 /* Scheduled report emails (cron/monthly_reports.php reads these settings) */
+/* Counselor progress reports: wait for a narrative (the default) or send automatically. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_report_sending'])) {
+    $auto = ($_POST['reports_auto_send'] ?? '') === '1';
+    set_setting('reports_auto_send', $auto ? '1' : '0');
+    audit($user['id'], 'settings.reports_auto_send', 'settings', null, $auto ? 'automatic' : 'wait for a narrative');
+    flash($auto ? 'Due progress reports will be emailed to counselors automatically.' : 'Due progress reports now wait: each one opens a task for the instructor to add a narrative and send it.');
+    redirect('admin.php#report-sending-h');
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_scheduled_reports'])) {
     $srOutcomes = !empty($_POST['sr_outcomes']);
     $srFunder = !empty($_POST['sr_funder']);
@@ -537,8 +546,15 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
       <?= field_error('sr_period') ?>
     </div>
     <button type="submit" name="save_scheduled_reports" value="1" class="btn btn-primary">Save scheduled reports</button>
+
   </form>
   <p class="hint">Last sent: outcome report <?= $srSentOut !== null ? 'for ' . h($srSentOut) : 'never' ?>; funder outcome report <?= $srSentFun !== null ? 'for ' . h($srSentFun) : 'never' ?>. Each send is recorded in the <a href="audit.php">audit log</a> as “report.scheduled”.</p>
+  <h3 id="report-sending-h">Counselor progress reports</h3>
+  <form method="post" action="admin.php#report-sending-h" class="stacked"><?= csrf_field() ?>
+    <div class="field"><label><input type="checkbox" name="reports_auto_send" value="1"<?= (setting('reports_auto_send') ?? '0') === '1' ? ' checked' : '' ?>> Email due progress reports to counselors automatically, without review</label>
+      <span class="hint" id="auto-send-hint">Unticked (recommended): each due report opens a task for the client's instructor, who adds a short narrative and sends it from the track's Send report page.</span></div>
+    <button type="submit" name="save_report_sending" value="1" class="btn btn-secondary btn-sm">Save report sending</button>
+  </form>
 </section>
 
 <section class="card" aria-labelledby="ai-h">

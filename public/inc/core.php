@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.34';
+const APP_VERSION = '3.0.35';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -289,6 +289,9 @@ function notify_admin_users(string $message, ?string $link = null): void {
 // Default subject/body per template key; {placeholders} are swapped at send
 // time. Admins can override any of these on the Email templates page.
 const EMAIL_TEMPLATES = [
+    'referral_closed' => ['Referral outcome to the referrer', 'Your referral {ref} to {org_short}',
+        "Hello,\n\nThank you for your referral {ref}, received on {date}.\n\nWe were not able to accept it: {reason}.\n\nNo client details are included in this email. If you have questions, reply to this email or contact {org}.\n",
+        '{ref} {date} {reason} {org_short} {org}'],
     'otp' => ['Sign-in codes', 'Your sign-in code: {code}',
         "Hello {name},\n\nYour one-time sign-in code for {app} is:\n\n{code}\n\nThis code expires in {minutes} minutes. If you did not try to sign in, you can ignore this email.\n",
         '{name} {code} {app} {minutes}'],
@@ -336,6 +339,7 @@ const EMAIL_TEMPLATE_REQUIRED = [
     'portal_link' => '{link}', 'consent_request' => '{link}', 'survey_invite' => '{link}',
     'portal_link_es' => '{link}', 'consent_request_es' => '{link}', 'survey_invite_es' => '{link}',
     'report_cover' => '{ack}',
+    'referral_closed' => '{ref}',
 ];
 
 /** Render a template: admin override from settings, else the built-in default. */
@@ -1558,3 +1562,5 @@ const TRACK_STATUSES = ['Active','Completed','Cancelled'];
 
 // Billing rules shared by every page, the API and voice (3.0.34).
 require_once __DIR__ . '/billing.php';
+// Referral outcomes and case closure (3.0.35).
+require_once __DIR__ . '/case_outcomes.php';

@@ -44,6 +44,8 @@ if (isset($_GET['export'])) {
     write_csv_row($out, ['CLIENTS CLOSED', $closedTotal]);
     foreach ($closures as $c) write_csv_row($out, [csv_cell('  ' . $c['new_status']), $c['n']]);
     write_csv_row($out, ['REHABILITATION RATE', $closedTotal ? round($rehab / $closedTotal * 100) . '%' : 'n/a']);
+    foreach ($m['closureReasons'] as $c) write_csv_row($out, [csv_cell('  Closed because: ' . $c['reason']), $c['n']]);
+    write_csv_row($out, ['EMPLOYED AT CLOSURE', (int)$m['employedAtClosure']]);
     write_csv_row($out, ['AVG HOURS PER REHABILITATED CLIENT', number_format($avgHours, 1)]);
     if ((int)$sv['n'] > 0) {
         write_csv_row($out, ['SURVEYS COMPLETED', $sv['n'], 'Avg satisfaction', round((float)$sv['sat'], 1) . '/10', 'Avg goals met', round((float)$sv['goals'], 1) . '/10']);
@@ -260,5 +262,12 @@ echo report_period_form('outcomes.php', $period, '', $downloads); ?>
     <?php foreach ($closures as $c): ?><li><?= h($c['new_status']) ?>: <strong><?= (int)$c['n'] ?></strong></li><?php endforeach; ?>
     <?php if (!$closures): ?><li class="muted">No cases closed in this period.</li><?php endif; ?>
   </ul>
+  <?php if ($m['closureReasons']): ?>
+  <h3 id="oc-reasons">Why they closed</h3>
+  <ul>
+    <?php foreach ($m['closureReasons'] as $c): ?><li><?= h($c['reason']) ?>: <strong><?= $c['n'] ?></strong></li><?php endforeach; ?>
+  </ul>
+  <p>Employed at closure: <strong><?= (int)$m['employedAtClosure'] ?></strong>.</p>
+  <?php endif; ?>
 </section>
 <?php page_footer();

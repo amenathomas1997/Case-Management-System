@@ -67,6 +67,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     set_form_errors($errors);
     $status = in_array($_POST['status'] ?? '', CLIENT_STATUSES, true) ? $_POST['status'] : 'Pending Assessment';
+    // Closing a case records why, and what the person came away with (3.0.35).
+    $closing = str_starts_with($status, 'Closed') && (!$client || $client['status'] !== $status);
+    $closureData = null;
+    if ($closing) {
+        [$closureData, $closureErrs] = closure_input($_POST);
+        if ($closureErrs) { $errors += $closureErrs; set_form_errors($errors); }
+    }
     $clientType = in_array($_POST['client_type'] ?? '', CLIENT_TYPES, true) ? $_POST['client_type'] : 'VR';
     $vals = [
         $name,
@@ -144,7 +151,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo = db();
             $pdo->beginTransaction();
             try {
-                record_status_change((int)$client['id'], $client['status'], $status, $user['id'], trim($_POST['status_note'] ?? '') ?: null);
+                record_status_change((int)$client['id'], $client['status'], $status, $user['id'], trim($_POST['status_note'] ?? '') ?: ($closing ? 'Closed: ' . $closureData['reason'] : null));
+                if ($closing) client_closure_record((int)$client['id'], $status, $closureData, (int)$user['id']);
                 $pdo->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, client_type=?, school=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, preferred_language=?, counselor_verified=?, email_verified=?'
                     . ($unarchive ? ', archived_at=NULL' : '') . ' WHERE id=?')->execute($vals);
                 // A portal link already emailed to the old address stops working when
@@ -277,6 +285,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newId = (int)db()->lastInsertId();
             web_once_set($clientKey, $newId);
             record_status_change($newId, null, $status, $user['id'], 'Client created');
+            if ($closing) client_closure_record($newId, $status, $closureData, (int)$user['id']);
             audit($user['id'], 'client.create', 'client', $newId, $name);
             flash('Client created.' . $ageNote);
             redirect('client.php?id=' . $newId);
@@ -348,6 +357,39 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       <?php endif; ?>
       <select id="status" name="status"<?= $client ? ' aria-describedby="status-hint" data-was="' . h($client['status']) . '"' : '' ?>><?= select_options(CLIENT_STATUSES, $raw('status') ?? $client['status'] ?? 'Pending Assessment') ?></select>
     </div>
+    <?php // Asked only when the case is being closed: the script shows it when a Closed status is
+    // chosen; it is shown from the start when that was already chosen or refused.
+    $cv = fn(string $k): string => h($raw($k) ?? '');
+    $showClosure = str_starts_with((string)($raw('status') ?? ''), 'Closed') && ($raw('status') !== ($client['status'] ?? null)) || array_filter(array_keys(form_errors()), fn($k) => str_starts_with((string)$k, 'closure_')); ?>
+    <fieldset id="closure-fields"<?= $showClosure ? '' : ' hidden' ?>>
+      <legend>Closing the case</legend>
+      <?php if ($client && ($loose = closure_checklist((int)$client['id']))): ?>
+      <p><strong>Still open on this record:</strong></p>
+      <ul><?php foreach ($loose as [$txt, $href]): ?><li><a href="<?= h($href) ?>"><?= h($txt) ?></a></li><?php endforeach; ?></ul>
+      <?php endif; ?>
+      <div class="field"><label for="closure_reason">Why is the case closing?</label>
+        <select id="closure_reason" name="closure_reason" <?= field_aria('closure_reason') ?>><option value="">Choose a reason</option>
+          <?php foreach (CLOSURE_REASONS as $cr): ?><option value="<?= h($cr) ?>"<?= ($raw('closure_reason') ?? '') === $cr ? ' selected' : '' ?>><?= h($cr) ?></option><?php endforeach; ?>
+        </select><?= field_error('closure_reason') ?></div>
+      <div class="field"><label for="closure_note">Note (required for Other)</label>
+        <input type="text" id="closure_note" name="closure_note" maxlength="255" value="<?= $cv('closure_note') ?>" <?= field_aria('closure_note') ?>><?= field_error('closure_note') ?></div>
+      <fieldset><legend>Employed at closure?</legend>
+        <?php $ce = $raw('closure_employed') ?? ''; ?>
+        <label><input type="radio" name="closure_employed" value="yes"<?= $ce === 'yes' ? ' checked' : '' ?>> Yes</label>
+        <label><input type="radio" name="closure_employed" value="no"<?= $ce === 'no' ? ' checked' : '' ?>> No</label>
+        <label><input type="radio" name="closure_employed" value=""<?= $ce === '' ? ' checked' : '' ?>> Not recorded</label>
+      </fieldset>
+      <div class="grid grid-2">
+        <div class="field"><label for="closure_employer">Employer</label><input type="text" id="closure_employer" name="closure_employer" maxlength="190" value="<?= $cv('closure_employer') ?>" <?= field_aria('closure_employer') ?>><?= field_error('closure_employer') ?></div>
+        <div class="field"><label for="closure_job_title">Job title</label><input type="text" id="closure_job_title" name="closure_job_title" maxlength="120" value="<?= $cv('closure_job_title') ?>" <?= field_aria('closure_job_title') ?>><?= field_error('closure_job_title') ?></div>
+        <div class="field"><label for="closure_job_start">Job start date</label><input type="date" id="closure_job_start" name="closure_job_start" value="<?= $cv('closure_job_start') ?>" <?= field_aria('closure_job_start') ?>><?= field_error('closure_job_start') ?></div>
+        <div class="field"><label for="closure_hours">Hours a week</label><input type="text" inputmode="decimal" id="closure_hours" name="closure_hours" maxlength="6" value="<?= $cv('closure_hours') ?>" <?= field_aria('closure_hours') ?>><?= field_error('closure_hours') ?></div>
+        <div class="field"><label for="closure_wage">Hourly wage (dollars)</label><input type="text" inputmode="decimal" id="closure_wage" name="closure_wage" maxlength="8" value="<?= $cv('closure_wage') ?>" <?= field_aria('closure_wage') ?>><?= field_error('closure_wage') ?></div>
+      </div>
+      <div class="field"><label for="closure_independence">Independence outcome (for a goal without a job, such as reading mail or using a phone on their own)</label>
+        <input type="text" id="closure_independence" name="closure_independence" maxlength="500" value="<?= $cv('closure_independence') ?>" <?= field_aria('closure_independence') ?>><?= field_error('closure_independence') ?></div>
+    </fieldset>
+    <script>(function(){var s=document.getElementById('status'),f=document.getElementById('closure-fields');if(!s||!f)return;var was=s.getAttribute('data-was')||'';function sync(){f.hidden=!(s.value.indexOf('Closed')===0&&s.value!==was);}s.addEventListener('change',sync);sync();<?= $showClosure ? 'f.hidden=false;' : '' ?>})();</script>
     <?php if ($client): ?>
     <div class="field">
       <label for="status_note">Reason for status change <span class="hint">Recorded in the audit history if the status changes</span></label>

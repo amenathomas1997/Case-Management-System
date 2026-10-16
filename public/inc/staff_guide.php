@@ -18,6 +18,9 @@ if (!function_exists('staff_guide_topics')) {
             ]],
             'guide-day' => ['How do I plan my day?', []],
             'guide-intake' => ['How do I handle a referral?', [
+                'guide-referral-close' => 'How do I close a referral that will not become a client?',
+                'guide-referral-attach' => 'What if the person is already a client?',
+                'guide-case-close' => 'How do I close a case?',
                 'guide-waitlist' => 'How do I use the referral waitlist?',
                 'guide-counselor-access' => 'How do I give a VR counselor access?',
             ]],
@@ -311,6 +314,15 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 </ol>
 <p>An email address from the referral form is marked Unverified. Nothing is sent to it until you confirm it with the client. To confirm it, open Edit profile / status on the client record and tick Confirmed with the client.</p>
 <p>Intake progress shows each new client's stage, so you can spot stalled intake work.</p>
+
+<?= $sgH(4, 'guide-referral-close') ?>
+<p>Open the referral, then Close without creating a client. Choose the reason (Declined services, Not eligible, Withdrawn, Unable to reach, Duplicate, Referred elsewhere or Other) and, for Other, a short note; then choose Close referral. The referral leaves the open list (Status: Closed without a client lists it), its contact task is done, and the person who sent it is emailed the outcome automatically: the reference number and a general reason, never the client's details or your note. A referral closed by mistake can be reopened from the same page.</p>
+
+<?= $sgH(4, 'guide-referral-attach') ?>
+<p>When the referral page shows Possible duplicate with an existing client, check it is the same person, then choose Attach to this client. No second record is made: the referral's intake note goes on their record, the contact task is done and a follow-up task is opened. A closed or archived record is reopened to Pending Assessment, with a history note naming the referral.</p>
+
+<?= $sgH(4, 'guide-case-close') ?>
+<p>On the client's edit page, choose a Closed status. Closing the case then asks why (Employed, Goals met, Declined further services, Unable to contact, Moved away, Health or medical, Not eligible, Transferred to another provider, or Other with a note) and, if you know it, the outcome: employed or not, the employer, job title, start date, hours a week and wage, or an independence outcome. It lists anything still open on the record, such as active tracks, unbilled work, loaned items, future sessions and unpaid invoices, each with a link. The reasons and employment at closure appear on the Outcome report. A case closed in the app asks the reason and employment; closed by voice, its reason is recorded as Not recorded and can be added later.</p>
 
 <?= $sgH(4, 'guide-waitlist') ?>
 <ol>
@@ -606,6 +618,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>To send a progress report to the counselor, choose Email report to VRC. Check the content and recipient before you send.</li>
   <li>For a statement, open the collapsed Billing and statements. Choose Download PDF statement or Download accessible HTML statement. The billing CSV exports are there too.</li>
 </ol>
+<p>When a track's progress report is due (weekly, every two weeks or monthly), a task appears for the client's instructor: Write and send the progress report. Open the track, choose Email report to VRC, add a short narrative, sign and send. Nothing goes to the counselor until a person sends it, unless an administrator turns on automatic sending under Administration, Scheduled reports.</p>
 
 <?= $sgH(3, 'guide-ai') ?>
 <p>AI tools in the menu holds the general tools: Accessible content &amp; remediation, Knowledge-base assistant, Ask your caseload, On-demand translation, Curriculum generator and Outcome risk flags. Other AI buttons sit next to notes, assessments, homework and briefings.</p>

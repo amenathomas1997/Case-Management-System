@@ -38,12 +38,19 @@ if ((int)db()->query("SELECT GET_LOCK(CONCAT('cms_monthly_reports_', MD5(DATABAS
 // (counselor_verified = 0) until staff confirm it on the client's edit page; no
 // report goes to it before then, since anyone can type any address on that form.
 $tracks = db()->query("SELECT t.id, t.title, t.auth_number, t.report_cadence, t.last_report_at, t.start_date, t.created_at,
-        c.id AS cid, c.name AS client_name, c.counselor_email, c.counselor_verified
+        c.id AS cid, c.name AS client_name, c.counselor_email, c.counselor_verified, c.assigned_to
     FROM training_tracks t JOIN clients c ON c.id = t.client_id
     WHERE t.status = 'Active' AND t.report_cadence <> 'none'
       AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%'")->fetchAll();
 
 $minDays = ['weekly' => 7, 'biweekly' => 14, 'monthly' => 28];
+// Owner decision (2026-10-16): a due report waits for a person to write a short narrative
+// and send it from the track's Send report page. This job then only opens a task for the
+// client's instructor (once per report period). Administrators can turn automatic sending
+// back on (Administration > Scheduled reports, setting reports_auto_send).
+$autoSend = (setting('reports_auto_send') ?? '0') === '1';
+$tasked = 0;
+$taskSeen = db()->prepare('SELECT 1 FROM tasks WHERE auto_key = ? LIMIT 1');
 $sent = 0; $skipped = []; $skipMarks = [];
 $note = db()->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)');
 // last_report_at means "a report was emailed that day" (compliance and the app
@@ -66,6 +73,17 @@ foreach ($tracks as $t) {
     // (report_due_date(): one cadence period after $since; monthly keeps its
     // familiar 1st-of-month rhythm).
     if (date('Y-m-d') < report_due_date($cadence, (string)$since)) continue;
+    if (!$autoSend) {
+        $key = 'report-due-' . (int)$t['id'] . '-' . date('Ymd', strtotime((string)$since));
+        $taskSeen->execute([$key]);
+        if ($taskSeen->fetchColumn()) continue;
+        $label = ['weekly' => 'weekly', 'biweekly' => 'two-week', 'monthly' => 'monthly'][$cadence] ?? 'monthly';
+        if (add_task('Write and send the ' . $label . ' progress report: ' . $t['client_name'] . ' — ' . $t['title'],
+                'The counselor\'s ' . $label . ' progress report is due. Open the training track, choose Send report, add a short narrative, sign it and send it.'
+                . (filter_var(strtolower(trim((string)$t['counselor_email'])), FILTER_VALIDATE_EMAIL) && !empty($t['counselor_verified']) ? '' : ' The counselor email is missing or not yet confirmed: fix it on the client\'s edit page first.'),
+                (int)$t['cid'], null, date('Y-m-d'), $t['assigned_to'] !== null ? (int)$t['assigned_to'] : null, null, $key)) $tasked++;
+        continue;
+    }
 
     $to = strtolower(trim($t['counselor_email'] ?? ''));
     $unconfirmed = filter_var($to, FILTER_VALIDATE_EMAIL) && empty($t['counselor_verified']);
@@ -136,7 +154,7 @@ if ($skipped) {
         foreach ($skipMarks as [$tid, $key]) $notice->execute([$tid, $key]);
     }
 }
-echo "Sent {$sent} report(s); skipped " . count($skipped) . ".\n";
+echo $autoSend ? "Sent {$sent} report(s); skipped " . count($skipped) . ".\n" : "Opened {$tasked} progress report task(s) for staff to write and send.\n";
 
 // Scheduled summary reports (Administration > Scheduled reports): the outcome
 // report and the funder outcome report, emailed as plain text to the listed

@@ -756,6 +756,14 @@ try {
     $closedReportTrack=$reportTrack('Report closed client','Closed - Rehabilitated','closed-counselor@example.invalid');
     $unconfirmedTrack=$reportTrack('Report unconfirmed client','Active Training','unconfirmed-counselor@example.invalid',0);
     $lastReport=fn(int $track)=>$db->query("SELECT last_report_at FROM training_tracks WHERE id=$track")->fetchColumn();
+    // By default (3.0.35) a due report waits for staff: the job only opens a task, once.
+    [$code,$mail]=$cronRun('monthly_reports.php',true);
+    $reportTasks=fn()=>(int)$db->query("SELECT COUNT(*) FROM tasks WHERE auto_key LIKE 'report-due-$sentTrack-%'")->fetchColumn();
+    check($code===0 && $lastReport($sentTrack)===null && !str_contains($mail,'To: counselor@example.invalid') && $reportTasks()===1,'A due progress report waits for staff: a task is opened and nothing is emailed');
+    $cronRun('monthly_reports.php',true);
+    check($reportTasks()===1,'The report task is opened once per report period');
+    // With automatic sending turned on, as before:
+    $db->exec("INSERT INTO settings(name,value) VALUES('reports_auto_send','1') ON DUPLICATE KEY UPDATE value='1'");
     [$code,$mail]=$cronRun('monthly_reports.php',true);
     check($code===0 && $lastReport($sentTrack)===date('Y-m-d') && str_contains($mail,'To: counselor@example.invalid'),'A due progress report is emailed and only then recorded as sent');
     check($lastReport($noEmailTrack)===null && str_contains($mail,'Report no email client') && $lastReport($closedReportTrack)===null && !str_contains($mail,'closed-counselor@example.invalid'),
@@ -765,6 +773,7 @@ try {
     check(str_contains($mail,'from the start of this authorization'),'The automatic report says it covers the whole authorization, not only the last period');
     [$code,$mail]=$cronRun('monthly_reports.php',true);
     check($code===0 && !str_contains($mail,'Report no email client') && !str_contains($mail,'Report unconfirmed client') && $lastReport($noEmailTrack)===null,'The administrators are told about a missing or unconfirmed counselor email once per period, not every day');
+    $db->exec("UPDATE settings SET value='0' WHERE name='reports_auto_send'");
     // Session reminders: an owner who was deactivated is replaced by an administrator notice.
     $tomorrow=date('Y-m-d',strtotime('+1 day'));
     $db->exec("UPDATE clients SET status='Active Training' WHERE id=$alertClient");
@@ -780,6 +789,7 @@ try {
     require __DIR__.'/session_record_cases.php';
     require __DIR__.'/consent_race_cases.php';
     require __DIR__.'/billing_cases.php';
+    require __DIR__.'/case_outcomes_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 
@@ -834,7 +844,7 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
     $db->exec("INSERT INTO clients (id,name,email,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-client@example.invalid','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL,NULL),(3,'Upgraded client with a blank counselor',NULL,'')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
     check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12, mig_3.0.16 and mig_3.0.21 has exactly the fresh-install schema, defaults included');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=1')->fetchColumn()===3,'The 3.0.21 upgrade keeps every existing client\'s email confirmed');
     $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");

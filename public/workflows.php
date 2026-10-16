@@ -116,7 +116,7 @@ $q=db()->prepare('SELECT t.id AS track_id,t.title,n.id AS note_id,n.subject,n.cr
 <?php elseif($view==='waitlist'):
 $rid=(int)($_GET['referral_id']??$_POST['referral_id']??0);
 // Closed entries are listed after every open one.
-$q=db()->query("SELECT r.id,r.client_name,r.created_at AS received_at,w.* FROM referrals r LEFT JOIN referral_waitlist w ON w.referral_id=r.id WHERE r.status<>'Converted'".(caseload_scoped()?' AND (r.assigned_to IS NULL OR r.assigned_to='.$actor.')':'')." ORDER BY COALESCE(w.status,'')='Closed',r.created_at,r.id");$rows=$q->fetchAll();$selected=null;foreach($rows as $r)if((int)$r['id']===$rid)$selected=$r;
+$q=db()->query("SELECT r.id,r.client_name,r.created_at AS received_at,w.* FROM referrals r LEFT JOIN referral_waitlist w ON w.referral_id=r.id WHERE r.status NOT IN ('Converted','Closed')".(caseload_scoped()?' AND (r.assigned_to IS NULL OR r.assigned_to='.$actor.')':'')." ORDER BY COALESCE(w.status,'')='Closed',r.created_at,r.id");$rows=$q->fetchAll();$selected=null;foreach($rows as $r)if((int)$r['id']===$rid)$selected=$r;
 $waitValues=$selected;
 $waitPosted=$selected&&$error!==null&&isset($_POST['save_waitlist']);
 // Someone else saved first: the form keeps what this user typed but carries the version now

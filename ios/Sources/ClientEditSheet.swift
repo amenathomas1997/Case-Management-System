@@ -18,6 +18,10 @@ struct ClientEditSheet: View {
     @State private var address = ""
     @State private var status = "Pending Assessment"
     @State private var statusNote = ""
+    /// Closing a case (3.0.35): why, and whether the person was employed at closure.
+    @State private var closureReason = ""
+    @State private var closureEmployed = ""
+    @State private var closureEmployer = ""
     @State private var counselorName = ""
     @State private var counselorAgency = ""
     @State private var counselorEmail = ""
@@ -65,6 +69,8 @@ struct ClientEditSheet: View {
         _a11yNotes = State(initialValue: existing.a11yNotes ?? "")
     }
 
+    static let closureReasons = ["Employed", "Goals met", "Declined further services", "Unable to contact", "Moved away",
+                                 "Health or medical", "Not eligible", "Transferred to another provider", "Other"]
     private var statusChanged: Bool { existing != nil && existing?.status != status }
 
     /// The unconfirmed email is still the one in the field: it can be confirmed here. A different
@@ -138,6 +144,19 @@ struct ClientEditSheet: View {
                             Label("Saving with this status emails the client an outcome survey, if they have a confirmed email address and were not sent one in the last 30 days.",
                                   systemImage: "envelope")
                                 .font(.callout)
+                        }
+                        if status.hasPrefix("Closed") {
+                            Picker("Why is the case closing?", selection: $closureReason) {
+                                Text("Choose a reason").tag("")
+                                ForEach(Self.closureReasons, id: \.self) { Text($0).tag($0) }
+                            }
+                            Picker("Employed at closure?", selection: $closureEmployed) {
+                                Text("Not recorded").tag("")
+                                Text("Yes").tag("yes")
+                                Text("No").tag("no")
+                            }
+                            if closureEmployed == "yes" { CaptionedField(label: "Employer", text: $closureEmployer) }
+                            Text("The job title, hours, wage or an independence outcome can be added on the website.").font(.caption).foregroundStyle(Color.secondaryText)
                         }
                     }
                     if api.scoped {
@@ -248,6 +267,10 @@ struct ClientEditSheet: View {
                     surveySent = try? c.decodeIfPresent(Bool.self, forKey: .surveySent)
                 }
             }
+            if status.hasPrefix("Closed") && (existing?.status ?? "") != status && closureReason.isEmpty {
+                showFormError("Choose why the case is closing.", in: &error)
+                return
+            }
             var body: [String: Any] = [
                 "id": existing?.id ?? 0,
                 "name": name, "phone": phone, "email": email, "address": address,
@@ -258,6 +281,12 @@ struct ClientEditSheet: View {
                 "a11y_format": a11yFormat, "a11y_primary_tech": a11yPrimaryTech,
                 "a11y_contact": a11yContact, "a11y_notes": a11yNotes,
             ]
+            if status.hasPrefix("Closed") && (existing?.status ?? "") != status {
+                body["closure_reason"] = closureReason
+                body["closure_note"] = statusNote
+                body["closure_employed"] = closureEmployed
+                body["closure_employer"] = closureEmployer
+            }
             // Sent only when staff turned the confirmation on; otherwise the server keeps the
             // stored state (and confirms an address staff typed themselves).
             let emailStaysUnconfirmed = offersEmailConfirmation && !confirmEmail

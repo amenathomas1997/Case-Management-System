@@ -19,6 +19,7 @@ const TPL_REQUIRED = [
     'consent_request' => ['{link}' => 'the consent form link'],
     'survey_invite' => ['{link}' => 'the survey link'],
     'report_cover' => ['{ack}' => 'the confirmation link'],
+    'referral_closed' => ['{ref}' => 'the referral reference number'],
 ];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tpl']) && $key !== '') {

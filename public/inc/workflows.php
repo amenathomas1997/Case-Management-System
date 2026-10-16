@@ -100,7 +100,7 @@ function workflow_action_items(array $user): array {
         foreach($q->fetchAll() as $r)$add('Session outcome',$r['name'].' — session ended: record the outcome (mark completed, log hours and add the note)',substr($r['start_at'],0,10),'schedule.php#s-'.(int)$r['id'],1);
     }
     if(can('referrals')){
-        $q=db()->query("SELECT r.id,r.client_name,r.created_at,w.followup_date FROM referrals r LEFT JOIN referral_waitlist w ON w.referral_id=r.id WHERE r.status<>'Converted' AND (w.status IS NULL OR w.status<>'Closed')".(caseload_scoped()?' AND (r.assigned_to IS NULL OR r.assigned_to='.$actor.')':''));
+        $q=db()->query("SELECT r.id,r.client_name,r.created_at,w.followup_date FROM referrals r LEFT JOIN referral_waitlist w ON w.referral_id=r.id WHERE r.status NOT IN ('Converted','Closed') AND (w.status IS NULL OR w.status<>'Closed')".(caseload_scoped()?' AND (r.assigned_to IS NULL OR r.assigned_to='.$actor.')':''));
         // Only a follow-up date is a deadline; a referral without one names the day it was received and is not marked overdue.
         foreach($q->fetchAll() as $r)$add('Referral',$r['client_name'].($r['followup_date']?'':' (received '.substr($r['created_at'],0,10).')'),$r['followup_date']?:null,'referrals.php?view='.(int)$r['id'],2);
     }
@@ -191,7 +191,7 @@ function workflow_waitlist_save(array $in,int $actor): int {
     $due=trim((string)($in['followup_date']??''));if($due!==''&&!valid_date($due,2000,$maxYear))throw new DomainException('Follow-up date: enter a full date with a year from 2000 to '.$maxYear.', or leave it blank.');
     db()->beginTransaction();try{
         $q=db()->prepare('SELECT * FROM referrals WHERE id=? FOR UPDATE');$q->execute([$id]);$ref=$q->fetch();
-        if(!$ref||$ref['status']==='Converted'||(caseload_scoped()&&$ref['assigned_to']!==null&&(int)$ref['assigned_to']!==$actor))throw new DomainException('Referral is unavailable on your queue.');
+        if(!$ref||in_array($ref['status'],['Converted','Closed'],true)||(caseload_scoped()&&$ref['assigned_to']!==null&&(int)$ref['assigned_to']!==$actor))throw new DomainException('Referral is unavailable on your queue.');
         $q=db()->prepare('SELECT version FROM referral_waitlist WHERE referral_id=?');$q->execute([$id]);$version=(int)$q->fetchColumn();
         if($version!==(int)($in['version']??0))throw new DomainException('Someone else saved this waitlist entry after you opened it, so your changes were not saved.');
         db()->prepare('INSERT INTO referral_waitlist(referral_id,status,expertise,languages,areas,availability,modality,followup_date) VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE status=VALUES(status),expertise=VALUES(expertise),languages=VALUES(languages),areas=VALUES(areas),availability=VALUES(availability),modality=VALUES(modality),followup_date=VALUES(followup_date),version=version+1')->execute([$id,$status,...array_values($v),$mode,$due?:null]);

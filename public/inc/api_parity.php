@@ -862,7 +862,7 @@ case 'waitlist': {
     // first, closed waitlist entries last; a caseload-scoped user sees unassigned
     // referrals and their own.
     $q = db()->prepare("SELECT r.id, r.client_name, r.created_at AS received_at, w.* FROM referrals r LEFT JOIN referral_waitlist w ON w.referral_id = r.id
-        WHERE r.status <> 'Converted'" . (caseload_scoped() ? ' AND (r.assigned_to IS NULL OR r.assigned_to = ?)' : '') . " ORDER BY COALESCE(w.status,'') = 'Closed', r.created_at, r.id");
+        WHERE r.status NOT IN ('Converted', 'Closed')" . (caseload_scoped() ? ' AND (r.assigned_to IS NULL OR r.assigned_to = ?)' : '') . " ORDER BY COALESCE(w.status,'') = 'Closed', r.created_at, r.id");
     $q->execute(caseload_scoped() ? [$userId] : []);
     out(['ok' => true, 'items' => array_map('parity_waitlist_item', $q->fetchAll()),
         'statuses' => PARITY_WAITLIST_STATUSES, 'modalities' => ['In person', 'Remote', 'Both']]);

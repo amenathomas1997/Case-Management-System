@@ -464,6 +464,10 @@ function voice_execute(string $do, array $in, array $user): array {
                 // other than Closed) returns it to the active lists, or it would vanish from every list.
                 $unarchive = $row['archived_at'] !== null && !str_starts_with($to, 'Closed');
                 record_status_change($cid, $old, $to, $uid, 'Changed by voice');
+                // Voice does not ask why a case closes: the closure is recorded as not recorded,
+                // and the reason and outcome can be added on the client's edit page (3.0.35).
+                if (str_starts_with($to, 'Closed') && $old !== $to) client_closure_record($cid, $to, ['reason' => 'Not recorded', 'note' => 'Closed by voice', 'employed' => null, 'employer' => null,
+                    'job_title' => null, 'job_start' => null, 'hours_per_week' => null, 'hourly_wage' => null, 'independence_outcome' => null], $uid);
                 db()->prepare('UPDATE clients SET status = ?' . ($unarchive ? ', archived_at = NULL' : '') . ' WHERE id = ?')->execute([$to, $cid]);
                 db()->commit();
             } catch (Throwable $e) {

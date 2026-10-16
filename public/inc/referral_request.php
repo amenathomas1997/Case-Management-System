@@ -217,6 +217,7 @@ function assign_open_referral(int $id, ?int $assigneeId, int $actor): array {
         $ref = $q->fetch();
         if (!$ref) throw new DomainException('Referral not found.');
         if ($ref['status'] === 'Converted') throw new DomainException('This referral has been converted. Change the assigned instructor on the client record instead.');
+        if ($ref['status'] === 'Closed') throw new DomainException('This referral is closed. Reopen it first to assign it.');
         if (caseload_scoped() && $ref['assigned_to'] !== null && (int)$ref['assigned_to'] !== $actor) {
             throw new DomainException('That referral is assigned to someone else.');
         }
