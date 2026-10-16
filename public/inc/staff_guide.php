@@ -33,6 +33,7 @@ if (!function_exists('staff_guide_topics')) {
             'guide-sessions' => ['How do I schedule and log a session?', [
                 'guide-log-session' => 'How do I record a session (hours and note)?',
                 'guide-complete-session' => 'How do I complete a session?',
+                'guide-move-session' => 'How do I move a session to another time?',
                 'guide-groups' => 'How do I run a group session?',
             ]],
             'guide-equipment' => ['How do I loan and track equipment?', [
@@ -420,6 +421,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Choose Save session. The confirmation says what was saved.</li>
 </ol>
 <p>The hours and the note are saved together: if either is refused, nothing is saved and what you typed stays in the form. If the work is outside the authorization (its dates, hours or dollars), you get an error: record the amendment on Edit track / authorization first. Do not log hours here for a session you will complete on the schedule. That would log them twice. Billable expenses use Log an expense, further down the track.</p>
+
+<?= $sgH(4, 'guide-move-session') ?>
+<p>On the Schedule page, open Move or cancel more on the session's row. Enter the new date, start time and length, and choose Move. If the instructor already has a session then, or the new time is outside the authorization's dates, nothing changes yet: the warning is shown with a Move anyway box to tick. A moved session keeps its record and history. A client with a confirmed email gets a calendar update that replaces the old time, and the instructor is told if someone else moved it. The same section has Cancel this and later sessions in the series (for a weekly series) and Cancel the whole group (for a group session). In the iPhone app, use Move session on the session's Actions rotor.</p>
 
 <?= $sgH(4, 'guide-complete-session') ?>
 <ol>

@@ -28,6 +28,7 @@ const TPL_REQUIRED = [
     'loan_overdue_client' => ['{item}' => 'the item loaned'],
     'session_booked_client' => ['{sessions}' => 'the session dates'],
     'session_cancelled_client' => ['{sessions}' => 'the session dates'],
+    'session_moved_client' => ['{sessions}' => 'the new session time'],
     'report_cover' => ['{ack}' => 'the confirmation link'],
     'referral_closed' => ['{ref}' => 'the referral reference number'],
 ];

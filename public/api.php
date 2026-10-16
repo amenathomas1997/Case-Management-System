@@ -447,6 +447,7 @@ $API_ACTION_PERMS = [
     'close_referral' => 'referrals', 'reopen_referral' => 'referrals', 'attach_referral' => 'referrals',
     'schedule' => 'schedule', 'schedule_session' => 'schedule', 'complete_session' => 'schedule', 'set_session_status' => 'schedule',
     'check_in_session' => 'schedule',   // 3.0.28, handled in inc/api_parity.php
+    'move_session' => 'schedule', 'cancel_series' => 'schedule', 'cancel_group' => 'schedule',   // 3.0.43
     // 'staff' is checked in its own case: scheduling, referral assignment and the client form all need it.
     // 'client_choices' likewise: every client picker (schedule, equipment, procurement, clients) needs it;
     // referrals alone gives only the clients converted from referrals the user can see.
@@ -569,6 +570,34 @@ switch ($action) {
         foreach($briefing['items'] as &$briefingItem)$briefingItem['text']=api_ai_plain((string)$briefingItem['text']);
         unset($briefingItem);
         out(['ok'=>true]+$briefing);
+    /* Move a session; cancel the rest of a series or a whole group (3.0.43, inc/session_changes.php).
+       move_session: session_id, start_at ('Y-m-d H:i'), duration (hours), confirm (true to move
+       despite warnings). Answers moved false with warnings when there are some to confirm. */
+    case 'move_session':
+    case 'cancel_series':
+    case 'cancel_group': {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') fail('Use POST for changes.', 405);
+        $sid = (int)($input['session_id'] ?? 0);
+        $sq = db()->prepare("SELECT client_id FROM scheduled_sessions WHERE id = ? AND status = 'Scheduled'");
+        $sq->execute([$sid]);
+        $scid = $sq->fetchColumn();
+        if ($scid === false) fail('That session is no longer scheduled.', 404);
+        api_require_client((int)$scid, $userId);
+        if ($action !== 'move_session') {
+            $n = $action === 'cancel_series' ? session_cancel_series($sid, $userId) : session_cancel_group($sid, $userId);
+            if (!$n) fail('Nothing was cancelled: those sessions are no longer scheduled.', 409);
+            out(['ok' => true, 'cancelled' => $n, 'message' => 'Cancelled ' . $n . ' session' . ($n === 1 ? '' : 's') . '.']);
+        }
+        $startIn = is_string($input['start_at'] ?? null) ? trim($input['start_at']) : '';
+        $start = preg_match('/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$/', $startIn) ? strtotime(str_replace('T', ' ', $startIn) . ':00') : false;
+        $dur = (float)($input['duration'] ?? 0);
+        if ($start === false || $dur < 0.25 || $dur > 12) fail('Give the new start (YYYY-MM-DD HH:MM) and a length from 0.25 to 12 hours.', 422);
+        $r = session_move($sid, $start, $start + (int)round($dur * 3600), $userId, !empty($input['confirm']), 'mobile');
+        if ($r['error'] !== null) fail($r['error'], 422);
+        out(['ok' => true, 'moved' => $r['moved'], 'warnings' => $r['warnings'],
+            'message' => $r['moved'] ? 'Moved to ' . date('l, F j \a\t g:i A', $start) . '.' : 'Not moved yet: ' . implode(' ', $r['warnings'])]);
+    }
+
     /* Email the client a new portal link, as the client page does (3.0.40). */
     case 'send_portal_link': {
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') fail('Use POST for changes.', 405);
@@ -910,7 +939,7 @@ switch ($action) {
         // Both are null for a one-to-one session.
         // checked_in_at (3.0.28): when the client was checked in (check_in_session), else null.
         $sql = "SELECT s.id, s.start_at, s.end_at, s.location, s.notes, s.status, s.track_id, s.is_remote, s.meeting_url,
-                s.checked_in_at, s.group_uid, CASE WHEN s.group_uid IS NULL THEN NULL ELSE
+                s.checked_in_at, s.group_uid, (s.series_uid IS NOT NULL) AS in_series, CASE WHEN s.group_uid IS NULL THEN NULL ELSE
                     (SELECT COUNT(*) FROM scheduled_sessions g WHERE g.group_uid = s.group_uid AND g.status <> 'Cancelled') END AS group_size,
                 c.name AS client, u.name AS instructor
             FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id LEFT JOIN users u ON u.id = s.user_id
@@ -929,6 +958,7 @@ switch ($action) {
         foreach ($s->fetchAll() as $row) $sessions[] = $row + ['overdue' => false];
         foreach ($sessions as &$row) {
             $row['is_remote'] = (bool)$row['is_remote'];
+            $row['in_series'] = (bool)$row['in_series']; // 3.0.43: part of a weekly series (cancel_series)
             $row['group_size'] = $row['group_size'] !== null ? (int)$row['group_size'] : null;
         }
         unset($row);
@@ -2040,6 +2070,7 @@ switch ($action) {
                 $newSessionIds[] = (int)db()->lastInsertId();
                 if ($w === 0) $firstId = (int)db()->lastInsertId();
             }
+            if (count($newSessionIds) > 1) db()->prepare('UPDATE scheduled_sessions SET series_uid = ? WHERE id IN (' . implode(',', $newSessionIds) . ')')->execute([bin2hex(random_bytes(16))]);
             db()->commit();
             client_session_notice($newSessionIds, 'booked'); // 3.0.41: the client's calendar invite
         } catch (Throwable $e) {

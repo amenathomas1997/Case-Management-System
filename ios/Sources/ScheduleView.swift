@@ -32,6 +32,10 @@ struct ScheduleView: View {
     @State private var showingNewSession = false
     @State private var showingLogHours = false
     @State private var signingSession: Session?
+    /// A session being moved to a new time (3.0.43).
+    @State private var movingSession: Session?
+    /// Asking before the rest of a series, or a whole group, is cancelled.
+    @State private var cancellingMore: (session: Session, action: String)?
     @State private var loaded = false
     /// Set while the list is the copy kept on this phone (the server could not be reached):
     /// when it was saved. Nothing can be changed until a load succeeds.
@@ -169,6 +173,22 @@ struct ScheduleView: View {
             }
             .sheet(isPresented: $showingLogHours) {
                 LogHoursView()
+            }
+            .sheet(item: $movingSession, onDismiss: announceSheetResult) { session in
+                MoveSessionSheet(session: session) { message in
+                    sheetResult = message
+                    Task { await load() }
+                }
+            }
+            .confirmationDialog(cancellingMore?.action == "cancel_group" ? "Cancel this group session for every client in it?" : "Cancel this session and every later session in its weekly series?",
+                                isPresented: Binding(get: { cancellingMore != nil }, set: { if !$0 { cancellingMore = nil } }), titleVisibility: .visible) {
+                Button(cancellingMore?.action == "cancel_group" ? "Cancel the whole group" : "Cancel the series", role: .destructive) {
+                    if let c = cancellingMore { Task { await cancelMore(c.session, action: c.action) } }
+                    cancellingMore = nil
+                }
+                Button("Keep them", role: .cancel) { cancellingMore = nil }
+            } message: {
+                Text("Each client with a confirmed email is sent a calendar cancellation.")
             }
             .sheet(item: $signingSession, onDismiss: announceSheetResult) { session in
                 // The sheet stays open until the completion is saved, so a failure keeps the
@@ -450,6 +470,9 @@ struct ScheduleView: View {
                     }
                     Button("Cancel session") { pendingOutcome = SessionOutcome(session: session, to: "Cancelled") }
                     Button("No-show") { pendingOutcome = SessionOutcome(session: session, to: "No Show") }
+                    Button("Move session") { movingSession = session }
+                    if session.inSeries { Button("Cancel this and later sessions in the series") { cancellingMore = (session, "cancel_series") } }
+                    if session.groupUid != nil { Button("Cancel the whole group") { cancellingMore = (session, "cancel_group") } }
                 }
                 if let url = joinURL(session) {
                     Button("Join online") { openURL(url) }
@@ -566,6 +589,17 @@ struct ScheduleView: View {
 
     /// `reportsFailure`: false when the caller says a failure itself, with its own (the refresh
     /// after a failed outcome).
+    /// cancel_series or cancel_group (3.0.43).
+    private func cancelMore(_ session: Session, action: String) async {
+        error = nil; confirmation = nil
+        do {
+            let r: TaskSaveResult = try await api.call(action, body: ["session_id": session.id])
+            confirmation = r.message ?? "Cancelled."
+            await load()
+            announce(confirmation ?? "")
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
+
     private func load(reportsFailure: Bool = true) async {
         do {
             error = nil
@@ -1056,4 +1090,69 @@ struct CompleteSessionSheet: View {
 private struct SigningStep: Identifiable {
     let id = UUID()
     let details: CompletionDetails
+}
+
+/// Move a session to a new time (move_session, 3.0.43). When the server has warnings (the
+/// instructor already booked, outside the authorization), they are shown and the move is
+/// sent again only once the person chooses Move anyway.
+struct MoveSessionSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let session: Session
+    let onMoved: (String) -> Void
+    @State private var start: Date
+    @State private var hours: Double
+    @State private var warnings: [String] = []
+    @State private var busy = false
+    @State private var error: String?
+
+    init(session: Session, onMoved: @escaping (String) -> Void) {
+        self.session = session
+        self.onMoved = onMoved
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; f.locale = Locale(identifier: "en_US_POSIX")
+        let s = f.date(from: session.startAt) ?? Date()
+        let e = f.date(from: session.endAt) ?? s.addingTimeInterval(3600)
+        _start = State(initialValue: s)
+        _hours = State(initialValue: max(0.25, (e.timeIntervalSince(s) / 3600 * 4).rounded() / 4))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let error { ErrorBanner(message: error) }
+                Section("Session with \(session.client)") {
+                    DatePicker("New start", selection: $start)
+                    Stepper("Length: \(hours.formatted()) hours", value: $hours, in: 0.25...12, step: 0.25)
+                }
+                if !warnings.isEmpty {
+                    Section("Check before moving") {
+                        ForEach(warnings, id: \.self) { Text($0) }
+                        Button(busy ? "Moving…" : "Move anyway") { Task { await move(confirm: true) } }.disabled(busy)
+                    }
+                }
+            }
+            .navigationTitle("Move session")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button(busy ? "Moving…" : "Move") { Task { await move(confirm: false) } }.disabled(busy) }
+            }
+        }
+    }
+
+    private func move(confirm: Bool) async {
+        busy = true; error = nil
+        defer { busy = false }
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm"; f.locale = Locale(identifier: "en_US_POSIX")
+        do {
+            let r: MoveSessionResult = try await api.call("move_session", body: ["session_id": session.id, "start_at": f.string(from: start),
+                                                                                  "duration": hours, "confirm": confirm])
+            if r.moved == true {
+                onMoved(r.message ?? "Session moved.")
+                dismiss()
+            } else {
+                warnings = r.warnings ?? []
+                announce("Not moved yet. " + warnings.joined(separator: " ") + " Choose Move anyway if the time is right.")
+            }
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
 }

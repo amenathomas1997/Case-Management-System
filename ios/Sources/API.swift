@@ -317,7 +317,10 @@ struct Session: Decodable, Identifiable {
     /// When the session was checked in ("YYYY-MM-DD HH:MM:SS", server time), nil when it has
     /// not been, or from a server that does not report it (3.0.28 adds check_in_session).
     var checkedInAt: String?
-    private enum CodingKeys: String, CodingKey { case id, startAt, endAt, location, notes, status, trackId, client, instructor, isRemote, meetingUrl, overdue, checkedInAt }
+    /// Part of a weekly series, or of a group (3.0.43): the rest can be cancelled in one step.
+    var inSeries = false
+    var groupUid: String?
+    private enum CodingKeys: String, CodingKey { case id, startAt, endAt, location, notes, status, trackId, client, instructor, isRemote, meetingUrl, overdue, checkedInAt, inSeries, groupUid }
     // Tolerant decode: endAt is never displayed, so a null on any row must not blank the
     // whole Schedule tab. Only id is required.
     init(from d: Decoder) throws {
@@ -336,8 +339,13 @@ struct Session: Decodable, Identifiable {
         overdue = try? c.decodeIfPresent(Bool.self, forKey: .overdue)
         let checked = (try? c.decodeIfPresent(String.self, forKey: .checkedInAt))?.trimmingCharacters(in: .whitespaces)
         checkedInAt = (checked?.isEmpty ?? true) ? nil : checked
+        inSeries = (try? c.decodeIfPresent(Bool.self, forKey: .inSeries)) ?? false
+        groupUid = try? c.decodeIfPresent(String.self, forKey: .groupUid)
     }
 }
+
+/// move_session's reply (3.0.43): moved, or the warnings to confirm first.
+struct MoveSessionResult: Decodable { let moved: Bool?; let warnings: [String]?; let message: String? }
 
 struct ScheduleResponse: Decodable { let sessions: [Session] }
 

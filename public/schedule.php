@@ -500,6 +500,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
             $newSessionIds[] = (int)db()->lastInsertId();
             if ($w === 0) $sessionId = (int)db()->lastInsertId();
         }
+        // A weekly series shares one ID, so its rest can be cancelled in one step (3.0.43).
+        if (count($newSessionIds) > 1) db()->prepare('UPDATE scheduled_sessions SET series_uid = ? WHERE id IN (' . implode(',', $newSessionIds) . ')')->execute([bin2hex(random_bytes(16))]);
         db()->commit();
         client_session_notice($newSessionIds, 'booked'); // 3.0.41: the client's calendar invite
     } catch (Throwable $e) {
@@ -537,6 +539,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
             . ($sent ? ' A calendar invite was emailed to ' . $staff['name'] . '.' : ' (Calendar invite email could not be sent.)'));
     }
     redirect('schedule.php');
+}
+
+/* ---- POST: move a session, or cancel the rest of its series or its whole group (3.0.43) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['move_session']) || isset($_POST['cancel_series']) || isset($_POST['cancel_group']))) {
+    $sid = (int)($_POST['session_id'] ?? 0);
+    $q = db()->prepare("SELECT s.*, c.name AS client_name FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id WHERE s.id = ? AND s.status = 'Scheduled'");
+    $q->execute([$sid]);
+    $sess = $q->fetch();
+    if (!$sess) { flash('That session is no longer scheduled.', 'error'); redirect('schedule.php'); }
+    schedule_scope_check((int)$sess['client_id'], $user);
+    if (isset($_POST['cancel_series']) || isset($_POST['cancel_group'])) {
+        $n = isset($_POST['cancel_series']) ? session_cancel_series($sid, (int)$user['id']) : session_cancel_group($sid, (int)$user['id']);
+        flash($n ? 'Cancelled ' . $n . ' session' . ($n === 1 ? '' : 's') . '. Clients with a confirmed email were sent a calendar cancellation.' : 'Nothing was cancelled: those sessions are no longer scheduled.', $n ? 'success' : 'error');
+        redirect('schedule.php#upcoming-h');
+    }
+    $key = 'move_' . $sid;
+    $date = valid_date(is_string($_POST['move_date'] ?? null) ? $_POST['move_date'] : '', 2000, (int)date('Y') + 5);
+    $time = is_string($_POST['move_time'] ?? null) ? trim($_POST['move_time']) : '';
+    $dur = is_string($_POST['move_duration'] ?? null) ? trim($_POST['move_duration']) : '';
+    if ($date === null || !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $time) || !is_numeric($dur) || (float)$dur < 0.25 || (float)$dur > 12) {
+        keep_input(); keep_field_errors([$key => 'Enter the new date, a start time and a length from 0.25 to 12 hours.']);
+        redirect('schedule.php#s-' . $sid);
+    }
+    $start = strtotime($date . ' ' . $time . ':00');
+    $r = session_move($sid, $start, $start + (int)round((float)$dur * 3600), (int)$user['id'], !empty($_POST['move_confirm']));
+    if ($r['error'] !== null) { keep_input(); keep_field_errors([$key => $r['error']]); redirect('schedule.php#s-' . $sid); }
+    if (!$r['moved']) {
+        keep_input();
+        keep_field_errors([$key => 'Not moved yet: ' . implode(' ', $r['warnings']) . ' Tick "Move anyway" and choose Move again if this time is right.']);
+        redirect('schedule.php#s-' . $sid);
+    }
+    flash('Moved the session with ' . $sess['client_name'] . ' to ' . date('l, F j \a\t g:i A', $start) . '. The client\'s calendar invite was updated if they have a confirmed email.');
+    redirect('schedule.php#s-' . (int)$sid);
 }
 
 /* ---- POST: update session status (Completed logs hours to the track) ---- */
@@ -831,6 +866,31 @@ function session_row(array $s, string $csrf): void {
           </details>
           <?php endif; ?>
         </form>
+        <?php // Move it, or cancel the rest of its series or its whole group (3.0.43). ?>
+        <?php $sidM = (int)$s['id']; $mKey = 'move_' . $sidM; $mMine = old_in('session_id') === (string)$sidM && old_in('move_session') !== ''; ?>
+        <details<?= has_field_error($mKey) ? ' open' : '' ?>>
+          <summary>Move or cancel more<span class="visually-hidden"> for the <?= $which ?></span></summary>
+          <form method="post" action="schedule.php" class="stacked" novalidate>
+            <?= csrf_field() ?><input type="hidden" name="session_id" value="<?= $sidM ?>">
+            <?= field_error($mKey) ?>
+            <div class="field"><label for="md-<?= $sidM ?>">New date<span class="visually-hidden"> for the <?= $which ?></span></label>
+              <input type="date" id="md-<?= $sidM ?>" name="move_date" value="<?= h($mMine ? old_in('move_date') : date('Y-m-d', strtotime($s['start_at']))) ?>" <?= field_aria($mKey) ?>></div>
+            <div class="field"><label for="mt-<?= $sidM ?>">New start time</label>
+              <input type="time" id="mt-<?= $sidM ?>" name="move_time" value="<?= h($mMine ? old_in('move_time') : date('H:i', strtotime($s['start_at']))) ?>"></div>
+            <div class="field"><label for="ml-<?= $sidM ?>">Length in hours</label>
+              <input type="text" inputmode="decimal" id="ml-<?= $sidM ?>" name="move_duration" value="<?= h($mMine ? old_in('move_duration') : rtrim(rtrim(number_format((strtotime($s['end_at']) - strtotime($s['start_at'])) / 3600, 2, '.', ''), '0'), '.')) ?>"></div>
+            <?php if (has_field_error($mKey) && str_starts_with(form_errors()[$mKey] ?? '', 'Not moved yet')): ?>
+            <div class="field"><label><input type="checkbox" name="move_confirm" value="1"> Move anyway</label></div>
+            <?php endif; ?>
+            <button type="submit" name="move_session" value="1" class="btn btn-secondary btn-sm">Move<span class="visually-hidden"> the <?= $which ?></span></button>
+          </form>
+          <?php if (!empty($s['series_uid']) || !empty($s['group_uid'])): ?>
+          <form method="post" action="schedule.php" class="inline-form"><?= csrf_field() ?><input type="hidden" name="session_id" value="<?= $sidM ?>">
+            <?php if (!empty($s['series_uid'])): ?><button type="submit" name="cancel_series" value="1" class="btn btn-secondary btn-sm" onclick="return confirm('Cancel this session and every later session in its weekly series? The client is sent a calendar cancellation.');">Cancel this and later sessions in the series<span class="visually-hidden"> (<?= $which ?>)</span></button><?php endif; ?>
+            <?php if (!empty($s['group_uid'])): ?><button type="submit" name="cancel_group" value="1" class="btn btn-secondary btn-sm" onclick="return confirm('Cancel this group session for every client in it? Each client is sent a calendar cancellation.');">Cancel the whole group<span class="visually-hidden"> (<?= $which ?>)</span></button><?php endif; ?>
+          </form>
+          <?php endif; ?>
+        </details>
         <?php endif; ?>
       </td>
     </tr>

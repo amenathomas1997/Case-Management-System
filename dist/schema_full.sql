@@ -989,6 +989,8 @@ CREATE TABLE `scheduled_sessions` (
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `reminder_sent` tinyint(1) NOT NULL DEFAULT 0,
   `group_uid` char(12) DEFAULT NULL,
+  `series_uid` char(32) DEFAULT NULL,
+  `ics_sequence` smallint(5) unsigned NOT NULL DEFAULT 0,
   `checked_in_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `client_id` (`client_id`),
@@ -996,6 +998,7 @@ CREATE TABLE `scheduled_sessions` (
   KEY `idx_start_at` (`start_at`),
   KEY `idx_track` (`track_id`),
   KEY `idx_group_uid` (`group_uid`),
+  KEY `series_uid` (`series_uid`),
   CONSTRAINT `scheduled_sessions_ibfk_1` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;

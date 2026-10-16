@@ -173,7 +173,7 @@ function counselor_noshow_notice(int $sessionId): bool {
  */
 function client_session_notice(array $sessionIds, string $kind): bool {
     $sessionIds = array_values(array_unique(array_map('intval', $sessionIds)));
-    if (!$sessionIds || !in_array($kind, ['booked', 'cancelled'], true)) return false;
+    if (!$sessionIds || !in_array($kind, ['booked', 'cancelled', 'moved'], true)) return false;
     try {
         $q = db()->prepare('SELECT s.*, c.name AS client_name, c.email, c.email_verified, c.a11y_contact, c.preferred_language, c.archived_at, c.status AS client_status
             FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id WHERE s.id IN (' . implode(',', array_fill(0, count($sessionIds), '?')) . ') ORDER BY s.start_at');
@@ -184,13 +184,13 @@ function client_session_notice(array $sessionIds, string $kind): bool {
         if ($c['archived_at'] !== null || str_starts_with((string)$c['client_status'], 'Closed') || (int)$c['email_verified'] !== 1
             || !filter_var($c['email'] ?? '', FILTER_VALIDATE_EMAIL) || in_array($c['a11y_contact'] ?? '', ['Phone', 'Postal mail'], true)) return false;
         $es = client_lang($c) === 'es';
-        $method = $kind === 'booked' ? 'REQUEST' : 'CANCEL';
+        $method = $kind === 'cancelled' ? 'CANCEL' : 'REQUEST';
         [$ics, $lines] = client_sessions_ics($rows, (string)$c['email'], $method, $es);
         $contact = trim((string)(cfg('support_email') ?: cfg('mail_from')));
-        [$subj, $body] = email_template_for_client($kind === 'booked' ? 'session_booked_client' : 'session_cancelled_client', $c,
+        [$subj, $body] = email_template_for_client(['booked' => 'session_booked_client', 'cancelled' => 'session_cancelled_client', 'moved' => 'session_moved_client'][$kind], $c,
             ['name' => (string)$c['client_name'], 'sessions' => implode("\n", $lines), 'contact' => $contact]);
         return send_app_mail_attach((string)$c['email'], $subj, $body,
-            [['name' => $kind === 'booked' ? 'invite.ics' : 'cancel.ics', 'mime' => 'text/calendar; method=' . $method, 'bytes' => $ics]]);
+            [['name' => $kind === 'cancelled' ? 'cancel.ics' : 'invite.ics', 'mime' => 'text/calendar; method=' . $method, 'bytes' => $ics]]);
     } catch (Throwable $e) {
         error_log('client_session_notice: ' . get_class($e) . ' ' . $e->getCode());
         return false;
@@ -241,7 +241,8 @@ function client_sessions_ics(array $rows, string $attendee, string $method, bool
         $where = $remote ? ($es ? 'en línea' : 'online') . ($url !== '' ? ' (' . $url . ')' : '') : trim((string)$s['location']);
         $lines[] = '- ' . ($es ? when_es($st) : date('l, F j \a\t g:i A T', $st)) . ($where !== '' ? ', ' . $where : '');
         $ics .= "BEGIN:VEVENT\r\nUID:cms-client-session-" . (int)$s['id'] . '@' . $host . "\r\nDTSTAMP:" . $fmt(time()) . "\r\n"
-            . 'SEQUENCE:' . ($method === 'CANCEL' ? 1 : 0) . "\r\nDTSTART:" . $fmt($st) . "\r\nDTEND:" . $fmt($en) . "\r\n"
+            // SEQUENCE grows with each move (ics_sequence, 3.0.43), so a calendar takes the newest.
+        . 'SEQUENCE:' . ((int)($s['ics_sequence'] ?? 0) + ($method === 'CANCEL' ? 1 : 0)) . "\r\nDTSTART:" . $fmt($st) . "\r\nDTEND:" . $fmt($en) . "\r\n"
             . 'SUMMARY:' . $esc(($es ? 'Capacitación con ' : 'Training with ') . brand('short')) . "\r\n"
             . ($where !== '' ? 'LOCATION:' . $esc($remote && $url !== '' ? $url : $where) . "\r\n" : '')
             . ($url !== '' ? 'URL:' . preg_replace('/[\r\n]+/', '', $url) . "\r\n" : '')

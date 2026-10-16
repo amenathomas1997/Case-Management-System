@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.43' => [
+        'A session can be moved to a new time from the Schedule page or the iPhone app (Move or cancel more, or Move session on the Actions rotor), instead of cancelling and booking it again. It warns first when the instructor is already booked then or the time is outside the authorization, and the client\'s and instructor\'s calendar entries update in place.',
+        'The rest of a weekly series, or a whole group session, can be cancelled in one step; each client gets a calendar cancellation.',
+    ],
     '3.0.42' => [
         'Clients see My devices in their portal: what is loaned to them and when it is due back, and any repair under way. They can answer their 30, 60 and 90-day device check-ins there themselves; Device follow-ups marks these as reported by the client.',
         'Clients are emailed a reminder three days before a loaned item is due, and the day after it is overdue (not those who prefer phone or post).',

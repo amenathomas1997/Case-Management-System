@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.42';
+const APP_VERSION = '3.0.43';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -313,6 +313,12 @@ const EMAIL_TEMPLATES = [
     'session_booked_client_es' => ['Session booked (client, Spanish)', 'Su sesión de capacitación con {org_short}',
         "Hola, {name}:\n\nSu capacitación en tecnología de asistencia está programada:\n\n{sessions}\n\nAdjuntamos una invitación de calendario para que la agregue a su calendario. Si necesita otra hora, responda a este correo o comuníquese con {contact}.\n",
         '{name} {sessions} {contact} {org_short} {org}'],
+    'session_moved_client' => ['Session moved (client)', 'Your training session with {org_short} has a new time',
+        "Hello {name},\n\nYour training session was moved. The new time is:\n\n{sessions}\n\nThe attached calendar update replaces the old time in your calendar. If the new time does not work, reply to this email or contact {contact}.\n",
+        '{name} {sessions} {contact} {org_short} {org}'],
+    'session_moved_client_es' => ['Session moved (client, Spanish)', 'Su sesión de capacitación con {org_short} tiene una nueva hora',
+        "Hola, {name}:\n\nSu sesión de capacitación cambió de hora. La nueva hora es:\n\n{sessions}\n\nLa actualización de calendario adjunta reemplaza la hora anterior en su calendario. Si la nueva hora no le sirve, responda a este correo o comuníquese con {contact}.\n",
+        '{name} {sessions} {contact} {org_short} {org}'],
     'session_cancelled_client' => ['Session cancelled (client)', 'Your training session with {org_short} was cancelled',
         "Hello {name},\n\nThis training session was cancelled:\n\n{sessions}\n\nThe attachment removes it from your calendar. To book another time, reply to this email or contact {contact}.\n",
         '{name} {sessions} {contact} {org_short} {org}'],
@@ -396,7 +402,7 @@ const EMAIL_TEMPLATE_REQUIRED = [
     'message_notice' => '{link}', 'message_notice_es' => '{link}', 'request_closed' => '{link}', 'request_closed_es' => '{link}',
     'portal_expiring' => '{link}', 'portal_expiring_es' => '{link}', 'counselor_noshow' => '{link}', 'counselor_auth_low' => '{link}',
     'loan_due_client' => '{item}', 'loan_due_client_es' => '{item}', 'loan_overdue_client' => '{item}', 'loan_overdue_client_es' => '{item}',
-    'session_booked_client' => '{sessions}', 'session_booked_client_es' => '{sessions}', 'session_cancelled_client' => '{sessions}', 'session_cancelled_client_es' => '{sessions}',
+    'session_booked_client' => '{sessions}', 'session_booked_client_es' => '{sessions}', 'session_cancelled_client' => '{sessions}', 'session_moved_client' => '{sessions}', 'session_moved_client_es' => '{sessions}', 'session_cancelled_client_es' => '{sessions}',
     'report_cover' => '{ack}',
     'referral_closed' => '{ref}',
 ];
@@ -1629,3 +1635,5 @@ require_once __DIR__ . '/records_privacy.php';
 require_once __DIR__ . '/client_notices.php';
 // My devices in the client portal and loan reminders (3.0.42).
 require_once __DIR__ . '/portal_devices.php';
+// Moving sessions, cancelling a series or a group (3.0.43).
+require_once __DIR__ . '/session_changes.php';
