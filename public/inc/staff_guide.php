@@ -18,6 +18,7 @@ if (!function_exists('staff_guide_topics')) {
             ]],
             'guide-day' => ['How do I plan my day?', []],
             'guide-intake' => ['How do I handle a referral?', [
+                'guide-auth-email' => 'How do I start a track from an authorization email?',
                 'guide-referral-close' => 'How do I close a referral that will not become a client?',
                 'guide-referral-attach' => 'What if the person is already a client?',
                 'guide-case-close' => 'How do I close a case?',
@@ -325,6 +326,8 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <p>An email address from the referral form is marked Unverified. Nothing is sent to it until you confirm it with the client. To confirm it, open Edit profile / status on the client record and tick Confirmed with the client.</p>
 <p>Intake progress shows each new client's stage, so you can spot stalled intake work.</p>
 
+<?= $sgH(4, 'guide-auth-email') ?>
+<p>Open Incoming authorizations in the Clients menu. Paste the whole approved authorization email into the box and choose Read the email, or forward the email to the CMS mailbox, which adds a task when it arrives. The page shows what was read: the authorization number, the client's name, the service category, the amount, the approval date and the counselor. It warns when the number is already on a track or the email does not say approved. Choose the client (a matching record is chosen for you), check Record … as the client's VR counselor to save the counselor's name and email on the client (it is checked for you when the client has no counselor yet), and choose Start the track from this authorization. The new track form opens filled in. When the email gives only a dollar amount, the hours are worked out at the client's last hourly rate. Check every field, add the expiration date, and save. Dismiss removes an email you will not use.</p>
 <?= $sgH(4, 'guide-referral-close') ?>
 <p>Open the referral, then Close without creating a client. Choose the reason (Declined services, Not eligible, Withdrawn, Unable to reach, Duplicate, Referred elsewhere or Other) and, for Other, a short note; then choose Close referral. The referral leaves the open list (Status: Closed without a client lists it), its contact task is done, and the person who sent it is emailed the outcome automatically: the reference number and a general reason, never the client's details or your note. A referral closed by mistake can be reopened from the same page.</p>
 

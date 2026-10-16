@@ -29,6 +29,7 @@ const STAGING_SCRUB_KEEP = [
     'client_releases' => ['signer_role', 'recipient_type', 'method'],
     'amendment_requests' => ['status'],
     'closure_followups' => ['status'],
+    'incoming_authorizations' => ['status', 'source', 'message_key'],
     'surveys' => ['channel'],
     'client_status_history' => ['old_status', 'new_status'],
     'client_closures' => ['status', 'reason'],

@@ -68,11 +68,12 @@ foreach (db()->query('SELECT id, email FROM users WHERE is_active = 1') as $r) {
 // counselor address staff have not confirmed yet (it came from the public
 // referral form, where anyone can type any address) is treated the same way:
 // it never files onto the client's record by itself.
-$clientsByAddress = []; $archivedAddresses = [];
+$clientsByAddress = []; $archivedAddresses = []; $counselorAddresses = [];
 foreach ($clients as $cl) {
     foreach (['email', 'guardian_email', 'counselor_email'] as $col) {
         $addr = strtolower(trim((string)($cl[$col] ?? '')));
         if ($addr === '') continue;
+        if ($col === 'counselor_email' && !empty($cl['counselor_verified'])) $counselorAddresses[$addr] = true;
         if (!empty($cl['archived_at']) || ($col === 'counselor_email' && empty($cl['counselor_verified']))) $archivedAddresses[$addr] = true;
         else $clientsByAddress[$addr][(int)$cl['id']] = $cl;
     }
@@ -94,7 +95,7 @@ for ($page = 0; $page < 4 && $path !== ''; $page++) {
     $next = (string)($list['@odata.nextLink'] ?? '');
     $path = str_starts_with($next, 'https://graph.microsoft.com/v1.0/') ? substr($next, strlen('https://graph.microsoft.com/v1.0')) : '';
 }
-$filed = 0; $skipped = 0; $unverified = 0; $failed = 0; $review = 0; $auto = 0;
+$filed = 0; $skipped = 0; $unverified = 0; $failed = 0; $review = 0; $auto = 0; $authorizations = 0;
 // client_notes.body is TEXT (65,535 bytes); the header lines take the rest.
 $maxBodyBytes = 60000;
 foreach ($msgs as $m) {
@@ -114,6 +115,43 @@ foreach ($msgs as $m) {
         $bodyText = strtolower((string)($m['body']['contentType'] ?? 'text')) === 'html' ? html_body_text($content) : $content;
         $bodyText = str_replace(["\r\n", "\r", "\u{00A0}"], ["\n", "\n", ' '], $bodyText);
         $bodyText = trim(preg_replace("/\n{3,}/", "\n\n", preg_replace('/[ \t]+\n/', "\n", $bodyText)));
+
+        // An approved-authorization email (3.0.48), forwarded by staff or sent by a client's
+        // confirmed counselor: kept on Incoming authorizations for staff to start the track,
+        // with a task for the matched client's instructor (or the administrators).
+        if (($isStaff || isset($counselorAddresses[$fromAddr])) && !empty($m['id'])
+            && ($auth = authorization_email_parse($subject . "\n" . $bodyText)) !== null
+            // Only an approval notice, and a number not already on a track: a reply quoting a
+            // progress report (which shows "Authorization #:") is filed as a note as before.
+            && !empty($auth['approved']) && !authorization_email_tracks($auth['auth_number'])) {
+            // Sent straight to the mailbox by the counselor: they are the counselor.
+            if ($auth['counselor_email'] === '' && isset($counselorAddresses[$fromAddr])) $auth['counselor_email'] = $fromAddr;
+            if (!sender_verified($headers, $fromAddr)) { $unverified++; continue; }
+            $authKey = hash('sha256', 'auth:' . $g['sender'] . ':' . $m['id']);
+            $seen = db()->prepare('SELECT id FROM incoming_authorizations WHERE message_key = ?');
+            $seen->execute([$authKey]);
+            if (!$seen->fetchColumn()) {
+                $incId = authorization_email_store($auth, $subject . "\n\n" . $bodyText, 'Mailbox', $authKey, null);
+                $inc = incoming_authorization($incId);
+                $owner = null;
+                if ($inc && $inc['client_id']) {
+                    $oq = db()->prepare('SELECT assigned_to FROM clients WHERE id = ?');
+                    $oq->execute([(int)$inc['client_id']]);
+                    $owner = (int)$oq->fetchColumn() ?: null;
+                    if ($owner !== null && !isset($activeUserIds[$owner])) $owner = null;
+                }
+                add_task('New authorization ' . $auth['auth_number'] . ': start the track',
+                    'An approved authorization email arrived. Open Incoming authorizations, check the client and details, and start the track.',
+                    $inc && $inc['client_id'] ? (int)$inc['client_id'] : null, null, business_days_from(2), $owner, null, 'incauth-' . $incId);
+                $note = 'A new authorization email (' . $auth['auth_number'] . ') is waiting on Incoming authorizations.';
+                if ($owner !== null) notify_user($owner, $note, 'authorizations.php?id=' . $incId);
+                else notify_admin_users($note, 'authorizations.php?id=' . $incId);
+            }
+            [$moveCode] = graph_api('POST', $sender . '/messages/' . rawurlencode($m['id']) . '/move', ['destinationId' => $filedId]);
+            if ($moveCode < 200 || $moveCode >= 300) { $skipped++; continue; }
+            $authorizations++;
+            continue;
+        }
 
         // Match all names before deciding. The first row is not an identity:
         // different clients can share a name, or a subject can name two people.
@@ -203,6 +241,7 @@ foreach ($msgs as $m) {
     }
 }
 echo "Filed {$filed} email(s) to client records; {$skipped} left in inbox (unknown sender or no client name match)"
+    . ($authorizations ? "; {$authorizations} authorization email(s) kept on Incoming authorizations" : '')
     . ($review ? "; {$review} from client contacts moved to \"{$reviewFolder}\" for an administrator" : '')
     . ($auto ? "; {$auto} automatic replies left in inbox" : '')
     . ($unverified ? "; {$unverified} left in inbox because Microsoft 365 could not verify the sender" : '')

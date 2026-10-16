@@ -6,6 +6,9 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.48' => [
+        'Incoming authorizations (Clients menu): paste an approved authorization email, or forward it to the CMS mailbox, and the system reads the authorization number, client, service, amount and counselor. Check the client, choose Start the track, and the new track form opens filled in for you to check and save. A forwarded email also adds a task. Nothing is sent to AI.',
+    ],
     '3.0.47' => [
         'Progress reports can cover only the period since the last report, and can include barriers and recommendations. Choose Final report when training ends: it adds skill levels and scored assessments (first and latest), devices and the closure. AI can draft the barriers and recommendations for you to edit, and the Outcome report, funder report and worksite recommendations each have an AI draft button too. The counselor\'s link now shows the report exactly as it was emailed.',
         'Closing a case schedules follow-up checks at 30, 60 and 90 days. When one is due, a task appears: call the former client and record, under After closure on the client page, whether they are still employed, still using their technology, and whether they need more service (which opens a re-referral task).',

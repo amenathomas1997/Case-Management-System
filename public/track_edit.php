@@ -252,12 +252,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newTrackId = (int)db()->lastInsertId();
             web_once_set($trackKey, $newTrackId);
             audit($user['id'], 'track.create', 'track', $newTrackId, $title . ' (auth ' . $authNumber . ')');
+            // Started from an authorization email (3.0.48): it is done once its track exists.
+            $incAuth = (int)($_POST['incoming_auth'] ?? 0);
+            if ($incAuth > 0) incoming_authorization_handled($incAuth, 'Track created', $newTrackId, (int)$user['id'], $clientId);
             flash('Training track created.');
             redirect('track.php?id=' . $newTrackId);
         }
     }
 }
 
+// A new track started from an authorization email (3.0.48, authorizations.php) opens with
+// what the email said, for staff to check before saving.
+$fromAuth = !$track && $_SERVER['REQUEST_METHOD'] !== 'POST' ? ($_SESSION['auth_prefill'][$clientId] ?? null) : null;
+$fromAuthRow = is_array($fromAuth) ? incoming_authorization((int)($fromAuth['incoming_auth'] ?? 0)) : null;
+if ($fromAuthRow && $fromAuthRow['status'] === 'New' && (int)$fromAuthRow['client_id'] === $clientId
+    && (string)$fromAuth['incoming_auth'] === (string)(int)($_GET['from_auth'] ?? 0)) { $_POST += $fromAuth; unset($_SESSION['auth_prefill'][$clientId]); }
+else $fromAuth = null;
 $v = fn(string $k, $default = '') => h($_POST[$k] ?? $track[$k] ?? $default);
 // A new track starts from the fee quoted when the client's referral came in (3.0.34):
 // $0 (free) is No charge, an hourly fee is Private pay at that fee; else VR.
@@ -276,7 +286,7 @@ set_form_errors($errors);
 page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] . ' — ' . $client['name'] : 'Add training track — ' . $client['name']), $user, 'clients', array_merge([['client.php?id=' . (int)$client['id'], $client['name']], ['client.php?id=' . (int)$client['id'] . '&tab=tracks', 'Training Tracks']], $track ? [['track.php?id=' . (int)$track['id'], $track['title']]] : []));
 ?>
 <p class="page-actions"><a href="client.php?id=<?= $clientId ?>&amp;tab=tracks"><span aria-hidden="true">&larr; </span>Back to <?= h($client['name']) ?></a></p>
-<h1><?= $track ? 'Edit training track: ' . h($track['title']) . ' for ' . h($client['name']) : 'New training track for ' . h($client['name']) ?></h1>
+<h1><?= $track ? 'Edit training track: ' . h($track['title']) . ' for ' . h($client['name']) : 'New training track for ' . h($client['name']) . ($fromAuth ? ', filled in from authorization ' . h((string)$fromAuth['auth_number']) . ': check each field before saving' : '') ?></h1>
 <?php // Focus moves to this summary once on load; each entry links to its field.
 // (The messages already name their field, so no label is put in front of them.) ?>
 <?= form_error_summary(array_fill_keys(array_keys($errors), '')) ?>
@@ -284,6 +294,7 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
 <p class="hint">Fields marked * are required.</p>
 <form method="post" class="stacked" novalidate>
   <?= csrf_field() ?><?php if (!$track) echo web_idem_field(); ?>
+  <?php if (!$track && (int)($_POST['incoming_auth'] ?? 0) > 0): ?><input type="hidden" name="incoming_auth" value="<?= (int)$_POST['incoming_auth'] ?>"><?php endif; ?>
   <fieldset>
     <legend>Track</legend>
     <div class="field">

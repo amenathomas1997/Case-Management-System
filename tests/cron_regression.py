@@ -196,6 +196,9 @@ class FakeIngestDB {
 }
 function db() { return new FakeIngestDB; }
 function graph_cfg() { return ['sender'=>'mailbox@example.invalid']; }
+// Authorization emails (3.0.48) are covered by tests/authorization_email_cases.php; none here is one.
+function authorization_email_parse($text) { return str_contains($text, 'Authorization Number:') ? ['auth_number'=>'X'] : null; }
+function authorization_email_tracks($n) { return []; }
 function record_heartbeat($job) { $GLOBALS['heartbeats'][]=$job; }
 function notify_user($id,$message,$link=null) { $GLOBALS['events'][]=['notify',$id]; }
 function notify_admin_users($message,$link=null) { $GLOBALS['events'][]=['notify','admins']; }
