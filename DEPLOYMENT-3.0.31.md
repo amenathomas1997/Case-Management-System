@@ -15,3 +15,7 @@ Files to deploy: public/health.php, public/inc/health_checks.php (new), public/i
 After deploy: health.php should still return 200 (the watchdog has a heartbeat; daily alerts gets 36 h from the first poll). If daily alerts has not run by then, the monitor alerts — check its cron entry.
 
 Verified before commit: run_all (incl. new health_checks); full_schema 910; audit_regression 61; security 67; staging_scrub 34; php -l on all public, inc, cron and dist PHP; iPhone build (generic simulator) succeeded. One full_schema run hit a timing-based licence-lock check (at_extended_cases.php:60) that passed on re-run — a flaky concurrency test, unrelated.
+
+## Deployment verified
+
+Published October 15, 2026, 9:31 p.m. Central, from da9e6e8 with .audit_work/deploy-3.0.31/deploy.sh. Production 3.0.30 matched the baseline (12 files); backups (website, cron, database 179,574 bytes, verified) at /home/cmsuser/casemanagement_private/deploy-3.0.31-20261015-213104/; mig_3.0.31.sql applied (client emails still unconfirmed: 0); 13 files installed, server syntax check passed, hashes match, .htaccess unchanged. Live: login, community_referral, help, privacy 200; admin 302; api 401; updates.json and the sign-in page report 3.0.31. health.php 200: database, watchdog (9:30 p.m.) and backup (2:15 a.m.) fine; daily alerts has no recorded run yet and must record one by October 17, 2026, 9:31 a.m., or the health address reports it. iPhone 3.0.31 (34) not archived yet.
