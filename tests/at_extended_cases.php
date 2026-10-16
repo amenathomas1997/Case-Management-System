@@ -58,10 +58,10 @@ $queued=null;$deadline=microtime(true)+30;
 // Only the waits on at_records count: another transaction waiting elsewhere on the
 // server at that moment (a CI runner's) must not make the count 3.
 do{usleep(50000);try{$queued=(int)$db->query("SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_state='LOCK WAIT' AND trx_query LIKE '%at_records%'")->fetchColumn();}catch(PDOException $e){$queued=null;usleep(1000000);break;}}while($queued<2&&microtime(true)<$deadline);
-$db->commit();$success=0;
-foreach($workers as [$process,$pipes]){$output=stream_get_contents($pipes[1]);$errors=stream_get_contents($pipes[2]);fclose($pipes[1]);fclose($pipes[2]);$code=proc_close($process);check($code===0,'Concurrent seat request returned a handled response');$success+=(int)(json_decode($output,true)['ok']??false);}
+$db->commit();$success=0;$workerSaid=[];
+foreach($workers as [$process,$pipes]){$output=stream_get_contents($pipes[1]);$errors=stream_get_contents($pipes[2]);fclose($pipes[1]);fclose($pipes[2]);$code=proc_close($process);check($code===0,'Concurrent seat request returned a handled response');$success+=(int)(json_decode($output,true)['ok']??false);$workerSaid[]=mb_strimwidth(trim($output.' '.$errors),0,300,'…');}
 // Without the PROCESS privilege the queue cannot be seen; a fixed pause stands in.
-if($queued!==null)check($queued===2,'Both concurrent seat requests waited on the license lock'.($queued===2?'':' (waiting on at_records: '.$queued.')'));
+if($queued!==null)check($queued===2,'Both concurrent seat requests waited on the license lock'.($queued===2?'':' (waiting on at_records: '.$queued.'; the workers said: '.implode(' | ',$workerSaid).')'));
 check($success===1&&(int)$db->query("SELECT COUNT(*) FROM at_records WHERE parent_id=$raceLicense AND status='Assigned'")->fetchColumn()===1,'Concurrent requests cannot overallocate a license');
 // Reminder delivery and deduplication share a transaction.
 $db->exec("UPDATE at_records SET due_date=CURDATE(),status='Scheduled' WHERE id=$outcome");
