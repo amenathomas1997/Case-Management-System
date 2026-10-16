@@ -699,6 +699,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     <dt>Authorized funds</dt><dd><?= $noAuthFunds ? $noFundsText : fmt_money($r['authorized_funds']) ?></dd>
   </dl>
   <p class="hint" id="burndown-hint">The burn-down shows the hours and funds used so far against this authorization, and drafts a request for more.</p>
+  <?php if ($waitAmend = amendment_waiting_text($id)): // 3.0.44 ?><p><strong><?= h($waitAmend) ?>.</strong></p><?php endif; ?>
   <p class="page-actions"><a class="btn btn-secondary btn-sm" href="amendment_request.php?track=<?= $id ?>" aria-describedby="burndown-hint">Authorization burn-down &amp; amendment request</a></p>
   <?php
   $amendments = db()->prepare('SELECT a.*, u.name AS changed_by_name FROM auth_amendments a LEFT JOIN users u ON u.id = a.changed_by WHERE a.track_id = ? ORDER BY a.changed_at DESC');

@@ -1123,6 +1123,9 @@ $tabLabels = ['overview' => 'Overview', 'notes' => 'Client Notes', 'assessments'
 page_header($tabLabels[$tab] . ' — ' . $client['name'], $user, 'clients', $tab === 'overview' ? [] : [['client.php?id=' . (int)$client['id'], $client['name']]]);
 ?>
 <h1><?= h($client['name']) ?> <?= status_badge($client['status']) ?></h1>
+<?php if ($client['status'] === 'On Hold' && (!empty($client['on_hold_reason']) || !empty($client['on_hold_until']))): // 3.0.44 ?>
+<p>On Hold<?= !empty($client['on_hold_reason']) ? ': ' . h($client['on_hold_reason']) : '' ?><?= !empty($client['on_hold_until']) ? '. Expected back ' . fmt_date($client['on_hold_until']) : '' ?>.</p>
+<?php endif; ?>
 <p class="page-actions"><a href="workflows.php?view=briefing&amp;client_id=<?= (int)$client['id'] ?>">AI case briefing</a><a href="workflows.php?view=homework&amp;client_id=<?= (int)$client['id'] ?>">Homework support</a></p>
 <?php if ($client['archived_at'] !== null): ?>
 <div class="alert alert-error" role="status">

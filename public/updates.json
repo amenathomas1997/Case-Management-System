@@ -1,7 +1,7 @@
 {
     "product": "Case Management System",
-    "latest": "3.0.43",
+    "latest": "3.0.44",
     "released": "2026-10-16",
-    "notes": "Moving sessions: move a session (web, app) with warnings for double-booking and the authorization dates, calendar invites updated in place; cancel the rest of a series or a whole group in one step. Apply dist/migrations/mig_3.0.43.sql before updating files (safe to re-run); sites below 3.0.42 first apply the earlier migrations in order. Sites below 3.0.31 also apply mig_3.0.31.sql; Apply dist/migrations/mig_3.0.31.sql (confirms client emails waiting for confirmation). Sites below 3.0.28 apply mig_3.0.28.sql (adds scheduled_sessions.checked_in_at) before updating files; sites below 3.0.27 apply mig_3.0.27.sql first. Sites on 3.0.16 to 3.0.20 apply mig_3.0.21.sql first. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16, 3.0.21, 3.0.27, 3.0.28, 3.0.31, 3.0.34, 3.0.35, 3.0.36, 3.0.37, 3.0.38, 3.0.39, 3.0.40, 3.0.42 and 3.0.43 in order; all are safe to re-run.",
+    "notes": "Amendments and On Hold: amendment requests recorded as sent, followed up, and answered, linked to the approved change; On Hold needs a reason, takes a return date and gets check-in tasks. Apply dist/migrations/mig_3.0.44.sql before updating files (safe to re-run); sites below 3.0.43 first apply the earlier migrations in order. Sites below 3.0.31 also apply mig_3.0.31.sql; Apply dist/migrations/mig_3.0.31.sql (confirms client emails waiting for confirmation). Sites below 3.0.28 apply mig_3.0.28.sql (adds scheduled_sessions.checked_in_at) before updating files; sites below 3.0.27 apply mig_3.0.27.sql first. Sites on 3.0.16 to 3.0.20 apply mig_3.0.21.sql first. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16, 3.0.21, 3.0.27, 3.0.28, 3.0.31, 3.0.34, 3.0.35, 3.0.36, 3.0.37, 3.0.38, 3.0.39, 3.0.40, 3.0.42, 3.0.43 and 3.0.44 in order; all are safe to re-run.",
     "contact": "Contact Example Agency for the update package."
 }

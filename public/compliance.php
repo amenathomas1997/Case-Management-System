@@ -267,7 +267,7 @@ page_header('Compliance', $user, 'compliance');
           <?php endif; ?></td>
         <td><?= fmt_date($t['expiration_date'], true) ?>
           <?= $t['expired'] ? '<br><strong class="field-error">Expired</strong>' : ($t['exp_soon'] ? '<br><span class="badge badge-pending">Expiring soon</span>' : '') ?></td>
-        <td><a class="btn btn-secondary btn-sm" href="amendment_request.php?track=<?= (int)$t['id'] ?>">Request amendment<span class="visually-hidden"> for <?= h($t['title']) ?> (<?= h($t['client']) ?>)</span></a></td>
+        <td><?php $waitA = amendment_waiting_text((int)$t['id']); if ($waitA !== ''): ?><?= h($waitA) ?>. <?php endif; ?><a class="btn btn-secondary btn-sm" href="amendment_request.php?track=<?= (int)$t['id'] ?>"><?= $waitA !== '' ? 'Record the reply' : 'Request amendment' ?><span class="visually-hidden"> for <?= h($t['title']) ?> (<?= h($t['client']) ?>)</span></a></td>
       </tr>
     <?php endforeach; ?>
     </tbody>

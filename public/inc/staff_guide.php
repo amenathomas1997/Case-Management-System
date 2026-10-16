@@ -422,6 +422,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 </ol>
 <p>The hours and the note are saved together: if either is refused, nothing is saved and what you typed stays in the form. If the work is outside the authorization (its dates, hours or dollars), you get an error: record the amendment on Edit track / authorization first. Do not log hours here for a session you will complete on the schedule. That would log them twice. Billable expenses use Log an expense, further down the track.</p>
 
+<p>To ask for more hours, dollars or time on an authorization, open the track and choose Authorization burn-down &amp; amendment request. Send the letter, then use Record the request as sent with what you asked for: the letter is kept on the track as a case note, and a follow-up task is due in 10 business days. When the counselor answers, record the reply on the same page. If it was approved, the track's edit page opens with the request linked; enter the new hours, dollars or end date there and save.</p>
+<p>When a client has to wait, for example for an authorization, set them to On Hold with the reason, and an expected return date if you know one. A check-in task appears about every three weeks, and on the return date.</p>
+
 <?= $sgH(4, 'guide-move-session') ?>
 <p>On the Schedule page, open Move or cancel more on the session's row. Enter the new date, start time and length, and choose Move. If the instructor already has a session then, or the new time is outside the authorization's dates, nothing changes yet: the warning is shown with a Move anyway box to tick. A moved session keeps its record and history. A client with a confirmed email gets a calendar update that replaces the old time, and the instructor is told if someone else moved it. The same section has Cancel this and later sessions in the series (for a weekly series) and Cancel the whole group (for a group session). In the iPhone app, use Move session on the session's Actions rotor.</p>
 

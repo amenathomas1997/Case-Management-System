@@ -189,3 +189,41 @@ function closure_checklist(int $clientId): array {
     if ($n) $items[] = [$n . ' invoice' . ($n === 1 ? ' is' : 's are') . ' still awaiting payment.', 'invoices.php'];
     return $items;
 }
+
+/* ---------- On Hold with a reason and a return date (3.0.44) ----------
+   Owner decision 2026-10-16: no separate "Awaiting authorization" status; On Hold, with a
+   reason, covers it. Moving a client to On Hold needs a reason; a return date is optional.
+   The daily job opens check-in tasks for On Hold clients, as for the Waitlist. */
+
+/** Check the On Hold fields from a form. Returns [error or null, return date or null]. */
+function on_hold_input(string $newStatus, string $oldStatus, string $reason, string $until): array {
+    if ($newStatus !== 'On Hold') return [null, null];
+    // Already On Hold: only a new return date can change.
+    if ($oldStatus !== 'On Hold' && trim($reason) === '') return ['Say why the client is going On Hold (for example, waiting for the authorization).', null];
+    if (trim($until) === '') return [null, null];
+    $d = valid_date(trim($until), 2000, (int)date('Y') + 5);
+    if ($d === null || $d < date('Y-m-d')) return ['Enter the expected return date as today or later, or leave it blank.', null];
+    return [null, $d];
+}
+
+/** Save (or clear) the On Hold reason and return date after a status change. */
+function on_hold_save(int $clientId, string $newStatus, string $oldStatus, string $reason, ?string $until): void {
+    try {
+        if ($newStatus === 'On Hold' && $oldStatus !== 'On Hold') {
+            db()->prepare('UPDATE clients SET on_hold_reason = ?, on_hold_until = ? WHERE id = ?')->execute([mb_substr(trim($reason), 0, 255), $until, $clientId]);
+        } elseif ($newStatus === 'On Hold' && $until !== null) {
+            db()->prepare('UPDATE clients SET on_hold_until = ? WHERE id = ?')->execute([$until, $clientId]);
+        } elseif ($newStatus !== 'On Hold' && $oldStatus === 'On Hold') {
+            db()->prepare('UPDATE clients SET on_hold_reason = NULL, on_hold_until = NULL WHERE id = ?')->execute([$clientId]);
+        }
+    } catch (PDOException $e) {
+        error_log('on_hold_save: ' . $e->getCode()); // mig_3.0.44 not run yet
+    }
+}
+
+/** A warning (never a refusal) when a client is set to Active Training without an active authorized track. */
+function active_without_authorization(int $clientId): ?string {
+    $q = db()->prepare("SELECT COUNT(*) FROM training_tracks WHERE client_id = ? AND status = 'Active' AND (billing_mode <> 'vr' OR (auth_number IS NOT NULL AND auth_number <> ''))");
+    $q->execute([$clientId]);
+    return (int)$q->fetchColumn() > 0 ? null : 'Note: this client has no active training track with an authorization yet. Add one before logging billable hours.';
+}

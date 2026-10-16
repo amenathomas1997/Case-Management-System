@@ -23,6 +23,30 @@ scope_check_client_id((int)$track['cid'], $user);
 $counselorEmail = trim((string)($track['counselor_email'] ?? ''));
 $counselorConfirmed = $counselorEmail !== '' && (int)($track['counselor_verified'] ?? 0) === 1;
 
+/* ---- POST: record the request as sent, or its reply (3.0.44, inc/amendments.php) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['record_request'])) {
+    $key = web_idem_key($_POST);
+    if (web_once_get($key) !== null) { flash('This request was already recorded (the form was sent twice).', 'info'); redirect('amendment_request.php?track=' . $trackId . '#requests-h'); }
+    [$errs, $newId] = amendment_record($trackId, $_POST, (int)$user['id']);
+    if ($errs) { keep_input(); keep_field_errors($errs); redirect('amendment_request.php?track=' . $trackId . '#record-h'); }
+    web_once_set($key, $newId);
+    flash('Recorded: amendment requested. The letter is on the track as a case note, and a follow-up task is due in 10 business days.');
+    redirect('amendment_request.php?track=' . $trackId . '#requests-h');
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['record_reply'])) {
+    $rid = (int)($_POST['request_id'] ?? 0);
+    $err = amendment_reply($rid, $trackId, is_string($_POST['reply_status'] ?? null) ? $_POST['reply_status'] : '',
+        is_string($_POST['replied_on'] ?? null) ? $_POST['replied_on'] : '', is_string($_POST['reply_note'] ?? null) ? $_POST['reply_note'] : '', (int)$user['id']);
+    if ($err !== null) { keep_input(); keep_field_errors(['reply_' . $rid => $err]); redirect('amendment_request.php?track=' . $trackId . '#requests-h'); }
+    $st = (string)$_POST['reply_status'];
+    if (in_array($st, ['Approved', 'Partly approved'], true)) {
+        flash('Reply recorded: ' . strtolower($st) . '. Now enter the approved hours, dollars or end date on the track.');
+        redirect('track_edit.php?id=' . $trackId . '&amend_request=' . $rid . '#amendment_reason');
+    }
+    flash('Reply recorded: ' . strtolower($st) . '.');
+    redirect('amendment_request.php?track=' . $trackId . '#requests-h');
+}
+
 $r = track_rollup($trackId);
 $worked = (float)$r['hours_worked']; $auth = (float)$r['authorized_hours'];
 $remaining = (float)$r['hours_remaining'];
@@ -264,7 +288,49 @@ page_header('Amendment request', $user, 'clients');
   <?php endif; ?>
   <p class="muted">The letter is a draft for you to review and send — nothing is emailed automatically. When you record the approved change on the track, it is saved to the amendment history.</p>
 </section>
+<?php $history = amendment_history($trackId); ?>
+<section class="card" aria-labelledby="record-h">
+  <h2 id="record-h">Record the request as sent</h2>
+  <p class="muted">After you send the letter, record it here. It is kept on the track as a case note, and a follow-up task reminds you if no reply comes.</p>
+  <form method="post" action="amendment_request.php?track=<?= $trackId ?>" class="stacked" id="record-form" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
+    <input type="hidden" name="track" value="<?= $trackId ?>">
+    <input type="hidden" name="letter" id="record-letter" value="">
+    <?= form_error_summary(['requested_on' => 'Date sent', 'hours' => 'Hours requested', 'amount' => 'Dollars requested', 'new_end' => 'New end date', 'letter' => 'Letter'],
+        ['requested_on' => 'ar_on', 'hours' => 'ar_hours', 'amount' => 'ar_amount', 'new_end' => 'ar_end']) ?>
+    <div class="field"><label for="ar_on">Date sent</label><input type="date" id="ar_on" name="requested_on" value="<?= h(old_in('requested_on', date('Y-m-d'))) ?>" <?= field_aria('requested_on') ?>><?= field_error('requested_on') ?></div>
+    <div class="field"><label for="ar_to">Sent to</label><input type="text" id="ar_to" name="sent_to" maxlength="190" value="<?= h(old_in('sent_to', trim(($track['counselor_name'] ?? '') . ($counselorEmail !== '' ? ' <' . $counselorEmail . '>' : '')))) ?>"></div>
+    <div class="field"><label for="ar_hours">Additional hours requested</label><input type="text" inputmode="decimal" id="ar_hours" name="hours" value="<?= h(old_in('hours')) ?>" <?= field_aria('hours') ?>><?= field_error('hours') ?></div>
+    <div class="field"><label for="ar_amount">Additional dollars requested</label><input type="text" inputmode="decimal" id="ar_amount" name="amount" value="<?= h(old_in('amount')) ?>" <?= field_aria('amount') ?>><?= field_error('amount') ?></div>
+    <div class="field"><label for="ar_end">New end date requested</label><input type="date" id="ar_end" name="new_end" value="<?= h(old_in('new_end')) ?>" <?= field_aria('new_end') ?>><?= field_error('new_end') ?></div>
+    <button type="submit" name="record_request" value="1" class="btn btn-primary">Record request as sent</button>
+  </form>
+</section>
+<?php if ($history): ?>
+<section class="card" aria-labelledby="requests-h">
+  <h2 id="requests-h">Requests and replies (<?= count($history) ?>)</h2>
+  <?php foreach ($history as $a): $aid = (int)$a['id']; ?>
+  <h3 id="req-<?= $aid ?>">Requested <?= fmt_date($a['requested_on']) ?>: <?= h($a['status']) ?></h3>
+  <p><?= h(implode(', ', array_filter([$a['hours_requested'] !== null ? fmt_hours((float)$a['hours_requested']) . ' more' : '', $a['amount_requested'] !== null ? fmt_money((float)$a['amount_requested']) . ' more' : '', $a['new_end_date'] ? 'end date ' . fmt_date($a['new_end_date']) : '']))) ?><?= $a['sent_to'] ? ', sent to ' . h($a['sent_to']) : '' ?>.
+    <?= $a['replied_on'] ? ' Reply ' . fmt_date($a['replied_on']) . ($a['reply_note'] ? ': ' . h($a['reply_note']) : '') . '.' : '' ?>
+    <?= $a['amendment_id'] ? ' The approved change is recorded on the track.' : (in_array($a['status'], ['Approved', 'Partly approved'], true) ? ' <a href="track_edit.php?id=' . $trackId . '&amp;amend_request=' . $aid . '#amendment_reason">Enter the approved change on the track</a>.' : '') ?></p>
+  <?php if ($a['status'] === 'Awaiting reply'): ?>
+  <form method="post" action="amendment_request.php?track=<?= $trackId ?>" class="stacked" novalidate><?= csrf_field() ?>
+    <input type="hidden" name="track" value="<?= $trackId ?>"><input type="hidden" name="request_id" value="<?= $aid ?>">
+    <?= field_error('reply_' . $aid) ?>
+    <div class="field"><label for="rs-<?= $aid ?>">Reply</label><select id="rs-<?= $aid ?>" name="reply_status" <?= field_aria('reply_' . $aid) ?>><option value="">Choose the reply</option><?= select_options(AMENDMENT_REPLY_STATUSES, null) ?></select></div>
+    <div class="field"><label for="rd-<?= $aid ?>">Date of the reply</label><input type="date" id="rd-<?= $aid ?>" name="replied_on" value="<?= date('Y-m-d') ?>"></div>
+    <div class="field"><label for="rn-<?= $aid ?>">Note</label><input type="text" id="rn-<?= $aid ?>" name="reply_note" maxlength="255"></div>
+    <button type="submit" name="record_reply" value="1" class="btn btn-secondary btn-sm">Record reply<span class="visually-hidden"> to the request of <?= fmt_date($a['requested_on']) ?></span></button>
+  </form>
+  <?php endif; ?>
+  <?php endforeach; ?>
+</section>
+<?php endif; ?>
 <script>
+// The letter as it reads now goes with "Record request as sent" (3.0.44).
+document.getElementById('record-form').addEventListener('submit', function () {
+  var l = document.getElementById('letter'); if (l) document.getElementById('record-letter').value = l.value;
+});
 // Success is reported only once the clipboard write has actually succeeded.
 document.getElementById('copy-letter').addEventListener('click', function () {
   var s = document.getElementById('copy-status');

@@ -27,6 +27,7 @@ const STAGING_SCRUB_KEEP = [
     'client_notes' => ['note_format', 'idem_key'],
     'client_note_revisions' => ['note_type', 'note_format'],
     'client_releases' => ['signer_role', 'recipient_type', 'method'],
+    'amendment_requests' => ['status'],
     'client_status_history' => ['old_status', 'new_status'],
     'client_closures' => ['status', 'reason'],
     'clients' => ['privacy_notice_how', 'a11y_format', 'a11y_primary_tech', 'a11y_contact', 'preferred_language', 'counselor_agency'],

@@ -1359,6 +1359,9 @@ switch ($action) {
             fail('The date of birth cannot be in the future. Check the year.', 422);
         }
         $statusNote = api_text($input, 'status_note', 255, 'Status note');
+        // On Hold needs a reason (3.0.44); on_hold_until (YYYY-MM-DD) is optional.
+        [$holdErr, $holdUntil] = on_hold_input($status, (string)($old['status'] ?? ''), (string)$statusNote, is_string($input['on_hold_until'] ?? null) ? $input['on_hold_until'] : '');
+        if ($holdErr !== null) fail($holdErr, 422);
         // A closure records why (3.0.35): app builds that send closure_reason are checked as
         // the website checks it; older builds, which do not ask, record 'Not recorded'.
         $closing = str_starts_with($status, 'Closed') && (($old['status'] ?? null) !== $status);
@@ -1444,6 +1447,7 @@ switch ($action) {
         try {
             if ($isUpdate) {
                 record_status_change($cid, $old['status'], $status, $userId, $statusNote ?: ($closing ? 'Closed: ' . $closureData['reason'] . ' (mobile)' : 'Updated from mobile'));
+                on_hold_save($cid, $status, (string)$old['status'], (string)$statusNote, $holdUntil);
                 if ($closing) client_closure_record($cid, $status, $closureData, $userId);
                 $vals[] = $cid;
                 db()->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, client_type=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, counselor_verified=?, school=?, email_verified=?'
@@ -1499,6 +1503,7 @@ switch ($action) {
                 db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=? WHERE id=?')
                     ->execute([$keep('guardian_name'), $keep('guardian_phone'), $keep('guardian_email'), $cid]);
                 record_status_change($cid, null, $status, $userId, 'Client created (mobile)');
+                on_hold_save($cid, $status, '', (string)$statusNote, $holdUntil);
                 if ($closing) client_closure_record($cid, $status, $closureData, $userId);
             }
             db()->commit();

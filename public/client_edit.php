@@ -77,6 +77,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($closureErrs) { $errors += $closureErrs; set_form_errors($errors); }
     }
     $clientType = in_array($_POST['client_type'] ?? '', CLIENT_TYPES, true) ? $_POST['client_type'] : 'VR';
+    // On Hold needs a reason; a return date is optional (3.0.44).
+    [$holdErr, $holdUntil] = on_hold_input($status, (string)($client['status'] ?? ''), is_string($_POST['status_note'] ?? null) ? $_POST['status_note'] : '',
+        is_string($_POST['on_hold_until'] ?? null) ? $_POST['on_hold_until'] : '');
+    if ($holdErr !== null) { $errors[str_contains($holdErr, 'return date') ? 'on_hold_until' : 'status_note'] = $holdErr; set_form_errors($errors); }
     // Guardian details (3.0.37): saved with their own statement, after the main save.
     $gIn = fn(string $k): ?string => (is_string($_POST[$k] ?? null) && trim($_POST[$k]) !== '') ? trim($_POST[$k]) : null;
     $guardianVals = [$gIn('guardian_name'), $gIn('guardian_phone'), $gIn('guardian_email')];
@@ -157,6 +161,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->beginTransaction();
             try {
                 record_status_change((int)$client['id'], $client['status'], $status, $user['id'], trim($_POST['status_note'] ?? '') ?: ($closing ? 'Closed: ' . $closureData['reason'] : null));
+                on_hold_save((int)$client['id'], $status, (string)$client['status'], trim((string)($_POST['status_note'] ?? '')), $holdUntil);
                 if ($closing) client_closure_record((int)$client['id'], $status, $closureData, (int)$user['id']);
                 $pdo->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, client_type=?, school=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, preferred_language=?, counselor_verified=?, email_verified=?'
                     . ($unarchive ? ', archived_at=NULL' : '') . ' WHERE id=?')->execute($vals);
@@ -277,7 +282,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     . ($told['to'] ? ' The new instructor was sent the list.' : '') . ($told['from'] ? ' The previous instructor was told they were moved.' : '') : '')
                 . ($portalRevoked > 0 ? ' The email address changed, so the portal link sent to the old address was turned off. Send a new portal link when the client needs one.' : '')
                 . ($redraftedInvoices > 0 ? ' ' . $redraftedInvoices . ' draft invoice' . ($redraftedInvoices === 1 ? ' now bills' : 's now bill') . ' the counselor as entered here.' : '')
-                . $ageNote);
+                . $ageNote
+                . ($status === 'Active Training' && $client['status'] !== 'Active Training' && ($an = active_without_authorization((int)$client['id'])) ? ' ' . $an : ''));
             redirect('client.php?id=' . (int)$client['id']);
         } else {
             // The same form sent twice (Enter pressed again while it loads) creates the
@@ -292,6 +298,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=? WHERE id=?')->execute([...$guardianVals, $newId]);
             web_once_set($clientKey, $newId);
             record_status_change($newId, null, $status, $user['id'], 'Client created');
+            on_hold_save($newId, $status, '', trim((string)($_POST['status_note'] ?? '')), $holdUntil);
             if ($closing) client_closure_record($newId, $status, $closureData, (int)$user['id']);
             audit($user['id'], 'client.create', 'client', $newId, $name);
             flash('Client created.' . $ageNote);
@@ -397,12 +404,14 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
         <input type="text" id="closure_independence" name="closure_independence" maxlength="500" value="<?= $cv('closure_independence') ?>" <?= field_aria('closure_independence') ?>><?= field_error('closure_independence') ?></div>
     </fieldset>
     <script>(function(){var s=document.getElementById('status'),f=document.getElementById('closure-fields');if(!s||!f)return;var was=s.getAttribute('data-was')||'';function sync(){f.hidden=!(s.value.indexOf('Closed')===0&&s.value!==was);}s.addEventListener('change',sync);sync();<?= $showClosure ? 'f.hidden=false;' : '' ?>})();</script>
-    <?php if ($client): ?>
     <div class="field">
-      <label for="status_note">Reason for status change <span class="hint">Recorded in the audit history if the status changes</span></label>
+      <label for="status_note">Reason for status change <span class="hint">Required for On Hold; recorded in the history</span></label>
       <input type="text" id="status_note" name="status_note" maxlength="255" value="<?= h($raw('status_note') ?? '') ?>" <?= field_aria('status_note') ?>><?= field_error('status_note') ?>
     </div>
-    <?php endif; ?>
+    <div class="field">
+      <label for="on_hold_until">Expected return date (On Hold only, optional)</label>
+      <input type="date" id="on_hold_until" name="on_hold_until" value="<?= h($raw('on_hold_until') ?? (string)($client['on_hold_until'] ?? '')) ?>" <?= field_aria('on_hold_until') ?>><?= field_error('on_hold_until') ?>
+    </div>
     <?php if (caseload_scoped()): ?>
     <p class="field"><strong>Assigned instructor:</strong> you (<?= h((string)($user['name'] ?? '')) ?>).
       <span class="hint">Clients you add or edit stay assigned to you; ask an administrator to reassign one.</span></p>

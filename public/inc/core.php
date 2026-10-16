@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.43';
+const APP_VERSION = '3.0.44';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1637,3 +1637,5 @@ require_once __DIR__ . '/client_notices.php';
 require_once __DIR__ . '/portal_devices.php';
 // Moving sessions, cancelling a series or a group (3.0.43).
 require_once __DIR__ . '/session_changes.php';
+// Amendment requests followed to their reply (3.0.44).
+require_once __DIR__ . '/amendments.php';

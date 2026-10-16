@@ -172,6 +172,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $authNoChanged ? $track['auth_number'] : null, $authNoChanged ? $authNumber : null,
                             $mileageChanged ? $track['mileage_rate'] : null, $mileageChanged ? $mileageRate : null,
                             $reason !== '' ? $reason : null, $user['id']]);
+                    // Entered from an approved amendment request: the two are linked (3.0.44).
+                    $amendReq = (int)($_POST['amend_request'] ?? 0);
+                    if ($amendReq > 0) {
+                        db()->prepare("UPDATE amendment_requests SET amendment_id = ? WHERE id = ? AND track_id = ? AND status IN ('Approved','Partly approved') AND amendment_id IS NULL")
+                            ->execute([(int)db()->lastInsertId(), $amendReq, (int)$track['id']]);
+                    }
                 }
                 // The authorization changed, so the alerts tied to the changed term
                 // start over for the new terms (they'd otherwise stay silent forever):
@@ -413,7 +419,12 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
     <div class="field">
       <label for="amendment_reason">Amendment reason</label>
       <span class="hint" id="amend-hint">If you are changing the authorization number, hours, hourly or mileage rate, or expiration, note why (e.g., “VR approved 10 additional hours 7/21”) — kept in the audit history. A new hourly or mileage rate also applies to work logged on this track that is not yet on an invoice, and re-prices and re-totals this track's Draft invoices; a new authorization number or funding agency is shown on those drafts too. Submitted and paid invoices keep what they billed.</span>
-      <input type="text" id="amendment_reason" name="amendment_reason" maxlength="255" value="<?= $v('amendment_reason') ?>" <?= field_aria('amendment_reason', 'amend-hint') ?>>
+      <?php // Opened from an approved amendment request (3.0.44): linked when saved, with the reason filled in.
+      $amendReqId = (int)($_GET['amend_request'] ?? old_in('amend_request', '0'));
+      $amendReqRow = null;
+      if ($amendReqId > 0) { $aq = db()->prepare("SELECT * FROM amendment_requests WHERE id = ? AND track_id = ? AND status IN ('Approved','Partly approved')"); $aq->execute([$amendReqId, (int)$track['id']]); $amendReqRow = $aq->fetch() ?: null; }
+      if ($amendReqRow): ?><input type="hidden" name="amend_request" value="<?= (int)$amendReqRow['id'] ?>"><?php endif; ?>
+      <input type="text" id="amendment_reason" name="amendment_reason" maxlength="255" value="<?= $amendReqRow && $v('amendment_reason') === '' ? h('VR ' . strtolower($amendReqRow['status']) . ' the amendment requested ' . fmt_date($amendReqRow['requested_on']) . ($amendReqRow['replied_on'] ? ' (reply ' . fmt_date($amendReqRow['replied_on']) . ')' : '')) : $v('amendment_reason') ?>" <?= field_aria('amendment_reason', 'amend-hint') ?>>
       <?= field_error('amendment_reason') ?>
     </div>
     <?php endif; ?>

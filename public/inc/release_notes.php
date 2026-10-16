@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.44' => [
+        'Amendment requests are followed to their answer: record a request as sent on the amendment page (what you asked for, and the letter, kept on the track), get a follow-up task, then record the reply. An approved change opens the track ready to enter it, and the two are linked. The track and Compliance say when an amendment is awaiting a reply.',
+        'Putting a client On Hold now needs a reason (for example, waiting for the authorization) and can have an expected return date; a check-in task appears about every three weeks and on the return date. Setting a client to Active Training without an authorized track gives a reminder.',
+    ],
     '3.0.43' => [
         'A session can be moved to a new time from the Schedule page or the iPhone app (Move or cancel more, or Move session on the Actions rotor), instead of cancelling and booking it again. It warns first when the instructor is already booked then or the time is outside the authorization, and the client\'s and instructor\'s calendar entries update in place.',
         'The rest of a weekly series, or a whole group session, can be cancelled in one step; each client gets a calendar cancellation.',

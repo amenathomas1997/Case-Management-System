@@ -305,6 +305,8 @@ CREATE TABLE `clients` (
   `hold_at` datetime DEFAULT NULL,
   `hold_by` int(10) unsigned DEFAULT NULL,
   `hold_reason` varchar(255) DEFAULT NULL,
+  `on_hold_reason` varchar(255) DEFAULT NULL,
+  `on_hold_until` date DEFAULT NULL,
   `archived_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_assigned_to` (`assigned_to`),
@@ -8419,4 +8421,26 @@ CREATE TABLE IF NOT EXISTS `privacy_incident_events` (
   PRIMARY KEY (`id`),
   KEY `incident_id` (`incident_id`),
   CONSTRAINT `fk_pie_incident` FOREIGN KEY (`incident_id`) REFERENCES `privacy_incidents` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+CREATE TABLE IF NOT EXISTS `amendment_requests` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `track_id` int(10) unsigned NOT NULL,
+  `client_id` int(10) unsigned NOT NULL,
+  `requested_on` date NOT NULL,
+  `sent_to` varchar(190) DEFAULT NULL,
+  `hours_requested` decimal(7,2) DEFAULT NULL,
+  `amount_requested` decimal(10,2) DEFAULT NULL,
+  `new_end_date` date DEFAULT NULL,
+  `letter` text DEFAULT NULL,
+  `status` varchar(20) NOT NULL DEFAULT 'Awaiting reply',
+  `replied_on` date DEFAULT NULL,
+  `reply_note` varchar(255) DEFAULT NULL,
+  `amendment_id` int(10) unsigned DEFAULT NULL,
+  `created_by` int(10) unsigned DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `track_id` (`track_id`),
+  KEY `client_id` (`client_id`),
+  CONSTRAINT `fk_amendreq_track` FOREIGN KEY (`track_id`) REFERENCES `training_tracks` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_amendreq_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;

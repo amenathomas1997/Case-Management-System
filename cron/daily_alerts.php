@@ -136,6 +136,33 @@ foreach (db()->query("SELECT id, name, assigned_to FROM clients WHERE status = '
         $wc['assigned_to'] ? (int)$wc['assigned_to'] : null, null, 'wait-' . (int)$wc['id'] . '-' . date('Ymd'));
 }
 
+// On Hold check-ins (3.0.44), as for the Waitlist: about every three weeks, and when the
+// expected return date comes, an open task asks staff to check in. A check-in still open
+// for a client no longer On Hold is closed here.
+try {
+    db()->exec("UPDATE tasks t JOIN clients c ON c.id = t.client_id SET t.status = 'Done', t.done_at = NOW()
+        WHERE t.status = 'Open' AND t.auto_key LIKE 'onhold-%' AND (c.status <> 'On Hold' OR c.archived_at IS NOT NULL)");
+    foreach (db()->query("SELECT id, name, assigned_to, on_hold_reason, on_hold_until FROM clients WHERE status = 'On Hold' AND archived_at IS NULL")->fetchAll() as $oh) {
+        $open = db()->prepare("SELECT COUNT(*) FROM tasks WHERE client_id = ? AND auto_key LIKE 'onhold-%' AND status = 'Open'");
+        $open->execute([(int)$oh['id']]);
+        if ((int)$open->fetchColumn() > 0) continue;
+        $last = db()->prepare("SELECT MAX(COALESCE(done_at, created_at)) FROM tasks WHERE client_id = ? AND auto_key LIKE 'onhold-%'");
+        $last->execute([(int)$oh['id']]);
+        $lastAt = $last->fetchColumn();
+        $returnDue = $oh['on_hold_until'] && $oh['on_hold_until'] <= date('Y-m-d') && ($lastAt === null || substr((string)$lastAt, 0, 10) < $oh['on_hold_until']);
+        $sinceHold = db()->prepare("SELECT MAX(changed_at) FROM client_status_history WHERE client_id = ? AND new_status = 'On Hold'");
+        $sinceHold->execute([(int)$oh['id']]);
+        $from = max(strtotime((string)($lastAt ?? '1970-01-01')), strtotime((string)($sinceHold->fetchColumn() ?: '1970-01-01')));
+        if (!$returnDue && $from > time() - 21 * 86400) continue;
+        add_task('On Hold check-in: ' . $oh['name'],
+            ($returnDue ? 'The expected return date (' . date('F j', strtotime($oh['on_hold_until'])) . ') has come. ' : 'This client has been On Hold for a while. ')
+            . ($oh['on_hold_reason'] ? 'Reason: ' . $oh['on_hold_reason'] . '. ' : '') . 'Check in, and move them back to Active Training when they can continue.',
+            (int)$oh['id'], null, business_days_from(3), $oh['assigned_to'] ? (int)$oh['assigned_to'] : null, null, 'onhold-' . (int)$oh['id'] . '-' . date('Ymd'));
+    }
+} catch (PDOException $e) {
+    error_log('daily_alerts: On Hold check-ins skipped (' . $e->getCode() . ')'); // mig_3.0.44 not run yet
+}
+
 // Turning 18 (3.0.37): a client with a guardian on file who turns 18 within two weeks
 // (or did in the last month) gets one task, ever: their guardian's consent stops
 // covering them, and they sign their own release of information.
