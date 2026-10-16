@@ -21,3 +21,11 @@ Web + iPhone 3.0.32 (35); no migration. Production baseline: 3.0.31 (da9e6e8). F
 Files to deploy: the public/ files in `git diff --name-only v3.0.31 HEAD -- public`. No migration. iPhone: archive 3.0.32 (35).
 
 Verified before commit: full_schema 920; audit_regression 61; security 67; staging_scrub 34; run_all (incl. hygiene_static and ai_eval); php -l on all public and inc PHP; iPhone build succeeded.
+
+## Deployment verified
+
+Published October 15, 2026, 10:26 p.m. Central, from 80058d4 (main at dca6b3e after the CI merge; the website files are the same) with .audit_work/deploy-3.0.32/deploy.sh. Production 3.0.31 matched the baseline (23 files). Backups (website, cron, database 179,622 bytes, verified) are at /home/cmsuser/casemanagement_private/deploy-3.0.32-20261015-222640/. 23 files installed; the server syntax check passed, hashes match, .htaccess unchanged. Live: login, community_referral, help and privacy 200; admin 302; api 401; health 200; updates.json and the sign-in page report 3.0.32. No migration.
+
+Crontab: the at_reminders line now appends to cron.log instead of /dev/null (the only line changed; the previous crontab is saved as crontab-before.txt in the backup folder). Its first logged run is 8:00 a.m. on October 16.
+
+CI: .github/workflows/ci.yml merged (dca6b3e) and runs on every push. iPhone 3.0.32 (35) not archived yet.
