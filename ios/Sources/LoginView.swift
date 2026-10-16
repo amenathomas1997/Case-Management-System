@@ -288,7 +288,7 @@ struct LoginView: View {
         busy = true; error = nil
         announce("Checking the code")
         do {
-            var body: [String: Any] = ["email": email, "code": codeDigits]
+            var body: [String: Any] = ["email": email, "code": codeDigits, "device_name": API.deviceName]
             if let loginChallenge, !loginChallenge.isEmpty { body["login_challenge"] = loginChallenge }
             let result: VerifyResult = try await api.call("verify", body: body)
             // The same account after an expired session carries on where it was; otherwise

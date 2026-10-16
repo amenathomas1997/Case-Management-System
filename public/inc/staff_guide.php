@@ -53,6 +53,7 @@ if (!function_exists('staff_guide_topics')) {
                 'guide-record-keeping' => 'How do I record the privacy notice or put a record on hold?',
                 'guide-privacy-incident' => 'What do I do if client information went to the wrong person?',
                 'guide-records-request' => 'How do I answer a request for a copy of records?',
+                'guide-lost-phone' => 'What if my phone is lost or stolen?',
             ]],
             'guide-billing' => ['How do I bill and record payments?', [
                 'guide-bill-month' => 'How do I bill all unbilled work?',
@@ -566,6 +567,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 
 <?= $sgH(4, 'guide-records-request') ?>
 <p>A client can ask in their portal for a copy of their records or a correction. It appears in Client requests with a due date 30 days ahead, and as a task. For a copy, choose Publish a copy to the portal: an accessible page with their details, training, sessions, case notes, assessments, loans, consents and releases (no billing) is added under Resources in their portal. Then set the request to Done and type the outcome the client sees, for example Published to your portal. For a correction, fix the record (a locked note gets an addendum), then set it to Done with what was corrected, or to Declined with the reason.</p>
+
+<?= $sgH(4, 'guide-lost-phone') ?>
+<p>Open My Account and find Phones signed in to the app. Choose Report lost and wipe next to that phone. The next time it connects, the app removes its drafts, any entries waiting to be sent and its saved lists, and signs out; entries not yet sent are lost. Then change your password, and report a privacy incident if client information may have been seen. An administrator can do the same for anyone on the Users page. Sign out signs one phone out without wiping it. The app keeps nothing between uses on an iPhone without a passcode, so set one.</p>
 
 <?= $sgH(4, 'guide-consent') ?>
 <ol>

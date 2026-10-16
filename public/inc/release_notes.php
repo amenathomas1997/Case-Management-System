@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.39' => [
+        'My Account and each person on Users list the phones signed in to the app. Sign one out on its own, or choose Report lost and wipe: the next time that phone connects, the app removes its drafts, unsent entries and saved lists, and signs out. On an iPhone without a passcode the app no longer keeps anything between uses.',
+        'The privacy notice is now in Spanish too (choose Español at the top), and says what changed this week: releases of information, copies of records from the portal, locked case notes and the lost-phone wipe.',
+    ],
     '3.0.38' => [
         'A privacy incident log (Administration, Privacy incidents, or from Incident reports): report a misdirected report, a lost device or access by the wrong person; record the risk assessment, the people affected, each notice sent and follow-up, with the 60-day notice deadline and a reminder task two weeks before it.',
         'Clients can ask in their portal for a copy of their records or a correction. Each request is due in 30 days, staff can publish an accessible copy of the record to the client\'s portal, and the request closes with an outcome the client sees.',

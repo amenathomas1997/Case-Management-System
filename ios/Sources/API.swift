@@ -1,5 +1,9 @@
 import Foundation
 import SwiftUI
+#if os(iOS)
+import LocalAuthentication
+import UIKit
+#endif
 
 // MARK: - Models
 
@@ -592,9 +596,10 @@ enum DraftStore {
         return dir.appendingPathComponent(safe + ".json")
     }
 
-    /// Keeps the fields; a draft with nothing typed in it is removed instead.
+    /// Keeps the fields; a draft with nothing typed in it is removed instead. Nothing is kept on
+    /// a phone without a passcode (3.0.39): its files would not be protected.
     static func save(_ fields: [String: String], key: String, owner: Int) {
-        guard let url = url(key, owner: owner) else { return }
+        guard API.phoneCanKeepClientData, let url = url(key, owner: owner) else { return }
         guard fields.values.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             try? FileManager.default.removeItem(at: url)
             return
@@ -840,6 +845,12 @@ final class API: ObservableObject {
                 throw APIError.network
             }
             guard token == sessionToken else { throw APIError.server("Your account changed. Please reload this screen.") }
+            // A phone reported lost (3.0.39): remove what the app keeps here and sign out.
+            if let http = response as? HTTPURLResponse, http.statusCode == 401,
+               let refusal = try? JSONSerialization.jsonObject(with: data) as? [String: Any], refusal["wipe"] as? Bool == true {
+                wipeThisPhone()
+                throw APIError.server((refusal["error"] as? String) ?? "This phone was reported lost, so the app removed what it kept here and signed out.")
+            }
             if let http = response as? HTTPURLResponse, http.statusCode == 401, action != "login", action != "verify",
                resent < 2, try await waitForSignIn() {
                 resent += 1
@@ -1099,6 +1110,9 @@ final class API: ObservableObject {
 
     /// Report success only after the record is durably stored for a known account.
     func enqueue(_ action: String, body: [String: Any], label: String) throws {
+        guard API.phoneCanKeepClientData else {
+            throw APIError.server("This iPhone has no passcode, so the app keeps nothing on it to send later. Save again when you have a signal, or set a passcode in Settings.")
+        }
         guard userId > 0, !token.isEmpty else {
             throw APIError.server("Could not verify the account for offline saving. Keep this form open and reconnect before saving.")
         }
@@ -1310,6 +1324,37 @@ final class API: ObservableObject {
             rows = response.clients
         }
         return rows.filter { !$0.status.hasPrefix("Closed") }
+    }
+
+    /// Whether this phone can keep client information between launches (drafts, the offline queue,
+    /// saved lists): only with a passcode, so iOS encrypts those files (3.0.39).
+    nonisolated static var phoneCanKeepClientData: Bool {
+        #if os(iOS)
+        return LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil)
+        #else
+        return true
+        #endif
+    }
+
+    /// The name the server lists this phone under, so it can be signed out or wiped on its own.
+    @MainActor static var deviceName: String {
+        #if os(iOS)
+        return "\(UIDevice.current.name) (\(UIDevice.current.model), iOS \(UIDevice.current.systemVersion))"
+        #else
+        return "Mac"
+        #endif
+    }
+
+    /// The server reported this phone lost: every account's drafts, the offline queue and the
+    /// saved lists go, scheduled reminders are cleared, and the app signs out (3.0.39).
+    func wipeThisPhone() {
+        let owner = userId
+        DraftStore.removeAll(owner: owner)
+        OfflineCache.removeAll(owner: owner)
+        try? FileManager.default.removeItem(at: queueURL)
+        LocalNotifications.shared.clearScheduled()
+        clearIdentity()
+        sessionNotice = "This phone was reported lost, so the app removed everything it kept here and signed out. Sign in again only if this phone is back with you."
     }
 
     func signOut() {

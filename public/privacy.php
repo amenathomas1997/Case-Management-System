@@ -7,6 +7,8 @@ require_once __DIR__ . '/inc/ai.php';
 // configured (AI provider, redaction, record retention) are read from its settings,
 // so the notice stays true when an administrator changes them.
 $viewer = optional_login();
+// In English and Spanish (3.0.39): the Spanish text is inc/privacy_es.php, with the same facts.
+enable_public_translation();
 $org = brand('org');
 $contact = (string)(cfg('support_email') ?: cfg('mail_from'));
 $mail = $contact !== '' ? '<a href="mailto:' . h($contact) . '">' . h($contact) . '</a>' : 'us';
@@ -22,12 +24,17 @@ $operator = brand('privacy_operator') ?: ($ownInstall ? 'the maintainer' : '');
 $address = brand('privacy_address') ?: ($ownInstall ? '100 Main Street, Springfield' : '');
 $law = brand('privacy_law') ?: ($ownInstall ? 'Minnesota privacy law and the federal HIPAA Privacy and Security Rules' : '');
 $hosting = brand('privacy_hosting') ?: ($ownInstall ? 'Linode' : '');
-const PRIVACY_UPDATED = '2026-10-15';
+const PRIVACY_UPDATED = '2026-10-16';
 page_header('Privacy notice', $viewer);
+echo lang_toggle();
+if (page_lang() === 'es') {
+    require __DIR__ . '/inc/privacy_es.php';
+    page_footer();
+    exit;
+}
 ?>
 <h1>Privacy notice</h1>
 <p>This notice explains what information <?= h($org) ?> keeps about you, why, who it is shared with, and the choices you have. It covers this website (including the referral form, the client portal and the counselor portal) and the staff iPhone app.</p>
-<?php if ($contact !== ''): ?><p lang="es">Si necesita esta información en español, escríbanos a <?= $mail ?>.</p><?php endif; ?>
 <p>Last updated <?= h(fmt_date(PRIVACY_UPDATED)) ?>.</p>
 <?php if ($operator !== '' || $address !== ''): ?>
 <p><?= h($org) ?><?= $operator !== '' ? ' is run by ' . h($operator) : '' ?><?= $address !== '' ? ', ' . h($address) : '' ?>.<?php if ($law !== ''): ?> We follow <?= h($law) ?>.<?php endif; ?></p>
@@ -57,7 +64,7 @@ page_header('Privacy notice', $viewer);
   <li>Your vocational rehabilitation (VR) counselor, funding authorizations and billing records.</li>
   <li>Records of our services: case notes, assessments, goals, training hours, equipment loans, incident reports and documents you or we upload, including signatures.</li>
   <li>What you send us through the client portal: messages, requests, practice logs, documents and changes to your contact details.</li>
-  <li>Consent forms a guardian signs (typed name, date and the internet address it was signed from) and survey answers you choose to give.</li>
+  <li>Consent forms a guardian signs and releases of information you sign (typed name, date and the internet address it was signed from), and survey answers you choose to give.</li>
   <li>Emails you send to our office address may be filed in your record.</li>
 </ul>
 <h3>About people who refer someone</h3>
@@ -91,7 +98,7 @@ page_header('Privacy notice', $viewer);
   <?php else: ?>
   <li><strong>The company that hosts our server</strong>, which stores the system for us.</li>
   <?php endif; ?>
-  <li>Anyone else only when you agree, or when the law requires it.</li>
+  <li>Anyone else, such as an employer or a doctor, only when you sign a release naming them (it lasts one year and you can withdraw it), or when the law requires it.</li>
 </ul>
 </section>
 
@@ -119,7 +126,8 @@ page_header('Privacy notice', $viewer);
   <li>Every connection to this site is encrypted (HTTPS).</li>
   <li>Staff sign in with two-step verification or a passkey, and are signed out after a period of inactivity.</li>
   <li>Each staff member sees only the areas, and where set up only the clients, their role needs.</li>
-  <li>Changes are recorded in an audit log.</li>
+  <li>Changes, and who opened each client's record, are recorded in an audit log.</li>
+  <li>Case notes cannot be changed 30 days after they are written. A correction is added beside the note, and earlier versions are kept.</li>
   <li>Uploaded files are kept outside the public part of the website. Off-site backup copies are encrypted.</li>
 </ul>
 </section>
@@ -127,7 +135,7 @@ page_header('Privacy notice', $viewer);
 <section aria-labelledby="keep"><h2 id="keep">How long we keep it</h2>
 <ul>
   <li>Service records are kept for as long as our funders, contracts and the law require.<?php if ($retYears > 0): ?> Records of closed clients are archived automatically after <?= $retYears ?> year<?= $retYears === 1 ? '' : 's' ?>.<?php endif; ?></li>
-  <li>Items staff delete go to a trash folder and are permanently removed after 30 days.</li>
+  <li>Items staff delete go to a trash folder and are permanently removed after 30 days, except authorizations, plans and releases, and records kept on hold.</li>
   <li>Daily backups are kept for 30 days.</li>
   <li>Sign-in records and the audit log are kept to protect the system.</li>
 </ul>
@@ -135,9 +143,9 @@ page_header('Privacy notice', $viewer);
 
 <section aria-labelledby="choices"><h2 id="choices">Your choices</h2>
 <ul>
-  <li><strong>See your information.</strong> Ask us for a copy of your record.</li>
-  <li><strong>Correct it.</strong> Update your contact details in your client portal, or ask us to correct anything else.</li>
-  <li><strong>Withdraw consent.</strong> A parent or guardian can withdraw a consent at any time by contacting us. This does not undo what was done before.</li>
+  <li><strong>See your information.</strong> Ask for a copy of your record in your client portal, or ask us. We answer within 30 days.</li>
+  <li><strong>Correct it.</strong> Update your contact details in your client portal, or ask there or ask us to correct anything else.</li>
+  <li><strong>Withdraw consent.</strong> You, or a parent or guardian, can withdraw a consent or a release at any time by contacting us. This does not undo what was shared before.</li>
   <li><strong>Surveys are optional.</strong> You can skip any question.</li>
 </ul>
 </section>
@@ -159,7 +167,8 @@ page_header('Privacy notice', $viewer);
 <section aria-labelledby="iphone"><h2 id="iphone">The staff iPhone app</h2>
 <p>The iPhone app is for <?= h($org) ?> staff. It connects only to this website over an encrypted connection.</p>
 <ul>
-  <li>Your sign-in is kept in the iPhone's Keychain. Unsent notes, hours and drafts are kept in protected app storage, are not included in iPhone backups, and are removed after 14 days or when you sign out.</li>
+  <li>Your sign-in is kept in the iPhone's Keychain. Unsent notes, hours and drafts are kept in protected app storage, are not included in iPhone backups, and are removed after 14 days or when you sign out. On an iPhone without a passcode the app keeps none of them.</li>
+  <li>If a phone is lost, staff can report it lost from the website: the next time it connects, the app removes everything it keeps and signs out.</li>
   <li>The app asks to use Face ID (to lock the app), the camera (to scan documents), the microphone and speech recognition (for the voice assistant), and Photos (only to save a document image you choose).</li>
   <li>The app contains no analytics, advertising or tracking, and does not collect your location.</li>
 </ul>

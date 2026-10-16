@@ -223,6 +223,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('users.php?id=' . $uid);
     }
 
+    // One phone at a time (3.0.39): sign it out, or report it lost so it wipes itself.
+    if (isset($_POST['device_signout']) || isset($_POST['device_lost'])) {
+        $lost = isset($_POST['device_lost']);
+        $ok = app_device_action((int)($_POST['device_id'] ?? 0), $uid, $lost, (int)$user['id']);
+        flash($ok ? ($lost ? 'Reported lost. The next time that phone connects, the app removes everything it keeps and signs out.' : 'That phone is signed out of the app.')
+            : 'That phone was already signed out or reported lost.', $ok ? 'success' : 'error');
+        redirect('users.php?id=' . $uid . '#phones-h');
+    }
+
     if (isset($_POST['clear_lockout'])) {
         // 'login:' is the sign-in key; the bare email is the app sign-in's and earlier releases'.
         $te = strtolower($target['email']);
@@ -464,6 +473,9 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
     </div>
     <button type="submit" name="save_user" value="1" class="btn btn-primary">Save changes</button>
   </form>
+
+  <h3 id="phones-h">Phones signed in to the app</h3>
+  <?= app_devices_html(app_devices((int)$edit['id']), 'users.php', ['uid' => (int)$edit['id']]) ?>
 
   <h3>Account recovery</h3>
   <form method="post" action="users.php" class="inline-form"><?= csrf_field() ?>

@@ -399,9 +399,12 @@ if ($action === 'verify') {
     db()->prepare('DELETE FROM login_attempts WHERE id = ?')->execute([$guessRow]);
 
     $token = bin2hex(random_bytes(32));
-    db()->prepare('INSERT INTO api_tokens (user_id, token_hash, expires_at) VALUES (?,?, DATE_ADD(NOW(), INTERVAL 30 DAY))')
-        ->execute([$user['id'], hash('sha256', $token)]);
-    audit((int)$user['id'], 'login', 'user', (int)$user['id'], 'mobile app sign-in');
+    // device_name (3.0.39): the phone's name as the app gives it, so one phone can be signed
+    // out, or reported lost and wiped, on its own (users.php, account.php).
+    $deviceName = mb_substr(trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', is_string($input['device_name'] ?? null) ? $input['device_name'] : '') ?? ''), 0, 120);
+    db()->prepare('INSERT INTO api_tokens (user_id, token_hash, expires_at, device_name) VALUES (?,?, DATE_ADD(NOW(), INTERVAL 30 DAY), ?)')
+        ->execute([$user['id'], hash('sha256', $token), $deviceName !== '' ? $deviceName : null]);
+    audit((int)$user['id'], 'login', 'user', (int)$user['id'], 'mobile app sign-in' . ($deviceName !== '' ? ' (' . $deviceName . ')' : ''));
     out(['ok' => true, 'token' => $token, 'name' => $user['name'], 'role' => $user['role'], 'user_id' => (int)$user['id']]);
 }
 
@@ -411,6 +414,13 @@ if (!preg_match('/Bearer\s+([a-f0-9]{64})/', $auth, $m)) fail('Sign in required.
 $t = db()->prepare('SELECT t.*, u.name, u.role, u.group_id, u.is_active FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.expires_at > NOW()');
 $t->execute([hash('sha256', $m[1])]);
 $tok = $t->fetch();
+// A phone reported lost (3.0.39): its next request tells the app to remove everything it
+// keeps (drafts, the offline queue and cached lists) and sign out. The session then ends.
+if ($tok && !empty($tok['wipe_requested_at'])) {
+    db()->prepare('UPDATE api_tokens SET wiped_at = NOW(), expires_at = NOW() WHERE id = ?')->execute([$tok['id']]);
+    audit((int)$tok['user_id'], 'user.device_wiped', 'user', (int)$tok['user_id'], (string)($tok['device_name'] ?? 'mobile app'));
+    out(['ok' => false, 'wipe' => true, 'error' => 'This phone was reported lost, so everything the app kept on it was removed and it was signed out.'], 401);
+}
 if (!$tok || !$tok['is_active']) fail('Session expired — sign in again.', 401);
 db()->prepare('UPDATE api_tokens SET last_used_at = NOW() WHERE id = ?')->execute([$tok['id']]);
 $userId = (int)$tok['user_id'];

@@ -210,6 +210,7 @@ function audit_action_label(string $code): string {
         'amend' => 'amended', 'scored' => 'scored', 'loan' => 'loaned', 'reserve' => 'reserved', 'redact' => 'redacted',
         'schedule' => 'scheduled', 'snooze' => 'snoozed', 'skip' => 'skipped', 'request' => 'requested',
         'open' => 'opened',
+        'device_wiped' => 'lost phone wiped', 'device_lost' => 'phone reported lost', 'device_signout' => 'phone signed out',
         'assess' => 'risk assessed', 'person' => 'affected person added', 'notice' => 'notice recorded', 'followup' => 'follow-up recorded',
         'close' => 'closed', 'reopen' => 'reopened',
         'addendum' => 'addendum added', 'hold' => 'hold placed or lifted', 'privacy_notice' => 'privacy notice given',

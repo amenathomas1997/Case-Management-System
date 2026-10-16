@@ -23,7 +23,8 @@ enum OfflineCache {
     }
 
     static func save(_ data: Data, key: String, owner: Int) {
-        guard let url = url(key, owner: owner) else { return }
+        // Nothing is kept on a phone without a passcode (3.0.39).
+        guard API.phoneCanKeepClientData, let url = url(key, owner: owner) else { return }
         #if os(iOS)
         try? data.write(to: url, options: [.atomic, .completeFileProtection])
         #else

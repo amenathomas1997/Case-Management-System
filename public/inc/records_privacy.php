@@ -486,3 +486,58 @@ function client_records_copy_publish(int $clientId, int $actor): int {
     audit($actor, 'client.export', 'client', $clientId, 'copy of records published to the portal (doc #' . $docId . ')');
     return $docId;
 }
+
+/* ---------- Phones signed in to the app (3.0.39) ---------- */
+
+/** One account's app sessions: in use, waiting to be wiped, or wiped in the last 30 days. */
+function app_devices(int $userId): array {
+    try {
+        $q = db()->prepare('SELECT id, device_name, created_at, last_used_at, expires_at, wipe_requested_at, wiped_at FROM api_tokens
+            WHERE user_id = ? AND (expires_at > NOW() OR wiped_at > DATE_SUB(NOW(), INTERVAL 30 DAY)) ORDER BY COALESCE(last_used_at, created_at) DESC');
+        $q->execute([$userId]);
+        return $q->fetchAll();
+    } catch (PDOException $e) {
+        return []; // mig_3.0.39 not run yet
+    }
+}
+
+/** A device's state in words. */
+function app_device_state(array $d): string {
+    if (!empty($d['wiped_at'])) return 'Wiped ' . fmt_datetime($d['wiped_at']);
+    if (!empty($d['wipe_requested_at'])) return 'Reported lost: wiped the next time it connects';
+    return 'Signed in' . ($d['last_used_at'] ? ', last used ' . fmt_datetime($d['last_used_at']) : '');
+}
+
+/** Sign one phone out ($lost false), or report it lost so it wipes itself ($lost true). */
+function app_device_action(int $tokenId, int $userId, bool $lost, int $actor): bool {
+    if ($lost) {
+        $u = db()->prepare('UPDATE api_tokens SET wipe_requested_at = NOW() WHERE id = ? AND user_id = ? AND wipe_requested_at IS NULL AND expires_at > NOW()');
+        $u->execute([$tokenId, $userId]);
+    } else {
+        $u = db()->prepare('DELETE FROM api_tokens WHERE id = ? AND user_id = ? AND wipe_requested_at IS NULL');
+        $u->execute([$tokenId, $userId]);
+    }
+    if ($u->rowCount() !== 1) return false;
+    audit($actor, $lost ? 'user.device_lost' : 'user.device_signout', 'user', $userId, 'app session #' . $tokenId);
+    return true;
+}
+
+/** The devices list and its buttons, for users.php (an administrator) and account.php (oneself). */
+function app_devices_html(array $devices, string $action, array $hidden): string {
+    if (!$devices) return '<p class="muted">Not signed in to the mobile app on any phone.</p>';
+    $fields = '';
+    foreach ($hidden as $k => $v) $fields .= '<input type="hidden" name="' . h($k) . '" value="' . h((string)$v) . '">';
+    $out = '<ul>';
+    foreach ($devices as $d) {
+        $name = $d['device_name'] ?: 'A phone';
+        $out .= '<li><strong>' . h($name) . '</strong>: signed in ' . fmt_date($d['created_at']) . '. ' . h(app_device_state($d)) . '.';
+        if (empty($d['wipe_requested_at']) && empty($d['wiped_at'])) {
+            $out .= '<form method="post" action="' . h($action) . '" class="inline-form">' . csrf_field() . $fields
+                . '<input type="hidden" name="device_id" value="' . (int)$d['id'] . '">'
+                . '<button type="submit" name="device_signout" value="1" class="btn btn-secondary btn-sm">Sign out<span class="visually-hidden"> ' . h($name) . '</span></button> '
+                . '<button type="submit" name="device_lost" value="1" class="btn btn-danger btn-sm" onclick="return confirm(' . h(json_encode('Report ' . $name . ' lost? The next time it connects, the app removes its drafts, its unsent offline entries and its saved lists, and signs out. Entries not yet sent are lost.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) . ');">Report lost and wipe<span class="visually-hidden"> ' . h($name) . '</span></button></form>';
+        }
+        $out .= '</li>';
+    }
+    return $out . '</ul>';
+}

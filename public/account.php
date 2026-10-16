@@ -17,6 +17,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_display_controls
     redirect('account.php#display-settings');
 }
 
+/* ---- Phones signed in to the app: sign one out, or report it lost (3.0.39) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['device_signout']) || isset($_POST['device_lost']))) {
+    $lost = isset($_POST['device_lost']);
+    $ok = app_device_action((int)($_POST['device_id'] ?? 0), (int)$user['id'], $lost, (int)$user['id']);
+    flash($ok ? ($lost ? 'Reported lost. The next time that phone connects, the app removes everything it keeps and signs out. Change your password too if someone may know it.' : 'That phone is signed out of the app.')
+        : 'That phone was already signed out or reported lost.', $ok ? 'success' : 'error');
+    redirect('account.php#phones-h');
+}
 
 /**
  * Re-check the account password for a sensitive change on this page. Returns
@@ -276,6 +284,10 @@ page_header('My Account', $user, 'account');
         <button type="submit" name="cal_regen" value="1" class="btn btn-secondary">Create my calendar address</button>
       </form>
     <?php endif; ?>
+
+    <h2 id="phones-h">Phones signed in to the app</h2>
+    <p>If a phone is lost or stolen, choose Report lost and wipe: the next time it connects, the app removes its drafts, unsent offline entries and saved lists, and signs out.</p>
+    <?= app_devices_html(app_devices((int)$user['id']), 'account.php', []) ?>
 
     <h2 id="passkeys">Passkeys</h2>
     <p>Sign in with Face ID, Touch ID, Windows Hello, or your password manager — nothing to read or retype, and stronger than email codes.</p>
