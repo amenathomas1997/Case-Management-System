@@ -23,12 +23,13 @@ $dist=array_map('basename',glob($root.'/dist/migrations/mig_*.sql')); $inc=array
 sort($dist); sort($inc);
 $same=$dist===$inc; foreach ($dist as $f) $same=$same && file_get_contents($root.'/dist/migrations/'.$f)===file_get_contents($root.'/public/inc/migrations/'.$f);
 check($same,'The migrations the upgrade page runs are the same as dist/migrations');
-set_setting('schema_version','3.0.53');
-check(array_keys(pending_migrations())===['3.0.54'],'The upgrade page finds the newer migrations');
+$shipped=array_keys(shipped_migrations()); $prev=$shipped[count($shipped)-2];
+set_setting('schema_version',$prev);
+check(array_keys(pending_migrations())===[end($shipped)] && end($shipped)===DB_SCHEMA_VERSION,'The upgrade page finds the newer migrations, up to the version the files need');
 [$code,$out,$err]=$renderPage('upgrade',[],['run_upgrade'=>'1']);
-check(setting('schema_version')==='3.0.53','The upgrade does not run without a backup confirmed' . ($err ? ": $err" : ''));
+check(setting('schema_version')===$prev,'The upgrade does not run without a backup confirmed' . ($err ? ": $err" : ''));
 [$code,$out,$err]=$renderPage('upgrade',[],['run_upgrade'=>'1','have_backup'=>'1']);
-check($code===0 && $err==='' && setting('schema_version')===DB_SCHEMA_VERSION && str_contains($out,'Version 3.0.54 applied'),'The upgrade applies each change and reports it' . ($err ? ": $err" : ''));
+check($code===0 && $err==='' && setting('schema_version')===DB_SCHEMA_VERSION && str_contains($out,'Version '.DB_SCHEMA_VERSION.' applied'),'The upgrade applies each change and reports it' . ($err ? ": $err" : ''));
 [$code,$out,$err]=$renderPage('upgrade',[]);
 check(str_contains($out,'The database is up to date'),'The database is then up to date');
 foreach (glob($root.'/dist/migrations/mig_*.sql') as $mf) {

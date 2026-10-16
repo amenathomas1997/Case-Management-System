@@ -187,17 +187,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user'])) {
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $uErrs['nu_email'] = 'Enter a valid email address, for example name@agency.org.';
     // 183 so the sign-in limiter keys ('verify:' plus the address) fit login_attempts.email.
     elseif (mb_strlen($email) > 183) $uErrs['nu_email'] = 'The email address is too long (183 characters maximum).';
-    if (!is_string($pw) || strlen($pw) < 10) $uErrs['nu_password'] = 'Enter a temporary password of at least 10 characters.';
+    // Empty: an invitation is emailed instead, so nobody types a password for someone else (3.0.55).
+    $invite = !is_string($pw) || $pw === '';
+    if (!$invite && strlen($pw) < 10) $uErrs['nu_password'] = 'Enter a temporary password of at least 10 characters, or leave it empty to email an invitation.';
     if ($uErrs) {
         keep_input();
         keep_field_errors($uErrs);
     } else {
         try {
             db()->prepare('INSERT INTO users (name, email, password_hash, role, group_id) VALUES (?,?,?,?,?)')
-                ->execute([$name, $email, password_hash($pw, PASSWORD_DEFAULT), $role, $newGroup ? (int)$newGroup['id'] : null]);
-            audit($user['id'], 'user.create', 'user', (int)db()->lastInsertId(), "{$name} <{$email}> role={$role} group="
+                ->execute([$name, $email, password_hash($invite ? bin2hex(random_bytes(24)) : $pw, PASSWORD_DEFAULT), $role, $newGroup ? (int)$newGroup['id'] : null]);
+            $newUid = (int)db()->lastInsertId();
+            audit($user['id'], 'user.create', 'user', $newUid, "{$name} <{$email}> role={$role} group="
                 . ($newGroup ? (int)$newGroup['id'] : 'legacy'));
-            flash("User {$name} added.");
+            if ($invite) {
+                $invSent = staff_invite_send($newUid, (int)$user['id']);
+                flash($invSent ? "User {$name} added, and an invitation was emailed to {$email} to choose a password (it works for 7 days)."
+                    : "User {$name} added, but the invitation could not be emailed. Use Send invitation again on their user page.", $invSent ? 'success' : 'error');
+            } else {
+                flash("User {$name} added.");
+            }
         } catch (PDOException $e) {
             keep_input();
             if ((int)($e->errorInfo[1] ?? 0) === 1062) {
@@ -213,6 +222,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user'])) {
 
 /* Scheduled report emails (cron/monthly_reports.php reads these settings) */
 /* Counselor progress reports: wait for a narrative (the default) or send automatically. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_m365'])) {
+    $on = !empty($_POST['m365_offboard']);
+    set_setting('m365_offboard', $on ? '1' : '0');
+    audit($user['id'], 'settings.m365_offboard', 'settings', null, $on ? 'on' : 'off');
+    flash($on ? 'Each night, staff whose Microsoft 365 account is disabled are switched off here (administrators are reported, not switched off).' : 'Microsoft 365 departures are no longer checked.');
+    redirect('admin.php#people-h');
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_fiscal_year'])) {
     $fy = (int)($_POST['fiscal_year_start'] ?? 0);
     if ($fy < 1 || $fy > 12) { flash('Choose the month your fiscal year starts.', 'error'); redirect('admin.php#fiscal-h'); }
@@ -271,7 +287,7 @@ page_header('Administration', $user, 'admin');
 <p class="muted">Agency-wide settings for administrators. Your own password, sign-in methods, display settings and calendar address are in <a href="account.php">My Account</a>.</p>
 <?php // One line from System health: the scheduled jobs, which stop silently when they stop.
 $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok'])); ?>
-<p><?= $jobsBehind ? '<strong>' . (count($jobsBehind) === 1 ? '1 scheduled job needs' : count($jobsBehind) . ' scheduled jobs need') . ' attention</strong> (' . h(implode(', ', array_column($jobsBehind, 'name'))) . '). ' : 'All scheduled jobs are running. ' ?><a href="system_health.php">Open System health</a> · <a href="settings.php">Settings: email, addresses, sign-in, time zone and branding</a> · <a href="upgrade.php">Database upgrade</a><?php $schemaHave = db_schema_version(); if ($schemaHave === null || version_compare($schemaHave, DB_SCHEMA_VERSION, '<')): ?> <strong>The database needs an upgrade.</strong><?php endif; ?></p>
+<p><?= $jobsBehind ? '<strong>' . (count($jobsBehind) === 1 ? '1 scheduled job needs' : count($jobsBehind) . ' scheduled jobs need') . ' attention</strong> (' . h(implode(', ', array_column($jobsBehind, 'name'))) . '). ' : 'All scheduled jobs are running. ' ?><a href="system_health.php">Open System health</a> · <a href="compliance.php#staff-h">Staff agreements and training</a> · <a href="client_import.php">Import clients and authorizations</a> · <a href="settings.php">Settings: email, addresses, sign-in, time zone and branding</a> · <a href="upgrade.php">Database upgrade</a><?php $schemaHave = db_schema_version(); if ($schemaHave === null || version_compare($schemaHave, DB_SCHEMA_VERSION, '<')): ?> <strong>The database needs an upgrade.</strong><?php endif; ?></p>
 <nav aria-label="Administration sections">
   <ul class="tab-nav">
     <li><a href="#people-h">People &amp; permissions</a></li>
@@ -287,6 +303,10 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
 <section class="card" aria-labelledby="people-h">
   <h2 id="people-h">People &amp; permissions</h2>
   <p class="muted">Quick group and hours changes live here — for everything else (edit details, password resets, two-factor (2FA) sign-in recovery, caseload transfer, deactivate or delete), open <a href="users.php">User management</a>.</p>
+  <form method="post" action="admin.php#people-h" class="inline-form"><?= csrf_field() ?>
+    <label><input type="checkbox" name="m365_offboard" value="1"<?= setting('m365_offboard') === '1' ? ' checked' : '' ?>> Each night, switch off staff whose Microsoft 365 account is disabled (needs the User.Read.All permission in Microsoft Entra)</label>
+    <button type="submit" name="save_m365" value="1" class="btn btn-secondary btn-sm">Save</button>
+  </form>
   <h3 id="add-user-h">Add a team member</h3>
   <?php $nuRefill = old_in('add_user') !== ''; // refill only after this form was sent
   // Preselected: what was chosen before an error, else the seeded own-caseload Instructors group.
@@ -305,9 +325,9 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
       <?= field_error('nu_email') ?>
     </div>
     <div class="field">
-      <label for="nu_password">Temporary password * <span class="hint">At least 10 characters — ask them to change it after first sign-in</span></label>
+      <label for="nu_password">Temporary password (leave empty to email them an invitation instead; otherwise at least 10 characters)</label>
       <?php if ($nuRefill): ?><span class="hint" id="nu_password-again">For safety a typed password is never kept after an error: type it again.</span><?php endif; ?>
-      <input type="text" id="nu_password" name="password" required minlength="10" autocomplete="off" <?= field_aria('nu_password', $nuRefill ? 'nu_password-again' : '') ?>>
+ <input type="text" id="nu_password" name="password" minlength="10" autocomplete="off" <?= field_aria('nu_password', $nuRefill ? 'nu_password-again' : '') ?>>
       <?= field_error('nu_password') ?>
     </div>
     <div class="field">

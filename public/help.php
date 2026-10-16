@@ -85,7 +85,39 @@ if (!$viewer) echo lang_toggle();
   <li><a href="privacy.php"><?= t('Privacy notice (separate page)') ?></a></li>
 </ul></nav>
 <?php if ($viewer) require __DIR__ . '/inc/staff_guide.php'; ?>
-<?php if ($viewer && can('admin')): // Administrators only (3.0.53). ?>
+<?php if ($viewer && can('admin')): // Administrators only (3.0.55). ?>
+<section aria-labelledby="admin-guide"><h2 id="admin-guide">Administrator guide</h2>
+<h3 id="admin-cron">The scheduled jobs</h3>
+<p>The server runs these jobs by itself; System health lists each one, when it last ran, and whether it is late. Set them up again on any new server, with these times: the database backup at 2:15 a.m.; the off-site backup at 2:45 a.m.; the daily alerts at 7:00 a.m.; session reminders at 7:15 a.m. and 5:15 p.m.; progress reports at 7:30 a.m.; AT service reminders at 8:00 a.m.; email filing every 15 minutes; the watchdog every 10 minutes. The watchdog emails the backup address when the site, the database, a backup or any job stops.</p>
+<h3 id="admin-graph">Renewing the Microsoft Graph email secret</h3>
+<ol>
+  <li>In Microsoft Entra, open App registrations, then the CMS app, then Certificates and secrets, and add a new client secret. Copy its value straight away.</li>
+  <li>In the CMS, open Administration, Settings, Microsoft Graph email. Paste the secret and save: the system checks it with Microsoft before keeping it.</li>
+  <li>On System health, enter the new secret's expiry date and send yourself a test email.</li>
+  <li>Delete the old secret in Microsoft Entra.</li>
+</ol>
+<h3 id="admin-joining">Someone joining</h3>
+<p>Open Administration, People and permissions, Add a team member. Choose their permission group, and leave the password empty: they are emailed an invitation to choose their own, which works for 7 days. Then open their user page and record the dates of their confidentiality agreement and privacy training. Both are renewed yearly; Compliance and the daily tasks remind you.</p>
+<h3 id="admin-leaving">Someone leaving</h3>
+<ol>
+  <li>Open their user page in User management. Under "If they are leaving" it lists what they still hold.</li>
+  <li>Use Caseload transfer to move it to one person: clients, open referrals and tasks, upcoming sessions, software licences, equipment reservations, group programs and access bookings. Open referrals go back to the queue when the receiver cannot open referrals, and sessions for clients outside a limited receiver's caseload stay to be rebooked.</li>
+  <li>Uncheck Active and save. They are signed out at once, including on their phone.</li>
+  <li>Disable their Microsoft 365 account. If you turn on the nightly Microsoft 365 check (Administration, People and permissions), the CMS switches off anyone disabled there by itself.</li>
+</ol>
+<h3 id="admin-misfiled">An email filed to the wrong client</h3>
+<p>Email sent to the CMS mailbox is filed as a case note when the subject names exactly one client. If it went to the wrong record, open that note, copy its text into a note on the right client, then correct the wrong note with an addendum saying it was misfiled (notes lock after 30 days and keep their history). Email that could not be placed waits in the "Needs review (CMS)" folder of the mailbox.</p>
+<h3 id="admin-groups">Permission groups</h3>
+<p>Each person belongs to one group, which decides what they can open: clients, referrals, scheduling, billing, analytics, equipment, templates and administration. "Own caseload only" limits someone to the clients assigned to them: their reports, downloads and lists then show only those. Give each person the least they need; an instructor rarely needs billing or administration.</p>
+<h3 id="admin-homework-ai">Turning on AI help for client homework</h3>
+<p>It is off until you turn on "Client portal homework explanations" on the AI assistant page. Clients can then ask the AI to explain their homework, up to 10 times a day. Turn it on only after a signed business associate agreement with your AI provider is recorded on Vendor agreements, and tell clients not to type private information into the question.</p>
+<h3 id="admin-incident">After a suspected privacy incident</h3>
+<ol>
+  <li>Record it straight away on Privacy incidents: what happened, when it was found, and which clients may be affected. The 60-day notice deadline starts when it was found.</li>
+  <li>Contain it: sign the person out (User management), remove a lost phone's access (Phones signed in to the app), or change a leaked password or secret.</li>
+  <li>Decide with your privacy lead whether clients, the VR agency or regulators must be told, and record each notice on the incident.</li>
+</ol>
+</section>
 <section aria-labelledby="restore"><h2 id="restore">Restoring from a backup</h2>
 <p>Every night the server saves the database, and every Sunday it archives the uploaded documents. Every morning an encrypted copy is emailed to the backup address: on Mondays it holds the database and every document, on other days the database and the documents changed in the last eight days. Keep these emails for at least 90 days, and keep the backup password in your password manager: without it no backup can be opened. Each Monday the system also checks that the backup can be restored; the result is on System health.</p>
 <p>If the server is lost:</p>

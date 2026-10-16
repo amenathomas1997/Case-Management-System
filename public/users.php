@@ -91,6 +91,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // never sign in with a password. An older address left unchanged is not
         // refused here, so the rest of that account can still be edited.
         elseif (mb_strlen($email) > 183 && $email !== strtolower((string)$target['email'])) $errs['email'] = 'The email address is too long (183 characters maximum).';
+        $dates = [];
+        foreach (['confidentiality_signed_on' => 'Confidentiality agreement date', 'privacy_training_on' => 'Privacy training date'] as $dk => $dl) {
+            $dv = trim((string)($_POST[$dk] ?? ''));
+            if ($dv !== '' && (!valid_date($dv, 2000, (int)date('Y')) || $dv > date('Y-m-d'))) $errs[$dk] = $dl . ': enter a date that has passed, or leave it empty.';
+            $dates[$dk] = $dv !== '' ? $dv : null;
+        }
         if (!is_numeric($hoursRaw) || (float)$hoursRaw < 0 || (float)$hoursRaw > 80) {
             $errs['weekly_hours'] = 'Enter weekly available hours as a number from 0 to 80.';
         }
@@ -108,10 +114,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $emailChanged = $email !== strtolower($target['email']);
         try {
             change_user_access($uid, (int)$user['id'], ['role' => $role, 'group_id' => $gid, 'is_active' => $active],
-                function (PDO $db) use ($name, $email, $role, $gid, $hours, $active, $uid, $emailChanged): void {
+                function (PDO $db) use ($name, $email, $role, $gid, $hours, $active, $uid, $emailChanged, $dates): void {
             $db->prepare('UPDATE users SET name = ?, email = ?, role = ?, group_id = ?, weekly_hours = ?, is_active = ?'
                 . ($emailChanged ? ', entra_oid = NULL' : '') . ' WHERE id = ?')
                 ->execute([$name, $email, $role, $gid, $hours, $active, $uid]);
+            // The confidentiality agreement and privacy training dates (3.0.55).
+            $db->prepare('UPDATE users SET confidentiality_signed_on = ?, privacy_training_on = ? WHERE id = ?')->execute([$dates['confidentiality_signed_on'], $dates['privacy_training_on'], $uid]);
             // A reset link or sign-in code already emailed (to the old address, or
             // to someone being deactivated) must not outlive the change.
             if ($emailChanged || !$active) {
@@ -150,6 +158,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('users.php?id=' . $uid);
     }
 
+    if (isset($_POST['send_invite'])) {
+        $invSent = (int)$target['is_active'] === 1 && staff_invite_send($uid, (int)$user['id']);
+        flash($invSent ? 'Invitation emailed again (it works for 7 days).' : ((int)$target['is_active'] !== 1 ? 'The account is switched off: make it Active first.' : 'The invitation could not be emailed.'), $invSent ? 'success' : 'error');
+        redirect('users.php?id=' . $uid);
+    }
     if (isset($_POST['send_reset'])) {
         $token = bin2hex(random_bytes(32));
         db()->prepare('UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0')->execute([$uid]);
@@ -312,6 +325,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 db()->prepare('UPDATE scheduled_sessions SET user_id = ?, reminder_sent = 0 WHERE id IN ('
                     . implode(',', array_fill(0, count($ids), '?')) . ')')->execute(array_merge([$toId], $ids));
             }
+            // Open AT records, equipment reservations, group programs and access bookings (3.0.55).
+            $othersMoved = staff_move_other_holdings($uid, $toId);
             db()->commit();
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
@@ -322,7 +337,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         audit($user['id'], 'user.transfer', 'user', $uid, "caseload -> {$toUser['name']} ({$moved} client(s), {$refsMoved} referral(s)"
             . ($refsQueued || $tasksQueued ? ", {$refsQueued} open referral(s) and {$tasksQueued} task(s) about them returned to the queue" : '')
             . ', ' . count($movedSessions) . ' upcoming session(s) moved'
-            . ($leftSessions ? ', ' . count($leftSessions) . ' left to rebook' : '') . ')');
+            . ($leftSessions ? ', ' . count($leftSessions) . ' left to rebook' : '') . ', ' . ($othersMoved ?? 0) . ' other open item(s) moved)');
 
         // Calendar invitations went to the old instructor, and no invitation id is
         // kept to withdraw or re-issue them, so both people are told in plain text
@@ -468,6 +483,10 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
       <div class="field"><label for="u_hours">Weekly available hours <?= required_mark() ?></label>
         <span class="hint" id="u_hours-hint">A number from 0 to 80, in half-hour steps (enter 0 for none).</span>
         <input type="number" id="u_hours" name="weekly_hours" required min="0" max="80" step="0.5" value="<?= h(old_in('weekly_hours', (string)(float)$edit['weekly_hours'])) ?>" <?= field_aria('weekly_hours', 'u_hours-hint') ?>><?= field_error('weekly_hours') ?></div>
+      <div class="field"><label for="u_conf">Confidentiality agreement signed on (renewed yearly)</label>
+        <input type="date" id="u_conf" name="confidentiality_signed_on" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('confidentiality_signed_on', (string)($edit['confidentiality_signed_on'] ?? ''))) ?>" <?= field_aria('confidentiality_signed_on') ?>><?= field_error('confidentiality_signed_on') ?></div>
+      <div class="field"><label for="u_priv">Privacy training completed on (renewed yearly)</label>
+        <input type="date" id="u_priv" name="privacy_training_on" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('privacy_training_on', (string)($edit['privacy_training_on'] ?? ''))) ?>" <?= field_aria('privacy_training_on') ?>><?= field_error('privacy_training_on') ?></div>
       <div class="field"><label><input type="checkbox" name="is_active" value="1" <?= $checkedActive ? 'checked' : '' ?>>
         Active <span class="hint">unchecking blocks sign-in immediately and signs the app out</span></label></div>
     </div>
@@ -480,6 +499,7 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
   <h3>Account recovery</h3>
   <form method="post" action="users.php" class="inline-form"><?= csrf_field() ?>
     <input type="hidden" name="uid" value="<?= (int)$edit['id'] ?>">
+    <?php if (!$edit['last_login']): ?><button type="submit" name="send_invite" value="1" class="btn btn-secondary">Send invitation again</button><?php endif; ?>
     <button type="submit" name="send_reset" value="1" class="btn btn-secondary"
       onclick="return confirm(<?= h(json_encode('Email ' . $edit['email'] . ' a password reset link?', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">Email password reset link</button>
     <button type="submit" name="reset_2fa" value="1" class="btn btn-secondary"
@@ -495,6 +515,11 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
     <?php endif; ?>
   </form>
 
+  <?php $holds = staff_holdings((int)$edit['id']); $held = array_filter($holds); ?>
+  <h3 id="leaving-h">If <?= h($edit['name']) ?> is leaving</h3>
+  <?php if ($held): ?>
+  <p>Still held: <?= h(implode('; ', array_map(fn($k, $v) => $k . ' ' . $v, array_keys($held), $held))) ?>. The transfer below moves it (open referrals go back to the queue when the receiver cannot open referrals, and sessions for clients outside a limited receiver's caseload stay to be rebooked); then uncheck Active above.</p>
+  <?php else: ?><p>Nothing is held: uncheck Active above to switch the account off.</p><?php endif; ?>
   <h3>Caseload transfer</h3>
   <p class="hint" id="to_user-hint">Open referrals go only to someone with access to referrals; otherwise they return to the unassigned referral queue. Someone limited to their own caseload receives only the sessions for clients they receive; any others stay here and are listed for you to rebook. Both people are emailed about the sessions that move.</p>
   <form method="post" action="users.php" class="inline-form"><?= csrf_field() ?>
@@ -545,7 +570,7 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
       <td><?= h($r['group_name'] ?? 'Legacy: ' . $r['role']) ?><br>
           <span class="muted"><?= $r['totp_enabled'] ? 'authenticator' : '' ?><?= $r['passkey_count'] ? ($r['totp_enabled'] ? ' · ' : '') . (int)$r['passkey_count'] . ' passkey(s)' : '' ?></span></td>
       <td class="num"><?= (int)$r['caseload'] ?></td>
-      <td class="muted"><?= $r['last_login'] ? fmt_datetime($r['last_login']) : 'never' ?></td>
+      <td class="muted"><?= $r['last_login'] ? fmt_datetime($r['last_login']) : 'never' ?><?php $sn = staff_compliance_notes($r + ['last_login_at' => $r['last_login']]); if ($sn): ?><br><?= h(implode('; ', $sn)) ?><?php endif; ?></td>
       <td><?= $r['is_active'] ? status_badge('Active') : '<span class="badge badge-hold">Deactivated</span>' ?></td>
       <td><a class="btn btn-secondary btn-sm" href="users.php?id=<?= (int)$r['id'] ?>">Manage<span class="visually-hidden"> user <?= h($r['name']) ?></span></a></td>
     </tr>

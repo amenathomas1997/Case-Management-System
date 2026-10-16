@@ -426,4 +426,12 @@ page_header('Compliance', $user, 'compliance');
   </details>
 </section>
 <?php endif; ?>
+<?php if (can('admin')): $staffDue = staff_compliance_list(); // 3.0.55 ?>
+<section class="card" aria-labelledby="staff-h">
+  <h2 id="staff-h">Staff agreements, training and unused accounts (<?= count($staffDue) ?>)</h2>
+  <?php if (!$staffDue): ?><p>Every active account has a current confidentiality agreement and privacy training, and has signed in recently.</p><?php else: ?>
+  <ul><?php foreach ($staffDue as $sd): ?><li><a href="users.php?id=<?= (int)$sd['id'] ?>"><?= h($sd['name']) ?></a>: <?= h(implode('; ', $sd['notes'])) ?></li><?php endforeach; ?></ul>
+  <?php endif; ?>
+</section>
+<?php endif; ?>
 <?php page_footer();

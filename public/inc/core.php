@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.54';
+const APP_VERSION = '3.0.55';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1682,3 +1682,5 @@ require_once __DIR__ . '/ops.php';
 // Settings changed on screen, and safe upgrades (3.0.54). Applied last, once everything is loaded.
 require_once __DIR__ . '/settings_admin.php';
 config_overrides_apply();
+// Staff accounts: invitations, renewals, departures (3.0.55).
+require_once __DIR__ . '/staff_accounts.php';

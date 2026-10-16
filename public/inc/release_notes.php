@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.55' => [
+        'New staff are emailed an invitation to choose their own password (leave the password empty when adding them). Each person\'s confidentiality agreement and privacy training dates are recorded on their user page and renewed yearly; Compliance and the daily tasks remind you, and flag accounts not used for 60 days. A person\'s user page lists what they still hold if they are leaving, and the transfer now also moves open AT records, equipment reservations, group programs and access bookings. Optionally, staff disabled in Microsoft 365 are switched off each night.',
+        'Help has an Administrator guide: the scheduled jobs, renewing the email secret, people joining and leaving, misfiled email, permission groups, homework AI and privacy incidents. Administrators can import clients and open authorizations from a spreadsheet, checked row by row first.',
+    ],
     '3.0.54' => [
         'Administrators can change settings on screen instead of in the server\'s config.php (Administration, Settings): the Microsoft Graph email details, the from, help and backup addresses, sign-in timeouts, the time zone and branding. PDFs now use your brand colour.',
         'Database upgrade (Administration) applies the database changes new files need, one step at a time, after you confirm there is a backup from today. The system checks for new versions every day and tells administrators.',

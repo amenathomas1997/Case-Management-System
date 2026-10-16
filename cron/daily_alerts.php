@@ -223,6 +223,29 @@ try {
 } catch (Throwable $e) {
     error_log('daily_alerts: update check skipped (' . get_class($e) . ')');
 }
+// Staff (3.0.55): a confidentiality agreement or privacy training due within 30 days (or
+// lapsed) opens one task for the administrators per renewal; accounts disabled in Microsoft
+// 365 are switched off when an administrator has turned that on.
+try {
+    foreach (staff_compliance_list() as $su) {
+        foreach (['confidentiality_signed_on' => 'confidentiality agreement', 'privacy_training_on' => 'privacy training'] as $col => $what) {
+            if (empty($su[$col])) continue;
+            $due = date('Y-m-d', strtotime($su[$col] . ' +' . STAFF_RENEWAL_DAYS . ' days'));
+            if ($due > date('Y-m-d', strtotime('+30 days'))) continue;
+            // For an administrator only: a task with no owner would show to everyone.
+            $adminIds = effective_admin_user_ids();
+            if (!$adminIds) continue;
+            add_task('Renew ' . $what . ': ' . $su['name'], ucfirst($what) . ' for ' . $su['name'] . ' is due by ' . date('F j, Y', strtotime($due)) . '. Record the new date on their user page.',
+                null, null, $due < date('Y-m-d') ? date('Y-m-d') : $due, (int)$adminIds[0], null, 'staffrenew-' . (int)$su['id'] . '-' . $col . '-' . $due);
+        }
+    }
+    $m365 = staff_m365_sync();
+    if ($m365['off']) notify_admin_users('Switched off because their Microsoft 365 account is disabled: ' . implode(', ', $m365['off']) . '. Move what they held from their user page.', 'users.php');
+    if ($m365['admins']) notify_admin_users('Disabled in Microsoft 365 but still an administrator here (not switched off automatically): ' . implode(', ', $m365['admins']) . '.', 'users.php');
+    if ($m365['error'] !== null && setting('m365_error_noticed') !== date('Y-m-d')) { set_setting('m365_error_noticed', date('Y-m-d')); notify_admin_users($m365['error'], 'admin.php#people-h'); }
+} catch (Throwable $e) {
+    error_log('daily_alerts: staff checks skipped (' . get_class($e) . ')');
+}
 try { db()->exec('DELETE FROM mail_log WHERE sent_at < DATE_SUB(NOW(), INTERVAL 180 DAY)'); }
 catch (Throwable $e) { error_log('daily_alerts: mail log not pruned (' . get_class($e) . ')'); }
 
