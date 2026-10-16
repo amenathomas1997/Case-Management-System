@@ -20,3 +20,6 @@ Verified before commit:
 - full_schema 1090 (run with the test process's mailer failing, as on CI), audit_regression 61, security 67, staging_scrub 34, and run_all.
 - The iPhone simulator build succeeded, and the migration rehearsal matched.
 - Not checked in a browser or with a screen reader.
+
+## Deployed 2026-10-16 12:15 CT
+From 3.0.42 with .audit_work/deploy-3.0.43. 1 migration statement ran. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.43). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.43-20261016-121539. iOS 3.0.43 (43) is not archived.
