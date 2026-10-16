@@ -173,8 +173,10 @@ struct ScheduleView: View {
             .sheet(item: $signingSession, onDismiss: announceSheetResult) { session in
                 // The sheet stays open until the completion is saved, so a failure keeps the
                 // client's signature for a retry instead of asking them to sign again.
-                SignatureSheet(clientName: session.client) { sig, name in
-                    try await complete(session, signature: sig, signedName: name)
+                // Hours, miles and the session note first (staff only), then the client's
+                // signature or none: one step records the whole session, as on the website.
+                CompleteSessionSheet(session: session) { details, sig, name in
+                    try await complete(session, signature: sig, signedName: name, details: details)
                 }
             }
             .refreshable { await load() }
@@ -600,7 +602,8 @@ struct ScheduleView: View {
 
     /// Throws on failure, after refreshing the list: the session may have been completed even
     /// though the reply was lost, and the list then shows what is true now.
-    private func complete(_ session: Session, signature: String? = nil, signedName: String? = nil) async throws {
+    private func complete(_ session: Session, signature: String? = nil, signedName: String? = nil,
+                          details: CompletionDetails? = nil) async throws {
         guard !completing.contains(session.id) else {
             throw APIError.server("This session is already being marked completed.")
         }
@@ -631,10 +634,17 @@ struct ScheduleView: View {
             var body: [String: Any] = ["session_id": session.id]
             if let signature { body["signature_b64"] = signature }
             if let signedName { body["signed_name"] = signedName }
+            // What the Complete session step recorded (3.0.32 servers; older ones ignore it).
+            if let details {
+                body["hours"] = details.hours
+                if details.miles > 0 { body["mileage"] = details.miles }
+                if !details.note.isEmpty { body["session_note"] = details.note }
+            }
             let result: CompleteResult = try await api.call("complete_session", body: body)
-            let done: String = result.hoursLogged > 0
+            let noteSaid = (details?.note.isEmpty == false) ? " The session note was saved." : ""
+            let done: String = (result.hoursLogged > 0
                 ? String(format: "Completed — %.2f hours logged for %@.", result.hoursLogged, session.client)
-                : "Session marked completed."
+                : "Session marked completed.") + noteSaid
             // Logged outside the authorization: said with it (the hours are logged either way).
             let warning: String = result.warning.map { " " + $0 } ?? ""
             confirmation = done + warning
@@ -928,4 +938,114 @@ struct NewSessionSheet: View {
             busy = false
         }
     }
+}
+
+/// What the Complete session step records with the outcome.
+struct CompletionDetails {
+    let hours: Double
+    let miles: Double
+    let note: String
+}
+
+/// Completing a session on a track: the hours (the scheduled length unless changed), miles and
+/// the session note, then the client's signature or none. Staff fill this in; only the
+/// signature step is handed to the client, so the note never is.
+struct CompleteSessionSheet: View {
+    let session: Session
+    let onDone: (_ details: CompletionDetails, _ signatureB64: String?, _ signedName: String?) async throws -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var hoursText = ""
+    @State private var milesText = ""
+    @State private var note = ""
+    @State private var busy = false
+    @State private var error: String?
+    @State private var signing: SigningStep?
+    @State private var finished = false
+
+    /// The scheduled length in quarter hours, as the server would log it.
+    private var scheduledHours: Double {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        guard let a = f.date(from: session.startAt), let b = f.date(from: session.endAt), b > a else { return 0 }
+        return (b.timeIntervalSince(a) / 3600 * 4).rounded() / 4
+    }
+
+    private static func number(_ raw: String) -> Double? {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
+        guard t.range(of: "^[0-9]{0,4}(\\.[0-9]{1,2})?$", options: .regularExpression) != nil, !t.isEmpty else { return nil }
+        return Double(t)
+    }
+
+    /// The entry checked as the server checks it, or the message saying what to fix.
+    private func checked() -> CompletionDetails? {
+        guard let hours = Self.number(hoursText), hours <= 24 else {
+            showFormError("Hours: enter a number from 0 to 24, such as 1.5.", in: &error); return nil
+        }
+        let milesRaw = milesText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let miles = milesRaw.isEmpty ? 0 : (Self.number(milesRaw) ?? -1)
+        guard miles >= 0, miles <= 1000 else {
+            showFormError("Miles: enter the miles driven, from 0 to 1000, like 12.5.", in: &error); return nil
+        }
+        guard miles == 0 || hours > 0 else {
+            showFormError("Miles are logged with hours: enter the hours worked, or clear the miles.", in: &error); return nil
+        }
+        return CompletionDetails(hours: hours, miles: miles, note: note.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func completeWithoutSignature() async {
+        guard let details = checked() else { return }
+        busy = true; error = nil
+        do {
+            try await onDone(details, nil, nil)
+            dismiss()
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+        }
+        busy = false
+    }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(error: error) {
+                CaptionedField(label: "Hours worked", text: $hoursText, keyboard: .decimalPad)
+                CaptionedField(label: "Miles driven (optional)", text: $milesText, keyboard: .decimalPad)
+                CaptionedField(label: "Session note (optional)", text: $note,
+                               prompt: "Progress, concerns, plan for next time", lines: 3...12)
+                Button("Get the client's signature") {
+                    if let details = checked() { error = nil; signing = SigningStep(details: details) }
+                }
+                .disabled(busy)
+                Button {
+                    Task { await completeWithoutSignature() }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text("Complete without signature")
+                        if busy { ProgressView().accessibilityHidden(true) }
+                    }
+                }
+                .disabled(busy)
+                .accessibilityValue(busy ? "Saving" : "")
+            }
+            .navigationTitle("Complete session")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.disabled(busy)
+                }
+            }
+            .onAppear {
+                if hoursText.isEmpty { hoursText = String(format: "%g", scheduledHours) }
+            }
+            .sheet(item: $signing, onDismiss: { if finished { dismiss() } }) { step in
+                SignatureSheet(clientName: session.client) { sig, name in
+                    try await onDone(step.details, sig, name)
+                    finished = true
+                }
+            }
+        }
+    }
+}
+
+/// The signature step's sheet item (CompletionDetails itself has no identity).
+private struct SigningStep: Identifiable {
+    let id = UUID()
+    let details: CompletionDetails
 }

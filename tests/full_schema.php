@@ -691,7 +691,7 @@ try {
     $db->beginTransaction();
     $db->query("SELECT id FROM clients WHERE id=$restored FOR UPDATE")->fetchAll();
     $purging=proc_open([PHP_BINARY,'-d','display_errors=stderr','-d','sendmail_path=/usr/bin/true',__FILE__,'page_post',$tmp.'/client.php',json_encode(['id'=>$restored]),json_encode(['purge_client'=>'1'])],[1=>['pipe','w'],2=>['pipe','w']],$purgePipes);
-    $deadline=microtime(true)+10;
+    $deadline=microtime(true)+30; // a fresh PHP process can take over 10 s to start on a busy machine
     do {
         usleep(50000);
         try { $waiting=(int)$db->query("SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_state='LOCK WAIT'")->fetchColumn(); }

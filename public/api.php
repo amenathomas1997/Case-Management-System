@@ -947,6 +947,23 @@ switch ($action) {
         $separate = $outcome === 'completed_separate' || in_array($input['log_anyway'] ?? null, [true, 1, '1'], true);
         $sessDate = date('Y-m-d', strtotime((string)$sess['start_at']));
         $hours = $sess['track_id'] && !$linkLogId ? round((strtotime($sess['end_at']) - strtotime($sess['start_at'])) / 3600 * 4) / 4 : 0.0;
+        // The hours, miles and session note entered at completion (3.0.32, as the
+        // website's Hours, miles and session note row): hours replace the scheduled
+        // length (0 completes it without hours), miles go on the same work log, and the
+        // note is saved on the track with the completion. Each is refused, with nothing
+        // changed, when it cannot be kept, never dropped.
+        if ($sess['track_id'] && !$linkLogId && array_key_exists('hours', $input) && $input['hours'] !== null && $input['hours'] !== '') {
+            $hoursIn = round(api_number($input, 'hours', 'Hours') ?? 0.0, 2);
+            if ($hoursIn < 0 || $hoursIn > 24) fail('Hours: enter a number from 0 to 24, such as 1.5. Nothing was changed.', 422);
+            $hours = $hoursIn < 0.01 ? 0.0 : $hoursIn;
+        }
+        $miles = round(api_number($input, 'mileage', 'Mileage') ?? 0.0, 1);
+        if ($miles < 0 || $miles > 1000) fail('Mileage must be between 0 and 1000 miles. Nothing was changed.', 422);
+        if ($miles > 0 && $hours <= 0) fail('Miles are logged with the session\'s hours: enter the hours worked, or clear the miles. Nothing was changed.', 422);
+        $sNote = api_text($input, 'session_note', API_TEXT_BYTES, 'The session note');
+        if ($sNote !== '' && !$sess['track_id']) {
+            fail('No training track is linked to this session, so its note cannot be saved with it. Nothing was changed. Clear the note and complete the session, then add the note on the client\'s record.', 422);
+        }
         // Hours are never logged at a $0.00 rate: refused (4xx, so the app reports it
         // rather than retrying) before anything changes, as on the website.
         if ($hours > 0) {
@@ -1032,7 +1049,7 @@ switch ($action) {
             // without a 0.00-hour work log, as on the website.
             if ($hours > 0) {
                 $logId = auto_log_session((int)$sess['track_id'], $sessDate, $hours,
-                    'Training session' . ($sess['notes'] ? ': ' . $sess['notes'] : '') . ' (logged from mobile)', $userId, $authIssue);
+                    'Training session' . ($sess['notes'] ? ': ' . $sess['notes'] : '') . ' (logged from mobile)', $userId, $authIssue, $miles);
                 db()->prepare('UPDATE scheduled_sessions SET work_log_id = ? WHERE id = ?')
                     ->execute([$logId, $sid]);
                 // A typed name stands on its own, so a client who cannot draw on the
@@ -1041,6 +1058,11 @@ switch ($action) {
                     db()->prepare('UPDATE work_logs SET signature_path = ?, signed_name = ? WHERE id = ?')
                         ->execute([$sigPath, $signedName ?: null, $logId]);
                 }
+            }
+            if ($sNote !== '') {
+                require_once __DIR__ . '/inc/workflows.php'; // track_note_create()
+                track_note_create((int)$sess['client_id'], (int)$sess['track_id'], 'Session on ' . fmt_date($sessDate),
+                    assemble_note(['note_type' => 'Case Note', 'body' => $sNote]), $userId);
             }
             db()->commit();
         } catch (Throwable $e) {
@@ -1053,10 +1075,12 @@ switch ($action) {
         }
         audit($userId, 'session.complete', 'session', $sid, 'mobile' . ($authIssue !== null ? '; logged outside the authorization: ' . $authIssue : '')
             . ($linkLogId ? '; linked to work log #' . $linkLogId . ' (hours already logged)' : '')
-            . ($loggedRows ? '; logged as a separate visit beside hours already logged that day' : ''));
+            . ($loggedRows ? '; logged as a separate visit beside hours already logged that day' : '')
+            . ($miles > 0 ? '; ' . $miles . ' mi' : '') . ($sNote !== '' ? '; session note saved' : ''));
+        // 'note_saved': the session note was saved with the completion (3.0.32).
         // 'warning': the sentence for the app to add to its "hours logged" message (null when none).
         // 'hours_linked': the hours already logged that the session was linked to (null when none).
-        out(['ok' => true, 'hours_logged' => $hours, 'warning' => $authIssue, 'hours_linked' => $linkedHours]);
+        out(['ok' => true, 'hours_logged' => $hours, 'warning' => $authIssue, 'hours_linked' => $linkedHours, 'note_saved' => $sNote !== '']);
 
     case 'tracks':
         $sql = "SELECT t.* , c.name AS client FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.status = 'Active'";

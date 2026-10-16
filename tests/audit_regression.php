@@ -67,7 +67,7 @@ function race(array $jobs, string $gate): array {
         $process = proc_open(array_merge([PHP_BINARY, __FILE__, 'worker'], $args), [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
         $running[] = [$process, $pipes];
     }
-    $deadline = microtime(true) + 10;
+    $deadline = microtime(true) + 30; // fresh PHP processes can take over 10 s to start on a busy machine
     do {
         usleep(50000);
         try {

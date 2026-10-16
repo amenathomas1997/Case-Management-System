@@ -51,8 +51,10 @@ foreach([3,4] as $cid){
 }
 // Release the parent lock only once both workers are queued behind it (as race()
 // in audit_regression.php does); otherwise they could simply run one after the
-// other and pass without at_save taking any lock.
-$queued=null;$deadline=microtime(true)+10;
+// other and pass without at_save taking any lock. Each worker is a fresh PHP process
+// loading the whole application, so on a busy machine (a build running beside the
+// suite) the second can take well over 10 seconds to queue: 30 seconds are allowed.
+$queued=null;$deadline=microtime(true)+30;
 do{usleep(50000);try{$queued=(int)$db->query("SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_state='LOCK WAIT'")->fetchColumn();}catch(PDOException $e){$queued=null;usleep(1000000);break;}}while($queued<2&&microtime(true)<$deadline);
 $db->commit();$success=0;
 foreach($workers as [$process,$pipes]){$output=stream_get_contents($pipes[1]);$errors=stream_get_contents($pipes[2]);fclose($pipes[1]);fclose($pipes[2]);$code=proc_close($process);check($code===0,'Concurrent seat request returned a handled response');$success+=(int)(json_decode($output,true)['ok']??false);}

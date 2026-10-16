@@ -63,3 +63,30 @@ check(($apiRes['note_saved']??null)===true && (int)$db->query("SELECT COUNT(*) F
 $replay=$call('log_hours',$apiLog);
 check(($replay['deduplicated']??null)===true && (int)$db->query("SELECT COUNT(*) FROM client_notes WHERE track_id=$srTrack AND body='App session note synthetic'")->fetchColumn()===1,
     'A replayed app entry saves its hours and note once');
+
+// The app's completion (3.0.32): hours, miles and the session note with complete_session.
+$db->prepare("INSERT INTO scheduled_sessions(client_id,track_id,user_id,start_at,end_at) VALUES(?,?,1,?,?)")->execute([$srClient,$srTrack,date('Y-m-d 08:00:00',strtotime('-4 days')),date('Y-m-d 09:00:00',strtotime('-4 days'))]); $appSess=(int)$db->lastInsertId();
+$call('complete_session',['session_id'=>$appSess,'hours'=>1.25]);
+$appWl=$db->query("SELECT w.hours,w.mileage FROM scheduled_sessions s JOIN work_logs w ON w.id=s.work_log_id WHERE s.id=$appSess")->fetch();
+check($appWl && (float)$appWl['hours']===1.25,'The app completes a session with the hours typed at completion');
+$db->prepare("INSERT INTO scheduled_sessions(client_id,track_id,user_id,start_at,end_at) VALUES(?,?,1,?,?)")->execute([$srClient,$srTrack,date('Y-m-d 08:00:00',strtotime('-5 days')),date('Y-m-d 09:00:00',strtotime('-5 days'))]); $appSess2=(int)$db->lastInsertId();
+$refusedMiles=$call('complete_session',['session_id'=>$appSess2,'hours'=>0,'mileage'=>5],[],false);
+check(str_contains((string)($refusedMiles['error']??''),'Miles are logged with') && $db->query("SELECT status FROM scheduled_sessions WHERE id=$appSess2")->fetchColumn()==='Scheduled',
+    'The app cannot log miles without hours: refused, nothing changed');
+$appDone=$call('complete_session',['session_id'=>$appSess2,'hours'=>2,'mileage'=>7.5,'session_note'=>'App completion note synthetic']);
+$appWl2=$db->query("SELECT w.hours,w.mileage FROM scheduled_sessions s JOIN work_logs w ON w.id=s.work_log_id WHERE s.id=$appSess2")->fetch();
+check(($appDone['note_saved']??null)===true && $appWl2 && (float)$appWl2['hours']===2.0 && (float)$appWl2['mileage']===7.5
+    && (int)$db->query("SELECT COUNT(*) FROM client_notes WHERE track_id=$srTrack AND body='App completion note synthetic'")->fetchColumn()===1,
+    'The app completes a session with its hours, miles and session note in one step');
+
+// A group: one hours field for everyone who attended.
+$db->exec("INSERT INTO clients(name,status) VALUES('Group record synthetic client','Active Training')"); $grClient=(int)$db->lastInsertId();
+$db->prepare("INSERT INTO training_tracks(client_id,title,auth_number,funding_agency,authorized_hours,hourly_rate,start_date,expiration_date) VALUES(?,'Group record track','GR-32','Synthetic agency',40,50,?,?)")
+    ->execute([$grClient,date('Y-m-d',strtotime('-30 days')),date('Y-m-d',strtotime('+60 days'))]); $grTrack=(int)$db->lastInsertId();
+$gStart=date('Y-m-d 10:00:00',strtotime('-6 days')); $gEnd=date('Y-m-d 11:00:00',strtotime('-6 days'));
+$gIns=$db->prepare("INSERT INTO scheduled_sessions(client_id,track_id,user_id,start_at,end_at,group_uid) VALUES(?,?,1,?,?,'aaaabbbb3232')");
+$gIns->execute([$srClient,$srTrack,$gStart,$gEnd]); $g1=(int)$db->lastInsertId();
+$gIns->execute([$grClient,$grTrack,$gStart,$gEnd]); $g2=(int)$db->lastInsertId();
+[$code,,$err]=$renderPage('schedule',[],['complete_group'=>'1','group_uid'=>'aaaabbbb3232','attendance_form'=>'1','listed'=>[(string)$g1,(string)$g2],'attended'=>[(string)$g1,(string)$g2],'g_hours'=>'1.5']);
+$gHours=$db->query("SELECT w.hours FROM scheduled_sessions s JOIN work_logs w ON w.id=s.work_log_id WHERE s.id IN ($g1,$g2) ORDER BY s.id")->fetchAll(PDO::FETCH_COLUMN);
+check($code===0 && $err==='' && array_map('floatval',$gHours)===[1.5,1.5],'Completing a group logs the hours typed for each client who attended' . ($err ? ": $err" : ''));
