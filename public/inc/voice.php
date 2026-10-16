@@ -835,7 +835,7 @@ function voice_sections(): array {
         'tasks' => 'tasks.php', 'my account' => 'account.php', 'capacity' => 'capacity.php', 'utilization' => 'utilization.php',
         'reports' => 'analytics.php', 'business summary' => 'business_summary.php', 'attendance' => 'attendance.php', 'no-shows' => 'attendance.php',
         'unused authorizations' => 'unused_authorizations.php', 'data quality' => 'data_quality.php', 'survey responses' => 'survey_responses.php',
-        'funder report' => 'funder_report.php', 'incoming authorizations' => 'authorizations.php', 'spreadsheet downloads' => 'exports.php', 'downloads' => 'exports.php', 'authorizations' => 'authorizations.php',
+        'funder report' => 'funder_report.php', 'incoming authorizations' => 'authorizations.php', 'spreadsheet downloads' => 'exports.php', 'letters' => 'letters.php', 'downloads' => 'exports.php', 'authorizations' => 'authorizations.php',
     ];
 }
 

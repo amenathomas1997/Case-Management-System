@@ -1199,6 +1199,7 @@ page_header($tabLabels[$tab] . ' — ' . $client['name'], $user, 'clients', $tab
   <a class="btn btn-secondary" href="messages.php?client=<?= $id ?>&amp;channel=client">Messages with client</a>
   <a class="btn btn-secondary" href="messages.php?client=<?= $id ?>&amp;channel=counselor">Messages with counselor</a>
   <a class="btn btn-secondary" href="client_timeline.php?id=<?= $id ?>">Timeline</a>
+  <a class="btn btn-secondary" href="letters.php?client=<?= $id ?>">Write a letter</a>
   <a class="btn btn-secondary" href="client_export.php?id=<?= $id ?>">Export full file (ZIP)</a>
 </div>
 

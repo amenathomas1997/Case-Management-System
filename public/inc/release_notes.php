@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.51' => [
+        'Letters: Write a letter on a client\'s page fills in a welcome, appointment, missed-appointment, equipment loan or return, referral acknowledgement or completion letter from the record. Check it, then save it to their documents (and portal), keep it as a note, or download it to print. Administrators change the wording on the Letters page.',
+        'The client portal now shows the client\'s practice updates with your feedback (add it under Daily work, Homework support), their finished homework, and a summary of each finished training plan. When you send a progress or final report you can also put a copy in the client\'s portal.',
+    ],
     '3.0.50' => [
         'Spreadsheet downloads (Business analytics) gives the everyday lists as CSV files: clients, referrals, tasks, sessions, authorizations, equipment and loans, device follow-ups, incidents, portal requests and contracts. The client list can be filtered by instructor, client type, funding agency and school, and Download these clients gets every match, past the 500 shown.',
         'Each client has a Timeline (a button on their page): every case event newest first under month headings, and the days spent in each status. On a lower-is-better assessment, a falling score now shows as better. The scheduled report email can include the Business summary.',

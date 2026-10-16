@@ -956,6 +956,41 @@ $homework = $hwStmt->fetchAll();
 </section>
 <?php endif; ?>
 
+<?php // Practice history with the instructor's feedback, completed homework, and finished
+// training plans with a completion summary (3.0.51).
+$pracHist = portal_practice_history((int)$client['id']);
+$doneHw = portal_completed_homework((int)$client['id']);
+$finished = portal_finished_tracks((int)$client['id']);
+if ($pracHist || $doneHw): ?>
+<section class="card" aria-labelledby="hist-h">
+  <h2 id="hist-h"><?= t('Your practice and finished homework') ?></h2>
+  <?php if ($pracHist): ?>
+  <details><summary><?= t('Your practice updates and your instructor\'s feedback') ?> (<?= count($pracHist) ?>)</summary>
+  <ul>
+  <?php foreach ($pracHist as $ph): ?>
+    <li><?= en(fmt_date(substr((string)$ph['created_at'], 0, 10))) ?>, <?= en((string)$ph['title']) ?>: <?= (int)$ph['minutes'] ?> <?= t('minutes') ?>.<?php if ($ph['staff_feedback']): ?> <strong><?= t('Instructor feedback') ?>:</strong> <?= en((string)$ph['staff_feedback']) ?><?php endif; ?></li>
+  <?php endforeach; ?>
+  </ul>
+  </details>
+  <?php endif; ?>
+  <?php if ($doneHw): ?>
+  <details><summary><?= t('Finished homework') ?> (<?= count($doneHw) ?>)</summary>
+  <ul><?php foreach ($doneHw as $dh): ?><li><?= en((string)$dh['title']) ?> (<?= en((string)$dh['track_title']) ?>)</li><?php endforeach; ?></ul>
+  </details>
+  <?php endif; ?>
+</section>
+<?php endif; ?>
+<?php if ($finished): ?>
+<section class="card" aria-labelledby="fin-h">
+  <h2 id="fin-h"><?= t('Finished training') ?></h2>
+  <?php foreach ($finished as $f): $ft = $f['track']; $met = array_filter($f['goals'], fn($g) => $g['status'] === 'Achieved'); ?>
+  <h3><?= en((string)$ft['title']) ?></h3>
+  <p><?= t('Completed') ?><?= !empty($ft['completed_at']) ? ' ' . en(fmt_date(substr((string)$ft['completed_at'], 0, 10))) : '' ?>. <?= portal_hours_num($f['hours']) ?> <?= t('hours of training.') ?> <?= count($met) ?> <?= h(__('of')) ?> <?= count($f['goals']) ?> <?= t('goals achieved') ?>.</p>
+  <?php if ($met): ?><ul><?php foreach ($met as $g): ?><li><?= en((string)$g['specific_goal']) ?></li><?php endforeach; ?></ul><?php endif; ?>
+  <?php endforeach; ?>
+</section>
+<?php endif; ?>
+
 <?php // A closed case shows only what was sent before (each section's history, if any). ?>
 <?php // My devices (3.0.42): loans, repairs, and check-ins the client can answer.
 $devLoans = portal_device_loans((int)$client['id']);

@@ -573,4 +573,12 @@ return [
 
     // ---- layout.php: footer ----
     'Help and glossary' => 'Ayuda y glosario',
+
+    // ---- portal.php: practice history and finished training (3.0.51) ----
+    'Your practice and finished homework' => 'Su práctica y tareas terminadas',
+    "Your practice updates and your instructor's feedback" => 'Sus avances de práctica y los comentarios de su instructor',
+    'Finished homework' => 'Tareas terminadas',
+    'Finished training' => 'Capacitación terminada',
+    'hours of training.' => 'horas de capacitación.',
+    'minutes' => 'minutos',
 ];

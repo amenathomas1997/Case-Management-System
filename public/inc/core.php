@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.50';
+const APP_VERSION = '3.0.51';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1661,3 +1661,5 @@ require_once __DIR__ . '/reports_extra.php';
 require_once __DIR__ . '/list_exports.php';
 // A client's timeline (3.0.50).
 require_once __DIR__ . '/client_timeline.php';
+// Portal history, report copies, practice feedback and letters (3.0.51).
+require_once __DIR__ . '/portal_history.php';

@@ -188,6 +188,17 @@ if ($posted && isset($_POST['send_report'])) {
         }
         audit($user['id'], 'report.send', 'client', (int)$t['cid'], 'to ' . $to);
         $copyMsg = $ccSelf && !$ccOk ? " The copy to you ({$user['email']}) could not be sent." : '';
+        // A copy for the client's portal (3.0.51), when staff chose to share it.
+        if (!empty($_POST['share_portal'])) {
+            try {
+                $shared = report_share_to_portal((int)$t['cid'], ($finalMode ? 'Final report' : 'Progress report') . ', ' . date('F j, Y'),
+                    $report['text'] . "\n\nElectronically signed by {$user['name']} on " . date('F j, Y \a\t g:i A') . '.', (int)$user['id']);
+                $copyMsg .= $shared ? ' A copy is in the client\'s portal.' : ' The copy for the client\'s portal could not be saved.';
+            } catch (Throwable $e) {
+                error_log('report.php: portal copy not saved: ' . get_class($e));
+                $copyMsg .= ' The copy for the client\'s portal could not be saved.';
+            }
+        }
         if ($recorded) {
             flash("Report signed, emailed to {$to}, and logged as a Progress Report note." . $copyMsg);
         } else {
@@ -270,6 +281,9 @@ page_header('Training report', $user, 'clients');
     <?php endif; ?>
     <div class="field">
       <label><input type="checkbox" name="cc_self" value="1"<?= $ccChecked ? ' checked' : '' ?>> Send a copy to me (<?= h($user['email']) ?>)</label>
+    </div>
+    <div class="field">
+      <label><input type="checkbox" name="share_portal" value="1"<?= ($posted || $refill) && (!empty($_POST['share_portal']) || old_in('share_portal') !== '') ? ' checked' : '' ?>> Also put a copy in the client's portal</label>
     </div>
     <div class="field">
       <label for="signature">Electronic signature <?= required_mark() ?> <span class="hint">Type your full name (<?= h($user['name']) ?>) to sign — the signature and timestamp are included on the report</span></label>
