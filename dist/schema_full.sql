@@ -561,6 +561,7 @@ CREATE TABLE `equipment_followups` (
   `notes` text DEFAULT NULL,
   `completed_at` datetime DEFAULT NULL,
   `completed_by` int(10) unsigned DEFAULT NULL,
+  `client_reported` tinyint(1) NOT NULL DEFAULT 0,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `idx_due` (`status`,`due_date`),

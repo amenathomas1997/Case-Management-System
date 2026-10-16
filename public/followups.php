@@ -223,6 +223,8 @@ function fu_when(array $r): string {
           elseif ($r['in_use'] === null) echo '<span class="muted">Use unknown</span>' . ($r['satisfaction'] ? ' · ' . (int)$r['satisfaction'] . '/5' : '');
           elseif ((int)$r['in_use'] === 1) echo 'In use' . ($r['satisfaction'] ? ' · ' . (int)$r['satisfaction'] . '/5' : '');
           else echo '<span class="field-error">Not in use</span>' . ($r['barriers'] ? ' · ' . h($r['barriers']) : '');
+          // Answered by the client in the portal (3.0.42).
+          if (!empty($r['client_reported'])) echo ' · reported by the client';
         ?></td></tr>
     <?php endforeach; ?>
     </tbody>

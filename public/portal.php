@@ -248,6 +248,21 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         return true;
     };
     $capMsg = 'You have reached today\'s limit for this. Please try again tomorrow, or contact your instructor.';
+    // A device check-in the client answered (3.0.42): saved as client-reported.
+    if (isset($_POST['device_checkin'])) {
+        $use = $_POST['in_use'] ?? '';
+        $satIn = (int)($_POST['satisfaction'] ?? 0);
+        $done = portal_device_checkin_save((int)($_POST['followup_id'] ?? 0), $client,
+            $use === 'yes' ? 1 : ($use === 'no' ? 0 : null), $satIn >= 1 && $satIn <= 5 ? $satIn : null,
+            is_string($_POST['barriers'] ?? null) ? $_POST['barriers'] : '');
+        if ($done) {
+            portal_notify_owner($client, $client['name'] . ' answered a device check-in', 'followups.php');
+            flash_ui('Thank you. Your answers were sent to your instructor.');
+        } else {
+            flash_ui('That check-in was already answered.', 'info');
+        }
+        redirect('portal.php?t=' . $token . '&lang=' . page_lang() . '#dev-h');
+    }
     if (isset($_POST['at_learning_done']) && at_ready()) {
         // Up to 5 updates a minute per client: enough to report several exercises in a row.
         $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 SECOND)");
@@ -942,6 +957,46 @@ $homework = $hwStmt->fetchAll();
 <?php endif; ?>
 
 <?php // A closed case shows only what was sent before (each section's history, if any). ?>
+<?php // My devices (3.0.42): loans, repairs, and check-ins the client can answer.
+$devLoans = portal_device_loans((int)$client['id']);
+$devRepairs = portal_device_repairs((int)$client['id']);
+$devChecks = $caseClosed ? [] : portal_device_checkins((int)$client['id']);
+if ($devLoans || $devRepairs || $devChecks): ?>
+<section class="card" aria-labelledby="dev-h">
+  <h2 id="dev-h"><?= t('My devices') ?></h2>
+  <?php if ($devLoans): ?>
+  <h3><?= t('Loaned to you') ?></h3>
+  <ul>
+  <?php foreach ($devLoans as $l): $over = $l['due_date'] && $l['due_date'] < date('Y-m-d'); ?>
+    <li><?= en((string)$l['name']) ?>: <?= t('loaned') ?> <?= en(fmt_date($l['loaned_at'])) ?><?php if ($l['due_date']): ?>, <?= $over ? '<strong>' . t('was due back') . ' ' . en(fmt_date($l['due_date'])) . '</strong>' : t('due back') . ' ' . en(fmt_date($l['due_date'])) ?><?php endif; ?>.</li>
+  <?php endforeach; ?>
+  </ul>
+  <p><?= t('To return an item, give it to your instructor, or send us a request below if you need it longer.') ?></p>
+  <?php endif; ?>
+  <?php if ($devRepairs): ?>
+  <h3><?= t('Repairs') ?></h3>
+  <ul><?php foreach ($devRepairs as $rp): ?><li><?= en((string)$rp['title']) ?>: <?= en((string)$rp['status']) ?></li><?php endforeach; ?></ul>
+  <?php endif; ?>
+  <?php foreach ($devChecks as $fc): $fid = (int)$fc['id']; ?>
+  <h3 id="chk-<?= $fid ?>"><?= t('How is it going?') ?> <?= en((string)$fc['name']) ?></h3>
+  <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked"><?= csrf_field() ?>
+    <input type="hidden" name="followup_id" value="<?= $fid ?>">
+    <fieldset><legend><?= t('Are you still using it?') ?></legend>
+      <label><input type="radio" name="in_use" value="yes"> <?= t('Yes') ?></label>
+      <label><input type="radio" name="in_use" value="no"> <?= t('No') ?></label>
+    </fieldset>
+    <div class="field"><label for="sat-<?= $fid ?>"><?= t('How happy are you with it?') ?></label>
+      <select id="sat-<?= $fid ?>" name="satisfaction"><option value=""><?= t('Choose') ?></option>
+        <?php foreach ([5 => 'Very happy', 4 => 'Happy', 3 => 'Okay', 2 => 'Unhappy', 1 => 'Very unhappy'] as $sv => $sl): ?><option value="<?= $sv ?>"><?= t($sl) ?></option><?php endforeach; ?>
+      </select></div>
+    <div class="field"><label for="bar-<?= $fid ?>"><?= t('Is anything getting in the way?') ?></label>
+      <input type="text" id="bar-<?= $fid ?>" name="barriers" maxlength="255"></div>
+    <button type="submit" name="device_checkin" value="1" class="btn btn-primary"><?= t('Send my answers') ?><span class="visually-hidden"> — <?= en((string)$fc['name']) ?></span></button>
+  </form>
+  <?php endforeach; ?>
+</section>
+<?php endif; ?>
+
 <?php if (!$caseClosed || $myRequests): ?>
 <section class="card" aria-labelledby="req-h">
   <h2 id="req-h"><?= t('Requests & help') ?></h2>

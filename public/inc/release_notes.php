@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.42' => [
+        'Clients see My devices in their portal: what is loaned to them and when it is due back, and any repair under way. They can answer their 30, 60 and 90-day device check-ins there themselves; Device follow-ups marks these as reported by the client.',
+        'Clients are emailed a reminder three days before a loaned item is due, and the day after it is overdue (not those who prefer phone or post).',
+    ],
     '3.0.41' => [
         'Counselors are emailed when a client misses a session, and when an authorization reaches 80% of its hours or funds. The email gives the date or the authorization number and a link to their portal, never the client\'s name. Their portal now shows each client\'s attendance for the last 90 days, lets them open a report again and confirm they received it.',
         'Clients are emailed a calendar invitation when a session is booked, and a cancellation that removes it from their calendar when it is cancelled (not those who prefer phone or post). Their portal has Add to calendar on each session and a list of past sessions.',

@@ -199,6 +199,10 @@ try {
     error_log('daily_alerts: portal link check skipped (' . $e->getCode() . ')'); // mig_3.0.40 not run yet
 }
 
+// Loan reminders to the client (3.0.42): three days before a loan is due and the day
+// after it is overdue, each once (inc/portal_devices.php).
+try { loan_reminders(); } catch (Throwable $e) { error_log('daily_alerts: loan reminders skipped (' . get_class($e) . ')'); }
+
 // Equipment maintenance: open a task when a scheduled item is due (or overdue)
 // for service. One open task per item at a time (idempotent via auto_key/day).
 // A task is closed here once it no longer applies: a service was logged after the

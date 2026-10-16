@@ -1,7 +1,7 @@
 {
     "product": "Case Management System",
-    "latest": "3.0.41",
+    "latest": "3.0.42",
     "released": "2026-10-16",
-    "notes": "Counselor and client notices: counselors are emailed on a no-show and when an authorization is 80% used (portal link only); their portal shows attendance, reopens reports and confirms receipt; clients get calendar invites and cancellations, Add to calendar and past sessions in the portal. No database change. Sites below 3.0.40 apply mig_3.0.34 to mig_3.0.40 first, in order. Sites below 3.0.31 also apply mig_3.0.31.sql; Apply dist/migrations/mig_3.0.31.sql (confirms client emails waiting for confirmation). Sites below 3.0.28 apply mig_3.0.28.sql (adds scheduled_sessions.checked_in_at) before updating files; sites below 3.0.27 apply mig_3.0.27.sql first. Sites on 3.0.16 to 3.0.20 apply mig_3.0.21.sql first. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16, 3.0.21, 3.0.27, 3.0.28, 3.0.31, 3.0.34, 3.0.35, 3.0.36, 3.0.37, 3.0.38, 3.0.39 and 3.0.40 in order; all are safe to re-run.",
+    "notes": "My devices: clients see their loans and repairs in the portal and answer their own device check-ins (saved as client-reported); loan due and overdue reminders to clients. Apply dist/migrations/mig_3.0.42.sql before updating files (safe to re-run); sites below 3.0.40 first apply mig_3.0.34 to mig_3.0.40 in order. Sites below 3.0.31 also apply mig_3.0.31.sql; Apply dist/migrations/mig_3.0.31.sql (confirms client emails waiting for confirmation). Sites below 3.0.28 apply mig_3.0.28.sql (adds scheduled_sessions.checked_in_at) before updating files; sites below 3.0.27 apply mig_3.0.27.sql first. Sites on 3.0.16 to 3.0.20 apply mig_3.0.21.sql first. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16, 3.0.21, 3.0.27, 3.0.28, 3.0.31, 3.0.34, 3.0.35, 3.0.36, 3.0.37, 3.0.38, 3.0.39, 3.0.40 and 3.0.42 in order; all are safe to re-run.",
     "contact": "Contact Example Agency for the update package."
 }

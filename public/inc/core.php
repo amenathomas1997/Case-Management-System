@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.41';
+const APP_VERSION = '3.0.42';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -319,6 +319,18 @@ const EMAIL_TEMPLATES = [
     'session_cancelled_client_es' => ['Session cancelled (client, Spanish)', 'Se canceló su sesión de capacitación con {org_short}',
         "Hola, {name}:\n\nSe canceló esta sesión de capacitación:\n\n{sessions}\n\nEl archivo adjunto la quita de su calendario. Para programar otra hora, responda a este correo o comuníquese con {contact}.\n",
         '{name} {sessions} {contact} {org_short} {org}'],
+    'loan_due_client' => ['Loaned item due soon (client)', 'Reminder: please return the {item} by {date}',
+        "Hello {name},\n\nThe {item} we loaned you is due back on {date}. Please return it to your instructor, or contact us if you need it longer: {contact}\n\nYour loans are listed in your portal: {portal_link}\n",
+        '{name} {item} {date} {portal_link} {contact} {org_short} {org}'],
+    'loan_due_client_es' => ['Loaned item due soon (client, Spanish)', 'Recordatorio: devuelva el equipo prestado ({item}) antes del {date}',
+        "Hola, {name}:\n\nEl equipo que le prestamos ({item}) se debe devolver el {date}. Devuélvalo a su instructor, o comuníquese con nosotros si lo necesita por más tiempo: {contact}\n\nSus préstamos aparecen en su portal: {portal_link}\n",
+        '{name} {item} {date} {portal_link} {contact} {org_short} {org}'],
+    'loan_overdue_client' => ['Loaned item overdue (client)', 'The {item} was due back on {date}',
+        "Hello {name},\n\nThe {item} we loaned you was due back on {date}. Please return it to your instructor, or contact us to keep it longer: {contact}\n\nYour loans are listed in your portal: {portal_link}\n",
+        '{name} {item} {date} {portal_link} {contact} {org_short} {org}'],
+    'loan_overdue_client_es' => ['Loaned item overdue (client, Spanish)', 'El equipo prestado ({item}) se debía devolver el {date}',
+        "Hola, {name}:\n\nEl equipo que le prestamos ({item}) se debía devolver el {date}. Devuélvalo a su instructor, o comuníquese con nosotros para quedárselo por más tiempo: {contact}\n\nSus préstamos aparecen en su portal: {portal_link}\n",
+        '{name} {item} {date} {portal_link} {contact} {org_short} {org}'],
     'counselor_auth_low' => ['Authorization nearly used (counselor)', 'Authorization {auth} is nearly used — {org_short}',
         "Hello {name},\n\nAuthorization {auth} is nearly used: {used}. If more training is needed, please consider an amendment. To see the client and their progress, open your counselor portal:\n\n{link}\n\nFor privacy, the client is not named in this email.\n",
         '{name} {auth} {used} {link} {org_short} {org}'],
@@ -383,6 +395,7 @@ const EMAIL_TEMPLATE_REQUIRED = [
     'release_request' => '{link}', 'release_request_es' => '{link}',
     'message_notice' => '{link}', 'message_notice_es' => '{link}', 'request_closed' => '{link}', 'request_closed_es' => '{link}',
     'portal_expiring' => '{link}', 'portal_expiring_es' => '{link}', 'counselor_noshow' => '{link}', 'counselor_auth_low' => '{link}',
+    'loan_due_client' => '{item}', 'loan_due_client_es' => '{item}', 'loan_overdue_client' => '{item}', 'loan_overdue_client_es' => '{item}',
     'session_booked_client' => '{sessions}', 'session_booked_client_es' => '{sessions}', 'session_cancelled_client' => '{sessions}', 'session_cancelled_client_es' => '{sessions}',
     'report_cover' => '{ack}',
     'referral_closed' => '{ref}',
@@ -1614,3 +1627,5 @@ require_once __DIR__ . '/case_outcomes.php';
 require_once __DIR__ . '/records_privacy.php';
 // Portal links that renew, message and request notices (3.0.40).
 require_once __DIR__ . '/client_notices.php';
+// My devices in the client portal and loan reminders (3.0.42).
+require_once __DIR__ . '/portal_devices.php';

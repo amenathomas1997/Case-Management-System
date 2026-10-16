@@ -24,6 +24,8 @@ const TPL_REQUIRED = [
     'portal_expiring' => ['{link}' => 'the portal link'],
     'counselor_noshow' => ['{link}' => 'the counselor portal link'],
     'counselor_auth_low' => ['{link}' => 'the counselor portal link'],
+    'loan_due_client' => ['{item}' => 'the item loaned'],
+    'loan_overdue_client' => ['{item}' => 'the item loaned'],
     'session_booked_client' => ['{sessions}' => 'the session dates'],
     'session_cancelled_client' => ['{sessions}' => 'the session dates'],
     'report_cover' => ['{ack}' => 'the confirmation link'],
