@@ -15,11 +15,11 @@ declare(strict_types=1);
 
 const REPORT_PERIOD_PRESETS = [
     'this_month' => 'This month', 'last_month' => 'Last month', 'this_quarter' => 'This quarter',
-    'fytd' => 'Fiscal year to date', 'last_12' => 'Last 12 months', 'custom' => 'Custom dates',
+    'fytd' => 'Fiscal year to date', 'last_fy' => 'Last fiscal year', 'last_12' => 'Last 12 months', 'custom' => 'Custom dates',
 ];
 
 /** [from, to] for a dated preset by today's date; null for 'custom' or an unknown key.
- *  The fiscal year is the federal one (October 1 to September 30), as the RSA-911 export uses. */
+ *  The fiscal year starts in the month set under Administration (October, the federal year, by default). */
 function report_period_dates(string $preset): ?array {
     $y = (int)date('Y'); $m = (int)date('n');
     switch ($preset) {
@@ -28,7 +28,9 @@ function report_period_dates(string $preset): ?array {
         case 'this_quarter':
             $qm = (int)(floor(($m - 1) / 3) * 3 + 1);
             return [sprintf('%04d-%02d-01', $y, $qm), date('Y-m-t', mktime(0, 0, 0, $qm + 2, 1, $y))];
-        case 'fytd': return [($m >= 10 ? $y : $y - 1) . '-10-01', date('Y-m-d')];
+        // The organisation's fiscal year (3.0.49: Administration sets the month it starts).
+        case 'fytd': return [fiscal_year_of(date('Y-m-d'))[0], date('Y-m-d')];
+        case 'last_fy': return fiscal_year_of(date('Y-m-d', strtotime(fiscal_year_of(date('Y-m-d'))[0] . ' -1 day')));
         case 'last_12': return [date('Y-m-01', strtotime('-11 months', strtotime(date('Y-m-01')))), date('Y-m-d')];
     }
     return null;

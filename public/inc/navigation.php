@@ -29,7 +29,7 @@ function cms_navigation_items(): array {
         ['contracts.php', 'Grants & contracts', 'contracts', 'billing', 'money', 'Funding agreements, budgets, deliverables and spending.', 'k'], // own entry: billing-only groups cannot open Compliance, its other link
         ['compliance.php', 'Authorizations & compliance', 'compliance', 'clients', 'money', 'Authorizations at risk, reports due, consents to renew, device follow-ups due and overdue loans.', 'p'],
         ['incidents.php', 'Incident reports', 'incidents', 'clients', 'money', 'Record an incident and follow it to closure.', 'j'],
-        ['analytics.php', 'Business analytics', 'analytics', 'analytics', 'money', 'Charts and every report: outcomes, funders, billing, RSA-911 and utilization.', 'y'],
+        ['analytics.php', 'Business analytics', 'analytics', 'analytics', 'money', 'Every report: business summary, outcomes, funders, attendance, unused authorizations, billing, RSA-911, utilization and data quality.', 'y'],
         ['kb.php', 'Staff knowledge base', 'kb', null, 'help', 'Agency how-to articles you can search or ask questions of.', 'w'],
         ['ai_tools.php', 'AI tools', 'ai_tools', null, 'help', 'AI drafting helpers; always check their work before saving.', 'x'],
         ['help.php#staff-guide', 'User guide', 'help', null, 'help', 'How to use this system, including screen reader tips.', 'u'],

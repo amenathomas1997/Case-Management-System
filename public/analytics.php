@@ -73,12 +73,18 @@ $avgRow = db()->query("SELECT AVG(track_hours) avg_hours FROM (
 /* Every report page, each listed only when this account can open it (the same
    permission checks those pages make). */
 $reports = array_filter([
+    ['business_summary.php', 'Business summary', 'Referrals, new clients, clients served, sessions, no-shows, hours, closures and the rehabilitation rate for a period, compared with the period before and last year, month by month; CSV and accessible HTML.', can('analytics')],
     ['outcomes.php', 'Outcome report', 'Clients served, hours by RSA category and program, closures and the rehabilitation rate for a period, as agencies ask for at contract renewal; exports to CSV.', can('analytics')],
     ['funder_report.php', 'Funder outcome report', 'One report per funding agency with clients served, hours, goal achievement, device retention, assessment score gains and closures; as a page, letterhead PDF or CSV.', can('analytics')],
     ['agency_report.php', 'Agency billing summary', 'Billing totals per funding agency for a date range, for quarterly reconciliation with state VR.', can('billing')],
     ['rsa_report.php', 'RSA-911 case-service export', 'One row per client served in a period with the case-service fields state VR asks for, to preview on screen or download as CSV.', can('billing')],
     ['utilization.php', 'Staff billable utilization', "Each staff member's billable hours and value for a period against their expected capacity, with a utilization rate.", can('analytics')],
     ['capacity.php', 'Capacity planning', 'Committed session hours against available hours per instructor, plus authorized hours not yet scheduled on active tracks.', can('schedule')],
+    ['attendance.php', 'Attendance and no-shows', 'Completed, missed and cancelled sessions for a period by client, instructor, service type or setting, and clients with repeated no-shows; CSV.', can('analytics')],
+    ['unused_authorizations.php', 'Unused authorizations', 'Authorizations that ended in a period, with hours and dollars authorized, delivered, invoiced and left unused, by agency, service and instructor; CSV.', can('analytics')],
+    ['survey_responses.php', 'Survey responses', 'Every outcome survey answer for a period, by email or phone, with the averages; CSV.', can('analytics')],
+    ['data_quality.php', 'Data quality', 'Likely duplicate clients and records to tidy before a report is due.', can('clients')],
+    ['doc_audit.php', 'Documentation audit', 'Documentation gaps on active clients: stale notes, missing assessments and goals with no recent progress.', can('clients')],
     ['risk.php', 'Outcome risk flags', 'Uses the AI assistant to rank active clients who may be at risk of not completing, with the reason and a suggested action.', can('analytics') && function_exists('ai_feature_enabled') && ai_feature_enabled('risk')],
 ], fn(array $r): bool => $r[3]);
 

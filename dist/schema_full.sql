@@ -1176,6 +1176,7 @@ CREATE TABLE `training_tracks` (
   `report_cadence` enum('none','weekly','biweekly','monthly') NOT NULL DEFAULT 'monthly',
   `last_report_at` date DEFAULT NULL,
   `billing_mode` enum('vr','private','none') NOT NULL DEFAULT 'vr',
+  `completed_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `client_id` (`client_id`),
   CONSTRAINT `training_tracks_ibfk_1` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE

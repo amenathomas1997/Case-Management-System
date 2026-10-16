@@ -1625,7 +1625,13 @@ switch ($action) {
                 catch (Throwable $e) { $surveySent = $surveyEmailOk ? false : null; error_log('api.php: outcome survey not sent: ' . get_class($e) . ' code=' . $e->getCode()); }
             }
         }
-        out(['ok' => true, 'client_id' => $cid, 'unarchived' => $unarchive, 'survey_sent' => $surveySent]);
+        // A new client who may already have a record (3.0.49): said, not refused.
+        $dupWarning = null;
+        if (!$isUpdate) {
+            $nc = db()->prepare('SELECT name, dob, phone, email FROM clients WHERE id = ?'); $nc->execute([$cid]); $ncr = $nc->fetch() ?: [];
+            $dupWarning = duplicate_warning_text(possible_duplicate_clients((string)($ncr['name'] ?? ''), $ncr['dob'] ?? null, $ncr['phone'] ?? null, $ncr['email'] ?? null, $cid), caseload_scoped() ? $userId : null) ?: null;
+        }
+        out(['ok' => true, 'client_id' => $cid, 'unarchived' => $unarchive, 'survey_sent' => $surveySent, 'duplicate_warning' => $dupWarning]);
     }
 
     case 'goals':

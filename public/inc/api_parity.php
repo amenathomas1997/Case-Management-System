@@ -503,6 +503,7 @@ case 'save_track': {
         db()->prepare('INSERT INTO training_tracks (client_id, title, service_type, rsa_category, bundle_id, status, auth_number, funding_agency, authorized_hours, hourly_rate, mileage_rate, start_date, expiration_date, report_cadence, billing_mode, authorized_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
             ->execute(array_merge([$clientId], $vals, [$billingMode, $authAmount]));
         $newTrackId = (int)db()->lastInsertId();
+        track_mark_ended($newTrackId, $status);
         audit($userId, 'track.create', 'track', $newTrackId, $title . ' (auth ' . $authNumber . ')');
         out(['ok' => true, 'id' => $newTrackId, 'message' => 'Training track created.']);
     }
@@ -590,6 +591,7 @@ case 'save_track': {
         $vals[] = $id;
         db()->prepare('UPDATE training_tracks SET title=?, service_type=?, rsa_category=?, bundle_id=?, status=?, auth_number=?, funding_agency=?, authorized_hours=?, hourly_rate=?, mileage_rate=?, start_date=?, expiration_date=?, report_cadence=? WHERE id=?')->execute($vals);
         db()->prepare('UPDATE training_tracks SET billing_mode = ?, authorized_amount = ? WHERE id = ?')->execute([$billingMode, $authAmount, $id]);
+        track_mark_ended($id, $status);
         $retotalled = 0;
         if ($draftIds && ($rateChanged || $mileageChanged)) {
             $headerSet = ($rateChanged ? ', i.hourly_rate = ?' : '') . ($mileageChanged ? ', i.mileage_rate = ?' : '');

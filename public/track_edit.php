@@ -205,6 +205,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $vals[] = $track['id'];
                 db()->prepare('UPDATE training_tracks SET title=?, service_type=?, rsa_category=?, bundle_id=?, status=?, auth_number=?, funding_agency=?, authorized_hours=?, hourly_rate=?, mileage_rate=?, start_date=?, expiration_date=?, report_cadence=? WHERE id=?')->execute($vals);
                 db()->prepare('UPDATE training_tracks SET billing_mode = ?, authorized_amount = ? WHERE id = ?')->execute([$billingMode, $authAmount, $id]);
+                track_mark_ended($id, $status);
                 if (($track['billing_mode'] ?? 'vr') !== $billingMode || ($track['authorized_amount'] === null ? null : round((float)$track['authorized_amount'], 2)) !== $authAmount) {
                     audit($user['id'], 'track.billing', 'track', $id, 'billing ' . ($track['billing_mode'] ?? 'vr') . ' -> ' . $billingMode
                         . '; authorized amount ' . ($track['authorized_amount'] ?? 'none') . ' -> ' . ($authAmount ?? 'none'));
@@ -251,6 +252,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Capture the id before audit() inserts its own row and replaces it.
             $newTrackId = (int)db()->lastInsertId();
             web_once_set($trackKey, $newTrackId);
+            track_mark_ended($newTrackId, $status);
             audit($user['id'], 'track.create', 'track', $newTrackId, $title . ' (auth ' . $authNumber . ')');
             // Started from an authorization email (3.0.48): it is done once its track exists.
             $incAuth = (int)($_POST['incoming_auth'] ?? 0);

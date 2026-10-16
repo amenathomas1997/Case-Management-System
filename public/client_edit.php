@@ -153,6 +153,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     }
+    // A new client who may already have a record (3.0.49): said before saving, and saved
+    // once staff tick that it is a different person.
+    $dupWarning = false;
+    if (!$errors && !$client && ($_POST['not_duplicate'] ?? '') !== '1') {
+        $dups = possible_duplicate_clients($name, valid_date($dobIn) ?: null, trim((string)($_POST['phone'] ?? '')) ?: null, trim((string)($_POST['email'] ?? '')) ?: null);
+        if ($dups) { $errors['name'] = duplicate_warning_text($dups, caseload_scoped() ? (int)$user['id'] : null) . ' If this is a different person, tick "This is a different person" below the name and save again.'; $dupWarning = true; set_form_errors($errors); }
+    }
     if (!$errors) {
         if ($client) {
             // Re-opening an archived record (any status other than Closed) returns
@@ -354,6 +361,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       <input type="text" id="name" name="name" required value="<?= $v('name') ?>"
         <?= isset($errors['name']) ? 'aria-invalid="true" aria-describedby="err-name"' : '' ?>>
       <?php if (isset($errors['name'])): ?><p class="field-error" id="err-name"><?= h($errors['name']) ?></p><?php endif; ?>
+      <?php if (!empty($dupWarning)): ?><label><input type="checkbox" name="not_duplicate" value="1"> This is a different person</label><?php endif; ?>
     </div>
     <div class="field"><label for="dob">Date of birth</label>
       <input type="date" id="dob" name="dob" max="<?= date('Y-m-d') ?>" value="<?= $v('dob') ?>" <?= field_aria('dob') ?>><?= field_error('dob') ?></div>

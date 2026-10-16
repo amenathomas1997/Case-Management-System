@@ -197,7 +197,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
       <li>Grants &amp; contracts: funding agreements, budgets, deliverables and spending.</li>
       <li>Authorizations &amp; compliance: authorizations at risk, reports due, consents to renew, device follow-ups due and overdue equipment loans.</li>
       <li>Incident reports: record an incident and follow it to closure.</li>
-      <li>Business analytics: charts and every report, such as outcomes, funders, billing, RSA-911 and utilization.</li>
+      <li>Business analytics: every report, such as the business summary, outcomes, funders, attendance, unused authorizations, billing, RSA-911, utilization and data quality, then the charts.</li>
     </ul></li>
   <li>Help &amp; account
     <ul>
@@ -652,7 +652,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <p>Open Grants &amp; contracts and choose the agreement. Record its budget and deliverables, and review spending. Authorizations &amp; compliance lists authorizations at risk and reports due. Follow each link to fix the record.</p>
 
 <?= $sgH(3, 'guide-reports') ?>
-<p>Open Business analytics. The Reports list comes first, then the charts. You see only the reports your permissions allow. Billable value is not the same as cash received.</p>
+<p>Open Business analytics. The Reports list comes first, then the charts. The Business summary compares a period with the one before and the same dates last year, month by month, and lists the open caseload by instructor. Attendance and no-shows counts sessions by client, instructor, service or remote and in person, and lists anyone with two or more no-shows in 60 days. Unused authorizations shows what was left on authorizations that ended. Data quality lists likely duplicates and records to tidy. Each period picker offers Fiscal year to date and Last fiscal year; an administrator sets the month the fiscal year starts under Administration, Scheduled reports. You see only the reports your permissions allow. Billable value is not the same as cash received.</p>
 <?= $sgH(4, 'guide-report-outcomes') ?>
 <p>Clients served, hours by RSA category and program, closures and the rehabilitation rate for a period. Agencies often ask for it at contract renewal. Exports to CSV. Results after training gives devices still in use, skill gains, goals achieved and the closure follow-up results; tables then count clients served by instructor, age band and vision status. Draft a narrative summary with AI sends only the figures, never names, for you to edit. Survey responses, linked at the bottom, lists every outcome survey answer with a CSV.</p>
 <?= $sgH(4, 'guide-report-funder') ?>

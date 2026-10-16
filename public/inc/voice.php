@@ -709,7 +709,8 @@ function voice_execute(string $do, array $in, array $user): array {
                 return voice_write_failed($e);
             }
             audit($uid, 'client.create', 'client', $ncid, $name . ' (voice)');
-            return ['ok' => true, 'speak' => 'Client ' . $name . ' created.', 'url' => 'client.php?id=' . $ncid, 'url_label' => 'Go to ' . $name . "'s record"];
+            $vDups = possible_duplicate_clients($name, null, null, null, $ncid);
+            return ['ok' => true, 'speak' => 'Client ' . $name . ' created.' . ($vDups ? ' Note: ' . count($vDups) . ' other record' . (count($vDups) === 1 ? ' has' : 's have') . ' the same name. Check it is not the same person.' : ''), 'url' => 'client.php?id=' . $ncid, 'url_label' => 'Go to ' . $name . "'s record"];
         case 'add_track':
             // A track is created on screen, where its authorization number, hours and
             // rate are required: a voice placeholder ("TBD", 0 hours) would be Active
@@ -832,6 +833,9 @@ function voice_sections(): array {
         'compliance' => 'compliance.php', 'documentation audit' => 'doc_audit.php', 'analytics' => 'analytics.php', 'outcomes' => 'outcomes.php',
         'contracts' => 'contracts.php', 'templates' => 'templates.php', 'knowledge base' => 'kb.php', 'ai tools' => 'ai_tools.php',
         'tasks' => 'tasks.php', 'my account' => 'account.php', 'capacity' => 'capacity.php', 'utilization' => 'utilization.php',
+        'reports' => 'analytics.php', 'business summary' => 'business_summary.php', 'attendance' => 'attendance.php', 'no-shows' => 'attendance.php',
+        'unused authorizations' => 'unused_authorizations.php', 'data quality' => 'data_quality.php', 'survey responses' => 'survey_responses.php',
+        'funder report' => 'funder_report.php', 'incoming authorizations' => 'authorizations.php', 'authorizations' => 'authorizations.php',
     ];
 }
 

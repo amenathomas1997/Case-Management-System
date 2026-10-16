@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.49' => [
+        'New reports under Business analytics: a Business summary (referrals, new clients, clients served, sessions, no-shows, hours, closures and the rehabilitation rate, compared with the period before and last year, month by month, with the open caseload by instructor), Attendance and no-shows, and Unused authorizations (hours and dollars left on authorizations that ended). Each downloads as CSV.',
+        'Data quality lists likely duplicate clients and records to tidy before a report is due. Adding a client who may already have a record now warns first. Administration sets the month your fiscal year starts; reports offer Fiscal year to date and Last fiscal year. The client page shows attendance.',
+    ],
     '3.0.48' => [
         'Incoming authorizations (Clients menu): paste an approved authorization email, or forward it to the CMS mailbox, and the system reads the authorization number, client, service, amount and counselor. Check the client, choose Start the track, and the new track form opens filled in for you to check and save. A forwarded email also adds a task. Nothing is sent to AI.',
     ],

@@ -221,6 +221,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user'])) {
 
 /* Scheduled report emails (cron/monthly_reports.php reads these settings) */
 /* Counselor progress reports: wait for a narrative (the default) or send automatically. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_fiscal_year'])) {
+    $fy = (int)($_POST['fiscal_year_start'] ?? 0);
+    if ($fy < 1 || $fy > 12) { flash('Choose the month your fiscal year starts.', 'error'); redirect('admin.php#fiscal-h'); }
+    set_setting('fiscal_year_start', (string)$fy);
+    audit($user['id'], 'settings.fiscal_year', 'settings', null, 'starts in ' . date('F', mktime(0, 0, 0, $fy, 1)));
+    flash('The fiscal year now starts in ' . date('F', mktime(0, 0, 0, $fy, 1)) . '. Reports use it for Fiscal year to date and Last fiscal year.');
+    redirect('admin.php#fiscal-h');
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_report_sending'])) {
     $auto = ($_POST['reports_auto_send'] ?? '') === '1';
     set_setting('reports_auto_send', $auto ? '1' : '0');
@@ -576,6 +584,12 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
 
   </form>
   <p class="hint">Last sent: outcome report <?= $srSentOut !== null ? 'for ' . h($srSentOut) : 'never' ?>; funder outcome report <?= $srSentFun !== null ? 'for ' . h($srSentFun) : 'never' ?>. Each send is recorded in the <a href="audit.php">audit log</a> as “report.scheduled”.</p>
+  <h3 id="fiscal-h">Fiscal year</h3>
+  <form method="post" action="admin.php#fiscal-h" class="inline-form"><?= csrf_field() ?>
+    <label for="fiscal_year_start">Fiscal year starts in</label>
+    <select id="fiscal_year_start" name="fiscal_year_start"><?php for ($fm = 1; $fm <= 12; $fm++): ?><option value="<?= $fm ?>"<?= fiscal_year_start_month() === $fm ? ' selected' : '' ?>><?= date('F', mktime(0, 0, 0, $fm, 1)) ?></option><?php endfor; ?></select>
+    <button type="submit" name="save_fiscal_year" value="1" class="btn btn-secondary btn-sm">Save fiscal year</button>
+  </form>
   <h3 id="report-sending-h">Counselor progress reports</h3>
   <form method="post" action="admin.php#report-sending-h" class="stacked"><?= csrf_field() ?>
     <div class="field"><label><input type="checkbox" name="reports_auto_send" value="1"<?= (setting('reports_auto_send') ?? '0') === '1' ? ' checked' : '' ?>> Email due progress reports to counselors automatically, without review</label>

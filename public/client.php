@@ -1260,6 +1260,7 @@ if ($hasA11y): ?>
     <dl class="props">
       <dt>Client type</dt><dd><?= h($client['client_type'] ?? 'VR') ?><?= ($client['client_type'] ?? '') === 'Pre-ETS' && !empty($client['school']) ? ' · ' . h($client['school']) : '' ?></dd>
       <dt>Date of birth</dt><dd><?= fmt_date($client['dob']) ?></dd>
+      <?php $att = client_attendance($id); if ($att['done'] + $att['noshow'] + $att['cancelled'] > 0): ?><dt>Attendance</dt><dd><?= $att['done'] ?> completed, <?= $att['noshow'] ?> no-show<?= $att['noshow'] === 1 ? '' : 's' ?>, <?= $att['cancelled'] ?> cancelled</dd><?php endif; ?>
       <?php if (!empty($client['vision_status']) || isset($client['vision_onset_age'])): ?><dt>Vision</dt><dd><?= h((string)($client['vision_status'] ?? 'Not recorded')) ?><?= isset($client['vision_onset_age']) ? ', since age ' . (int)$client['vision_onset_age'] : '' ?></dd><?php endif; ?>
       <?php // Only one valid address becomes a link: a stored list or '?bcc=' text must not add recipients. ?>
       <dt>Email</dt><dd><?= $client['email'] ? (filter_var($client['email'], FILTER_VALIDATE_EMAIL) ? '<a href="mailto:' . h($client['email']) . '">' . h($client['email']) . '</a>' : h($client['email']) . ' (not a valid address)') : '—' ?>

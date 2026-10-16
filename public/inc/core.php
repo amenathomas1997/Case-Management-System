@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.48';
+const APP_VERSION = '3.0.49';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1655,3 +1655,5 @@ require_once __DIR__ . '/report_ai.php';
 require_once __DIR__ . '/outcome_followups.php';
 // Authorization emails read into new tracks (3.0.48).
 require_once __DIR__ . '/authorization_email.php';
+// Management reports and data quality (3.0.49).
+require_once __DIR__ . '/reports_extra.php';
