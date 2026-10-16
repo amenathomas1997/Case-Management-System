@@ -62,10 +62,12 @@ $queued=null;$deadline=microtime(true)+30;
 $waitSql="SELECT GREATEST((SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_state='LOCK WAIT' AND trx_query LIKE '%at_records%'),"
     ."(SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID<>CONNECTION_ID() AND COMMAND='Query' AND INFO LIKE '%at_records%FOR UPDATE%'))";
 do{usleep(50000);try{$queued=(int)$db->query($waitSql)->fetchColumn();}catch(PDOException $e){$queued=null;usleep(1000000);break;}}while($queued<2&&microtime(true)<$deadline);
+// What the other connections were doing, for the message if the count is wrong.
+$othersDid=[];try{foreach($db->query("SELECT COMMAND,STATE,LEFT(COALESCE(INFO,''),120) FROM information_schema.PROCESSLIST WHERE ID<>CONNECTION_ID()")->fetchAll(PDO::FETCH_NUM) as $pr)$othersDid[]=implode(' / ',$pr);}catch(PDOException $e){}
 $db->commit();$success=0;$workerSaid=[];
 foreach($workers as [$process,$pipes]){$output=stream_get_contents($pipes[1]);$errors=stream_get_contents($pipes[2]);fclose($pipes[1]);fclose($pipes[2]);$code=proc_close($process);check($code===0,'Concurrent seat request returned a handled response');$success+=(int)(json_decode($output,true)['ok']??false);$workerSaid[]=mb_strimwidth(trim($output.' '.$errors),0,300,'…');}
 // Without the PROCESS privilege the queue cannot be seen; a fixed pause stands in.
-if($queued!==null)check($queued===2,'Both concurrent seat requests waited on the license lock'.($queued===2?'':' (waiting on at_records: '.$queued.'; the workers said: '.implode(' | ',$workerSaid).')'));
+if($queued!==null)check($queued===2,'Both concurrent seat requests waited on the license lock'.($queued===2?'':' (waiting on at_records: '.$queued.'; the workers said: '.implode(' | ',$workerSaid).'; other connections: '.implode(' | ',$othersDid).')'));
 check($success===1&&(int)$db->query("SELECT COUNT(*) FROM at_records WHERE parent_id=$raceLicense AND status='Assigned'")->fetchColumn()===1,'Concurrent requests cannot overallocate a license');
 // Reminder delivery and deduplication share a transaction.
 $db->exec("UPDATE at_records SET due_date=CURDATE(),status='Scheduled' WHERE id=$outcome");
