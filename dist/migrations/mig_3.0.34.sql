@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS `invoice_payments` (
 
 -- Payments recorded before 3.0.34 (one amount on the invoice) become one payment row,
 -- dated as recorded; an old Paid invoice with no amount was paid in full.
-UPDATE `invoices` SET `paid_amount` = `total_amount` WHERE `status` = 'Paid' AND `paid_amount` IS NULL;
+UPDATE `invoices` SET `paid_amount` = `total_amount` WHERE `status` = 'Paid' AND `paid_amount` IS NULL
+  AND NOT EXISTS (SELECT 1 FROM `invoice_payments` p WHERE p.`invoice_id` = `invoices`.`id`);
 INSERT INTO `invoice_payments` (`invoice_id`, `kind`, `amount`, `received_on`, `reference`, `note`)
   SELECT i.`id`, 'payment', i.`paid_amount`, COALESCE(i.`paid_at`, DATE(i.`created_at`)), i.`payment_ref`, 'Recorded before 3.0.34'
   FROM `invoices` i

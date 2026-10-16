@@ -17,7 +17,8 @@ if (!empty($_GET['invoice'])) {
 } else {
     $trackId = (int)($_GET['track'] ?? 0);
 }
-$stmt = db()->prepare('SELECT t.*, c.name AS client_name, c.assigned_to, c.counselor_name, c.counselor_agency, c.counselor_email, c.counselor_verified FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.id = ?');
+$stmt = db()->prepare('SELECT t.*, c.name AS client_name, c.assigned_to, c.counselor_name, c.counselor_agency, c.counselor_email, c.counselor_verified,
+    c.address AS client_address, c.email AS client_email, c.email_verified AS client_email_verified FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.id = ?');
 $stmt->execute([$trackId]);
 $t = $stmt->fetch();
 if (!$t) { flash('That training track no longer exists.', 'error'); redirect('clients.php'); }
@@ -62,9 +63,12 @@ if ($invoice) {
 // leaving out a counselor email not yet confirmed (counselor_verified = 0).
 $snap = $invoice && ($invoice['auth_number'] ?? null) !== null;
 $authNo = $snap ? (string)$invoice['auth_number'] : (string)$t['auth_number'];
+// A private-pay invoice or statement is billed to the client (3.0.34): no agency line.
+$privateBill = $invoice ? ($invoice['bill_mode'] ?? 'vr') === 'private' : track_mode($t) === 'private';
 $billTo = array_values(array_filter(array_map(fn($v) => trim((string)$v), $snap
-    ? array_merge([$invoice['funding_agency'] ?? ''], explode("\n", (string)($invoice['bill_to'] ?? '')))
-    : [$t['funding_agency'], $t['counselor_name'], $t['counselor_agency'], (int)$t['counselor_verified'] === 1 ? $t['counselor_email'] : null]), fn($v) => $v !== ''));
+    ? array_merge($privateBill ? [] : [$invoice['funding_agency'] ?? ''], explode("\n", (string)($invoice['bill_to'] ?? '')))
+    : ($privateBill ? [$t['client_name'], $t['client_address'], (int)$t['client_email_verified'] === 1 ? $t['client_email'] : null]
+        : [$t['funding_agency'], $t['counselor_name'], $t['counselor_agency'], (int)$t['counselor_verified'] === 1 ? $t['counselor_email'] : null])), fn($v) => $v !== ''));
 // Lines without their own rate snapshot are priced at the rate captured on the
 // invoice (what they were billed at), else the track's current rate.
 $fbRate = ($invoice && ($invoice['hourly_rate'] ?? null) !== null) ? (float)$invoice['hourly_rate'] : $r['hourly_rate'];

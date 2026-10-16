@@ -60,8 +60,10 @@ function work_authorization_block(array $track, string $date, float $addHours, f
         return 'This would bring the hours to ' . fmt_hours($hoursAfter) . ' of the ' . fmt_hours($r['authorized_hours']) . ' authorized ('
             . fmt_hours(round($hoursAfter - $r['authorized_hours'], 2)) . ' over).' . $fix;
     }
+    // The dollar limit applies when the authorization states one; without it, the hours
+    // limit above is the authorization (mileage and expenses on top are not refused).
     $usedAfter = round($r['total_billed'] + $r['expenses_amount'] + $addAmount, 2);
-    if ($addAmount > 0 && $r['authorized_funds'] > 0 && $usedAfter > $r['authorized_funds'] + 0.004) {
+    if ($addAmount > 0 && ($track['authorized_amount'] ?? null) !== null && $r['authorized_funds'] > 0 && $usedAfter > $r['authorized_funds'] + 0.004) {
         return 'This would bring the amount to ' . fmt_money($usedAfter) . ' of the ' . fmt_money($r['authorized_funds']) . ' authorized ('
             . fmt_money(round($usedAfter - $r['authorized_funds'], 2)) . ' over).' . $fix;
     }

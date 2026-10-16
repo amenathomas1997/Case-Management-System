@@ -41,3 +41,13 @@ Verified before commit:
 - full_schema 944, audit_regression, security, staging_scrub, and run_all.
 - php -l on all PHP files.
 - The iPhone build succeeded.
+
+Review fixes before release (all eight are tested in billing_cases.php):
+- Who pays cannot change while a track has unbilled work or a Draft invoice, so that work is never re-priced to $0 or from $0.
+- A replayed entry that waited on the track lock is acknowledged, not refused as "over". This covers the app's hours and expenses, the website and voice.
+- Trash restore checks the authorization block.
+- The dollar check applies only when an authorized amount is entered; otherwise the hours limit is the authorization.
+- No-charge work is left out of the unbilled totals and the batch.
+- The migration's paid_amount backfill is safe to re-run.
+- Private-pay statements and invoices are billed to the client, with no agency line.
+- A refused Remove of a payment shows in the error summary, with its own field name.

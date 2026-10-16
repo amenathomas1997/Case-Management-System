@@ -599,6 +599,7 @@ function voice_execute(string $do, array $in, array $user): array {
                 }
                 // Work outside the authorization (its dates, hours or dollars) is refused until an
                 // amendment is recorded on the website (3.0.34): a spoken yes no longer overrides it.
+                if ($idem !== null) { $dup->execute([$idem]); if ($dup->fetchColumn()) { if ($own) db()->rollBack(); return $already; } }
                 $block = work_authorization_block($locked, $date, $hours, round($hours * (float)$locked['hourly_rate'], 2));
                 if ($block !== null) {
                     if ($own) db()->rollBack();

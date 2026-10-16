@@ -274,6 +274,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
                     flash('Nothing was saved: this training track has no hourly rate yet. Enter its hourly billing rate under Edit track / authorization, then log the hours.', 'error');
                     redirect("track.php?id=$id#logs");
                 }
+                // A copy of this form that waited on the lock behind the first is that same session.
+                if ($logKey !== null) { $logDup->execute([$logKey, $logKey]); if ($logDup->fetchColumn()) { db()->rollBack(); $logAlready(); } }
                 $block = work_authorization_block($rates, $date, $hours, round($hours * (float)$rates['hourly_rate'], 2) + round($mileage * (float)$rates['mileage_rate'], 2));
                 if ($block !== null) {
                     db()->rollBack();
@@ -455,6 +457,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_expense'])) {
         try {
             $lt = db()->prepare('SELECT * FROM training_tracks WHERE id = ? FOR UPDATE');
             $lt->execute([$id]);
+            if ($expKey !== null) { $expDup->execute([$expKey]); if ($expDup->fetchColumn()) { db()->rollBack(); $expAlready(); } }
             $block = work_authorization_block($lt->fetch() ?: $track, $expDate, 0.0, $amt);
             if ($block !== null) {
                 db()->rollBack();

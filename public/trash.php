@@ -24,6 +24,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['restore'])) {
         } else {
             flash('That item is no longer in the trash — it may already have been restored or removed.', 'error');
         }
+    } catch (DomainException $e) {
+        // Our own sentence (for example, work now outside its authorization): said as it is.
+        flash($e->getMessage(), 'error');
     } catch (Throwable $e) {
         // Class and code only: a database message can quote the record's contents.
         error_log('Trash restore failed: ' . get_class($e) . ' (code ' . $e->getCode() . ')');

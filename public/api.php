@@ -1183,6 +1183,8 @@ switch ($action) {
                 api_discard_upload($sigPath);
                 fail('This track has no hourly rate. Ask an administrator to set the rate on the track before logging hours.', 422);
             }
+            // A replay that waited on the lock behind its first send is that same entry.
+            if ($idem !== null && api_idem_saved('work_logs', $idem, $userId)) { db()->rollBack(); api_discard_upload($sigPath); out(['ok' => true, 'deduplicated' => true]); }
             $block = work_authorization_block($rates, $date, $hours, round($hours * (float)$rates['hourly_rate'], 2) + round($mileage * (float)$rates['mileage_rate'], 2));
             if ($block !== null) {
                 db()->rollBack();
@@ -1583,6 +1585,7 @@ switch ($action) {
         try {
             $et = db()->prepare('SELECT * FROM training_tracks WHERE id = ? FOR UPDATE');
             $et->execute([$tid]);
+            if ($idem !== null && ($savedId = $expenseSaved()) !== null) { db()->rollBack(); out(['ok' => true, 'deduplicated' => true, 'id' => $savedId]); }
             $block = work_authorization_block($et->fetch() ?: [], $expenseDate, 0.0, $amount);
             if ($block !== null) { db()->rollBack(); out(['ok' => false, 'error' => $block, 'authorization_issue' => $block], 422); }
             db()->prepare('INSERT INTO track_expenses (track_id, expense_date, description, amount, created_by, idem_key) VALUES (?,?,?,?,?,?)')

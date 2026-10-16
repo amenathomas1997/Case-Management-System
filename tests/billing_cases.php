@@ -97,3 +97,28 @@ check($code===0 && $err==='' && $db->query("SELECT CONCAT(billing_mode,'|',fundi
 /* The referral form's fee rule follows the billing settings */
 [$code,$html,$err]=$renderPage('community_referral',[]);
 check($code===0 && $err==='' && str_contains($html,'$20.00 per hour') && str_contains($html,'$2,500 per month'),'The public referral form quotes the fee and income threshold from the billing settings' . ($err ? ": $err" : ''));
+
+/* Review fixes */
+// A replay of an entry that brought the track to its limit is that entry, not "over".
+$limitTrack=$newTrack('Billing replay track','vr',1,50);
+$rk='5E55A0A1-0000-4000-8000-000000000034';
+$call('log_hours',['track_id'=>$limitTrack,'hours'=>1,'date'=>$d1,'description'=>'Replay synthetic','idem_key'=>$rk]);
+$again=$call('log_hours',['track_id'=>$limitTrack,'hours'=>1,'date'=>$d1,'description'=>'Replay synthetic','idem_key'=>$rk]);
+check(($again['deduplicated']??null)===true && $logs($limitTrack)===1,'A replay of an entry at the limit is acknowledged as the same entry');
+// Who pays cannot change while work is unbilled (it would be re-priced).
+[[$code,,$err],$sess]=$pageSession(fn()=>$renderPage('track_edit',['id'=>$limitTrack],['title'=>'Billing replay track','billing_mode'=>'none','auth_number'=>'BILL-34','funding_agency'=>'Billing agency','authorized_hours'=>'1','hourly_rate'=>'50','status'=>'Active','service_type'=>'Assistive Technology']));
+check($code===0 && $err==='' && $db->query("SELECT CONCAT(billing_mode,'|',hourly_rate) FROM training_tracks WHERE id=$limitTrack")->fetchColumn()==='vr|50.00'
+    && (float)$db->query("SELECT hourly_rate FROM work_logs WHERE track_id=$limitTrack")->fetchColumn()===50.0,
+    'Who pays cannot change while the track has unbilled work, so nothing is re-priced' . ($err ? ": $err" : ''));
+// Restoring trashed work cannot get around the limit.
+$wl=(int)$db->query("SELECT id FROM work_logs WHERE track_id=$limitTrack")->fetchColumn();
+$payload=$db->query("SELECT * FROM work_logs WHERE id=$wl")->fetch(PDO::FETCH_ASSOC);
+$db->prepare("INSERT INTO trash(entity,entity_id,label,payload,deleted_by) VALUES('work_logs',?,'Synthetic trashed log',?,1)")->execute([$wl,json_encode($payload)]); $trashId=(int)$db->lastInsertId();
+$db->exec("DELETE FROM work_logs WHERE id=$wl");
+$call('log_hours',['track_id'=>$limitTrack,'hours'=>1,'date'=>$d2,'description'=>'Logged while the first was in the trash']);
+$restoreErr=null; try { restore_trash($trashId); } catch (DomainException $e) { $restoreErr=$e->getMessage(); }
+check(str_starts_with((string)$restoreErr,'Not restored:') && $logs($limitTrack)===1,'Restoring trashed work that would go over the authorization is refused');
+// No-charge work is not counted as unbilled money.
+$db->exec("UPDATE work_logs SET mileage=10 WHERE track_id=$freeTrack"); $db->exec("UPDATE training_tracks SET mileage_rate=0.5 WHERE id=$freeTrack");
+$before=unbilled_totals(null)['total']; $db->exec("UPDATE work_logs SET hourly_rate=0, mileage_rate=0.5 WHERE track_id=$freeTrack");
+check(abs(unbilled_totals(null)['total']-$before)<0.001,'No-charge work never counts toward the unbilled total');

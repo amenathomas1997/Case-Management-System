@@ -500,6 +500,20 @@ function restore_trash(int $id): ?array {
                 }
             }
         }
+        // An unbilled log or expense comes back only inside its authorization (3.0.34):
+        // restoring must not reach work the block refuses (hours or dollars used meanwhile,
+        // an expired or closed track). The track is locked, as above.
+        if (in_array($row['entity'], ['work_logs', 'track_expenses'], true) && empty($payload['is_billed']) && isset($payload['track_id'])) {
+            $tl = $pdo->prepare('SELECT * FROM training_tracks WHERE id = ? FOR UPDATE');
+            $tl->execute([(int)$payload['track_id']]);
+            if ($trow = $tl->fetch()) {
+                $isLog = $row['entity'] === 'work_logs';
+                $h = $isLog ? (float)($payload['hours'] ?? 0) : 0.0;
+                $amt = $isLog ? round($h * (float)$trow['hourly_rate'], 2) + round((float)($payload['mileage'] ?? 0) * (float)$trow['mileage_rate'], 2) : (float)($payload['amount'] ?? 0);
+                $block = work_authorization_block($trow, (string)($isLog ? ($payload['work_date'] ?? '') : ($payload['expense_date'] ?? '')), $h, $amt);
+                if ($block !== null) throw new DomainException('Not restored: ' . $block);
+            }
+        }
         $cols = array_keys($payload);
         foreach ($cols as $col) if (!is_string($col) || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/D', $col)) throw new DomainException('Invalid trash column.');
         $sql = 'INSERT INTO '.$row['entity'].' ('.implode(',',array_map(fn($c)=>"`$c`",$cols)).') VALUES ('.implode(',',array_fill(0,count($cols),'?')).')';
@@ -1005,12 +1019,12 @@ function unbilled_totals(?int $scopeUserId): array {
         COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate, t.hourly_rate), 2)
             + ROUND(w.mileage * COALESCE(w.mileage_rate, t.mileage_rate), 2)),0) AS a
         FROM work_logs w JOIN training_tracks t ON t.id = w.track_id JOIN clients c ON c.id = t.client_id
-        WHERE w.is_billed = 0 AND w.work_date <= ?' . $scope);
+        WHERE w.is_billed = 0 AND w.work_date <= ? AND t.billing_mode <> \'none\'' . $scope);
     $w->execute($args);
     $work = $w->fetch();
     $e = db()->prepare('SELECT COALESCE(SUM(e.amount),0) FROM track_expenses e
         JOIN training_tracks t ON t.id = e.track_id JOIN clients c ON c.id = t.client_id
-        WHERE e.is_billed = 0 AND e.expense_date <= ?' . $scope);
+        WHERE e.is_billed = 0 AND e.expense_date <= ? AND t.billing_mode <> \'none\'' . $scope);
     $e->execute($args);
     $service = (float)$work['a'];
     $expense = (float)$e->fetchColumn();

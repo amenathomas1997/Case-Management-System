@@ -434,6 +434,12 @@ case 'save_track': {
     if ($isVr && $authHours <= 0) $errors['authorized_hours'] = 'Authorized hours must be greater than zero.';
     elseif ($authHours < 0) $errors['authorized_hours'] = 'Authorized hours cannot be negative.';
     elseif ($authHours > 99999.99) $errors['authorized_hours'] = 'Authorized hours must be 99,999.99 or fewer.';
+    if ($track && track_mode($track) !== $billingMode) {
+        $pend = db()->prepare("SELECT (SELECT COUNT(*) FROM work_logs WHERE track_id = ? AND is_billed = 0) + (SELECT COUNT(*) FROM track_expenses WHERE track_id = ? AND is_billed = 0)
+            + (SELECT COUNT(*) FROM invoices WHERE track_id = ? AND status = 'Draft')");
+        $pend->execute([(int)$track['id'], (int)$track['id'], (int)$track['id']]);
+        if ((int)$pend->fetchColumn() > 0) $errors['billing_mode'] = 'Who pays cannot change while this track has work not yet invoiced or a Draft invoice: that work would be re-priced. Invoice it (or void the Draft) first, or start a new track.';
+    }
     if ($billingMode !== 'none' && $rate <= 0) $errors['hourly_rate'] = 'Hourly rate must be greater than zero.';
     elseif ($rate > 999999.99) $errors['hourly_rate'] = 'Hourly rate must be 999,999.99 or less.';
     if (mb_strlen($reason) > 255) $errors['amendment_reason'] = 'Keep the amendment reason to 255 characters or fewer.';

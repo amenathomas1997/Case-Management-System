@@ -56,7 +56,7 @@ function invoice_list_hidden(array $f): string {
 
 // The agencies on tracks with unbilled work, for the batch's optional restriction.
 $ua = db()->prepare("SELECT DISTINCT t.funding_agency FROM training_tracks t JOIN clients c ON c.id = t.client_id
-    WHERE t.funding_agency <> '' AND (EXISTS (SELECT 1 FROM work_logs w WHERE w.track_id = t.id AND w.is_billed = 0)
+    WHERE t.funding_agency <> '' AND t.billing_mode <> 'none' AND (EXISTS (SELECT 1 FROM work_logs w WHERE w.track_id = t.id AND w.is_billed = 0)
         OR EXISTS (SELECT 1 FROM track_expenses e WHERE e.track_id = t.id AND e.is_billed = 0))" . $scopeCond . ' ORDER BY t.funding_agency');
 $ua->execute($scopeArg);
 $unbilledAgencies = $ua->fetchAll(PDO::FETCH_COLUMN);
@@ -82,7 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['batch_generate'])) {
         JOIN clients c ON c.id = t.client_id
         LEFT JOIN work_logs w ON w.track_id = t.id AND w.is_billed = 0" . ($until !== null ? ' AND w.work_date <= ?' : '') . "
         LEFT JOIN track_expenses e ON e.track_id = t.id AND e.is_billed = 0" . ($until !== null ? ' AND e.expense_date <= ?' : '') . "
-        WHERE (w.id IS NOT NULL OR e.id IS NOT NULL)" . ($agency !== '' ? ' AND t.funding_agency = ?' : '') . $scopeCond);
+        WHERE (w.id IS NOT NULL OR e.id IS NOT NULL) AND t.billing_mode <> 'none'" . ($agency !== '' ? ' AND t.funding_agency = ?' : '') . $scopeCond);
     $bt->execute(array_merge($until !== null ? [$until, $until] : [], $agency !== '' ? [$agency] : [], $scopeArg));
     $tracks = $bt->fetchAll();
     $made = 0;
@@ -221,7 +221,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['apply_payment'])) {
 /* Remove a payment or write-off entered by mistake (the reason is audited). */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_payment'])) {
     $pid = (int)($_POST['payment_id'] ?? 0);
-    $reason = is_string($_POST['reason'] ?? null) ? trim($_POST['reason']) : '';
+    $reason = is_string($_POST['rm_reason'] ?? null) ? trim($_POST['rm_reason']) : '';
     $belongs = db()->prepare('SELECT 1 FROM invoice_payments WHERE id = ? AND invoice_id = ?');
     $belongs->execute([$pid, $id]);
     $why = !$belongs->fetchColumn() ? 'That entry is not on invoice ' . $num . ' any more.' : (mb_strlen($reason) > 200 ? 'Keep the reason to 200 characters or fewer.' : invoice_payment_remove($pid, $reason, (int)$user['id']));
@@ -343,6 +343,9 @@ $pageUrl = fn(int $p): string => invoice_list_url($filters, $p);
 // field error and refill show.
 $refusedId = (int)old_in('id');
 $refusedKeys = array_map(fn($k) => $k . $refusedId, ['pay_amount_', 'pay_date_', 'pay_ref_', 'pay_note_', 'close_reason_', 'memo_', 'submit_date_']);
+// A refused Remove names its payment entry: the invoice it belongs to is listed too.
+$rmPid = (int)old_in('payment_id');
+if ($rmPid > 0 && has_field_error('rm_reason_' . $rmPid)) $refusedKeys[] = 'rm_reason_' . $rmPid;
 if ($refusedId > 0 && array_filter($refusedKeys, 'has_field_error')
     && !in_array($refusedId, array_map('intval', array_column($invoices, 'id')), true)) {
     $rs = db()->prepare($listSql . " AND i.id = ?");
@@ -454,6 +457,7 @@ foreach ($invoices as $i) {
         $payLabels[$k . $iid] = $label; $payAnchors[$k . $iid] = $anchor . $iid;
     }
 }
+if ($rmPid > 0) { $payLabels['rm_reason_' . $rmPid] = 'Why remove it'; $payAnchors['rm_reason_' . $rmPid] = 'rm-' . $rmPid; }
 if (array_filter(array_keys($payLabels), 'has_field_error')) echo form_error_summary($payLabels, $payAnchors);
 $payDraftId = old_in('id');
 $listHidden = invoice_list_hidden($filters);
@@ -578,7 +582,7 @@ $pageNote = $invTotal > $perPage && $onlyId === 0
               <form method="post" action="invoices.php" class="inline-form" novalidate><?= csrf_field() ?><?= $listHidden ?>
                 <input type="hidden" name="id" value="<?= $iid ?>"><input type="hidden" name="payment_id" value="<?= $pid ?>">
                 <label for="rm-<?= $pid ?>">Why remove it<span class="visually-hidden">, the <?= $p['kind'] === 'payment' ? 'payment' : 'write-off' ?> of <?= fmt_money((float)$p['amount']) ?></span></label>
-                <input type="text" id="rm-<?= $pid ?>" name="reason" maxlength="200" <?= field_aria('rm_reason_' . $pid) ?>><?= field_error('rm_reason_' . $pid) ?>
+                <input type="text" id="rm-<?= $pid ?>" name="rm_reason" maxlength="200" value="<?= $refill && (int)old_in('payment_id') === $pid ? h(old_in('rm_reason')) : '' ?>" <?= field_aria('rm_reason_' . $pid) ?>><?= field_error('rm_reason_' . $pid) ?>
                 <button type="submit" name="remove_payment" value="1" class="btn btn-danger btn-sm">Remove<span class="visually-hidden"> the <?= $p['kind'] === 'payment' ? 'payment' : 'write-off' ?> of <?= fmt_money((float)$p['amount']) ?></span></button>
               </form></li>
             <?php endforeach; ?>
@@ -595,7 +599,7 @@ $pageNote = $invTotal > $perPage && $onlyId === 0
               <label><input type="radio" name="to" value="Void"> Void (sent in error)</label>
             </fieldset>
             <label for="creason-<?= $iid ?>">Reason<?= $invName ?></label>
-            <input type="text" id="creason-<?= $iid ?>" name="reason" maxlength="255" value="<?= $refill ? h(old_in('reason')) : '' ?>" <?= field_aria('close_reason_' . $iid) ?>><?= field_error('close_reason_' . $iid) ?>
+            <input type="text" id="creason-<?= $iid ?>" name="reason" maxlength="255" value="<?= $refill && old_in('close_invoice') !== '' ? h(old_in('reason')) : '' ?>" <?= field_aria('close_reason_' . $iid) ?>><?= field_error('close_reason_' . $iid) ?>
             <button type="submit" name="close_invoice" value="1" class="btn btn-danger btn-sm"
               onclick="return confirm('Close invoice <?= h($i['invoice_number']) ?>? It stays on record, and its work becomes unbilled again so it can be corrected and invoiced again.');">Close the invoice<?= $invName ?></button>
           </form>
