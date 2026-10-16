@@ -26,3 +26,6 @@ Verified before commit:
 - full_schema 1099 (run with the test process's mailer failing), audit_regression 61, security 67, staging_scrub 34, and run_all.
 - The migration rehearsal matched.
 - Not checked in a browser or with a screen reader.
+
+## Deployed 2026-10-16 12:34 CT
+From 3.0.43 with .audit_work/deploy-3.0.44. 2 migration statements ran. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.44). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.44-20261016-123430. Clients already On Hold have no reason recorded; their first check-in task comes on the next daily run when they have been On Hold three weeks or more.
