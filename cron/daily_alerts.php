@@ -106,6 +106,13 @@ foreach ($tracks as $t) {
     $fundsClear = $r['authorized_funds'] <= 0 || $r['funds_remaining'] > 0.25 * $r['authorized_funds'];
     if ($hoursClear && isset($already["$id:pct80"])) $unmark->execute([$id, 'pct80']);
     if ($fundsClear && isset($already["$id:funds80"])) $unmark->execute([$id, 'funds80']);
+    // The client's counselor is emailed too, once per crossing (owner decision 2026-10-16;
+    // portal link only). Marked only once it went, so a day without email tries again.
+    if (($hoursLow || $fundsLow) && empty($already["$id:vrc80"])) {
+        if (counselor_auth_notice($id)) $mark->execute([$id, 'vrc80']);
+    } elseif ($hoursClear && $fundsClear && isset($already["$id:vrc80"])) {
+        $unmark->execute([$id, 'vrc80']);
+    }
 }
 
 // Waitlist check-ins: nobody waits silently — every ~3 weeks an open task

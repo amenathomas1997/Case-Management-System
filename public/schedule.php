@@ -262,10 +262,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
                 . '. Untick ' . (count($booked) === 1 ? 'that client' : 'those clients') . ', or choose another time. Nothing was saved.']);
             redirect('schedule.php');
         }
+        $groupSessionIds = [];
         foreach ($clientIds as $cid) {
             $ins->execute([$cid, $trackIds[$cid], (int)$staff['id'], date('Y-m-d H:i:s', $startTs), date('Y-m-d H:i:s', $endTs), $location ?: null, $notes ?: null, $groupUid, $isRemote ? 1 : 0, $meetingUrl]);
+            $groupSessionIds[] = (int)db()->lastInsertId();
         }
         db()->commit();
+        // Each client is emailed their own calendar invite (3.0.41).
+        foreach ($groupSessionIds as $gsId) client_session_notice([$gsId], 'booked');
     } catch (Throwable $e) {
         if (db()->inTransaction()) db()->rollBack();
         throw $e;
@@ -325,6 +329,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_group'])) {
     $refusedWhy = []; // auto_log_session()'s own explanation, each once
     $alreadyLogged = []; // left Scheduled: hours for that day are already on their track
     $noShows = []; // not ticked as attended: recorded as No Show, nothing logged
+    $noShowIds = [];
     $authNotes = []; // logged, but outside the track's authorization (named per client)
     $notStarted = 0; // a session that has not begun cannot be completed (or billed)
     $startAt = null;
@@ -339,7 +344,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_group'])) {
         $startAt = $sess['start_at'];
         if (!in_array((int)$sess['id'], $attended, true)) {
             $claimNoShow->execute([(int)$sess['id']]);
-            if ($claimNoShow->rowCount() === 1) $noShows[] = $sess;
+            if ($claimNoShow->rowCount() === 1) { $noShows[] = $sess; $noShowIds[] = (int)$sess['id']; }
             continue;
         }
         $hours = $sess['track_id'] ? ($gHours ?? schedule_hours($sess)) : 0.0;
@@ -392,6 +397,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_group'])) {
         redirect('schedule.php');
     }
     if ($noShows) schedule_tell_instructors($noShows, 'No Show', $user);
+    foreach ($noShowIds as $nsId) counselor_noshow_notice($nsId); // 3.0.41: each counselor is emailed
     audit($user['id'], 'session.complete', 'group', null, "group {$uid}, {$done} attended, hours logged for {$logged}"
         . ($noShows ? ', No Show: client #' . implode(', #', array_map(fn($s) => (int)$s['client_id'], $noShows)) : '')
         . ($refused ? ', ' . count($refused) . ' left Scheduled (track has no hourly rate)' : '')
@@ -456,6 +462,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
     $staffId = (int)$f['staff']['id'];
     $ins = db()->prepare('INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, notes, is_remote, meeting_url) VALUES (?,?,?,?,?,?,?,?,?)');
     $sessionId = 0;
+    $newSessionIds = [];
     $occurrences = [];
     for ($w = 0; $w < $repeatWeeks; $w++) {
         // "+N week" keeps the local start time across daylight-saving changes
@@ -490,9 +497,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         }
         foreach ($occurrences as $w => [$s0, $e0]) {
             $ins->execute([$clientId, $trackId, $staffId, date('Y-m-d H:i:s', $s0), date('Y-m-d H:i:s', $e0), $location ?: null, $notes ?: null, $isRemote ? 1 : 0, $meetingUrl]);
+            $newSessionIds[] = (int)db()->lastInsertId();
             if ($w === 0) $sessionId = (int)db()->lastInsertId();
         }
         db()->commit();
+        client_session_notice($newSessionIds, 'booked'); // 3.0.41: the client's calendar invite
     } catch (Throwable $e) {
         if (db()->inTransaction()) db()->rollBack();
         throw $e;
@@ -662,6 +671,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
         }
         if ($claimed) {
             $act = ['Completed' => 'session.complete', 'Cancelled' => 'session.cancel', 'No Show' => 'session.no_show'][$to] ?? 'session.status';
+            if ($to === 'No Show') counselor_noshow_notice($sid); // 3.0.41: the counselor is emailed
+            // A future session cancelled: the client's calendar entry is removed (3.0.41).
+            if ($to === 'Cancelled' && strtotime((string)$sess['start_at']) > time()) client_session_notice([$sid], 'cancelled');
             audit($user['id'], $act, 'session', $sid, 'client #' . (int)$sess['client_id']
                 . ($hours > 0 ? ', ' . fmt_hours($hours) . ' logged' . ($miles > 0 ? ' and ' . $miles . ' mi' : '') : '') . ($linkLogId ? ', linked to work log #' . $linkLogId . ' (hours already logged)' : ''));
             // Flash text is escaped, so the "write the session note" link is drawn by

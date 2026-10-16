@@ -236,6 +236,41 @@ $clients = db()->prepare("SELECT * FROM clients WHERE counselor_email = ? AND ar
 $clients->execute([strtolower($vrc['counselor_email'])]);
 $clients = $clients->fetchAll();
 
+$myClientIds = array_map(fn($c) => (int)$c['id'], $clients);
+
+/* ---- POST: confirm receipt of a report here, without the email link (3.0.41) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_report'])) {
+    $ack = db()->prepare('UPDATE report_acks SET acked_at = NOW(), ack_ip = ? WHERE id = ? AND sent_to = ? AND acked_at IS NULL');
+    $ack->execute([$_SERVER['REMOTE_ADDR'] ?? '', (int)($_POST['ack_id'] ?? 0), strtolower($vrc['counselor_email'])]);
+    if ($ack->rowCount() === 1) {
+        audit(null, 'vrcportal.ack', 'counselor', (int)$vrc['id'], 'report receipt #' . (int)$_POST['ack_id']);
+        flash('Receipt confirmed. Thank you.');
+    } else {
+        flash('That report was already confirmed.', 'info');
+    }
+    redirect('vrc.php?t=' . $token . '#reports-h');
+}
+
+/* ---- A report opened again: the track's report as it reads today (3.0.41) ---- */
+if (isset($_GET['report'])) {
+    $rq = db()->prepare('SELECT ra.track_id, ra.client_id, ra.sent_at FROM report_acks ra WHERE ra.id = ? AND ra.sent_to = ?');
+    $rq->execute([(int)$_GET['report'], strtolower($vrc['counselor_email'])]);
+    $ra = $rq->fetch();
+    if ($ra && in_array((int)$ra['client_id'], $myClientIds, true)) {
+        require_once __DIR__ . '/inc/report_builder.php';
+        $rep = build_track_report((int)$ra['track_id'], brand('org'), '', 2);
+        page_header('Progress report');
+        echo '<p><a href="vrc.php?t=' . h($token) . '#reports-h">Back to your caseload</a></p><h1>Progress report</h1>'
+            . '<p>This is the report as it reads today. The copy we emailed you on ' . h(fmt_date($ra['sent_at'])) . ' may differ.</p>'
+            . ($rep ? $rep['html'] : '<p>This report is no longer available.</p>');
+        audit(null, 'vrcportal.report', 'client', (int)$ra['client_id'], 'counselor reopened a report');
+        page_footer();
+        exit;
+    }
+    flash('That report is not available here.', 'error');
+    redirect('vrc.php?t=' . $token . '#reports-h');
+}
+
 /* ---- POST: message to the provider (becomes a task + alert + email) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
     // Line breaks counted as the browser counts them (one character each).
@@ -314,7 +349,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
     redirect('vrc.php?t=' . $token);
 }
 
-$reports = db()->prepare("SELECT ra.sent_at, ra.acked_at, c.name AS client_name, t.title
+$reports = db()->prepare("SELECT ra.id, ra.client_id, ra.sent_at, ra.acked_at, c.name AS client_name, t.title
     FROM report_acks ra JOIN clients c ON c.id = ra.client_id JOIN training_tracks t ON t.id = ra.track_id
     WHERE ra.sent_to = ? AND c.archived_at IS NULL ORDER BY ra.sent_at DESC LIMIT 25");
 $reports->execute([strtolower($vrc['counselor_email'])]);
@@ -361,11 +396,24 @@ page_header('Your caseload');
     <progress id="vp-<?= (int)$t['id'] ?>" class="hours" max="100" value="<?= $r['pct_used'] ?>"></progress>
   </div>
   <?php endforeach; ?>
+  <?php // Attendance over the last 90 days (3.0.41): where a missed-session email points.
+  $att = db()->prepare("SELECT start_at, status FROM scheduled_sessions WHERE client_id = ? AND start_at < NOW() AND start_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+      AND status IN ('Completed','No Show','Cancelled') ORDER BY start_at DESC");
+  $att->execute([(int)$c['id']]);
+  $att = $att->fetchAll();
+  $count = fn(string $st) => count(array_filter($att, fn($a) => $a['status'] === $st)); ?>
+  <h3 id="att-<?= (int)$c['id'] ?>">Attendance, last 90 days</h3>
+  <?php if (!$att): ?><p class="muted">No past sessions in the last 90 days.</p><?php else: ?>
+  <p><?= $count('Completed') ?> attended, <?= $count('No Show') ?> missed, <?= $count('Cancelled') ?> cancelled.</p>
+  <details><summary>Each session<span class="visually-hidden"> for <?= h($c['name']) ?></span></summary>
+    <ul><?php foreach ($att as $a): ?><li><?= fmt_datetime($a['start_at']) ?>: <?= h(['Completed' => 'attended', 'No Show' => 'missed', 'Cancelled' => 'cancelled'][$a['status']]) ?></li><?php endforeach; ?></ul>
+  </details>
+  <?php endif; ?>
 </section>
 <?php endforeach; ?>
 
 <section class="card">
-  <h2>Reports we've sent you</h2>
+  <h2 id="reports-h">Reports we've sent you</h2>
   <?php if (!$reports): ?><p class="muted">None yet.</p><?php else: ?>
   <div class="table-scroll" tabindex="0" role="region" aria-labelledby="reports-cap"><table>
     <caption class="visually-hidden" id="reports-cap">Progress reports sent to you, and whether receipt was confirmed</caption>
@@ -373,8 +421,11 @@ page_header('Your caseload');
     <tbody>
     <?php foreach ($reports as $rp): ?>
       <tr><td><?= fmt_datetime($rp['sent_at']) ?></td>
-          <th scope="row"><?= h($rp['client_name']) ?> — <?= h($rp['title']) ?></th>
-          <td><?= $rp['acked_at'] ? 'Confirmed ' . fmt_datetime($rp['acked_at']) : 'Not yet confirmed' ?></td></tr>
+          <th scope="row"><?= in_array((int)$rp['client_id'], $myClientIds, true) ? '<a href="vrc.php?t=' . h($token) . '&amp;report=' . (int)$rp['id'] . '">' . h($rp['client_name']) . ' — ' . h($rp['title']) . '</a>' : h($rp['client_name']) . ' — ' . h($rp['title']) ?></th>
+          <td><?php if ($rp['acked_at']): ?>Confirmed <?= fmt_datetime($rp['acked_at']) ?>
+            <?php else: ?><form method="post" action="vrc.php?t=<?= h($token) ?>" class="inline-form"><?= csrf_field() ?>
+              <input type="hidden" name="ack_id" value="<?= (int)$rp['id'] ?>">
+              <button type="submit" name="confirm_report" value="1" class="btn btn-secondary btn-sm">Confirm receipt<span class="visually-hidden">: <?= h($rp['client_name']) ?>, sent <?= fmt_date($rp['sent_at']) ?></span></button></form><?php endif; ?></td></tr>
     <?php endforeach; ?>
     </tbody>
   </table></div>

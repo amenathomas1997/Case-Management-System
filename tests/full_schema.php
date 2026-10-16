@@ -797,6 +797,7 @@ try {
     require __DIR__.'/privacy_incident_cases.php';
     require __DIR__.'/devices_cases.php';
     require __DIR__.'/client_notices_cases.php';
+    require __DIR__.'/session_notices_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 

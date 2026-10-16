@@ -654,6 +654,23 @@ if ($client && !empty($_GET['download'])) {
     redirect('portal.php?t=' . $token . '&lang=' . page_lang());
 }
 
+// "Add to calendar" for one upcoming session (3.0.41): the client's own, still Scheduled.
+// The same calendar ID as the invite emailed at booking, so it is never added twice.
+if ($client && isset($_GET['ics'])) {
+    $iq = db()->prepare("SELECT * FROM scheduled_sessions WHERE id = ? AND client_id = ? AND status = 'Scheduled'");
+    $iq->execute([(int)$_GET['ics'], (int)$client['id']]);
+    if ($row = $iq->fetch()) {
+        [$icsText] = client_sessions_ics([$row], (string)($client['email'] ?? ''), 'PUBLISH', page_lang() === 'es');
+        session_write_close();
+        header('Content-Type: text/calendar; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="training-session.ics"');
+        echo $icsText;
+        exit;
+    }
+    flash_ui('That session is no longer on your schedule.', 'error');
+    redirect('portal.php?t=' . $token . '&lang=' . page_lang());
+}
+
 // An AI explanation asked for on the previous request, shown once inside its homework.
 if ($client && is_array($_SESSION['hw_explanation'] ?? null) && ($_SESSION['hw_explanation']['token'] ?? '') === $token) {
     $homeworkExplanation = $_SESSION['hw_explanation'];
@@ -785,6 +802,7 @@ document.addEventListener('submit', function (e) {
       <?php if (!empty($s['is_remote']) && !empty($s['meeting_url'])): ?>
         <div style="margin-top:.3rem"><a class="btn btn-primary btn-sm" href="<?= h($s['meeting_url']) ?>" target="_blank" rel="noopener"><?= t('Join online') ?><?= $forSession ?><span class="visually-hidden"> <?= h(__('(opens in a new tab)')) ?></span></a></div>
       <?php endif; ?>
+      <div style="margin-top:.3rem"><a href="portal.php?t=<?= h($token) ?>&amp;ics=<?= (int)$s['id'] ?>&amp;lang=<?= h(page_lang()) ?>"><?= t('Add to calendar') ?><?= $forSession ?></a></div>
       <?php if (!$caseClosed): ?>
       <div style="margin-top:.3rem">
         <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="inline-form" onsubmit="return confirm(<?= $jsq($askNew) ?>);"><?= csrf_field() ?>
@@ -803,6 +821,25 @@ document.addEventListener('submit', function (e) {
   </ul>
   <?php endif; ?>
 </section>
+
+<?php // Past sessions, newest first (3.0.41): what happened at each.
+$pastQ = db()->prepare("SELECT start_at, status FROM scheduled_sessions WHERE client_id = ? AND start_at < NOW() AND status IN ('Completed','No Show','Cancelled')
+    ORDER BY start_at DESC LIMIT 30");
+$pastQ->execute([(int)$client['id']]);
+$past = $pastQ->fetchAll();
+$pastWord = ['Completed' => 'Attended', 'No Show' => 'Missed', 'Cancelled' => 'Cancelled']; ?>
+<?php if ($past): ?>
+<section class="card" aria-labelledby="past-h">
+  <h2 id="past-h"><?= t('Past sessions') ?></h2>
+  <details><summary><?= t('Show your last sessions') ?> (<?= count($past) ?>)</summary>
+  <ul>
+  <?php foreach ($past as $ps): $pts = strtotime($ps['start_at']); ?>
+    <li><?= page_lang() === 'es' ? h(portal_when_es($pts)) : en(date('l, F j, Y \a\t g:i A', $pts)) ?>: <?= t($pastWord[$ps['status']]) ?></li>
+  <?php endforeach; ?>
+  </ul>
+  </details>
+</section>
+<?php endif; ?>
 
 <?php foreach ($tracks as $t):
     $goals = db()->prepare('SELECT * FROM smart_goals WHERE track_id = ? ORDER BY status = "Achieved" DESC, target_date IS NULL, target_date');

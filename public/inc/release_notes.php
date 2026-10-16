@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.41' => [
+        'Counselors are emailed when a client misses a session, and when an authorization reaches 80% of its hours or funds. The email gives the date or the authorization number and a link to their portal, never the client\'s name. Their portal now shows each client\'s attendance for the last 90 days, lets them open a report again and confirm they received it.',
+        'Clients are emailed a calendar invitation when a session is booked, and a cancellation that removes it from their calendar when it is cancelled (not those who prefer phone or post). Their portal has Add to calendar on each session and a list of past sessions.',
+    ],
     '3.0.40' => [
         'Portal links for clients and counselors now stay open while they are used at least every six months. Two weeks before an unused link stops, its holder is emailed and the instructor is alerted, and a client with an expired link can ask for a new one from the expired-link page.',
         'Clients and counselors get a short email when you send them a message (no message text, at most once a day), and clients are emailed when a portal request is answered. Session reminders are not emailed to clients who prefer phone or post; your reminder tells you to call them. The app can send a portal link.',

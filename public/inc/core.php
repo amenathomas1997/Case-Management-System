@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.40';
+const APP_VERSION = '3.0.41';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -307,6 +307,24 @@ const EMAIL_TEMPLATES = [
     'message_notice' => ['New message notice (client or counselor)', 'You have a new message from {org_short}',
         "Hello {name},\n\nYou have a new message from {org}. To read it, open your portal:\n\n{link}\n\nFor your privacy, the message itself is not in this email.\n",
         '{name} {link} {org_short} {org}'],
+    'session_booked_client' => ['Session booked (client)', 'Your training session with {org_short}',
+        "Hello {name},\n\nYour assistive technology training is booked:\n\n{sessions}\n\nA calendar invitation is attached, so you can add it to your calendar. If you need a different time, reply to this email or contact {contact}.\n",
+        '{name} {sessions} {contact} {org_short} {org}'],
+    'session_booked_client_es' => ['Session booked (client, Spanish)', 'Su sesión de capacitación con {org_short}',
+        "Hola, {name}:\n\nSu capacitación en tecnología de asistencia está programada:\n\n{sessions}\n\nAdjuntamos una invitación de calendario para que la agregue a su calendario. Si necesita otra hora, responda a este correo o comuníquese con {contact}.\n",
+        '{name} {sessions} {contact} {org_short} {org}'],
+    'session_cancelled_client' => ['Session cancelled (client)', 'Your training session with {org_short} was cancelled',
+        "Hello {name},\n\nThis training session was cancelled:\n\n{sessions}\n\nThe attachment removes it from your calendar. To book another time, reply to this email or contact {contact}.\n",
+        '{name} {sessions} {contact} {org_short} {org}'],
+    'session_cancelled_client_es' => ['Session cancelled (client, Spanish)', 'Se canceló su sesión de capacitación con {org_short}',
+        "Hola, {name}:\n\nSe canceló esta sesión de capacitación:\n\n{sessions}\n\nEl archivo adjunto la quita de su calendario. Para programar otra hora, responda a este correo o comuníquese con {contact}.\n",
+        '{name} {sessions} {contact} {org_short} {org}'],
+    'counselor_auth_low' => ['Authorization nearly used (counselor)', 'Authorization {auth} is nearly used — {org_short}',
+        "Hello {name},\n\nAuthorization {auth} is nearly used: {used}. If more training is needed, please consider an amendment. To see the client and their progress, open your counselor portal:\n\n{link}\n\nFor privacy, the client is not named in this email.\n",
+        '{name} {auth} {used} {link} {org_short} {org}'],
+    'counselor_noshow' => ['Missed session notice (counselor)', 'A client missed a session — {org_short}',
+        "Hello {name},\n\nOne of the clients you referred to {org} missed a scheduled training session on {date}. To see who, and their attendance, open your counselor portal:\n\n{link}\n\nFor privacy, the client is not named in this email.\n",
+        '{name} {date} {link} {org_short} {org}'],
     'request_closed' => ['Portal request answered (client)', 'Your request to {org_short} was answered',
         "Hello {name},\n\nWe answered a request you sent from your portal. To see the answer, open your portal:\n\n{link}\n",
         '{name} {link} {org_short} {org}'],
@@ -364,7 +382,8 @@ const EMAIL_TEMPLATE_REQUIRED = [
     'portal_link_es' => '{link}', 'consent_request_es' => '{link}', 'survey_invite_es' => '{link}',
     'release_request' => '{link}', 'release_request_es' => '{link}',
     'message_notice' => '{link}', 'message_notice_es' => '{link}', 'request_closed' => '{link}', 'request_closed_es' => '{link}',
-    'portal_expiring' => '{link}', 'portal_expiring_es' => '{link}',
+    'portal_expiring' => '{link}', 'portal_expiring_es' => '{link}', 'counselor_noshow' => '{link}', 'counselor_auth_low' => '{link}',
+    'session_booked_client' => '{sessions}', 'session_booked_client_es' => '{sessions}', 'session_cancelled_client' => '{sessions}', 'session_cancelled_client_es' => '{sessions}',
     'report_cover' => '{ack}',
     'referral_closed' => '{ref}',
 ];

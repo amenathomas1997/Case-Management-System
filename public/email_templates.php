@@ -22,6 +22,10 @@ const TPL_REQUIRED = [
     'message_notice' => ['{link}' => 'the portal link'],
     'request_closed' => ['{link}' => 'the portal link'],
     'portal_expiring' => ['{link}' => 'the portal link'],
+    'counselor_noshow' => ['{link}' => 'the counselor portal link'],
+    'counselor_auth_low' => ['{link}' => 'the counselor portal link'],
+    'session_booked_client' => ['{sessions}' => 'the session dates'],
+    'session_cancelled_client' => ['{sessions}' => 'the session dates'],
     'report_cover' => ['{ack}' => 'the confirmation link'],
     'referral_closed' => ['{ref}' => 'the referral reference number'],
 ];

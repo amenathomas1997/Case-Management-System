@@ -541,6 +541,7 @@ function voice_execute(string $do, array $in, array $user): array {
                 ->execute([$cid, $trackId, $uid, date('Y-m-d H:i:s', $start), date('Y-m-d H:i:s', $end), $location ?: null]);
             $sessionId = (int)db()->lastInsertId();
             audit($uid, 'session.add', 'client', $cid, 'voice');
+            client_session_notice([$sessionId], 'booked'); // 3.0.41: the client's calendar invite
             // As on the website and in the app, the instructor (the speaker) is emailed a
             // calendar invite. The session is already saved: a failed invite is only said.
             $inviteSent = false;

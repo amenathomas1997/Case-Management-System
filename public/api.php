@@ -955,6 +955,8 @@ switch ($action) {
         if ($claim->rowCount() !== 1) fail('Session was already closed.', 409);
         // The website's codes (schedule.php), so a search of the audit log finds both channels.
         audit($userId, $to === 'Cancelled' ? 'session.cancel' : 'session.no_show', 'session', $sid, $to . ' (mobile)');
+        if ($to === 'No Show') counselor_noshow_notice($sid); // 3.0.41: the counselor is emailed
+        if ($to === 'Cancelled' && strtotime((string)$sess['start_at']) > time()) client_session_notice([$sid], 'cancelled');
         // The session's instructor is told when someone else closed it. No calendar
         // cancellation can be sent (no invite UID is stored), so a plain notice says
         // which session it was: the date, the time and the client's first name only.
@@ -2023,6 +2025,7 @@ switch ($action) {
         }
         $ins = db()->prepare('INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, notes, is_remote, meeting_url) VALUES (?,?,?,?,?,?,?,?,?)');
         $firstId = 0;
+        $newSessionIds = [];
         $occurrences = [];
         // The whole series is saved or none of it: a failure part-way through must
         // not leave a partial series that a retry would then duplicate.
@@ -2034,9 +2037,11 @@ switch ($action) {
                 $e0 = $w === 0 ? $endTs : strtotime("+{$w} week", $endTs);
                 $occurrences[] = [$s0, $e0];
                 $ins->execute([$clientId, $trackId, $staffId, date('Y-m-d H:i:s', $s0), date('Y-m-d H:i:s', $e0), $location ?: null, $notes ?: null, $isRemote ? 1 : 0, $meetingUrl]);
+                $newSessionIds[] = (int)db()->lastInsertId();
                 if ($w === 0) $firstId = (int)db()->lastInsertId();
             }
             db()->commit();
+            client_session_notice($newSessionIds, 'booked'); // 3.0.41: the client's calendar invite
         } catch (Throwable $e) {
             db()->rollBack();
             throw $e;

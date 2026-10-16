@@ -534,6 +534,8 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <?= $sgH(4, 'guide-portal-expiry') ?>
 <p>A client's or counselor's portal link keeps working as long as it is opened at least once every six months. Two weeks before an unused link stops, its holder is emailed and, for a client, the instructor gets an alert. A client whose link has stopped can type their email address on the expired-link page to get a new one; it goes only to the confirmed address on their record. You can also send a new link from the client page or the iPhone app (Client portal, Email a new portal link). When you send a client or counselor a message, they get a short email saying a message is waiting, at most once a day, and clients are emailed when you answer a portal request. A client whose preferred contact is phone or postal mail is not emailed session reminders; your own reminder tells you to call them.</p>
 
+<p>Counselors are emailed in two cases only: when a session is recorded as a No Show, and when an authorization reaches 80% of its hours or funds. The email never names the client; it links to the counselor's portal, which shows each client's attendance for the last 90 days and the reports sent, which they can open again and confirm. Only a confirmed counselor with a portal link is emailed, so send counselors a portal link from the Counselor portal page. When you book a session, the client is emailed a calendar invitation (unless they prefer phone or post); when you cancel a future session, they get a cancellation that removes it from their calendar.</p>
+
 <?= $sgH(4, 'guide-portal-requests') ?>
 <ol>
   <li>Open Client portal requests.</li>
