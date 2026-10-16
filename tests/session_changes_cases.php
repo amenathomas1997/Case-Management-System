@@ -25,8 +25,8 @@ $row=$db->query("SELECT * FROM scheduled_sessions WHERE id=$s0")->fetch();
 check(str_contains($ics,'SEQUENCE:1') && str_contains($ics,"cms-client-session-$s0@"),'The client\'s calendar update keeps the same ID with a higher sequence');
 $api=$call('move_session',['session_id'=>$s0,'start_at'=>date('Y-m-d',$first+86400).' 09:00','duration'=>1]);
 check(($api['moved']??null)===false && !empty($api['warnings']),'The app is given the warnings to confirm');
-$api=$call('move_session',['session_id'=>$s0,'start_at'=>date('Y-m-d',$first+3*86400).' 14:00','duration'=>1]);
-check(($api['moved']??null)===true && $db->query("SELECT start_at FROM scheduled_sessions WHERE id=$s0")->fetchColumn()===date('Y-m-d',$first+3*86400).' 14:00:00','The app moves a session');
+$api=$call('move_session',['session_id'=>$s0,'start_at'=>date('Y-m-d',$first+30*86400).' 14:00','duration'=>1]);
+check(($api['moved']??null)===true && $db->query("SELECT start_at FROM scheduled_sessions WHERE id=$s0")->fetchColumn()===date('Y-m-d',$first+30*86400).' 14:00:00','The app moves a session');
 
 /* Cancelling the rest of a series, and a whole group */
 $s1=(int)$series[1]['id'];

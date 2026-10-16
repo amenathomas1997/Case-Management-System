@@ -334,33 +334,7 @@ struct TrackDetailView: View {
                         Button { showingTrackNote = true } label: { Label("Add note on this track", systemImage: "square.and.pencil") }
                     }
                 }
-                Section(workLogsLoaded ? "Hours logged (\(workLogs.count))" : "Hours logged") {
-                    if workLogsLoaded && workLogs.isEmpty {
-                        Text("No hours logged on this track.").foregroundStyle(Color.secondaryText)
-                    }
-                    ForEach(workLogs) { log in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(log.summary).font(.body)
-                            Text(log.description).font(.caption).foregroundStyle(Color.secondaryText).lineLimit(2)
-                        }
-                        .padding(.vertical, 2)
-                        // One stop per entry; Correct and Delete (each asking first) are on the Actions rotor.
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel(log.summary + ". " + log.description)
-                        .accessibilityActions {
-                            if !log.isBilled {
-                                Button("Correct hours or miles") { correctingLog = log }
-                                Button("Delete entry", role: .destructive) { deletingLog = log }
-                            }
-                        }
-                        .contextMenu {
-                            if !log.isBilled {
-                                Button("Correct hours or miles") { correctingLog = log }
-                                Button("Delete entry", role: .destructive) { deletingLog = log }
-                            }
-                        }
-                    }
-                }
+                hoursSection
                 Section(expensesLoaded ? "Billable expenses (\(expenses.count))" : "Billable expenses") {
                     if !expensesLoaded {
                         if error == nil { ProgressView("Loading expenses…") }
@@ -653,6 +627,38 @@ struct TrackDetailView: View {
         }
         await loadExpenses()
         await loadWorkLogs()
+    }
+
+    /// Hours logged on this track, each correctable or deletable while unbilled (3.0.46). Its
+    /// own property: inside the screen's body it made the expression too slow to type-check.
+    @ViewBuilder private var hoursSection: some View {
+        Section(workLogsLoaded ? "Hours logged (\(workLogs.count))" : "Hours logged") {
+            if workLogsLoaded && workLogs.isEmpty {
+                Text("No hours logged on this track.").foregroundStyle(Color.secondaryText)
+            }
+            ForEach(workLogs) { log in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(log.summary).font(.body)
+                    Text(log.description).font(.caption).foregroundStyle(Color.secondaryText).lineLimit(2)
+                }
+                .padding(.vertical, 2)
+                // One stop per entry; Correct and Delete (each asking first) are on the Actions rotor.
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(log.summary + ". " + log.description)
+                .accessibilityActions {
+                    if !log.isBilled {
+                        Button("Correct hours or miles") { correctingLog = log }
+                        Button("Delete entry", role: .destructive) { deletingLog = log }
+                    }
+                }
+                .contextMenu {
+                    if !log.isBilled {
+                        Button("Correct hours or miles") { correctingLog = log }
+                        Button("Delete entry", role: .destructive) { deletingLog = log }
+                    }
+                }
+            }
+        }
     }
 
     private func loadWorkLogs() async {
