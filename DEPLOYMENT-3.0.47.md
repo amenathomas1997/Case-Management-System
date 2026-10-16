@@ -59,3 +59,10 @@ Verified before commit:
 - full_schema 1143, audit_regression 61, security 67, staging_scrub 34, run_all.
 - The migration rehearsal matched.
 - Not checked in a browser or with a screen reader.
+
+## Deployed 2026-10-16 13:37 CT
+From 3.0.46 with .audit_work/deploy-3.0.47. mig_3.0.47.sql ran 4 statements, and all 8 checked columns and tables are present.
+
+CI is green on b564531. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.47). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.47-20261016-133752.
+
+At 7:00 tomorrow, the first daily alerts run will send one reminder for each emailed outcome survey still unanswered after 7 to 60 days. It skips clients who prefer phone or post.
