@@ -5,6 +5,7 @@
 // Every section here needs the admin permission; personal settings stay in My Account.
 require __DIR__ . '/inc/bootstrap.php';
 require_once __DIR__ . '/inc/scheduled_reports.php';
+require_once __DIR__ . '/inc/health_checks.php';
 require __DIR__ . '/inc/layout.php';
 csrf_check();
 $user = require_login();
@@ -220,6 +221,9 @@ page_header('Administration', $user, 'admin');
 ?>
 <h1>Administration</h1>
 <p class="muted">Agency-wide settings for administrators. Your own password, sign-in methods, display settings and calendar address are in <a href="account.php">My Account</a>.</p>
+<?php // One line from System health: the scheduled jobs, which stop silently when they stop.
+$jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok'])); ?>
+<p><?= $jobsBehind ? '<strong>' . (count($jobsBehind) === 1 ? '1 scheduled job needs' : count($jobsBehind) . ' scheduled jobs need') . ' attention</strong> (' . h(implode(', ', array_column($jobsBehind, 'name'))) . '). ' : 'All scheduled jobs are running. ' ?><a href="system_health.php">Open System health</a></p>
 <nav aria-label="Administration sections">
   <ul class="tab-nav">
     <li><a href="#people-h">People &amp; permissions</a></li>

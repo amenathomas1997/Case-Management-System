@@ -207,6 +207,9 @@ echo "Filed {$filed} email(s) to client records; {$skipped} left in inbox (unkno
     . ($auto ? "; {$auto} automatic replies left in inbox" : '')
     . ($unverified ? "; {$unverified} left in inbox because Microsoft 365 could not verify the sender" : '')
     . ($failed ? "; {$failed} could not be stored and will be retried" : '') . ".\n";
+// The inbox was read and filed: the heartbeat is recorded even when a message could
+// not be stored (it is retried next run, and the exit status reports it).
+record_heartbeat('ingest_email');
 if ($failed) exit(1);
 
 /**

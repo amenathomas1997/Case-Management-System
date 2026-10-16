@@ -41,3 +41,4 @@ foreach($rows as $r){
     }
 }
 echo "Created $sent AT reminders.\n";
+record_heartbeat('at_reminders');

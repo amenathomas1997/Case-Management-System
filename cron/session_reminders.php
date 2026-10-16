@@ -179,6 +179,9 @@ foreach ($unconfirmed as [$clientId, $label]) {
         . 'Confirm it on the client\'s edit page.', 'client.php?id=' . $clientId);
 }
 if ($unconfirmed) echo count($unconfirmed) . " client(s) were not emailed: their email address has not been confirmed (the administrators were told).\n";
+// The run itself completed: its heartbeat is recorded even when a reminder email
+// failed (those are reported below, and the mail failure is noted for System health).
+record_heartbeat('session_reminders');
 if ($failed) {
     echo count($failed) . " session reminder(s) could not be sent.\n";
     foreach ($failed as [$clientId, $label]) {

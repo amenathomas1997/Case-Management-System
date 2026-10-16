@@ -1,0 +1,245 @@
+<?php
+// System health (administrators): everything that keeps the system running, on one
+// page. Every scheduled job and when it last ran, the backups, email, storage, the
+// database, sign-in activity, the AI assistant, recent problems in the cron log and
+// work that is waiting. The job checks are health.php's (inc/health_checks.php), so
+// this page and the external monitor never disagree. Read-only: nothing here changes
+// anything, so it can be reloaded at will ("Check again").
+require __DIR__ . '/inc/bootstrap.php';
+require_once __DIR__ . '/inc/health_checks.php';
+require __DIR__ . '/inc/layout.php';
+$user = require_login();
+require_perm('admin');
+
+$now = time();
+$when = fn(?int $ts): string => $ts ? date('F j, Y g:i a', $ts) : 'never';
+$ago = function (?int $ts) use ($now): string {
+    if (!$ts) return '';
+    $m = intdiv(max(0, $now - $ts), 60);
+    if ($m < 60) return $m <= 1 ? 'a minute ago' : "$m minutes ago";
+    $hrs = intdiv($m, 60);
+    if ($hrs < 48) return $hrs === 1 ? 'an hour ago' : "$hrs hours ago";
+    return intdiv($hrs, 24) . ' days ago';
+};
+$ts = fn(?string $v): ?int => $v !== null && $v !== '' && strtotime($v) !== false ? (int)strtotime($v) : null;
+$bytes = function (float $b): string {
+    foreach (['bytes', 'KB', 'MB', 'GB', 'TB'] as $i => $u) if ($b < 1024 ** ($i + 1) || $u === 'TB') return ($i ? number_format($b / 1024 ** $i, 1) : number_format($b)) . ' ' . $u;
+    return '';
+};
+$q = function (string $sql, array $p = []) { $s = db()->prepare($sql); $s->execute($p); return $s->fetchColumn(); };
+$problems = []; // [anchor id, text]
+
+/* ---- Database ---- */
+$dbOk = true; $dbVersion = ''; $dbSize = 0.0; $dbTables = 0;
+try {
+    $dbVersion = (string)db()->query('SELECT VERSION()')->fetchColumn();
+    $sz = db()->query('SELECT COUNT(*), COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables WHERE table_schema = DATABASE()')->fetch(PDO::FETCH_NUM);
+    [$dbTables, $dbSize] = [(int)$sz[0], (float)$sz[1]];
+} catch (Throwable $e) { $dbOk = false; $problems[] = ['db-h', 'The database did not answer.']; }
+
+/* ---- Scheduled jobs ---- */
+$jobs = health_job_rows($dbOk, $now);
+foreach ($jobs as $j) if (!$j['ok']) $problems[] = ['jobs-h', $j['name'] . ': ' . $j['detail']];
+
+/* ---- Backups ---- */
+$priv = health_private_dir();
+$dumps = health_backup_dumps() ?? [];
+$dumpTotal = 0.0; foreach (array_keys($dumps) as $f) $dumpTotal += (float)@filesize($f);
+$newestDump = $dumps ? array_key_first($dumps) : null;
+$uploadsArchives = glob($priv . '/backups/uploads_*.tar.gz') ?: [];
+usort($uploadsArchives, fn($a, $b) => filemtime($b) <=> filemtime($a));
+$offsite = $dbOk ? $ts(setting('heartbeat_weekly_offsite')) : null;
+if ($newestDump !== null && (float)@filesize($newestDump) < 1000) $problems[] = ['backups-h', 'The newest database backup is smaller than 1 KB, so it is probably empty.'];
+
+/* ---- Storage ---- */
+$diskFree = @disk_free_space($priv); $diskTotal = @disk_total_space($priv);
+$diskPct = ($diskFree !== false && $diskTotal) ? round($diskFree / $diskTotal * 100) : null;
+if ($diskPct !== null && $diskPct < 10) $problems[] = ['storage-h', 'Less than 10% of the server disk is free (' . $bytes((float)$diskFree) . ').'];
+$uploadCount = 0; $uploadBytes = 0.0;
+$updir = (string)cfg('upload_dir');
+if (is_dir($updir)) {
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($updir, FilesystemIterator::SKIP_DOTS)) as $f) {
+        if ($f->isFile()) { $uploadCount++; $uploadBytes += $f->getSize(); }
+        if ($uploadCount > 50000) break; // a bound, so a huge folder cannot stall the page
+    }
+}
+
+/* ---- Email ---- */
+$graphOn = function_exists('graph_cfg') && graph_cfg() !== null;
+$mailDisabled = !empty($GLOBALS['CONFIG']['mail_disabled']);
+$mailSent = $dbOk ? $ts(setting('mail_last_sent')) : null;
+$mailFailed = $dbOk ? $ts(setting('mail_last_failed')) : null;
+if (!$graphOn && !$mailDisabled) $problems[] = ['email-h', 'Microsoft Graph email is not configured, so sign-in codes and reminders use the server\'s own mail, which is often blocked as spam.'];
+if ($mailFailed && $mailFailed > ($mailSent ?? 0)) $problems[] = ['email-h', 'The most recent email attempt failed (' . $when($mailFailed) . '), and none has been sent since.'];
+
+/* ---- Sign-in and security ---- */
+$failed24 = $failedIps = $locked = $staff = $withTotp = $appSessions = 0;
+if ($dbOk) {
+    $failed24 = (int)$q("SELECT COUNT(*) FROM login_attempts WHERE success = 0 AND email LIKE '%@%' AND attempted_at > DATE_SUB(NOW(), INTERVAL 1 DAY)");
+    $failedIps = (int)$q("SELECT COUNT(DISTINCT ip) FROM login_attempts WHERE success = 0 AND email LIKE '%@%' AND attempted_at > DATE_SUB(NOW(), INTERVAL 1 DAY)");
+    $staff = (int)$q('SELECT COUNT(*) FROM users WHERE is_active = 1');
+    $withTotp = (int)$q('SELECT COUNT(*) FROM users WHERE is_active = 1 AND totp_enabled = 1');
+    $appSessions = (int)$q('SELECT COUNT(DISTINCT user_id) FROM api_tokens WHERE expires_at > NOW()');
+}
+if ($failed24 >= 50) $problems[] = ['security-h', "$failed24 failed sign-ins in the last 24 hours, from $failedIps address" . ($failedIps === 1 ? '' : 'es') . '.'];
+
+/* ---- AI assistant ---- */
+$aiOn = function_exists('ai_enabled') && ai_enabled();
+$aiCalls = $aiFails = 0; $aiLastFail = null;
+if ($dbOk) {
+    $aiCalls = (int)$q('SELECT COUNT(*) FROM ai_usage WHERE created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)');
+    $aiFails = (int)$q('SELECT COUNT(*) FROM ai_usage WHERE succeeded = 0 AND created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)');
+    $aiLastFail = $ts((string)$q('SELECT MAX(created_at) FROM ai_usage WHERE succeeded = 0') ?: null);
+}
+if ($aiOn && $aiCalls >= 10 && $aiFails * 2 > $aiCalls) $problems[] = ['ai-h', "More than half of this week's AI requests failed ($aiFails of $aiCalls)."];
+
+/* ---- Recent problems in the cron log, and the watchdog's open alerts ---- */
+$logLines = [];
+$logFile = $priv . '/cron.log';
+$logSize = is_file($logFile) ? (int)filesize($logFile) : 0;
+$logTime = $logSize ? (int)filemtime($logFile) : null;
+if ($logSize && is_readable($logFile) && ($fh = fopen($logFile, 'rb'))) {
+    fseek($fh, max(0, $logSize - 256 * 1024));
+    $tail = (string)stream_get_contents($fh); fclose($fh);
+    foreach (array_reverse(preg_split('/\R/', $tail) ?: []) as $line) {
+        if (preg_match('/fail|error|fatal|could not|not found|refused|STOP|problem\(s\)|warning/i', $line) && !preg_match('/^All healthy\.?$/', $line)) {
+            $logLines[] = mb_strimwidth(trim($line), 0, 300, '…');
+            if (count($logLines) >= 10) break;
+        }
+    }
+}
+$watch = is_file($priv . '/watchdog_state.json') ? (json_decode((string)@file_get_contents($priv . '/watchdog_state.json'), true) ?: []) : [];
+
+/* ---- Work waiting ---- */
+$waiting = [];
+if ($dbOk) {
+    $waiting = [
+        ['schedule.php', 'Ended sessions with no outcome recorded', (int)$q("SELECT COUNT(*) FROM scheduled_sessions WHERE status = 'Scheduled' AND end_at < NOW()")],
+        ['referrals.php', 'New referrals waiting more than 3 days', (int)$q("SELECT COUNT(*) FROM referrals WHERE status = 'New' AND created_at < DATE_SUB(NOW(), INTERVAL 3 DAY)")],
+        ['portal_requests.php', 'Client portal requests not done', (int)$q("SELECT COUNT(*) FROM portal_requests WHERE status <> 'Done'")],
+        ['compliance.php', 'Guardian consent requests unsigned after 14 days', (int)$q('SELECT COUNT(*) FROM consent_forms WHERE signed_at IS NULL AND withdrawn_at IS NULL AND sent_at < DATE_SUB(NOW(), INTERVAL 14 DAY)')],
+    ];
+}
+
+$latest = $dbOk ? (string)(setting('update_latest') ?? '') : '';
+$checked = $dbOk ? (string)(setting('update_checked') ?? '') : '';
+$stateWord = ['fresh' => 'Working', 'waiting' => 'Waiting for its first run', 'stale' => 'Overdue', 'overdue' => 'Never ran', 'unreadable' => 'Cannot be checked', 'unchecked' => 'Not checked'];
+
+page_header('System health', $user, 'admin', [['admin.php', 'Administration']]);
+?>
+<h1>System health</h1>
+<p>Checked <?= h($when($now)) ?>. <a href="system_health.php">Check again</a></p>
+
+<section class="card" aria-labelledby="summary-h">
+  <h2 id="summary-h">Summary</h2>
+  <?php if (!$problems): ?>
+  <p><strong>Everything is working.</strong> All <?= count($jobs) ?> scheduled jobs ran on time, and backups, email and storage are fine.</p>
+  <?php else: ?>
+  <p><strong><?= count($problems) === 1 ? '1 problem needs attention' : count($problems) . ' problems need attention' ?>:</strong></p>
+  <ul>
+    <?php foreach ($problems as [$anchor, $text]): ?><li><a href="#<?= h($anchor) ?>"><?= h($text) ?></a></li><?php endforeach; ?>
+  </ul>
+  <?php endif; ?>
+</section>
+
+<section class="card" aria-labelledby="jobs-h">
+  <h2 id="jobs-h">Scheduled jobs</h2>
+  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="jobs-cap">
+  <table>
+    <caption id="jobs-cap">Scheduled jobs and their last good run</caption>
+    <thead><tr><th scope="col">Job</th><th scope="col">Runs</th><th scope="col">Status</th><th scope="col">Last good run</th><th scope="col">Details</th></tr></thead>
+    <tbody>
+    <?php foreach ($jobs as $j): ?>
+      <tr>
+        <th scope="row"><?= h($j['name']) ?></th>
+        <td><?= h($j['schedule']) ?></td>
+        <td><?= $j['ok'] ? '' : '<strong>' ?><?= h($stateWord[$j['state']] ?? $j['state']) ?><?= $j['ok'] ? '' : '</strong>' ?></td>
+        <td><?= $j['last'] ? h($when($j['last'])) . ' (' . h($ago($j['last'])) . ')' : 'none recorded' ?></td>
+        <td><?= h($j['detail']) ?></td>
+      </tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table>
+  </div>
+  <p class="hint">The schedule shown is the one the installer sets up; the server's crontab is the source of truth. A job counts as working when its last good run is within its limit (for example two hours for the watchdog, eight days for the off-site backup). The watchdog emails the backup address when a job falls behind.</p>
+</section>
+
+<section class="card" aria-labelledby="backups-h">
+  <h2 id="backups-h">Backups</h2>
+  <dl class="props">
+    <dt>Newest database backup</dt><dd><?= $newestDump ? h($when($dumps[$newestDump])) . ', ' . h($bytes((float)filesize($newestDump))) : 'none found' ?></dd>
+    <dt>Database backups kept</dt><dd><?= count($dumps) ?><?= $dumps ? ', ' . h($bytes($dumpTotal)) . ' in all; oldest ' . h($when(end($dumps))) : '' ?></dd>
+    <dt>Newest uploaded-documents archive</dt><dd><?= $uploadsArchives ? h($when((int)filemtime($uploadsArchives[0]))) . ', ' . h($bytes((float)filesize($uploadsArchives[0]))) : 'none found' ?></dd>
+    <dt>Last off-site backup emailed</dt><dd><?= $offsite ? h($when($offsite)) . ' (' . h($ago($offsite)) . ')' : 'none recorded since this check was added' ?></dd>
+  </dl>
+</section>
+
+<section class="card" aria-labelledby="email-h">
+  <h2 id="email-h">Email</h2>
+  <dl class="props">
+    <dt>Sending through</dt><dd><?= $mailDisabled ? 'Nothing: email is turned off on this copy (staging); messages are kept in mail_sink' : ($graphOn ? 'Microsoft Graph' : 'The server\'s own mail (Microsoft Graph is not configured)') ?></dd>
+    <dt>Last email sent</dt><dd><?= $mailSent ? h($when($mailSent)) . ' (' . h($ago($mailSent)) . ')' : 'none recorded since this check was added' ?></dd>
+    <dt>Last email that failed</dt><dd><?= $mailFailed ? h($when($mailFailed)) . ' (' . h($ago($mailFailed)) . ')' : 'none recorded' ?></dd>
+  </dl>
+</section>
+
+<section class="card" aria-labelledby="storage-h">
+  <h2 id="storage-h">Storage</h2>
+  <dl class="props">
+    <dt>Free disk space</dt><dd><?= $diskFree !== false && $diskTotal ? h($bytes((float)$diskFree)) . ' of ' . h($bytes((float)$diskTotal)) . " ($diskPct% free)" : 'could not be read' ?></dd>
+    <dt>Uploaded documents</dt><dd><?= number_format($uploadCount) ?> file<?= $uploadCount === 1 ? '' : 's' ?>, <?= h($bytes($uploadBytes)) ?></dd>
+    <dt>Cron log</dt><dd><?= $logSize ? h($bytes((float)$logSize)) . ', last written ' . h($when($logTime)) : 'not found' ?></dd>
+  </dl>
+</section>
+
+<section class="card" aria-labelledby="db-h">
+  <h2 id="db-h">Database and versions</h2>
+  <dl class="props">
+    <dt>Database</dt><dd><?= $dbOk ? 'Answering; ' . $dbTables . ' tables, ' . h($bytes($dbSize)) : '<strong>Not answering</strong>' ?></dd>
+    <dt>Case Management System</dt><dd>Version <?= h(APP_VERSION) ?><?= $latest !== '' ? (version_compare($latest, APP_VERSION, '>') ? '; version ' . h($latest) . ' is available' : '; up to date') . ($checked !== '' ? ' (checked ' . h($checked) . ')' : '') : '' ?></dd>
+    <dt>PHP</dt><dd><?= h(PHP_VERSION) ?></dd>
+    <dt>Database server</dt><dd><?= h($dbVersion ?: 'unknown') ?></dd>
+  </dl>
+</section>
+
+<section class="card" aria-labelledby="security-h">
+  <h2 id="security-h">Sign-in and security</h2>
+  <dl class="props">
+    <dt>Failed sign-ins in the last 24 hours</dt><dd><?= $failed24 ?><?= $failed24 ? ", from $failedIps address" . ($failedIps === 1 ? '' : 'es') : '' ?></dd>
+    <dt>Active staff accounts</dt><dd><?= $staff ?>; <?= $withTotp ?> use an authenticator app (the rest get emailed sign-in codes)</dd>
+    <dt>Staff signed in to the iPhone app</dt><dd><?= $appSessions ?></dd>
+  </dl>
+  <p><a href="audit.php">Audit log</a></p>
+</section>
+
+<section class="card" aria-labelledby="ai-h">
+  <h2 id="ai-h">AI assistant</h2>
+  <dl class="props">
+    <dt>Status</dt><dd><?= $aiOn ? 'On' : 'Off' ?></dd>
+    <dt>Requests in the last 7 days</dt><dd><?= $aiCalls ?><?= $aiFails ? ", $aiFails failed" : '' ?></dd>
+    <dt>Last failed request</dt><dd><?= $aiLastFail ? h($when($aiLastFail)) : 'none' ?></dd>
+  </dl>
+</section>
+
+<section class="card" aria-labelledby="log-h">
+  <h2 id="log-h">Recent problems in the cron log</h2>
+  <?php if ($watch): ?>
+  <p>The watchdog has open alerts: <?= h(implode(', ', array_map(fn($k, $t) => $k . ' (last emailed ' . $when((int)$t) . ')', array_keys($watch), $watch))) ?>.</p>
+  <?php endif; ?>
+  <?php if ($logLines): ?>
+  <p>The newest first. The log has no times, so a line may be old; it repeats while a problem lasts.</p>
+  <ol><?php foreach ($logLines as $l): ?><li><?= h($l) ?></li><?php endforeach; ?></ol>
+  <?php else: ?>
+  <p>None in the most recent part of the log.</p>
+  <?php endif; ?>
+</section>
+
+<?php if ($waiting): ?>
+<section class="card" aria-labelledby="work-h">
+  <h2 id="work-h">Work waiting</h2>
+  <ul>
+    <?php foreach ($waiting as [$href, $label, $n]): ?><li><a href="<?= h($href) ?>"><?= h($label) ?></a>: <?= $n ?></li><?php endforeach; ?>
+  </ul>
+</section>
+<?php endif; ?>
+<?php page_footer();

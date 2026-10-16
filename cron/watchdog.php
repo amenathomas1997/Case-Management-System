@@ -51,13 +51,28 @@ if (!$dumps || filemtime($dumps[0]) < time() - 48 * 3600) {
     $problems['backup'] = 'No database backup newer than 48 hours — check the nightly backup cron.';
 }
 
+/* 4. Every other scheduled job (System health's checks): one that has fallen behind
+   is alerted like the checks above, at most every 6 hours while it lasts. The
+   watchdog itself and the backup are judged above; the daily alerts tell about a
+   stalled watchdog. */
+$healthFile = dirname((string)(new ReflectionFunction('db'))->getFileName()) . '/health_checks.php';
+if (!isset($problems['db']) && is_file($healthFile)) {
+    require_once $healthFile;
+    try {
+        foreach (health_job_rows(true) as $j) {
+            if ($j['ok'] || in_array($j['key'], ['watchdog', 'backup'], true)) continue;
+            $problems['job_' . $j['key']] = $j['name'] . ': ' . $j['detail'];
+        }
+    } catch (Throwable $e) { error_log('watchdog: the job checks failed (' . get_class($e) . ' ' . $e->getCode() . ')'); }
+}
+
 $alerted = 0;
 $alertTo = cfg('backup_email');
 foreach ($problems as $key => $msg) {
     if (($state[$key] ?? 0) > time() - 6 * 3600) continue; // already alerted recently
     if (!$alertTo) { error_log("CMS watchdog (no backup_email configured): {$key} — {$msg}"); continue; }
     $ok = send_app_mail($alertTo,
-        'CMS health alert: ' . $key,
+        'CMS health alert: ' . (str_starts_with($key, 'job_') ? 'scheduled job' : $key),
         "The Case Management System watchdog found a problem:\n\n{$msg}\n\nChecked at " . date('Y-m-d H:i:s') . " server time.\nThis alert repeats at most every 6 hours while the problem persists.\n");
     if ($ok) { $state[$key] = time(); $alerted++; }
 }

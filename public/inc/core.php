@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.32';
+const APP_VERSION = '3.0.33';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -591,7 +591,31 @@ function graph_send_text(string $to, string $subject, string $body): string {
     return ($code >= 500 || ($code === 0 && $uploaded > 0)) ? 'unknown' : 'refused';
 }
 
+/** A cron job's heartbeat: the time of its last good run (heartbeat_<job>), read by
+ *  health.php and System health. Never stops the job that records it. */
+function record_heartbeat(string $job): void {
+    try { set_setting('heartbeat_' . $job, date('c')); }
+    catch (Throwable $e) { error_log($job . ': could not record the heartbeat (' . get_class($e) . ' ' . $e->getCode() . ')'); }
+}
+
+/** The last email sent and the last one that failed (System health), recorded once per
+ *  request each, so a team notification to every user writes two settings at most.
+ *  No address or subject is kept. */
+function mail_outcome_note(bool $sent): void {
+    static $noted = [];
+    if (isset($noted[$sent])) return;
+    $noted[$sent] = true;
+    try { set_setting($sent ? 'mail_last_sent' : 'mail_last_failed', date('c')); } catch (Throwable $e) { /* never stops a send */ }
+}
+
 function send_app_mail(string $to, string $subject, string $body): bool {
+    $sent = send_app_mail_now($to, $subject, $body);
+    mail_outcome_note($sent);
+    return $sent;
+}
+
+/** send_app_mail() without the outcome note. */
+function send_app_mail_now(string $to, string $subject, string $body): bool {
     // Subjects and addresses can carry record data (names); newlines in them
     // would become extra SMTP headers through the mail() fallback.
     $to = trim(preg_replace('/[\r\n]+/', '', $to));
@@ -1028,7 +1052,9 @@ function record_status_change(int $clientId, ?string $old, string $new, ?int $us
 
 /** Email with attachments — Graph only (no fallback). */
 function send_app_mail_attach(string $to, string $subject, string $body, array $attachments): bool {
-    return graph_cfg() !== null && graph_send_mail($to, $subject, $body, false, null, $attachments);
+    $sent = graph_cfg() !== null && graph_send_mail($to, $subject, $body, false, null, $attachments);
+    mail_outcome_note($sent);
+    return $sent;
 }
 
 /** Record an action in the admin audit trail. */

@@ -123,6 +123,7 @@ if ($warning !== '') {
         . "Copy the uploads folder from the server's private directory to off-site storage another way.\n");
 }
 echo "Off-site backup emailed to {$recipient} (" . ($sentWithUploads ? 'database and uploaded documents' : 'database only') . ").\n";
+record_heartbeat('weekly_offsite');
 exit(0);
 
 /** Every regular file under $root as [path, name in the archive, bytes]; null when the folder cannot be read. */

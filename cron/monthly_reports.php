@@ -175,3 +175,4 @@ try {
     error_log('monthly_reports: scheduled summary reports failed (' . get_class($e) . ' ' . $e->getCode() . ')');
     echo "The scheduled summary reports could not be prepared; they will be tried again tomorrow.\n";
 }
+record_heartbeat('monthly_reports');

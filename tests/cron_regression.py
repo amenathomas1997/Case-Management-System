@@ -104,6 +104,7 @@ function cfg($key) { return 'https://example.invalid'; }
 // The built-in wording says "tomorrow"; {day} and the other placeholders are shown so the test can read them.
 function email_template($name,$args) { return ['Reminder: your session tomorrow', "Hello {$args['name']}, see you tomorrow.\nWhen: {$args['when']}{$args['where']}\nDay: {$args['day']}\nJoin: {$args['join_link']}\n"]; }
 function brand($key) { return 'Test'; }
+function record_heartbeat($job) { $GLOBALS['heartbeats'][]=$job; }
 function send_app_mail($to,$subject,$body) { $GLOBALS['to'][]=$to; $GLOBALS['mails'][]=['to'=>$to,'subject'=>$subject,'body'=>$body]; $results=json_decode(getenv('MAIL_RESULTS'),true); return $results[$GLOBALS['calls']++]; }
 function notify_admins($subject,$body) { $GLOBALS['admin'][]=$subject; $results=json_decode(getenv('MAIL_RESULTS'),true); return $results[$GLOBALS['calls']++]; }
 function notify_admin_users($message,$link=null) { $GLOBALS['notices'][]=$message; $GLOBALS['links'][]=$link; }
@@ -195,6 +196,7 @@ class FakeIngestDB {
 }
 function db() { return new FakeIngestDB; }
 function graph_cfg() { return ['sender'=>'mailbox@example.invalid']; }
+function record_heartbeat($job) { $GLOBALS['heartbeats'][]=$job; }
 function notify_user($id,$message,$link=null) { $GLOBALS['events'][]=['notify',$id]; }
 function notify_admin_users($message,$link=null) { $GLOBALS['events'][]=['notify','admins']; }
 function graph_api($method,$url,$body=null,$headers=[]) {
@@ -321,6 +323,7 @@ function send_app_mail_attach($to,$subject,$body,$attachments) {
     return $results[$call++] ?? true;
 }
 function notify_admins($subject,$body) { $GLOBALS['sent'][]=['to'=>'administrators','subject'=>$subject,'attachments'=>[]]; return true; }
+function record_heartbeat($job) { $GLOBALS['heartbeats'][]=$job; }
 function graph_cfg() { return null; }
 register_shutdown_function(function() { echo "\nSENT:" . json_encode($GLOBALS['sent']); });
 ''')
