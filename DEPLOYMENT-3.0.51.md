@@ -37,3 +37,8 @@ Verified before commit:
 - full_schema 1255, audit_regression, security, staging_scrub, and run_all.
 - The migration rehearsal matched.
 - Not checked in a browser or with a screen reader.
+
+## Deployed 2026-10-16 15:30 CT
+From 3.0.50 with .audit_work/deploy-3.0.51. mig_3.0.51.sql ran, and both checked columns are present.
+
+CI is green. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.51). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.51-20261016-153006.
