@@ -1,0 +1,121 @@
+# Continuous integration: lint and every test suite, on each push and pull request.
+# CI never deploys and holds no production secrets; the database is a throwaway
+# MariaDB service container. See CI.md for how to read the results.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  php:
+    name: PHP 8.1 + MariaDB suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: ci-only-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    env:
+      CMS_TEST_HOST: 127.0.0.1
+      CMS_TEST_USER: root
+      CMS_TEST_PASSWORD: ci-only-root
+      # audit_regression, full_schema and security insist on exactly this dbname.
+      CMS_TEST_DSN: mysql:host=127.0.0.1;dbname=cms_audit_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, intl, pdo_mysql, curl, zip, gd, dom, iconv, openssl, fileinfo
+          ini-values: zend.assertions=1, memory_limit=512M
+          coverage: none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Lint PHP (php -l)
+        run: |
+          status=0
+          for f in public/*.php public/inc/*.php cron/*.php dist/*.php; do
+            [ -e "$f" ] || continue
+            php -l "$f" > /dev/null || { echo "::error file=$f::php -l failed"; status=1; }
+          done
+          exit $status
+
+      - name: tests/run_all.sh (Node, PHP and Python suites + installer end to end)
+        run: |
+          bash .github/ci/fresh-db.sh cms_installer_e2e
+          # tests/ios_api_regression.py compiles the app's Swift on macOS; the
+          # Linux runner ships swiftc without Apple's Foundation, so it is hidden
+          # here (run_all reports it skipped) and run in the iOS job instead.
+          while command -v swiftc > /dev/null; do
+            swiftdir=$(dirname "$(command -v swiftc)")
+            case "$swiftdir" in /usr/bin|/bin) echo "::warning::swiftc is in $swiftdir; ios_api_regression.py will run here"; break ;; esac
+            PATH=$(printf %s "$PATH" | tr ':' '\n' | grep -vxF "$swiftdir" | paste -sd: -)
+          done
+          bash tests/run_all.sh
+
+      - name: tests/full_schema.php
+        if: ${{ !cancelled() }}
+        run: bash .github/ci/fresh-db.sh cms_audit_test && php tests/full_schema.php
+
+      - name: tests/audit_regression.php
+        if: ${{ !cancelled() }}
+        run: bash .github/ci/fresh-db.sh cms_audit_test && php tests/audit_regression.php
+
+      - name: tests/security.php
+        if: ${{ !cancelled() }}
+        run: bash .github/ci/fresh-db.sh cms_audit_test && php tests/security.php
+
+      - name: tests/staging_scrub.php
+        if: ${{ !cancelled() }}
+        run: bash .github/ci/fresh-db.sh cms_audit_test && php tests/staging_scrub.php
+
+  ios:
+    # Builds the companion app for the simulator without signing. Optional: a
+    # failure here does not fail the workflow (macOS minutes are also billed at
+    # a higher rate on private repositories).
+    name: iOS simulator build (optional)
+    runs-on: macos-15
+    continue-on-error: true
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        run: xcodegen generate --spec ios/project.yml --project ios
+
+      - name: Build scheme CaseManagement for the simulator (unsigned)
+        run: |
+          xcodebuild -project ios/CaseManagement.xcodeproj -scheme CaseManagement \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            build
+
+      - name: tests/ios_api_regression.py (API queue logic compiled with swiftc)
+        run: python3 tests/ios_api_regression.py

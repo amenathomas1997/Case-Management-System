@@ -117,7 +117,9 @@ fi
 # ---- Config outside the docroot, mode 0600 ----
 CONFIG="$PRIVATE/config.php"
 if [ -f "$CONFIG" ]; then pass "config.php written to the private directory"; else fail "config.php missing at $CONFIG"; fi
-mode=$(stat -f '%Lp' "$CONFIG" 2>/dev/null || stat -c '%a' "$CONFIG" 2>/dev/null)
+# GNU stat first: its -f takes no format, so on Linux the BSD form would print the
+# filesystem's details before failing and spoil the captured mode.
+mode=$(stat -c '%a' "$CONFIG" 2>/dev/null || stat -f '%Lp' "$CONFIG" 2>/dev/null)
 if [ "$mode" = "600" ]; then pass "config.php has mode 0600"; else fail "config.php mode is '$mode', not 600"; fi
 case "$(cd "$PRIVATE" && pwd -P)" in
   "$(cd "$DOCROOT" && pwd -P)"/*) fail "private directory is inside the docroot" ;;
