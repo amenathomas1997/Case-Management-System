@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.46' => [
+        'Completing a session can record the goal worked on and, where a track offers several, the service delivered. A logged entry not yet invoiced can be corrected afterwards (hours and miles, with a reason kept in the audit log) on the track page or in the iPhone app, which now lists a track\'s hours. An entry of 0 hours with miles records travel only.',
+        'The Dashboard shows your week: hours logged, hours still booked, and your weekly target.',
+    ],
     '3.0.45' => [
         'Each client now has their VR case or participant number, IPE employment goal, IPE date and latest IPE amendment (edit page, and the iPhone app for the number and goal). They print on progress reports and invoices, and the evaluation report\'s justification names the goal.',
         'On the Counselor portal page, Replace with a new counselor moves every client of a counselor who has left to the new one in one step, with a note on each client, and turns off the old counselor\'s portal link.',

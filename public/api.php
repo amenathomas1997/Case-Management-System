@@ -448,6 +448,7 @@ $API_ACTION_PERMS = [
     'schedule' => 'schedule', 'schedule_session' => 'schedule', 'complete_session' => 'schedule', 'set_session_status' => 'schedule',
     'check_in_session' => 'schedule',   // 3.0.28, handled in inc/api_parity.php
     'move_session' => 'schedule', 'cancel_series' => 'schedule', 'cancel_group' => 'schedule',   // 3.0.43
+    'work_logs' => 'clients', 'correct_log' => 'clients', 'delete_log' => 'clients',   // 3.0.46 ('my_week' is open to every signed-in user)
     // 'staff' is checked in its own case: scheduling, referral assignment and the client form all need it.
     // 'client_choices' likewise: every client picker (schedule, equipment, procurement, clients) needs it;
     // referrals alone gives only the clients converted from referrals the user can see.
@@ -570,6 +571,49 @@ switch ($action) {
         foreach($briefing['items'] as &$briefingItem)$briefingItem['text']=api_ai_plain((string)$briefingItem['text']);
         unset($briefingItem);
         out(['ok'=>true]+$briefing);
+    /* A track's work entries; correcting or deleting an unbilled one; my hours this week (3.0.46). */
+    case 'work_logs': {
+        $tid = (int)($_GET['track_id'] ?? 0);
+        api_require_track($tid, $userId);
+        $q = db()->prepare('SELECT w.id, w.work_date, w.hours, w.mileage, w.description, w.is_billed, w.goal_id, w.rsa_category, u.name AS author
+            FROM work_logs w LEFT JOIN users u ON u.id = w.created_by WHERE w.track_id = ? ORDER BY w.work_date DESC, w.id DESC LIMIT 200');
+        $q->execute([$tid]);
+        $logs = array_map(fn($l) => ['id' => (int)$l['id'], 'work_date' => $l['work_date'], 'hours' => (float)$l['hours'], 'mileage' => (float)$l['mileage'],
+            'description' => (string)$l['description'], 'is_billed' => (bool)$l['is_billed'], 'goal_id' => $l['goal_id'] !== null ? (int)$l['goal_id'] : null,
+            'rsa_category' => $l['rsa_category'], 'author' => $l['author']], $q->fetchAll());
+        out(['ok' => true, 'logs' => $logs]);
+    }
+    case 'correct_log': {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') fail('Use POST for changes.', 405);
+        $lid = (int)($input['id'] ?? 0);
+        $lq = db()->prepare('SELECT track_id FROM work_logs WHERE id = ?');
+        $lq->execute([$lid]);
+        $ltid = $lq->fetchColumn();
+        if ($ltid === false) fail('That entry no longer exists.', 404);
+        api_require_track((int)$ltid, $userId);
+        if (!is_numeric($input['hours'] ?? null) || (isset($input['mileage']) && !is_numeric($input['mileage']))) fail('Give the hours (and miles) as numbers.', 422);
+        $err = work_log_correct($lid, (int)$ltid, (float)$input['hours'], (float)($input['mileage'] ?? 0), is_string($input['reason'] ?? null) ? $input['reason'] : '', $userId);
+        if ($err !== null) fail($err, 422);
+        out(['ok' => true, 'message' => 'Entry corrected.']);
+    }
+    case 'delete_log': {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') fail('Use POST for changes.', 405);
+        $lid = (int)($input['id'] ?? 0);
+        $lq = db()->prepare('SELECT w.track_id, w.work_date, w.hours, w.is_billed, c.name AS client_name FROM work_logs w JOIN training_tracks t ON t.id = w.track_id JOIN clients c ON c.id = t.client_id WHERE w.id = ?');
+        $lq->execute([$lid]);
+        $lg = $lq->fetch();
+        if (!$lg) fail('That entry was already deleted.', 404);
+        api_require_track((int)$lg['track_id'], $userId);
+        if ((int)$lg['is_billed'] === 1) fail('That entry is already on an invoice and cannot be deleted.', 409);
+        if (!trash_row('work_logs', $lid, $userId, 'Work log: ' . fmt_hours((float)$lg['hours']) . ' on ' . fmt_date($lg['work_date']) . ' (' . $lg['client_name'] . ')')) fail('That entry was invoiced or removed a moment ago.', 409);
+        audit($userId, 'hours.delete', 'track', (int)$lg['track_id'], 'log #' . $lid . ' (to trash, mobile)');
+        out(['ok' => true, 'message' => 'Entry moved to the trash. An administrator can restore it for 30 days.']);
+    }
+    case 'my_week': {
+        $w = staff_week($userId);
+        out(['ok' => true] + $w + ['summary' => staff_week_text($w)]);
+    }
+
     /* Move a session; cancel the rest of a series or a whole group (3.0.43, inc/session_changes.php).
        move_session: session_id, start_at ('Y-m-d H:i'), duration (hours), confirm (true to move
        despite warnings). Answers moved false with warnings when there are some to confirm. */

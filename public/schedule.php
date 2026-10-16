@@ -685,6 +685,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
                     schedule_log_description($sess), (int)$sess['user_id'], $authIssue, $miles);
                 db()->prepare('UPDATE scheduled_sessions SET work_log_id = ? WHERE id = ?')
                     ->execute([$logId, $sid]);
+                // The goal worked on and the service delivered (3.0.46): only this track's own.
+                $sGoal = (int)($_POST['session_goal'] ?? 0);
+                if ($sGoal > 0) {
+                    $gq = db()->prepare('SELECT id FROM smart_goals WHERE id = ? AND track_id = ?');
+                    $gq->execute([$sGoal, (int)$sess['track_id']]);
+                    if ($gq->fetchColumn()) db()->prepare('UPDATE work_logs SET goal_id = ? WHERE id = ?')->execute([$sGoal, $logId]);
+                }
+                $sCat = is_string($_POST['session_category'] ?? null) ? $_POST['session_category'] : '';
+                if ($sCat !== '') {
+                    $tq2 = db()->prepare('SELECT * FROM training_tracks WHERE id = ?');
+                    $tq2->execute([(int)$sess['track_id']]);
+                    if (($trow = $tq2->fetch()) && in_array($sCat, track_visit_categories($trow), true)) db()->prepare('UPDATE work_logs SET rsa_category = ? WHERE id = ?')->execute([$sCat, $logId]);
+                }
             }
             // The note is by the person recording the outcome, as on the track page.
             $noteSaved = false;
@@ -856,11 +869,25 @@ function session_row(array $s, string $csrf): void {
             $snOpen = has_field_error($snErr) || has_field_error('session_hours_' . $sidS) || has_field_error('session_miles_' . $sidS)
                 || ($snMine && (trim(old_in('session_note')) !== '' || trim(old_in('session_miles')) !== '')); ?>
           <details<?= $snOpen ? ' open' : '' ?>>
-            <summary>Hours, miles and session note<span class="visually-hidden"> for the <?= $which ?></span></summary>
+            <summary>Hours, miles, goal and session note<span class="visually-hidden"> for the <?= $which ?></span></summary>
             <div class="field"><label for="sh-<?= $sidS ?>">Hours worked<span class="visually-hidden"> for the <?= $which ?></span></label>
               <input type="text" inputmode="decimal" autocomplete="off" id="sh-<?= $sidS ?>" name="session_hours" value="<?= h($snMine && old_in('session_hours') !== '' ? old_in('session_hours') : rtrim(rtrim(number_format($hrs, 2, '.', ''), '0'), '.')) ?>" <?= field_aria('session_hours_' . $sidS) ?>><?= field_error('session_hours_' . $sidS) ?></div>
             <div class="field"><label for="sm-<?= $sidS ?>">Miles driven<span class="visually-hidden"> for the <?= $which ?></span></label>
               <input type="text" inputmode="decimal" autocomplete="off" id="sm-<?= $sidS ?>" name="session_miles" value="<?= $snMine ? h(old_in('session_miles')) : '' ?>" <?= field_aria('session_miles_' . $sidS) ?>><?= field_error('session_miles_' . $sidS) ?></div>
+            <?php // The goal worked on and the service delivered (3.0.46).
+            $sGoals = db()->prepare("SELECT id, specific_goal FROM smart_goals WHERE track_id = ? AND status <> 'Achieved' ORDER BY id");
+            $sGoals->execute([(int)$s['track_id']]);
+            $sGoals = $sGoals->fetchAll();
+            $sTr = db()->prepare('SELECT * FROM training_tracks WHERE id = ?'); $sTr->execute([(int)$s['track_id']]);
+            $sCats = ($sTrRow = $sTr->fetch()) ? track_visit_categories($sTrRow) : []; ?>
+            <?php if ($sGoals): ?>
+            <div class="field"><label for="sg-<?= $sidS ?>">Goal worked on<span class="visually-hidden"> for the <?= $which ?></span></label>
+              <select id="sg-<?= $sidS ?>" name="session_goal"><option value="0">None</option><?php foreach ($sGoals as $sg): ?><option value="<?= (int)$sg['id'] ?>"><?= h(mb_strimwidth((string)$sg['specific_goal'], 0, 80, '…')) ?></option><?php endforeach; ?></select></div>
+            <?php endif; ?>
+            <?php if (count($sCats) > 1): ?>
+            <div class="field"><label for="sc-<?= $sidS ?>">Service delivered<span class="visually-hidden"> for the <?= $which ?></span></label>
+              <select id="sc-<?= $sidS ?>" name="session_category"><?= select_options($sCats, $sCats[0]) ?></select></div>
+            <?php endif; ?>
             <div class="field"><label for="sn-<?= $sidS ?>">Session note<span class="visually-hidden"> for the <?= $which ?></span></label>
               <textarea id="sn-<?= $sidS ?>" name="session_note" rows="4" <?= field_aria($snErr) ?>><?= $snMine ? h(old_in('session_note')) : '' ?></textarea><?= field_error($snErr) ?></div>
           </details>

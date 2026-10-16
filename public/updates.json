@@ -1,7 +1,7 @@
 {
     "product": "Case Management System",
-    "latest": "3.0.45",
+    "latest": "3.0.46",
     "released": "2026-10-16",
-    "notes": "Plan and counselor handover: VR case number, IPE goal and dates on each client, printed on reports and invoices; replace a counselor on all their clients in one step. Apply dist/migrations/mig_3.0.45.sql before updating files (safe to re-run); sites below 3.0.44 first apply the earlier migrations in order. Sites below 3.0.31 also apply mig_3.0.31.sql; Apply dist/migrations/mig_3.0.31.sql (confirms client emails waiting for confirmation). Sites below 3.0.28 apply mig_3.0.28.sql (adds scheduled_sessions.checked_in_at) before updating files; sites below 3.0.27 apply mig_3.0.27.sql first. Sites on 3.0.16 to 3.0.20 apply mig_3.0.21.sql first. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16, 3.0.21, 3.0.27, 3.0.28, 3.0.31, 3.0.34, 3.0.35, 3.0.36, 3.0.37, 3.0.38, 3.0.39, 3.0.40, 3.0.42, 3.0.43, 3.0.44 and 3.0.45 in order; all are safe to re-run.",
+    "notes": "Session details and corrections: goal and service at completion; correct unbilled hours and miles with an audited reason (web and app); mileage-only entries; your week on the Dashboard. No database change. Sites below 3.0.45 apply the earlier migrations first, in order. Sites below 3.0.31 also apply mig_3.0.31.sql; Apply dist/migrations/mig_3.0.31.sql (confirms client emails waiting for confirmation). Sites below 3.0.28 apply mig_3.0.28.sql (adds scheduled_sessions.checked_in_at) before updating files; sites below 3.0.27 apply mig_3.0.27.sql first. Sites on 3.0.16 to 3.0.20 apply mig_3.0.21.sql first. Older sites apply mig_3.0.8, 3.0.9, 3.0.10, 3.0.12, 3.0.16, 3.0.21, 3.0.27, 3.0.28, 3.0.31, 3.0.34, 3.0.35, 3.0.36, 3.0.37, 3.0.38, 3.0.39, 3.0.40, 3.0.42, 3.0.43, 3.0.44 and 3.0.45 in order; all are safe to re-run.",
     "contact": "Contact Example Agency for the update package."
 }

@@ -226,7 +226,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
         if (!$rsaOk) $lErrs['visit_rsa_category'] = 'RSA service delivered this visit: choose one of the services listed for this track.';
         if (!$typeOk) $lErrs['visit_service_type'] = 'Service type: choose one of the service types listed.';
         if (!$goalOk) $lErrs['goal_id'] = 'Goal this session advanced: that goal is not on this track any more. Choose one of the goals listed, or None.';
-        if ($hours < 0.01 || $hours > 24) $lErrs['hours'] = $hoursRaw === '' ? 'Enter the hours worked, or write a session note to save the note on its own.' : 'Enter the hours worked as a number more than 0 and no more than 24, such as 1.5.';
+        // Hours 0 with miles is a mileage-only entry (3.0.46): travel without session time.
+        $mileageOnly = $hoursRaw !== '' && is_numeric($hoursRaw) && $hours == 0.0 && $mileage > 0;
+        if (!$mileageOnly && ($hours < 0.01 || $hours > 24)) $lErrs['hours'] = $hoursRaw === '' ? 'Enter the hours worked, or write a session note to save the note on its own.' : 'Enter the hours worked as a number more than 0 and no more than 24, such as 1.5, or 0 with miles for travel only.';
         if ($mileage < 0 || $mileage > 1000) $lErrs['mileage'] = 'Mileage must be a number from 0 to 1000 miles per entry.';
         if ($desc === '') $lErrs['description'] = 'Describe the activity, for the hours on the invoice.';
         elseif ($descTooLong) $lErrs['description'] = 'The activity description is too long to save. It can hold 65,535 bytes (accented letters and symbols count as 2 to 4 bytes each); shorten it.';
@@ -334,6 +336,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mark_billed'])) {
     }
     flash('No unbilled entries dated today or earlier to invoice.', 'error');
     redirect("track.php?id=$id#logs");
+}
+
+/* ---- POST: correct an unbilled entry's hours and miles (3.0.46, inc/work_logs.php) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['correct_log'])) {
+    $lid = (int)($_POST['log_id'] ?? 0);
+    $hIn = is_string($_POST['fix_hours'] ?? null) ? trim($_POST['fix_hours']) : '';
+    $mIn = is_string($_POST['fix_miles'] ?? null) ? trim($_POST['fix_miles']) : '';
+    $err = (!is_numeric($hIn) || ($mIn !== '' && !is_numeric($mIn))) ? 'Enter the hours (and miles) as numbers.'
+        : work_log_correct($lid, $id, (float)$hIn, $mIn === '' ? 0.0 : (float)$mIn, is_string($_POST['fix_reason'] ?? null) ? $_POST['fix_reason'] : '', (int)$user['id']);
+    if ($err !== null) { keep_input(); keep_field_errors(['fix_' . $lid => $err]); redirect("track.php?id=$id#log-" . $lid); }
+    flash('Entry corrected. The change and its reason are in the audit log.');
+    redirect("track.php?id=$id#log-" . $lid);
 }
 
 /* ---- POST: delete a log entry (unbilled only; goes to the 30-day trash) ---- */
@@ -940,6 +954,17 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
               onclick="return confirm('Move this log entry from <?= fmt_date($l['work_date']) ?> to the trash? An administrator can restore it for 30 days.');">
               Move to trash<span class="visually-hidden"> — log entry from <?= fmt_date($l['work_date']) ?>, <?= fmt_hours((float)$l['hours']) ?>: <?= h(mb_strimwidth($l['description'], 0, 50, '…')) ?></span></button>
           </form>
+          <?php $fk = 'fix_' . (int)$l['id']; $fMine = old_in('log_id') === (string)(int)$l['id'] && old_in('correct_log') !== ''; ?>
+          <details id="log-<?= (int)$l['id'] ?>"<?= has_field_error($fk) ? ' open' : '' ?>><summary>Correct<span class="visually-hidden"> the log entry from <?= fmt_date($l['work_date']) ?></span></summary>
+            <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate><?= csrf_field() ?>
+              <input type="hidden" name="log_id" value="<?= (int)$l['id'] ?>">
+              <?= field_error($fk) ?>
+              <div class="field"><label for="fh-<?= (int)$l['id'] ?>">Hours</label><input type="text" inputmode="decimal" id="fh-<?= (int)$l['id'] ?>" name="fix_hours" value="<?= h($fMine ? old_in('fix_hours') : (string)(float)$l['hours']) ?>" <?= field_aria($fk) ?>></div>
+              <div class="field"><label for="fm-<?= (int)$l['id'] ?>">Miles</label><input type="text" inputmode="decimal" id="fm-<?= (int)$l['id'] ?>" name="fix_miles" value="<?= h($fMine ? old_in('fix_miles') : (string)(float)$l['mileage']) ?>"></div>
+              <div class="field"><label for="fr-<?= (int)$l['id'] ?>">Reason</label><input type="text" id="fr-<?= (int)$l['id'] ?>" name="fix_reason" maxlength="255" value="<?= $fMine ? h(old_in('fix_reason')) : '' ?>"></div>
+              <button type="submit" name="correct_log" value="1" class="btn btn-secondary btn-sm">Save correction<span class="visually-hidden"> for <?= fmt_date($l['work_date']) ?></span></button>
+            </form>
+          </details>
           <?php else: ?><span class="muted">Invoiced</span><?php endif; ?>
         </td>
       </tr>

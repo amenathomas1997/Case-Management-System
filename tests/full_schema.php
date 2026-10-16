@@ -802,6 +802,7 @@ try {
     require __DIR__.'/session_changes_cases.php';
     require __DIR__.'/amendment_onhold_cases.php';
     require __DIR__.'/plan_handover_cases.php';
+    require __DIR__.'/work_log_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 

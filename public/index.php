@@ -163,6 +163,8 @@ page_header('Dashboard', $user, 'dashboard');
   <?php endif; ?>
 </section>
 
+<?php // Your week (3.0.46): hours logged and still booked, against the weekly target. ?>
+<p id="my-week"><?= h(staff_week_text(staff_week((int)$user['id']))) ?></p>
 <h2 class="visually-hidden">Caseload at a glance</h2>
 <div class="grid grid-4">
   <?php if (can('clients')): ?>

@@ -120,6 +120,11 @@ struct TrackDetailView: View {
     @State private var editingTrackNote: Note?
     /// A locked note being corrected with an addendum (3.0.36).
     @State private var addendumTrackNote: Note?
+    /// Hours logged on this track (3.0.46): an unbilled one can be corrected or deleted.
+    @State private var workLogs: [WorkLogEntry] = []
+    @State private var workLogsLoaded = false
+    @State private var correctingLog: WorkLogEntry?
+    @State private var deletingLog: WorkLogEntry?
     @State private var expenses: [TrackExpense] = []
     @State private var expensesLoaded = false
     /// The expense waiting for the person to confirm its deletion.
@@ -329,6 +334,33 @@ struct TrackDetailView: View {
                         Button { showingTrackNote = true } label: { Label("Add note on this track", systemImage: "square.and.pencil") }
                     }
                 }
+                Section(workLogsLoaded ? "Hours logged (\(workLogs.count))" : "Hours logged") {
+                    if workLogsLoaded && workLogs.isEmpty {
+                        Text("No hours logged on this track.").foregroundStyle(Color.secondaryText)
+                    }
+                    ForEach(workLogs) { log in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(log.summary).font(.body)
+                            Text(log.description).font(.caption).foregroundStyle(Color.secondaryText).lineLimit(2)
+                        }
+                        .padding(.vertical, 2)
+                        // One stop per entry; Correct and Delete (each asking first) are on the Actions rotor.
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(log.summary + ". " + log.description)
+                        .accessibilityActions {
+                            if !log.isBilled {
+                                Button("Correct hours or miles") { correctingLog = log }
+                                Button("Delete entry", role: .destructive) { deletingLog = log }
+                            }
+                        }
+                        .contextMenu {
+                            if !log.isBilled {
+                                Button("Correct hours or miles") { correctingLog = log }
+                                Button("Delete entry", role: .destructive) { deletingLog = log }
+                            }
+                        }
+                    }
+                }
                 Section(expensesLoaded ? "Billable expenses (\(expenses.count))" : "Billable expenses") {
                     if !expensesLoaded {
                         if error == nil { ProgressView("Loading expenses…") }
@@ -432,6 +464,18 @@ struct TrackDetailView: View {
             if let goal = historyGoal {
                 GoalHistoryView(goalId: goal.id, goalText: goal.specificGoal)
             }
+        }
+        .sheet(item: $correctingLog, onDismiss: announceSheetResult) { log in
+            CorrectLogSheet(entry: log) { message in
+                sheetResult = message
+                Task { await loadWorkLogs() }
+            }
+        }
+        .confirmationDialog("Delete the entry \(deletingLog?.summary ?? "")? It moves to the trash, where an administrator can restore it for 30 days.",
+                            isPresented: Binding(get: { deletingLog != nil }, set: { if !$0 { deletingLog = nil } }),
+                            titleVisibility: .visible, presenting: deletingLog) { log in
+            Button("Delete entry", role: .destructive) { Task { await deleteLog(log) } }
+            Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog("Delete the expense \(deletingExpense?.summary ?? "")? It moves to the trash, where an administrator can restore it for 30 days.",
                             isPresented: Binding(get: { deletingExpense != nil }, set: { if !$0 { deletingExpense = nil } }),
@@ -608,6 +652,27 @@ struct TrackDetailView: View {
             if self.error != error.localizedDescription { showFormError(error.localizedDescription, in: &self.error) }
         }
         await loadExpenses()
+        await loadWorkLogs()
+    }
+
+    private func loadWorkLogs() async {
+        do {
+            let r: WorkLogsResponse = try await api.call("work_logs", query: ["track_id": String(track.id)])
+            workLogs = r.logs
+            workLogsLoaded = true
+        } catch {
+            if self.error == nil { showFormError(error.localizedDescription, in: &self.error) }
+        }
+    }
+
+    private func deleteLog(_ log: WorkLogEntry) async {
+        error = nil; confirmation = nil
+        do {
+            let r: TaskSaveResult = try await api.call("delete_log", body: ["id": log.id])
+            confirmation = r.message ?? "Entry deleted."
+            await loadWorkLogs()
+            announce(confirmation ?? "")
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 
     /// Leaves an error already on screen in place (a refused delete says more than a failed reload).
@@ -1645,5 +1710,82 @@ struct TrackEditSheet: View {
             onSaved(r.message ?? (trackId == nil ? "Training track created." : "Training track updated."), r.track)
             dismiss()
         } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+    }
+}
+
+/// One work entry on a track (work_logs, 3.0.46).
+struct WorkLogEntry: Decodable, Identifiable {
+    let id: Int
+    let workDate: String
+    let hours: Double
+    let mileage: Double
+    let description: String
+    let isBilled: Bool
+    private enum CodingKeys: String, CodingKey { case id, workDate, hours, mileage, description, isBilled }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        workDate = (try? c.decode(String.self, forKey: .workDate)) ?? ""
+        hours = (try? c.decode(Double.self, forKey: .hours)) ?? 0
+        mileage = (try? c.decode(Double.self, forKey: .mileage)) ?? 0
+        description = (try? c.decode(String.self, forKey: .description)) ?? ""
+        isBilled = (try? c.decode(Bool.self, forKey: .isBilled)) ?? false
+    }
+}
+extension WorkLogEntry {
+    var summary: String {
+        "\(formatDate(workDate)): \(hours.formatted()) hours" + (mileage > 0 ? ", \(mileage.formatted()) miles" : "") + (isBilled ? ", on an invoice" : ", not yet billed")
+    }
+}
+struct WorkLogsResponse: Decodable { let logs: [WorkLogEntry] }
+
+/// Correct an unbilled entry's hours and miles, with a reason (correct_log, 3.0.46).
+struct CorrectLogSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let entry: WorkLogEntry
+    let onSaved: (String) -> Void
+    @State private var hours: String
+    @State private var miles: String
+    @State private var reason = ""
+    @State private var busy = false
+    @State private var error: String?
+
+    init(entry: WorkLogEntry, onSaved: @escaping (String) -> Void) {
+        self.entry = entry
+        self.onSaved = onSaved
+        _hours = State(initialValue: entry.hours.formatted())
+        _miles = State(initialValue: entry.mileage.formatted())
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let error { ErrorBanner(message: error) }
+                Section("Entry of \(formatDate(entry.workDate))") {
+                    CaptionedField(label: "Hours", text: $hours, keyboard: .decimalPad)
+                    CaptionedField(label: "Miles", text: $miles, keyboard: .decimalPad)
+                    CaptionedField(label: "Reason for the correction", text: $reason)
+                }
+            }
+            .navigationTitle("Correct entry")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button(busy ? "Saving…" : "Save") { Task { await save() } }.disabled(busy) }
+            }
+        }
+    }
+
+    private func save() async {
+        guard let h = Double(hours.replacingOccurrences(of: ",", with: ".")), let m = Double(miles.isEmpty ? "0" : miles.replacingOccurrences(of: ",", with: ".")) else {
+            showFormError("Enter the hours and miles as numbers.", in: &error); return
+        }
+        busy = true; error = nil
+        defer { busy = false }
+        do {
+            let r: TaskSaveResult = try await api.call("correct_log", body: ["id": entry.id, "hours": h, "mileage": m, "reason": reason])
+            onSaved(r.message ?? "Entry corrected.")
+            dismiss()
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
