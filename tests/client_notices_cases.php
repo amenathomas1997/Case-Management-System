@@ -41,7 +41,14 @@ check($sends()===1,'A second message the same day sends no second notice');
 
 /* A closed request emails the client */
 $db->prepare("INSERT INTO portal_requests(client_id,type,details) VALUES(?,'device','Synthetic device help')")->execute([$nc]); $nr=(int)$db->lastInsertId();
-check(request_closed_notice($nr)===true,'The client is emailed when a request is answered');
+// Sending is exercised through the page (its own mailer); here, what is sent and to whom.
+[$code,,$err]=$renderPage('portal_requests',[],['set_status'=>'1','id'=>(string)$nr,'to'=>'Done']);
+check($code===0 && $err==='' && $db->query("SELECT status FROM portal_requests WHERE id=$nr")->fetchColumn()==='Done','Answering a request closes it and emails the client' . ($err ? ": $err" : ''));
+[$subj,$body]=email_template('request_closed',['name'=>'X','link'=>'https://example.invalid/p']);
+check(str_contains($body,'https://example.invalid/p') && !str_contains($subj.$body,'Synthetic device help'),'The answered-request email carries the portal link, not the request');
+$db->exec("UPDATE clients SET email_verified=0 WHERE id=$nc");
+check(request_closed_notice($nr)===false,'An unconfirmed client address is never emailed');
+$db->exec("UPDATE clients SET email_verified=1 WHERE id=$nc");
 
 /* Contact preference in session reminders */
 $db->exec("UPDATE clients SET a11y_contact='Phone', phone='555-0142' WHERE id=$nc");

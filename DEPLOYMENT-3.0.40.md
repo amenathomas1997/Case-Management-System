@@ -15,6 +15,6 @@ Web, cron and iPhone 3.0.40 (42); migration **mig_3.0.40.sql** (portal_tokens an
 - **Tests.** tests/client_notices_cases.php is new, and mig_3.0.40 is added to the chain test.
 
 Verified before commit:
-- full_schema 1059, audit_regression 61, security 67, staging_scrub 34, and run_all.
+- full_schema 1061 (also run with the test process's own mailer failing, as on the CI runner), audit_regression 61, security 67, staging_scrub 34, and run_all.
 - The iPhone simulator build succeeded.
 - Not checked in a browser or with a screen reader.
