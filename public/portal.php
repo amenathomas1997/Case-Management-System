@@ -321,7 +321,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('portal.php?t=' . $token . '&lang=' . page_lang());
     }
     if (isset($_POST['new_request'])) {
-        $type = in_array($_POST['req_type'] ?? '', ['appointment', 'reschedule', 'cancel', 'device', 'other'], true) ? $_POST['req_type'] : 'other';
+        $type = in_array($_POST['req_type'] ?? '', ['appointment', 'reschedule', 'cancel', 'device', 'other', 'records', 'correction'], true) ? $_POST['req_type'] : 'other';
         $sessionId = (int)($_POST['session_id'] ?? 0) ?: null;
         $details = str_replace("\r\n", "\n", trim(is_string($_POST['details'] ?? null) ? $_POST['details'] : ''));
         // Throttle: 5 requests / 5 minutes / client (server-side).
@@ -355,16 +355,19 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             flash_ui($capMsg, 'error');
         } else {
             db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-req-' . (int)$client['id']]);
-            db()->prepare('INSERT INTO portal_requests (client_id, type, session_id, details) VALUES (?,?,?,?)')
-                ->execute([(int)$client['id'], $type, $sessionId, $details !== '' ? $details : null]);
+            // A request for a copy of the record or a correction is due in 30 days (3.0.38).
+            $dueOn = isset(RECORDS_REQUEST_TYPES[$type]) ? date('Y-m-d', strtotime('+' . RECORDS_REQUEST_DAYS . ' days')) : null;
+            db()->prepare('INSERT INTO portal_requests (client_id, type, session_id, details, due_on) VALUES (?,?,?,?,?)')
+                ->execute([(int)$client['id'], $type, $sessionId, $details !== '' ? $details : null, $dueOn]);
             $reqId = (int)db()->lastInsertId();
-            $labels = ['appointment' => 'appointment request', 'reschedule' => 'reschedule request', 'cancel' => 'cancellation request', 'device' => 'device help request', 'other' => 'request'];
+            $labels = ['appointment' => 'appointment request', 'reschedule' => 'reschedule request', 'cancel' => 'cancellation request', 'device' => 'device help request', 'other' => 'request',
+                'records' => 'request for a copy of their records (due ' . ($dueOn ? date('F j', strtotime($dueOn)) : '') . ')', 'correction' => 'request to correct their records (due ' . ($dueOn ? date('F j', strtotime($dueOn)) : '') . ')'];
             $label = $labels[$type] ?? 'request';
             // The follow-up task goes to an active instructor (unassigned otherwise, where
             // staff with client access see it); its key lets Client requests close it
             // when the request is set to Done or Declined.
             $aid = (int)($client['active_owner'] ?? 0);
-            add_task('Client ' . $label . ': ' . $client['name'], mb_substr($details, 0, 400), (int)$client['id'], null, business_days_from(2), $aid ?: null, null, 'preq-' . $reqId);
+            add_task('Client ' . $label . ': ' . $client['name'], mb_substr($details, 0, 400), (int)$client['id'], null, $dueOn ? date('Y-m-d', strtotime($dueOn . ' -5 days')) : business_days_from(2), $aid ?: null, null, 'preq-' . $reqId);
             portal_notify_owner($client, $client['name'] . ' sent a ' . $label, 'portal_requests.php?client=' . (int)$client['id']);
             flash_ui('Request sent — your instructor will follow up.');
         }
@@ -900,7 +903,7 @@ $homework = $hwStmt->fetchAll();
     <h3><?= t('Ask us something') ?></h3>
     <fieldset class="field">
       <legend><?= t('What is it about?') ?></legend>
-      <?php foreach (['appointment' => 'An appointment', 'device' => 'Help with a device', 'other' => 'Something else'] as $rtVal => $rtLabel): ?>
+      <?php foreach (['appointment' => 'An appointment', 'device' => 'Help with a device', 'records' => 'A copy of my records', 'correction' => 'A correction to my records', 'other' => 'Something else'] as $rtVal => $rtLabel): ?>
       <div class="field"><label><input type="radio" name="req_type" value="<?= $rtVal ?>" <?= ($oldReq !== '' ? $oldReq : 'appointment') === $rtVal ? 'checked' : '' ?>> <?= t($rtLabel) ?></label></div>
       <?php endforeach; ?>
     </fieldset>
@@ -913,11 +916,12 @@ $homework = $hwStmt->fetchAll();
   <?php if ($myRequests): ?>
   <h3><?= t('Your requests') ?></h3>
   <ul>
-  <?php $typeLabels = ['appointment' => 'Appointment', 'reschedule' => 'Reschedule', 'cancel' => 'Cancellation', 'device' => 'Device help', 'other' => 'Request']; ?>
+  <?php $typeLabels = ['appointment' => 'Appointment', 'reschedule' => 'Reschedule', 'cancel' => 'Cancellation', 'device' => 'Device help', 'other' => 'Request'] + RECORDS_REQUEST_TYPES; ?>
   <?php foreach ($myRequests as $rq): ?>
     <li><strong><?= t($typeLabels[$rq['type']] ?? 'Request') ?></strong>
       · <span class="badge <?= $rq['status'] === 'Done' ? 'badge-closed' : ($rq['status'] === 'Declined' ? 'badge-hold' : 'badge-pending') ?>"><?= isset($reqStatusLabel[$rq['status']]) ? t($reqStatusLabel[$rq['status']]) : en((string)$rq['status']) ?></span>
-      <span class="muted">· <?= en(fmt_date($rq['created_at'])) ?></span>
+      <span class="muted">· <?= en(fmt_date($rq['created_at'])) ?></span><?php if (isset(RECORDS_REQUEST_TYPES[$rq['type']]) && !in_array($rq['status'], ['Done', 'Declined'], true)): ?> <?= t('We answer within 30 days.') ?><?php endif; ?>
+      <?php if (!empty($rq['outcome'])): ?><br><?= en((string)$rq['outcome']) ?><?php endif; ?>
       <?php // The whole request, with its line breaks (a list of times stays a list). ?>
       <?= $rq['details'] ? '<br>' . nl2br(h((string)$rq['details'])) : '' ?></li>
   <?php endforeach; ?>

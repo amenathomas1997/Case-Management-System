@@ -185,7 +185,7 @@ function audit_action_subjects(): array {
         'retention' => 'Record retention', 'session' => 'Session', 'signature' => 'Signature', 'task' => 'Task',
         'totp' => 'Authenticator app', 'track' => 'Training track', 'trash' => 'Trash', 'user' => 'Team member',
         'vrcportal' => 'Counselor portal', 'worksite' => 'Worksite',
-        'release' => 'Release of information', 'vendor' => 'Vendor agreement', 'note_lock' => 'Case note lock',
+        'release' => 'Release of information', 'privacy_incident' => 'Privacy incident', 'vendor' => 'Vendor agreement', 'note_lock' => 'Case note lock',
     ];
 }
 /** Plain wording for a stored action code such as "equipment.loan" (display only;
@@ -210,6 +210,8 @@ function audit_action_label(string $code): string {
         'amend' => 'amended', 'scored' => 'scored', 'loan' => 'loaned', 'reserve' => 'reserved', 'redact' => 'redacted',
         'schedule' => 'scheduled', 'snooze' => 'snoozed', 'skip' => 'skipped', 'request' => 'requested',
         'open' => 'opened',
+        'assess' => 'risk assessed', 'person' => 'affected person added', 'notice' => 'notice recorded', 'followup' => 'follow-up recorded',
+        'close' => 'closed', 'reopen' => 'reopened',
         'addendum' => 'addendum added', 'hold' => 'hold placed or lifted', 'privacy_notice' => 'privacy notice given',
         'purge_auto' => 'emptied automatically after 30 days', 'paper' => 'paper copy recorded', 'withdraw' => 'withdrawn', 'set' => 'set',
     ];

@@ -63,7 +63,7 @@ function parity_visible_task(int $id, array $user): ?array {
 
 /** portal_requests.php's statuses and type labels. */
 const PARITY_PREQ_STATUSES = ['New', 'In Progress', 'Done', 'Declined'];
-const PARITY_PREQ_TYPES = ['appointment' => 'Appointment', 'reschedule' => 'Reschedule', 'cancel' => 'Cancellation', 'device' => 'Device help', 'other' => 'Request'];
+const PARITY_PREQ_TYPES = ['appointment' => 'Appointment', 'reschedule' => 'Reschedule', 'cancel' => 'Cancellation', 'device' => 'Device help', 'other' => 'Request'] + RECORDS_REQUEST_TYPES;
 
 /** client.php's guardian consent state for one client (Demographics). */
 function parity_consent_state(int $clientId): array {
@@ -335,7 +335,9 @@ case 'portal_requests': {
             'type' => (string)$r['type'], 'type_label' => PARITY_PREQ_TYPES[$r['type']] ?? 'Request',
             'details' => $r['details'] !== null && $r['details'] !== '' ? (string)$r['details'] : null,
             'status' => (string)$r['status'], 'created_at' => (string)$r['created_at'],
-            'session_id' => $r['session_id'] !== null ? (int)$r['session_id'] : null, 'session_start' => $r['start_at']];
+            'session_id' => $r['session_id'] !== null ? (int)$r['session_id'] : null, 'session_start' => $r['start_at'],
+            // 3.0.38: a records request's due date and the outcome the client sees.
+            'due_on' => $r['due_on'] ?? null, 'outcome' => $r['outcome'] ?? null];
     }
     out(['ok' => true, 'requests' => $items, 'statuses' => PARITY_PREQ_STATUSES, 'new_count' => (int)$nc->fetchColumn(),
         'truncated' => $truncated, 'showing_all' => $showDone, 'scoped' => $scoped]);
@@ -353,6 +355,12 @@ case 'portal_request_update': {
     if (caseload_scoped() && (int)$row['assigned_to'] !== $userId) fail('That request is not on your caseload.', 403);
     $to = in_array($input['to'] ?? '', PARITY_PREQ_STATUSES, true) ? $input['to'] : null;
     if ($to === null) fail('Choose a status for the request.', 422);
+    // As on the website: a records request closes with the outcome the client sees.
+    $outcome = trim(is_string($input['outcome'] ?? null) ? $input['outcome'] : '');
+    if (isset(RECORDS_REQUEST_TYPES[$row['type']]) && in_array($to, ['Done', 'Declined'], true) && $outcome === '') {
+        fail($to === 'Declined' ? 'Say why the request is refused; the client sees it.' : 'Say how the copy was delivered or what was corrected; the client sees it.', 422);
+    }
+    if (mb_strlen($outcome) > 500) fail('Keep the outcome to 500 characters or fewer.', 422);
     $label = PARITY_PREQ_TYPES[$row['type']] ?? 'Request';
     if ($to === $row['status']) {
         out(['ok' => true, 'changed' => false, 'message' => 'Request from ' . $row['client_name'] . ' (' . $label . ') is already ' . $to . '; nothing was changed.']);
@@ -360,7 +368,7 @@ case 'portal_request_update': {
     $closed = ['Done', 'Declined'];
     db()->beginTransaction();
     try {
-        db()->prepare('UPDATE portal_requests SET status = ?, handled_by = ? WHERE id = ?')->execute([$to, $userId, $id]);
+        db()->prepare('UPDATE portal_requests SET status = ?, handled_by = ?, outcome = COALESCE(?, outcome) WHERE id = ?')->execute([$to, $userId, $outcome !== '' ? $outcome : null, $id]);
         if (in_array($to, $closed, true)) {
             complete_task_by_key('preq-' . $id, $userId);
         } elseif (in_array($row['status'], $closed, true)) {

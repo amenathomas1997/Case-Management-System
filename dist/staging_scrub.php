@@ -49,6 +49,8 @@ const STAGING_SCRUB_KEEP = [
     'kb_articles' => ['title', 'category', 'body'],
     'notifications' => ['link'],
     'portal_requests' => ['type', 'status'],
+    'privacy_incidents' => ['kind', 'risk_level', 'status'],
+    'privacy_incident_events' => ['event_type', 'recipient'],
     'referral_waitlist' => ['status', 'languages', 'areas', 'modality'],
     'referrals' => ['closed_reason', 'counselor_agency', 'income_bracket', 'referral_purpose', 'requested_service', 'grade_level',
         'relationship', 'contact_first', 'preets_services', 'preferred_language'],

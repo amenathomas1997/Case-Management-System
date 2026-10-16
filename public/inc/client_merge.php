@@ -31,6 +31,13 @@ function move_client_records(PDO $pdo, int $keepId, int $mergeId): void {
     foreach (CLIENT_MERGE_TABLES as $table) {
         $pdo->prepare("UPDATE `$table` SET client_id = ? WHERE client_id = ?")->execute([$keepId, $mergeId]);
     }
+    // A privacy incident that lists both records keeps one entry (3.0.38); the duplicate's
+    // own entries move to the kept record.
+    try {
+        $pdo->prepare('UPDATE IGNORE privacy_incident_clients SET client_id = ? WHERE client_id = ?')->execute([$keepId, $mergeId]);
+    } catch (PDOException $e) {
+        if ((string)$e->getCode() !== '42S02') throw $e; // mig_3.0.38 not run yet
+    }
 }
 
 // Sessions move before training tracks: completing a session locks the session

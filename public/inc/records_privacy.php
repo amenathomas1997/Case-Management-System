@@ -367,3 +367,122 @@ function trash_auto_purge_allowed(array $row): bool {
 
 /** How a client was given the privacy notice. */
 const PRIVACY_NOTICE_METHODS = ['In person', 'By email', 'By mail', 'In the portal', 'Read aloud by phone'];
+
+/* ---------- Privacy incidents (3.0.38) ---------- */
+
+const PRIVACY_INCIDENT_KINDS = ['Misdirected email or report', 'Lost or stolen device', 'Unauthorized access', 'Wrong portal link',
+    'Vendor incident', 'Paper records', 'Other'];
+const PRIVACY_RISK_LEVELS = ['Under assessment', 'Low probability of compromise', 'Breach: notice required'];
+const PRIVACY_NOTICE_RECIPIENTS = ['Affected person', 'Guardian', 'HHS (Office for Civil Rights)', 'Media', 'Funding agency', 'Other'];
+const PRIVACY_INCIDENT_STATUSES = ['Open', 'Closed'];
+
+/** Days from discovery to the notice deadline (HIPAA: without unreasonable delay, at most 60 days). */
+const PRIVACY_NOTICE_DAYS = 60;
+
+/** One privacy incident with its reporter, or null. */
+function privacy_incident(int $id): ?array {
+    $q = db()->prepare('SELECT p.*, u.name AS reporter FROM privacy_incidents p LEFT JOIN users u ON u.id = p.reported_by WHERE p.id = ?');
+    $q->execute([$id]);
+    return $q->fetch() ?: null;
+}
+
+/** The people affected: client id (null once purged), the name kept, and when they were notified. */
+function privacy_incident_people(int $id): array {
+    $q = db()->prepare('SELECT a.*, c.name AS current_name FROM privacy_incident_clients a LEFT JOIN clients c ON c.id = a.client_id WHERE a.incident_id = ? ORDER BY a.client_label');
+    $q->execute([$id]);
+    return $q->fetchAll();
+}
+
+/** The dated log: notices sent and follow-up entries, oldest first. */
+function privacy_incident_events(int $id): array {
+    $q = db()->prepare('SELECT e.*, u.name AS by_name FROM privacy_incident_events e LEFT JOIN users u ON u.id = e.created_by WHERE e.incident_id = ? ORDER BY e.happened_on, e.id');
+    $q->execute([$id]);
+    return $q->fetchAll();
+}
+
+/** Days left to the notice deadline (negative when past). */
+function privacy_days_left(array $inc): int {
+    return (int)floor((strtotime((string)$inc['notice_deadline']) - strtotime('today')) / 86400);
+}
+
+/* ---------- Requests for a copy of records, or a correction (3.0.38) ---------- */
+
+/** Portal request types that are records requests, with their label. Each is due in 30 days. */
+const RECORDS_REQUEST_TYPES = ['records' => 'Copy of records', 'correction' => 'Correction to records'];
+const RECORDS_REQUEST_DAYS = 30;
+
+/**
+ * A client-safe copy of the record as one accessible HTML page: profile, training tracks
+ * and goals, sessions, case notes, assessments, equipment loans, and consents and
+ * releases. Internal review items, billing, rates and invoices are left out.
+ */
+function client_records_copy_html(int $clientId): string {
+    $one = function (string $sql) use ($clientId) { $q = db()->prepare($sql); $q->execute([$clientId]); return $q->fetchAll(); };
+    $c = $one('SELECT * FROM clients WHERE id = ?')[0] ?? null;
+    if (!$c) return '';
+    $e = fn($v): string => htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
+    $date = fn($v): string => $v ? $e(fmt_date((string)$v)) : '';
+    $out = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+        . '<title>Your records — ' . $e(brand('org')) . '</title><style>body{font-family:system-ui,sans-serif;max-width:48rem;margin:1rem auto;padding:0 1rem;line-height:1.5}</style></head><body>'
+        . '<h1>Your records from ' . $e(brand('org')) . '</h1><p>Prepared ' . $e(date('F j, Y')) . ' for ' . $e($c['name']) . '.</p>';
+    $out .= '<h2>Your details</h2><ul>';
+    foreach (['Name' => $c['name'], 'Date of birth' => $c['dob'] ? fmt_date($c['dob']) : '', 'Email' => $c['email'], 'Phone' => $c['phone'], 'Address' => $c['address'],
+        'Status' => $c['status'], 'VR counselor' => trim(($c['counselor_name'] ?? '') . ' ' . ($c['counselor_agency'] ? '(' . $c['counselor_agency'] . ')' : '')),
+        'Guardian' => $c['guardian_name'] ?? ''] as $k => $v) if ((string)$v !== '') $out .= '<li>' . $e($k) . ': ' . $e($v) . '</li>';
+    $out .= '</ul>';
+    $tracks = $one('SELECT id, title, status, start_date, expiration_date FROM training_tracks WHERE client_id = ? ORDER BY start_date, id');
+    $out .= '<h2>Training</h2>' . ($tracks ? '' : '<p>None.</p>');
+    foreach ($tracks as $t) {
+        $out .= '<h3>' . $e($t['title']) . '</h3><p>' . $e($t['status']) . ($t['start_date'] ? ', from ' . $date($t['start_date']) : '') . ($t['expiration_date'] ? ' to ' . $date($t['expiration_date']) : '') . '.</p>';
+        $g = db()->prepare('SELECT specific_goal, status, target_date FROM smart_goals WHERE track_id = ? ORDER BY id');
+        $g->execute([(int)$t['id']]);
+        if ($goals = $g->fetchAll()) {
+            $out .= '<p>Goals:</p><ul>';
+            foreach ($goals as $go) $out .= '<li>' . $e($go['specific_goal']) . ' (' . $e($go['status']) . ($go['target_date'] ? ', target ' . $date($go['target_date']) : '') . ')</li>';
+            $out .= '</ul>';
+        }
+    }
+    $sessions = $one("SELECT start_at, status, location, is_remote FROM scheduled_sessions WHERE client_id = ? ORDER BY start_at");
+    $out .= '<h2>Sessions</h2>' . ($sessions ? '<ul>' : '<p>None.</p>');
+    foreach ($sessions as $s) $out .= '<li>' . $e(fmt_datetime($s['start_at'])) . ': ' . $e($s['status']) . ($s['is_remote'] ? ', online' : ($s['location'] ? ', ' . $e($s['location']) : '')) . '</li>';
+    $out .= $sessions ? '</ul>' : '';
+    $notes = $one('SELECT created_at, note_type, subject, body FROM client_notes WHERE client_id = ? ORDER BY created_at, id');
+    $out .= '<h2>Case notes</h2>' . ($notes ? '' : '<p>None.</p>');
+    foreach ($notes as $n) $out .= '<h3>' . $e($n['subject']) . '</h3><p>' . $e($n['note_type']) . ', ' . $e(fmt_datetime($n['created_at'])) . '</p><p style="white-space:pre-wrap">' . $e($n['body']) . '</p>';
+    $ass = $one('SELECT assessment_date, primary_tech, summary FROM tech_assessments WHERE client_id = ? ORDER BY assessment_date');
+    $out .= '<h2>Assessments</h2>' . ($ass ? '' : '<p>None.</p>');
+    foreach ($ass as $a) $out .= '<h3>' . $date($a['assessment_date']) . ($a['primary_tech'] ? ': ' . $e($a['primary_tech']) : '') . '</h3><p style="white-space:pre-wrap">' . $e($a['summary']) . '</p>';
+    $loans = $one('SELECT l.loaned_at, l.due_date, l.returned_at, q.name FROM equipment_loans l JOIN equipment q ON q.id = l.equipment_id WHERE l.client_id = ? ORDER BY l.loaned_at');
+    $out .= '<h2>Equipment loans</h2>' . ($loans ? '<ul>' : '<p>None.</p>');
+    foreach ($loans as $l) $out .= '<li>' . $e($l['name']) . ': loaned ' . $date($l['loaned_at']) . ($l['returned_at'] ? ', returned ' . $date($l['returned_at']) : ', not yet returned') . '</li>';
+    $out .= $loans ? '</ul>' : '';
+    $rels = client_releases($clientId);
+    $cons = $one('SELECT guardian_name, signed_at, signed_name, withdrawn_at FROM consent_forms WHERE client_id = ? AND signed_at IS NOT NULL ORDER BY signed_at');
+    $out .= '<h2>Consents and releases</h2>' . ($rels || $cons ? '<ul>' : '<p>None.</p>');
+    foreach ($cons as $f) $out .= '<li>Guardian consent signed by ' . $e($f['signed_name']) . ' on ' . $date($f['signed_at']) . ($f['withdrawn_at'] ? ', withdrawn ' . $date($f['withdrawn_at']) : '') . '</li>';
+    foreach ($rels as $r) $out .= '<li>Release for ' . $e($r['recipient_name']) . ' (' . $e($r['recipient_type']) . '): ' . $e(release_status($r)) . ($r['expires_on'] ? ', valid until ' . $date($r['expires_on']) : '') . '. Covers ' . $e($r['info_scope']) . '.</li>';
+    $out .= ($rels || $cons) ? '</ul>' : '';
+    $contact = (string)(cfg('support_email') ?: cfg('mail_from'));
+    $out .= '<h2>Questions or corrections</h2><p>If anything here is wrong, ask for a correction from your portal' . ($contact !== '' ? ' or email ' . $e($contact) : '') . '.</p></body></html>';
+    return $out;
+}
+
+/** Save the copy as a Resource document on the client's portal. Returns the document id, or 0. */
+function client_records_copy_publish(int $clientId, int $actor): int {
+    $html = client_records_copy_html($clientId);
+    if ($html === '') return 0;
+    $dir = cfg('upload_dir');
+    if (!is_dir($dir)) mkdir($dir, 0750, true);
+    $stored = bin2hex(random_bytes(16)) . '.html';
+    if (file_put_contents($dir . '/' . $stored, $html) === false) return 0;
+    try {
+        db()->prepare('INSERT INTO client_documents (client_id, category, title, orig_name, path, uploaded_by) VALUES (?,?,?,?,?,?)')
+            ->execute([$clientId, 'Resource', 'Copy of your records (' . date('F j, Y') . ')', 'your-records-' . date('Y-m-d') . '.html', $stored, $actor]);
+        $docId = (int)db()->lastInsertId();
+    } catch (Throwable $e) {
+        @unlink($dir . '/' . $stored);
+        throw $e;
+    }
+    audit($actor, 'client.export', 'client', $clientId, 'copy of records published to the portal (doc #' . $docId . ')');
+    return $docId;
+}

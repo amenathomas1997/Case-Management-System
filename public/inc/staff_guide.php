@@ -51,6 +51,8 @@ if (!function_exists('staff_guide_topics')) {
                 'guide-consent' => 'How do I request guardian consent?',
                 'guide-release' => 'How do I get a release of information?',
                 'guide-record-keeping' => 'How do I record the privacy notice or put a record on hold?',
+                'guide-privacy-incident' => 'What do I do if client information went to the wrong person?',
+                'guide-records-request' => 'How do I answer a request for a copy of records?',
             ]],
             'guide-billing' => ['How do I bill and record payments?', [
                 'guide-bill-month' => 'How do I bill all unbilled work?',
@@ -558,6 +560,12 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <p>On the client's Overview, Record keeping shows when the privacy notice was given and whether the record is on hold. To record the notice, choose how it was given (in person, by email, by mail, in the portal or read aloud by phone) and choose Record notice given. Compliance lists open clients with no notice recorded.</p>
 <p>An administrator can place a hold, with a reason, for example a records request or a legal matter. While a record is on hold it is not archived by the retention setting, cannot be purged, and its items in the trash are not emptied after 30 days. Choose Lift hold when it is no longer needed. Purging is also refused while the client has an open incident or an unpaid invoice. Only an administrator can delete an authorization, IPE or release document, and those are never emptied from the trash automatically.</p>
 <p>Guardian name, phone and email are under Parent or guardian on the client's edit page. When a client with a guardian is about to turn 18, a task reminds you to ask them for their own release. The audit log, under Administration, shows who opened each client's file and every report or list that was exported.</p>
+
+<?= $sgH(4, 'guide-privacy-incident') ?>
+<p>Open Incident reports and choose Privacy incidents, then Report a privacy incident. Choose the kind (for example a misdirected email or report, or a lost device), the date it was discovered, the client affected and what happened. An administrator is told at once. The notice deadline is 60 days from discovery. On the incident, an administrator records the risk assessment (what information, who received it, whether it was viewed, how the risk was reduced), adds everyone affected, records each notice sent, and closes it. A task appears two weeks before the deadline. Each affected client has a link to their access history in the audit log.</p>
+
+<?= $sgH(4, 'guide-records-request') ?>
+<p>A client can ask in their portal for a copy of their records or a correction. It appears in Client requests with a due date 30 days ahead, and as a task. For a copy, choose Publish a copy to the portal: an accessible page with their details, training, sessions, case notes, assessments, loans, consents and releases (no billing) is added under Resources in their portal. Then set the request to Done and type the outcome the client sees, for example Published to your portal. For a correction, fix the record (a locked note gets an addendum), then set it to Done with what was corrected, or to Declined with the reason.</p>
 
 <?= $sgH(4, 'guide-consent') ?>
 <ol>

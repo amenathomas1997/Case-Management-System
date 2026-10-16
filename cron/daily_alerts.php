@@ -145,6 +145,24 @@ foreach (db()->query("SELECT id, name, dob, assigned_to FROM clients
         (int)$ad['id'], null, business_days_from(3), $ad['assigned_to'] ? (int)$ad['assigned_to'] : null, null, $key);
 }
 
+// Privacy incidents (3.0.38): an open one whose 60-day notice deadline is two weeks away
+// (or past) gets one task for an administrator. Closing the incident completes it.
+try {
+    $admins = effective_admin_user_ids();
+    foreach (db()->query("SELECT id, kind, notice_deadline FROM privacy_incidents
+        WHERE status = 'Open' AND notice_deadline <= DATE_ADD(CURDATE(), INTERVAL 14 DAY)")->fetchAll() as $pi) {
+        $key = 'privinc-' . (int)$pi['id'];
+        $seen = db()->prepare('SELECT COUNT(*) FROM tasks WHERE auto_key = ?');
+        $seen->execute([$key]);
+        if ((int)$seen->fetchColumn() > 0) continue;
+        add_task('Privacy incident notice deadline: ' . $pi['kind'],
+            'The notice deadline for this privacy incident is ' . date('F j, Y', strtotime($pi['notice_deadline'])) . '. Finish the risk assessment and record each notice sent, then close it: ' . cfg('base_url') . '/privacy_incidents.php?id=' . (int)$pi['id'],
+            null, null, $pi['notice_deadline'] < date('Y-m-d') ? date('Y-m-d') : $pi['notice_deadline'], $admins[0] ?? null, null, $key);
+    }
+} catch (PDOException $e) {
+    error_log('daily_alerts: privacy incident check skipped (' . $e->getCode() . ')'); // mig_3.0.38 not run yet
+}
+
 // Equipment maintenance: open a task when a scheduled item is due (or overdue)
 // for service. One open task per item at a time (idempotent via auto_key/day).
 // A task is closed here once it no longer applies: a service was logged after the

@@ -8,7 +8,7 @@ $user = require_login();
 require_perm('clients');
 
 const PREQ_STATUSES = ['New', 'In Progress', 'Done', 'Declined'];
-const PREQ_TYPES = ['appointment' => 'Appointment', 'reschedule' => 'Reschedule', 'cancel' => 'Cancellation', 'device' => 'Device help', 'other' => 'Request'];
+const PREQ_TYPES = ['appointment' => 'Appointment', 'reschedule' => 'Reschedule', 'cancel' => 'Cancellation', 'device' => 'Device help', 'other' => 'Request'] + RECORDS_REQUEST_TYPES;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     $id = (int)($_POST['id'] ?? 0);
@@ -18,12 +18,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
         if (caseload_scoped() && (int)$row['assigned_to'] !== (int)$user['id']) { flash('That request is not on your caseload.', 'error'); redirect('portal_requests.php'); }
         $to = in_array($_POST['to'] ?? '', PREQ_STATUSES, true) ? $_POST['to'] : null;
         if ($to === null) { keep_field_errors(['to_' . $id => 'Choose a status for the request.']); redirect('portal_requests.php'); }
+        // A records request closes with what was done: how the copy was delivered, what was
+        // corrected, or why it was refused (3.0.38). The client sees it in the portal.
+        $outcome = trim(is_string($_POST['outcome'] ?? null) ? $_POST['outcome'] : '');
+        if (isset(RECORDS_REQUEST_TYPES[$row['type']]) && in_array($to, ['Done', 'Declined'], true) && $outcome === '') {
+            keep_field_errors(['to_' . $id => $to === 'Declined' ? 'Say why the request is refused; the client sees it.' : 'Say how the copy was delivered or what was corrected; the client sees it.']);
+            redirect('portal_requests.php');
+        }
+        if (mb_strlen($outcome) > 500) { keep_field_errors(['to_' . $id => 'Keep the outcome to 500 characters or fewer.']); redirect('portal_requests.php'); }
         // Saving the status it already has changes nothing, so nothing is audited.
         if ($to === $row['status']) { flash('Request from ' . $row['client_name'] . ' (' . (PREQ_TYPES[$row['type']] ?? 'Request') . ') is already ' . $to . '; nothing was changed.'); redirect('portal_requests.php'); }
         $closed = ['Done', 'Declined'];
         db()->beginTransaction();
         try {
-            db()->prepare('UPDATE portal_requests SET status = ?, handled_by = ? WHERE id = ?')->execute([$to, $user['id'], $id]);
+            db()->prepare('UPDATE portal_requests SET status = ?, handled_by = ?, outcome = COALESCE(?, outcome) WHERE id = ?')->execute([$to, $user['id'], $outcome !== '' ? $outcome : null, $id]);
             // A handled request closes the follow-up task the portal opened for it, so it
             // does not sit Open and go overdue (requests sent before the key existed have none).
             if (in_array($to, $closed, true)) {
@@ -48,6 +56,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
         audit($user['id'], 'portal_request.status', 'client', (int)$row['client_id'], 'request #' . $id . ': ' . $row['status'] . ' → ' . $to);
         flash('Request from ' . $row['client_name'] . ' (' . (PREQ_TYPES[$row['type']] ?? 'Request') . ') set to ' . $to . '.');
     }
+    redirect('portal_requests.php');
+}
+
+/* A copy of the record, published to the client's portal for a records request (3.0.38). */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['publish_copy'])) {
+    $id = (int)($_POST['id'] ?? 0);
+    $r = db()->prepare("SELECT pr.client_id, c.name AS client_name, c.assigned_to FROM portal_requests pr JOIN clients c ON c.id = pr.client_id WHERE pr.id = ? AND pr.type = 'records'");
+    $r->execute([$id]);
+    $row = $r->fetch();
+    if (!$row || (caseload_scoped() && (int)$row['assigned_to'] !== (int)$user['id'])) { flash('That records request was not found on your caseload.', 'error'); redirect('portal_requests.php'); }
+    $docId = client_records_copy_publish((int)$row['client_id'], (int)$user['id']);
+    flash($docId ? 'A copy of ' . $row['client_name'] . '\'s records is now under Resources in their portal. Set the request to Done with how it was delivered.' : 'The copy could not be saved. Try again.', $docId ? 'success' : 'error');
     redirect('portal_requests.php');
 }
 
@@ -96,11 +116,11 @@ page_header('Client requests', $user, 'portal_requests');
       <th scope="row"><a href="client.php?id=<?= (int)$r['cid'] ?>"><?= h($r['client_name']) ?></a><br><span class="muted"><?= fmt_date($r['created_at']) ?></span></th>
       <?php // The session link names its date and time and opens the schedule at that session's row. ?>
       <?php // Only staff who can open the schedule get a link to it; others see the date. ?>
-      <td><?= h(PREQ_TYPES[$r['type']] ?? 'Request') ?><?= $r['start_at'] ? (can('schedule')
+      <td><?= h(PREQ_TYPES[$r['type']] ?? 'Request') ?><?= !empty($r['due_on']) ? '<br><strong>Due ' . fmt_date($r['due_on']) . '</strong>' : '' ?><?= $r['start_at'] ? (can('schedule')
           ? '<br><a class="muted" href="schedule.php#s-' . (int)$r['session_id'] . '">session ' . fmt_datetime($r['start_at']) . '<span class="visually-hidden"> on the schedule</span></a>'
           : '<br><span class="muted">session ' . fmt_datetime($r['start_at']) . '</span>') : '' ?></td>
       <?php // Line breaks the client typed are kept (a list of times stays a list). ?>
-      <td><?= $r['details'] ? nl2br(h($r['details'])) : '<span class="muted">—</span>' ?></td>
+      <td><?= $r['details'] ? nl2br(h($r['details'])) : '<span class="muted">—</span>' ?><?= !empty($r['outcome']) ? '<br><span class="muted">Outcome: ' . h($r['outcome']) . '</span>' : '' ?></td>
       <td><span class="badge <?= $r['status'] === 'Done' ? 'badge-closed' : ($r['status'] === 'Declined' ? 'badge-hold' : 'badge-pending') ?>"><?= h($r['status']) ?></span></td>
       <td>
         <form method="post" action="portal_requests.php" class="inline-form"><?= csrf_field() ?>
@@ -109,8 +129,18 @@ page_header('Client requests', $user, 'portal_requests');
           <?= form_error_summary([$toKey => 'Status for ' . $which], [$toKey => 's-' . (int)$r['id']]) ?>
           <label class="visually-hidden" for="s-<?= (int)$r['id'] ?>">Set status for <?= $which ?></label>
           <select id="s-<?= (int)$r['id'] ?>" name="to" <?= field_aria($toKey) ?>><?= select_options(PREQ_STATUSES, $r['status']) ?></select><?= field_error($toKey) ?>
+          <?php if (isset(RECORDS_REQUEST_TYPES[$r['type']])): ?>
+          <label for="o-<?= (int)$r['id'] ?>">Outcome the client sees<span class="visually-hidden"> for <?= $which ?></span></label>
+          <input type="text" id="o-<?= (int)$r['id'] ?>" name="outcome" maxlength="500" value="<?= h((string)($r['outcome'] ?? '')) ?>">
+          <?php endif; ?>
           <button type="submit" name="set_status" value="1" class="btn btn-secondary btn-sm">Save<span class="visually-hidden"> status for <?= $which ?></span></button>
         </form>
+        <?php if ($r['type'] === 'records' && !in_array($r['status'], ['Done', 'Declined'], true)): ?>
+        <form method="post" action="portal_requests.php" class="inline-form"><?= csrf_field() ?>
+          <input type="hidden" name="id" value="<?= (int)$r['id'] ?>">
+          <button type="submit" name="publish_copy" value="1" class="btn btn-secondary btn-sm">Publish a copy to the portal<span class="visually-hidden"> for <?= $which ?></span></button>
+        </form>
+        <?php endif; ?>
       </td>
     </tr>
   <?php endforeach; ?>

@@ -11,7 +11,10 @@ struct PortalRequestItem: Decodable, Identifiable {
     let status: String
     let createdAt: String
     let sessionStart: String?
-    private enum CodingKeys: String, CodingKey { case id, clientId, clientName, type, typeLabel, details, status, createdAt, sessionStart }
+    /// A records request (3.0.38): its due date and the outcome the client sees.
+    var dueOn: String?
+    var outcome: String?
+    private enum CodingKeys: String, CodingKey { case id, clientId, clientName, type, typeLabel, details, status, createdAt, sessionStart, dueOn, outcome }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id)
@@ -23,7 +26,11 @@ struct PortalRequestItem: Decodable, Identifiable {
         status = (try? c.decode(String.self, forKey: .status)) ?? "New"
         createdAt = (try? c.decode(String.self, forKey: .createdAt)) ?? ""
         sessionStart = try? c.decodeIfPresent(String.self, forKey: .sessionStart)
+        dueOn = try? c.decodeIfPresent(String.self, forKey: .dueOn)
+        outcome = try? c.decodeIfPresent(String.self, forKey: .outcome)
     }
+    /// A copy-of-records or correction request: closing it needs the outcome the client sees.
+    var isRecordsRequest: Bool { type == "records" || type == "correction" }
 }
 
 struct PortalRequestsResponse: Decodable {
@@ -39,6 +46,8 @@ extension PortalRequestItem {
     var spoken: String {
         var parts = [clientName, typeLabel, status, "sent \(formatDate(createdAt))"]
         if let sessionStart { parts.append("session \(formatDateTime(sessionStart))") }
+        if let dueOn { parts.append("due \(formatDate(dueOn))") }
+        if let outcome, !outcome.isEmpty { parts.append("Outcome: \(outcome)") }
         if let details, !details.isEmpty { parts.append(details) }
         return parts.joined(separator: ". ")
     }
@@ -53,6 +62,9 @@ struct PortalRequestsView: View {
     @State private var showAll = false
     @State private var openClient: Int?
     @State private var saving: Set<Int> = []
+    /// A records request being closed, waiting for its outcome.
+    @State private var closing: (request: PortalRequestItem, to: String)?
+    @State private var outcomeText = ""
     @AccessibilityFocusState private var focused: Int?
     private let errorRow = "portalRequestsError"
 
@@ -104,6 +116,16 @@ struct PortalRequestsView: View {
         .navigationDestination(isPresented: Binding(get: { openClient != nil }, set: { if !$0 { openClient = nil } })) {
             if let id = openClient { ClientDetailView(clientId: id) }
         }
+        .alert(closing?.to == "Declined" ? "Why is the request refused?" : "How was it handled?", isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } })) {
+            TextField("Outcome the client sees", text: $outcomeText)
+            Button("Save") {
+                if let c = closing { Task { await setStatus(c.request, c.to, outcome: outcomeText) } }
+                closing = nil
+            }
+            Button("Cancel", role: .cancel) { closing = nil }
+        } message: {
+            Text("The client sees this in their portal.")
+        }
         .refreshable { await load() }
         .task { await load() }
     }
@@ -117,6 +139,8 @@ struct PortalRequestsView: View {
             }
             Text("\(r.typeLabel) · sent \(formatDate(r.createdAt))").font(.caption).foregroundStyle(Color.secondaryText)
             if let s = r.sessionStart { Text("Session \(formatDateTime(s))").font(.caption).foregroundStyle(Color.secondaryText) }
+            if let due = r.dueOn { Text("Due \(formatDate(due))").font(.caption.weight(.semibold)) }
+            if let o = r.outcome, !o.isEmpty { Text("Outcome: \(o)").font(.caption).foregroundStyle(Color.secondaryText) }
             if let details = r.details, !details.isEmpty { Text(details).font(.callout) }
             Menu {
                 ForEach(statuses, id: \.self) { s in
@@ -145,14 +169,21 @@ struct PortalRequestsView: View {
         }
     }
 
-    private func setStatus(_ r: PortalRequestItem, _ to: String) async {
+    private func setStatus(_ r: PortalRequestItem, _ to: String, outcome: String? = nil) async {
         guard to != r.status, !saving.contains(r.id) else { return }
+        if r.isRecordsRequest && (to == "Done" || to == "Declined") && (outcome ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
+            outcomeText = r.outcome ?? ""
+            closing = (r, to)
+            return
+        }
         let index = data?.requests.firstIndex(where: { $0.id == r.id }) ?? 0
         saving.insert(r.id)
         defer { saving.remove(r.id) }
         error = nil
         do {
-            let result: PortalRequestUpdated = try await api.call("portal_request_update", body: ["id": r.id, "to": to])
+            var body: [String: Any] = ["id": r.id, "to": to]
+            if let outcome { body["outcome"] = outcome }
+            let result: PortalRequestUpdated = try await api.call("portal_request_update", body: body)
             await load()
             if let list = data?.requests {
                 if list.contains(where: { $0.id == r.id }) { focused = r.id }

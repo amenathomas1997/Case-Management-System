@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.38' => [
+        'A privacy incident log (Administration, Privacy incidents, or from Incident reports): report a misdirected report, a lost device or access by the wrong person; record the risk assessment, the people affected, each notice sent and follow-up, with the 60-day notice deadline and a reminder task two weeks before it.',
+        'Clients can ask in their portal for a copy of their records or a correction. Each request is due in 30 days, staff can publish an accessible copy of the record to the client\'s portal, and the request closes with an outcome the client sees.',
+    ],
     '3.0.37' => [
         'The audit log now shows who opened each client\'s file (on the website, in the app and through the portals) and every bulk export. A client record can be put on hold, so it is not archived, purged or emptied from the trash, and only an administrator can delete an authorization, IPE or release document.',
         'Guardian name, phone and email can be edited on the client and in the app, with a call link. Compliance lists minors with no guardian consent and clients with no privacy notice recorded, and a task reminds you when a client with a guardian turns 18.',

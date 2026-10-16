@@ -125,7 +125,8 @@ $sevBadge = fn($s) => '<span class="badge ' . ($s === 'Critical' || $s === 'High
 ?>
 <h1>Incident reports</h1>
 <p class="muted">Record injuries, near misses, equipment failures and other safety events, and track them to closure. <?= $openCount ?> open.</p>
-<div class="page-actions"><a class="btn btn-secondary btn-sm" href="incidents.php<?= $showClosed ? '' : '?all=1' ?>"><?= $showClosed ? 'Hide closed' : 'Show closed' ?></a></div>
+<div class="page-actions"><a class="btn btn-secondary btn-sm" href="incidents.php<?= $showClosed ? '' : '?all=1' ?>"><?= $showClosed ? 'Hide closed' : 'Show closed' ?></a>
+  <a class="btn btn-secondary btn-sm" href="privacy_incidents.php">Privacy incidents</a></div>
 
 <h2 id="log-h">Incident log</h2>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Incident log">
