@@ -79,21 +79,21 @@ if ($m && isset($_GET['pdf'])) {
     // The PDF is untagged: its first line links to the accessible HTML version.
     $pdf->SetFont('Helvetica', '', 9);
     $pdf->Cell(0, 6, 'Accessible HTML version (sign-in required)', 0, 1, 'L', false, cfg('base_url') . '/funder_report.php?agency=' . urlencode($agency) . '&from=' . $from . '&to=' . $to . '&html=1');
-    $pdf->SetFont('Helvetica', 'B', 18); $pdf->SetTextColor(30, 58, 138);
+    $pdf->SetFont('Helvetica', 'B', 18); $pdf->SetTextColor(...brand_rgb());
     $pdf->Cell(120, 9, $tx(brand('org')), 0, 0);
     $pdf->SetFont('Helvetica', 'B', 14); $pdf->SetTextColor(60, 60, 60);
     $pdf->Cell(0, 9, 'FUNDER OUTCOME REPORT', 0, 1, 'R');
     $pdf->SetFont('Helvetica', '', 10);
     $pdf->Cell(120, 5, $tx($agency), 0, 0);
     $pdf->Cell(0, 5, $tx('Period: ' . fmt_date($from) . ' to ' . fmt_date($to)), 0, 1, 'R');
-    $pdf->SetDrawColor(30, 58, 138); $pdf->SetLineWidth(0.6); $pdf->Ln(2);
+    $pdf->SetDrawColor(...brand_rgb()); $pdf->SetLineWidth(0.6); $pdf->Ln(2);
     $pdf->Line(15, $pdf->GetY(), 200, $pdf->GetY()); $pdf->Ln(5); $pdf->SetTextColor(0, 0, 0);
     foreach (funder_stat_rows($agency, $from, $to, $m, $retentionPct, $goalPct) as $r) {
         $pdf->SetFont('Helvetica', 'B', 11); $pdf->Cell(78, 7, $tx($r[0]), 0, 0);
         $pdf->SetFont('Helvetica', '', 11); $pdf->MultiCell(0, 7, $tx($r[1]), 0, 'L');
     }
     $pdf->Ln(3);
-    $pdf->SetFont('Helvetica', 'B', 12); $pdf->SetTextColor(30, 58, 138);
+    $pdf->SetFont('Helvetica', 'B', 12); $pdf->SetTextColor(...brand_rgb());
     $pdf->Cell(0, 8, 'Hours by RSA service category', 0, 1); $pdf->SetTextColor(0, 0, 0);
     $pdf->SetFont('Helvetica', 'B', 9); $pdf->SetFillColor(238, 241, 246);
     foreach ([[95, 'Category', 'L'], [25, 'Clients', 'R'], [30, 'Hours', 'R'], [35, 'Value', 'R']] as [$w, $t, $a]) $pdf->Cell($w, 7, $tx($t), 1, 0, $a, true);

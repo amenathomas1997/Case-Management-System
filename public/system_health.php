@@ -98,6 +98,8 @@ if ($graphOn && $graphDays !== null && $graphDays <= 30) $problems[] = ['email-h
 $bcResult = (string)(setting('backup_check_result') ?? '');
 if (str_starts_with($bcResult, 'PROBLEM')) $problems[] = ['backups-h', 'The last backup check found a problem.'];
 $mailRecent = mail_log_recent(30);
+$schemaHave = db_schema_version();
+if ($dbOk && ($schemaHave === null || version_compare($schemaHave, DB_SCHEMA_VERSION, '<'))) $problems[] = ['db-h', 'The database is ' . ($schemaHave ? 'version ' . $schemaHave : 'from before 3.0.54') . ' but the files need ' . DB_SCHEMA_VERSION . ': open Database upgrade.'];
 if ($mailFailed && $mailFailed > ($mailSent ?? 0)) $problems[] = ['email-h', 'The most recent email attempt failed (' . $when($mailFailed) . '), and none has been sent since.'];
 
 /* ---- Sign-in and security ---- */

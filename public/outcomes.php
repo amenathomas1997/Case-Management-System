@@ -137,7 +137,7 @@ if (isset($_GET['pdf'])) {
     $pdf->Cell(0, 6, 'Accessible HTML version (sign-in required)', 0, 1, 'L', false, cfg('base_url') . '/outcomes.php?from=' . $from . '&to=' . $to . '&html=1');
     // Letterhead
     $pdf->SetFont('Helvetica', 'B', 18);
-    $pdf->SetTextColor(30, 58, 138);
+    $pdf->SetTextColor(...brand_rgb());
     $pdf->Cell(120, 9, $tx(brand('org')), 0, 0);
     $pdf->SetFont('Helvetica', 'B', 15);
     $pdf->SetTextColor(60, 60, 60);
@@ -145,7 +145,7 @@ if (isset($_GET['pdf'])) {
     $pdf->SetFont('Helvetica', '', 10);
     $pdf->Cell(120, 5, $tx(brand('tagline')), 0, 0);
     $pdf->Cell(0, 5, $tx('Period: ' . fmt_date($from) . ' to ' . fmt_date($to)), 0, 1, 'R');
-    $pdf->SetDrawColor(30, 58, 138);
+    $pdf->SetDrawColor(...brand_rgb());
     $pdf->SetLineWidth(0.6);
     $pdf->Ln(2);
     $pdf->Line(15, $pdf->GetY(), 200, $pdf->GetY());
@@ -177,7 +177,7 @@ if (isset($_GET['pdf'])) {
         $pdf->SetFont('Helvetica', '', 9);
     };
     $pdf->SetFont('Helvetica', 'B', 12);
-    $pdf->SetTextColor(30, 58, 138);
+    $pdf->SetTextColor(...brand_rgb());
     $pdf->Cell(0, 8, 'Hours by RSA service category', 0, 1);
     $pdf->SetTextColor(0, 0, 0);
     $tableHead([[95, 'Category', 'L'], [25, 'Clients', 'R'], [30, 'Hours', 'R'], [35, 'Value', 'R']]);
@@ -189,7 +189,7 @@ if (isset($_GET['pdf'])) {
     }
     $pdf->Ln(4);
     $pdf->SetFont('Helvetica', 'B', 12);
-    $pdf->SetTextColor(30, 58, 138);
+    $pdf->SetTextColor(...brand_rgb());
     $pdf->Cell(0, 8, 'Hours by program', 0, 1);
     $pdf->SetTextColor(0, 0, 0);
     $tableHead([[120, 'Program', 'L'], [25, 'Clients', 'R'], [40, 'Hours', 'R']]);
@@ -201,7 +201,7 @@ if (isset($_GET['pdf'])) {
     $pdf->Ln(4);
     if ($closures) {
         $pdf->SetFont('Helvetica', 'B', 12);
-        $pdf->SetTextColor(30, 58, 138);
+        $pdf->SetTextColor(...brand_rgb());
         $pdf->Cell(0, 8, 'Closures', 0, 1);
         $pdf->SetTextColor(0, 0, 0);
         $pdf->SetFont('Helvetica', '', 10);

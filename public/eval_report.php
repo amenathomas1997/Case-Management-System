@@ -158,13 +158,13 @@ function eval_pdf(array $a, array $fields, string $preparedBy, bool $signed = fa
     $pdf->SetFont('Helvetica', '', 9);
     $pdf->Cell(0, 6, 'Accessible equivalent: download HTML from the same form, or use the HTML email attachment.', 0, 1);
     $pdf->SetFont('Helvetica', 'B', 18);
-    $pdf->SetTextColor(30, 58, 138);
+    $pdf->SetTextColor(...brand_rgb());
     $pdf->Cell(0, 9, $tx(brand('org')), 0, 1);
     $pdf->SetFont('Helvetica', '', 10);
     $pdf->SetTextColor(60, 60, 60);
     $pdf->Cell(0, 5, $tx('Assistive Technology Evaluation Report'), 0, 1);
     $pdf->Ln(2);
-    $pdf->SetDrawColor(30, 58, 138);
+    $pdf->SetDrawColor(...brand_rgb());
     $pdf->SetLineWidth(0.6);
     $pdf->Line(15, $pdf->GetY(), 200, $pdf->GetY());
     $pdf->Ln(4);
@@ -189,7 +189,7 @@ function eval_pdf(array $a, array $fields, string $preparedBy, bool $signed = fa
     ] as $heading => $text) {
         $pdf->Ln(3);
         $pdf->SetFont('Helvetica', 'B', 12);
-        $pdf->SetTextColor(30, 58, 138);
+        $pdf->SetTextColor(...brand_rgb());
         $pdf->Cell(0, 7, $tx($heading), 0, 1);
         $pdf->SetTextColor(0, 0, 0);
         $pdf->SetFont('Helvetica', '', 10);

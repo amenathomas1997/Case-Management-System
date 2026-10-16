@@ -66,7 +66,12 @@ function backup_check(bool $import = true): array {
         $tail = substr($chunk, -300);
     }
     gzclose($gz);
-    $live = db()->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
+    // A table created after the dump was made (a release installed since) is not expected in it.
+    // (MariaDB also resets CREATE_TIME when a table is rebuilt; such a table is then not checked.)
+    $dumpTime = date('Y-m-d H:i:s', (int)filemtime($latest));
+    $lq = db()->prepare('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND (CREATE_TIME IS NULL OR CREATE_TIME <= ?)');
+    $lq->execute([$dumpTime]);
+    $live = $lq->fetchAll(PDO::FETCH_COLUMN);
     $missing = array_values(array_diff($live, array_keys($tables)));
     if ($missing) return $result(false, basename($latest) . ' is missing ' . count($missing) . ' table' . (count($missing) === 1 ? '' : 's') . ': ' . implode(', ', array_slice($missing, 0, 10)) . '.');
     $detail = basename($latest) . ' opens completely (' . round($bytes / 1048576, 1) . ' MB of SQL) and holds all ' . count($live) . ' tables.';

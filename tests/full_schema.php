@@ -87,7 +87,7 @@ try {
     $noSecret = function(string $what, string $output) use ($secrets): void {
         if (str_contains($output, $secrets['ai']) || str_contains($output, $secrets['entra'])) throw new RuntimeException("$what showed a stored secret.");
     };
-    $config = ['db'=>['dsn'=>$dsn,'user'=>getenv('CMS_TEST_USER') ?: 'root','pass'=>getenv('CMS_TEST_PASSWORD') ?: ''], 'app'=>['timezone'=>'America/Chicago','upload_dir'=>$tmp,'base_url'=>'https://example.invalid','name'=>'Test CMS','mail_from'=>'noreply@example.invalid','session_timeout_minutes'=>30],
+    $config = ['db'=>['dsn'=>$dsn,'user'=>getenv('CMS_TEST_USER') ?: 'root','pass'=>getenv('CMS_TEST_PASSWORD') ?: ''], 'app'=>['timezone'=>'America/Chicago','upload_dir'=>$tmp,'base_url'=>'https://example.invalid','name'=>'Test CMS','mail_from'=>'noreply@example.invalid','session_timeout_minutes'=>30,'update_url'=>'off'],
         'entra'=>['enabled'=>false,'tenant_id'=>'','client_id'=>'','client_secret'=>$secrets['entra'],'auto_provision_group'=>'']];
     $core = file_get_contents($root . '/public/inc/core.php');
     $start = strpos($core, '$configPaths =');
@@ -310,7 +310,7 @@ try {
         'verify'=>'redirect','ai'=>'AI assistant','intake'=>'Guided intake','recommend'=>'AT recommendations','amendment_request'=>'Amendment request',
         'progress_review'=>'Progress review','translate'=>'Translate','remediate'=>'Remediation','ask'=>'Ask your caseload','kb_ask'=>'Ask the knowledge base',
         'curriculum_ai'=>'Curriculum generator','workflows'=>'Daily action center','privacy'=>'Privacy notice',
-        'release'=>'Release of information','vendors'=>'Vendor agreements','privacy_incidents'=>'Privacy incidents','survey_responses'=>'Survey responses','authorizations'=>'Incoming authorizations','business_summary'=>'Business summary','attendance'=>'Attendance and no-shows','unused_authorizations'=>'Unused authorizations','data_quality'=>'Data quality','exports'=>'Spreadsheet downloads','client_timeline'=>'Timeline','letters'=>'Letters'];
+        'release'=>'Release of information','vendors'=>'Vendor agreements','privacy_incidents'=>'Privacy incidents','survey_responses'=>'Survey responses','authorizations'=>'Incoming authorizations','business_summary'=>'Business summary','attendance'=>'Attendance and no-shows','unused_authorizations'=>'Unused authorizations','data_quality'=>'Data quality','exports'=>'Spreadsheet downloads','client_timeline'=>'Timeline','letters'=>'Letters','settings'=>'Settings','upgrade'=>'Database upgrade'];
     $showsOwnContent=function(string $page,string $html)use($pageMarkers):bool{
         $marker=$pageMarkers[$page]??null;
         if($marker===null)return false;
@@ -320,7 +320,7 @@ try {
         if(!preg_match('~<title[^>]*>(.*?)</title>~s',$html,$m))return false;
         return $marker[0]==='~'?preg_match($marker,$m[1])===1:str_contains($m[1],$marker);
     };
-    foreach (['index','clients','client','client_edit','track','track_edit','tasks','referrals','pipeline','schedule','capacity','access_bookings','equipment','followups','procurement','programs','contracts','invoices','analytics','outcomes','compliance','incidents','messages','curriculum','templates','score_assessment','accommodations','users','account','admin','system_health','audit','trash','client_merge','counselors','portal_requests','email_templates','referral_settings','kb','search','utilization','agency_report','funder_report','rsa_report','doc_audit','risk','ai_tools','help','federation','report','eval_report','invoice_pdf','client_export','equipment_import','equipment_labels','notifications','community_referral','consent','survey','ack','portal','vrc','login','forgot','reset','verify','ai','intake','recommend','amendment_request','progress_review','translate','remediate','ask','kb_ask','curriculum_ai','workflows','privacy','release','vendors','privacy_incidents','survey_responses','authorizations','business_summary','attendance','unused_authorizations','data_quality','exports','client_timeline','letters'] as $page) {
+    foreach (['index','clients','client','client_edit','track','track_edit','tasks','referrals','pipeline','schedule','capacity','access_bookings','equipment','followups','procurement','programs','contracts','invoices','analytics','outcomes','compliance','incidents','messages','curriculum','templates','score_assessment','accommodations','users','account','admin','system_health','audit','trash','client_merge','counselors','portal_requests','email_templates','referral_settings','kb','search','utilization','agency_report','funder_report','rsa_report','doc_audit','risk','ai_tools','help','federation','report','eval_report','invoice_pdf','client_export','equipment_import','equipment_labels','notifications','community_referral','consent','survey','ack','portal','vrc','login','forgot','reset','verify','ai','intake','recommend','amendment_request','progress_review','translate','remediate','ask','kb_ask','curriculum_ai','workflows','privacy','release','vendors','privacy_incidents','survey_responses','authorizations','business_summary','attendance','unused_authorizations','data_quality','exports','client_timeline','letters','settings','upgrade'] as $page) {
         $source=file_get_contents($root . '/public/' . $page . '.php');
         $source=swap_required("require __DIR__ . '/inc/bootstrap.php';", 'require ' . var_export($tmp . '/bootstrap.php',true) . ';', $source, "public/$page.php");
         $source=str_replace('__DIR__',var_export($root . '/public',true),$source);
@@ -810,6 +810,7 @@ try {
     require __DIR__.'/portal_letters_cases.php';
     require __DIR__.'/request_offers_cases.php';
     require __DIR__.'/ops_cases.php';
+    require __DIR__.'/settings_upgrade_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 
@@ -864,7 +865,7 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
     $db->exec("INSERT INTO clients (id,name,email,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-client@example.invalid','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL,NULL),(3,'Upgraded client with a blank counselor',NULL,'')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37','3.0.38','3.0.39','3.0.40','3.0.42','3.0.43','3.0.44','3.0.45','3.0.47','3.0.48','3.0.49','3.0.50','3.0.51','3.0.52','3.0.53'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37','3.0.38','3.0.39','3.0.40','3.0.42','3.0.43','3.0.44','3.0.45','3.0.47','3.0.48','3.0.49','3.0.50','3.0.51','3.0.52','3.0.53','3.0.54'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
     check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12, mig_3.0.16 and mig_3.0.21 has exactly the fresh-install schema, defaults included');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=1')->fetchColumn()===3,'The 3.0.21 upgrade keeps every existing client\'s email confirmed');
     $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");

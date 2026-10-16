@@ -41,7 +41,7 @@ $h1 = function (string $t) use ($pdf, $tx, $doc) {
     $doc->heading($t);
     $pdf->Ln(4);
     $pdf->SetFont('Helvetica', 'B', 13);
-    $pdf->SetTextColor(30, 58, 138);
+    $pdf->SetTextColor(...brand_rgb());
     // MultiCell wraps: a long track title (up to 190 characters) stays on the page.
     $pdf->MultiCell(0, 8, $tx($t));
     $pdf->SetTextColor(0, 0, 0);
@@ -63,7 +63,7 @@ $h3 = function (string $t) use ($pp, $doc) {
 };
 
 $pdf->SetFont('Helvetica', 'B', 17);
-$pdf->SetTextColor(30, 58, 138);
+$pdf->SetTextColor(...brand_rgb());
 $pdf->MultiCell(0, 9, $tx(brand('org')));
 $pdf->SetFont('Helvetica', '', 11);
 $pdf->SetTextColor(60, 60, 60);

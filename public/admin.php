@@ -13,18 +13,10 @@ require_perm('admin');
 
 /* Check the vendor manifest for a newer version */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['check_updates'])) {
-    $url = ($GLOBALS['CONFIG']['app']['update_url'] ?? null) ?: 'https://cms.example.org/updates.json';
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15]);
-    $resp = curl_exec($ch);
-    curl_close($ch);
-    $m = is_string($resp) ? json_decode($resp, true) : null;
-    if (is_array($m) && preg_match('/^\d+(\.\d+){1,3}$/', (string)($m['latest'] ?? ''))) {
-        set_setting('update_latest', (string)$m['latest']);
-        set_setting('update_notes', mb_substr((string)($m['notes'] ?? ''), 0, 500));
-        set_setting('update_checked', date('Y-m-d H:i'));
-        flash(version_compare((string)$m['latest'], APP_VERSION, '>')
-            ? 'A newer version is available: v' . $m['latest'] . '.'
+    $uc = update_check();
+    if ($uc['ok']) {
+        flash(version_compare((string)$uc['latest'], APP_VERSION, '>')
+            ? 'A newer version is available: v' . $uc['latest'] . '.'
             : 'You are up to date (v' . APP_VERSION . ').');
     } else {
         flash('The update server could not be reached. Try again later.', 'error');
@@ -279,7 +271,7 @@ page_header('Administration', $user, 'admin');
 <p class="muted">Agency-wide settings for administrators. Your own password, sign-in methods, display settings and calendar address are in <a href="account.php">My Account</a>.</p>
 <?php // One line from System health: the scheduled jobs, which stop silently when they stop.
 $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok'])); ?>
-<p><?= $jobsBehind ? '<strong>' . (count($jobsBehind) === 1 ? '1 scheduled job needs' : count($jobsBehind) . ' scheduled jobs need') . ' attention</strong> (' . h(implode(', ', array_column($jobsBehind, 'name'))) . '). ' : 'All scheduled jobs are running. ' ?><a href="system_health.php">Open System health</a></p>
+<p><?= $jobsBehind ? '<strong>' . (count($jobsBehind) === 1 ? '1 scheduled job needs' : count($jobsBehind) . ' scheduled jobs need') . ' attention</strong> (' . h(implode(', ', array_column($jobsBehind, 'name'))) . '). ' : 'All scheduled jobs are running. ' ?><a href="system_health.php">Open System health</a> · <a href="settings.php">Settings: email, addresses, sign-in, time zone and branding</a> · <a href="upgrade.php">Database upgrade</a><?php $schemaHave = db_schema_version(); if ($schemaHave === null || version_compare($schemaHave, DB_SCHEMA_VERSION, '<')): ?> <strong>The database needs an upgrade.</strong><?php endif; ?></p>
 <nav aria-label="Administration sections">
   <ul class="tab-nav">
     <li><a href="#people-h">People &amp; permissions</a></li>

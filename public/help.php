@@ -97,6 +97,7 @@ if (!$viewer) echo lang_toggle();
   <li>Open the new config.php in the private directory and fill in the empty values: the Microsoft Graph details (create a new client secret in Microsoft Entra if needed), the email addresses and your branding.</li>
   <li>Copy the application files into the website folder, sign in as an administrator, and open System health. Enter the Graph secret's expiry date there, send yourself a test email, and enter the AI key and the Microsoft sign-in secret again on the AI assistant and Federation pages: backups never hold them.</li>
   <li>Set up the scheduled jobs listed on System health (the cron table) on the new server.</li>
+  <li>If email or sign-in does not work after the restore because of a value saved on the Settings page, add 'ignore_db_settings' => true to the app section of config.php, sign in, correct the value on Settings, then remove that line.</li>
 </ol>
 </section>
 <?php endif; ?>

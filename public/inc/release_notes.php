@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.54' => [
+        'Administrators can change settings on screen instead of in the server\'s config.php (Administration, Settings): the Microsoft Graph email details, the from, help and backup addresses, sign-in timeouts, the time zone and branding. PDFs now use your brand colour.',
+        'Database upgrade (Administration) applies the database changes new files need, one step at a time, after you confirm there is a backup from today. The system checks for new versions every day and tells administrators.',
+    ],
     '3.0.53' => [
         'Backups now go off-site every day, not once a week: Mondays carry every document, other days the database and the documents changed that week. Each Monday the system checks that the backup can be restored, and System health shows the result, with a Check the backup now button. Administrators find a step-by-step restore guide in Help, and the release has a restore script.',
         'System health can send you a test email, lists the recent emails (who they went to by kind, and whether they went, never addresses), and records when the Microsoft Graph email secret expires: administrators are warned 30, 14 and 7 days before. If email ever falls back from Microsoft Graph to the server\'s own mail, administrators are told.',

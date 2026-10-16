@@ -159,6 +159,8 @@ if [ "$(dbquery "SELECT COUNT(*) FROM users WHERE email='$ADMIN_EMAIL' AND role=
 hash=$(dbquery "SELECT password_hash FROM users WHERE email='$ADMIN_EMAIL'")
 if php -r 'exit(password_verify($argv[1], $argv[2]) ? 0 : 1);' "$ADMIN_PASS" "$hash"; then pass "Admin password verifies"; else fail "Admin password hash does not verify"; fi
 if [ "$(dbquery "SELECT value FROM settings WHERE name='support_phone'")" = "+1 555 010 2000" ]; then pass "Support phone saved as a setting"; else fail "support_phone setting missing"; fi
+want_schema=$(sed -n "s/^const DB_SCHEMA_VERSION = '\([0-9.]*\)';.*/\1/p" "$ROOT/public/inc/settings_admin.php")
+if [ -n "$want_schema" ] && [ "$(dbquery "SELECT value FROM settings WHERE name='schema_version'")" = "$want_schema" ]; then pass "A fresh install records database version $want_schema (3.0.54)"; else fail "schema_version not recorded as $want_schema"; fi
 if [ "$(dbquery "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name='scheduled_sessions' AND column_name='checked_in_at'")" = "1" ]; then pass "Fresh schema includes scheduled_sessions.checked_in_at (3.0.28)"; else fail "checked_in_at column missing from the fresh schema"; fi
 
 if [ "$failed" -ne 0 ]; then echo "installer_e2e: FAILED"; exit 1; fi

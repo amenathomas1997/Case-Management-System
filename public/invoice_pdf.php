@@ -251,7 +251,7 @@ $pdf->Cell(0, 6, 'Accessible HTML version (sign-in required)', 0, 1, 'L', false,
 
 // Letterhead
 $pdf->SetFont('Helvetica', 'B', 18);
-$pdf->SetTextColor(30, 58, 138);
+$pdf->SetTextColor(...brand_rgb());
 $pdf->Cell(120, 9, pdf_txt(brand('org')), 0, 0);
 $pdf->SetFont('Helvetica', 'B', 16);
 $pdf->SetTextColor(60, 60, 60);
@@ -271,7 +271,7 @@ for ($n = 0; $n < max(count($fromLines), count($rightHead)); $n++) {
 if (isset($payInfo['Memo'])) $pdf->Cell(0, 5, pdf_txt('Memo: ' . $payInfo['Memo']), 0, 1, 'L');
 if ($closedNote !== '') { $pdf->SetFont('Helvetica', 'B', 10); $pdf->MultiCell(0, 5, pdf_txt($closedNote), 0, 'L'); $pdf->SetFont('Helvetica', '', 10); }
 $pdf->Ln(4);
-$pdf->SetDrawColor(30, 58, 138);
+$pdf->SetDrawColor(...brand_rgb());
 $pdf->SetLineWidth(0.6);
 $pdf->Line(15, $pdf->GetY(), 200, $pdf->GetY());
 $pdf->Ln(5);

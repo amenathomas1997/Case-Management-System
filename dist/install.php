@@ -376,6 +376,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->prepare('INSERT INTO users (name, email, password_hash, role, group_id) VALUES (?,?,?,?,?)')
                 ->execute([$adminName, $adminEmail, password_hash($adminPass, PASSWORD_DEFAULT), 'admin', $adminGroup ?: null]);
             $report[] = "Admin account created for {$adminEmail}.";
+            // A fresh database is the newest version: Database upgrade then has nothing to do.
+            // The version the application files need (inc/settings_admin.php), wherever the bundle put the migrations.
+            $schemaSrc = (string)@file_get_contents(__DIR__ . '/inc/settings_admin.php') ?: (string)@file_get_contents(dirname(__DIR__) . '/public/inc/settings_admin.php');
+            if (preg_match("/const DB_SCHEMA_VERSION = '(\d+\.\d+\.\d+)'/", $schemaSrc, $sv)) {
+                $pdo->prepare("INSERT INTO settings (name, value) VALUES ('schema_version', ?) ON DUPLICATE KEY UPDATE value = VALUES(value)")->execute([$sv[1]]);
+            }
             if ($supportPhone !== '') {
                 // Shown beside the contact email in the page footer and the privacy notice
                 // (core.php support_phone()); an administrator can change it later.

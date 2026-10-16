@@ -207,6 +207,22 @@ try {
 } catch (Throwable $e) {
     error_log('daily_alerts: Graph expiry check skipped (' . get_class($e) . ')');
 }
+// Updates (3.0.54): checked every day; administrators are told once about each new version,
+// and when the database needs an upgrade for the files installed.
+try {
+    $uc = update_check();
+    if ($uc['ok'] && version_compare((string)$uc['latest'], APP_VERSION, '>') && setting('update_noticed') !== $uc['latest']) {
+        set_setting('update_noticed', (string)$uc['latest']);
+        notify_admin_users('Version ' . $uc['latest'] . ' of the Case Management System is available (you have ' . APP_VERSION . ').', 'admin.php#updates-h');
+    }
+    $sv = db_schema_version();
+    if (($sv === null || version_compare($sv, DB_SCHEMA_VERSION, '<')) && setting('upgrade_noticed') !== DB_SCHEMA_VERSION) {
+        set_setting('upgrade_noticed', DB_SCHEMA_VERSION);
+        notify_admin_users('The database needs an upgrade for the files installed. Open Database upgrade.', 'upgrade.php');
+    }
+} catch (Throwable $e) {
+    error_log('daily_alerts: update check skipped (' . get_class($e) . ')');
+}
 try { db()->exec('DELETE FROM mail_log WHERE sent_at < DATE_SUB(NOW(), INTERVAL 180 DAY)'); }
 catch (Throwable $e) { error_log('daily_alerts: mail log not pruned (' . get_class($e) . ')'); }
 
