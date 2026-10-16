@@ -21,7 +21,7 @@ declare(strict_types=1);
  * Functions only: the caller loads core.php (db(), fmt_*, setting()) first.
  */
 
-const SCHEDULED_REPORTS = ['outcomes' => 'Outcome report', 'funder' => 'Funder outcome report'];
+const SCHEDULED_REPORTS = ['outcomes' => 'Outcome report', 'funder' => 'Funder outcome report', 'business' => 'Business summary'];
 const SCHEDULED_REPORT_PERIODS = ['last_month' => 'Previous month', 'last_quarter' => 'Previous quarter'];
 
 /* ---------- Shared report queries ---------- */
@@ -280,6 +280,7 @@ function scheduled_reports_config(): array {
     return [
         'outcomes' => setting('scheduled_reports_outcomes_enabled') === '1',
         'funder' => setting('scheduled_reports_funder_enabled') === '1',
+        'business' => setting('scheduled_reports_business_enabled') === '1',
         'recipients' => scheduled_reports_parse_recipients((string)(setting('scheduled_reports_recipients') ?? ''))['valid'],
         'day' => $day >= 1 && $day <= 28 ? $day : 1,
         'period' => isset(SCHEDULED_REPORT_PERIODS[$period]) ? $period : 'last_month',
@@ -376,6 +377,18 @@ function scheduled_report_sections(string $key, string $from, string $to): array
                 ? array_map(fn($c) => [$c['new_status'], (string)(int)$c['n']], $m['closures'])
                 : [['No cases closed in this period.', '']]];
         }
+        return $sections;
+    }
+    if ($key === 'business') {
+        // The business summary (3.0.50), agency-wide, totals only, with the same comparisons as the page.
+        $cmp = comparison_periods($from, $to);
+        $fig = fn(array $p) => business_figures($p[0], $p[1], 'training_tracks', 'clients', 'client_status_history', 'scheduled_sessions', null);
+        $now = $fig([$from, $to]); $prev = $fig($cmp['previous']); $ly = $fig($cmp['last_year']);
+        $sections[] = ['heading' => 'This period compared', 'table' => ['columns' => ['Figure', 'This period', 'Previous period', 'Change from previous', 'Same dates last year', 'Change from last year'],
+            'rows' => array_map(fn($k) => [BUSINESS_FIGURE_LABELS[$k][0], business_figure_text($now[$k], BUSINESS_FIGURE_LABELS[$k][1]), business_figure_text($prev[$k], BUSINESS_FIGURE_LABELS[$k][1]),
+                business_change_text($now[$k], $prev[$k], BUSINESS_FIGURE_LABELS[$k][1]), business_figure_text($ly[$k], BUSINESS_FIGURE_LABELS[$k][1]), business_change_text($now[$k], $ly[$k], BUSINESS_FIGURE_LABELS[$k][1])], array_keys(BUSINESS_FIGURE_LABELS))]];
+        $sections[] = ['heading' => 'Open caseload now', 'table' => ['columns' => ['Instructor', 'Status', 'Clients'],
+            'rows' => array_map(fn($r) => [$r['instructor'], $r['status'], (string)$r['n']], open_caseload('clients'))]];
         return $sections;
     }
     throw new InvalidArgumentException('Unknown scheduled report.');

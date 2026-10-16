@@ -83,6 +83,7 @@ $reports = array_filter([
     ['attendance.php', 'Attendance and no-shows', 'Completed, missed and cancelled sessions for a period by client, instructor, service type or setting, and clients with repeated no-shows; CSV.', can('analytics')],
     ['unused_authorizations.php', 'Unused authorizations', 'Authorizations that ended in a period, with hours and dollars authorized, delivered, invoiced and left unused, by agency, service and instructor; CSV.', can('analytics')],
     ['survey_responses.php', 'Survey responses', 'Every outcome survey answer for a period, by email or phone, with the averages; CSV.', can('analytics')],
+    ['exports.php', 'Spreadsheet downloads', 'The everyday lists as CSV files: clients, referrals, tasks, sessions, authorizations, equipment and loans, follow-ups, incidents, portal requests and contracts.', true],
     ['data_quality.php', 'Data quality', 'Likely duplicate clients and records to tidy before a report is due.', can('clients')],
     ['doc_audit.php', 'Documentation audit', 'Documentation gaps on active clients: stale notes, missing assessments and goals with no recent progress.', can('clients')],
     ['risk.php', 'Outcome risk flags', 'Uses the AI assistant to rank active clients who may be at risk of not completing, with the reason and a suggested action.', can('analytics') && function_exists('ai_feature_enabled') && ai_feature_enabled('risk')],

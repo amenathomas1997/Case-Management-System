@@ -990,7 +990,7 @@ $assessments = db()->prepare('SELECT a.*, u.name AS author FROM tech_assessments
 $assessments->execute([$id]); $assessments = $assessments->fetchAll();
 
 // Structured scored assessments (repeatable instruments) + available instruments.
-$scored = db()->prepare('SELECT sa.*, i.name AS instrument, i.scale_min, i.scale_max, u.name AS assessor,
+$scored = db()->prepare('SELECT sa.*, i.name AS instrument, i.scale_min, i.scale_max, i.higher_is_better, u.name AS assessor,
         (SELECT COUNT(*) FROM client_scored_assessment_items si WHERE si.scored_id = sa.id) AS item_count
     FROM client_scored_assessments sa
     JOIN assessment_instruments i ON i.id = sa.instrument_id LEFT JOIN users u ON u.id = sa.assessor_id
@@ -1198,6 +1198,7 @@ page_header($tabLabels[$tab] . ' — ' . $client['name'], $user, 'clients', $tab
   <?php endif; ?>
   <a class="btn btn-secondary" href="messages.php?client=<?= $id ?>&amp;channel=client">Messages with client</a>
   <a class="btn btn-secondary" href="messages.php?client=<?= $id ?>&amp;channel=counselor">Messages with counselor</a>
+  <a class="btn btn-secondary" href="client_timeline.php?id=<?= $id ?>">Timeline</a>
   <a class="btn btn-secondary" href="client_export.php?id=<?= $id ?>">Export full file (ZIP)</a>
 </div>
 
@@ -1814,7 +1815,9 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
         <td><?= fmt_date($sc['assessed_on']) ?><br><span class="muted"><?= h($sc['assessor'] ?? '') ?></span></td>
         <td><?php $lo = $scoreLow($sc); ?><?= (int)$sc['total_score'] ?> <?= $lo === 0 ? 'of ' . (int)$sc['max_score'] : 'on a range of ' . $lo . ' to ' . (int)$sc['max_score'] ?> (<?= $pct ?>%)
           <div class="progress-wrap"><progress class="hours" max="100" value="<?= $pct ?>" aria-label="Score percentage"><?= $pct ?>%</progress></div></td>
-        <td><?= (int)$sc['id'] === (int)$first['id'] ? '<span class="muted">Baseline</span>' : ($delta > 0 ? '<span class="badge badge-active">+' . $delta . '% since baseline</span>' : ($delta < 0 ? '<span class="badge badge-hold">' . $delta . '% since baseline</span>' : 'No change since baseline')) ?></td>
+        <?php // "Lower is better" instruments (3.0.50): a falling score is the improvement.
+              $better = (int)($sc['higher_is_better'] ?? 1) === 0 ? $delta < 0 : $delta > 0; ?>
+        <td><?= (int)$sc['id'] === (int)$first['id'] ? '<span class="muted">Baseline</span>' : ($delta === 0.0 || $delta == 0 ? 'No change since baseline' : '<span class="badge ' . ($better ? 'badge-active' : 'badge-hold') . '">' . ($delta > 0 ? '+' : '') . $delta . '% since baseline, ' . ($better ? 'better' : 'worse') . '</span>') ?></td>
         <td><a class="btn btn-secondary btn-sm" href="score_assessment.php?client=<?= $id ?>&amp;scored=<?= (int)$sc['id'] ?>">View<span class="visually-hidden"> assessment <?= h($sc['instrument']) ?> on <?= h(fmt_date($sc['assessed_on'])) ?></span></a></td>
       </tr>
     <?php endforeach; ?>
@@ -1983,7 +1986,7 @@ $documents = $documents->fetchAll();
 </div>
 
 <?php elseif ($tab === 'history'): ?>
-<h2>Case status history (audit trail)</h2>
+<h2 id="history-h">Case status history (audit trail)</h2>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Case status history">
 <table>
   <caption class="visually-hidden">Status transitions with timestamps and users</caption>

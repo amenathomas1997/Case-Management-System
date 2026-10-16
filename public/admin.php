@@ -240,6 +240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_report_sending']
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_scheduled_reports'])) {
     $srOutcomes = !empty($_POST['sr_outcomes']);
     $srFunder = !empty($_POST['sr_funder']);
+    $srBusiness = !empty($_POST['sr_business']);
     $srRaw = trim(is_string($_POST['sr_recipients'] ?? null) ? $_POST['sr_recipients'] : '');
     $srParsed = scheduled_reports_parse_recipients($srRaw);
     $srDayRaw = is_string($_POST['sr_day'] ?? null) ? $_POST['sr_day'] : '';
@@ -247,7 +248,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_scheduled_report
     $srPeriod = is_string($_POST['sr_period'] ?? null) ? $_POST['sr_period'] : '';
     $srErrs = [];
     if ($srParsed['invalid']) $srErrs['sr_recipients'] = 'These are not valid email addresses: ' . implode(', ', array_map(fn($v) => mb_substr($v, 0, 60), $srParsed['invalid'])) . '. Enter one address per line, for example director@agency.org.';
-    elseif (($srOutcomes || $srFunder) && !$srParsed['valid']) $srErrs['sr_recipients'] = 'Enter at least one email address to send the reports to, or turn both reports off.';
+    elseif (($srOutcomes || $srFunder || $srBusiness) && !$srParsed['valid']) $srErrs['sr_recipients'] = 'Enter at least one email address to send the reports to, or turn the reports off.';
     elseif (count($srParsed['valid']) > 20) $srErrs['sr_recipients'] = 'Enter at most 20 email addresses.';
     if ($srDay < 1 || $srDay > 28) $srErrs['sr_day'] = 'Choose a day of the month from 1 to 28.';
     if (!isset(SCHEDULED_REPORT_PERIODS[$srPeriod])) $srErrs['sr_period'] = 'Choose the period each report covers.';
@@ -258,6 +259,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_scheduled_report
     }
     set_setting('scheduled_reports_outcomes_enabled', $srOutcomes ? '1' : '0');
     set_setting('scheduled_reports_funder_enabled', $srFunder ? '1' : '0');
+    set_setting('scheduled_reports_business_enabled', $srBusiness ? '1' : '0');
     set_setting('scheduled_reports_recipients', implode(',', $srParsed['valid']));
     set_setting('scheduled_reports_day', (string)$srDay);
     set_setting('scheduled_reports_period', $srPeriod);
@@ -555,6 +557,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
       <legend>Reports to send</legend>
       <div class="field"><label><input type="checkbox" name="sr_outcomes" value="1" <?= ($srRefill ? old_in('sr_outcomes') === '1' : $srCfg['outcomes']) ? 'checked' : '' ?>> Outcome report (clients served, hours by category and program, closures, rehabilitation rate)</label></div>
       <div class="field"><label><input type="checkbox" name="sr_funder" value="1" <?= ($srRefill ? old_in('sr_funder') === '1' : $srCfg['funder']) ? 'checked' : '' ?>> Funder outcome report (one summary per funding agency)</label></div>
+      <div class="field"><label><input type="checkbox" name="sr_business" value="1" <?= ($srRefill ? old_in('sr_business') === '1' : $srCfg['business']) ? 'checked' : '' ?>> Business summary (referrals, clients served, sessions, no-shows, hours, closures, compared with the period before and last year; totals only)</label></div>
     </fieldset>
     <div class="field">
       <label for="sr_recipients">Recipients</label>
@@ -583,7 +586,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
     <button type="submit" name="save_scheduled_reports" value="1" class="btn btn-primary">Save scheduled reports</button>
 
   </form>
-  <p class="hint">Last sent: outcome report <?= $srSentOut !== null ? 'for ' . h($srSentOut) : 'never' ?>; funder outcome report <?= $srSentFun !== null ? 'for ' . h($srSentFun) : 'never' ?>. Each send is recorded in the <a href="audit.php">audit log</a> as “report.scheduled”.</p>
+  <p class="hint">Last sent: outcome report <?= $srSentOut !== null ? 'for ' . h($srSentOut) : 'never' ?>; funder outcome report <?= $srSentFun !== null ? 'for ' . h($srSentFun) : 'never' ?>; business summary <?= ($srSentBus = setting('scheduled_reports_sent_business')) !== null ? 'for ' . h($srSentBus) : 'never' ?>. Each send is recorded in the <a href="audit.php">audit log</a> as “report.scheduled”.</p>
   <h3 id="fiscal-h">Fiscal year</h3>
   <form method="post" action="admin.php#fiscal-h" class="inline-form"><?= csrf_field() ?>
     <label for="fiscal_year_start">Fiscal year starts in</label>

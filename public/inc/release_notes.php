@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.50' => [
+        'Spreadsheet downloads (Business analytics) gives the everyday lists as CSV files: clients, referrals, tasks, sessions, authorizations, equipment and loans, device follow-ups, incidents, portal requests and contracts. The client list can be filtered by instructor, client type, funding agency and school, and Download these clients gets every match, past the 500 shown.',
+        'Each client has a Timeline (a button on their page): every case event newest first under month headings, and the days spent in each status. On a lower-is-better assessment, a falling score now shows as better. The scheduled report email can include the Business summary.',
+    ],
     '3.0.49' => [
         'New reports under Business analytics: a Business summary (referrals, new clients, clients served, sessions, no-shows, hours, closures and the rehabilitation rate, compared with the period before and last year, month by month, with the open caseload by instructor), Attendance and no-shows, and Unused authorizations (hours and dollars left on authorizations that ended). Each downloads as CSV.',
         'Data quality lists likely duplicate clients and records to tidy before a report is due. Adding a client who may already have a record now warns first. Administration sets the month your fiscal year starts; reports offer Fiscal year to date and Last fiscal year. The client page shows attendance.',

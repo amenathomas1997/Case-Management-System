@@ -51,7 +51,9 @@ $showArchived = isset($_GET['archived']) && can('admin');
 // per-user settings), so the list opens the same way next time. With no choice
 // saved, staff limited to their own caseload start on "My clients"; everyone
 // else on "Everyone's clients".
-$whoChoices = ['', 'me', 'unassigned'];
+// Named instructors too (3.0.50), for anyone who sees every caseload.
+$instructors = caseload_scoped() ? [] : array_values(array_filter(db()->query("SELECT DISTINCT u.id, u.name FROM users u JOIN clients c ON c.assigned_to = u.id WHERE u.is_active = 1 AND c.archived_at IS NULL ORDER BY u.name")->fetchAll(), fn($i) => (int)$i['id'] !== (int)$user['id']));
+$whoChoices = array_merge(['', 'me', 'unassigned'], array_map(fn($i) => 'u' . (int)$i['id'], $instructors));
 $whoKey = 'clients_filter_' . (int)$user['id'];
 if (is_string($_GET['who'] ?? null)) {
     $who = in_array($_GET['who'], $whoChoices, true) ? $_GET['who'] : '';
@@ -69,7 +71,22 @@ if ($q !== '') { $sql .= ' AND (c.name LIKE ? OR c.email LIKE ? OR c.counselor_n
 if (in_array($statusFilter, CLIENT_STATUSES, true)) { $sql .= ' AND c.status = ?'; $params[] = $statusFilter; }
 if ($who === 'me') { $sql .= ' AND c.assigned_to = ?'; $params[] = $user['id']; }
 elseif ($who === 'unassigned') { $sql .= ' AND c.assigned_to IS NULL'; }
+elseif (str_starts_with($who, 'u')) { $sql .= ' AND c.assigned_to = ?'; $params[] = (int)substr($who, 1); }
+// Client type, funding agency (any of the client's tracks) and school (3.0.50).
+$typeFilter = in_array($_GET['type'] ?? '', CLIENT_TYPES, true) ? $_GET['type'] : '';
+$agencyFilter = is_string($_GET['agency'] ?? null) ? trim($_GET['agency']) : '';
+$schoolFilter = is_string($_GET['school'] ?? null) ? trim($_GET['school']) : '';
+if ($typeFilter !== '') { $sql .= ' AND c.client_type = ?'; $params[] = $typeFilter; }
+if ($agencyFilter !== '') { $sql .= ' AND EXISTS (SELECT 1 FROM training_tracks ft WHERE ft.client_id = c.id AND ft.funding_agency = ?)'; $params[] = $agencyFilter; }
+if ($schoolFilter !== '') { $sql .= ' AND c.school LIKE ?'; $params[] = '%' . $schoolFilter . '%'; }
 if (caseload_scoped()) { $sql .= ' AND c.assigned_to = ?'; $params[] = $user['id']; }
+// The download has every match, past the screen's 500 rows (3.0.50).
+if (isset($_GET['export'])) {
+    $ex = db()->prepare($sql . ' ORDER BY c.name');
+    $ex->execute($params);
+    list_export_send('clients', (int)$user['id'], ['Name', 'Status', 'Client type', 'Instructor', 'VR counselor', 'Counselor agency', 'Email', 'Phone', 'Date of birth', 'School', 'Active tracks'],
+        array_map(fn($c) => [$c['name'], $c['status'], $c['client_type'], $c['instructor'], $c['counselor_name'], $c['counselor_agency'], $c['email'], $c['phone'], $c['dob'], $c['school'], (int)$c['active_tracks']], $ex->fetchAll()), ' (filtered)');
+}
 // The list shows at most 500 rows; count every match so the page can say so.
 $cnt = db()->prepare('SELECT COUNT(*) FROM (' . $sql . ') matched');
 $cnt->execute($params);
@@ -114,10 +131,25 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
         <option value="" <?= $who === '' ? 'selected' : '' ?>>Everyone's clients</option>
         <option value="me" <?= $who === 'me' ? 'selected' : '' ?>>My clients</option>
         <option value="unassigned" <?= $who === 'unassigned' ? 'selected' : '' ?>>Unassigned</option>
+        <?php foreach ($instructors as $in): ?><option value="u<?= (int)$in['id'] ?>" <?= $who === 'u' . (int)$in['id'] ? 'selected' : '' ?>><?= h($in['name']) ?></option><?php endforeach; ?>
       </select>
+    </div>
+    <div class="field">
+      <label for="type">Client type</label>
+      <select id="type" name="type"><option value="">All types</option><?= select_options(CLIENT_TYPES, $typeFilter) ?></select>
+    </div>
+    <?php $agencies = db()->query("SELECT DISTINCT funding_agency FROM training_tracks WHERE funding_agency NOT IN ('', 'Private pay', 'No charge') ORDER BY funding_agency")->fetchAll(PDO::FETCH_COLUMN); ?>
+    <div class="field">
+      <label for="agency">Funding agency</label>
+      <select id="agency" name="agency"><option value="">All agencies</option><?= select_options(array_map('strval', $agencies), $agencyFilter) ?></select>
+    </div>
+    <div class="field">
+      <label for="school">School</label>
+      <input type="text" id="school" name="school" value="<?= h($schoolFilter) ?>">
     </div>
   </div>
   <button type="submit" class="btn btn-secondary">Apply filters</button>
+  <button type="submit" name="export" value="1" class="btn btn-secondary">Download these clients (CSV)</button>
 </form>
 
 <?php if ($matchCount > count($clients)): ?>
