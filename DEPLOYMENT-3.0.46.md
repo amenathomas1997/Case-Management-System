@@ -17,3 +17,10 @@ Verified before commit:
 - full_schema 1115 (run with the test process's mailer failing), audit_regression 61, security 67, staging_scrub 34, and run_all.
 - The iPhone simulator build succeeded.
 - Not checked in a browser or with a screen reader.
+
+## Deployed 2026-10-16 13:11 CT
+From 3.0.45 with .audit_work/deploy-3.0.46 (no migration). The first CI run failed twice before this, and both causes are fixed in the commits after 3ae4d0f:
+- The iPhone track screen's body was too slow to type-check on the CI compiler; its goals, hours and expenses sections are now separate properties.
+- A time-dependent overlap in the 3.0.43 move test.
+
+CI is green on 3deb9e5. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.46). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.46-20261016-131145. iOS 3.0.46 (45) is not archived.
