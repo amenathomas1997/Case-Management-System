@@ -54,6 +54,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
         }
         // Tied to the client, and naming the request, like the other client audit entries.
         audit($user['id'], 'portal_request.status', 'client', (int)$row['client_id'], 'request #' . $id . ': ' . $row['status'] . ' → ' . $to);
+        // The client is emailed that it was answered (3.0.40); the answer stays in the portal.
+        if (in_array($to, $closed, true) && !in_array($row['status'], $closed, true)) request_closed_notice($id);
         flash('Request from ' . $row['client_name'] . ' (' . (PREQ_TYPES[$row['type']] ?? 'Request') . ') set to ' . $to . '.');
     }
     redirect('portal_requests.php');

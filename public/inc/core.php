@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.39';
+const APP_VERSION = '3.0.40';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -296,7 +296,7 @@ const EMAIL_TEMPLATES = [
         "Hello {name},\n\nYour one-time sign-in code for {app} is:\n\n{code}\n\nThis code expires in {minutes} minutes. If you did not try to sign in, you can ignore this email.\n",
         '{name} {code} {app} {minutes}'],
     'portal_link' => ['Client portal invitation', 'Your {org_short} training portal',
-        "Hello {name},\n\nHere is your personal link to view your upcoming training sessions, goals, and resources:\n\n{link}\n\nKeep this link private — anyone with it can view your training page. If you lose it, your instructor can send a new one (which replaces this link).\n",
+        "Hello {name},\n\nHere is your personal link to view your upcoming training sessions, goals, and resources:\n\n{link}\n\nKeep this link private — anyone with it can view your training page. It keeps working as long as you open it at least once every six months. If you lose it, your instructor can send a new one (which replaces this link).\n",
         '{name} {link} {org_short} {org}'],
     'consent_request' => ['Guardian consent request', 'A consent form to sign — {org_short}',
         "Hello {name},\n\n{client} has been referred to {org} for services. Please review and sign the consent form at this private link:\n\n{link}\n\nIt takes about a minute. Thank you!\n",
@@ -304,6 +304,15 @@ const EMAIL_TEMPLATES = [
     'release_request' => ['Release of information request', 'A release form to sign — {org_short}',
         "Hello {name},\n\n{org} would like your permission to share some of your training information. Please read the release form at this private link. It names who receives the information, what is shared and why, and you can sign it there:\n\n{link}\n\nYou do not have to sign it, and you can withdraw it later. If you have questions, reply to this email.\n",
         '{name} {link} {org_short} {org}'],
+    'message_notice' => ['New message notice (client or counselor)', 'You have a new message from {org_short}',
+        "Hello {name},\n\nYou have a new message from {org}. To read it, open your portal:\n\n{link}\n\nFor your privacy, the message itself is not in this email.\n",
+        '{name} {link} {org_short} {org}'],
+    'request_closed' => ['Portal request answered (client)', 'Your request to {org_short} was answered',
+        "Hello {name},\n\nWe answered a request you sent from your portal. To see the answer, open your portal:\n\n{link}\n",
+        '{name} {link} {org_short} {org}'],
+    'portal_expiring' => ['Portal link about to expire', 'Your {org_short} portal link expires on {date}',
+        "Hello {name},\n\nYour portal link has not been used for a while and stops working on {date}. To keep it working, open it before then:\n\n{link}\n\nIf you no longer need it, you can ignore this email.\n",
+        '{name} {link} {date} {org_short} {org}'],
     'survey_invite' => ['Outcome survey invitation', 'How was your training with {org_short}?',
         "Hello {name},\n\nCongratulations on completing your assistive technology training!\n\nWe'd love your feedback — three quick questions, under a minute:\n\n{link}\n\nThank you for training with {org}.\n",
         '{name} {link} {org_short} {org}'],
@@ -320,7 +329,7 @@ const EMAIL_TEMPLATES = [
     // placeholders. email_template_for_client() sends one when the client's
     // preferred language is Spanish and the English wording was not customised.
     'portal_link_es' => ['Client portal invitation (Spanish)', 'Su portal de capacitación de {org_short}',
-        "Hola, {name}:\n\nEste es su enlace personal para ver sus próximas sesiones de capacitación, sus metas y sus recursos:\n\n{link}\n\nMantenga este enlace en privado: cualquier persona que lo tenga puede ver su página de capacitación. Si lo pierde, su instructor puede enviarle uno nuevo (que reemplaza a este).\n",
+        "Hola, {name}:\n\nEste es su enlace personal para ver sus próximas sesiones de capacitación, sus metas y sus recursos:\n\n{link}\n\nMantenga este enlace en privado: cualquier persona que lo tenga puede ver su página de capacitación. Sigue funcionando mientras lo abra al menos una vez cada seis meses. Si lo pierde, su instructor puede enviarle uno nuevo (que reemplaza a este).\n",
         '{name} {link} {org_short} {org}'],
     'consent_request_es' => ['Guardian consent request (Spanish)', 'Un formulario de consentimiento para firmar — {org_short}',
         "Hola, {name}:\n\n{client} fue referido/a a {org} para recibir servicios. Revise y firme el formulario de consentimiento en este enlace privado:\n\n{link}\n\nToma alrededor de un minuto. ¡Gracias!\n",
@@ -328,6 +337,15 @@ const EMAIL_TEMPLATES = [
     'release_request_es' => ['Release of information request (Spanish)', 'Un formulario de autorización para firmar — {org_short}',
         "Hola, {name}:\n\n{org} quisiera su permiso para compartir parte de la información de su capacitación. Lea el formulario de autorización en este enlace privado. Dice quién recibe la información, qué se comparte y por qué, y puede firmarlo allí:\n\n{link}\n\nNo tiene que firmarlo, y puede retirarlo más adelante. Si tiene preguntas, responda a este correo.\n",
         '{name} {link} {org_short} {org}'],
+    'message_notice_es' => ['New message notice (client, Spanish)', 'Tiene un mensaje nuevo de {org_short}',
+        "Hola, {name}:\n\nTiene un mensaje nuevo de {org}. Para leerlo, abra su portal:\n\n{link}\n\nPor su privacidad, el mensaje no viene en este correo.\n",
+        '{name} {link} {org_short} {org}'],
+    'request_closed_es' => ['Portal request answered (client, Spanish)', 'Respondimos su solicitud a {org_short}',
+        "Hola, {name}:\n\nRespondimos una solicitud que envió desde su portal. Para ver la respuesta, abra su portal:\n\n{link}\n",
+        '{name} {link} {org_short} {org}'],
+    'portal_expiring_es' => ['Portal link about to expire (Spanish)', 'Su enlace al portal de {org_short} vence el {date}',
+        "Hola, {name}:\n\nHace tiempo que no usa su enlace al portal, y dejará de funcionar el {date}. Para que siga funcionando, ábralo antes de esa fecha:\n\n{link}\n\nSi ya no lo necesita, puede ignorar este correo.\n",
+        '{name} {link} {date} {org_short} {org}'],
     'survey_invite_es' => ['Outcome survey invitation (Spanish)', '¿Cómo fue su capacitación con {org_short}?',
         "Hola, {name}:\n\n¡Felicidades por completar su capacitación en tecnología de asistencia!\n\nNos gustaría conocer su opinión: tres preguntas rápidas, en menos de un minuto:\n\n{link}\n\nGracias por capacitarse con {org}.\n",
         '{name} {link} {org_short} {org}'],
@@ -345,6 +363,8 @@ const EMAIL_TEMPLATE_REQUIRED = [
     'portal_link' => '{link}', 'consent_request' => '{link}', 'survey_invite' => '{link}',
     'portal_link_es' => '{link}', 'consent_request_es' => '{link}', 'survey_invite_es' => '{link}',
     'release_request' => '{link}', 'release_request_es' => '{link}',
+    'message_notice' => '{link}', 'message_notice_es' => '{link}', 'request_closed' => '{link}', 'request_closed_es' => '{link}',
+    'portal_expiring' => '{link}', 'portal_expiring_es' => '{link}',
     'report_cover' => '{ack}',
     'referral_closed' => '{ref}',
 ];
@@ -1573,3 +1593,5 @@ require_once __DIR__ . '/billing.php';
 require_once __DIR__ . '/case_outcomes.php';
 // Note versions and the 30-day lock, adult releases of information, vendor agreements (3.0.36).
 require_once __DIR__ . '/records_privacy.php';
+// Portal links that renew, message and request notices (3.0.40).
+require_once __DIR__ . '/client_notices.php';

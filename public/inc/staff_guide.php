@@ -46,6 +46,7 @@ if (!function_exists('staff_guide_topics')) {
             'guide-contact' => ['How do I message clients and use the portal?', [
                 'guide-messages' => 'How do I send a message?',
                 'guide-portal-staff' => 'How do I give a client portal access?',
+                'guide-portal-expiry' => 'How long does a portal link work?',
                 'guide-portal-requests' => 'How do I handle a portal request?',
                 'guide-documents' => 'How do I upload a document?',
                 'guide-consent' => 'How do I request guardian consent?',
@@ -529,6 +530,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <p>The client gets a private link by email. There is no password. The link lasts 180 days. Only the newest link works. Sending a new link turns off every older one.</p>
 <p>The link is not sent to an Unverified email address. Confirm the address first on Edit profile / status. If someone else may have the link, choose Turn off portal link. Text next to the button says until when the link is active, or when it expired.</p>
 <p>An archived record's portal does not open. A closed case's portal is read-only.</p>
+
+<?= $sgH(4, 'guide-portal-expiry') ?>
+<p>A client's or counselor's portal link keeps working as long as it is opened at least once every six months. Two weeks before an unused link stops, its holder is emailed and, for a client, the instructor gets an alert. A client whose link has stopped can type their email address on the expired-link page to get a new one; it goes only to the confirmed address on their record. You can also send a new link from the client page or the iPhone app (Client portal, Email a new portal link). When you send a client or counselor a message, they get a short email saying a message is waiting, at most once a day, and clients are emailed when you answer a portal request. A client whose preferred contact is phone or postal mail is not emailed session reminders; your own reminder tells you to call them.</p>
 
 <?= $sgH(4, 'guide-portal-requests') ?>
 <ol>

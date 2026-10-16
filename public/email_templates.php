@@ -19,6 +19,9 @@ const TPL_REQUIRED = [
     'consent_request' => ['{link}' => 'the consent form link'],
     'survey_invite' => ['{link}' => 'the survey link'],
     'release_request' => ['{link}' => 'the release form link'],
+    'message_notice' => ['{link}' => 'the portal link'],
+    'request_closed' => ['{link}' => 'the portal link'],
+    'portal_expiring' => ['{link}' => 'the portal link'],
     'report_cover' => ['{ack}' => 'the confirmation link'],
     'referral_closed' => ['{ref}' => 'the referral reference number'],
 ];

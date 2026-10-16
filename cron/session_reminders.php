@@ -42,7 +42,10 @@ if ((int)db()->query("SELECT GET_LOCK(CONCAT('cms_session_reminders_', MD5(DATAB
     echo "Another session reminders run is still working; this run sent nothing.\n";
     exit(0);
 }
+// A client who prefers Phone or Postal mail (a11y_contact) is not emailed (3.0.40): the
+// instructor's reminder says to call them, with their number.
 $sessions = db()->query("SELECT s.*, c.name AS client_name, c.email AS client_email, c.email_verified AS client_email_verified,
+        c.a11y_contact AS client_contact, c.phone AS client_phone,
         (c.archived_at IS NULL AND c.status NOT LIKE 'Closed%') AS client_current,
         u.id AS active_staff_id, u.name AS staff_name, u.email AS staff_email,
         (u.id IS NOT NULL AND (g.id IS NULL OR g.own_caseload_only = 0 OR c.assigned_to = u.id)) AS staff_sees_client,
@@ -84,7 +87,10 @@ foreach ($sessions as $s) {
     $current = (bool)($s['client_current'] ?? true);
     $staffSees = !empty($s['staff_sees_client']);
     $allSent = true; $anyAddress = false; $badAddress = false; $emailHeld = false;
-    if ($s['client_email'] && $current) {
+    $prefersOther = in_array($s['client_contact'] ?? '', ['Phone', 'Postal mail'], true);
+    // Reached another way: no client email, an unusable one, or a preference for phone or post.
+    $callClient = $current && ($prefersOther || !filter_var((string)($s['client_email'] ?? ''), FILTER_VALIDATE_EMAIL));
+    if ($s['client_email'] && $current && !$prefersOther) {
         if (empty($s['client_email_verified'])) {
             // Typed on the public referral form by whoever sent it and not yet
             // confirmed by staff: nothing is sent to it. The instructor's reminder
@@ -131,7 +137,9 @@ foreach ($sessions as $s) {
     $staffBody = "Session reminder.\n\nClient: {$s['client_name']}\nWhen: {$when}{$where}\n"
         . ($current ? '' : "\nThis client is closed or archived, so the client was not reminded. Cancel the session on the Schedule page if it no longer applies.\n")
         . ($emailHeld ? "\nThe client was not emailed this reminder: their email address came from the public referral form and has not been confirmed. "
-            . "Confirm it on the client's edit page, and remind the client another way this time.\n" : '');
+            . "Confirm it on the client's edit page, and remind the client another way this time.\n" : '')
+        . ($callClient && !$emailHeld ? "\nRemind the client yourself: " . ($prefersOther ? 'they prefer ' . strtolower((string)$s['client_contact']) : 'there is no email address to remind them at')
+            . (trim((string)($s['client_phone'] ?? '')) !== '' ? '. Phone: ' . $s['client_phone'] : '') . ".\n" : '');
     $staffSubject = ucfirst($day) . ': training session — ' . date('g:i A T', $startTs);
     if ($s['staff_email'] && $staffSees) {
         $anyAddress = true;

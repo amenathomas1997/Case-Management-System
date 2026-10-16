@@ -153,6 +153,9 @@ struct ClientDetailView: View {
     @State private var expandedNotes: Set<Int> = []
     @State private var showingAddTrack = false
     @State private var showingConsent = false
+    /// Asking before a new portal link is emailed (3.0.40).
+    @State private var confirmingPortalLink = false
+    @State private var sendingPortalLink = false
     /// The guardian consent as the website's client page shows it (request_consent); nil until
     /// loaded, or from a server that does not have it.
     @State private var consent: ConsentStatusResponse?
@@ -232,6 +235,20 @@ struct ClientDetailView: View {
                                 Label(c.requestLabel, systemImage: "envelope")
                             }
                         }
+                    }
+                }
+
+                Section("Client portal") {
+                    Button {
+                        confirmingPortalLink = true
+                    } label: {
+                        Label(sendingPortalLink ? "Sending…" : "Email a new portal link", systemImage: "link")
+                    }
+                    .disabled(sendingPortalLink || (detail.client.email ?? "").isEmpty)
+                    .confirmationDialog("Email a new portal link to \(detail.client.email ?? "the client")? Any earlier link stops working.",
+                                        isPresented: $confirmingPortalLink, titleVisibility: .visible) {
+                        Button("Email portal link") { Task { await sendPortalLink() } }
+                        Button("Cancel", role: .cancel) {}
                     }
                 }
 
@@ -507,6 +524,18 @@ struct ClientDetailView: View {
                 announce("The flagged note is older than the notes shown. Use Load older notes at the end of the Notes section.")
             }
         }
+    }
+
+    /// Email the client a new portal link (send_portal_link), as the website's client page does.
+    private func sendPortalLink() async {
+        sendingPortalLink = true
+        defer { sendingPortalLink = false }
+        error = nil
+        do {
+            let result: TaskSaveResult = try await api.call("send_portal_link", body: ["client_id": clientId])
+            confirmation = result.message ?? "Portal link emailed."
+            announce(confirmation ?? "")
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 
     /// The consent state for the Guardian consent section and the Send consent request action.

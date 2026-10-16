@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.40' => [
+        'Portal links for clients and counselors now stay open while they are used at least every six months. Two weeks before an unused link stops, its holder is emailed and the instructor is alerted, and a client with an expired link can ask for a new one from the expired-link page.',
+        'Clients and counselors get a short email when you send them a message (no message text, at most once a day), and clients are emailed when a portal request is answered. Session reminders are not emailed to clients who prefer phone or post; your reminder tells you to call them. The app can send a portal link.',
+    ],
     '3.0.39' => [
         'My Account and each person on Users list the phones signed in to the app. Sign one out on its own, or choose Report lost and wipe: the next time that phone connects, the app removes its drafts, unsent entries and saved lists, and signs out. On an iPhone without a passcode the app no longer keeps anything between uses.',
         'The privacy notice is now in Spanish too (choose Español at the top), and says what changed this week: releases of information, copies of records from the portal, locked case notes and the lost-phone wipe.',

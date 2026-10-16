@@ -435,7 +435,7 @@ $GLOBALS['CURRENT_PERMS'] = $resolved['perms'];
 $GLOBALS['CURRENT_SCOPED'] = $resolved['scoped'];
 $API_ACTION_PERMS = [
     'clients' => 'clients', 'client' => 'clients', 'save_client' => 'clients',
-    'add_note' => 'clients', 'update_note' => 'clients',
+    'add_note' => 'clients', 'update_note' => 'clients', 'send_portal_link' => 'clients',
     'documents' => 'clients', 'download_document' => 'clients', 'upload_document' => 'clients',
     'homework' => 'clients', 'assign_homework' => 'clients', 'complete_homework' => 'clients',
     'assessments' => 'clients', 'add_assessment' => 'clients',
@@ -569,6 +569,16 @@ switch ($action) {
         foreach($briefing['items'] as &$briefingItem)$briefingItem['text']=api_ai_plain((string)$briefingItem['text']);
         unset($briefingItem);
         out(['ok'=>true]+$briefing);
+    /* Email the client a new portal link, as the client page does (3.0.40). */
+    case 'send_portal_link': {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') fail('Use POST for changes.', 405);
+        $cid = (int)($input['client_id'] ?? 0);
+        api_require_client($cid, $userId);
+        $sent = portal_link_send($cid, $userId, 'mobile');
+        if ($sent['error'] !== null) fail($sent['error'], 422);
+        out(['ok' => true, 'sent_to' => $sent['sent_to'], 'message' => 'Portal link emailed to ' . $sent['sent_to'] . '. Any earlier link no longer works.']);
+    }
+
     case 'logout':
         db()->prepare('DELETE FROM api_tokens WHERE id = ?')->execute([$tok['id']]);
         out(['ok' => true]);
@@ -3788,6 +3798,7 @@ switch ($action) {
         $id = post_message($cid, $channel, 'staff', $userId, $body);
         // The website's code (messages.php), so a search of the audit log finds both channels.
         audit($userId, 'message.send', 'client', $cid, $channel . ' (mobile)');
+        message_notice($cid, $channel); // 3.0.40: a short "new message" email, at most once a day
         // Same check as the website (messages.php): the portal is the only way the
         // other side reads a message, so say when there is no live link to read it on.
         // The counselor portal lists only clients whose counselor email staff have

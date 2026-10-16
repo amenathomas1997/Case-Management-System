@@ -161,7 +161,8 @@ if (strlen($token) === 48) {
         WHERE p.token = ? AND (p.expires_at IS NULL OR p.expires_at > NOW()) AND c.archived_at IS NULL');
     $stmt->execute([$token]);
     $client = $stmt->fetch();
-    if ($client) db()->prepare('UPDATE portal_tokens SET last_used_at = NOW() WHERE token = ?')->execute([$token]);
+    // Each use keeps the link open for another six months (3.0.40).
+    if ($client) portal_link_touch('portal_tokens', 'token', $token);
     // A client who prefers Spanish gets the portal in Spanish from the first visit;
     // the Español/English toggle (which sets the session language) still decides after that.
     if ($client && !isset($_SESSION['lang']) && client_lang($client) === 'es') $_SESSION['lang'] = 'es';
@@ -658,6 +659,14 @@ if ($client && is_array($_SESSION['hw_explanation'] ?? null) && ($_SESSION['hw_e
     $homeworkExplanation = $_SESSION['hw_explanation'];
 }
 unset($_SESSION['hw_explanation']);
+// "Email me a new link" from the dead-link page (3.0.40): sent only to the confirmed address
+// on file, and the answer is the same whether or not the address is known.
+if (!$client && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['new_link'])) {
+    csrf_check();
+    portal_link_self_service(is_string($_POST['new_link_email'] ?? null) ? $_POST['new_link_email'] : '');
+    flash_ui('If that address belongs to a client with a portal, a new link is on its way. Check your email in a few minutes.', 'info');
+    redirect('portal.php?lang=' . page_lang());
+}
 if ($client) record_client_view(null, (int)$client['id'], 'client portal');
 page_header($client ? 'My training' : 'Portal');
 
@@ -672,7 +681,13 @@ if (!$client) {
             : ($linkContact !== ''
             ? t('This link has been replaced or no longer works. Email') . ' <a href="mailto:' . h($linkContact) . '">' . h($linkContact) . '</a> ' . t('and we will send you a new one.')
             : t('This link has been replaced or no longer works. Ask your instructor and we will send you a new one.')))
-        . '</p></div>';
+        . '</p>'
+        . '<h2>' . t('Email me a new link') . '</h2>'
+        . '<form method="post" action="portal.php?lang=' . h(page_lang()) . '" class="stacked" novalidate>' . csrf_field()
+        . '<div class="field"><label for="new_link_email">' . t('Your email address') . '</label>'
+        . '<input type="email" id="new_link_email" name="new_link_email" autocomplete="email" maxlength="190"></div>'
+        . '<button type="submit" name="new_link" value="1" class="btn btn-primary">' . t('Send me a new link') . '</button></form>'
+        . '</div>';
     page_footer();
     exit;
 }

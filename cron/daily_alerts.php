@@ -163,6 +163,35 @@ try {
     error_log('daily_alerts: privacy incident check skipped (' . $e->getCode() . ')'); // mig_3.0.38 not run yet
 }
 
+// Portal links about to lapse (3.0.40): a link unused for nearly six months stops working
+// in 14 days. Its holder is emailed once (opening it renews it) and, for a client, the
+// instructor gets an alert.
+try {
+    foreach (db()->query("SELECT p.id, p.token, p.expires_at, c.id AS cid, c.name, c.email, c.email_verified, c.preferred_language, c.assigned_to
+        FROM portal_tokens p JOIN clients c ON c.id = p.client_id
+        WHERE p.expiry_warned_at IS NULL AND c.archived_at IS NULL AND p.expires_at > NOW()
+          AND p.expires_at <= DATE_ADD(NOW(), INTERVAL " . PORTAL_LINK_WARN_DAYS . " DAY)")->fetchAll() as $pt) {
+        $date = date('F j, Y', strtotime($pt['expires_at']));
+        $sent = false;
+        if ((int)$pt['email_verified'] === 1 && filter_var($pt['email'] ?? '', FILTER_VALIDATE_EMAIL)) {
+            [$subj, $body] = email_template_for_client('portal_expiring', $pt, ['name' => $pt['name'], 'date' => $date,
+                'link' => cfg('base_url') . '/portal.php?t=' . $pt['token'] . (client_lang($pt) === 'es' ? '&lang=es' : '')]);
+            $sent = send_app_mail((string)$pt['email'], $subj, $body);
+        }
+        if ($pt['assigned_to']) notify_user((int)$pt['assigned_to'], $pt['name'] . '\'s portal link stops working on ' . $date . ($sent ? ' (they were emailed)' : '') . '. Send a new one if they still need it.', 'client.php?id=' . (int)$pt['cid']);
+        db()->prepare('UPDATE portal_tokens SET expiry_warned_at = NOW() WHERE id = ?')->execute([(int)$pt['id']]);
+    }
+    foreach (db()->query("SELECT id, token, expires_at, counselor_name, counselor_email FROM vrc_tokens
+        WHERE expiry_warned_at IS NULL AND expires_at > NOW() AND expires_at <= DATE_ADD(NOW(), INTERVAL " . PORTAL_LINK_WARN_DAYS . " DAY)")->fetchAll() as $vt) {
+        [$subj, $body] = email_template('portal_expiring', ['name' => $vt['counselor_name'], 'date' => date('F j, Y', strtotime($vt['expires_at'])),
+            'link' => cfg('base_url') . '/vrc.php?t=' . $vt['token']]);
+        if (filter_var($vt['counselor_email'], FILTER_VALIDATE_EMAIL)) send_app_mail((string)$vt['counselor_email'], $subj, $body);
+        db()->prepare('UPDATE vrc_tokens SET expiry_warned_at = NOW() WHERE id = ?')->execute([(int)$vt['id']]);
+    }
+} catch (PDOException $e) {
+    error_log('daily_alerts: portal link check skipped (' . $e->getCode() . ')'); // mig_3.0.40 not run yet
+}
+
 // Equipment maintenance: open a task when a scheduled item is due (or overdue)
 // for service. One open task per item at a time (idempotent via auto_key/day).
 // A task is closed here once it no longer applies: a service was logged after the

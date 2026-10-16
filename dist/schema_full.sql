@@ -895,6 +895,7 @@ CREATE TABLE `portal_tokens` (
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `last_used_at` datetime DEFAULT NULL,
   `expires_at` datetime DEFAULT NULL,
+  `expiry_warned_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `client_id` (`client_id`),
   UNIQUE KEY `token` (`token`),
@@ -1214,6 +1215,7 @@ CREATE TABLE `vrc_tokens` (
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `last_used_at` datetime DEFAULT NULL,
   `expires_at` datetime DEFAULT NULL,
+  `expiry_warned_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `counselor_email` (`counselor_email`),
   UNIQUE KEY `token` (`token`)

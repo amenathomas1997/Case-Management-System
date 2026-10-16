@@ -178,7 +178,7 @@ if (empty($_SESSION[$sessionKey])) {
             $_SESSION[$sessionKey] = true;
             $_SESSION[$sessionKey . '_at'] = time();
             unset($_SESSION[$codeKey]);
-            db()->prepare('UPDATE vrc_tokens SET last_used_at = NOW() WHERE id = ?')->execute([(int)$vrc['id']]);
+            portal_link_touch('vrc_tokens', 'id', (int)$vrc['id']); // open another six months (3.0.40)
             // Each opening of this external caseload view is kept in the audit trail
             // (last_used_at holds only the latest).
             audit(null, 'vrcportal.open', 'counselor', (int)$vrc['id'], $vrc['counselor_email']);

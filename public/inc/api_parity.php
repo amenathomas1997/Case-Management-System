@@ -384,6 +384,7 @@ case 'portal_request_update': {
         throw $e;
     }
     audit($userId, 'portal_request.status', 'client', (int)$row['client_id'], 'request #' . $id . ': ' . $row['status'] . ' → ' . $to);
+    if (in_array($to, $closed, true) && !in_array($row['status'], $closed, true)) request_closed_notice($id); // 3.0.40
     out(['ok' => true, 'changed' => true, 'message' => 'Request from ' . $row['client_name'] . ' (' . $label . ') set to ' . $to . '.']);
 }
 

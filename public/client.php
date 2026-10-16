@@ -690,45 +690,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_document'])) {
     redirect("client.php?id=$id&tab=documents#docs-h");
 }
 
-/* ---- POST: send (or resend) client portal link ---- */
+/* ---- POST: send (or resend) client portal link (inc/client_notices.php portal_link_send) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_portal'])) {
-    // The portal refuses archived records, so a link sent now would not open.
-    if ($client['archived_at'] !== null) {
-        flash('This client\'s record is archived, so a portal link would not open. Restore the record first.', 'error');
+    $sent = portal_link_send($id, (int)$user['id']);
+    if ($sent['error'] !== null) {
+        if (str_starts_with($sent['error'], 'The portal link was not sent:')) keep_field_errors(['send_portal' => $sent['error']]);
+        else flash($sent['error'], 'error');
         redirect("client.php?id=$id");
     }
-    if (!filter_var($client['email'] ?? '', FILTER_VALIDATE_EMAIL)) {
-        flash('Add an email address to the client profile first.', 'error');
-        redirect("client.php?id=$id");
-    }
-    // An address typed into the public referral form may be the referrer's, not
-    // the client's: the private link goes to it only once staff have confirmed it.
-    if ((int)$client['email_verified'] !== 1) {
-        keep_field_errors(['send_portal' => 'The portal link was not sent: ' . $client['email'] . ' came from the public referral form and has not been confirmed with the client. Confirm it on the Edit profile page (tick Confirmed with the client), then send the link.']);
-        redirect("client.php?id=$id");
-    }
-    $token = bin2hex(random_bytes(24));
-    [$subj, $body] = email_template_for_client('portal_link', $client, ['name' => $client['name'], 'link' => cfg('base_url') . '/portal.php?t=' . $token]);
-    // The new link replaces the old one only once it has been sent, so a mail
-    // outage never leaves the client with a dead link and no new one.
-    if (!send_app_mail($client['email'], $subj, $body)) {
-        flash('The portal email could not be sent, so nothing was changed — any link the client already has still works. Please try again later.', 'error');
-        redirect("client.php?id=$id");
-    }
-    // Portal links expire after 180 days; resending issues a fresh window.
-    try {
-        db()->prepare('INSERT INTO portal_tokens (client_id, token, expires_at) VALUES (?,?, DATE_ADD(NOW(), INTERVAL 180 DAY))
-            ON DUPLICATE KEY UPDATE token = VALUES(token), created_at = NOW(), expires_at = DATE_ADD(NOW(), INTERVAL 180 DAY)')
-            ->execute([$id, $token]);
-    } catch (Throwable $e) {
-        // The email has gone, so this is not "nothing was saved": say exactly what happened.
-        error_log('Portal link store failed: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
-        audit($user['id'], 'portal.send_failed', 'client', $id, 'emailed, but the link could not be activated');
-        flash('The portal email went to ' . $client['email'] . ', but its link could not be activated, so it will not open. Send a new portal link; any link sent before this one still works.', 'error');
-        redirect("client.php?id=$id");
-    }
-    audit($user['id'], 'portal.send', 'client', $id);
-    flash('Portal link emailed to the client at ' . $client['email'] . '. Any previous link no longer works.'
+    flash('Portal link emailed to the client at ' . $sent['sent_to'] . '. Any previous link no longer works. It stays open while it is used at least every six months.'
         . (str_starts_with((string)$client['status'], 'Closed') ? ' This client\'s case is closed, so their portal is read-only: they can view it but cannot send requests, messages or files. Reopen the case first if they need to send requests again.' : ''));
     redirect("client.php?id=$id");
 }
@@ -1181,7 +1151,9 @@ page_header($tabLabels[$tab] . ' — ' . $client['name'], $user, 'clients', $tab
     <?= form_error_summary(['send_portal' => ''], ['send_portal' => 'send-portal-btn']) ?>
     <button type="submit" name="send_portal" value="1" class="btn btn-secondary" id="send-portal-btn"<?= has_field_error('send_portal') ? ' aria-describedby="err-send_portal"' : '' ?>
       onclick="return confirm(<?= h(json_encode('Email ' . $client['name'] . ' a private portal link' . (filter_var($client['email'] ?? '', FILTER_VALIDATE_EMAIL) ? ' at ' . $client['email'] : '') . '? Any previous link will stop working.'
-        . (str_starts_with((string)$client['status'], 'Closed') ? ' This client\'s case is closed, so their portal is read-only: they can view it but cannot send requests, messages or files. Reopen the case first if they need to send requests again.' : ''), JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">
+        . (str_starts_with((string)$client['status'], 'Closed') ? ' This client\'s case is closed, so their portal is read-only: they can view it but cannot send requests, messages or files. Reopen the case first if they need to send requests again.' : '')
+        // Said in the question (no extra stop on the page) when they prefer not to be emailed (3.0.40).
+        . (in_array($client['a11y_contact'] ?? '', ['Phone', 'Postal mail'], true) ? ' Note: this client prefers contact by ' . strtolower((string)$client['a11y_contact']) . '.' : ''), JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">
       Send portal link</button>
     <?= field_error('send_portal') ?>
   </form>

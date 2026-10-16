@@ -49,6 +49,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reply'])) {
     }
     web_once_set($msgKey, post_message($cid, $channel, 'staff', (int)$user['id'], $body));
     audit($user['id'], 'message.send', 'client', $cid, $channel);
+    // A short email with the portal link (no message text), at most once a day (3.0.40).
+    $noticed = message_notice($cid, $channel);
     // Only promise delivery when the other side has a live portal link to read it on.
     // The counselor portal lists only clients whose counselor email staff have
     // confirmed (counselor_verified = 1), so the message shows there only then.
@@ -60,7 +62,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reply'])) {
     }
     $link->execute([$cid]);
     if ($link->fetchColumn()) {
-        flash('Message sent — it will appear on the ' . ($channel === 'client' ? "client's" : "counselor's") . ' portal.');
+        flash('Message sent — it will appear on the ' . ($channel === 'client' ? "client's" : "counselor's") . ' portal.'
+            . ($noticed ? ' They were emailed that a message is waiting.' : ''));
     } elseif ($channel === 'counselor' && trim((string)$c['counselor_email']) !== '' && (int)$c['counselor_verified'] === 0) {
         flash('Message saved, but ' . $c['name'] . '\'s counselor email has not been confirmed, so the counselor portal does not show this client yet. Confirm the counselor on the client\'s edit page.', 'error');
     } elseif ($channel === 'client') {
