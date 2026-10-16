@@ -968,8 +968,10 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
       <?php else: ?>
         <p style="white-space:pre-wrap"><?= h($tn['body']) ?></p>
       <?php endif; ?>
-      <?php if (can('admin') || (int)($tn['author_id'] ?? 0) === (int)$user['id']): ?>
+      <?php if (note_editable($tn, (int)$user['id'])): ?>
         <p><a class="btn btn-secondary btn-sm" href="client.php?id=<?= (int)$track['client_id'] ?>&amp;tab=notes&amp;edit_note=<?= (int)$tn['id'] ?>#addnote-h">Edit<span class="visually-hidden"> note: <?= h($tn['subject']) ?></span></a></p>
+      <?php elseif (note_locked($tn)): // past the edit window: corrections go in an addendum (earlier versions are on the client page) ?>
+        <p><a class="btn btn-secondary btn-sm" href="client.php?id=<?= (int)$track['client_id'] ?>&amp;tab=notes&amp;addendum_to=<?= (int)$tn['id'] ?>#addnote-h">Add addendum<span class="visually-hidden"> to note: <?= h($tn['subject']) ?></span></a></p>
       <?php endif; ?>
       <?php if ($hwDraftOn): // Drafts homework from this note into the Assign homework form; nothing is saved until Assign. ?>
       <form method="post" action="track.php?id=<?= $id ?>#assign-hw-h" class="inline-form"><?= csrf_field() ?>

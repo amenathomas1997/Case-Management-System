@@ -195,7 +195,8 @@ function build_track_report(int $trackId, string $preparedBy, string $intro = ''
         'html' => $html,
         'text' => $plain($rows),
         'ai_text' => $plain($aiRows),
-        'subject' => 'Training Progress Report — ' . $t['client_name'] . ' — ' . $t['title'] . ' (Authorization ' . $t['auth_number'] . ')',
+        // No client name in the subject (3.0.36): the authorization number identifies the case.
+        'subject' => 'Training Progress Report — Authorization ' . $t['auth_number'],
         'track' => $t,
     ];
 }

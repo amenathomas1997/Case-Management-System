@@ -33,6 +33,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['check_updates'])) {
 }
 
 /* Record-retention setting */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_note_lock'])) {
+    // Days after which a case note is locked (3.0.36; owner decision: 30). Later changes are addenda.
+    $rawNl = $_POST['note_lock_days'] ?? '';
+    $nl = is_string($rawNl) && preg_match('/^\d{1,3}$/', $rawNl) ? (int)$rawNl : -1;
+    if (!in_array($nl, [0, 7, 14, 30, 60, 90], true)) {
+        flash('The note lock was not changed: choose Off, 7, 14, 30, 60 or 90 days.', 'error');
+        redirect('admin.php#notelock-h');
+    }
+    set_setting('note_lock_days', (string)$nl);
+    audit($user['id'], 'note_lock.set', 'settings', null, $nl . ' days');
+    flash($nl > 0 ? "Notes now lock {$nl} days after they are written." : 'Notes no longer lock; they can be edited at any time. Earlier versions are still kept.');
+    redirect('admin.php#notelock-h');
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retention'])) {
     // Only the offered periods (or the period already stored, so an older
     // setting can be saved again unchanged); anything else is refused, never
@@ -490,7 +503,20 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
     <a class="btn btn-secondary" href="client_merge.php">Merge duplicate clients</a>
     <a class="btn btn-secondary" href="clients.php?archived=1">Archived clients</a>
     <a class="btn btn-secondary" href="outcomes.php">Annual outcome report</a>
+    <a class="btn btn-secondary" href="vendors.php">Vendor agreements</a>
   </div>
+  <h3 id="notelock-h">Case note lock</h3>
+  <form method="post" action="admin.php" class="inline-form"><?= csrf_field() ?>
+    <label for="note_lock_days">Lock case notes for editing after</label>
+    <select id="note_lock_days" name="note_lock_days">
+      <?php $curNl = note_lock_days();
+      foreach ([0 => 'Off', 7 => '7 days', 14 => '14 days', 30 => '30 days', 60 => '60 days', 90 => '90 days'] as $nd => $nlab): ?>
+      <option value="<?= $nd ?>" <?= $curNl === $nd ? 'selected' : '' ?>><?= $nlab ?></option>
+      <?php endforeach; ?>
+    </select>
+    <button type="submit" name="save_note_lock" value="1" class="btn btn-secondary btn-sm">Save</button>
+  </form>
+  <p class="hint">A locked note is corrected with an addendum. Every earlier version of an edited note is kept.</p>
   <h3 id="retention-h">Record retention</h3>
   <form method="post" action="admin.php" class="inline-form"><?= csrf_field() ?>
     <label for="retention_years">Record retention: auto-archive clients closed for</label>

@@ -42,6 +42,7 @@ const CLIENT_MERGE_TABLES = [
     'referrals', 'tasks', 'client_scored_assessments', 'access_bookings',
     'client_competency', 'device_requests', 'equipment_reservations',
     'portal_requests', 'worksite_assessments', 'at_records', 'client_closures',
+    'client_note_revisions', 'client_releases',
 ];
 
 // Blank profile fields on the kept record that the duplicate can fill. Each fill

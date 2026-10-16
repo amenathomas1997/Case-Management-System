@@ -320,7 +320,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['purge_client'])) {
 
 /* ---- Note edit permission: author or admin ---- */
 function can_edit_note(array $note, array $user): bool {
-    return can('admin') || (int)($note['author_id'] ?? 0) === (int)$user['id'];
+    // A note past the edit window (30 days, inc/records_privacy.php) is locked: a later
+    // change is an addendum.
+    return note_editable($note, (int)$user['id']);
 }
 
 /* A collapsed <details> opens when the URL's #fragment points inside it, so links
@@ -422,13 +424,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
         $n = db()->prepare('SELECT * FROM client_notes WHERE id = ? AND client_id = ?');
         $n->execute([$noteId, $id]);
         $note = $n->fetch();
-        if (!$note || !can_edit_note($note, $user)) {
+        if ($note && note_locked($note)) {
+            flash(note_locked_message(), 'error');
+            redirect("client.php?id=$id&tab=notes&addendum_to=$noteId#addnote-h");
+        } elseif (!$note || !can_edit_note($note, $user)) {
             flash('Only the note author or an admin can edit a note.', 'error');
         } else {
             // The note and the homework it creates are saved together, or not at all.
+            // The text it replaces is kept as an earlier version.
             $pdo = db();
             $pdo->beginTransaction();
             try {
+                $kept = note_keep_version($pdo, $noteId, (int)$user['id']);
+                if (is_string($kept)) {
+                    $pdo->rollBack();
+                    flash($kept, 'error');
+                    redirect("client.php?id=$id&tab=notes&addendum_to=$noteId#addnote-h");
+                }
                 $pdo->prepare('UPDATE client_notes SET note_type = ?, note_format = ?, subject = ?, body = ?, birp_behavior = ?, birp_intervention = ?, birp_response = ?, birp_plan = ?, updated_at = NOW(), updated_by = ? WHERE id = ?')
                     ->execute([$type, $noteFormat, $subject, $body, $birpCols[0], $birpCols[1], $birpCols[2], $birpCols[3], $user['id'], $noteId]);
                 // The generator can run on a note being edited too: its checked
@@ -455,14 +467,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
                 redirect("client.php?id=$id&tab=notes");
             }
         }
+        // An addendum is a new note attached to an earlier one (the way a locked note is corrected).
+        $addendumTo = note_addendum_parent($_POST['addendum_to'] ?? null, $id);
+        if (is_string($addendumTo)) {
+            flash($addendumTo, 'error');
+            redirect("client.php?id=$id&tab=notes");
+        }
+        if ($addendumTo !== null) $type = 'Addendum';
         // Homework captured by the note generator: create each checked item on the
         // chosen training track so it appears in the client's portal automatically.
         // The note and its homework are saved together, or not at all.
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $pdo->prepare('INSERT INTO client_notes (client_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-                ->execute([$id, $type, $noteFormat, $subject, $body, $birpCols[0], $birpCols[1], $birpCols[2], $birpCols[3], $user['id'], $idem]);
+            $pdo->prepare('INSERT INTO client_notes (client_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key, addendum_to) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+                ->execute([$id, $type, $noteFormat, $subject, $body, $birpCols[0], $birpCols[1], $birpCols[2], $birpCols[3], $user['id'], $idem, $addendumTo]);
             $added = save_note_homework($id, (int)($_POST['hw_track'] ?? 0), $_POST, (int)$user['id']);
             $pdo->commit();
         } catch (Throwable $e) {
@@ -474,8 +493,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
             }
             $noteSaveFailed($e, 0);
         }
-        audit($user['id'], 'note.add', 'client', $id, $subject);
-        flash('Note added.' . ($added ? ' ' . $added . ' homework item' . ($added === 1 ? '' : 's') . ' added to the client portal.' : ''));
+        audit($user['id'], $addendumTo !== null ? 'note.addendum' : 'note.add', 'client', $id, $subject . ($addendumTo !== null ? ' (addendum to note #' . $addendumTo . ')' : ''));
+        flash(($addendumTo !== null ? 'Addendum added.' : 'Note added.') . ($added ? ' ' . $added . ' homework item' . ($added === 1 ? '' : 's') . ' added to the client portal.' : ''));
     }
     redirect("client.php?id=$id&tab=notes");
 }
@@ -838,6 +857,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['withdraw_consent'])) 
     redirect("client.php?id=$id#demo-h");
 }
 
+/* ---- POST: releases of information (3.0.36): email one to sign, record a paper one,
+   or record that one was withdrawn. Valid for 1 year from signing. ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['send_release']) || isset($_POST['record_release']))) {
+    $relMethod = isset($_POST['record_release']) ? 'Paper' : 'Email';
+    [$relErrs, $relIn] = release_input($_POST, $relMethod);
+    if ($relErrs) {
+        keep_input();
+        keep_field_errors($relErrs);
+        redirect("client.php?id=$id&release_method=" . strtolower($relMethod) . '#release-form');
+    }
+    $relKey = web_idem_key($_POST);
+    if (web_once_get($relKey) !== null) {
+        flash('This release was already ' . ($relMethod === 'Paper' ? 'recorded' : 'emailed') . ' (the form was sent twice), so it was saved once.', 'info');
+        redirect("client.php?id=$id#releases-h");
+    }
+    if ($relMethod === 'Paper') {
+        $relId = release_record_paper($id, $relIn, (int)$user['id']);
+        web_once_set($relKey, $relId);
+        flash('Paper release recorded for ' . $relIn['recipient_name'] . '. It is valid until ' . fmt_date(date('Y-m-d', strtotime($relIn['signed_on'] . ' +' . release_validity_days() . ' days'))) . '.');
+    } else {
+        $sent = release_send($id, $relIn, (int)$user['id']);
+        if ($sent['error'] !== null) {
+            keep_input();
+            flash($sent['error'], 'error');
+            redirect("client.php?id=$id&release_method=email#release-form");
+        }
+        web_once_set($relKey, $sent['id']);
+        flash('The release form was emailed to ' . $relIn['signer_name'] . ' to sign.');
+    }
+    redirect("client.php?id=$id#releases-h");
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['withdraw_release'])) {
+    if (release_withdraw((int)($_POST['release_id'] ?? 0), $id, (int)$user['id'])) {
+        flash('Release recorded as withdrawn. Nothing more is shared under it.');
+    } else {
+        flash('That release was already withdrawn, or is not on this client.', 'error');
+    }
+    redirect("client.php?id=$id#releases-h");
+}
+
 /* ---- Data for tabs ---- */
 // Notes filter: 'all' (default) or 'general' (hide notes tied to a track).
 $noteFilter = ($_GET['nf'] ?? '') === 'general' ? 'general' : 'all';
@@ -881,6 +940,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($_POST['ai_do'] ?? '', ['g
     }
 }
 $noteIn = fn(string $k): string => is_string($noteSrc[$k] ?? null) ? $noteSrc[$k] : '';
+// Earlier versions of edited notes, and the addenda attached to each note (3.0.36).
+$noteVersions = note_versions(array_column($notes, 'id'));
+$noteAddenda = note_addenda($id);
+$noteSubjects = [];
+foreach ($notes as $n) $noteSubjects[(int)$n['id']] = (string)$n['subject'];
+// An addendum being written: ?addendum_to=N, or the kept form after an error.
+$addendumParent = null;
+if ($editNote === null) {
+    $apId = (int)(is_string($_GET['addendum_to'] ?? null) ? $_GET['addendum_to'] : $noteIn('addendum_to'));
+    if ($apId > 0) {
+        $ap = db()->prepare('SELECT id, subject, created_at FROM client_notes WHERE id = ? AND client_id = ?');
+        $ap->execute([$apId, $id]);
+        $addendumParent = $ap->fetch() ?: null;
+    }
+}
 
 $assessments = db()->prepare('SELECT a.*, u.name AS author FROM tech_assessments a LEFT JOIN users u ON u.id = a.created_by WHERE a.client_id = ? ORDER BY a.assessment_date DESC');
 $assessments->execute([$id]); $assessments = $assessments->fetchAll();
@@ -1244,6 +1318,77 @@ if ($hasA11y): ?>
     </dl>
   </section>
 </div>
+<?php
+$releases = client_releases($id);
+// Ticked boxes come back after a refused save (keep_input() keeps lists).
+$relInfoKept = isset($GLOBALS['OLD_INPUT']['signer_name']) ? old_in_list('info') : null;
+$relMethodOpen = in_array($_GET['release_method'] ?? '', ['email', 'paper'], true) ? $_GET['release_method'] : '';
+$relDefaultSigner = !empty($client['guardian_name']) && !empty($client['dob']) && $client['dob'] > date('Y-m-d', strtotime('-18 years'));
+?>
+<section class="card" aria-labelledby="releases-h">
+  <h2 id="releases-h">Releases of information</h2>
+  <?php if (!$releases): ?><p class="muted">No release of information on file. A release lets you share this client's information with one named recipient for 1 year.</p>
+  <?php else: ?>
+  <ul>
+  <?php foreach ($releases as $rel): $rs = release_status($rel); ?>
+    <li><strong><?= h($rel['recipient_name']) ?></strong> (<?= h($rel['recipient_type']) ?>):
+      <span class="badge <?= $rs === 'Current' ? 'badge-closed' : ($rs === 'Awaiting signature' ? 'badge-pending' : 'badge-hold') ?>"><?= h($rs) ?></span>
+      <?php if ($rs === 'Current'): ?>signed by <?= h($rel['signed_name']) ?> on <?= fmt_date($rel['signed_at']) ?><?= $rel['method'] === 'Paper' ? ' (paper)' : '' ?>, valid until <?= fmt_date($rel['expires_on']) ?>.
+      <?php elseif ($rs === 'Expired'): ?>expired on <?= fmt_date($rel['expires_on']) ?>.
+      <?php elseif ($rs === 'Withdrawn'): ?>on <?= fmt_date($rel['withdrawn_at']) ?>.
+      <?php else: ?>emailed to <?= h($rel['signer_name']) ?> on <?= fmt_date($rel['sent_at']) ?>.<?php endif; ?>
+      Covers: <?= h($rel['info_scope']) ?>. Purpose: <?= h($rel['purpose']) ?>.
+      <?php if (in_array($rs, ['Current', 'Awaiting signature'], true)): ?>
+      <form method="post" action="client.php?id=<?= $id ?>" class="inline-form"><?= csrf_field() ?>
+        <input type="hidden" name="release_id" value="<?= (int)$rel['id'] ?>">
+        <button type="submit" name="withdraw_release" value="1" class="btn btn-secondary btn-sm"
+          onclick="return confirm(<?= h(json_encode('Record that the release for ' . $rel['recipient_name'] . ' is withdrawn? Nothing more is shared under it.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">Record withdrawn<span class="visually-hidden">: release for <?= h($rel['recipient_name']) ?></span></button>
+      </form>
+      <?php endif; ?>
+    </li>
+  <?php endforeach; ?>
+  </ul>
+  <?php endif; ?>
+  <details id="release-form"<?= $relMethodOpen !== '' ? ' open' : '' ?>>
+    <summary>Request or record a release</summary>
+    <form method="post" action="client.php?id=<?= $id ?>" class="stacked" novalidate>
+      <?= csrf_field() ?><?= web_idem_field() ?>
+      <?= form_error_summary(['signer_name' => 'Signer name', 'signer_email' => 'Signer email', 'recipient_type' => 'Recipient type',
+          'recipient_name' => 'Recipient', 'recipient_email' => 'Recipient email', 'info' => 'Information covered', 'purpose' => 'Purpose', 'signed_on' => 'Date signed'],
+          ['signer_name' => 'rel_signer', 'signer_email' => 'rel_semail', 'recipient_type' => 'rel_rtype', 'recipient_name' => 'rel_rname',
+          'recipient_email' => 'rel_remail', 'info' => 'rel_info0', 'purpose' => 'rel_purpose', 'signed_on' => 'rel_signed']) ?>
+      <p class="hint">Fields marked * are required. Email it to sign, or record one signed on paper.</p>
+      <?php $relRole = old_in('signer_role', $relDefaultSigner ? 'Guardian' : 'Client'); ?>
+      <div class="field"><label for="rel_role">Who signs</label>
+        <select id="rel_role" name="signer_role"><?= select_options(['Client', 'Guardian'], $relRole) ?></select></div>
+      <div class="field"><label for="rel_signer">Signer name <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+        <input type="text" id="rel_signer" name="signer_name" maxlength="120" value="<?= h(old_in('signer_name', $relRole === 'Guardian' ? (string)($client['guardian_name'] ?? '') : (string)$client['name'])) ?>" <?= field_aria('signer_name') ?>><?= field_error('signer_name') ?></div>
+      <div class="field"><label for="rel_semail">Signer email (required to email it)</label>
+        <input type="email" id="rel_semail" name="signer_email" maxlength="190" value="<?= h(old_in('signer_email', $relRole === 'Guardian' ? (string)($client['guardian_email'] ?? '') : (string)($client['email'] ?? ''))) ?>" <?= field_aria('signer_email') ?>><?= field_error('signer_email') ?></div>
+      <div class="field"><label for="rel_rtype">Recipient type <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+        <select id="rel_rtype" name="recipient_type" <?= field_aria('recipient_type') ?>><?= select_options(RELEASE_RECIPIENT_TYPES, old_in('recipient_type', 'VR counselor and agency')) ?></select><?= field_error('recipient_type') ?></div>
+      <div class="field"><label for="rel_rname">Recipient name and organisation <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+        <input type="text" id="rel_rname" name="recipient_name" maxlength="190" value="<?= h(old_in('recipient_name', trim(($client['counselor_name'] ?? '') . (!empty($client['counselor_agency']) ? ', ' . $client['counselor_agency'] : ''), ', '))) ?>" <?= field_aria('recipient_name') ?>><?= field_error('recipient_name') ?></div>
+      <div class="field"><label for="rel_remail">Recipient email</label>
+        <input type="email" id="rel_remail" name="recipient_email" maxlength="190" value="<?= h(old_in('recipient_email', (string)($client['counselor_email'] ?? ''))) ?>" <?= field_aria('recipient_email') ?>><?= field_error('recipient_email') ?></div>
+      <fieldset <?= has_field_error('info') ? 'aria-describedby="err-info"' : '' ?>><legend>Information covered <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></legend>
+        <?php foreach (RELEASE_INFO_ITEMS as $ii => $item): $checked = $relInfoKept !== null ? in_array($item, $relInfoKept, true) : $ii < 2; ?>
+        <label><input type="checkbox" id="rel_info<?= $ii ?>" name="info[]" value="<?= h($item) ?>"<?= $checked ? ' checked' : '' ?>> <?= h($item) ?></label>
+        <?php endforeach; ?>
+        <?= field_error('info') ?>
+      </fieldset>
+      <div class="field"><label for="rel_other">Other information</label>
+        <input type="text" id="rel_other" name="info_other" maxlength="200" value="<?= h(old_in('info_other')) ?>"></div>
+      <div class="field"><label for="rel_purpose">Purpose <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+        <input type="text" id="rel_purpose" name="purpose" maxlength="255" value="<?= h(old_in('purpose', 'To plan and report on assistive technology services')) ?>" <?= field_aria('purpose') ?>><?= field_error('purpose') ?></div>
+      <div class="field"><label for="rel_signed">Date signed (paper releases only)</label>
+        <input type="date" id="rel_signed" name="signed_on" value="<?= h(old_in('signed_on')) ?>" <?= field_aria('signed_on') ?>><?= field_error('signed_on') ?></div>
+      <button type="submit" name="send_release" value="1" class="btn btn-primary">Email release to sign</button>
+      <button type="submit" name="record_release" value="1" class="btn btn-secondary">Record paper release</button>
+    </form>
+  </details>
+  <?= details_open_on_hash('release-form') ?>
+</section>
 <section class="card" aria-labelledby="tr-sum-h">
   <h2 id="tr-sum-h">Training tracks summary</h2>
   <?php if (!$tracks): ?><p class="muted">No training tracks yet. <a href="track_edit.php?client_id=<?= $id ?>">Add a training track</a>.</p>
@@ -1266,7 +1411,7 @@ if ($hasA11y): ?>
 <?php elseif ($tab === 'notes'):
 // The notes are what people read first; the note form stays collapsed unless a
 // note is being edited, was refused or restored, or an AI button just filled it.
-$noteFormOpen = $editNote || $noteSrc !== null || $aiSections !== null || $aiNoteDraft !== null || $aiHomework !== null
+$noteFormOpen = $editNote || $addendumParent || $noteSrc !== null || $aiSections !== null || $aiNoteDraft !== null || $aiHomework !== null
     || isset($_GET['new_note'])
     || array_filter(array_keys(form_errors()), fn($k) => in_array($k, ['subject', 'note_content'], true) || str_starts_with((string)$k, 'hw_due_'));
 // The newest 20 notes, unless all were asked for or one is being edited.
@@ -1276,11 +1421,14 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
 ?>
 <h2 id="notes-h">Notes (<?= $notesTotal ?>)</h2>
 <section class="card" aria-labelledby="addnote-h">
-  <h3 class="visually-hidden"><?= $editNote ? 'Edit note' : 'Add a note' ?></h3>
+  <?php $noteFormTitle = $editNote ? 'Edit note' : ($addendumParent ? 'Add an addendum' : 'Add a note'); ?>
+  <h3 class="visually-hidden"><?= $noteFormTitle ?></h3>
   <details id="addnote"<?= $noteFormOpen ? ' open' : '' ?>>
-  <summary accesskey="n" id="addnote-h"><?= $editNote ? 'Edit note' : 'Add a note' ?></summary>
+  <summary accesskey="n" id="addnote-h"><?= $noteFormTitle ?></summary>
   <?php if ($editNote): ?>
-    <p class="muted">Editing “<?= h($editNote['subject']) ?>” — the note will be marked as edited. <a href="<?= $tabUrl('notes') ?>">Cancel and write a new note instead</a>.</p>
+    <p class="muted">Editing “<?= h($editNote['subject']) ?>” — the note will be marked as edited, and the current text is kept as an earlier version. <a href="<?= $tabUrl('notes') ?>">Cancel and write a new note instead</a>.</p>
+  <?php elseif ($addendumParent): ?>
+    <p class="muted">An addendum to “<?= h($addendumParent['subject']) ?>” (<?= fmt_date($addendumParent['created_at']) ?>). The original note stays as it is. <a href="<?= $tabUrl('notes') ?>">Cancel and write a new note instead</a>.</p>
   <?php else: ?>
     <p class="muted">General progress notes live here at the client level — training-session logs belong on the specific training track.</p>
   <?php endif; ?>
@@ -1293,16 +1441,16 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     echo form_error_summary($noteSumLabels, $noteSumAnchors); ?>
     <p class="hint">Fields marked * are required.</p>
     <?php if ($editNote): ?><input type="hidden" name="note_id" value="<?= (int)$editNote['id'] ?>">
-    <?php else: // The same key while this note is being written (a refused save, an AI button), a new one after it is saved. ?>
+    <?php else: if ($addendumParent): ?><input type="hidden" name="addendum_to" value="<?= (int)$addendumParent['id'] ?>"><?php endif; // The same key while this note is being written (a refused save, an AI button), a new one after it is saved. ?>
     <input type="hidden" name="idem_key" value="<?= h(preg_match('/^[0-9a-fA-F-]{36}$/D', $noteIn('idem_key')) ? $noteIn('idem_key') : new_note_key()) ?>">
     <?php endif; ?>
     <div class="field">
       <label for="note_type">Note type</label>
-      <select id="note_type" name="note_type"><?= select_options(NOTE_TYPES, $noteSrc !== null ? ($noteIn('note_type') ?: null) : ($editNote['note_type'] ?? null)) ?></select>
+      <select id="note_type" name="note_type"><?= select_options(NOTE_TYPES, $noteSrc !== null ? ($noteIn('note_type') ?: null) : ($editNote['note_type'] ?? ($addendumParent ? 'Addendum' : null))) ?></select>
     </div>
     <div class="field">
       <label for="subject">Subject <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-      <input type="text" id="subject" name="subject" required maxlength="255" value="<?= h($noteSrc !== null ? $noteIn('subject') : ($editNote['subject'] ?? '')) ?>" <?= field_aria('subject') ?>>
+      <input type="text" id="subject" name="subject" required maxlength="255" value="<?= h($noteSrc !== null ? $noteIn('subject') : ($editNote['subject'] ?? ($addendumParent ? mb_substr('Addendum: ' . $addendumParent['subject'], 0, 255) : ''))) ?>" <?= field_aria('subject') ?>>
       <?= field_error('subject') ?>
     </div>
     <?php
@@ -1407,7 +1555,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
       <?php endif; ?>
     </fieldset>
     <?php endif; ?>
-    <button type="submit" name="add_note" value="1" class="btn btn-primary"><?= $editNote ? 'Save changes' : 'Save note' ?></button>
+    <button type="submit" name="add_note" value="1" class="btn btn-primary"><?= $editNote ? 'Save changes' : ($addendumParent ? 'Save addendum' : 'Save note') ?></button>
     <?php if (ai_feature_enabled('draft')): ?>
     <button type="submit" name="ai_do" value="generate" class="btn btn-secondary" formnovalidate>Generate structured note</button>
     <button type="submit" name="ai_do" value="format" class="btn btn-secondary" formnovalidate>Format with AI</button>
@@ -1471,8 +1619,26 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     <?php else: ?>
     <p style="white-space: pre-wrap;"><?= h($n['body']) ?></p>
     <?php endif; ?>
+    <?php $nid = (int)$n['id']; ?>
+    <?php if (!empty($n['addendum_to'])): ?>
+      <p>Addendum to <a href="#note-<?= (int)$n['addendum_to'] ?>"><?= h($noteSubjects[(int)$n['addendum_to']] ?? 'an earlier note') ?></a>.</p>
+    <?php endif; ?>
+    <?php if (!empty($noteAddenda[$nid])): ?>
+      <p>Addenda: <?php foreach ($noteAddenda[$nid] as $ai => $ad): ?><?= $ai ? ', ' : '' ?><a href="#note-<?= (int)$ad['id'] ?>"><?= h($ad['subject']) ?></a> (<?= fmt_date($ad['created_at']) ?>)<?php endforeach; ?>.</p>
+    <?php endif; ?>
+    <?php if (!empty($noteVersions[$nid])): $nv = $noteVersions[$nid]; ?>
+      <details><summary>Earlier versions (<?= count($nv) ?>)<span class="visually-hidden"> of note: <?= h($n['subject']) ?></span></summary>
+      <?php foreach ($nv as $v): ?>
+        <h4><?= h($v['subject']) ?></h4>
+        <p class="muted">Written <?= fmt_datetime($v['version_written_at']) ?><?= $v['written_by_name'] ? ' by ' . h($v['written_by_name']) : '' ?> <span aria-hidden="true">·</span> replaced <?= fmt_datetime($v['replaced_at']) ?><?= $v['replaced_by_name'] ? ' by ' . h($v['replaced_by_name']) : '' ?> <span aria-hidden="true">·</span> <?= h($v['note_type']) ?></p>
+        <p style="white-space: pre-wrap;"><?= h($v['body']) ?></p>
+      <?php endforeach; ?>
+      </details>
+    <?php endif; ?>
     <?php if (can_edit_note($n, $user)): ?>
-      <p><a class="btn btn-secondary btn-sm" href="<?= $tabUrl('notes') ?>&amp;edit_note=<?= (int)$n['id'] ?>#addnote-h">Edit<span class="visually-hidden"> note: <?= h($n['subject']) ?></span></a></p>
+      <p><a class="btn btn-secondary btn-sm" href="<?= $tabUrl('notes') ?>&amp;edit_note=<?= $nid ?>#addnote-h">Edit<span class="visually-hidden"> note: <?= h($n['subject']) ?></span></a></p>
+    <?php elseif (note_locked($n)): // past the edit window: corrections go in an addendum ?>
+      <p><a class="btn btn-secondary btn-sm" href="<?= $tabUrl('notes') ?>&amp;addendum_to=<?= $nid ?>#addnote-h">Add addendum<span class="visually-hidden"> to note: <?= h($n['subject']) ?></span></a></p>
     <?php endif; ?>
   </article>
 <?php endforeach; ?>

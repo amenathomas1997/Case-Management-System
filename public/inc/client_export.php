@@ -88,5 +88,5 @@ const CLIENT_EXPORT_TABLES = [
     'tasks', 'client_scored_assessments', 'access_bookings',
     'client_competency', 'equipment_reservations',
     'portal_requests', 'worksite_assessments', 'cohort_members', 'cohort_attendance',
-    'client_closures',
+    'client_closures', 'client_note_revisions', 'client_releases',
 ];

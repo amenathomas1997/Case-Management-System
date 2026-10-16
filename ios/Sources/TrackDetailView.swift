@@ -118,6 +118,8 @@ struct TrackDetailView: View {
     @State private var trackClientId: Int?
     @State private var showingTrackNote = false
     @State private var editingTrackNote: Note?
+    /// A locked note being corrected with an addendum (3.0.36).
+    @State private var addendumTrackNote: Note?
     @State private var expenses: [TrackExpense] = []
     @State private var expensesLoaded = false
     /// The expense waiting for the person to confirm its deletion.
@@ -282,6 +284,14 @@ struct TrackDetailView: View {
                                     }
                                     .buttonStyle(.borderless)
                                     .accessibilityLabel("Edit note: \(note.subject)")
+                                } else if note.locked {
+                                    Button { addendumTrackNote = note } label: {
+                                        Image(systemName: "text.badge.plus")
+                                            .frame(minWidth: 44, minHeight: 44)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .accessibilityLabel("Add addendum to note: \(note.subject)")
                                 }
                             }
                             if mayTruncate(note.body, lines: 6, accessibilitySize: typeSize.isAccessibilitySize) {
@@ -298,6 +308,8 @@ struct TrackDetailView: View {
                         .accessibilityActions {
                             if note.canEdit {
                                 Button("Edit note") { editingTrackNote = note }
+                            } else if note.locked {
+                                Button("Add addendum") { addendumTrackNote = note }
                             }
                             if mayTruncate(note.body, lines: 6, accessibilitySize: typeSize.isAccessibilitySize) {
                                 Button(open ? "Show less" : "Show full note") {
@@ -456,6 +468,13 @@ struct TrackDetailView: View {
         .sheet(item: $editingTrackNote, onDismiss: announceSheetResult) { note in
             if let cid = trackClientId {
                 AddNoteSheet(clientId: cid, tracks: [track], existing: note) { message in
+                    sheetDone(message); Task { await load() }
+                }
+            }
+        }
+        .sheet(item: $addendumTrackNote, onDismiss: announceSheetResult) { note in
+            if let cid = trackClientId {
+                AddNoteSheet(clientId: cid, tracks: [track], existing: nil, addendumTo: note) { message in
                     sheetDone(message); Task { await load() }
                 }
             }

@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.36' => [
+        'Case notes lock 30 days after they are written. A later correction is added as an addendum beside the original, and every earlier version of an edited note is kept and shown under the note.',
+        'Adult clients can sign their own release of information, by email or on paper, naming who receives what and why. It is valid for one year. The client page, the Compliance page and the report screens show when no current release covers a recipient. Email subjects no longer carry client names, and Administration has a Vendor agreements page.',
+    ],
     '3.0.35' => [
         'A referral that will not become a client is closed with a reason, and the person who sent it is emailed the outcome. A referral for someone already on file is attached to their record (a closed record is reopened), so no second record is made.',
         'Closing a case asks why it closed and, if you know it, the employment or independence outcome, and lists anything still open on the record. A due progress report now opens a task for you to add a short narrative and send it.',

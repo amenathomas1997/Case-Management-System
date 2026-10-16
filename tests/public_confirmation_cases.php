@@ -6,6 +6,7 @@ putenv('CMS_TEST_ANON=1'); putenv('CMS_TEST_SESSION');
 $cases=[
  ['ack','report_acks','acked_at',['confirm'=>'1'],"INSERT INTO report_acks(client_id,track_id,token,sent_to) VALUES(1,1,?,'test@example.invalid')"],
  ['consent','consent_forms','signed_at',['signature'=>'Synthetic Guardian'],"INSERT INTO consent_forms(client_id,guardian_name,guardian_email,token) VALUES(1,'Synthetic Guardian','test@example.invalid',?)"],
+ ['release','client_releases','signed_at',['signature'=>'Synthetic Signer'],"INSERT INTO client_releases(client_id,signer_name,signer_email,recipient_type,recipient_name,info_scope,purpose,token) VALUES(1,'Synthetic Signer','test@example.invalid','Employer','Synthetic employer','Progress reports and attendance','Synthetic purpose',?)"],
  ['survey','surveys','completed_at',['satisfaction'=>'8','goals_met'=>'9','comments'=>'Synthetic feedback'],"INSERT INTO surveys(client_id,token) VALUES(1,?)"],
 ];
 foreach($cases as [$route,$table,$column,$post,$insert]){

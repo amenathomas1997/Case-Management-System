@@ -73,11 +73,7 @@ if (!$form) {
  *  does not speak the period in "Mary J. Smith" or the apostrophe in "O'Brien",
  *  and a US keyboard types "Jose" for "José"), so only the letters must match. */
 function consent_name_key(string $s): string {
-    if (class_exists('Normalizer')) {
-        $decomposed = Normalizer::normalize($s, Normalizer::FORM_D);
-        if (is_string($decomposed)) $s = preg_replace('/\p{Mn}+/u', '', $decomposed) ?? $s;
-    }
-    return preg_replace('/[^\p{L}\p{N}]+/u', '', mb_convert_case($s, MB_CASE_FOLD, 'UTF-8')) ?? '';
+    return typed_name_key($s); // inc/records_privacy.php, shared with release.php
 }
 
 // keep_input() never keeps a field named like "signature" (its credential filter),

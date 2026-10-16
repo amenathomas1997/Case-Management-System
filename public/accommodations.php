@@ -171,6 +171,8 @@ if (isset($_GET['id'])) {
     <p class="muted">For <a href="client.php?id=<?= (int)$r['client_id'] ?>"><?= h($r['client_name']) ?></a>
       <?= $r['employer'] ? ' · ' . h($r['employer']) : '' ?><?= $r['job_title'] ? ' · ' . h($r['job_title']) : '' ?></p>
     <div class="page-actions"><a class="btn btn-secondary btn-sm" href="accommodations.php?report=<?= $id ?>">Download recommendation report</a></div>
+    <?php // The report is for the employer: said here when no current release covers one (3.0.36). ?>
+    <?php if ($relWarn = release_warning((int)$r['client_id'], 'Employer')): ?><p class="alert alert-info"><?= h($relWarn) ?></p><?php endif; ?>
 
     <form method="post" action="accommodations.php" class="stacked" novalidate><?= csrf_field() ?>
       <?= form_error_summary(['employer' => 'Employer', 'job_title' => 'Job title', 'worksite_location' => 'Worksite location',

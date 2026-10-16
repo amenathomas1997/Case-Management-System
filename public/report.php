@@ -191,6 +191,9 @@ page_header('Training report', $user, 'clients');
 
 <section class="card" aria-labelledby="send-h">
   <h2 id="send-h">Email this report</h2>
+  <?php if ($relWarn = release_warning((int)$report['track']['cid'], 'VR counselor and agency', (string)($t['counselor_email'] ?? ''))): ?>
+  <p class="alert alert-info"><?= h($relWarn) ?></p>
+  <?php endif; ?>
   <form method="post" action="report.php?track=<?= $trackId ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
     <input type="hidden" name="send_token" value="<?= h($sendToken) ?>">

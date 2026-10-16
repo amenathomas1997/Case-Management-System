@@ -171,6 +171,41 @@ foreach ($cf->fetchAll() as $f) {
 $noConsent = fn(array $f): int => in_array($f['kind'], ['Expired', 'Withdrawn'], true) ? 0 : 1;
 usort($consentRisk, fn($a, $b) => [$noConsent($a), $a['when']] <=> [$noConsent($b), $b['when']]);
 
+/* ---- Releases of information (3.0.36) ----
+   Per open client: the release for each recipient that is expiring within 30 days,
+   expired or withdrawn (until a newer one for that recipient is current), and the open
+   clients with no current release and no guardian consent in force at all. */
+$releaseRisk = []; $noRelease = [];
+try {
+    $rq = db()->prepare("SELECT r.*, c.name AS client FROM client_releases r JOIN clients c ON c.id = r.client_id
+        WHERE c.archived_at IS NULL AND c.status NOT LIKE 'Closed%' AND r.signed_at IS NOT NULL" . $scopeSql . "
+        ORDER BY r.client_id, r.signed_at DESC, r.id DESC");
+    $rq->execute($scopeArg);
+    $seenRecipient = [];
+    foreach ($rq->fetchAll() as $r) {
+        $k = $r['client_id'] . '|' . $r['recipient_type'] . '|' . mb_strtolower($r['recipient_name']);
+        if (isset($seenRecipient[$k])) continue; // only the newest signed release per recipient
+        $seenRecipient[$k] = true;
+        $st = release_status($r);
+        if ($st === 'Withdrawn') { $r['kind'] = 'Withdrawn'; $r['when'] = substr($r['withdrawn_at'], 0, 10); }
+        elseif ($st === 'Expired') { $r['kind'] = 'Expired'; $r['when'] = $r['expires_on']; }
+        elseif ($r['expires_on'] !== null && $r['expires_on'] <= $soon) { $r['kind'] = 'Expiring'; $r['when'] = $r['expires_on']; }
+        else continue;
+        $releaseRisk[] = $r;
+    }
+    usort($releaseRisk, fn($a, $b) => [$a['kind'] === 'Expiring' ? 1 : 0, $a['when']] <=> [$b['kind'] === 'Expiring' ? 1 : 0, $b['when']]);
+    $nq = db()->prepare("SELECT c.id AS cid, c.name AS client FROM clients c
+        WHERE c.archived_at IS NULL AND c.status NOT LIKE 'Closed%'" . $scopeSql . "
+          AND NOT EXISTS (SELECT 1 FROM client_releases r WHERE r.client_id = c.id AND r.signed_at IS NOT NULL AND r.withdrawn_at IS NULL AND r.expires_on >= CURDATE())
+          AND NOT EXISTS (SELECT 1 FROM consent_forms f WHERE f.client_id = c.id AND f.signed_at IS NOT NULL AND f.withdrawn_at IS NULL
+              AND f.signed_at > DATE_SUB(NOW(), INTERVAL ? DAY))
+        ORDER BY c.name");
+    $nq->execute(array_merge($scopeArg, [$validDays]));
+    $noRelease = $nq->fetchAll();
+} catch (PDOException $e) {
+    $releaseRisk = []; $noRelease = []; // mig_3.0.36 not run yet
+}
+
 page_header('Compliance', $user, 'compliance');
 ?>
 <h1>Authorization &amp; compliance</h1>
@@ -186,6 +221,7 @@ page_header('Compliance', $user, 'compliance');
   <div class="card stat"><span class="stat-num"><?= can('equipment') ? count($equipDue) : '<span aria-hidden="true">—</span><span class="visually-hidden">Not shown (needs equipment access)</span>' ?></span><span class="stat-label">Equipment service due</span></div>
   <div class="card stat"><span class="stat-num"><?= count(array_filter($authRisk, fn($t) => $t['expired'])) ?></span><span class="stat-label">Expired authorizations</span></div>
   <div class="card stat"><span class="stat-num"><?= count($consentRisk) ?></span><span class="stat-label">Consents to renew</span></div>
+  <div class="card stat"><span class="stat-num"><?= count($releaseRisk) + count($noRelease) ?></span><span class="stat-label">Releases to renew or request</span></div>
   <div class="card stat"><span class="stat-num"><?= $fuDueTotal ?></span><span class="stat-label">Device follow-ups due</span></div>
   <div class="card stat"><span class="stat-num"><?= can('equipment') ? count($loansOverdue) : '<span aria-hidden="true">—</span><span class="visually-hidden">Not shown (needs equipment access)</span>' ?></span><span class="stat-label">Overdue equipment loans</span></div>
 </div>
@@ -332,6 +368,28 @@ page_header('Compliance', $user, 'compliance');
     </tbody>
   </table>
   </div>
+  <?php endif; ?>
+</section>
+<section class="card" aria-labelledby="release-h">
+  <h2 id="release-h">Releases of information (<?= count($releaseRisk) + count($noRelease) ?>)</h2>
+  <p class="muted">An adult client's release is valid for <?= release_validity_days() ?> days. Listed: the newest release for each recipient when it expires within 30 days, has expired or was withdrawn, and open clients with no current release or guardian consent. Request one from the client's page.</p>
+  <?php if (!$releaseRisk && !$noRelease): ?><p class="muted">No releases need attention.</p><?php endif; ?>
+  <?php if ($releaseRisk): ?>
+  <h3>Expiring, expired or withdrawn (<?= count($releaseRisk) ?>)</h3>
+  <ul>
+  <?php foreach ($releaseRisk as $r): ?>
+    <li><a href="client.php?id=<?= (int)$r['client_id'] ?>#releases-h"><?= h($r['client']) ?></a>: <?= h($r['recipient_name']) ?> (<?= h($r['recipient_type']) ?>),
+      <?= ['Withdrawn' => 'withdrawn ', 'Expired' => 'expired ', 'Expiring' => 'expires '][$r['kind']] . fmt_date($r['when']) ?>.</li>
+  <?php endforeach; ?>
+  </ul>
+  <?php endif; ?>
+  <?php if ($noRelease): ?>
+  <h3>No release or consent on file (<?= count($noRelease) ?>)</h3>
+  <ul>
+  <?php foreach ($noRelease as $c): ?>
+    <li><a href="client.php?id=<?= (int)$c['cid'] ?>#releases-h"><?= h($c['client']) ?></a></li>
+  <?php endforeach; ?>
+  </ul>
   <?php endif; ?>
 </section>
 <?php page_footer();

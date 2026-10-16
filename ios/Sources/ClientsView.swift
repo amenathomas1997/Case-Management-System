@@ -121,6 +121,8 @@ struct ClientDetailView: View {
     @State private var error: String?
     @State private var showingNoteSheet = false
     @State private var editingNote: Note?
+    /// A locked note being corrected with an addendum (3.0.36).
+    @State private var addendumNote: Note?
     @State private var showingEditClient = false
     @State private var showingUpload = false
     @State private var showingAISummary = false
@@ -223,6 +225,14 @@ struct ClientDetailView: View {
                     }
                 }
 
+                Section("Releases of information") {
+                    if detail.releases.isEmpty {
+                        Text("No release of information on file. Request one on the website's client page.").font(.callout)
+                    } else {
+                        ForEach(detail.releases) { r in Text(r.summary).font(.callout) }
+                    }
+                }
+
                 Section("Progress tools") {
                     NavigationLink { ScoredAssessmentsView(clientId: clientId) } label: { Label("Scored assessments", systemImage: "list.number") }
                     NavigationLink { CompetencyView(clientId: clientId) } label: { Label("Curriculum & competency", systemImage: "graduationcap") }
@@ -306,6 +316,16 @@ struct ClientDetailView: View {
                                     }
                                     .buttonStyle(.borderless)
                                     .accessibilityLabel("Edit note: \(note.subject)")
+                                } else if note.locked {
+                                    Button {
+                                        addendumNote = note
+                                    } label: {
+                                        Image(systemName: "text.badge.plus")
+                                            .frame(minWidth: 44, minHeight: 44)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .accessibilityLabel("Add addendum to note: \(note.subject)")
                                 }
                             }
                             if mayTruncate(note.body, lines: 6, accessibilitySize: typeSize.isAccessibilitySize) {
@@ -323,6 +343,8 @@ struct ClientDetailView: View {
                         .accessibilityActions {
                             if note.canEdit {
                                 Button("Edit note") { editingNote = note }
+                            } else if note.locked {
+                                Button("Add addendum") { addendumNote = note }
                             }
                             if mayTruncate(note.body, lines: 6, accessibilitySize: typeSize.isAccessibilitySize) {
                                 Button(open ? "Show less" : "Show full note") {
@@ -447,6 +469,12 @@ struct ClientDetailView: View {
         }
         .sheet(item: $editingNote, onDismiss: announceSheetResult) { note in
             AddNoteSheet(clientId: clientId, tracks: detail?.tracks ?? [], existing: note) { message in
+                confirmation = message; sheetResult = message
+                Task { await reload() }
+            }
+        }
+        .sheet(item: $addendumNote, onDismiss: announceSheetResult) { note in
+            AddNoteSheet(clientId: clientId, tracks: detail?.tracks ?? [], existing: nil, addendumTo: note) { message in
                 confirmation = message; sheetResult = message
                 Task { await reload() }
             }
@@ -620,11 +648,13 @@ struct AddNoteSheet: View {
     var tracks: [Track] = []
     var initialTrackId = 0
     let existing: Note?
+    /// A new note written as an addendum to this (locked) note.
+    var addendumTo: Note? = nil
     /// The result to tell the person. The presenter shows it and says it once the sheet has
     /// gone: closing the sheet moves VoiceOver focus, which cut off a message said from here.
     let onSaved: (String) -> Void
 
-    private let noteTypes = ["Case Note", "Phone Call", "Progress Report", "Monthly Summary", "Intake"]
+    private let noteTypes = ["Case Note", "Phone Call", "Progress Report", "Monthly Summary", "Intake", "Addendum"]
     @State private var noteType = "Case Note"
     @State private var noteFormat = "free"
     @State private var subject = ""
@@ -657,7 +687,7 @@ struct AddNoteSheet: View {
     /// A new note's unsaved text is kept on this phone as it is typed (DraftStore), so a forced
     /// sign-in or the app being closed does not lose it. Cleared once it is saved, queued
     /// offline or discarded.
-    private var draftKey: String { "note-\(clientId)" }
+    private var draftKey: String { addendumTo.map { "note-\(clientId)-addendum-\($0.id)" } ?? "note-\(clientId)" }
 
     private func saveDraft() {
         guard existing == nil else { return }
@@ -701,8 +731,11 @@ struct AddNoteSheet: View {
                 || noteType != existing.noteType || noteFormat != (existing.noteFormat ?? "free")
                 || attachTrackId != (existing.trackId ?? 0)
         }
-        return !subject.isEmpty || !body_.isEmpty || sections.contains { !$0.isEmpty } || !messy.isEmpty || !homework.isEmpty
+        return (!subject.isEmpty && subject != addendumSubject) || !body_.isEmpty || sections.contains { !$0.isEmpty } || !messy.isEmpty || !homework.isEmpty
     }
+
+    /// The subject an addendum starts with.
+    private var addendumSubject: String { addendumTo.map { String("Addendum: \($0.subject)".prefix(255)) } ?? "" }
 
     private func cleanup() async {
         aiBusy = true; error = nil
@@ -902,7 +935,7 @@ struct AddNoteSheet: View {
                     } header: { Text("Homework → client portal") }
                 }
             }
-            .navigationTitle(existing == nil ? "Add note" : "Edit note")
+            .navigationTitle(existing != nil ? "Edit note" : (addendumTo != nil ? "Add addendum" : "Add note"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -931,6 +964,11 @@ struct AddNoteSheet: View {
                     body_ = existing.body
                     attachTrackId = existing.trackId ?? 0
                     if let s = existing.sections, s.count == 4 { sections = s }
+                }
+                if let addendumTo, existing == nil {
+                    noteType = "Addendum"
+                    if subject.isEmpty { subject = addendumSubject }
+                    if attachTrackId == 0 { attachTrackId = addendumTo.trackId ?? 0 }
                 }
                 if existing == nil && initialTrackId > 0 {
                     if attachTrackId == 0 { attachTrackId = initialTrackId }
@@ -976,6 +1014,7 @@ struct AddNoteSheet: View {
             } else {
                 payload["client_id"] = clientId
                 payload["idem_key"] = idemKey
+                if let addendumTo { payload["addendum_to"] = addendumTo.id }
                 let kept = homework.filter { $0.include && !$0.title.isEmpty }
                 // Only to an active track the picker offers: the sheet says homework is not
                 // saved otherwise (opened from a completed track, for example).
@@ -1398,5 +1437,15 @@ struct ConsentRequestSheet: View {
             onSent(r.message ?? "Consent form emailed.")
             dismiss()
         } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+    }
+}
+
+extension ClientRelease {
+    /// One line for the client screen's list and for VoiceOver.
+    var summary: String {
+        var line = "\(recipientName), \(recipientType): \(status)"
+        if status == "Current", let e = expiresOn { line += ", valid until \(formatDate(e))" }
+        else if status == "Expired", let e = expiresOn { line += " on \(formatDate(e))" }
+        return line + ". Covers \(infoScope)."
     }
 }

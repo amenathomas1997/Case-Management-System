@@ -132,7 +132,7 @@ foreach ($sessions as $s) {
         . ($current ? '' : "\nThis client is closed or archived, so the client was not reminded. Cancel the session on the Schedule page if it no longer applies.\n")
         . ($emailHeld ? "\nThe client was not emailed this reminder: their email address came from the public referral form and has not been confirmed. "
             . "Confirm it on the client's edit page, and remind the client another way this time.\n" : '');
-    $staffSubject = ucfirst($day) . ': ' . $s['client_name'] . ' — ' . date('g:i A T', $startTs);
+    $staffSubject = ucfirst($day) . ': training session — ' . date('g:i A T', $startTs);
     if ($s['staff_email'] && $staffSees) {
         $anyAddress = true;
         $allSent = send_app_mail($s['staff_email'], $staffSubject, $staffBody) && $allSent;
@@ -144,14 +144,14 @@ foreach ($sessions as $s) {
             . "Cancel it on the Schedule page and book it again with the right instructor if it should go ahead: " . cfg('base_url') . "/schedule.php\n";
         $allSent = ($s['assignee_email']
             ? send_app_mail($s['assignee_email'], $staffSubject, $staffBody . "\n" . $stranded)
-            : notify_admins(ucfirst($day) . "'s session for {$s['client_name']} is booked with staff who no longer have this client",
+            : notify_admins(ucfirst($day) . "'s session is booked with staff who no longer have this client",
                 $staffBody . "\n" . $stranded)) && $allSent;
     } elseif ($s['user_id'] && !$s['active_staff_id']) {
         // The session still belongs to a deactivated (or removed) account, so no
         // staff member would hear about it: the administrators are asked to move it.
         // Any one administrator can act on it, so one successful email is enough.
         $anyAddress = true;
-        $allSent = notify_admins(ucfirst($day) . "'s session for {$s['client_name']} belongs to a deactivated account — reassign it",
+        $allSent = notify_admins(ucfirst($day) . "'s session belongs to a deactivated account — reassign it",
             "A session {$day} is still assigned to a staff account that is no longer active, so no staff member was reminded about it.\n\n"
             . "Client: {$s['client_name']}\nWhen: {$when}{$where}\n\n"
             . "Transfer that account's caseload on its Users page (this moves its upcoming sessions too): " . cfg('base_url') . '/users.php?id=' . (int)$s['user_id'] . "\n"

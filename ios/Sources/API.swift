@@ -182,7 +182,11 @@ struct Note: Decodable, Identifiable {
     var trackId: Int?
     var trackTitle: String?
     var sections: [String]?
-    private enum CodingKeys: String, CodingKey { case id, noteType, subject, body, createdAt, updatedAt, author, editor, canEdit, noteFormat, trackId, trackTitle, sections }
+    /// Past the 30-day edit window (3.0.36): it cannot be edited; an addendum is added instead.
+    var locked = false
+    /// The note this one is an addendum to, if any.
+    var addendumTo: Int?
+    private enum CodingKeys: String, CodingKey { case id, noteType, subject, body, createdAt, updatedAt, author, editor, canEdit, noteFormat, trackId, trackTitle, sections, locked, addendumTo }
     // Tolerant decode: a single note with a null field must not fail the whole client
     // record and blank the detail screen for a VoiceOver user. Only id is required.
     init(from d: Decoder) throws {
@@ -200,6 +204,30 @@ struct Note: Decodable, Identifiable {
         trackId = try? c.decodeIfPresent(Int.self, forKey: .trackId)
         trackTitle = try? c.decodeIfPresent(String.self, forKey: .trackTitle)
         sections = try? c.decodeIfPresent([String].self, forKey: .sections)
+        locked = (try? c.decode(Bool.self, forKey: .locked)) ?? false
+        addendumTo = try? c.decodeIfPresent(Int.self, forKey: .addendumTo)
+    }
+}
+
+/// A release of information (3.0.36): who may receive what, and whether it is in force.
+struct ClientRelease: Decodable, Identifiable {
+    let id: Int
+    let recipientType: String
+    let recipientName: String
+    let status: String
+    let signedName: String?
+    let expiresOn: String?
+    let infoScope: String
+    private enum CodingKeys: String, CodingKey { case id, recipientType, recipientName, status, signedName, expiresOn, infoScope }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        recipientType = (try? c.decode(String.self, forKey: .recipientType)) ?? ""
+        recipientName = (try? c.decode(String.self, forKey: .recipientName)) ?? ""
+        status = (try? c.decode(String.self, forKey: .status)) ?? ""
+        signedName = try? c.decodeIfPresent(String.self, forKey: .signedName)
+        expiresOn = try? c.decodeIfPresent(String.self, forKey: .expiresOn)
+        infoScope = (try? c.decode(String.self, forKey: .infoScope)) ?? ""
     }
 }
 
@@ -250,13 +278,16 @@ struct ClientDetail: Decodable {
     /// All of the client's notes; `notes` holds the newest 50 (older ones come from
     /// notes_offset). nil from a server that does not report it.
     let notesTotal: Int?
-    private enum CodingKeys: String, CodingKey { case client, notes, tracks, notesTotal }
+    /// Releases of information, newest first ([] from an older server).
+    var releases: [ClientRelease] = []
+    private enum CodingKeys: String, CodingKey { case client, notes, tracks, notesTotal, releases }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         client = try c.decode(ClientInfo.self, forKey: .client)
         notes = try c.decode([Note].self, forKey: .notes)
         tracks = try c.decode([Track].self, forKey: .tracks)
         notesTotal = try? c.decodeIfPresent(Int.self, forKey: .notesTotal)
+        releases = (try? c.decodeIfPresent([ClientRelease].self, forKey: .releases)) ?? []
     }
 }
 

@@ -25,6 +25,8 @@ const STAGING_SCRUB_KEEP = [
     'audit_log' => ['action', 'entity'],
     'client_documents' => ['path'],
     'client_notes' => ['note_format', 'idem_key'],
+    'client_note_revisions' => ['note_type', 'note_format'],
+    'client_releases' => ['signer_role', 'recipient_type', 'method'],
     'client_status_history' => ['old_status', 'new_status'],
     'client_closures' => ['status', 'reason'],
     'clients' => ['a11y_format', 'a11y_primary_tech', 'a11y_contact', 'preferred_language', 'counselor_agency'],
@@ -59,6 +61,8 @@ const STAGING_SCRUB_KEEP = [
     'training_tracks' => ['rsa_category', 'funding_agency'],
     'trash' => ['entity'],
     'users' => ['name', 'email'],
+    // The organisation's own vendor list: no client information.
+    'vendor_agreements' => ['vendor', 'service', 'client_info', 'agreement_status', 'notes'],
     'work_logs' => ['service_type', 'rsa_category', 'signature_path', 'idem_key'],
     'worksite_assessments' => ['status'],
 ];
@@ -99,6 +103,7 @@ function staging_scrub(PDO $db): array
         "equipment_loans" => ["notes" => "NULL"],
         "consent_forms" => ["guardian_name" => "CONCAT(\"Guardian \", client_id)", "guardian_email" => "CONCAT(\"guardian\", client_id, \"@example.invalid\")",
             "signed_name" => "IF(signed_name IS NULL, NULL, CONCAT(\"Guardian \", client_id))", "sign_ip" => "NULL", "token" => $token],
+        "client_releases" => ["token" => "IF(token IS NULL, NULL, $token)", "sign_ip" => "NULL"],
         "report_acks" => ["sent_to" => "CONCAT(\"counselor\", client_id, \"@example.invalid\")", "ack_ip" => "NULL", "token" => $token],
         "audit_log" => ["ip" => "NULL"],
         "trash" => ["payload" => "\"{}\""],

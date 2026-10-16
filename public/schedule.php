@@ -518,7 +518,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
             cfg('mail_from'), $staff['email'], $occurrences, $meetingUrl ?? ''
         );
         $sent = send_app_mail_attach($staff['email'],
-            ($isRemote ? 'Remote session' : 'Session') . ($repeatWeeks > 1 ? ' series' : '') . ' scheduled: ' . $clientName . ' — ' . date('D, M j g:i A T', $startTs),
+            ($isRemote ? 'Remote session' : 'Session') . ($repeatWeeks > 1 ? ' series' : '') . ' scheduled — ' . date('D, M j g:i A T', $startTs),
             "A " . ($isRemote ? 'remote ' : '') . "training session{$seriesNote} has been scheduled.\n\nClient: {$clientName}\nWhen: " . date('l, F j, Y g:i A T', $startTs)
             . ' to ' . date('g:i A T', $endTs)
             . ($isRemote ? "\nFormat: Remote / telepractice" . ($meetingUrl ? "\nJoin online: {$meetingUrl}" : '') : ($location !== '' ? "\nWhere: {$location}" : ''))

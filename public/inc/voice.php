@@ -554,7 +554,7 @@ function voice_execute(string $do, array $in, array $user): array {
                         'AT Training: ' . $calName, "Training session with {$calName}.\nDetails: " . cfg('base_url') . '/schedule.php#s-' . $sessionId,
                         $location, $start, $end, cfg('mail_from'), (string)$staff['email']);
                     $inviteSent = send_app_mail_attach((string)$staff['email'],
-                        'Session scheduled: ' . $clientName . ' — ' . date('D, M j g:i A', $start),
+                        'Session scheduled — ' . date('D, M j g:i A', $start),
                         "A training session has been scheduled.\n\nClient: {$clientName}\nWhen: " . date('l, F j, Y g:i A', $start)
                         . ' to ' . date('g:i A', $end) . ($location !== '' ? "\nWhere: {$location}" : '')
                         . "\n\nOpen the attached invite to add it to your calendar.\n",

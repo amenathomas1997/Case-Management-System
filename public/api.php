@@ -685,16 +685,22 @@ switch ($action) {
         $nc->execute([$id]);
         $notesTotal = (int)$nc->fetchColumn();
         $n = db()->prepare('SELECT n.id, n.note_type, n.subject, n.body, n.created_at, n.updated_at, n.author_id,
-                n.note_format, n.track_id, n.birp_behavior, n.birp_intervention, n.birp_response, n.birp_plan,
+                n.note_format, n.track_id, n.birp_behavior, n.birp_intervention, n.birp_response, n.birp_plan, n.addendum_to,
                 u.name AS author, e.name AS editor, tt.title AS track_title
             FROM client_notes n LEFT JOIN users u ON u.id = n.author_id LEFT JOIN users e ON e.id = n.updated_by
                 LEFT JOIN training_tracks tt ON tt.id = n.track_id
             WHERE n.client_id = ? ORDER BY n.created_at DESC, n.id DESC LIMIT 50 OFFSET ' . $notesOffset);
         $n->execute([$id]);
         $notes = $n->fetchAll();
+        $noteVersionMap = note_versions(array_column($notes, 'id'));
         $isAdmin = can('admin');
         foreach ($notes as &$noteRow) {
-            $noteRow['can_edit'] = $isAdmin || (int)($noteRow['author_id'] ?? 0) === $userId;
+            // locked (3.0.36): past the edit window; can_edit is then false and the app offers
+            // an addendum (add_note with addendum_to). versions: earlier versions kept.
+            $noteRow['locked'] = note_locked($noteRow);
+            $noteRow['can_edit'] = ($isAdmin || (int)($noteRow['author_id'] ?? 0) === $userId) && !$noteRow['locked'];
+            $noteRow['addendum_to'] = $noteRow['addendum_to'] !== null ? (int)$noteRow['addendum_to'] : null;
+            $noteRow['versions'] = count($noteVersionMap[(int)$noteRow['id']] ?? []);
             $noteRow['track_id'] = $noteRow['track_id'] !== null ? (int)$noteRow['track_id'] : null;
             // Expose the four positional slots as a plain array the app can label
             // by note_format (free = no sections).
@@ -718,7 +724,12 @@ switch ($action) {
             $track['pct_used'] = $r['pct_used'];
         }
         unset($track);
-        out(['ok' => true, 'client' => $client, 'notes' => $notes, 'notes_total' => $notesTotal, 'notes_offset' => $notesOffset, 'tracks' => $tracks]);
+        // releases (3.0.36): the client's releases of information, newest first, with their
+        // state today (Current, Expired, Withdrawn, Awaiting signature, Link expired).
+        $releases = array_map(fn($r) => ['id' => (int)$r['id'], 'recipient_type' => $r['recipient_type'], 'recipient_name' => $r['recipient_name'],
+            'status' => release_status($r), 'signed_name' => $r['signed_name'], 'signed_at' => $r['signed_at'], 'expires_on' => $r['expires_on'],
+            'info_scope' => $r['info_scope'], 'purpose' => $r['purpose'], 'method' => $r['method']], client_releases($id));
+        out(['ok' => true, 'client' => $client, 'notes' => $notes, 'notes_total' => $notesTotal, 'notes_offset' => $notesOffset, 'tracks' => $tracks, 'releases' => $releases]);
 
     case 'add_note': {
         $cid = (int)($input['client_id'] ?? 0);
@@ -743,6 +754,11 @@ switch ($action) {
         $idem = preg_match('/^[0-9a-fA-F-]{36}$/', (string)($input['idem_key'] ?? '')) ? strtoupper($input['idem_key']) : null;
         if ($idem !== null && api_idem_saved('client_notes', $idem, $userId)) out(['ok' => true, 'deduplicated' => true]);
         api_require_client($cid, $userId);
+        // addendum_to (3.0.36): a note added to an earlier one of the same client (how a
+        // locked note is corrected). Its type is always Addendum.
+        $addendumTo = note_addendum_parent($input['addendum_to'] ?? null, $cid);
+        if (is_string($addendumTo)) fail($addendumTo, 422);
+        if ($addendumTo !== null) $na['type'] = 'Addendum';
         // A note may be attached to one of the client's own training tracks.
         $trackId = (int)($input['track_id'] ?? 0) ?: null;
         if ($trackId !== null && api_require_track($trackId, $userId) !== $cid) {
@@ -766,9 +782,9 @@ switch ($action) {
         }
         db()->beginTransaction();
         try {
-        db()->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-            ->execute([$cid, $trackId, $na['type'], $na['format'], $subject, $body, $na['cols'][0], $na['cols'][1], $na['cols'][2], $na['cols'][3], $userId, $idem]);
-        audit($userId, 'note.add', 'client', $cid, $subject . ' (mobile)');
+        db()->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key, addendum_to) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+            ->execute([$cid, $trackId, $na['type'], $na['format'], $subject, $body, $na['cols'][0], $na['cols'][1], $na['cols'][2], $na['cols'][3], $userId, $idem, $addendumTo]);
+        audit($userId, $addendumTo !== null ? 'note.addendum' : 'note.add', 'client', $cid, $subject . ($addendumTo !== null ? ' (addendum to note #' . $addendumTo . ')' : '') . ' (mobile)');
         // Homework captured by the generator: create on the chosen track so it
         // appears in the client's portal (mirrors save_note_homework).
         $hwCreated = 0;
@@ -841,12 +857,28 @@ switch ($action) {
         if (!can('admin') && (int)($note['author_id'] ?? 0) !== $userId) {
             fail('Only the note author or an admin can edit a note.', 403);
         }
+        // Past the edit window the note is locked (409, with locked true): the app offers an addendum.
+        if (note_locked($note)) out(['ok' => false, 'error' => note_locked_message(), 'locked' => true], 409);
         $trackId = array_key_exists('track_id', $input) ? ((int)$input['track_id'] ?: null) : ($note['track_id'] !== null ? (int)$note['track_id'] : null);
         if ($trackId !== null && api_require_track($trackId, $userId) !== (int)$note['client_id']) {
             fail('That training track belongs to a different client.');
         }
-        db()->prepare('UPDATE client_notes SET track_id = ?, note_type = ?, note_format = ?, subject = ?, body = ?, birp_behavior = ?, birp_intervention = ?, birp_response = ?, birp_plan = ?, updated_at = NOW(), updated_by = ? WHERE id = ?')
-            ->execute([$trackId, $na['type'], $na['format'], $subject, $body, $na['cols'][0], $na['cols'][1], $na['cols'][2], $na['cols'][3], $userId, $nid]);
+        // The text being replaced is kept as an earlier version, in the same transaction.
+        $pdo = db();
+        $pdo->beginTransaction();
+        try {
+            $kept = note_keep_version($pdo, $nid, $userId);
+            if (is_string($kept)) {
+                $pdo->rollBack();
+                out(['ok' => false, 'error' => $kept, 'locked' => true], 409);
+            }
+            $pdo->prepare('UPDATE client_notes SET track_id = ?, note_type = ?, note_format = ?, subject = ?, body = ?, birp_behavior = ?, birp_intervention = ?, birp_response = ?, birp_plan = ?, updated_at = NOW(), updated_by = ? WHERE id = ?')
+                ->execute([$trackId, $na['type'], $na['format'], $subject, $body, $na['cols'][0], $na['cols'][1], $na['cols'][2], $na['cols'][3], $userId, $nid]);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $e;
+        }
         audit($userId, 'note.edit', 'client', (int)$note['client_id'], $subject . ' (mobile)');
         out(['ok' => true]);
     }
@@ -1451,7 +1483,7 @@ switch ($action) {
                 if ($instructorEmail === false) continue;
                 $isNew = $instructorId === $newAssignee;
                 notify_user($instructorId, $sessionsMoved . ' upcoming session(s) with ' . $firstName . ($isNew ? ' moved to you.' : ' moved to another instructor.'), 'schedule.php');
-                send_app_mail((string)$instructorEmail, ($isNew ? 'Sessions moved to you: ' : 'Sessions moved to another instructor: ') . $firstName,
+                send_app_mail((string)$instructorEmail, $isNew ? 'Sessions moved to you' : 'Sessions moved to another instructor',
                     ($isNew ? "These upcoming training sessions with {$firstName} are now yours:\n\n"
                         : "Your upcoming training sessions with {$firstName} have been moved to another instructor:\n\n")
                     . $sessionLines . "\n\n"
@@ -1790,7 +1822,9 @@ switch ($action) {
             error_log('api.php: send_report note not recorded: ' . get_class($e) . ' code=' . $e->getCode());
         }
         audit($userId, 'report.send', 'client', (int)$t['cid'], 'to ' . $to . ' (mobile)');
-        out(['ok' => true, 'sent_to' => $to]);
+        // release_warning (3.0.36): set when no current release of information covers the
+        // counselor, so the app can say so (the report has gone either way).
+        out(['ok' => true, 'sent_to' => $to, 'release_warning' => release_warning((int)$t['cid'], 'VR counselor and agency', $to)]);
 
     case 'search':
         $q = trim((string)($_GET['q'] ?? ''));
@@ -2000,7 +2034,7 @@ switch ($action) {
                 $isRemote && $meetingUrl ? $meetingUrl : $location, $startTs, $endTs, cfg('mail_from'), $staff['email'], $occurrences,
                 $isRemote && $meetingUrl ? $meetingUrl : '');
             $inviteSent = send_app_mail_attach($staff['email'],
-                'Session' . ($repeatWeeks > 1 ? ' series' : '') . ' scheduled: ' . $clientName . ' — ' . date('D, M j g:i A', $startTs),
+                'Session' . ($repeatWeeks > 1 ? ' series' : '') . ' scheduled — ' . date('D, M j g:i A', $startTs),
                 "A training session{$seriesNote} has been scheduled.\n\nClient: {$clientName}\nWhen: " . date('l, F j, Y g:i A', $startTs)
                 . ' to ' . date('g:i A', $endTs)
                 . ($isRemote ? "\nRemote session" . ($meetingUrl ? "\nJoin online: {$meetingUrl}" : '') : ($location !== '' ? "\nWhere: {$location}" : ''))
@@ -3575,14 +3609,20 @@ switch ($action) {
         $nc->execute([$trackId]);
         $notesTotal = (int)$nc->fetchColumn();
         $n = db()->prepare('SELECT n.id, n.note_type, n.subject, n.body, n.created_at, n.updated_at, n.author_id,
-                n.note_format, n.track_id, n.birp_behavior, n.birp_intervention, n.birp_response, n.birp_plan,
+                n.note_format, n.track_id, n.birp_behavior, n.birp_intervention, n.birp_response, n.birp_plan, n.addendum_to,
                 u.name AS author, e.name AS editor
             FROM client_notes n LEFT JOIN users u ON u.id = n.author_id LEFT JOIN users e ON e.id = n.updated_by
             WHERE n.track_id = ? ORDER BY n.created_at DESC, n.id DESC LIMIT 50 OFFSET ' . $notesOffset);
         $n->execute([$trackId]);
         $notes = $n->fetchAll(); $isAdmin = can('admin');
+        $noteVersionMap = note_versions(array_column($notes, 'id'));
         foreach ($notes as &$noteRow) {
-            $noteRow['can_edit'] = $isAdmin || (int)($noteRow['author_id'] ?? 0) === $userId;
+            // locked (3.0.36): past the edit window; can_edit is then false and the app offers
+            // an addendum (add_note with addendum_to). versions: earlier versions kept.
+            $noteRow['locked'] = note_locked($noteRow);
+            $noteRow['can_edit'] = ($isAdmin || (int)($noteRow['author_id'] ?? 0) === $userId) && !$noteRow['locked'];
+            $noteRow['addendum_to'] = $noteRow['addendum_to'] !== null ? (int)$noteRow['addendum_to'] : null;
+            $noteRow['versions'] = count($noteVersionMap[(int)$noteRow['id']] ?? []);
             $noteRow['track_id'] = (int)$noteRow['track_id'];
             $noteRow['sections'] = ($noteRow['note_format'] ?? 'free') !== 'free'
                 ? [ (string)($noteRow['birp_behavior'] ?? ''), (string)($noteRow['birp_intervention'] ?? ''),

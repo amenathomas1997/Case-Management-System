@@ -24,7 +24,9 @@ if (!function_exists('staff_guide_topics')) {
                 'guide-waitlist' => 'How do I use the referral waitlist?',
                 'guide-counselor-access' => 'How do I give a VR counselor access?',
             ]],
-            'guide-notes' => ['How do I write a case note?', []],
+            'guide-notes' => ['How do I write a case note?', [
+                'guide-note-lock' => 'How do I correct a note after it locks?',
+            ]],
             'guide-training' => ['How do I set up assessments, tracks, goals and homework?', [
                 'guide-homework-draft' => 'How do I draft homework from a session note?',
             ]],
@@ -47,6 +49,7 @@ if (!function_exists('staff_guide_topics')) {
                 'guide-portal-requests' => 'How do I handle a portal request?',
                 'guide-documents' => 'How do I upload a document?',
                 'guide-consent' => 'How do I request guardian consent?',
+                'guide-release' => 'How do I get a release of information?',
             ]],
             'guide-billing' => ['How do I bill and record payments?', [
                 'guide-bill-month' => 'How do I bill all unbilled work?',
@@ -356,6 +359,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 </ol>
 <p>For a note about one training track, open the track and choose Record a session in the On this page links. Write the note there, with the hours or without them. After you complete a session, the confirmation has a link, Write the session note. It opens that form for you.</p>
 <p>The notes list shows the newest 20 notes. Choose Show all notes to see the rest. Client Notes also lists track notes. The General only filter hides them.</p>
+
+<?= $sgH(4, 'guide-note-lock') ?>
+<p>A note can be edited by its author or an administrator for 30 days after it was written. After that it is locked, and its Edit button becomes Add addendum. An addendum is a new note, of type Addendum, linked to the original: the original says Addenda with a link to it, and the addendum says which note it corrects. When a note is edited, the text it replaces is kept: open Earlier versions under the note to read each one, with who wrote it and when it was replaced. An administrator can change the number of days under Administration, Data, Case note lock. In the app, a locked note has Add addendum on the Actions rotor.</p>
 <p>Documentation review (in Daily work &amp; review) checks recent notes for missing sections and placeholders. For each flagged note, do one of these:</p>
 <ul>
   <li>Choose Open the flagged note, and fix the note.</li>
@@ -536,6 +542,16 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Check the file is in the Documents list.</li>
 </ol>
 <p>If the upload fails, choose the file again and resend the form.</p>
+
+<?= $sgH(4, 'guide-release') ?>
+<p>A release lets you share an adult client's information with one named recipient, such as their VR counselor, an employer or a doctor, for one year.</p>
+<ol>
+  <li>Open the client record, on the Overview tab, and find Releases of information.</li>
+  <li>Open the collapsed Request or record a release.</li>
+  <li>Choose who signs (the client, or a parent or guardian), the recipient type and the recipient's name. Tick what information it covers, and say why it is shared.</li>
+  <li>To have it signed online, enter the signer's email and choose Email release to sign. They type their name on the form to sign it, in English or Spanish. For a release signed on paper, enter the date signed and choose Record paper release; then upload the paper copy under Documents, category Release.</li>
+</ol>
+<p>The list shows each release as Current, Awaiting signature, Expired or Withdrawn. If the client takes a release back, choose Record withdrawn. Compliance lists releases that expire within 30 days and open clients with no release or guardian consent. The progress report, evaluation report and worksite report screens say so when no current release covers the recipient.</p>
 
 <?= $sgH(4, 'guide-consent') ?>
 <ol>

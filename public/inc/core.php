@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.35';
+const APP_VERSION = '3.0.36';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -298,9 +298,12 @@ const EMAIL_TEMPLATES = [
     'portal_link' => ['Client portal invitation', 'Your {org_short} training portal',
         "Hello {name},\n\nHere is your personal link to view your upcoming training sessions, goals, and resources:\n\n{link}\n\nKeep this link private — anyone with it can view your training page. If you lose it, your instructor can send a new one (which replaces this link).\n",
         '{name} {link} {org_short} {org}'],
-    'consent_request' => ['Guardian consent request', 'Consent form for {client} — {org_short}',
+    'consent_request' => ['Guardian consent request', 'A consent form to sign — {org_short}',
         "Hello {name},\n\n{client} has been referred to {org} for services. Please review and sign the consent form at this private link:\n\n{link}\n\nIt takes about a minute. Thank you!\n",
         '{name} {client} {link} {org_short} {org}'],
+    'release_request' => ['Release of information request', 'A release form to sign — {org_short}',
+        "Hello {name},\n\n{org} would like your permission to share some of your training information. Please read the release form at this private link. It names who receives the information, what is shared and why, and you can sign it there:\n\n{link}\n\nYou do not have to sign it, and you can withdraw it later. If you have questions, reply to this email.\n",
+        '{name} {link} {org_short} {org}'],
     'survey_invite' => ['Outcome survey invitation', 'How was your training with {org_short}?',
         "Hello {name},\n\nCongratulations on completing your assistive technology training!\n\nWe'd love your feedback — three quick questions, under a minute:\n\n{link}\n\nThank you for training with {org}.\n",
         '{name} {link} {org_short} {org}'],
@@ -319,9 +322,12 @@ const EMAIL_TEMPLATES = [
     'portal_link_es' => ['Client portal invitation (Spanish)', 'Su portal de capacitación de {org_short}',
         "Hola, {name}:\n\nEste es su enlace personal para ver sus próximas sesiones de capacitación, sus metas y sus recursos:\n\n{link}\n\nMantenga este enlace en privado: cualquier persona que lo tenga puede ver su página de capacitación. Si lo pierde, su instructor puede enviarle uno nuevo (que reemplaza a este).\n",
         '{name} {link} {org_short} {org}'],
-    'consent_request_es' => ['Guardian consent request (Spanish)', 'Formulario de consentimiento para {client} — {org_short}',
+    'consent_request_es' => ['Guardian consent request (Spanish)', 'Un formulario de consentimiento para firmar — {org_short}',
         "Hola, {name}:\n\n{client} fue referido/a a {org} para recibir servicios. Revise y firme el formulario de consentimiento en este enlace privado:\n\n{link}\n\nToma alrededor de un minuto. ¡Gracias!\n",
         '{name} {client} {link} {org_short} {org}'],
+    'release_request_es' => ['Release of information request (Spanish)', 'Un formulario de autorización para firmar — {org_short}',
+        "Hola, {name}:\n\n{org} quisiera su permiso para compartir parte de la información de su capacitación. Lea el formulario de autorización en este enlace privado. Dice quién recibe la información, qué se comparte y por qué, y puede firmarlo allí:\n\n{link}\n\nNo tiene que firmarlo, y puede retirarlo más adelante. Si tiene preguntas, responda a este correo.\n",
+        '{name} {link} {org_short} {org}'],
     'survey_invite_es' => ['Outcome survey invitation (Spanish)', '¿Cómo fue su capacitación con {org_short}?',
         "Hola, {name}:\n\n¡Felicidades por completar su capacitación en tecnología de asistencia!\n\nNos gustaría conocer su opinión: tres preguntas rápidas, en menos de un minuto:\n\n{link}\n\nGracias por capacitarse con {org}.\n",
         '{name} {link} {org_short} {org}'],
@@ -338,6 +344,7 @@ const EMAIL_TEMPLATE_REQUIRED = [
     'otp' => '{code}', 'vrc_code' => '{code}',
     'portal_link' => '{link}', 'consent_request' => '{link}', 'survey_invite' => '{link}',
     'portal_link_es' => '{link}', 'consent_request_es' => '{link}', 'survey_invite_es' => '{link}',
+    'release_request' => '{link}', 'release_request_es' => '{link}',
     'report_cover' => '{ack}',
     'referral_closed' => '{ref}',
 ];
@@ -1293,7 +1300,7 @@ function generate_invoice(int $trackId, ?int $userId, ?string $until = null): ?i
 const DOC_CATEGORIES = ['Authorization','IPE','Release','Report','Resource','Other'];
 const SESSION_STATUSES = ['Scheduled','Completed','Cancelled','No Show'];
 const CLIENT_STATUSES = ['Pending Assessment','Waitlist','Active Training','On Hold','Closed - Rehabilitated','Closed - Other'];
-const NOTE_TYPES = ['Case Note','Phone Call','Progress Report','Monthly Summary','Intake'];
+const NOTE_TYPES = ['Case Note','Phone Call','Progress Report','Monthly Summary','Intake','Addendum'];
 // A client's accessible-format and contact preferences (client form and the app).
 const A11Y_FORMATS = ['Standard print', 'Large print', 'Plain text', 'Braille-ready (BRF)', 'Audio', 'Accessible PDF'];
 const A11Y_CONTACTS = ['No preference', 'Email', 'Phone', 'Client portal', 'Postal mail'];
@@ -1564,3 +1571,5 @@ const TRACK_STATUSES = ['Active','Completed','Cancelled'];
 require_once __DIR__ . '/billing.php';
 // Referral outcomes and case closure (3.0.35).
 require_once __DIR__ . '/case_outcomes.php';
+// Note versions and the 30-day lock, adult releases of information, vendor agreements (3.0.36).
+require_once __DIR__ . '/records_privacy.php';

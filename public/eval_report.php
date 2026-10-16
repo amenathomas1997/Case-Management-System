@@ -240,7 +240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['email_report'])) {
     } else {
         $bytes = eval_pdf($a, $fields, $user['name'], true);
         $sent = send_app_mail_attach($to,
-            'AT Evaluation Report — ' . $a['client_name'],
+            'AT Evaluation Report — ' . fmt_date($a['assessment_date']),
             "Please find attached the Assistive Technology Evaluation Report for {$a['client_name']}, evaluated " . fmt_date($a['assessment_date']) . ". The accessible HTML attachment contains the same report as the PDF.\n\n"
             . "Electronically signed by {$user['name']}, " . brand('org') . ".\nReply to this email with any questions.\n",
             [['name' => eval_file_base($a) . '.pdf', 'mime' => 'application/pdf', 'bytes' => $bytes],
@@ -282,6 +282,9 @@ page_header('Evaluation report', $user, 'clients');
 <h1>AT evaluation report — <?= h($a['client_name']) ?></h1>
 <p class="muted">Prefilled from the <?= fmt_date($a['assessment_date']) ?> assessment. Edit each section, then download the PDF or email it signed to the counselor.</p>
 
+<?php if ($relWarn = release_warning((int)$a['cid'], 'VR counselor and agency', (string)($a['counselor_email'] ?? ''))): ?>
+<p class="alert alert-info"><?= h($relWarn) ?></p>
+<?php endif; ?>
 <form method="post" action="eval_report.php?assessment=<?= $aid ?>" class="stacked" novalidate>
   <?= csrf_field() ?>
   <?= form_error_summary(['recipient' => 'Email to', 'signature' => 'Electronic signature'] + EVAL_SECTIONS) ?>
