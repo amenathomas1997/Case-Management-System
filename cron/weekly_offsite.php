@@ -1,8 +1,10 @@
 <?php
 declare(strict_types=1);
-// Weekly off-site backup: email the newest database dump, together with the
-// uploaded documents, as one AES-256 encrypted ZIP to the backup address.
-// Cron: 45 2 * * 1 (Mondays, after the nightly backup)
+// Daily off-site backup (3.0.53; weekly before): email the newest database dump, with the
+// uploaded documents, as one AES-256 encrypted ZIP to the backup address. Mondays (or when a
+// week has passed without one) carry every document; other days the documents added or
+// changed in the last eight days. Each full run also checks that the backup can be restored.
+// Cron: 45 2 * * * (after the nightly backup)
 if (PHP_SAPI !== 'cli') exit('CLI only.');
 
 // Where the application's inc/ directory is: an optional cron_config.php beside
@@ -37,7 +39,7 @@ if (!$recipient) { echo "No backup_email configured.\n"; exit(1); }
 $password = (string)(cfg('backup_password') ?? '');
 if ($password === '') {
     $noticed = send_app_mail((string)cfg('backup_email'), 'CMS off-site backup NOT sent — set a backup password',
-        "This week's off-site backup was NOT emailed because no 'backup_password' is configured.\n"
+        "Today's off-site backup was NOT emailed because no 'backup_password' is configured.\n"
         . "The database dump contains every client's records and will not be sent unencrypted.\n\n"
         . "Add a strong 'backup_password' to the server's config.php to enable encrypted off-site backups,\n"
         . "or download a copy manually from the server at {$dir} and store it off-site.\n");
@@ -55,27 +57,44 @@ const OFFSITE_ATTACH_MAX = 150 * 1024 * 1024;    // the largest attachment a Gra
 const OFFSITE_UPLOADS_MAX = 1024 * 1024 * 1024;  // database + documents above this: database only
 
 $uploads = offsite_files(rtrim((string)cfg('upload_dir'), '/'));
+$allUploads = $uploads; // null when the folder could not be read
+$lastFull = (string)(setting('offsite_full_at') ?? '');
+$full = date('N') === '1' || $lastFull === '' || strtotime($lastFull) < time() - 7 * 86400;
 $warning = '';
-if ($uploads === null) {
-    $uploads = [];
-    $warning = 'The uploaded documents were NOT included: the uploads folder on the server could not be read.';
-} elseif ($uploads && filesize($latest) + array_sum(array_column($uploads, 2)) > OFFSITE_UPLOADS_MAX) {
-    $warning = 'The uploaded documents (' . offsite_mb(array_sum(array_column($uploads, 2))) . ' MB) were NOT included: together with the database they are over 1 GB.';
-    $uploads = [];
-}
+// What is tried, in order: on a full day every document, then (if that cannot go) the ones
+// changed since the last full copy, then the database alone; on other days the documents
+// changed in the last eight days, then the database alone. A file copied back with its old
+// date counts as changed when it arrived (its inode change time).
+$since = $lastFull !== '' && strtotime($lastFull) ? min(strtotime($lastFull), time() - 8 * 86400) : time() - 8 * 86400;
+$recent = is_array($uploads) ? array_values(array_filter($uploads, fn($f) => max((int)@filemtime($f[0]), (int)@filectime($f[0])) >= $since)) : [];
+if ($uploads === null) $warning = 'The uploaded documents were NOT included: the uploads folder on the server could not be read.';
+$variants = [];
+if ($full && $uploads) $variants[] = ['every', $uploads];
+if ($recent && (!$full || count($recent) < count((array)$uploads))) $variants[] = ['recent', $recent];
+$variants[] = ['none', []];
+$variants = array_values(array_filter($variants, function ($v) use ($latest, &$warning) {
+    if ($v[1] && filesize($latest) + array_sum(array_column($v[1], 2)) > OFFSITE_UPLOADS_MAX) {
+        $warning = 'Some uploaded documents (' . offsite_mb(array_sum(array_column($v[1], 2))) . ' MB) were NOT included: together with the database they are over 1 GB.';
+        return false;
+    }
+    return true;
+}));
+$uploads = $variants[0][1];
 // Temporary archives are removed however the script ends.
 $tmpFiles = [];
 register_shutdown_function(function () use (&$tmpFiles): void { foreach ($tmpFiles as $f) @unlink($f); });
 
-$ok = false; $sentWithUploads = false; $attachName = ''; $size = 0;
-foreach ($uploads ? [true, false] : [false] as $withUploads) {
+$ok = false; $sentWithUploads = false; $sentKind = 'none'; $attachName = ''; $size = 0;
+foreach ($variants as [$kind, $files]) {
+    $withUploads = $files !== [];
+    $uploads = $files;
     // Encryption must succeed. If anything fails (temp dir unwritable, disk full,
     // zip error), nothing is sent — NEVER fall back to emailing a plaintext dump.
     $zipPath = offsite_zip($latest, $withUploads ? $uploads : [], $password, $dir);
     if ($zipPath === null) {
-        if ($withUploads) { $warning = 'The uploaded documents were NOT included: the encrypted archive holding them could not be built this week.'; continue; }
+        if ($withUploads) { $warning = 'The uploaded documents were NOT included: the encrypted archive holding them could not be built this run.'; continue; }
         $noticed = send_app_mail($recipient, 'CMS off-site backup could not be encrypted',
-            "The weekly off-site backup could not be encrypted this run, so nothing was emailed.\n"
+            "The off-site backup could not be encrypted this run, so nothing was emailed.\n"
             . "The database dump contains every client's records and will not be sent unencrypted.\n\n"
             . "Check the server's temp space/permissions, then download a copy manually from {$dir} and store it off-site.\n");
         echo "Refused to email backup — encryption failed. " . offsite_notice($noticed) . "\n";
@@ -95,35 +114,45 @@ foreach ($uploads ? [true, false] : [false] as $withUploads) {
         exit($noticed ? 0 : 1);
     }
     $body = "Attached is the latest Case Management System off-site backup ({$attachName}, " . offsite_mb($size) . " MB): an AES-256 encrypted ZIP holding "
-        . ($withUploads ? 'the database and every uploaded document' : 'the database') . ".\n\n"
+        . ($kind === 'every' ? 'the database and every uploaded document' : ($kind === 'recent' ? 'the database and the documents added or changed since the last full copy (the Monday backup holds every document)' : 'the database')) . ".\n\n"
         . ($warning !== '' && !$withUploads ? "NOTE: {$warning} Copy the uploads folder from the server to off-site storage another way.\n\n" : '')
         . "Keep this email (or save the file somewhere safe) — it is your off-site copy in case the server is ever lost.\n"
         . "The ZIP password is the off-site backup password the installer showed once. Keep it in your organisation's password manager, not only on the server: if it is lost, this backup cannot be opened. (It is also the 'backup_password' in the server's config.php.)\n"
         . "To restore: unzip with that password, gunzip the .sql.gz file and import it into MariaDB"
         . ($withUploads ? ', then copy the uploads folder back into the private directory' : '') . ".\n"
         . "The backup leaves out the stored AI API key and Microsoft Entra client secret, so after a restore enter them again on the AI assistant and Federation pages.\n";
-    $subject = 'Weekly off-site CMS backup — ' . date('M j, Y');
+    $subject = ($full ? 'Full' : 'Daily') . ' off-site CMS backup — ' . date('M j, Y');
     $ok = $size <= OFFSITE_INLINE_MAX
         ? send_app_mail_attach($recipient, $subject, $body, [['name' => $attachName, 'mime' => 'application/zip', 'bytes' => (string)file_get_contents($zipPath)]])
         : offsite_send_large($recipient, $subject, $body, $zipPath, $attachName);
+    if ($size > OFFSITE_INLINE_MAX && function_exists('mail_log_record')) mail_log_record($recipient, 'graph', $ok, true);
     @unlink($zipPath);
-    if ($ok) { $sentWithUploads = $withUploads; break; }
-    if ($withUploads) $warning = 'The uploaded documents were NOT included: the encrypted archive with them (' . offsite_mb($size) . ' MB) could not be emailed this week.';
+    if ($ok) { $sentWithUploads = $withUploads; $sentKind = $kind; break; }
+    if ($withUploads) $warning = 'The uploaded documents were NOT included: the encrypted archive with them (' . offsite_mb($size) . ' MB) could not be emailed this run.';
 }
 if (!$ok) {
     // Make the failure visible instead of silently skipping a week.
     send_app_mail($recipient, 'CMS off-site backup FAILED to send',
-        "This week's off-site backup email could not be sent. The backup still exists on the server at {$dir}.\n");
+        "Today's off-site backup email could not be sent. The backup still exists on the server at {$dir}.\n");
     echo "Failed to email backup.\n";
     exit(1);
 }
 if ($warning !== '') {
     notify_admins('CMS off-site backup: uploaded documents not included',
-        $warning . "\n\nThe encrypted database backup was emailed to {$recipient}, but the uploaded client documents now have no off-site copy from this week. "
+        $warning . "\n\nThe encrypted database backup was emailed to {$recipient}, but the uploaded client documents now have no off-site copy from this run. "
         . "Copy the uploads folder from the server's private directory to off-site storage another way.\n");
 }
-echo "Off-site backup emailed to {$recipient} (" . ($sentWithUploads ? 'database and uploaded documents' : 'database only') . ").\n";
+echo "Off-site backup emailed to {$recipient} (" . ['every' => 'database and every uploaded document', 'recent' => 'database and recently changed documents', 'none' => 'database only'][$sentKind] . ").\n";
+// A full copy is recorded only when every document went (or there are none at all), so a
+// failed one is tried again the next day.
+if ($full && ($sentKind === 'every' || $allUploads === [])) set_setting('offsite_full_at', date('c'));
 record_heartbeat('weekly_offsite');
+// The full run also checks that the backup can be restored, and says so when it cannot.
+if ($full) {
+    $check = backup_check();
+    echo 'Backup check: ' . ($check['ok'] ? 'OK. ' : 'PROBLEM. ') . $check['detail'] . "\n";
+    if (!$check['ok']) notify_admins('CMS backup check found a problem', $check['detail'] . "\n\nSee System health in the Case Management System.\n");
+}
 exit(0);
 
 /** Every regular file under $root as [path, name in the archive, bytes]; null when the folder cannot be read. */

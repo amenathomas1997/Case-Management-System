@@ -192,6 +192,24 @@ try {
     error_log('daily_alerts: closure follow-ups skipped (' . $e->getCode() . ')'); // mig_3.0.47 not run yet
 }
 
+// The Microsoft Graph secret (3.0.53): when it stops working no email goes out at all, so the
+// administrators are told 30, 14 and 7 days before (and daily once it has passed). Old mail
+// log rows are removed after 180 days.
+try {
+    $gd = graph_secret_days_left();
+    if ($gd !== null && (in_array($gd, [30, 14, 7], true) || $gd <= 0) && setting('graph_expiry_noticed') !== date('Y-m-d')) {
+        set_setting('graph_expiry_noticed', date('Y-m-d'));
+        $gmsg = $gd > 0 ? 'The Microsoft Graph email secret expires in ' . $gd . ' days. Create a new secret in Microsoft Entra, then enter it and its new expiry date on System health.'
+            : 'The Microsoft Graph email secret has expired, so the system cannot send email. Create a new secret in Microsoft Entra and enter it on System health.';
+        notify_admin_users($gmsg, 'system_health.php#email-h');
+        if ($gd > 0) notify_admins('CMS email secret expires in ' . $gd . ' days', $gmsg . "\n");
+    }
+} catch (Throwable $e) {
+    error_log('daily_alerts: Graph expiry check skipped (' . get_class($e) . ')');
+}
+try { db()->exec('DELETE FROM mail_log WHERE sent_at < DATE_SUB(NOW(), INTERVAL 180 DAY)'); }
+catch (Throwable $e) { error_log('daily_alerts: mail log not pruned (' . get_class($e) . ')'); }
+
 // Turning 18 (3.0.37): a client with a guardian on file who turns 18 within two weeks
 // (or did in the last month) gets one task, ever: their guardian's consent stops
 // covering them, and they sign their own release of information.

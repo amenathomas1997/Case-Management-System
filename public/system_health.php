@@ -3,13 +3,36 @@
 // page. Every scheduled job and when it last ran, the backups, email, storage, the
 // database, sign-in activity, the AI assistant, recent problems in the cron log and
 // work that is waiting. The job checks are health.php's (inc/health_checks.php), so
-// this page and the external monitor never disagree. Read-only: nothing here changes
-// anything, so it can be reloaded at will ("Check again").
+// this page and the external monitor never disagree. It can be reloaded at will ("Check
+// again"). Its few actions (3.0.53): check the backup now, send a test email, and record
+// when the Microsoft Graph secret expires.
 require __DIR__ . '/inc/bootstrap.php';
 require_once __DIR__ . '/inc/health_checks.php';
 require __DIR__ . '/inc/layout.php';
 $user = require_login();
 require_perm('admin');
+csrf_check();
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['check_backup'])) {
+        $bc = backup_check(false);
+        audit($user['id'], 'backup.check', 'settings', null, $bc['ok'] ? 'ok' : 'problem');
+        flash(($bc['ok'] ? 'The backup check passed. ' : 'The backup check found a problem. ') . $bc['detail'], $bc['ok'] ? 'success' : 'error');
+        redirect('system_health.php#backups-h');
+    }
+    if (isset($_POST['test_email'])) {
+        $sent = send_app_mail((string)$user['email'], 'Test email from ' . brand('org'), "This is a test email from the Case Management System's System health page. If you can read it, email is working.\n");
+        flash($sent ? 'A test email was sent to ' . $user['email'] . '. Check that it arrived (and not in junk).' : 'The test email could not be sent. See Email below.', $sent ? 'success' : 'error');
+        redirect('system_health.php#email-h');
+    }
+    if (isset($_POST['save_graph_expiry'])) {
+        $d = trim((string)($_POST['graph_expires'] ?? ''));
+        if ($d !== '' && !valid_date($d, (int)date('Y'), (int)date('Y') + 3)) { flash('Enter the expiry date as a date within the next three years, or leave it empty.', 'error'); redirect('system_health.php#email-h'); }
+        set_setting('graph_credential_expires', $d);
+        audit($user['id'], 'settings.graph_expiry', 'settings', null, $d ?: 'cleared');
+        flash($d === '' ? 'The secret expiry date was cleared.' : 'Saved. Administrators are reminded 30, 14 and 7 days before ' . fmt_date($d) . '.');
+        redirect('system_health.php#email-h');
+    }
+}
 
 $now = time();
 $when = fn(?int $ts): string => $ts ? date('F j, Y g:i a', $ts) : 'never';
@@ -70,6 +93,11 @@ $mailDisabled = !empty($GLOBALS['CONFIG']['mail_disabled']);
 $mailSent = $dbOk ? $ts(setting('mail_last_sent')) : null;
 $mailFailed = $dbOk ? $ts(setting('mail_last_failed')) : null;
 if (!$graphOn && !$mailDisabled) $problems[] = ['email-h', 'Microsoft Graph email is not configured, so sign-in codes and reminders use the server\'s own mail, which is often blocked as spam.'];
+$graphDays = graph_secret_days_left();
+if ($graphOn && $graphDays !== null && $graphDays <= 30) $problems[] = ['email-h', $graphDays > 0 ? "The Microsoft Graph email secret expires in $graphDays days." : 'The Microsoft Graph email secret has expired.'];
+$bcResult = (string)(setting('backup_check_result') ?? '');
+if (str_starts_with($bcResult, 'PROBLEM')) $problems[] = ['backups-h', 'The last backup check found a problem.'];
+$mailRecent = mail_log_recent(30);
 if ($mailFailed && $mailFailed > ($mailSent ?? 0)) $problems[] = ['email-h', 'The most recent email attempt failed (' . $when($mailFailed) . '), and none has been sent since.'];
 
 /* ---- Sign-in and security ---- */
@@ -171,7 +199,12 @@ page_header('System health', $user, 'admin', [['admin.php', 'Administration']]);
     <dt>Database backups kept</dt><dd><?= count($dumps) ?><?= $dumps ? ', ' . h($bytes($dumpTotal)) . ' in all; oldest ' . h($when(end($dumps))) : '' ?></dd>
     <dt>Newest uploaded-documents archive</dt><dd><?= $uploadsArchives ? h($when((int)filemtime($uploadsArchives[0]))) . ', ' . h($bytes((float)filesize($uploadsArchives[0]))) : 'none found' ?></dd>
     <dt>Last off-site backup emailed</dt><dd><?= $offsite ? h($when($offsite)) . ' (' . h($ago($offsite)) . ')' : 'none recorded since this check was added' ?></dd>
+    <dt>Last backup check</dt><dd><?= $bcResult !== '' ? h($when($ts(setting('backup_check_at')))) . ': ' . h($bcResult) : 'not run yet (it runs with each Monday backup)' ?></dd>
   </dl>
+  <form method="post" action="system_health.php" class="inline-form"><?= csrf_field() ?>
+    <button type="submit" name="check_backup" value="1" class="btn btn-secondary btn-sm">Check the backup now</button>
+  </form>
+  <p>How to restore from a backup: <a href="help.php#restore">Restoring from a backup</a>.</p>
 </section>
 
 <section class="card" aria-labelledby="email-h">
@@ -180,7 +213,25 @@ page_header('System health', $user, 'admin', [['admin.php', 'Administration']]);
     <dt>Sending through</dt><dd><?= $mailDisabled ? 'Nothing: email is turned off on this copy (staging); messages are kept in mail_sink' : ($graphOn ? 'Microsoft Graph' : 'The server\'s own mail (Microsoft Graph is not configured)') ?></dd>
     <dt>Last email sent</dt><dd><?= $mailSent ? h($when($mailSent)) . ' (' . h($ago($mailSent)) . ')' : 'none recorded since this check was added' ?></dd>
     <dt>Last email that failed</dt><dd><?= $mailFailed ? h($when($mailFailed)) . ' (' . h($ago($mailFailed)) . ')' : 'none recorded' ?></dd>
+    <dt>Microsoft Graph secret expires</dt><dd><?= $graphDays === null ? 'not recorded' : h(fmt_date((string)setting('graph_credential_expires'))) . ($graphDays > 0 ? " (in $graphDays days)" : ' (expired)') ?></dd>
   </dl>
+  <form method="post" action="system_health.php" class="inline-form"><?= csrf_field() ?>
+    <button type="submit" name="test_email" value="1" class="btn btn-secondary btn-sm">Send a test email to me</button>
+  </form>
+  <form method="post" action="system_health.php" class="inline-form"><?= csrf_field() ?>
+    <label for="graph_expires">Graph secret expiry date</label>
+    <input type="date" id="graph_expires" name="graph_expires" value="<?= h((string)(setting('graph_credential_expires') ?? '')) ?>">
+    <button type="submit" name="save_graph_expiry" value="1" class="btn btn-secondary btn-sm">Save expiry date</button>
+  </form>
+  <?php if ($mailRecent): ?>
+  <h3 id="maillog-h">Recent emails</h3>
+  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="maillog-cap">
+  <table><caption class="visually-hidden" id="maillog-cap">The last <?= count($mailRecent) ?> emails sent, without addresses or content</caption>
+    <thead><tr><th scope="col">When</th><th scope="col">To</th><th scope="col">Sent through</th><th scope="col">Result</th></tr></thead>
+    <tbody><?php foreach ($mailRecent as $ml): ?><tr><th scope="row"><?= h($when($ts($ml['sent_at']))) ?></th><td><?= h($ml['recipient_type']) ?><?= (int)$ml['with_attachment'] ? ', with attachment' : '' ?></td>
+      <td><?= h(['graph' => 'Microsoft Graph', 'mail' => 'server mail', 'sink' => 'not sent (staging)'][$ml['via']] ?? $ml['via']) ?></td><td><?= (int)$ml['ok'] ? 'Sent' : '<strong>Failed</strong>' ?></td></tr><?php endforeach; ?></tbody>
+  </table></div>
+  <?php endif; ?>
 </section>
 
 <section class="card" aria-labelledby="storage-h">

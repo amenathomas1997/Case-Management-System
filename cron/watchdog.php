@@ -50,6 +50,12 @@ rsort($dumps);
 if (!$dumps || filemtime($dumps[0]) < time() - 48 * 3600) {
     $problems['backup'] = 'No database backup newer than 48 hours — check the nightly backup cron.';
 }
+// The uploaded documents are archived on the server every Sunday (3.0.53).
+$archives = glob($privateDir . '/backups/uploads_*.tar.gz') ?: [];
+rsort($archives);
+if ($archives && filemtime($archives[0]) < time() - 9 * 86400) {
+    $problems['uploads_archive'] = 'No archive of the uploaded documents newer than 9 days — check the Sunday part of the nightly backup.';
+}
 
 /* 4. Every other scheduled job (System health's checks): one that has fallen behind
    is alerted like the checks above, at most every 6 hours while it lasts. The

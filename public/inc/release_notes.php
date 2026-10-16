@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.53' => [
+        'Backups now go off-site every day, not once a week: Mondays carry every document, other days the database and the documents changed that week. Each Monday the system checks that the backup can be restored, and System health shows the result, with a Check the backup now button. Administrators find a step-by-step restore guide in Help, and the release has a restore script.',
+        'System health can send you a test email, lists the recent emails (who they went to by kind, and whether they went, never addresses), and records when the Microsoft Graph email secret expires: administrators are warned 30, 14 and 7 days before. If email ever falls back from Microsoft Graph to the server\'s own mail, administrators are told.',
+    ],
     '3.0.52' => [
         'Offer times on a client\'s appointment or reschedule request (Client portal requests, Offer times): up to three times, each checked against the instructor\'s calendar and the authorization. The client is emailed, picks one in their portal and confirms it: the session is booked (or moved), they get the calendar invitation, and the request closes.',
     ],

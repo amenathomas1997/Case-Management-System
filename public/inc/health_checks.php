@@ -34,7 +34,7 @@ function cms_cron_jobs(): array {
         'monthly_reports' => ['Progress reports', 'cron/monthly_reports.php', '7:30 a.m.', 36 * 3600],
         'at_reminders' => ['AT service reminders', 'cron/at_reminders.php', '8:00 a.m.', 36 * 3600],
         'backup' => ['Database backup', 'cron/backup.sh', '2:15 a.m.', 48 * 3600],
-        'weekly_offsite' => ['Off-site backup', 'cron/weekly_offsite.php', 'Mondays at 2:45 a.m.', 8 * 86400],
+        'weekly_offsite' => ['Off-site backup', 'cron/weekly_offsite.php', 'daily at 2:45 a.m. (every document on Mondays)', 36 * 3600],
     ];
 }
 

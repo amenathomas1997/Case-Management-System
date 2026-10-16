@@ -85,6 +85,21 @@ if (!$viewer) echo lang_toggle();
   <li><a href="privacy.php"><?= t('Privacy notice (separate page)') ?></a></li>
 </ul></nav>
 <?php if ($viewer) require __DIR__ . '/inc/staff_guide.php'; ?>
+<?php if ($viewer && can('admin')): // Administrators only (3.0.53). ?>
+<section aria-labelledby="restore"><h2 id="restore">Restoring from a backup</h2>
+<p>Every night the server saves the database, and every Sunday it archives the uploaded documents. Every morning an encrypted copy is emailed to the backup address: on Mondays it holds the database and every document, on other days the database and the documents changed in the last eight days. Keep these emails for at least 90 days, and keep the backup password in your password manager: without it no backup can be opened. Each Monday the system also checks that the backup can be restored; the result is on System health.</p>
+<p>If the server is lost:</p>
+<ol>
+  <li>Get a new hosting account with PHP 8.1 or newer and MariaDB, and create an empty database and its user.</li>
+  <li>Save the newest backup email's attachment, and the newest Monday backup's attachment, to the new server.</li>
+  <li>Copy the release package there and run, from its dist folder: php restore.php --zip=the-backup.zip --dsn="mysql:host=localhost;dbname=YOUR_DB;charset=utf8mb4" --db-user=YOUR_USER --private=/path/to/private. It asks for the backup password and the database password, and reports each step in plain sentences.</li>
+  <li>If you used a daily backup, also open the Monday backup with any ZIP tool and copy its uploads folder into the private directory, keeping the newer files.</li>
+  <li>Open the new config.php in the private directory and fill in the empty values: the Microsoft Graph details (create a new client secret in Microsoft Entra if needed), the email addresses and your branding.</li>
+  <li>Copy the application files into the website folder, sign in as an administrator, and open System health. Enter the Graph secret's expiry date there, send yourself a test email, and enter the AI key and the Microsoft sign-in secret again on the AI assistant and Federation pages: backups never hold them.</li>
+  <li>Set up the scheduled jobs listed on System health (the cron table) on the new server.</li>
+</ol>
+</section>
+<?php endif; ?>
 <?php if ($viewer): // Staff only (English, like the guide): what changed for a caseworker in each release, newest first.
     $releaseNotes = require __DIR__ . '/inc/release_notes.php'; ?>
 <section aria-labelledby="whats-new"><h2 id="whats-new">What's new in each release</h2>

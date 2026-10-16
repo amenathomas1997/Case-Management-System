@@ -328,6 +328,10 @@ function send_app_mail_attach($to,$subject,$body,$attachments) {
 function notify_admins($subject,$body) { $GLOBALS['sent'][]=['to'=>'administrators','subject'=>$subject,'attachments'=>[]]; return true; }
 function record_heartbeat($job) { $GLOBALS['heartbeats'][]=$job; }
 function graph_cfg() { return null; }
+// 3.0.53: the daily run keeps when the last full copy went, and checks the backup after it.
+function setting($k) { return $k === 'offsite_full_at' ? (getenv('OFFSITE_LAST_FULL') ?: null) : null; }
+function set_setting($k, $v) { $GLOBALS['settings'][$k]=$v; }
+function backup_check() { return ['ok'=>true,'detail'=>'checked']; }
 register_shutdown_function(function() { echo "\nSENT:" . json_encode($GLOBALS['sent']); });
 ''')
     private = path / 'offsite_private'

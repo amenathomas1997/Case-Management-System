@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.52';
+const APP_VERSION = '3.0.53';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -699,8 +699,10 @@ function mail_outcome_note(bool $sent): void {
 }
 
 function send_app_mail(string $to, string $subject, string $body): bool {
+    $GLOBALS['mail_last_via'] = 'graph';
     $sent = send_app_mail_now($to, $subject, $body);
     mail_outcome_note($sent);
+    if (function_exists('mail_log_record')) mail_log_record($to, (string)$GLOBALS['mail_last_via'], $sent);
     return $sent;
 }
 
@@ -729,6 +731,7 @@ function send_app_mail_now(string $to, string $subject, string $body): bool {
         } else {
             error_log('send_app_mail: mail is disabled on this copy (mail_disabled); message to a recipient not sent.');
         }
+        $GLOBALS['mail_last_via'] = 'sink';
         return true;
     }
     // Preferred path: Microsoft Graph (cmswebnotifications mailbox)
@@ -754,6 +757,7 @@ function send_app_mail_now(string $to, string $subject, string $body): bool {
     // An ASCII name with RFC 5322 specials (a comma in "Acme, Inc.") must be a
     // quoted-string, or the From header becomes a broken mailbox list.
     elseif (preg_match('/[()<>\[\]:;@\\\\,."]/', $fromName)) $fromName = '"' . addcslashes($fromName, '"\\') . '"';
+    $GLOBALS['mail_last_via'] = 'mail';
     $headers = "From: {$fromName} <{$from}>\r\n"
              . "Reply-To: {$from}\r\n"
              . "MIME-Version: 1.0\r\n"
@@ -1153,6 +1157,7 @@ function record_status_change(int $clientId, ?string $old, string $new, ?int $us
 function send_app_mail_attach(string $to, string $subject, string $body, array $attachments): bool {
     $sent = graph_cfg() !== null && graph_send_mail($to, $subject, $body, false, null, $attachments);
     mail_outcome_note($sent);
+    if (function_exists('mail_log_record')) mail_log_record($to, 'graph', $sent, true);
     return $sent;
 }
 
@@ -1672,3 +1677,5 @@ require_once __DIR__ . '/client_timeline.php';
 require_once __DIR__ . '/portal_history.php';
 // Times offered on a portal request (3.0.52).
 require_once __DIR__ . '/request_offers.php';
+// Running the system safely: mail log, backup check, Graph secret expiry (3.0.53).
+require_once __DIR__ . '/ops.php';
