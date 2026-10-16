@@ -27,7 +27,7 @@ $errors = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $title = trim($_POST['title'] ?? '');
     $authNumber = trim($_POST['auth_number'] ?? '');
-    $agency = trim($_POST['funding_agency'] ?? '');
+    $agency = agency_canonical((string)($_POST['funding_agency'] ?? ''));
     $authHours = (float)($_POST['authorized_hours'] ?? 0);
     $rate = (float)($_POST['hourly_rate'] ?? 0);
     $reason = trim((string)($_POST['amendment_reason'] ?? ''));

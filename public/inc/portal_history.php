@@ -109,7 +109,7 @@ function letter_template(string $key): string {
 /** The merge values for one client: their latest active track, next session, last missed one and newest loan. */
 function letter_values(int $clientId, string $key = ''): array {
     $one = function (string $sql) use ($clientId) { $q = db()->prepare($sql); $q->execute([$clientId]); return $q->fetch() ?: []; };
-    $c = $one('SELECT c.name, c.counselor_name, c.counselor_agency, u.name AS instructor FROM clients c LEFT JOIN users u ON u.id = c.assigned_to WHERE c.id = ?');
+    $c = $one('SELECT c.name, c.counselor_name, c.counselor_agency, c.time_zone, c.state, u.name AS instructor FROM clients c LEFT JOIN users u ON u.id = c.assigned_to WHERE c.id = ?');
     // A completion letter is about the plan just finished; every other letter about the current one.
     $t = $one("SELECT id, title, auth_number, authorized_hours, expiration_date FROM training_tracks WHERE client_id = ? ORDER BY "
         . ($key === 'completion' ? "status = 'Completed' DESC, COALESCE(completed_at, created_at) DESC" : "status = 'Active' DESC, id DESC") . ' LIMIT 1');
@@ -128,7 +128,8 @@ function letter_values(int $clientId, string $key = ''): array {
         '{authorized_hours}' => isset($t['authorized_hours']) ? (string)(float)$t['authorized_hours'] : $blank,
         '{hours_used}' => isset($t['id']) ? (string)round((float)track_rollup((int)$t['id'])['hours_worked'], 2) : $blank,
         '{expiration}' => !empty($t['expiration_date']) ? fmt_date($t['expiration_date']) : $blank,
-        '{next_session}' => !empty($next['start_at']) ? date('l, F j, Y \a\t g:i A', strtotime($next['start_at'])) : $blank,
+        // In the client's own time zone, named when it is not the office's (4.1.0).
+        '{next_session}' => !empty($next['start_at']) ? zone_date(client_zone($c ?: []), 'l, F j, Y \a\t g:i A' . (client_zone($c ?: []) ? ' T' : ''), strtotime($next['start_at'])) : $blank,
         '{last_missed}' => !empty($missed['start_at']) ? date('l, F j, Y', strtotime($missed['start_at'])) : $blank,
         '{item}' => $v($loan['name'] ?? ''), '{loan_due}' => !empty($loan['due_date']) ? fmt_date($loan['due_date']) : $blank,
         '{org}' => brand('org'),

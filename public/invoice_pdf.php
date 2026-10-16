@@ -115,8 +115,13 @@ $private = $invoice ? ($invoice['bill_mode'] ?? 'vr') === 'private' : track_mode
 $fromLines = array_values(array_filter(array_merge(explode("\n", str_replace("\r", '', $bs['remit_to'])),
     [$bs['phone'] !== '' ? 'Phone ' . $bs['phone'] : '', $bs['email']]), fn($v) => trim($v) !== ''));
 $payInfo = array_filter([
-    'Vendor number' => $bs['vendor_number'], 'Tax ID' => $bs['tax_id'],
-    'Payment terms' => $invoice ? 'Due ' . $bs['terms_days'] . ' days after submission' : '',
+    // The vendor number kept on the invoice when it was made (4.1.0); else this agency's, else
+    // Billing details. The terms are the ones its due date was set with, once it is sent.
+    'Vendor number' => trim((string)($invoice['vendor_number'] ?? '')) !== '' ? trim((string)$invoice['vendor_number'])
+        : ($private ? $bs['vendor_number'] : agency_vendor_number((string)(($invoice['funding_agency'] ?? null) ?: $t['funding_agency']))), 'Tax ID' => $bs['tax_id'],
+    'Payment terms' => $invoice ? 'Due ' . (!empty($invoice['due_date']) && !empty($invoice['submitted_at'])
+        ? (int)round((strtotime((string)$invoice['due_date']) - strtotime(substr((string)$invoice['submitted_at'], 0, 10))) / 86400)
+        : ($private ? $bs['terms_days'] : agency_terms_days((string)(($invoice['funding_agency'] ?? null) ?: $t['funding_agency'])))) . ' days after submission' : '',
     'Due date' => $invoice && !empty($invoice['due_date']) ? fmt_date($invoice['due_date']) : '',
     'Memo' => $invoice ? (string)($invoice['notes'] ?? '') : '',
 ], fn($v) => $v !== '');

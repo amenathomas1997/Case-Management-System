@@ -485,7 +485,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
 
 <section class="card" aria-labelledby="billing-h">
   <h2 id="billing-h">Billing details</h2>
-  <p class="muted">Printed on every invoice, in the PDF and the accessible version. VR payment systems match payments on the vendor number and the remit-to address.</p>
+  <p class="muted">Printed on every invoice, in the PDF and the accessible version. VR payment systems match payments on the vendor number and the remit-to address. An agency with its own vendor number, terms or billing address uses those instead: see <a href="funding_agencies.php">Funding agencies</a>.</p>
   <?php $bs = billing_settings(); $bv = fn(string $k, string $cur) => old_in('save_billing') !== '' ? old_in('billing_' . $k) : $cur; ?>
   <form method="post" action="admin.php#billing-h" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['billing_vendor_number' => 'Vendor number', 'billing_tax_id' => 'Tax ID', 'billing_remit_to' => 'Remit-to address', 'billing_phone' => 'Billing phone',
@@ -526,6 +526,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
     <a class="btn btn-secondary" href="clients.php?archived=1">Archived clients</a>
     <a class="btn btn-secondary" href="outcomes.php">Annual outcome report</a>
     <a class="btn btn-secondary" href="vendors.php">Vendor agreements</a>
+    <a class="btn btn-secondary" href="funding_agencies.php">Funding agencies</a>
     <a class="btn btn-secondary" href="privacy_incidents.php">Privacy incidents</a>
   </div>
   <h3 id="notelock-h">Case note lock</h3>

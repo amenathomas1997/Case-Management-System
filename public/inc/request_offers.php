@@ -169,7 +169,11 @@ function offer_confirm(int $offerId, int $clientId): array {
         }
         $pdo->prepare("UPDATE portal_request_offers SET status = 'Chosen', chosen_at = NOW(), session_id = ? WHERE id = ?")->execute([$sid, $offerId]);
         $pdo->prepare("UPDATE portal_request_offers SET status = 'Withdrawn' WHERE request_id = ? AND status = 'Offered'")->execute([(int)$req['id']]);
-        $pdo->prepare("UPDATE portal_requests SET status = 'Done', outcome = ? WHERE id = ?")->execute([mb_substr('Booked for ' . date('l, F j, Y \a\t g:i A', $start) . '.', 0, 500), (int)$req['id']]);
+        // The client reads this on their portal: in their own time zone, named (4.1.0).
+        $cq = $pdo->prepare('SELECT time_zone, state FROM clients WHERE id = ?');
+        $cq->execute([$clientId]);
+        $bookedTz = client_zone($cq->fetch() ?: []);
+        $pdo->prepare("UPDATE portal_requests SET status = 'Done', outcome = ? WHERE id = ?")->execute([mb_substr('Booked for ' . zone_date($bookedTz, 'l, F j, Y \a\t g:i A T', $start) . '.', 0, 500), (int)$req['id']]);
         $pdo->commit();
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();

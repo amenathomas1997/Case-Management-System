@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.0.0';
+const APP_VERSION = '4.1.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1368,15 +1368,18 @@ function generate_invoice(int $trackId, ?int $userId, ?string $until = null): ?i
         $counselor = $c->fetch() ?: [];
         $billTo = implode("\n", array_filter(array_map(fn($v) => trim((string)$v), $private
             ? [$counselor['name'] ?? null, $counselor['address'] ?? null, (int)($counselor['email_verified'] ?? 0) === 1 ? ($counselor['email'] ?? null) : null]
-            : [$counselor['counselor_name'] ?? null, $counselor['counselor_agency'] ?? null,
-                (int)($counselor['counselor_verified'] ?? 0) === 1 ? ($counselor['counselor_email'] ?? null) : null]), fn($v) => $v !== ''));
+            // The agency's billing address (4.1.0) comes first, under its name; then the counselor.
+            : array_merge(agency_bill_to_lines((string)$track['funding_agency']), [$counselor['counselor_name'] ?? null, $counselor['counselor_agency'] ?? null,
+                (int)($counselor['counselor_verified'] ?? 0) === 1 ? ($counselor['counselor_email'] ?? null) : null])), fn($v) => $v !== ''));
         // Number the invoice from its own id after the insert — collision-free
         // even for two invoices created at the same instant.
         $pdo->prepare('INSERT INTO invoices (track_id, invoice_number, hours, hours_amount, mileage, mileage_amount, expenses_amount, total_amount, created_by,
-                auth_number, funding_agency, bill_mode, bill_to, hourly_rate, mileage_rate, period_start, period_end) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+                auth_number, funding_agency, bill_mode, bill_to, hourly_rate, mileage_rate, period_start, period_end, vendor_number) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
             ->execute([$trackId, 'PENDING', $sums['h'], $hoursAmt, $sums['m'], $milesAmt, $expAmt, round($hoursAmt + $milesAmt + $expAmt, 2), $userId,
                 $private ? '' : $track['auth_number'], $private ? 'Private pay' : $track['funding_agency'], $private ? 'private' : 'vr', $billTo, $track['hourly_rate'], $track['mileage_rate'],
-                $dates ? min($dates) : null, $dates ? max($dates) : null]);
+                $dates ? min($dates) : null, $dates ? max($dates) : null,
+                // The vendor number this agency knows you by (4.1.0), kept with the invoice.
+                ($vn = $private ? billing_settings()['vendor_number'] : agency_vendor_number((string)$track['funding_agency'])) !== '' ? $vn : null]);
         $invId = (int)$pdo->lastInsertId();
         $pdo->prepare('UPDATE invoices SET invoice_number = ? WHERE id = ?')
             ->execute(['INV-' . date('Ym') . '-' . str_pad((string)$invId, 4, '0', STR_PAD_LEFT), $invId]);
@@ -1705,3 +1708,5 @@ require_once __DIR__ . '/staff_accounts.php';
 require_once __DIR__ . '/voice_more.php';
 // The iPhone app's 4.0.0 actions (api.php only uses them).
 require_once __DIR__ . '/api_more.php';
+// Funding agencies in other states, client time zones (4.1.0).
+require_once __DIR__ . '/agencies.php';

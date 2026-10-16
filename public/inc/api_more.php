@@ -23,7 +23,7 @@ function api_more(string $action, array $input, int $userId): ?array {
             if ($on === null) return ['ok' => false, 'error' => 'The date sent must be from the day the invoice was created to today.', 'status' => 422];
             if (!invoice_submit($id, $on)) return ['ok' => false, 'error' => 'That invoice was changed meanwhile.', 'status' => 409];
             audit($userId, 'invoice.submit', 'invoice', $id, 'submitted ' . $on . ' (app)');
-            return ['ok' => true, 'submitted_on' => $on, 'due_date' => invoice_due_date($on)];
+            return ['ok' => true, 'submitted_on' => $on, 'due_date' => (string)db()->query('SELECT due_date FROM invoices WHERE id = ' . $id)->fetchColumn()];
         }
     }
     return null;

@@ -94,7 +94,7 @@ function portal_progress_line(array $track, array $sessions): string {
     if ($next) {
         $ts = strtotime($next['start_at']);
         // A Spanish page gets a Spanish date; an English date is read in English (en()).
-        $parts[] = t('Next session:') . ' ' . (page_lang() === 'es' ? h(portal_when_es($ts)) : en(date('l, F j \a\t g:i A T', $ts))) . '.';
+        $parts[] = t('Next session:') . ' ' . (page_lang() === 'es' ? h(portal_when_es($ts)) : en(portal_date('l, F j \a\t g:i A T', $ts))) . '.';
     } else {
         $parts[] = t('No session scheduled yet.');
     }
@@ -138,7 +138,15 @@ function portal_upload_max_mb(): int {
 /** A session's day and time in Spanish, for the Spanish confirm dialogs: a native
  *  dialog cannot mark an English date lang="en", so the voice would misread it. */
 function portal_when_es(int $ts): string {
-    return when_es($ts); // shared with the Spanish emails (inc/core.php)
+    return zone_when_es(portal_tz(), $ts); // shared with the Spanish emails (inc/core.php), in the client's zone
+}
+/** The client's time zone when it is not the site's (null: show times as they are). */
+function portal_tz(): ?string {
+    return $GLOBALS['PORTAL_TZ'] ?? null;
+}
+/** date() in the client's time zone. */
+function portal_date(string $format, int $ts): string {
+    return zone_date(portal_tz(), $format, $ts);
 }
 /** Tell the client's instructor about portal activity, or every administrator when
  *  nobody is assigned or the assigned account has been deactivated: an alert to a
@@ -167,6 +175,8 @@ if (strlen($token) === 48) {
     // A client who prefers Spanish gets the portal in Spanish from the first visit;
     // the Español/English toggle (which sets the session language) still decides after that.
     if ($client && !isset($_SESSION['lang']) && client_lang($client) === 'es') $_SESSION['lang'] = 'es';
+    // Times on the portal are the client's own (4.1.0).
+    if ($client) $GLOBALS['PORTAL_TZ'] = client_zone($client);
 }
 // A closed case keeps its portal readable (history, messages, resources) but sends
 // nothing more: no messages, requests, updates, files or AI explanations.
@@ -813,7 +823,7 @@ document.addEventListener('submit', function (e) {
   <?php foreach ($sessions as $s):
       // Every session offers the same actions, so each control also names its
       // session (hidden text) — otherwise a list of them is indistinguishable.
-      $when = date('l, F j \a\t g:i A T', strtotime($s['start_at']));
+      $when = portal_date('l, F j \a\t g:i A T', strtotime($s['start_at']));
       $forSession = '<span class="visually-hidden"> — ' . en($when) . '</span>';
       // Each request is confirmed first, naming the session; the question says what
       // OK and Cancel do, since "Cancel" would otherwise read as cancelling the session.
@@ -823,7 +833,7 @@ document.addEventListener('submit', function (e) {
       $askNew = __('Send your instructor a request for a new time for this session?') . "\n" . $askWhen . "\n" . __('Choose OK to send the request, or Cancel to send nothing.');
       $askCancel = __('Send your instructor a request to cancel this session?') . "\n" . $askWhen . "\n" . __('Choose OK to send the request. Choose Cancel to keep the session and send nothing.'); ?>
     <li>
-      <strong><?= en($when) ?></strong> <?= h(__('to')) ?> <?= en(date('g:i A T', strtotime($s['end_at']))) ?>
+      <strong><?= en($when) ?></strong> <?= h(__('to')) ?> <?= en(portal_date('g:i A T', strtotime($s['end_at']))) ?>
       <?= !empty($s['is_remote']) ? ' · <span class="badge badge-active">' . h(__('Remote')) . '</span>' : ($s['location'] ? ' · ' . en($s['location']) : '') ?>
       <?= $s['staff_name'] ? ' · ' . t('with') . ' ' . h($s['staff_name']) : '' ?>
       <?php if (!empty($s['is_remote']) && !empty($s['meeting_url'])): ?>
@@ -861,7 +871,7 @@ $pastWord = ['Completed' => 'Attended', 'No Show' => 'Missed', 'Cancelled' => 'C
   <details><summary><?= t('Show your last sessions') ?> (<?= count($past) ?>)</summary>
   <ul>
   <?php foreach ($past as $ps): $pts = strtotime($ps['start_at']); ?>
-    <li><?= page_lang() === 'es' ? h(portal_when_es($pts)) : en(date('l, F j, Y \a\t g:i A', $pts)) ?>: <?= t($pastWord[$ps['status']]) ?></li>
+    <li><?= page_lang() === 'es' ? h(portal_when_es($pts)) : en(portal_date('l, F j, Y \a\t g:i A' . (portal_tz() ? ' T' : ''), $pts)) ?>: <?= t($pastWord[$ps['status']]) ?></li>
   <?php endforeach; ?>
   </ul>
   </details>
@@ -1083,7 +1093,7 @@ if ($devLoans || $devRepairs || $devChecks): ?>
       <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked"><?= csrf_field() ?>
         <fieldset><legend><?= t('Choose a time') ?></legend>
         <?php foreach ($offers as $i => $of): $ots = strtotime($of['start_at']); ?>
-          <label><input type="radio" name="offer_id" value="<?= (int)$of['id'] ?>"<?= $i === 0 ? ' checked' : '' ?>> <?= page_lang() === 'es' ? h(portal_when_es($ots)) : en(date('l, F j \a\t g:i A', $ots)) ?>,
+          <label><input type="radio" name="offer_id" value="<?= (int)$of['id'] ?>"<?= $i === 0 ? ' checked' : '' ?>> <?= page_lang() === 'es' ? h(portal_when_es($ots)) : en(portal_date('l, F j \a\t g:i A' . (portal_tz() ? ' T' : ''), $ots)) ?>,
             <?= (int)round((strtotime($of['end_at']) - $ots) / 60) ?> <?= t('minutes') ?><?= (int)$of['is_remote'] ? ', ' . h(__('Remote')) : ($of['location'] ? ', ' . en((string)$of['location']) : '') ?><?= $of['staff_name'] ? ', ' . t('with') . ' ' . h((string)$of['staff_name']) : '' ?></label>
         <?php endforeach; ?>
         </fieldset>
@@ -1137,7 +1147,7 @@ if (!$caseClosed || $thread): ?>
       <li class="msg <?= $m['sender'] === 'client' ? 'out' : 'in' ?>">
         <span class="visually-hidden"><?= h($who) ?>:</span>
         <div class="msg-body"><?= nl2br(h($m['body'])) ?></div>
-        <div class="msg-meta"><span aria-hidden="true"><?= h($who) ?> · </span><?= en(date('M j, g:i A', strtotime($m['created_at']))) ?></div>
+        <div class="msg-meta"><span aria-hidden="true"><?= h($who) ?> · </span><?= en(portal_date('M j, g:i A', strtotime($m['created_at']))) ?></div>
       </li>
     <?php endforeach; ?>
   </ul>

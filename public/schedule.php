@@ -335,7 +335,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_group'])) {
     $attended = $postedIds('attended');
     // Scoped staff complete only their own clients' rows of the group, instead of
     // stopping part-way at the first client that belongs to someone else.
-    $rows = db()->prepare("SELECT s.*, c.name AS client_name FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
+    $rows = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
         WHERE s.group_uid = ? AND s.status = 'Scheduled'" . (caseload_scoped() ? ' AND c.assigned_to = ?' : '') . ' ORDER BY c.name, s.id');
     $rows->execute(caseload_scoped() ? [$uid, (int)$user['id']] : [$uid]);
     $done = 0;
@@ -560,7 +560,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
 /* ---- POST: move a session, or cancel the rest of its series or its whole group (3.0.43) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['move_session']) || isset($_POST['cancel_series']) || isset($_POST['cancel_group']))) {
     $sid = (int)($_POST['session_id'] ?? 0);
-    $q = db()->prepare("SELECT s.*, c.name AS client_name FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id WHERE s.id = ? AND s.status = 'Scheduled'");
+    $q = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id WHERE s.id = ? AND s.status = 'Scheduled'");
     $q->execute([$sid]);
     $sess = $q->fetch();
     if (!$sess) { flash('That session is no longer scheduled.', 'error'); redirect('schedule.php'); }
@@ -600,7 +600,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     $linkLogId = preg_match('/^Completed_logged_(\d+)$/D', $toIn, $lm) ? (int)$lm[1] : 0;
     $separate = $toIn === 'Completed_separate';
     $to = ($linkLogId > 0 || $separate) ? 'Completed' : (in_array($toIn, array_diff(SESSION_STATUSES, ['Scheduled']), true) ? $toIn : null);
-    $st = db()->prepare('SELECT s.*, c.name AS client_name, t.title AS track_title FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
+    $st = db()->prepare('SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, t.title AS track_title FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
         LEFT JOIN training_tracks t ON t.id = s.track_id WHERE s.id = ?');
     $st->execute([$sid]);
     $sess = $st->fetch();
@@ -795,7 +795,7 @@ $ucq = db()->prepare("SELECT COUNT(*) FROM scheduled_sessions s JOIN clients c O
     WHERE s.status = 'Scheduled' AND s.end_at >= NOW()" . $upAnd);
 $ucq->execute($upParams);
 $upcomingTotal = (int)$ucq->fetchColumn();
-$uq = db()->prepare("SELECT s.*, c.name AS client_name, u.name AS staff_name, t.title AS track_title
+$uq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, u.name AS staff_name, t.title AS track_title
     FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
     LEFT JOIN users u ON u.id = s.user_id LEFT JOIN training_tracks t ON t.id = s.track_id
     WHERE s.status = 'Scheduled' AND s.end_at >= NOW()" . $upAnd . " ORDER BY s.start_at LIMIT 100");
@@ -803,7 +803,7 @@ $uq->execute($upParams);
 $upcoming = $uq->fetchAll();
 // Every group still awaiting an outcome, whatever the list limit or filter, so a
 // group cut off at the end of the upcoming list still gets its card.
-$gq = db()->prepare("SELECT s.*, c.name AS client_name, u.name AS staff_name, t.title AS track_title
+$gq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, u.name AS staff_name, t.title AS track_title
     FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
     LEFT JOIN users u ON u.id = s.user_id LEFT JOIN training_tracks t ON t.id = s.track_id
     WHERE s.status = 'Scheduled' AND s.group_uid IS NOT NULL" . $scopeAnd . " ORDER BY s.start_at, s.id");
@@ -813,14 +813,14 @@ $groupRows = $gq->fetchAll();
 // Sessions whose time has passed but that are still 'Scheduled'. Every one stays
 // listed (no limit) until an outcome is recorded, so a session can never scroll
 // out of reach with its hours unlogged.
-$oq = db()->prepare("SELECT s.*, c.name AS client_name, u.name AS staff_name, t.title AS track_title
+$oq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, u.name AS staff_name, t.title AS track_title
     FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
     LEFT JOIN users u ON u.id = s.user_id LEFT JOIN training_tracks t ON t.id = s.track_id
     WHERE s.status = 'Scheduled' AND s.end_at < NOW()" . $scopeAnd . " ORDER BY s.start_at");
 $oq->execute($scopeParams);
 $overdue = $oq->fetchAll();
 
-$rq = db()->prepare("SELECT s.*, c.name AS client_name, u.name AS staff_name, t.title AS track_title
+$rq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, u.name AS staff_name, t.title AS track_title
     FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
     LEFT JOIN users u ON u.id = s.user_id LEFT JOIN training_tracks t ON t.id = s.track_id
     WHERE s.status <> 'Scheduled'" . $scopeAnd . " ORDER BY s.start_at DESC LIMIT 30");
@@ -850,7 +850,9 @@ function session_row(array $s, string $csrf): void {
       <th scope="row" id="s-<?= (int)$s['id'] ?>" tabindex="-1"><?= fmt_datetime($s['start_at']) ?><br><span class="muted">to <?= date('g:i A', strtotime($s['end_at'])) ?></span></th>
       <?php // The client links to their record only for staff who can open it. ?>
       <td><?php if (can('clients')): ?><a href="client.php?id=<?= (int)$s['client_id'] ?>"><?= h($s['client_name']) ?></a><?php else: ?><?= h($s['client_name']) ?><?php endif; ?>
-          <?= $s['track_title'] ? '<br><span class="muted">' . h($s['track_title']) . '</span>' : '' ?></td>
+          <?= $s['track_title'] ? '<br><span class="muted">' . h($s['track_title']) . '</span>' : '' ?><?php
+          // A client in another time zone (4.1.0): their clock, so nobody books 8 AM for them by mistake.
+          if ($cz = client_zone($s)): ?><br><span class="muted">Client's time <?= h(zone_date($cz, 'g:i A T', strtotime($s['start_at']))) ?></span><?php endif; ?></td>
       <td><?= h($s['staff_name'] ?? '—') ?></td>
       <td><?php if (!empty($s['is_remote'])): ?><span class="badge badge-active">Remote</span><?= !empty($s['meeting_url']) ? ' <a href="' . h($s['meeting_url']) . '" target="_blank" rel="noopener">Join<span class="visually-hidden"> ' . $which . ' (opens in a new tab)</span></a>' : '' ?><?php else: ?><?= trim((string)$s['location']) !== '' ? h($s['location']) . ' <a href="https://maps.apple.com/?daddr=' . rawurlencode((string)$s['location']) . '" target="_blank" rel="noopener">Directions<span class="visually-hidden"> ' . $which . ' (opens maps in a new tab)</span></a>' : '—' ?><?php endif; ?></td>
       <td><?= status_badge($s['status']) ?><?php // Checked in from the app (API check_in_session): the time the client arrived.

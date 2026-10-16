@@ -73,8 +73,8 @@ check(session_set_outcome($fs,'No Show',1,'test')!==null && $db->query("SELECT s
 check(voice_builtin_match('cancel my next appointment',$secs)===null && voice_builtin_match('add a note that John was a no show',$secs)===null
     && voice_builtin_match('add a note that Maria is managing her email',$secs)===null && voice_builtin_match('remind me to check expiring authorizations for Pat',$secs)===null,'Voice never reads a pronoun as a client, and a note mentioning a question is left for the AI');
 check((voice_builtin_match('unpaid invoices',$secs)['ask']??'')==='invoices_unpaid' && (voice_builtin_match('record Pat Smith as a no show',$secs)['create']??'')==='no_show','The plain questions and commands still match');
-$db->prepare("INSERT INTO api_tokens(user_id,token_hash,created_at,expires_at) VALUES(1,?,DATE_SUB(NOW(),INTERVAL 85 DAY),DATE_ADD(NOW(),INTERVAL 2 DAY))")->execute([hash('sha256',str_repeat('g',64))]); $oldTok=(int)$db->lastInsertId();
-putenv('CMS_TEST_TOKEN=' . str_repeat('g',64)); $call('me',[],[],false); putenv('CMS_TEST_TOKEN');
+$db->prepare("INSERT INTO api_tokens(user_id,token_hash,created_at,expires_at) VALUES(1,?,DATE_SUB(NOW(),INTERVAL 85 DAY),DATE_ADD(NOW(),INTERVAL 2 DAY))")->execute([hash('sha256',str_repeat('9',64))]); $oldTok=(int)$db->lastInsertId();
+putenv('CMS_TEST_TOKEN=' . str_repeat('9',64)); $call('me'); putenv('CMS_TEST_TOKEN');
 $left=(int)$db->query("SELECT TIMESTAMPDIFF(HOUR,NOW(),expires_at) FROM api_tokens WHERE id=$oldTok")->fetchColumn();
-check($left>=48 && $left<=5*24+1,'An app sign-in is renewed in use, but never past 90 days from signing in');
+check($left>=5*24-1 && $left<=5*24,'An app sign-in is renewed in use, but never past 90 days from signing in');
 $db->exec("DELETE FROM api_tokens WHERE id=$oldTok");

@@ -77,8 +77,9 @@ function invoice_balance(array $i): float {
 }
 
 /** The due date for an invoice submitted on $date, from the payment terms. */
-function invoice_due_date(string $date): string {
-    return date('Y-m-d', strtotime($date . ' +' . billing_settings()['terms_days'] . ' days'));
+function invoice_due_date(string $date, ?string $agency = null): string {
+    // The agency's own payment terms when it has them (4.1.0), else Billing details.
+    return date('Y-m-d', strtotime($date . ' +' . agency_terms_days($agency) . ' days'));
 }
 
 /** A date typed for a submission or payment: a real date from the invoice's creation
@@ -91,8 +92,10 @@ function billing_date_in(mixed $raw, string $notBefore): ?string {
 
 /** Submit a Draft on $date: its due date follows from the terms. True when it changed. */
 function invoice_submit(int $id, string $date): bool {
+    $ag = db()->prepare('SELECT funding_agency FROM invoices WHERE id = ?');
+    $ag->execute([$id]);
     $st = db()->prepare("UPDATE invoices SET status = 'Submitted', submitted_at = ?, due_date = ? WHERE id = ? AND status = 'Draft'");
-    $st->execute([$date, invoice_due_date($date), $id]);
+    $st->execute([$date, invoice_due_date($date, ($a = $ag->fetchColumn()) === false ? null : (string)$a), $id]);
     return $st->rowCount() === 1;
 }
 

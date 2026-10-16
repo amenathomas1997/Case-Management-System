@@ -112,7 +112,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
             if ($auth === '' || mb_strlen($auth) > 80) { $skip($label, 'auth_number is missing or longer than 80 characters'); continue; }
             $ex = db()->prepare('SELECT COUNT(*) FROM training_tracks WHERE auth_number = ?'); $ex->execute([$auth]);
             if ((int)$ex->fetchColumn() > 0 || isset($seen[$auth])) { $skip($label, 'Authorization ' . $auth . ' is already on a track'); continue; }
-            $agency = $get($row, 'funding_agency');
+            $agency = agency_canonical($get($row, 'funding_agency'));
             if ($agency === '' || mb_strlen($agency) > 190) { $skip($label, 'funding_agency is missing'); continue; }
             $num = function (string $c, float $min, float $max, bool $required) use ($get, $row): ?float {
                 $v = str_replace(['$', ',', ' '], '', $get($row, $c));

@@ -175,7 +175,7 @@ function client_session_notice(array $sessionIds, string $kind): bool {
     $sessionIds = array_values(array_unique(array_map('intval', $sessionIds)));
     if (!$sessionIds || !in_array($kind, ['booked', 'cancelled', 'moved'], true)) return false;
     try {
-        $q = db()->prepare('SELECT s.*, c.name AS client_name, c.email, c.email_verified, c.a11y_contact, c.preferred_language, c.archived_at, c.status AS client_status
+        $q = db()->prepare('SELECT s.*, c.name AS client_name, c.email, c.email_verified, c.a11y_contact, c.preferred_language, c.archived_at, c.status AS client_status, c.time_zone AS client_time_zone, c.state AS client_state
             FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id WHERE s.id IN (' . implode(',', array_fill(0, count($sessionIds), '?')) . ') ORDER BY s.start_at');
         $q->execute($sessionIds);
         $rows = $q->fetchAll();
@@ -239,7 +239,9 @@ function client_sessions_ics(array $rows, string $attendee, string $method, bool
         $remote = !empty($s['is_remote']);
         $url = $remote && preg_match('~^https?://\S+$~i', trim((string)$s['meeting_url'])) ? trim((string)$s['meeting_url']) : '';
         $where = $remote ? ($es ? 'en línea' : 'online') . ($url !== '' ? ' (' . $url . ')' : '') : trim((string)$s['location']);
-        $lines[] = '- ' . ($es ? when_es($st) : date('l, F j \a\t g:i A T', $st)) . ($where !== '' ? ', ' . $where : '');
+        // In the client's own time zone (4.1.0); the calendar file itself is in UTC.
+        $tz = client_zone($s);
+        $lines[] = '- ' . ($es ? zone_when_es($tz, $st) : zone_date($tz, 'l, F j \a\t g:i A T', $st)) . ($where !== '' ? ', ' . $where : '');
         $ics .= "BEGIN:VEVENT\r\nUID:cms-client-session-" . (int)$s['id'] . '@' . $host . "\r\nDTSTAMP:" . $fmt(time()) . "\r\n"
             // SEQUENCE grows with each move (ics_sequence, 3.0.43), so a calendar takes the newest.
         . 'SEQUENCE:' . ((int)($s['ics_sequence'] ?? 0) + ($method === 'CANCEL' ? 1 : 0)) . "\r\nDTSTART:" . $fmt($st) . "\r\nDTEND:" . $fmt($en) . "\r\n"

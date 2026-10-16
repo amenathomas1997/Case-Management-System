@@ -279,6 +279,8 @@ CREATE TABLE `clients` (
   `email_verified` tinyint(1) NOT NULL DEFAULT 1,
   `phone` varchar(40) DEFAULT NULL,
   `address` varchar(255) DEFAULT NULL,
+  `state` char(2) DEFAULT NULL,
+  `time_zone` varchar(40) DEFAULT NULL,
   `status` enum('Pending Assessment','Waitlist','Active Training','On Hold','Closed - Rehabilitated','Closed - Other') NOT NULL DEFAULT 'Pending Assessment',
   `client_type` enum('VR','Pre-ETS') NOT NULL DEFAULT 'VR',
   `a11y_screen_reader` tinyint(1) NOT NULL DEFAULT 0,
@@ -642,6 +644,25 @@ CREATE TABLE `equipment_reservations` (
   CONSTRAINT `er_ibfk_2` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `funding_agencies`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `funding_agencies` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `name` varchar(190) NOT NULL,
+  `state` char(2) DEFAULT NULL,
+  `time_zone` varchar(40) DEFAULT NULL,
+  `email_domains` varchar(255) DEFAULT NULL,
+  `vendor_number` varchar(80) DEFAULT NULL,
+  `terms_days` smallint(5) unsigned DEFAULT NULL,
+  `bill_to` varchar(500) DEFAULT NULL,
+  `notes` varchar(500) DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `goal_progress`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -757,6 +778,7 @@ CREATE TABLE `invoices` (
   `mileage_rate` decimal(6,3) DEFAULT NULL,
   `period_start` date DEFAULT NULL,
   `period_end` date DEFAULT NULL,
+  `vendor_number` varchar(80) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `invoice_number` (`invoice_number`),
   KEY `track_id` (`track_id`),
@@ -933,6 +955,7 @@ CREATE TABLE `referrals` (
   `client_phone` varchar(40) DEFAULT NULL,
   `client_email` varchar(190) DEFAULT NULL,
   `client_address` varchar(255) DEFAULT NULL,
+  `client_state` char(2) DEFAULT NULL,
   `status` enum('New','Reviewed','Converted','Closed') NOT NULL DEFAULT 'New',
   `assigned_to` int(10) unsigned DEFAULT NULL,
   `client_id` int(10) unsigned DEFAULT NULL,

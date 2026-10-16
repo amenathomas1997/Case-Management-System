@@ -417,7 +417,7 @@ case 'save_track': {
     $errors = [];
     $title = trim((string)($input['title'] ?? ''));
     $authNumber = trim((string)($input['auth_number'] ?? ''));
-    $agency = trim((string)($input['funding_agency'] ?? ''));
+    $agency = agency_canonical((string)($input['funding_agency'] ?? ''));
     // A field left out keeps the track's value on an edit (none on a new track).
     $authHours = parity_track_number($input, 'authorized_hours', 'Authorized hours', $track ? (float)$track['authorized_hours'] : 0.0);
     $rate = parity_track_number($input, 'hourly_rate', 'Hourly rate', $track ? (float)$track['hourly_rate'] : 0.0);

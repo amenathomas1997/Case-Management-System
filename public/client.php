@@ -1272,6 +1272,9 @@ if ($hasA11y): ?>
         <?php endif; ?></dd>
       <dt>Phone</dt><dd><?= tel_link($client['phone'] ?? null) ?></dd>
       <dt>Address</dt><dd><?= directions_link($client['address'] ?? null) ?></dd>
+      <?php if (!empty($client['state']) || client_zone($client)): // 4.1.0 ?>
+      <dt>State and time zone</dt><dd><?= h(implode('; ', array_filter([US_STATES[$client['state'] ?? ''] ?? '', ($cz = client_zone($client)) ? zone_difference_text($cz) : '']))) ?></dd>
+      <?php endif; ?>
       <?php if (!empty($client['guardian_name']) || !empty($client['guardian_phone']) || !empty($client['guardian_email'])): // 3.0.37 ?>
       <dt>Guardian</dt><dd><?= h($client['guardian_name'] ?: '—') ?>
         <?php $gTel = preg_replace('/[^0-9+]/', '', (string)($client['guardian_phone'] ?? '')); ?>

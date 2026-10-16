@@ -313,7 +313,7 @@ try {
         'verify'=>'redirect','ai'=>'AI assistant','intake'=>'Guided intake','recommend'=>'AT recommendations','amendment_request'=>'Amendment request',
         'progress_review'=>'Progress review','translate'=>'Translate','remediate'=>'Remediation','ask'=>'Ask your caseload','kb_ask'=>'Ask the knowledge base',
         'curriculum_ai'=>'Curriculum generator','workflows'=>'Daily action center','privacy'=>'Privacy notice',
-        'release'=>'Release of information','vendors'=>'Vendor agreements','privacy_incidents'=>'Privacy incidents','survey_responses'=>'Survey responses','authorizations'=>'Incoming authorizations','business_summary'=>'Business summary','attendance'=>'Attendance and no-shows','unused_authorizations'=>'Unused authorizations','data_quality'=>'Data quality','exports'=>'Spreadsheet downloads','client_timeline'=>'Timeline','letters'=>'Letters','settings'=>'Settings','upgrade'=>'Database upgrade','client_import'=>'Import clients and authorizations'];
+        'release'=>'Release of information','vendors'=>'Vendor agreements','privacy_incidents'=>'Privacy incidents','survey_responses'=>'Survey responses','authorizations'=>'Incoming authorizations','business_summary'=>'Business summary','attendance'=>'Attendance and no-shows','unused_authorizations'=>'Unused authorizations','data_quality'=>'Data quality','exports'=>'Spreadsheet downloads','client_timeline'=>'Timeline','letters'=>'Letters','settings'=>'Settings','upgrade'=>'Database upgrade','client_import'=>'Import clients and authorizations','funding_agencies'=>'Funding agencies'];
     $showsOwnContent=function(string $page,string $html)use($pageMarkers):bool{
         $marker=$pageMarkers[$page]??null;
         if($marker===null)return false;
@@ -816,6 +816,7 @@ try {
     require __DIR__.'/settings_upgrade_cases.php';
     require __DIR__.'/staff_import_cases.php';
     require __DIR__.'/v4_cases.php';
+    require __DIR__.'/v41_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 
@@ -846,12 +847,14 @@ try {
     $db->prepare("INSERT INTO at_records(kind,client_id,title,status,details) VALUES('repair',1,'Legacy repair with a loaner','Open',?)")->execute([json_encode(['loan_id'=>(string)$loanerLoan])]);
     $followup=fn(int $loan):string=>(string)$db->query("SELECT CONCAT(status,'|',COALESCE(notes,'')) FROM equipment_followups WHERE loan_id=$loan")->fetchColumn();
     $installed=$shape();
-    $db->exec("ALTER TABLE invoices DROP COLUMN auth_number, DROP COLUMN funding_agency, DROP COLUMN bill_to, DROP COLUMN hourly_rate, DROP COLUMN mileage_rate, DROP COLUMN period_start, DROP COLUMN period_end");
+    // vendor_number (4.1.0) comes after 3.0.8's columns, so it is dropped too and put back by mig_4.1.0 below.
+    $db->exec("ALTER TABLE invoices DROP COLUMN auth_number, DROP COLUMN funding_agency, DROP COLUMN bill_to, DROP COLUMN hourly_rate, DROP COLUMN mileage_rate, DROP COLUMN period_start, DROP COLUMN period_end, DROP COLUMN vendor_number");
     $db->exec("ALTER TABLE login_otps DROP COLUMN channel");
     $db->exec("ALTER TABLE consent_forms DROP COLUMN withdrawn_at, DROP COLUMN withdrawn_by");
     $db->exec("ALTER TABLE auth_amendments DROP COLUMN old_auth_number, DROP COLUMN new_auth_number, DROP COLUMN old_mileage_rate, DROP COLUMN new_mileage_rate");
     $db->exec("ALTER TABLE client_documents MODIFY category enum('Authorization','IPE','Release','Report','Resource','Other') NOT NULL DEFAULT 'Other'");
     $migrate($root.'/dist/migrations/mig_3.0.8.sql');
+    $migrate($root.'/dist/migrations/mig_4.1.0.sql');
     check($shape()===$installed,'mig_3.0.8.sql brings a 3.0.7 database to exactly the installed schema');
     check($db->query("SELECT notes FROM equipment WHERE id=$legacyItem")->fetchColumn()==='From device request #9','The upgrade removes the client name from a legacy inventory note');
     check($followup($returnedLoan)==='Skipped|Device returned' && $followup($loanerLoan)==='Skipped|Repair loaner' && $followup($openLoan)==='Pending|',
@@ -870,7 +873,7 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
     $db->exec("INSERT INTO clients (id,name,email,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-client@example.invalid','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL,NULL),(3,'Upgraded client with a blank counselor',NULL,'')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37','3.0.38','3.0.39','3.0.40','3.0.42','3.0.43','3.0.44','3.0.45','3.0.47','3.0.48','3.0.49','3.0.50','3.0.51','3.0.52','3.0.53','3.0.54','3.0.55','4.0.0'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37','3.0.38','3.0.39','3.0.40','3.0.42','3.0.43','3.0.44','3.0.45','3.0.47','3.0.48','3.0.49','3.0.50','3.0.51','3.0.52','3.0.53','3.0.54','3.0.55','4.0.0','4.1.0'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
     check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12, mig_3.0.16 and mig_3.0.21 has exactly the fresh-install schema, defaults included');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=1')->fetchColumn()===3,'The 3.0.21 upgrade keeps every existing client\'s email confirmed');
     $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");

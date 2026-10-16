@@ -2515,6 +2515,9 @@ switch ($action) {
             $counselorConfirmed ? 1 : 0, 1,
         ]);
         $clientId = (int)db()->lastInsertId();
+        // As on the website: the referral's language, and its state with that state's time zone (4.1.0).
+        apply_referral_language($clientId, $ref);
+        client_apply_state($clientId, $ref['client_state'] ?? null);
         record_status_change($clientId, null, 'Pending Assessment', $userId, 'Created from referral #' . $id . ' (mobile)');
         $intake = referral_intake_note($ref);
         db()->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,?)')->execute([

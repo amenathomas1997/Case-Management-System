@@ -278,6 +278,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 page_lang() === 'es' ? 'es' : 'en',
             ]);
             $refId = (int)$pdo->lastInsertId();
+            // The state the person lives in (4.1.0), carried to the client with its time zone.
+            if (($refState = us_state(is_string($_POST['client_state'] ?? null) ? $_POST['client_state'] : null)) !== null) {
+                $pdo->prepare('UPDATE referrals SET client_state = ? WHERE id = ?')->execute([$refState, $refId]);
+            }
             if (!add_task('Contact new referral: ' . $clientName,
                 'Reach out to the referral within 3 business days of receipt.',
                 null, $refId, business_days_from(3), null, null, 'ref-contact-' . $refId)) {
@@ -551,6 +555,8 @@ if ($errors): ?>
     <div class="field"><label for="client_address"><?= t('Their address') ?></label>
       <input type="text" id="client_address" name="client_address" maxlength="255" value="<?= $old('client_address') ?>" <?= $aria('client_address') ?>>
       <?= $err('client_address') ?></div>
+    <div class="field"><label for="client_state"><?= t('Their state') ?></label>
+      <select id="client_state" name="client_state"><?= kv_options(US_STATES, html_entity_decode($old('client_state'), ENT_QUOTES), __('Not given'), true) ?></select></div>
 
     <div class="field" data-role="school">
       <label for="grade_level"><?= t('Grade level') ?></label>

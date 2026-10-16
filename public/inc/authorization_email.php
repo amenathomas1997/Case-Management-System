@@ -91,7 +91,8 @@ function authorization_email_agency(string $addr): string {
         WHERE LOWER(c.counselor_email) LIKE ? AND t.funding_agency NOT IN ('Private pay', 'No charge') GROUP BY t.funding_agency ORDER BY COUNT(*) DESC LIMIT 1");
     $q->execute(['%@' . $domain]);
     $a = $q->fetchColumn();
-    return $a !== false ? (string)$a : (AUTH_EMAIL_AGENCIES[$domain] ?? '');
+    // An agency listed with this domain (Funding agencies, 4.1.0), then the built-in one.
+    return $a !== false ? (string)$a : (agency_for_domain($domain) ?? AUTH_EMAIL_AGENCIES[$domain] ?? '');
 }
 
 /** Clients whose first and last names match the name on the email (a middle name or initial is ignored). */

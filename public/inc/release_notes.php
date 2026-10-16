@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.1.0' => [
+        'Referrals from VR agencies in other states. Administration, Funding agencies keeps each agency\'s state, its clients\' usual time zone, the email domains its authorizations come from, the vendor number it gave you, its payment terms and its billing address. Its invoices use them, and its authorization emails are recognised.',
+        'Each client has a State and a Time zone on their edit page; the public referral form asks for the state. A client in another time zone gets their reminders, calendar invitations, portal and letters in their own time, and the schedule shows "Client\'s time" beside yours.',
+    ],
     '4.0.0' => [
         'The voice assistant now answers common requests without AI: what is on today or this week, tasks due, unread messages and alerts, new referrals, open requests, unbilled work, unpaid invoices, expiring authorizations, a client\'s phone, status, next session, hours left, notes, goals and homework, and opening a client or page. It can also cancel a session or mark a no-show, after you confirm. Administrators can keep voice on with AI off.',
         'On My account, Email me about alerts: urgent ones (a client\'s request, message or call for help) at once and a daily count, a daily count only, or never (the starting choice). The email never names the client. Calendar subscriptions remind you 30 minutes before each session. Phone numbers and addresses are links to call and get directions.',

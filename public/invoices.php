@@ -276,7 +276,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     if ($on === null) { keep_input(); keep_field_errors(['submit_date_' . $id => 'Enter the date the invoice was sent, from the day it was created to today.']); redirect($rowUrl($id)); }
     if (invoice_submit($id, $on)) {
         audit($user['id'], 'invoice.submit', 'invoice', $id, 'submitted ' . $on);
-        flash('Invoice ' . $num . ' marked submitted on ' . fmt_date($on) . '; it is due ' . fmt_date(invoice_due_date($on)) . '.');
+        flash('Invoice ' . $num . ' marked submitted on ' . fmt_date($on) . '; it is due ' . fmt_date((string)db()->query('SELECT due_date FROM invoices WHERE id = ' . (int)$id)->fetchColumn()) . '.');
     } else {
         flash('Invoice ' . $num . ' was not changed: it is no longer a Draft, so someone may have already updated it. The list below shows its current status.', 'error');
     }

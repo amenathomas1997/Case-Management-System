@@ -105,6 +105,9 @@ function cfg($key) { return 'https://example.invalid'; }
 function email_template($name,$args) { return ['Reminder: your session tomorrow', "Hello {$args['name']}, see you tomorrow.\nWhen: {$args['when']}{$args['where']}\nDay: {$args['day']}\nJoin: {$args['join_link']}\n"]; }
 function brand($key) { return 'Test'; }
 function record_heartbeat($job) { $GLOBALS['heartbeats'][]=$job; }
+function client_zone($c) { return null; }
+function zone_format($tz,$fn) { return $fn(); }
+function zone_date($tz,$f,$ts) { return date($f,$ts); }
 function send_app_mail($to,$subject,$body) { $GLOBALS['to'][]=$to; $GLOBALS['mails'][]=['to'=>$to,'subject'=>$subject,'body'=>$body]; $results=json_decode(getenv('MAIL_RESULTS'),true); return $results[$GLOBALS['calls']++]; }
 function notify_admins($subject,$body) { $GLOBALS['admin'][]=$subject; $results=json_decode(getenv('MAIL_RESULTS'),true); return $results[$GLOBALS['calls']++]; }
 function notify_admin_users($message,$link=null) { $GLOBALS['notices'][]=$message; $GLOBALS['links'][]=$link; }

@@ -606,6 +606,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <p>The guardian signs by typing their full name. The link works for 60 days. A new request turns off any earlier unsigned link. While a request is waiting, the form is called Resend the guardian consent request by email. Authorizations &amp; compliance lists consents that need renewing.</p>
 
 <?= $sgH(3, 'guide-billing') ?>
+<p>Each funding agency can have its own vendor number, payment terms and billing address (Administration, Funding agencies); its invoices use them. A client in another time zone shows "Client's time" on the schedule, and their record says how far their time is from yours.</p>
 <p>Before you bill, check each track's authorization, hours, expenses and rate. Fix mistakes on the track first. Recording work and recording payment are separate steps. Your vendor number, remit-to address, tax ID and payment terms print on every invoice; an administrator enters them under Administration, Billing details.</p>
 <p>Work outside an authorization is refused: hours, mileage or expenses dated outside its dates, or that would go over its authorized hours or dollars, cannot be saved on the website, in the app or by voice. The message says how far over it would go. Record the amendment on Edit track / authorization first, then log the work. The track page shows an overrun as, for example, 2 hours over.</p>
 

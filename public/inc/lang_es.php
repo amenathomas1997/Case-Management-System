@@ -229,6 +229,8 @@ return [
     'Their phone' => 'Teléfono de la persona',
     'Their email' => 'Correo electrónico de la persona',
     'Their address' => 'Dirección de la persona',
+    'Their state' => 'Estado donde vive la persona',
+    'Not given' => 'No indicado',
     'Grade level' => 'Grado escolar',
     'Parent / guardian name' => 'Nombre del padre, madre o tutor',
     'Parent / guardian phone' => 'Teléfono del padre, madre o tutor',

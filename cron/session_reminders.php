@@ -45,7 +45,7 @@ if ((int)db()->query("SELECT GET_LOCK(CONCAT('cms_session_reminders_', MD5(DATAB
 // A client who prefers Phone or Postal mail (a11y_contact) is not emailed (3.0.40): the
 // instructor's reminder says to call them, with their number.
 $sessions = db()->query("SELECT s.*, c.name AS client_name, c.email AS client_email, c.email_verified AS client_email_verified,
-        c.a11y_contact AS client_contact, c.phone AS client_phone,
+        c.a11y_contact AS client_contact, c.phone AS client_phone, c.time_zone AS client_time_zone, c.state AS client_state,
         (c.archived_at IS NULL AND c.status NOT LIKE 'Closed%') AS client_current,
         u.id AS active_staff_id, u.name AS staff_name, u.email AS staff_email,
         (u.id IS NOT NULL AND (g.id IS NULL OR g.own_caseload_only = 0 OR c.assigned_to = u.id)) AS staff_sees_client,
@@ -78,6 +78,13 @@ foreach ($sessions as $s) {
     $day = date('Y-m-d', $startTs) === date('Y-m-d') ? 'today' : 'tomorrow';
     // With the time zone (e.g. "2:00 PM CDT"): a remote client may be elsewhere.
     $when = date('l, F j \a\t g:i A T', $startTs);
+    // The client's own clock (4.1.0): a client in another time zone reads their time, and
+    // "today" or "tomorrow" by their calendar.
+    $cz = client_zone($s);
+    // Counted in days on the client's calendar: far ahead of the office (Guam), "tomorrow"
+    // here can be two days away there, so the weekday is said instead.
+    $clientDays = (int)zone_format($cz, fn() => (int)round((strtotime(date('Y-m-d', $startTs) . ' 12:00') - strtotime(date('Y-m-d') . ' 12:00')) / 86400));
+    $clientDay = $clientDays <= 0 ? 'today' : ($clientDays === 1 ? 'tomorrow' : 'on ' . zone_date($cz, 'l', $startTs));
     // A remote session says so and carries its join link (http(s) links only).
     $url = trim((string)($s['meeting_url'] ?? ''));
     $joinLink = !empty($s['is_remote']) && preg_match('~^https?://\S+$~i', $url) ? $url : '';
@@ -112,11 +119,11 @@ foreach ($sessions as $s) {
             $portalToken = (string)($s['portal_token'] ?? '');
             $portalLink = preg_match('/^[a-f0-9]{48}$/D', $portalToken) ? cfg('base_url') . '/portal.php?t=' . $portalToken : '';
             [$subj, $body] = email_template('session_reminder_client', [
-                'name' => $s['client_name'], 'when' => $when, 'where' => $where,
+                'name' => $s['client_name'], 'when' => zone_date($cz, 'l, F j \a\t g:i A T', $startTs), 'where' => $where,
                 // A marker for now: the line is dropped below, and prose elsewhere in an
                 // administrator's own wording reads "your instructor" rather than a gap.
                 'instructor' => $instructor !== '' ? $instructor : "\u{1F}instructor\u{1F}",
-                'day' => $day, 'date' => date('l, F j', $startTs), 'time' => date('g:i A T', $startTs),
+                'day' => $clientDay, 'date' => zone_date($cz, 'l, F j', $startTs), 'time' => zone_date($cz, 'g:i A T', $startTs),
                 'location' => empty($s['is_remote']) ? (string)($s['location'] ?? '') : '', 'join_link' => $joinLink,
                 'portal_link' => $portalLink, 'contact' => $contact,
             ]);
@@ -130,11 +137,15 @@ foreach ($sessions as $s) {
                 ? 'Need a different time? Use your portal: ' . $portalLink . ($contact !== '' ? "\nOr email us at " . $contact . '.' : '')
                 : 'Need a different time? Reply to this email' . ($contact !== '' ? ' or email us at ' . $contact : '') . '.';
             $body = str_replace($rescheduleOld, $reschedule, $body);
-            if ($day === 'today') { $subj = $sameDay($subj); $body = $sameDay($body); }
+            if ($clientDay === 'today') { $subj = $sameDay($subj); $body = $sameDay($body); }
+            elseif ($clientDay !== 'tomorrow') {
+                $later = fn(string $text): string => (string)preg_replace_callback('/\btomorrow\b/i', fn(array $m): string => ctype_upper($m[0][0]) ? ucfirst($clientDay) : $clientDay, $text);
+                $subj = $later($subj); $body = $later($body);
+            }
             $allSent = send_app_mail($s['client_email'], $subj, $body) && $allSent;
         }
     }
-    $staffBody = "Session reminder.\n\nClient: {$s['client_name']}\nWhen: {$when}{$where}\n"
+    $staffBody = "Session reminder.\n\nClient: {$s['client_name']}\nWhen: {$when}" . ($cz !== null ? "\nThe client's time: " . zone_date($cz, 'g:i A T', $startTs) : '') . "{$where}\n"
         . ($current ? '' : "\nThis client is closed or archived, so the client was not reminded. Cancel the session on the Schedule page if it no longer applies.\n")
         . ($emailHeld ? "\nThe client was not emailed this reminder: their email address came from the public referral form and has not been confirmed. "
             . "Confirm it on the client's edit page, and remind the client another way this time.\n" : '')

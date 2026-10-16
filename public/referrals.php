@@ -184,7 +184,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $isCounselor ? $ref['counselor_phone'] : null, $isCounselor ? $ref['counselor_agency'] : null,
         ]);
         $clientId = (int)db()->lastInsertId();
-        apply_referral_language($clientId, $ref);   // Spanish referral form → Spanish client emails
+        apply_referral_language($clientId, $ref);
+        client_apply_state($clientId, $ref['client_state'] ?? null);   // 4.1.0: their state and its time zone   // Spanish referral form → Spanish client emails
         if (!empty($ref['guardian_name'])) {
             db()->prepare('UPDATE clients SET guardian_name = ?, guardian_phone = ? WHERE id = ?')
                 ->execute([$ref['guardian_name'], $ref['guardian_phone'] ?? null, $clientId]);
@@ -369,7 +370,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
       <?= $refMail ?> · <?= h($view['counselor_phone']) ?></dd>
     <?php endif; ?>
     <dt>Client</dt><dd><?= h($view['client_name']) ?><?= $view['client_dob'] ? ' (date of birth ' . fmt_date($view['client_dob']) . ')' : '' ?><br>
-      <?= trim((string)($view['client_phone'] ?? '')) !== '' ? tel_link($view['client_phone']) : '' ?> <?= h($view['client_email'] ?? '') ?><br><?= trim((string)($view['client_address'] ?? '')) !== '' ? directions_link($view['client_address']) : '' ?></dd>
+      <?= trim((string)($view['client_phone'] ?? '')) !== '' ? tel_link($view['client_phone']) : '' ?> <?= h($view['client_email'] ?? '') ?><br><?= trim((string)($view['client_address'] ?? '')) !== '' ? directions_link($view['client_address']) : '' ?><?= !empty($view['client_state']) ? '<br>' . h(US_STATES[$view['client_state']] ?? $view['client_state']) : '' ?></dd>
   </dl>
   <h3>Referral notes</h3>
   <p style="white-space: pre-wrap;"><?= h($view['body']) ?></p>
