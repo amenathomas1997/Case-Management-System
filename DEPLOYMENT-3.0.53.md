@@ -40,3 +40,12 @@ Verified before commit:
 - The migration rehearsal matched.
 - A manual restore into a scratch database succeeded, and a wrong password was refused.
 - Not checked in a browser or with a screen reader.
+
+## Deployed 2026-10-16 16:24 CT
+From 3.0.52 with .audit_work/deploy-3.0.53. mig_3.0.53.sql ran.
+
+The crontab's off-site line changed from `45 2 * * 1` to `45 2 * * *`. The old crontab is saved at /home/cmsuser/casemanagement_private/crontab-before-3.0.53.txt.
+
+CI is green. Every checksum matched and every smoke check passed (health reports 3.0.53). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.53-20261016-162459.
+
+The first production backup check reported 13 "missing" tables. Last night's dump (02:15) predates the tables today's releases created, so this was a false alarm. 3.0.54 ignores tables created after the dump was made.
