@@ -174,7 +174,7 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
       <td><?= status_badge($c['status']) ?></td>
       <td><?= h($c['instructor'] ?? '—') ?></td>
       <td><?= h($c['counselor_name'] ?? '—') ?><br><span class="muted"><?= h($c['counselor_agency'] ?? '') ?></span></td>
-      <td><?= h($c['phone'] ?? '') ?><br><span class="muted"><?= h($c['email'] ?? '') ?></span></td>
+      <td><?= trim((string)($c['phone'] ?? '')) !== '' ? tel_link($c['phone'], $c['name']) : '' ?><br><span class="muted"><?= h($c['email'] ?? '') ?></span></td>
       <td class="num"><?= (int)$c['active_tracks'] ?></td>
       <?php if ($showArchived): ?>
       <td>

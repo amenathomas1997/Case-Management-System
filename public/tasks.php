@@ -79,6 +79,13 @@ function task_return_to_list(string $returnUrl, string $message): never {
 }
 
 /* ---- Complete / reopen / delete ---- */
+/* Several tasks completed at once (4.0.0). */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_done'])) {
+    $n = 0;
+    foreach (array_slice(array_values(array_unique(array_filter(array_map('intval', (array)($_POST['bulk_ids'] ?? []))))), 0, 200) as $tid) if (set_task_done($tid, $user, true)) $n++;
+    flash($n ? $n . ' task' . ($n === 1 ? '' : 's') . ' completed.' : 'Nothing was completed: choose at least one open task.', $n ? 'success' : 'error');
+    redirect('tasks.php');
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_done'])) {
     $tid = (int)($_POST['task_id'] ?? 0);
     if (set_task_done($tid, $user, ($_POST['to'] ?? '') !== 'Open')) {
@@ -282,4 +289,14 @@ $addOpen = array_intersect_key(form_errors(), ['title' => 1, 'due_date' => 1]) |
   </tbody>
 </table>
 </div>
+<?php $openTasks = array_values(array_filter($tasks, fn($t) => $t['status'] === 'Open')); if (count($openTasks) > 1): ?>
+<details><summary>Complete several tasks at once</summary>
+  <form method="post" action="tasks.php" class="stacked"><?= csrf_field() ?>
+    <fieldset><legend>Open tasks</legend>
+    <?php foreach ($openTasks as $t): ?><label><input type="checkbox" name="bulk_ids[]" value="<?= (int)$t['id'] ?>"> <?= h($t['title']) ?><?= $t['client_name'] ? ', ' . h($t['client_name']) : '' ?><?= $t['due_date'] ? ', due ' . h(fmt_date($t['due_date'])) : '' ?></label><?php endforeach; ?>
+    </fieldset>
+    <button type="submit" name="bulk_done" value="1" class="btn btn-secondary">Complete the chosen tasks</button>
+  </form>
+</details>
+<?php endif; ?>
 <?php page_footer();

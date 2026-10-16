@@ -161,6 +161,22 @@ function schedule_outcome_back(array $user): string {
 }
 
 /* ---- POST: schedule a GROUP session (one time slot, many clients) ---- */
+/* Several ended sessions recorded as No Show or Cancelled at once (4.0.0). Completed ones are
+   recorded one by one, because each logs hours. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_outcome'])) {
+    $to = ($_POST['bulk_to'] ?? '') === 'Cancelled' ? 'Cancelled' : 'No Show';
+    $ids = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['bulk_ids'] ?? [])))));
+    $done = 0; $failed = 0;
+    foreach (array_slice($ids, 0, 200) as $sid) {
+        $own = db()->prepare("SELECT c.assigned_to FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id WHERE s.id = ? AND s.end_at < NOW() AND s.group_uid IS NULL");
+        $own->execute([$sid]);
+        $owner = $own->fetchColumn();
+        if ($owner === false || (caseload_scoped() && (int)$owner !== (int)$user['id'])) { $failed++; continue; }
+        if (session_set_outcome($sid, $to, (int)$user['id'], 'website, several at once') === null) $done++; else $failed++;
+    }
+    flash($done ? $done . ' session' . ($done === 1 ? '' : 's') . ' recorded as ' . $to . '.' . ($failed ? ' ' . $failed . ' could not be (already recorded, or not on your caseload).' : '') : 'Nothing was recorded: choose at least one session.', $done ? 'success' : 'error');
+    redirect('schedule.php#overdue-h');
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session'])) {
     // array_unique: a client posted twice would be booked, and later billed, twice.
     $clientIds = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['group_clients'] ?? [])))));
@@ -836,7 +852,7 @@ function session_row(array $s, string $csrf): void {
       <td><?php if (can('clients')): ?><a href="client.php?id=<?= (int)$s['client_id'] ?>"><?= h($s['client_name']) ?></a><?php else: ?><?= h($s['client_name']) ?><?php endif; ?>
           <?= $s['track_title'] ? '<br><span class="muted">' . h($s['track_title']) . '</span>' : '' ?></td>
       <td><?= h($s['staff_name'] ?? '—') ?></td>
-      <td><?php if (!empty($s['is_remote'])): ?><span class="badge badge-active">Remote</span><?= !empty($s['meeting_url']) ? ' <a href="' . h($s['meeting_url']) . '" target="_blank" rel="noopener">Join<span class="visually-hidden"> ' . $which . ' (opens in a new tab)</span></a>' : '' ?><?php else: ?><?= h($s['location'] ?: '—') ?><?php endif; ?></td>
+      <td><?php if (!empty($s['is_remote'])): ?><span class="badge badge-active">Remote</span><?= !empty($s['meeting_url']) ? ' <a href="' . h($s['meeting_url']) . '" target="_blank" rel="noopener">Join<span class="visually-hidden"> ' . $which . ' (opens in a new tab)</span></a>' : '' ?><?php else: ?><?= trim((string)$s['location']) !== '' ? h($s['location']) . ' <a href="https://maps.apple.com/?daddr=' . rawurlencode((string)$s['location']) . '" target="_blank" rel="noopener">Directions<span class="visually-hidden"> ' . $which . ' (opens maps in a new tab)</span></a>' : '—' ?><?php endif; ?></td>
       <td><?= status_badge($s['status']) ?><?php // Checked in from the app (API check_in_session): the time the client arrived.
           if (!empty($s['checked_in_at'])): ?><br><span class="muted">Arrived <?= date('H:i', strtotime($s['checked_in_at'])) ?><span class="visually-hidden"> for the <?= $which ?></span></span><?php endif; ?></td>
       <td>
@@ -1116,6 +1132,20 @@ foreach ($groupsPending as $uid => $members): if (count($members) < 2) continue;
   </tbody>
 </table>
 </div>
+<?php $bulkable = array_values(array_filter($overdue, fn($s) => empty($s['group_uid']))); if (count($bulkable) > 1): ?>
+<details><summary>Record several as no-show or cancelled</summary>
+  <form method="post" action="schedule.php" class="stacked" onsubmit="return confirm('Record the chosen sessions? Each client\'s counselor is emailed about a no-show.');"><?= csrf_field() ?>
+    <fieldset><legend>Sessions</legend>
+    <?php foreach ($bulkable as $s): ?><label><input type="checkbox" name="bulk_ids[]" value="<?= (int)$s['id'] ?>"> <?= h($s['client_name']) ?>, <?= h(date('D M j, g:i A', strtotime($s['start_at']))) ?></label><?php endforeach; ?>
+    </fieldset>
+    <fieldset><legend>Record them as</legend>
+      <label><input type="radio" name="bulk_to" value="No Show" checked> No show</label>
+      <label><input type="radio" name="bulk_to" value="Cancelled"> Cancelled</label>
+    </fieldset>
+    <button type="submit" name="bulk_outcome" value="1" class="btn btn-secondary">Record the chosen sessions</button>
+  </form>
+</details>
+<?php endif; ?>
 <?php endif; ?>
 
 <h2 id="upcoming-h">Upcoming sessions (<?= count($upcoming) < $upcomingTotal ? 'showing the next ' . count($upcoming) . ' of ' . $upcomingTotal : $upcomingTotal ?>)</h2>

@@ -143,10 +143,11 @@ function portal_when_es(int $ts): string {
 /** Tell the client's instructor about portal activity, or every administrator when
  *  nobody is assigned or the assigned account has been deactivated: an alert to a
  *  deactivated account is never seen. $client carries active_owner from the lookup. */
-function portal_notify_owner(array $client, string $ownerMsg, string $link, ?string $adminMsg = null): void {
+function portal_notify_owner(array $client, string $ownerMsg, string $link, ?string $adminMsg = null, bool $urgent = false): void {
     $owner = (int)($client['active_owner'] ?? 0);
-    if ($owner) notify_user($owner, $ownerMsg, $link);
-    else notify_admin_users($adminMsg ?? $ownerMsg, $link);
+    // A message or a request from the client is urgent: the alert can also be emailed (4.0.0).
+    if ($owner) notify_user($owner, $ownerMsg, $link, $urgent);
+    else notify_admin_users($adminMsg ?? $ownerMsg, $link, $urgent);
 }
 
 $rawToken = $_GET['t'] ?? '';
@@ -331,7 +332,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-msg-' . (int)$client['id']]);
             post_message((int)$client['id'], 'client', 'client', null, $msg);
-            portal_notify_owner($client, 'Message from ' . $client['name'] . ' (portal)', 'messages.php?client=' . (int)$client['id'] . '&channel=client');
+            portal_notify_owner($client, 'Message from ' . $client['name'] . ' (portal)', 'messages.php?client=' . (int)$client['id'] . '&channel=client', null, true);
             flash_ui('Message sent — your instructor will get back to you.');
         }
         redirect('portal.php?t=' . $token . '&lang=' . page_lang());
@@ -395,7 +396,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             // when the request is set to Done or Declined.
             $aid = (int)($client['active_owner'] ?? 0);
             add_task('Client ' . $label . ': ' . $client['name'], mb_substr($details, 0, 400), (int)$client['id'], null, $dueOn ? date('Y-m-d', strtotime($dueOn . ' -5 days')) : business_days_from(2), $aid ?: null, null, 'preq-' . $reqId);
-            portal_notify_owner($client, $client['name'] . ' sent a ' . $label, 'portal_requests.php?client=' . (int)$client['id']);
+            portal_notify_owner($client, $client['name'] . ' sent a ' . $label, 'portal_requests.php?client=' . (int)$client['id'], null, true);
             flash_ui('Request sent — your instructor will follow up.');
         }
         redirect('portal.php?t=' . $token . '&lang=' . page_lang());

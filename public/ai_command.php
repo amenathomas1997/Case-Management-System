@@ -35,7 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     echo json_encode(['ok' => false, 'error' => 'Use POST for voice commands.']);
     exit;
 }
-if (!ai_feature_enabled('voice')) { echo json_encode(['ok' => false, 'error' => 'The voice assistant is turned off.']); exit; }
+if (!voice_available()) { echo json_encode(['ok' => false, 'error' => 'The voice assistant is turned off.']); exit; }
 $in = json_decode((string)file_get_contents('php://input'), true);
 if (!is_array($in)) $in = [];
 // Every field is read as a single value except the conversation history, the

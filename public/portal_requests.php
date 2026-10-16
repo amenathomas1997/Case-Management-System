@@ -36,6 +36,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
             // does not sit Open and go overdue (requests sent before the key existed have none).
             if (in_array($to, $closed, true)) {
                 complete_task_by_key('preq-' . $id, (int)$user['id']);
+                // Times still offered on it are withdrawn: the client can no longer pick one.
+                db()->prepare("UPDATE portal_request_offers SET status = 'Withdrawn' WHERE request_id = ? AND status = 'Offered'")->execute([$id]);
             } elseif (in_array($row['status'], $closed, true)) {
                 // Opened again: so is its follow-up task (only this request's own task),
                 // with its original due date. It goes to the client's instructor as of now
@@ -61,6 +63,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     redirect('portal_requests.php');
 }
 
+/* Several requests closed at once (4.0.0), not records requests (each needs its own outcome). */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_close'])) {
+    $to = ($_POST['bulk_to'] ?? '') === 'Declined' ? 'Declined' : 'Done';
+    $n = 0;
+    foreach (array_slice(array_values(array_unique(array_filter(array_map('intval', (array)($_POST['bulk_ids'] ?? []))))), 0, 200) as $bid) {
+        $bq = db()->prepare("SELECT pr.id, pr.client_id, pr.type, pr.status, c.assigned_to FROM portal_requests pr JOIN clients c ON c.id = pr.client_id WHERE pr.id = ? AND pr.status IN ('New','In Progress')");
+        $bq->execute([$bid]);
+        $br = $bq->fetch();
+        if (!$br || isset(RECORDS_REQUEST_TYPES[$br['type']]) || (caseload_scoped() && (int)$br['assigned_to'] !== (int)$user['id'])) continue;
+        $u = db()->prepare("UPDATE portal_requests SET status = ?, handled_by = ? WHERE id = ? AND status IN ('New','In Progress')");
+        $u->execute([$to, $user['id'], $bid]);
+        if ($u->rowCount() !== 1) continue;
+        complete_task_by_key('preq-' . $bid, (int)$user['id']);
+        db()->prepare("UPDATE portal_request_offers SET status = 'Withdrawn' WHERE request_id = ? AND status = 'Offered'")->execute([$bid]);
+        audit($user['id'], 'portal_request.status', 'client', (int)$br['client_id'], 'request #' . $bid . ': ' . $br['status'] . ' → ' . $to . ' (several at once)');
+        request_closed_notice($bid);
+        $n++;
+    }
+    flash($n ? $n . ' request' . ($n === 1 ? '' : 's') . ' set to ' . $to . '.' : 'Nothing was changed: choose at least one open request.', $n ? 'success' : 'error');
+    redirect('portal_requests.php');
+}
 /* Times offered for an appointment or reschedule request (3.0.52): the client confirms one in the portal. */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['offer_times'])) {
     $id = (int)($_POST['id'] ?? 0);
@@ -200,4 +223,18 @@ page_header('Client requests', $user, 'portal_requests');
   </tbody>
 </table>
 </div>
+<?php $bulkReq = array_values(array_filter($rows, fn($r) => in_array($r['status'], ['New', 'In Progress'], true) && !isset(RECORDS_REQUEST_TYPES[$r['type']]))); if (count($bulkReq) > 1): ?>
+<details><summary>Close several requests at once</summary>
+  <form method="post" action="portal_requests.php" class="stacked"><?= csrf_field() ?>
+    <fieldset><legend>Open requests</legend>
+    <?php foreach ($bulkReq as $r): ?><label><input type="checkbox" name="bulk_ids[]" value="<?= (int)$r['id'] ?>"> <?= h($r['client_name']) ?>, <?= h(PREQ_TYPES[$r['type']] ?? 'Request') ?>, <?= h(fmt_date($r['created_at'])) ?></label><?php endforeach; ?>
+    </fieldset>
+    <fieldset><legend>Set them to</legend>
+      <label><input type="radio" name="bulk_to" value="Done" checked> Done</label>
+      <label><input type="radio" name="bulk_to" value="Declined"> Declined</label>
+    </fieldset>
+    <button type="submit" name="bulk_close" value="1" class="btn btn-secondary">Close the chosen requests</button>
+  </form>
+</details>
+<?php endif; ?>
 <?php page_footer();

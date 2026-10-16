@@ -234,7 +234,7 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
 <?php
         // Voice assistant (natural-language commands + human-voice replies). Its
         // endpoint, ai_command.php, requires the clients permission.
-        if (function_exists('ai_feature_enabled') && ai_feature_enabled('voice') && can('clients')) {
+        if (function_exists('voice_available') && voice_available() && can('clients')) {
             $voiceTts = function_exists('ai_speak_capable') && ai_feature_enabled('readaloud') && ai_speak_capable();
             ?>
 <div id="voice-fab">
@@ -395,3 +395,19 @@ function select_options(array $options, ?string $selected): string {
     }
     return $out;
 }
+
+/** A phone number as a call link (4.0.0), or the text as it is when it has no digits. */
+function tel_link(?string $phone, string $whose = ''): string {
+    $p = trim((string)$phone);
+    if ($p === '') return '—';
+    $dial = preg_replace('/[^0-9+]/', '', $p);
+    return strlen((string)$dial) >= 7 ? '<a href="tel:' . h($dial) . '">' . h($p) . ($whose !== '' ? '<span class="visually-hidden"> (call ' . h($whose) . ')</span>' : '') . '</a>' : h($p);
+}
+
+/** An address with a Directions link that opens the phone's or computer's maps (4.0.0). */
+function directions_link(?string $address): string {
+    $a = trim((string)$address);
+    if ($a === '') return '—';
+    return h($a) . ' <a href="https://maps.apple.com/?daddr=' . rawurlencode($a) . '" target="_blank" rel="noopener">Directions<span class="visually-hidden"> to ' . h($a) . ' (opens maps in a new tab)</span></a>';
+}
+

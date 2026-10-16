@@ -31,6 +31,9 @@ struct DashboardView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if let error { ErrorBanner(message: error) }
+                    if let notice = api.updateNotice {
+                        Text(notice).font(.callout.weight(.medium))
+                    }
                     if let data {
                         // As on the website, a figure the account has no permission for is left
                         // out (the server sends 0 for it, which would read as a fact).

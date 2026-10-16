@@ -6,6 +6,12 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.0.0' => [
+        'The voice assistant now answers common requests without AI: what is on today or this week, tasks due, unread messages and alerts, new referrals, open requests, unbilled work, unpaid invoices, expiring authorizations, a client\'s phone, status, next session, hours left, notes, goals and homework, and opening a client or page. It can also cancel a session or mark a no-show, after you confirm. Administrators can keep voice on with AI off.',
+        'On My account, Email me about alerts: urgent ones (a client\'s request, message or call for help) at once and a daily count, a daily count only, or never (the starting choice). The email never names the client. Calendar subscriptions remind you 30 minutes before each session. Phone numbers and addresses are links to call and get directions.',
+        'Bulk actions: mark several ended sessions No Show or Cancelled, several tasks done, several draft invoices submitted, or close several portal requests at once. Equipment loans record the item\'s condition going out and coming back, and who accepted it.',
+        'iPhone app: My sessions only on the schedule, directions, open the client from a session, mark draft invoices submitted, equipment condition, client records readable offline, and a calendar subscription link.',
+    ],
     '3.0.55' => [
         'New staff are emailed an invitation to choose their own password (leave the password empty when adding them). Each person\'s confidentiality agreement and privacy training dates are recorded on their user page and renewed yearly; Compliance and the daily tasks remind you, and flag accounts not used for 60 days. A person\'s user page lists what they still hold if they are leaving, and the transfer now also moves open AT records, equipment reservations, group programs and access bookings. Optionally, staff disabled in Microsoft 365 are switched off each night.',
         'Help has an Administrator guide: the scheduled jobs, renewing the email secret, people joining and leaving, misfiled email, permission groups, homework AI and privacy incidents. Administrators can import clients and open authorizations from a spreadsheet, checked row by row first.',

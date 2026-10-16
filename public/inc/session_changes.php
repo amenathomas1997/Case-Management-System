@@ -119,3 +119,44 @@ function session_tell_instructor(int $sid, string $what, int $actor, ?string $ol
         error_log('session_tell_instructor: ' . get_class($e) . ' ' . $e->getCode());
     }
 }
+
+/**
+ * Mark a Scheduled session Cancelled or No Show (4.0.0: shared by the app and voice). The
+ * counselor is told of a no-show, the client of a cancellation still ahead, and the
+ * session's instructor when someone else closed it. Returns an error, or null.
+ */
+function session_set_outcome(int $sid, string $to, int $userId, string $via): ?string {
+    if (!in_array($to, ['Cancelled', 'No Show'], true)) return 'Status is not a valid choice.';
+    $st = db()->prepare("SELECT s.client_id, s.user_id, s.start_at, c.name AS client_name FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id WHERE s.id = ? AND s.status = 'Scheduled'");
+    $st->execute([$sid]);
+    $sess = $st->fetch();
+    if (!$sess) return 'Session not found or already closed.';
+    // As on the website: a session that has not started yet can be cancelled, not marked a no-show.
+    if ($to === 'No Show' && strtotime((string)$sess['start_at']) > time()) return 'A session can be marked No Show only once it has started.';
+        $claim = db()->prepare("UPDATE scheduled_sessions SET status = ? WHERE id = ? AND status = 'Scheduled'");
+        $claim->execute([$to, $sid]);
+        if ($claim->rowCount() !== 1) return 'Session was already closed.';
+        // The website's codes (schedule.php), so a search of the audit log finds both channels.
+        audit($userId, $to === 'Cancelled' ? 'session.cancel' : 'session.no_show', 'session', $sid, $to . ' (' . $via . ')');
+        if ($to === 'No Show') counselor_noshow_notice($sid); // 3.0.41: the counselor is emailed
+        if ($to === 'Cancelled' && strtotime((string)$sess['start_at']) > time()) client_session_notice([$sid], 'cancelled');
+        // The session's instructor is told when someone else closed it. No calendar
+        // cancellation can be sent (no invite UID is stored), so a plain notice says
+        // which session it was: the date, the time and the client's first name only.
+        $sessInstructor = (int)$sess['user_id'];
+        if ($sessInstructor !== $userId) {
+            $iu = db()->prepare('SELECT email FROM users WHERE id = ? AND is_active = 1');
+            $iu->execute([$sessInstructor]);
+            $instructorEmail = $iu->fetchColumn();
+            if ($instructorEmail !== false) {
+                $sessTs = strtotime((string)$sess['start_at']);
+                $firstName = preg_split('/\s+/u', trim((string)$sess['client_name']))[0] ?? '';
+                $outcome = $to === 'Cancelled' ? 'cancelled' : 'marked No Show';
+                notify_user($sessInstructor, 'Session ' . $outcome . ': ' . $firstName . ', ' . date('D, M j g:i A', $sessTs), 'schedule.php');
+                send_app_mail((string)$instructorEmail, 'Session ' . $outcome . ': ' . date('D, M j g:i A', $sessTs),
+                    "Your training session with {$firstName} on " . date('l, F j, Y \a\t g:i A', $sessTs) . " was {$outcome}.\n"
+                    . ($to === 'Cancelled' ? "\nIf it is in your calendar, remove it there: no calendar update was sent.\n" : ''));
+            }
+        }
+    return null;
+}

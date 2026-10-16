@@ -116,7 +116,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['loan_out'])) {
         // loan_equipment() also settles reservations in the same transaction: this
         // client's hold is fulfilled, anyone else's hold returns to the waitlist, and
         // the staff member who made that hold is notified.
-        loan_equipment($eid, $cid, $due, $loanNotes ?: null, (int)$user['id']);
+        $newLoan = loan_equipment($eid, $cid, $due, $loanNotes ?: null, (int)$user['id']);
+        loan_handoff_out($newLoan, is_string($_POST['condition_out'] ?? null) ? $_POST['condition_out'] : null, is_string($_POST['accepted_name'] ?? null) ? $_POST['accepted_name'] : null);
     } catch (DomainException $e) {
         keep_input(); keep_field_errors(['loan_equipment_id' => 'Item: ' . lcfirst($e->getMessage())]); redirect('equipment.php');
     }
@@ -259,6 +260,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['return_item'])) {
         // (return_equipment() promotes the waitlist and tells that client's instructor).
         try { return_equipment($lid, (int)$user['id']); }
         catch (DomainException $e) { flash($e->getMessage(), 'error'); redirect('equipment.php#inv-h'); }
+        loan_handoff_in($lid, is_string($_POST['condition_in'] ?? null) ? $_POST['condition_in'] : null);
         audit($user['id'], 'equipment.return', 'equipment', (int)$loan['equipment_id']);
         flash('Item marked returned.');
     } else {
@@ -534,6 +536,8 @@ if (isset($_GET['scan'])) {
         <p>On loan to <?= h($it['borrower'] ?? 'a client') ?><?= $it['due_date'] ? ', due ' . fmt_date($it['due_date']) : '' ?>.</p>
         <form method="post" action="equipment.php"><?= csrf_field() ?>
           <input type="hidden" name="loan_id" value="<?= (int)$it['loan_id'] ?>">
+          <div class="field"><label for="ret_cond">Condition as it comes back</label>
+            <select id="ret_cond" name="condition_in"><option value="">Unchanged</option><?= select_options(LOAN_CONDITIONS, null) ?></select></div>
           <button type="submit" name="return_item" value="1" class="btn btn-primary" onclick="return confirm(<?= h((string)json_encode('Mark ' . $it['name'] . ' returned from ' . ($it['borrower'] ?? 'the client') . '?', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)) ?>);">Mark returned</button>
         </form>
       <?php elseif ($it['status'] === 'Available'): ?>
@@ -724,6 +728,10 @@ page_header('Equipment & loans', $user, 'equipment');
         <input type="date" id="due_date" name="due_date" value="<?= h($oldLoan('due_date', date('Y-m-d', strtotime('+60 days')))) ?>" <?= field_aria('loan_due_date') ?>><?= field_error('loan_due_date') ?></div>
       <div class="field"><label for="lo_notes">Loan notes</label>
         <input type="text" id="lo_notes" name="notes" maxlength="255" value="<?= h($oldLoan('notes')) ?>" <?= field_aria('loan_notes') ?>><?= field_error('loan_notes') ?></div>
+      <div class="field"><label for="lo_cond">Condition as it goes out</label>
+        <select id="lo_cond" name="condition_out"><option value="">Not recorded</option><?= select_options(LOAN_CONDITIONS, $oldLoan('condition_out') ?: null) ?></select></div>
+      <div class="field"><label for="lo_accept">Client's name, typed by the client, accepting the loan agreement</label>
+        <input type="text" id="lo_accept" name="accepted_name" maxlength="120" autocomplete="off" value="<?= h($oldLoan('accepted_name')) ?>"></div>
     </div>
     <button type="submit" name="loan_out" value="1" class="btn btn-primary">Loan out</button>
   </form>

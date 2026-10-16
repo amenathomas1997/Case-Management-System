@@ -125,6 +125,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_shown'])) {
 }
 
 /* Every action on one invoice shares the caseload check */
+/* Several Draft invoices marked submitted at once (4.0.0), each with the same date. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_submit'])) {
+    $raw = is_string($_POST['bulk_submitted_on'] ?? null) ? trim($_POST['bulk_submitted_on']) : '';
+    $n = 0; $refused = [];
+    foreach (array_slice(array_values(array_unique(array_filter(array_map('intval', (array)($_POST['bulk_ids'] ?? []))))), 0, 200) as $bid) {
+        $bq = db()->prepare("SELECT i.id, i.invoice_number, i.created_at FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id WHERE i.id = ? AND i.status = 'Draft'" . $scopeCond);
+        $bq->execute(array_merge([$bid], $scopeArg));
+        $bi = $bq->fetch();
+        if (!$bi) continue;
+        $on = $raw === '' ? date('Y-m-d') : billing_date_in($raw, (string)$bi['created_at']);
+        if ($on === null) { $refused[] = $bi['invoice_number']; continue; }
+        if (invoice_submit((int)$bi['id'], $on)) { audit($user['id'], 'invoice.submit', 'invoice', (int)$bi['id'], 'submitted ' . $on . ' (several at once)'); $n++; }
+    }
+    flash(($n ? $n . ' invoice' . ($n === 1 ? '' : 's') . ' marked submitted.' : 'No invoice was marked submitted.') . ($refused ? ' Not changed, because the date is before they were created: ' . implode(', ', $refused) . '.' : ''), $n ? 'success' : 'error');
+    redirect('invoices.php#inv-list-h');
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['set_status']) || isset($_POST['void_draft']) || isset($_POST['apply_payment'])
         || isset($_POST['remove_payment']) || isset($_POST['close_invoice']) || isset($_POST['save_memo']))) {
     $id = (int)($_POST['id'] ?? 0);
@@ -614,4 +630,16 @@ $pageNote = $invTotal > $perPage && $onlyId === 0
   </tbody>
 </table>
 </div>
+<?php $bq = db()->prepare("SELECT i.id, i.invoice_number, i.total_amount, c.name AS client_name FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id WHERE i.status = 'Draft'" . $scopeCond . ' ORDER BY i.created_at LIMIT 200');
+$bq->execute($scopeArg); $drafts = $bq->fetchAll(); if (count($drafts) > 1): ?>
+<details><summary>Mark several drafts submitted</summary>
+  <form method="post" action="invoices.php" class="stacked"><?= csrf_field() ?>
+    <fieldset><legend>Draft invoices</legend>
+    <?php foreach ($drafts as $d): ?><label><input type="checkbox" name="bulk_ids[]" value="<?= (int)$d['id'] ?>"> <?= h($d['invoice_number']) ?>, <?= h($d['client_name']) ?>, <?= h(fmt_money((float)$d['total_amount'])) ?></label><?php endforeach; ?>
+    </fieldset>
+    <div class="field"><label for="bulk_submitted_on">Date they were sent</label><input type="date" id="bulk_submitted_on" name="bulk_submitted_on" max="<?= date('Y-m-d') ?>" value="<?= date('Y-m-d') ?>"></div>
+    <button type="submit" name="bulk_submit" value="1" class="btn btn-secondary">Mark the chosen invoices submitted</button>
+  </form>
+</details>
+<?php endif; ?>
 <?php page_footer();

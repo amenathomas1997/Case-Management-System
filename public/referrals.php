@@ -369,7 +369,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
       <?= $refMail ?> · <?= h($view['counselor_phone']) ?></dd>
     <?php endif; ?>
     <dt>Client</dt><dd><?= h($view['client_name']) ?><?= $view['client_dob'] ? ' (date of birth ' . fmt_date($view['client_dob']) . ')' : '' ?><br>
-      <?= h($view['client_phone'] ?? '') ?> <?= h($view['client_email'] ?? '') ?><br><?= h($view['client_address'] ?? '') ?></dd>
+      <?= trim((string)($view['client_phone'] ?? '')) !== '' ? tel_link($view['client_phone']) : '' ?> <?= h($view['client_email'] ?? '') ?><br><?= trim((string)($view['client_address'] ?? '')) !== '' ? directions_link($view['client_address']) : '' ?></dd>
   </dl>
   <h3>Referral notes</h3>
   <p style="white-space: pre-wrap;"><?= h($view['body']) ?></p>

@@ -36,7 +36,15 @@ enum OfflineCache {
     static func load(key: String, owner: Int) -> (data: Data, savedAt: Date)? {
         guard let url = url(key, owner: owner), let data = try? Data(contentsOf: url) else { return nil }
         let savedAt = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date ?? Date()
+        // A copy over 30 days old is not shown: the client may have moved to someone else (4.0.0).
+        if savedAt < Date().addingTimeInterval(-30 * 24 * 3600) { try? FileManager.default.removeItem(at: url); return nil }
         return (data, savedAt)
+    }
+
+    /// One kept copy, removed when the server refuses it (a client no longer on this caseload).
+    static func remove(key: String, owner: Int) {
+        guard let url = url(key, owner: owner) else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     /// Everything kept for one account: sign-out removes it with the drafts.

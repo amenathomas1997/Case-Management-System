@@ -422,7 +422,10 @@ if ($tok && !empty($tok['wipe_requested_at'])) {
     out(['ok' => false, 'wipe' => true, 'error' => 'This phone was reported lost, so everything the app kept on it was removed and it was signed out.'], 401);
 }
 if (!$tok || !$tok['is_active']) fail('Session expired — sign in again.', 401);
-db()->prepare('UPDATE api_tokens SET last_used_at = NOW() WHERE id = ?')->execute([$tok['id']]);
+// In use, the app stays signed in (4.0.0): a token within a week of expiring is renewed for
+// 30 days from now, but never past 90 days from the sign-in, so a full sign-in (and its
+// code) is still needed at least every three months.
+db()->prepare('UPDATE api_tokens SET last_used_at = NOW(), expires_at = IF(expires_at < DATE_ADD(NOW(), INTERVAL 7 DAY), GREATEST(expires_at, LEAST(DATE_ADD(NOW(), INTERVAL 30 DAY), DATE_ADD(created_at, INTERVAL 90 DAY))), expires_at) WHERE id = ?')->execute([$tok['id']]);
 $userId = (int)$tok['user_id'];
 $userName = $tok['name'];
 // A large body (an upload) is decoded now that the caller is known.
@@ -762,7 +765,7 @@ switch ($action) {
         $id = (int)($_GET['id'] ?? 0);
         api_require_client($id, $userId);
         record_client_view($userId, $id, 'iPhone app');
-        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email, vr_case_number, ipe_goal, ipe_date, ipe_amended_on FROM clients WHERE id = ?');
+        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email, vr_case_number, ipe_goal, ipe_date, ipe_amended_on FROM clients WHERE id = ?');
         $c->execute([$id]);
         $client = $c->fetch();
         if (!$client) fail('Client not found.', 404);
@@ -985,7 +988,7 @@ switch ($action) {
         $sql = "SELECT s.id, s.start_at, s.end_at, s.location, s.notes, s.status, s.track_id, s.is_remote, s.meeting_url,
                 s.checked_in_at, s.group_uid, (s.series_uid IS NOT NULL) AS in_series, CASE WHEN s.group_uid IS NULL THEN NULL ELSE
                     (SELECT COUNT(*) FROM scheduled_sessions g WHERE g.group_uid = s.group_uid AND g.status <> 'Cancelled') END AS group_size,
-                c.name AS client, u.name AS instructor
+                c.name AS client, u.name AS instructor, s.client_id, s.user_id
             FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id LEFT JOIN users u ON u.id = s.user_id
             WHERE s.status = 'Scheduled'";
         $params = [];
@@ -1024,31 +1027,9 @@ switch ($action) {
         if (!$sess) fail('Session not found or already closed.', 404);
         api_require_client((int)$sess['client_id'], $userId);
         // Claim: a double tap, or a colleague closing it meanwhile, changes nothing twice.
-        $claim = db()->prepare("UPDATE scheduled_sessions SET status = ? WHERE id = ? AND status = 'Scheduled'");
-        $claim->execute([$to, $sid]);
-        if ($claim->rowCount() !== 1) fail('Session was already closed.', 409);
-        // The website's codes (schedule.php), so a search of the audit log finds both channels.
-        audit($userId, $to === 'Cancelled' ? 'session.cancel' : 'session.no_show', 'session', $sid, $to . ' (mobile)');
-        if ($to === 'No Show') counselor_noshow_notice($sid); // 3.0.41: the counselor is emailed
-        if ($to === 'Cancelled' && strtotime((string)$sess['start_at']) > time()) client_session_notice([$sid], 'cancelled');
-        // The session's instructor is told when someone else closed it. No calendar
-        // cancellation can be sent (no invite UID is stored), so a plain notice says
-        // which session it was: the date, the time and the client's first name only.
-        $sessInstructor = (int)$sess['user_id'];
-        if ($sessInstructor !== $userId) {
-            $iu = db()->prepare('SELECT email FROM users WHERE id = ? AND is_active = 1');
-            $iu->execute([$sessInstructor]);
-            $instructorEmail = $iu->fetchColumn();
-            if ($instructorEmail !== false) {
-                $sessTs = strtotime((string)$sess['start_at']);
-                $firstName = preg_split('/\s+/u', trim((string)$sess['client_name']))[0] ?? '';
-                $outcome = $to === 'Cancelled' ? 'cancelled' : 'marked No Show';
-                notify_user($sessInstructor, 'Session ' . $outcome . ': ' . $firstName . ', ' . date('D, M j g:i A', $sessTs), 'schedule.php');
-                send_app_mail((string)$instructorEmail, 'Session ' . $outcome . ': ' . date('D, M j g:i A', $sessTs),
-                    "Your training session with {$firstName} on " . date('l, F j, Y \a\t g:i A', $sessTs) . " was {$outcome}.\n"
-                    . ($to === 'Cancelled' ? "\nIf it is in your calendar, remove it there: no calendar update was sent.\n" : ''));
-            }
-        }
+        // The shared rules (inc/session_changes.php), as voice uses them (4.0.0).
+        $outcomeErr = session_set_outcome($sid, $to, $userId, 'mobile');
+        if ($outcomeErr !== null) fail($outcomeErr, 409);
         out(['ok' => true, 'status' => $to]);
 
     case 'complete_session':
@@ -2042,7 +2023,8 @@ switch ($action) {
         out(['ok' => true, 'id' => $userId, 'name' => $userName,
              'perms' => $resolved['perms'], 'scoped' => (bool)$resolved['scoped'],
              'ai_enabled' => ai_enabled(),
-             'ai_features' => array_values(array_filter(array_keys(ai_features()), 'ai_feature_enabled')),
+             // The voice assistant has its own switch and works without the AI service (4.0.0).
+             'ai_features' => array_values(array_unique(array_merge(array_filter(array_keys(ai_features()), 'ai_feature_enabled'), voice_available() ? ['voice'] : []))),
              // The zone every appointment time is written and read in; app builds from
              // 3.0.21 use it for appointment writes and displays (older ones ignore it).
              'timezone' => date_default_timezone_get(),
@@ -2210,7 +2192,9 @@ switch ($action) {
         $loanNotes = api_text($input, 'notes', 255, 'Notes');
         api_require_client($cid, $userId);
         try {
-            loan_equipment($eid, $cid, $loanDue, $loanNotes ?: null, $userId);
+            $newLoan = loan_equipment($eid, $cid, $loanDue, $loanNotes ?: null, $userId);
+            // The hand-off (4.0.0): condition_out and the client's typed accepted_name.
+            loan_handoff_out($newLoan, is_string($input['condition_out'] ?? null) ? $input['condition_out'] : null, is_string($input['accepted_name'] ?? null) ? $input['accepted_name'] : null);
         } catch (DomainException $e) { fail($e->getMessage(), 409); }
         audit($userId, 'equipment.loan', 'equipment', $eid, 'to client #' . $cid . ' (mobile)');
         out(['ok' => true]);
@@ -2222,7 +2206,7 @@ switch ($action) {
         $loan = $l->fetch();
         if (!$loan) fail('Loan not found or already returned.', 404);
         api_require_client((int)$loan['client_id'], $userId);
-        try { return_equipment($lid); }
+        try { return_equipment($lid); loan_handoff_in($lid, is_string($input['condition_in'] ?? null) ? $input['condition_in'] : null); }
         catch (DomainException $e) { fail($e->getMessage(), 409); }
         audit($userId, 'equipment.return', 'equipment', (int)$loan['equipment_id'], 'mobile');
         out(['ok' => true]);
@@ -4169,7 +4153,7 @@ switch ($action) {
 
     /* ---------- Voice assistant (v2.44–v2.52 parity; shared with ai_command.php) ---------- */
     case 'voice_command': {
-        if (!ai_feature_enabled('voice')) fail('The voice assistant is turned off.');
+        if (!voice_available()) fail('The voice assistant is turned off.');
         // Same shared interpreter/executor the website uses; $user needs only id.
         $reply = voice_handle($input, ['id' => $userId]);
         if (isset($reply['ok']) && $reply['ok'] === false) {
@@ -4179,5 +4163,9 @@ switch ($action) {
     }
 
     default:
-        fail('Unknown action.', 404);
+        // The 4.0.0 actions (inc/api_more.php): alerts, client requests, invoices and tasks.
+        $more = api_more($action, $input, $userId);
+        if ($more === null) fail('Unknown action.', 404);
+        if (empty($more['ok'])) fail((string)$more['error'], (int)($more['status'] ?? 400));
+        out($more);
 }

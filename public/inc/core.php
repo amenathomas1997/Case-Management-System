@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.55';
+const APP_VERSION = '4.0.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -253,12 +253,29 @@ function save_signature_png(?string $b64): ?string {
 
 /* ---------- In-app notifications ---------- */
 
-function notify_user(int $userId, string $message, ?string $link = null): void {
+function notify_user(int $userId, string $message, ?string $link = null, bool $urgent = false): void {
     try {
         db()->prepare('INSERT INTO notifications (user_id, message, link) VALUES (?,?,?)')
             ->execute([$userId, mb_substr($message, 0, 255), $link]);
     } catch (Throwable $e) {
         error_log('notify_user failed: ' . get_class($e) . ' ' . $e->getCode() . ' at ' . basename($e->getFile()) . ':' . $e->getLine());
+        return;
+    }
+    // An urgent alert (a client's request, message or call for help) is also emailed to someone
+    // who chose "at once" (4.0.0): never the alert's words, which can name a client, only a
+    // sign-in link, and at most one such email every 15 minutes.
+    if (!$urgent) return;
+    try {
+        $u = db()->prepare("SELECT email, alert_email FROM users WHERE id = ? AND is_active = 1");
+        $u->execute([$userId]);
+        $row = $u->fetch();
+        if (!$row || $row['alert_email'] !== 'now') return;
+        $key = 'alert_mailed_' . $userId;
+        if (($last = setting($key)) !== null && strtotime($last) > time() - 900) return;
+        set_setting($key, date('c'));
+        send_app_mail((string)$row['email'], 'New alert in ' . cfg('name'), "You have a new alert in " . cfg('name') . ".\n\nSign in to read it: " . cfg('base_url') . "/notifications.php\n\n(To change how alerts reach you, open My Account.)\n");
+    } catch (Throwable $e) {
+        error_log('notify_user alert email: ' . get_class($e));
     }
 }
 
@@ -278,9 +295,9 @@ function effective_admin_user_ids(): array {
 }
 
 /** One in-app notification per active admin. */
-function notify_admin_users(string $message, ?string $link = null): void {
+function notify_admin_users(string $message, ?string $link = null, bool $urgent = false): void {
     foreach (effective_admin_user_ids() as $adminId) {
-        notify_user($adminId, $message, $link);
+        notify_user($adminId, $message, $link, $urgent);
     }
 }
 
@@ -1684,3 +1701,7 @@ require_once __DIR__ . '/settings_admin.php';
 config_overrides_apply();
 // Staff accounts: invitations, renewals, departures (3.0.55).
 require_once __DIR__ . '/staff_accounts.php';
+// Voice without the AI service, and more voice commands (4.0.0).
+require_once __DIR__ . '/voice_more.php';
+// The iPhone app's 4.0.0 actions (api.php only uses them).
+require_once __DIR__ . '/api_more.php';

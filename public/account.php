@@ -6,6 +6,12 @@ require __DIR__ . '/inc/account_actions.php';
 csrf_check();
 $user = require_login();
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_alert_email'])) {
+    $how = in_array($_POST['alert_email'] ?? '', ['now', 'daily', 'off'], true) ? $_POST['alert_email'] : 'off';
+    db()->prepare('UPDATE users SET alert_email = ? WHERE id = ?')->execute([$how, (int)$user['id']]);
+    flash(['now' => 'Urgent alerts will be emailed to you as they happen (at most one email every 15 minutes), with one email a day when you have unread alerts.', 'daily' => 'You will get one email a day when you have unread alerts.', 'off' => 'Alerts will no longer be emailed; they stay in Alerts in the app and on the website.'][$how]);
+    redirect('account.php#alerts-h');
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_display_controls'])) {
     $visibility = $_POST['display_controls'] ?? null;
     if (!is_string($visibility) || !in_array($visibility, ['show', 'hide'], true)) {
@@ -244,6 +250,17 @@ page_header('My Account', $user, 'account');
       </form>
     <?php endif; ?>
 
+    <h2 id="alerts-h">How alerts reach you</h2>
+    <?php $ae = db()->prepare('SELECT alert_email FROM users WHERE id = ?'); $ae->execute([$user['id']]); $alertHow = (string)($ae->fetchColumn() ?: 'off'); ?>
+    <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
+      <label for="alert_email">Email me about alerts</label>
+      <select id="alert_email" name="alert_email">
+        <option value="now"<?= $alertHow === 'now' ? ' selected' : '' ?>>Urgent ones at once, and daily</option>
+        <option value="daily"<?= $alertHow === 'daily' ? ' selected' : '' ?>>Once a day</option>
+        <option value="off"<?= $alertHow === 'off' ? ' selected' : '' ?>>Never</option>
+      </select>
+      <button type="submit" name="save_alert_email" value="1" class="btn btn-secondary btn-sm">Save</button>
+    </form>
     <h2 id="calfeed">Calendar subscription</h2>
     <?php
     $ct = db()->prepare('SELECT cal_token FROM users WHERE id = ?');
@@ -262,6 +279,7 @@ page_header('My Account', $user, 'account');
     <?php elseif ($calToken): ?>
       <p>Subscribe your Outlook, Apple, or Google calendar to this private address and your sessions appear and update automatically. Client names are shortened to first name + last initial, and in-person locations are left out of the feed (they are on the schedule in the app):</p>
       <p><code id="calfeed-url" style="user-select: all; word-break: break-all;"><?= h(cfg('base_url')) ?>/calfeed.php?u=<?= h($calToken) ?></code></p>
+      <p><a href="<?= h('webcal://' . preg_replace('#^https?://#', '', (string)cfg('base_url')) . '/calfeed.php?u=' . $calToken) ?>">Subscribe in your calendar app</a> (opens Calendar or Outlook on this device)</p>
       <p><button type="button" class="btn btn-secondary btn-sm" id="calfeed-copy">Copy address</button>
          <span id="calfeed-copied" role="status" class="muted"></span></p>
       <script>document.getElementById('calfeed-copy').addEventListener('click', function () {

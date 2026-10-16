@@ -1270,8 +1270,8 @@ if ($hasA11y): ?>
         <?php // An address from the public referral form: nothing is sent to it until staff confirm it. ?>
         <p class="hint"><strong>Unverified — confirm before anything is sent.</strong> This address came from the public referral form and has not been confirmed with the client, so no session reminder, outcome survey or portal link goes to it yet. <a href="client_edit.php?id=<?= $id ?>">Confirm it on the edit page</a>.</p>
         <?php endif; ?></dd>
-      <dt>Phone</dt><dd><?= h($client['phone'] ?? '—') ?></dd>
-      <dt>Address</dt><dd><?= h($client['address'] ?? '—') ?></dd>
+      <dt>Phone</dt><dd><?= tel_link($client['phone'] ?? null) ?></dd>
+      <dt>Address</dt><dd><?= directions_link($client['address'] ?? null) ?></dd>
       <?php if (!empty($client['guardian_name']) || !empty($client['guardian_phone']) || !empty($client['guardian_email'])): // 3.0.37 ?>
       <dt>Guardian</dt><dd><?= h($client['guardian_name'] ?: '—') ?>
         <?php $gTel = preg_replace('/[^0-9+]/', '', (string)($client['guardian_phone'] ?? '')); ?>
@@ -1359,7 +1359,7 @@ if ($hasA11y): ?>
         <?php if (trim((string)($client['counselor_email'] ?? '')) !== '' && (int)($client['counselor_verified'] ?? 0) !== 1): ?>
         <p class="hint"><strong>Unverified — confirm before reports are sent.</strong> This address has not been confirmed (one from the public referral form is not checked), so no monthly progress report, counselor portal link or email filing uses it yet. <a href="client_edit.php?id=<?= $id ?>">Confirm the counselor email on the edit page</a>.</p>
         <?php endif; ?></dd>
-      <dt>Phone</dt><dd><?= h($client['counselor_phone'] ?? '—') ?></dd>
+      <dt>Phone</dt><dd><?= tel_link($client['counselor_phone'] ?? null) ?></dd>
       <?php // The plan (3.0.45). ?>
       <dt>VR case number</dt><dd><?= h($client['vr_case_number'] ?? '') ?: '—' ?></dd>
       <dt>IPE employment goal</dt><dd><?= h($client['ipe_goal'] ?? '') ?: '—' ?><?= !empty($client['ipe_date']) ? ' (IPE ' . fmt_date($client['ipe_date']) . (!empty($client['ipe_amended_on']) ? ', amended ' . fmt_date($client['ipe_amended_on']) : '') . ')' : '' ?></dd>

@@ -295,3 +295,26 @@ function report_table(string $table, int $actor): string {
     if ($columns[$table] === 'track_id') $ids = 'SELECT id FROM training_tracks WHERE client_id IN ('.$ids.')';
     return '(SELECT * FROM '.$table.' WHERE '.$columns[$table].' IN ('.$ids.'))';
 }
+
+/* ---------- The equipment hand-off record (4.0.0) ---------- */
+const LOAN_CONDITIONS = ['New', 'Good', 'Fair', 'Needs Repair'];
+
+/** Record how an item left (its condition, and the client's typed name accepting the loan agreement). */
+function loan_handoff_out(int $loanId, ?string $condition, ?string $acceptedName): void {
+    $condition = in_array($condition, LOAN_CONDITIONS, true) ? $condition : null;
+    $acceptedName = $acceptedName !== null && trim($acceptedName) !== '' ? mb_substr(trim($acceptedName), 0, 120) : null;
+    if ($condition === null && $acceptedName === null) return;
+    try {
+        db()->prepare('UPDATE equipment_loans SET condition_out = COALESCE(?, condition_out), accepted_name = COALESCE(?, accepted_name), accepted_at = IF(? IS NULL, accepted_at, NOW()) WHERE id = ?')
+            ->execute([$condition, $acceptedName, $acceptedName, $loanId]);
+    } catch (PDOException $e) { if ((string)$e->getCode() !== '42S22') throw $e; } // mig_4.0.0 not run yet
+}
+
+/** Record how an item came back; damage found updates the item's own condition. */
+function loan_handoff_in(int $loanId, ?string $condition): void {
+    if (!in_array($condition, LOAN_CONDITIONS, true)) return;
+    try {
+        db()->prepare('UPDATE equipment_loans SET condition_in = ? WHERE id = ?')->execute([$condition, $loanId]);
+        db()->prepare('UPDATE equipment e JOIN equipment_loans l ON l.equipment_id = e.id SET e.item_condition = ? WHERE l.id = ?')->execute([$condition, $loanId]);
+    } catch (PDOException $e) { if ((string)$e->getCode() !== '42S22') throw $e; }
+}

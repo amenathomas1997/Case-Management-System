@@ -23,6 +23,7 @@ struct ScheduleView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.openURL) private var openURL
     @State private var sessions: [Session] = []
+    @AppStorage("scheduleMineOnly") private var mineOnly = false
     /// How many upcoming sessions exist in all, and how many the server sends (nil from an
     /// older server).
     @State private var upcomingTotal: Int?
@@ -40,6 +41,9 @@ struct ScheduleView: View {
     /// Set while the list is the copy kept on this phone (the server could not be reached):
     /// when it was saved. Nothing can be changed until a load succeeds.
     @State private var offlineSince: Date?
+    /// The client record opened from a session's Actions rotor (4.0.0).
+    @State private var openClientId: Int?
+    @State private var showingClient = false
     /// Sessions whose outcome (completed, cancelled, no-show) is on its way, so a second tap
     /// can't send it again.
     @State private var completing: Set<Int> = []
@@ -93,8 +97,9 @@ struct ScheduleView: View {
                     }
                     // Sessions that have ended but are still Scheduled come first (the server sends
                     // every one of them): each needs an outcome, so its hours are logged or it is closed.
-                    let ended = sessions.filter { $0.overdue == true }
-                    let upcoming = sessions.filter { $0.overdue != true }
+                    Toggle("My sessions only", isOn: $mineOnly)
+                    let ended = shownSessions.filter { $0.overdue == true }
+                    let upcoming = shownSessions.filter { $0.overdue != true }
                     let groups = dayGroups(upcoming)
                     if !ended.isEmpty {
                         Section {
@@ -135,6 +140,9 @@ struct ScheduleView: View {
                 }
             }
             .navigationTitle("Schedule")
+            .navigationDestination(isPresented: $showingClient) {
+                if let openClientId { ClientDetailView(clientId: openClientId) }
+            }
             .confirmationDialog(outcomeQuestion, isPresented: Binding(get: { pendingOutcome != nil },
                                                                       set: { if !$0 { pendingOutcome = nil } }),
                                 titleVisibility: .visible, presenting: pendingOutcome) { outcome in
@@ -259,8 +267,8 @@ struct ScheduleView: View {
     /// The session VoiceOver should land on once `session`'s row has gone: the next one in the
     /// list as shown (ended first, then upcoming by day), else the one before it.
     private func neighbour(of session: Session) -> Int? {
-        let shown = sessions.filter { $0.overdue == true }
-            + dayGroups(sessions.filter { $0.overdue != true }).flatMap(\.sessions)
+        let shown = shownSessions.filter { $0.overdue == true }
+            + dayGroups(shownSessions.filter { $0.overdue != true }).flatMap(\.sessions)
         guard let index = shown.firstIndex(where: { $0.id == session.id }) else { return nil }
         if index + 1 < shown.count { return shown[index + 1].id }
         return index > 0 ? shown[index - 1].id : nil
@@ -346,6 +354,11 @@ struct ScheduleView: View {
         else { pendingOutcome = SessionOutcome(session: session, to: "Completed") }
     }
 
+    /// Every session, or only this person's (4.0.0, remembered on the phone).
+    private var shownSessions: [Session] {
+        mineOnly ? sessions.filter { $0.userId == nil || $0.userId == api.userId } : sessions
+    }
+
     @ViewBuilder
     private func sessionRow(_ session: Session) -> some View {
         let instructor = (session.instructor ?? "").isEmpty ? nil : session.instructor
@@ -400,7 +413,17 @@ struct ScheduleView: View {
                         }
                     }
                 } else if let location = session.location, !location.isEmpty {
-                    Text(location).font(.callout).foregroundStyle(Color.secondaryText)
+                    // Directions to the session's location (4.0.0).
+                    if let url = mapsURL(location) {
+                        Link(destination: url) { Text("\(location), directions").font(.callout) }
+                            .accessibilityLabel("Directions to \(location)")
+                    } else {
+                        Text(location).font(.callout).foregroundStyle(Color.secondaryText)
+                    }
+                }
+                if let cid = session.clientId, api.can("clients") {
+                    NavigationLink("Open \(session.client)'s record", destination: ClientDetailView(clientId: cid))
+                        .font(.callout)
                 }
                 if session.trackId != nil {
                     Text("Completing logs hours automatically")
@@ -476,6 +499,13 @@ struct ScheduleView: View {
                 }
                 if let url = joinURL(session) {
                     Button("Join online") { openURL(url) }
+                }
+                // The links on the row, which VoiceOver reads as one stop (4.0.0).
+                if session.isRemote != true, let location = session.location, let url = mapsURL(location) {
+                    Button("Directions to \(location)") { openURL(url) }
+                }
+                if let cid = session.clientId, api.can("clients") {
+                    Button("Open \(session.client)'s record") { openClientId = cid; showingClient = true }
                 }
             }
         }

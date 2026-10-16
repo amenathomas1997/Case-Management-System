@@ -94,14 +94,17 @@ extension InvoiceItem {
     }
 }
 
-/// The invoice list, read only: status, amount, balance and dates, filtered by status, with
-/// what each funding agency still owes. Billing actions stay on the website.
+/// The invoice list: status, amount, balance and dates, filtered by status, with what each
+/// funding agency still owes. A draft can be marked submitted today (4.0.0); other billing
+/// actions stay on the website.
 struct InvoicesView: View {
     @EnvironmentObject var api: API
     @State private var data: InvoicesResponse?
     @State private var error: String?
     @State private var status = ""
     @State private var page = 1
+    /// The draft waiting for a yes before it is marked submitted (4.0.0).
+    @State private var pendingSubmit: InvoiceItem?
 
     var body: some View {
         List {
@@ -115,7 +118,7 @@ struct InvoicesView: View {
                     Text("Denied").tag("Denied")
                     Text("Void").tag("Void")
                 }
-                Text("Read only. Submitting, recording payments and write-offs, and closing denied invoices are on the website.")
+                Text("A draft can be marked submitted here (swipe, or the Actions rotor). Recording payments and write-offs, and closing denied invoices, are on the website.")
                     .font(.callout).foregroundStyle(Color.secondaryText)
             }
             if let d = data {
@@ -133,26 +136,7 @@ struct InvoicesView: View {
                 }
                 Section {
                     if d.invoices.isEmpty { Text("No invoices.").foregroundStyle(Color.secondaryText) }
-                    ForEach(d.invoices) { inv in
-                        let row = VStack(alignment: .leading, spacing: 3) {
-                            HStack {
-                                Text(inv.invoiceNumber).font(.body.weight(.semibold))
-                                Spacer()
-                                Text(String(format: "$%.2f", inv.totalAmount)).font(.body.monospacedDigit())
-                            }
-                            Text(inv.clientName).font(.callout)
-                            Text(inv.statusText).font(.caption).foregroundStyle(inv.shortPaid ? Color.alertRed : Color.secondaryText)
-                            Text("\(inv.trackTitle) · Authorization \(inv.authNumber ?? "none")").font(.caption).foregroundStyle(Color.secondaryText)
-                            Text(inv.datesText).font(.caption).foregroundStyle(Color.secondaryText)
-                        }
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(inv.spoken)
-                        if inv.canOpenClient {
-                            NavigationLink { ClientDetailView(clientId: inv.clientId) } label: { row }
-                        } else {
-                            row
-                        }
-                    }
+                    ForEach(d.invoices) { inv in invoiceRow(inv) }
                     if d.pages > 1 {
                         HStack {
                             Button("Newer") { page = max(1, page - 1); Task { await load() } }.disabled(page <= 1)
@@ -172,9 +156,55 @@ struct InvoicesView: View {
             }
         }
         .navigationTitle("Invoices")
+        .confirmationDialog("Mark invoice \(pendingSubmit?.invoiceNumber ?? "") submitted today?",
+                            isPresented: Binding(get: { pendingSubmit != nil }, set: { if !$0 { pendingSubmit = nil } }),
+                            titleVisibility: .visible) {
+            Button("Mark submitted") {
+                if let inv = pendingSubmit { Task { await markSubmitted(inv) } }
+                pendingSubmit = nil
+            }
+            Button("Cancel", role: .cancel) { pendingSubmit = nil }
+        }
         .onChange(of: status) { _ in page = 1; Task { await load(announceView: true) } }
         .refreshable { await load() }
         .task { await load() }
+    }
+
+    /// One invoice, opening the client's record when allowed; a draft offers Mark submitted.
+    @ViewBuilder
+    private func invoiceRow(_ inv: InvoiceItem) -> some View {
+        let row = VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(inv.invoiceNumber).font(.body.weight(.semibold))
+                Spacer()
+                Text(String(format: "$%.2f", inv.totalAmount)).font(.body.monospacedDigit())
+            }
+            Text(inv.clientName).font(.callout)
+            Text(inv.statusText).font(.caption).foregroundStyle(inv.shortPaid ? Color.alertRed : Color.secondaryText)
+            Text("\(inv.trackTitle) · Authorization \(inv.authNumber ?? "none")").font(.caption).foregroundStyle(Color.secondaryText)
+            Text(inv.datesText).font(.caption).foregroundStyle(Color.secondaryText)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(inv.spoken)
+        Group {
+            if inv.canOpenClient {
+                NavigationLink { ClientDetailView(clientId: inv.clientId) } label: { row }
+            } else {
+                row
+            }
+        }
+        .modifier(DraftSubmitActions(isDraft: inv.status == "Draft") { pendingSubmit = inv })
+    }
+
+    private func markSubmitted(_ inv: InvoiceItem) async {
+        do {
+            error = nil
+            let _: OKResponse = try await api.call("submit_invoice", body: ["id": inv.id])
+            announce("Invoice \(inv.invoiceNumber) marked submitted today.")
+            await load()
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+        }
     }
 
     private func load(announceView: Bool = false) async {
@@ -190,6 +220,21 @@ struct InvoicesView: View {
         } catch {
             guard wanted == status else { return }
             showFormError(error.localizedDescription, in: &self.error)
+        }
+    }
+}
+
+/// Mark submitted, as a swipe and on the Actions rotor, on a draft invoice only.
+private struct DraftSubmitActions: ViewModifier {
+    let isDraft: Bool
+    let action: () -> Void
+    func body(content: Content) -> some View {
+        if isDraft {
+            content
+                .swipeActions { Button("Mark submitted", action: action).tint(.brandTeal) }
+                .accessibilityAction(named: "Mark submitted today", action)
+        } else {
+            content
         }
     }
 }

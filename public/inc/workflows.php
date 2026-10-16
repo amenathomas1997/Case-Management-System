@@ -240,8 +240,8 @@ function workflow_practice(array $in,array $client): void {
     // A request for help is announced, as other portal requests are: to the instructor, or every administrator while nobody active is assigned.
     if($difficulty==='Need help'){
         $link='workflows.php?view=homework&client_id='.(int)$client['id'];
-        if($owner)notify_user($owner,explode(' ',(string)$client['name'])[0].' asked for help with homework: '.$h['title'],$link);
-        else notify_admin_users($client['name'].' asked for help with homework: '.$h['title'],$link);
+        if($owner)notify_user($owner,explode(' ',(string)$client['name'])[0].' asked for help with homework: '.$h['title'],$link,true);
+        else notify_admin_users($client['name'].' asked for help with homework: '.$h['title'],$link,true);
     }
 }
 function workflow_homework_explain(int $homeworkId,array $client,string $question,string $language): array {

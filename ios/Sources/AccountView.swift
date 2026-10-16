@@ -367,6 +367,10 @@ struct AccountView: View {
                     Button("Copy address") { copyCalAddress(calAddress) }
                 }
                 .accessibilityFocused($calAddressFocused)
+                // One tap to subscribe in Calendar (4.0.0): the same address as webcal://.
+                if let webcal = URL(string: calAddress.replacingOccurrences(of: "https://", with: "webcal://")) {
+                    Link("Subscribe in Calendar", destination: webcal)
+                }
             }
             SecureCaptionedField(label: "Account password, for the calendar address", text: $calPassword)
             if s.hasCalFeed {

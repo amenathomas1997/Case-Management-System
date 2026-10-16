@@ -83,6 +83,24 @@ foreach ($rows->fetchAll() as $s) {
         // Session notes are intentionally omitted: calendar providers store the
         // feed, so clinical detail must not leave the app (matches the name
         // shortening above). Staff read notes in the app, not the calendar.
-        . "STATUS:" . ($noShow ? 'CANCELLED' : 'CONFIRMED') . "\r\nEND:VEVENT\r\n";
+        . "STATUS:" . ($noShow ? 'CANCELLED' : 'CONFIRMED') . "\r\n"
+        // A reminder 30 minutes before a session still ahead (4.0.0).
+        . ($s['status'] === 'Scheduled' && strtotime((string)$s['start_at']) > time() ? "BEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:" . $esc($title) . "\r\nTRIGGER:-PT30M\r\nEND:VALARM\r\n" : '')
+        . "END:VEVENT\r\n";
 }
+// Interpreter, captioning and transport bookings (4.0.0) the person made or for their
+// clients: titled "Support booking" so the kind of support (which can reveal a disability)
+// stays in the app.
+try {
+    $bk = db()->prepare("SELECT b.id, b.needed_at, b.duration_min, b.status, c.name AS client_name FROM access_bookings b JOIN clients c ON c.id = b.client_id
+        WHERE b.status IN ('Requested','Confirmed') AND b.needed_at > DATE_SUB(NOW(), INTERVAL 30 DAY) AND (b.created_by = ? OR c.assigned_to = ?)" . $scope . ' ORDER BY b.needed_at LIMIT 200');
+    $bk->execute([(int)$u['id'], (int)$u['id']]);
+    foreach ($bk->fetchAll() as $b) {
+        $end = date('Y-m-d H:i:s', strtotime((string)$b['needed_at']) + 60 * max(15, (int)($b['duration_min'] ?: 60)));
+        echo "BEGIN:VEVENT\r\nUID:cms-booking-" . (int)$b['id'] . "@" . (parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost') . "\r\n"
+            . "DTSTAMP:" . gmdate('Ymd\THis\Z') . "\r\nDTSTART:" . $fmt($b['needed_at']) . "\r\nDTEND:" . $fmt($end) . "\r\n"
+            . "SUMMARY:" . $esc(($b['status'] === 'Requested' ? 'Support booking (requested): ' : 'Support booking: ') . $shortName($b['client_name'])) . "\r\n"
+            . "STATUS:" . ($b['status'] === 'Confirmed' ? 'CONFIRMED' : 'TENTATIVE') . "\r\nEND:VEVENT\r\n";
+    }
+} catch (Throwable $e) { /* bookings are an addition; the sessions above still go out */ }
 echo "END:VCALENDAR\r\n";

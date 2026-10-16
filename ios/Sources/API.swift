@@ -168,6 +168,8 @@ struct ClientInfo: Decodable {
     var ipeGoal: String?
     var ipeDate: String?
     var ipeAmendedOn: String?
+    /// The client's school (4.0.0); nil from an older server.
+    var school: String?
 }
 
 let clientTypes = ["VR", "Pre-ETS"]
@@ -325,7 +327,10 @@ struct Session: Decodable, Identifiable {
     /// Part of a weekly series, or of a group (3.0.43): the rest can be cancelled in one step.
     var inSeries = false
     var groupUid: String?
-    private enum CodingKeys: String, CodingKey { case id, startAt, endAt, location, notes, status, trackId, client, instructor, isRemote, meetingUrl, overdue, checkedInAt, inSeries, groupUid }
+    /// The client and the instructor (4.0.0): for the client record link and "My sessions".
+    var clientId: Int?
+    var userId: Int?
+    private enum CodingKeys: String, CodingKey { case id, startAt, endAt, location, notes, status, trackId, client, instructor, isRemote, meetingUrl, overdue, checkedInAt, inSeries, groupUid, clientId, userId }
     // Tolerant decode: endAt is never displayed, so a null on any row must not blank the
     // whole Schedule tab. Only id is required.
     init(from d: Decoder) throws {
@@ -346,6 +351,8 @@ struct Session: Decodable, Identifiable {
         checkedInAt = (checked?.isEmpty ?? true) ? nil : checked
         inSeries = (try? c.decodeIfPresent(Bool.self, forKey: .inSeries)) ?? false
         groupUid = try? c.decodeIfPresent(String.self, forKey: .groupUid)
+        clientId = try? c.decodeIfPresent(Int.self, forKey: .clientId)
+        userId = try? c.decodeIfPresent(Int.self, forKey: .userId)
     }
 }
 
@@ -742,6 +749,16 @@ final class API: ObservableObject {
     @Published var aiEnabled: Bool = false
     /// Enabled AI feature keys (recommend, intake, progress, remediate, ask, kb, translate, curriculum, risk).
     @Published var aiFeatures: [String] = []
+    /// The website's release (4.0.0), to say when this app is older than it.
+    @Published var serverVersion: String?
+    /// "Please update" when the website is a newer major release than this app.
+    var updateNotice: String? {
+        guard let server = serverVersion,
+              let app = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+              let sMajor = Int(server.split(separator: ".").first ?? ""),
+              let aMajor = Int(app.split(separator: ".").first ?? ""), sMajor > aMajor else { return nil }
+        return "The website is version \(server) and this app is \(app). Please update the app to use everything the website offers."
+    }
     func aiHas(_ key: String) -> Bool { aiEnabled && aiFeatures.contains(key) }
 
     init() {
@@ -785,6 +802,7 @@ final class API: ObservableObject {
             scoped = me.scoped ?? false
             aiEnabled = me.aiEnabled ?? false
             aiFeatures = me.aiFeatures ?? []
+            serverVersion = me.serverVersion
             permsLoaded = true
             // Appointment times are sent and shown in the server's zone (APIDate); a server that
             // does not report it keeps the zone known before (America/Chicago by default).
@@ -942,6 +960,8 @@ final class API: ObservableObject {
             let (data, _) = try await send(action, method: "GET", query: query, body: nil,
                                            accountChanged: "Your account changed. Please reload this screen.")
             if let errorBody = try? decoder.decode(APIErrorResponse.self, from: data), !errorBody.ok {
+                // Refused (no longer on this caseload, or removed): the copy kept here goes too.
+                if owner > 0 { OfflineCache.remove(key: cacheKey, owner: owner) }
                 throw APIError.server(errorBody.error ?? "Something went wrong.")
             }
             let value: T

@@ -374,7 +374,7 @@ function ai_features(): array {
         'curriculum' => 'Curriculum generator',
         'homework_draft' => 'Homework drafted from a session note',
         'risk' => 'Outcome risk flags',
-        'voice' => 'Voice assistant (natural-language commands)',
+        'voice' => 'Voice assistant (its fixed commands work even with the AI service off)',
         'readaloud' => 'Human-voice read-aloud (text-to-speech)',
     ];
 }

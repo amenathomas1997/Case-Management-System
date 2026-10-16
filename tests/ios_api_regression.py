@@ -95,12 +95,13 @@ voice = (root / 'ios/Sources/VoiceAssistant.swift').read_text()
 c = voice.index('    nonisolated static func confirmAnswer(_ utterance: String) -> ConfirmAnswer {')
 d = voice.index('\n    }\n', c) + len('\n    }\n')
 # Stand-ins for the offline read cache and local notifications (API.swift only calls these
-# three members; the real types need UIKit and UserNotifications).
+# members; the real types need UIKit and UserNotifications).
 prefix += '''
 enum OfflineCache {
     static func save(_ data: Data, key: String, owner: Int) {}
     static func load(key: String, owner: Int) -> (data: Data, savedAt: Date)? { nil }
     static func removeAll(owner: Int) {}
+    static func remove(key: String, owner: Int) {}
 }
 final class LocalNotifications { static let shared = LocalNotifications(); func clearScheduled() {} }
 '''

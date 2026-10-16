@@ -246,6 +246,21 @@ try {
 } catch (Throwable $e) {
     error_log('daily_alerts: staff checks skipped (' . get_class($e) . ')');
 }
+// The daily alert email (4.0.0): to each person who chose it ("now" too, so an urgent alert
+// held back by the 15-minute limit is still mentioned), the number of alerts from the
+// last day still unread, and a sign-in link. No alert's words (they can name a client).
+try {
+    foreach (db()->query("SELECT u.id, u.email, COUNT(n.id) n FROM users u JOIN notifications n ON n.user_id = u.id AND n.read_at IS NULL AND n.created_at > DATE_SUB(NOW(), INTERVAL 1 DAY)
+        WHERE u.is_active = 1 AND u.alert_email IN ('daily', 'now') GROUP BY u.id, u.email")->fetchAll() as $au) {
+        if (setting('alert_digest_' . (int)$au['id']) === date('Y-m-d')) continue;
+        if (send_app_mail((string)$au['email'], (int)$au['n'] . ' unread alert' . ((int)$au['n'] === 1 ? '' : 's') . ' in ' . cfg('name'),
+            'You have ' . (int)$au['n'] . ' unread alert' . ((int)$au['n'] === 1 ? '' : 's') . ' from the last day in ' . cfg('name') . ".\n\nSign in to read them: " . cfg('base_url') . "/notifications.php\n\n(To change how alerts reach you, open My Account.)\n")) {
+            set_setting('alert_digest_' . (int)$au['id'], date('Y-m-d'));
+        }
+    }
+} catch (Throwable $e) {
+    error_log('daily_alerts: alert digest skipped (' . get_class($e) . ')');
+}
 try { db()->exec('DELETE FROM mail_log WHERE sent_at < DATE_SUB(NOW(), INTERVAL 180 DAY)'); }
 catch (Throwable $e) { error_log('daily_alerts: mail log not pruned (' . get_class($e) . ')'); }
 

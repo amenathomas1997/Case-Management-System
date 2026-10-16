@@ -116,6 +116,8 @@ struct ClientDetailView: View {
     /// A note to put VoiceOver on once the record has loaded (opened from Documentation review).
     var focusNoteId: Int? = nil
     @State private var detail: ClientDetail?
+    /// When the record shown is the copy kept on this phone (no signal), nil when it is live.
+    @State private var offlineSince: Date?
     @State private var showingVoice = false
     @AccessibilityFocusState private var focusedNote: Int?
     @State private var error: String?
@@ -170,9 +172,37 @@ struct ClientDetailView: View {
         return "Notes (\(shown))"
     }
 
+    /// The address with directions, the school, and the counselor with a call link (4.0.0),
+    /// kept out of the body so it type-checks quickly.
+    @ViewBuilder
+    private func contactExtras(_ c: ClientInfo) -> some View {
+            // The address opens Maps for directions (4.0.0).
+            if let address = c.address, !address.isEmpty {
+                if let url = mapsURL(address) {
+                    Link(destination: url) { LabeledContent("Address, directions", value: address) }
+                } else {
+                    LabeledContent("Address", value: address)
+                }
+            }
+            if let school = c.school, !school.isEmpty {
+                LabeledContent("School", value: school)
+            }
+            if let counselor = c.counselorName, !counselor.isEmpty {
+                LabeledContent("Vocational rehabilitation (VR) counselor", value: counselor)
+            }
+            if let cPhone = c.counselorPhone, !cPhone.isEmpty {
+                if let url = telURL(cPhone) {
+                    Link(destination: url) { LabeledContent("Counselor phone", value: cPhone) }
+                } else {
+                    LabeledContent("Counselor phone", value: cPhone)
+                }
+            }
+    }
+
     var body: some View {
         List {
             if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
+            if let offlineSince { OfflineNotice(savedAt: offlineSince).listRowSeparator(.hidden) }
             if let confirmation {
                 Text(confirmation).font(.callout.weight(.medium)).foregroundStyle(Color.brandTeal)
             }
@@ -195,9 +225,7 @@ struct ClientDetailView: View {
                             LabeledContent("Email", value: email)
                         }
                     }
-                    if let counselor = detail.client.counselorName, !counselor.isEmpty {
-                        LabeledContent("Vocational rehabilitation (VR) counselor", value: counselor)
-                    }
+                    contactExtras(detail.client)
                     if let counselorEmail = detail.client.counselorEmail, !counselorEmail.isEmpty {
                         if let url = URL(string: "mailto:" + counselorEmail) {
                             Link(destination: url) { LabeledContent("Counselor email", value: counselorEmail) }
@@ -578,7 +606,9 @@ struct ClientDetailView: View {
         let owner = api.userId
         do {
             error = nil
-            let record: ClientRecord = try await api.call("client", query: ["id": String(clientId)])
+            // Kept on the phone (4.0.0), so a record opened before can be read with no signal.
+            let (record, savedAt): (ClientRecord, Date?) = try await api.callCached("client", query: ["id": String(clientId)], cacheKey: "client-\(clientId)")
+            offlineSince = savedAt
             let fresh = record.detail
             var older: [Note] = []
             var known = Set(fresh.notes.map(\.id))
@@ -1098,6 +1128,13 @@ struct AddNoteSheet: View {
 /// Only the first phone-shaped run is dialled: a field holding two numbers or a note
 /// ("512-555-1234 or 512-555-9876", "after 3pm 512-555-1234") never has every digit in it
 /// joined into one, and one that holds no plausible number (7 to 15 digits) is not a link.
+/// A Maps link for directions to an address (4.0.0); nil when it cannot form one.
+func mapsURL(_ address: String) -> URL? {
+    let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, let q = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return nil }
+    return URL(string: "https://maps.apple.com/?daddr=" + q)
+}
+
 func telURL(_ phone: String) -> URL? {
     var main = Substring(phone)
     var ext = ""

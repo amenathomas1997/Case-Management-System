@@ -294,6 +294,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Open Session schedule. Check Ended sessions awaiting an outcome first.</li>
   <li>Check Notifications, Client &amp; counselor messages and Client portal requests.</li>
 </ol>
+<p>On My account, under How alerts reach you, Email me about alerts can be: Urgent ones at once, and daily (a client's request, message or call for help is emailed straight away); Once a day (a count of unread alerts); or Never, which is where everyone starts. The email never names the client. Session schedule, Tasks, Invoices and Client portal requests each have a form listing items with checkboxes, to act on several at once.</p>
 <p>Reading an alert does not finish the work. Update the record, then mark the task done.</p>
 <p>The other tools in Daily work &amp; review are links near the top of that page:</p>
 <ul>
@@ -709,10 +710,11 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>To keep talking back and forth, choose Start conversation. Choose End conversation to stop.</li>
   <li>Before anything is saved, the assistant asks you to confirm. Choose Accept and save, or Decline. You can also type yes or no.</li>
 </ol>
+<p>Common requests work even when AI is off: say, for example, what is on today, my tasks, unread messages, open requests, unpaid invoices, or for a client, their phone number, next session, hours left, notes or goals. Say cancel or no-show with a client's name to change their next session; you confirm first. Say help to hear the list.</p>
 <p>Opening the assistant does not turn on the microphone. Stop speaking stops a spoken reply. The reply stays as text in the conversation history. Escape closes the assistant. You can also turn off Sound cues and Spoken replies, and set Loudness.</p>
 
 <?= $sgH(3, 'guide-iphone') ?>
-<p>The iPhone app works with VoiceOver. It covers daily work: clients, tracks, notes, hours, the schedule, Tasks, Notifications, Portal requests, Intake progress and Invoices. Invoices are read-only in the app. The app links to this user guide and to the privacy notice.</p>
+<p>The iPhone app works with VoiceOver. It covers daily work: clients, tracks, notes, hours, the schedule, Tasks, Notifications, Portal requests, Intake progress and Invoices. In Invoices you can mark a draft submitted from its Actions rotor. Client records you have opened can be read without a connection. The app links to this user guide and to the privacy notice.</p>
 
 <?= $sgH(4, 'iphone-signin') ?>
 <ol>

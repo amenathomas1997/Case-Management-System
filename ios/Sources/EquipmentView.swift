@@ -158,8 +158,13 @@ struct EquipmentView: View {
                 isPresented: Binding(get: { pendingReturn != nil }, set: { if !$0 { pendingReturn = nil } }),
                 titleVisibility: .visible
             ) {
-                Button("Mark returned") {
+                Button("Mark returned in the same condition") {
                     if let item = pendingReturn { Task { await returnItem(item) } }
+                    pendingReturn = nil
+                }
+                // Damage found on return (4.0.0) also changes the item's own condition.
+                Button("Mark returned, needing repair") {
+                    if let item = pendingReturn { Task { await returnItem(item, condition: "Needs Repair") } }
                     pendingReturn = nil
                 }
                 Button("Keep on loan", role: .cancel) { pendingReturn = nil }
@@ -387,13 +392,13 @@ struct EquipmentView: View {
         return item.overdue ? "\(who) · Overdue: was due back \(formatDate(due))" : "\(who) · due back \(formatDate(due))"
     }
 
-    private func returnItem(_ item: EquipmentItem) async {
+    private func returnItem(_ item: EquipmentItem, condition: String = "") async {
         guard let loanId = item.loanId, !returning.contains(loanId) else { return }
         returning.insert(loanId)
         defer { returning.remove(loanId) }
         do {
             error = nil; confirmation = nil
-            let _: OKResponse = try await api.call("return_equipment", body: ["loan_id": loanId])
+            let _: OKResponse = try await api.call("return_equipment", body: ["loan_id": loanId, "condition_in": condition])
             let message = "\(item.name) marked returned."
             confirmation = message
             await load()
@@ -414,6 +419,9 @@ struct LoanSheet: View {
     @State private var selectedClient: Int?
     @State private var dueDate = LoanSheet.defaultDue
     @State private var notes = ""
+    /// The hand-off (4.0.0): the condition as it goes out, and the client's typed name accepting the loan agreement.
+    @State private var conditionOut = ""
+    @State private var acceptedName = ""
     @State private var busy = false
     @State private var error: String?
     @State private var askingDiscard = false
@@ -450,6 +458,11 @@ struct LoanSheet: View {
                 DatePicker("Return due", selection: $dueDate, in: Self.dueRange, displayedComponents: .date)
                 // A visible name that stays once the field holds text.
                 CaptionedField(label: "Notes (optional)", text: $notes)
+                Picker("Condition as it goes out", selection: $conditionOut) {
+                    Text("Not recorded").tag("")
+                    ForEach(loanConditions, id: \.self) { Text($0).tag($0) }
+                }
+                CaptionedField(label: "Client's name, typed by the client, accepting the loan agreement", text: $acceptedName)
             }
             .navigationTitle("Loan out")
             .navigationBarTitleDisplayMode(.inline)
@@ -477,6 +490,7 @@ struct LoanSheet: View {
             let _: OKResponse = try await api.call("loan_equipment", body: [
                 "equipment_id": item.id, "client_id": clientId,
                 "due_date": APIDate.day(dueDate), "notes": notes,
+                "condition_out": conditionOut, "accepted_name": acceptedName,
             ])
             onDone("\(item.name) loaned out.")
             dismiss()
@@ -486,6 +500,9 @@ struct LoanSheet: View {
         }
     }
 }
+
+/// The conditions an item can be in (equipment.item_condition).
+let loanConditions = ["New", "Good", "Fair", "Needs Repair"]
 
 // MARK: - Equipment lifecycle: service history, reservations, add item
 
