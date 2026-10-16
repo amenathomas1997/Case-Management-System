@@ -60,7 +60,7 @@ $queued=null;$deadline=microtime(true)+30;
 // service container) do not list a row-lock wait in INNODB_TRX, so a statement on
 // at_records still running in the process list counts too; the larger is used.
 $waitSql="SELECT GREATEST((SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_state='LOCK WAIT' AND trx_query LIKE '%at_records%'),"
-    ."(SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID<>CONNECTION_ID() AND COMMAND='Query' AND INFO LIKE '%at_records%FOR UPDATE%'))";
+    ."(SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID<>CONNECTION_ID() AND COMMAND IN ('Query','Execute') AND INFO LIKE '%at_records%FOR UPDATE%'))";
 do{usleep(50000);try{$queued=(int)$db->query($waitSql)->fetchColumn();}catch(PDOException $e){$queued=null;usleep(1000000);break;}}while($queued<2&&microtime(true)<$deadline);
 // What the other connections were doing, for the message if the count is wrong.
 $othersDid=[];try{foreach($db->query("SELECT COMMAND,STATE,LEFT(COALESCE(INFO,''),120) FROM information_schema.PROCESSLIST WHERE ID<>CONNECTION_ID()")->fetchAll(PDO::FETCH_NUM) as $pr)$othersDid[]=implode(' / ',$pr);}catch(PDOException $e){}
