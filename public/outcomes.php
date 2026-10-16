@@ -25,6 +25,21 @@ $m = outcome_metrics($from, $to, $rt, $rh, $rs);
 $served = $m['served']; $servedTotal = $m['servedTotal']; $byCat = $m['byCat']; $byProg = $m['byProg'];
 $closures = $m['closures']; $closedTotal = $m['closedTotal']; $rehab = $m['rehab']; $avgHours = $m['avgHours'];
 $totals = $m['totals']; $expenses = $m['expenses']; $valueAll = $m['valueAll']; $sv = $m['sv'];
+// Results after training, and who was served by instructor, age and vision (3.0.47).
+$om = outcome_measures($from, $to, caseload_scoped() ? (int)$user['id'] : null);
+$ob = outcome_breakdowns($from, $to, $rt, $rh);
+$pctTxt = fn(?int $p) => $p === null ? 'n/a' : $p . '%';
+$omRows = [
+    ['Devices still in use at follow-up', $pctTxt($om['devices_in_use_pct']) . ' of ' . $om['devices_checked'] . ' checks'],
+    ['Skills rated twice or more', $om['skills_rated_twice'] . ' (' . $om['skills_improved'] . ' improved' . ($om['average_skill_gain'] !== null ? ', average gain ' . sprintf('%+.2f', $om['average_skill_gain']) . ' levels' : '') . ')'],
+    ['Goals achieved', (string)$om['goals_achieved']],
+    ['Closure follow-ups recorded', (string)$om['closure_followups']],
+    ['Still employed at follow-up', $pctTxt($om['still_employed_pct'])],
+    ['Still using the technology at follow-up', $pctTxt($om['still_using_tech_pct'])],
+    ['Needing more service at follow-up', (string)$om['need_more_service']],
+];
+$obLabels = ['instructor' => 'Instructor', 'age' => 'Age band', 'vision' => 'Vision status'];
+$obRows = fn(array $d) => array_map(fn($k, $g) => [(string)$k, (string)$g['clients'], number_format($g['hours'], 2), (string)$g['closed'], (string)$g['rehab']], array_keys($d), $d);
 
 /* ---- CSV export ---- */
 if (isset($_GET['export'])) {
@@ -59,6 +74,15 @@ if (isset($_GET['export'])) {
     write_csv_row($out, ['HOURS BY PROGRAM']);
     write_csv_row($out, ['Program', 'Clients', 'Hours']);
     foreach ($byProg as $r) write_csv_row($out, [csv_cell($r['program']), $r['clients'], number_format((float)$r['hrs'], 2)]);
+    write_csv_row($out, []);
+    write_csv_row($out, ['RESULTS AFTER TRAINING']);
+    foreach ($omRows as $r) write_csv_row($out, [csv_cell($r[0]), csv_cell($r[1])]);
+    foreach ($obLabels as $dim => $label) {
+        write_csv_row($out, []);
+        write_csv_row($out, ['BY ' . mb_strtoupper($label)]);
+        write_csv_row($out, [$label, 'Clients', 'Hours', 'Closed', 'Rehabilitated']);
+        foreach ($obRows($ob[$dim]) as $r) write_csv_row($out, array_map('csv_cell', $r));
+    }
     fclose($out);
     exit;
 }
@@ -88,6 +112,13 @@ if (isset($_GET['html'])) {
     $doc->heading('Closures');
     if ($closures) $doc->properties(array_column(array_map(fn($c) => [$c['new_status'], (string)$c['n']], $closures), 1, 0));
     else $doc->paragraph('No cases closed in this period.');
+    $doc->heading('Results after training');
+    $doc->properties(array_column($omRows, 1, 0));
+    foreach ($obLabels as $dim => $label) {
+        $doc->heading('Clients served by ' . mb_strtolower($label));
+        if ($ob[$dim]) $doc->table('Clients served, hours, closures and rehabilitations by ' . mb_strtolower($label), [$label, 'Clients', 'Hours', 'Closed', 'Rehabilitated'], $obRows($ob[$dim]));
+        else $doc->paragraph('No logged services in this period.');
+    }
     $doc->paragraph('Prepared ' . date('F j, Y') . ' by ' . $user['name'] . ' — ' . cfg('name'));
     $doc->download('outcome_report_' . $from . '_' . $to . '.html');
 }
@@ -189,6 +220,14 @@ if (isset($_GET['pdf'])) {
     exit;
 }
 
+// AI narrative summary from this page's figures (3.0.47; counts only).
+$aiNarrative = null;
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['ai_narrative'])) {
+    csrf_check();
+    $nr = report_ai_narrative('annual outcome report', 'Period: ' . fmt_date($from) . ' to ' . fmt_date($to) . "\n" . report_ai_facts($m) . "\n" . implode("\n", array_map(fn($r) => $r[0] . ': ' . $r[1], $omRows))
+        . "\n" . report_ai_facts(array_map(fn($d) => array_map(fn($g) => $g['clients'] . ' clients, ' . round($g['hours'], 1) . ' hours, ' . $g['rehab'] . ' rehabilitated', $d), ['by age band' => $ob['age'], 'by vision status' => $ob['vision']])), (int)$user['id']);
+    if ($nr['ok']) { $aiNarrative = $nr['text']; audit($user['id'], 'ai.draft', 'report', null, 'outcome report narrative'); } else flash($nr['error'], 'error');
+}
 page_header('Outcome report', $user, 'analytics');
 ?>
 <h1>Outcome report</h1>
@@ -205,6 +244,7 @@ $downloads = '<button type="submit" name="export" value="1" class="btn btn-secon
     . '<a class="btn btn-secondary btn-sm" href="funder_report.php?from=' . h($from) . '&amp;to=' . h($to) . '">Per-funder report pack</a>';
 echo report_period_form('outcomes.php', $period, '', $downloads); ?>
 
+<?= report_ai_narrative_card('outcomes.php?from=' . rawurlencode($from) . '&to=' . rawurlencode($to), $aiNarrative, 'this outcome report') ?>
 <h2 class="visually-hidden">Outcomes at a glance</h2>
 <div class="grid grid-4">
   <div class="card stat"><span class="stat-num"><?= $servedTotal ?></span><span class="stat-label">Clients served</span></div>
@@ -272,4 +312,29 @@ echo report_period_form('outcomes.php', $period, '', $downloads); ?>
   <p>Employed at closure: <strong><?= (int)$m['employedAtClosure'] ?></strong>.</p>
   <?php endif; ?>
 </section>
+<section class="card" aria-labelledby="oc-results">
+  <h2 id="oc-results">Results after training</h2>
+  <dl class="props">
+    <?php foreach ($omRows as $r): ?><dt><?= h($r[0]) ?></dt><dd><?= h($r[1]) ?></dd><?php endforeach; ?>
+  </dl>
+</section>
+
+<?php foreach ($obLabels as $dim => $label): $lc = mb_strtolower($label); ?>
+<section class="card" aria-labelledby="oc-by-<?= $dim ?>">
+  <h2 id="oc-by-<?= $dim ?>">Clients served by <?= h($lc) ?></h2>
+  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="oc-by-<?= $dim ?>-cap">
+  <table>
+    <caption class="visually-hidden" id="oc-by-<?= $dim ?>-cap">Clients served, hours, closures and rehabilitations by <?= h($lc) ?></caption>
+    <thead><tr><th scope="col"><?= h($label) ?></th><th scope="col" class="num">Clients</th><th scope="col" class="num">Hours</th><th scope="col" class="num">Closed</th><th scope="col" class="num">Rehabilitated</th></tr></thead>
+    <tbody>
+    <?php if (!$ob[$dim]): ?><tr><td colspan="5" class="muted">Nothing in this period.</td></tr><?php endif; ?>
+    <?php foreach ($obRows($ob[$dim]) as $r): ?>
+      <tr><th scope="row"><?= h($r[0]) ?></th><td class="num"><?= h($r[1]) ?></td><td class="num"><?= h($r[2]) ?></td><td class="num"><?= h($r[3]) ?></td><td class="num"><?= h($r[4]) ?></td></tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table>
+  </div>
+</section>
+<?php endforeach; ?>
+<p><a href="survey_responses.php?from=<?= h($from) ?>&amp;to=<?= h($to) ?>">Outcome survey responses for this period</a></p>
 <?php page_footer();

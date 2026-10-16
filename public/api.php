@@ -1616,8 +1616,8 @@ switch ($action) {
         // whether it went: null when none was due or the client has no valid, confirmed
         // email address (as voice.php), false only when it should have gone but did not.
         $surveySent = null;
-        $surveyEmailOk = (bool)filter_var((string)($clientEmail ?? ''), FILTER_VALIDATE_EMAIL) && $emailVerified === 1;
-        if ($isUpdate && $status === 'Closed - Rehabilitated' && $old['status'] !== 'Closed - Rehabilitated') {
+        $surveyEmailOk = (bool)filter_var((string)($clientEmail ?? ''), FILTER_VALIDATE_EMAIL) && $emailVerified === 1 && !client_survey_by_phone($cid);
+        if ($isUpdate && str_starts_with($status, 'Closed') && !str_starts_with((string)$old['status'], 'Closed')) {
             $recent = db()->prepare('SELECT id FROM surveys WHERE client_id = ? AND sent_at > DATE_SUB(NOW(), INTERVAL 30 DAY) LIMIT 1');
             $recent->execute([$cid]);
             if (!$recent->fetchColumn()) {
@@ -1906,7 +1906,7 @@ switch ($action) {
         // At most 50 emailed reports per user per hour: room for a whole caseload's
         // month-end reports, while a runaway client still cannot flood counselors.
         if (api_throttle_count('report-' . $userId, 3600) >= 50) fail('You have sent the maximum number of reports for now. Try again in an hour.', 429);
-        $ackUrl = create_report_ack((int)$t['cid'], $tid, $to);
+        $ackUrl = create_report_ack((int)$t['cid'], $tid, $to, $report['text']);
         $body = $report['text']
             . "\n\n---\nElectronically signed by {$userName} on " . date('F j, Y \a\t g:i A') . " (" . cfg('name') . ")."
             . "\n\n" . email_template('report_cover', ['ack' => $ackUrl])[1];

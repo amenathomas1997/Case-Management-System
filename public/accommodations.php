@@ -96,6 +96,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assessment'])) {
     redirect('accommodations.php?id=' . $id);
 }
 
+/* ---- AI: draft the recommended accommodations from what was typed (3.0.47). Nothing is
+   saved: the form comes back with the draft below any recommendations already written. ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ai_recommend']) && ai_feature_enabled('draft')) {
+    $id = (int)($_POST['id'] ?? 0);
+    $r = wa_load($id, $user);
+    if (!$r) { flash('Assessment not found.', 'error'); redirect('accommodations.php'); }
+    $in = fn(string $k): string => is_string($_POST[$k] ?? null) ? trim($_POST[$k]) : '';
+    $cr = db()->prepare('SELECT * FROM clients WHERE id = ?');
+    $cr->execute([(int)$r['client_id']]);
+    $res = worksite_ai_recommendations(['job_title' => $in('job_title'), 'job_tasks' => $in('job_tasks'), 'barriers' => $in('barriers')], $cr->fetch() ?: [], (int)$user['id']);
+    keep_input();
+    $_SESSION['old_input']['save_assessment'] = '1';
+    if ($res['ok']) {
+        $mine = $in('recommendations');
+        $_SESSION['old_input']['recommendations'] = $mine === '' ? $res['text'] : $mine . "\n" . $res['text'];
+        audit($user['id'], 'ai.draft', 'client', (int)$r['client_id'], 'worksite recommendations');
+        flash('Recommendations drafted. Read and edit them, then save the assessment.');
+    } else {
+        flash($res['error'], 'error');
+    }
+    redirect('accommodations.php?id=' . $id . '#recommendations');
+}
+
 /* ---- Update ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_assessment'])) {
     $id = (int)($_POST['id'] ?? 0);
@@ -190,7 +213,8 @@ if (isset($_GET['id'])) {
       </fieldset>
       <div class="field"><label for="job_tasks">Essential job tasks</label><textarea id="job_tasks" name="job_tasks" rows="3" <?= field_aria('job_tasks') ?>><?= h($v('job_tasks')) ?></textarea><?= field_error('job_tasks') ?></div>
       <div class="field"><label for="barriers">Barriers identified</label><textarea id="barriers" name="barriers" rows="3" <?= field_aria('barriers') ?>><?= h($v('barriers')) ?></textarea><?= field_error('barriers') ?></div>
-      <div class="field"><label for="recommendations">Recommended accommodations</label><textarea id="recommendations" name="recommendations" rows="4" <?= field_aria('recommendations') ?>><?= h($v('recommendations')) ?></textarea><?= field_error('recommendations') ?></div>
+      <div class="field"><label for="recommendations">Recommended accommodations</label><textarea id="recommendations" name="recommendations" rows="4" <?= field_aria('recommendations') ?>><?= h($v('recommendations')) ?></textarea><?= field_error('recommendations') ?>
+        <?php if (ai_feature_enabled('draft')): ?><button type="submit" name="ai_recommend" value="1" class="btn btn-secondary btn-sm" formnovalidate>Draft recommendations with AI</button><?php endif; ?></div>
       <fieldset>
         <legend>Status &amp; follow-up</legend>
         <div class="grid grid-4">

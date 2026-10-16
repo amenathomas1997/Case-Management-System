@@ -28,6 +28,8 @@ const STAGING_SCRUB_KEEP = [
     'client_note_revisions' => ['note_type', 'note_format'],
     'client_releases' => ['signer_role', 'recipient_type', 'method'],
     'amendment_requests' => ['status'],
+    'closure_followups' => ['status'],
+    'surveys' => ['channel'],
     'client_status_history' => ['old_status', 'new_status'],
     'client_closures' => ['status', 'reason'],
     'clients' => ['privacy_notice_how', 'a11y_format', 'a11y_primary_tech', 'a11y_contact', 'preferred_language', 'counselor_agency'],
@@ -88,7 +90,7 @@ function staging_scrub(PDO $db): array
     $token = "SUBSTRING(SHA2(CONCAT(id, RAND(), \"staging\"), 256), 1, 48)";
     // Column → replacement, applied only where the table and column exist in this schema.
     $plan = [
-        "clients" => ["name" => "CONCAT(\"Client \", id)", "email" => "CONCAT(\"client\", id, \"@example.invalid\")", "phone" => "NULL", "address" => "NULL",
+        "clients" => ["vision_onset_age" => "NULL", "name" => "CONCAT(\"Client \", id)", "email" => "CONCAT(\"client\", id, \"@example.invalid\")", "phone" => "NULL", "address" => "NULL",
             "dob" => "IF(dob IS NULL, NULL, MAKEDATE(YEAR(dob), 1))", "school" => "NULL",
             "counselor_name" => "IF(counselor_name IS NULL OR counselor_name = \"\", counselor_name, CONCAT(\"Counselor \", id))",
             "counselor_email" => "IF(counselor_email IS NULL OR counselor_email = \"\", counselor_email, CONCAT(\"counselor\", id, \"@example.invalid\"))",

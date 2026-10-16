@@ -163,6 +163,35 @@ try {
     error_log('daily_alerts: On Hold check-ins skipped (' . $e->getCode() . ')'); // mig_3.0.44 not run yet
 }
 
+// After closure (3.0.47): a task for each 30, 60 or 90-day follow-up check that is due
+// (recording the check completes it), and one reminder for an emailed outcome survey still
+// unanswered after a week (the same link; marked only once it is sent).
+try {
+    // A case reopened since: its checks no longer apply, and their open tasks close.
+    db()->exec("UPDATE tasks t JOIN closure_followups f ON t.auto_key = CONCAT('closefu-', f.id) JOIN clients c ON c.id = f.client_id
+        SET t.status = 'Done', t.done_at = NOW() WHERE t.status = 'Open' AND f.status = 'Pending' AND c.status NOT LIKE 'Closed%'");
+    db()->exec("UPDATE closure_followups f JOIN clients c ON c.id = f.client_id SET f.status = 'Cancelled' WHERE f.status = 'Pending' AND c.status NOT LIKE 'Closed%'");
+    foreach (db()->query("SELECT f.id, f.client_id, f.interval_days, c.name, c.assigned_to FROM closure_followups f JOIN clients c ON c.id = f.client_id
+        WHERE f.status = 'Pending' AND f.due_on <= CURDATE() AND c.archived_at IS NULL AND c.status LIKE 'Closed%'")->fetchAll() as $cf) {
+        add_task((int)$cf['interval_days'] . '-day closure follow-up: ' . $cf['name'],
+            'Call this former client: are they still employed or independent, still using their technology, and do they need more service? Record the answers in After closure on the client page.',
+            (int)$cf['client_id'], null, business_days_from(3), $cf['assigned_to'] ? (int)$cf['assigned_to'] : null, null, 'closefu-' . (int)$cf['id']);
+    }
+    $rem = db()->query("SELECT s.id, s.token, s.client_id, c.name, c.email FROM surveys s JOIN clients c ON c.id = s.client_id
+        WHERE s.completed_at IS NULL AND s.channel = 'Email' AND s.reminded_at IS NULL AND s.sent_at <= DATE_SUB(NOW(), INTERVAL 7 DAY)
+          AND s.sent_at > DATE_SUB(NOW(), INTERVAL 60 DAY) AND c.archived_at IS NULL AND c.email_verified = 1 AND c.email IS NOT NULL
+          AND (c.a11y_contact IS NULL OR c.a11y_contact NOT IN ('Phone', 'Postal mail'))
+          AND NOT EXISTS (SELECT 1 FROM surveys s2 WHERE s2.client_id = s.client_id AND s2.completed_at IS NOT NULL AND s2.id > s.id)")->fetchAll();
+    foreach ($rem as $sv) {
+        if (!filter_var($sv['email'], FILTER_VALIDATE_EMAIL)) continue;
+        $lang = client_lang((int)$sv['client_id']);
+        [$subj, $body] = email_template_for_client('survey_invite', (int)$sv['client_id'], ['name' => $sv['name'], 'link' => cfg('base_url') . '/survey.php?t=' . $sv['token'] . ($lang === 'es' ? '&lang=es' : '')]);
+        if (send_app_mail($sv['email'], 'Reminder: ' . $subj, $body)) db()->prepare('UPDATE surveys SET reminded_at = NOW() WHERE id = ?')->execute([(int)$sv['id']]);
+    }
+} catch (PDOException $e) {
+    error_log('daily_alerts: closure follow-ups skipped (' . $e->getCode() . ')'); // mig_3.0.47 not run yet
+}
+
 // Turning 18 (3.0.37): a client with a guardian on file who turns 18 within two weeks
 // (or did in the last month) gets one task, ever: their guardian's consent stops
 // covering them, and they sign their own release of information.

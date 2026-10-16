@@ -485,7 +485,7 @@ function voice_execute(string $do, array $in, array $user): array {
             // An address not yet confirmed (email_verified = 0) is skipped on purpose by
             // send_outcome_survey(), so that is said instead of a failure.
             $surveyed = false; $surveyFailed = false; $surveyUnconfirmed = false;
-            if ($to === 'Closed - Rehabilitated' && $old !== $to) {
+            if (str_starts_with($to, 'Closed') && !str_starts_with($old, 'Closed')) {
                 $attempted = false;
                 try {
                     $recent = db()->prepare('SELECT id FROM surveys WHERE client_id = ? AND sent_at > DATE_SUB(NOW(), INTERVAL 30 DAY) LIMIT 1');
@@ -499,7 +499,7 @@ function voice_execute(string $do, array $in, array $user): array {
                         $em = db()->prepare('SELECT email, email_verified FROM clients WHERE id = ?'); $em->execute([$cid]);
                         $emRow = $em->fetch();
                         $emValid = $emRow && filter_var((string)$emRow['email'], FILTER_VALIDATE_EMAIL);
-                        $surveyFailed = $emValid && (int)$emRow['email_verified'] === 1;
+                        $surveyFailed = $emValid && (int)$emRow['email_verified'] === 1 && !client_survey_by_phone($cid);
                         $surveyUnconfirmed = $emValid && (int)$emRow['email_verified'] === 0;
                     } catch (Throwable $e) { $surveyFailed = false; $surveyUnconfirmed = false; }
                 }

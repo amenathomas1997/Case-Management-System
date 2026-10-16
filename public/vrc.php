@@ -253,16 +253,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_report'])) {
 
 /* ---- A report opened again: the track's report as it reads today (3.0.41) ---- */
 if (isset($_GET['report'])) {
-    $rq = db()->prepare('SELECT ra.track_id, ra.client_id, ra.sent_at FROM report_acks ra WHERE ra.id = ? AND ra.sent_to = ?');
+    $rq = db()->prepare('SELECT ra.* FROM report_acks ra WHERE ra.id = ? AND ra.sent_to = ?');
     $rq->execute([(int)$_GET['report'], strtolower($vrc['counselor_email'])]);
     $ra = $rq->fetch();
     if ($ra && in_array((int)$ra['client_id'], $myClientIds, true)) {
-        require_once __DIR__ . '/inc/report_builder.php';
-        $rep = build_track_report((int)$ra['track_id'], brand('org'), '', 2);
-        page_header('Progress report');
-        echo '<p><a href="vrc.php?t=' . h($token) . '#reports-h">Back to your caseload</a></p><h1>Progress report</h1>'
-            . '<p>This is the report as it reads today. The copy we emailed you on ' . h(fmt_date($ra['sent_at'])) . ' may differ.</p>'
-            . ($rep ? $rep['html'] : '<p>This report is no longer available.</p>');
+        $raTitle = str_contains(mb_substr((string)($ra['report_text'] ?? ''), 0, 300), 'Final Report') ? 'Final report' : 'Progress report';
+        page_header($raTitle);
+        echo '<p><a href="vrc.php?t=' . h($token) . '#reports-h">Back to your caseload</a></p><h1>' . $raTitle . '</h1>';
+        if (!empty($ra['report_text'])) {
+            // The copy kept when it was sent (3.0.47): exactly what was emailed.
+            echo '<p>This is the report as we emailed it to you on ' . h(fmt_date($ra['sent_at'])) . '.</p><div class="card" style="white-space:pre-wrap">' . h((string)$ra['report_text']) . '</div>';
+        } else {
+            require_once __DIR__ . '/inc/report_builder.php';
+            $rep = build_track_report((int)$ra['track_id'], brand('org'), '', 2);
+            echo '<p>This is the report as it reads today. The copy we emailed you on ' . h(fmt_date($ra['sent_at'])) . ' may differ.</p>'
+                . ($rep ? $rep['html'] : '<p>This report is no longer available.</p>');
+        }
         audit(null, 'vrcportal.report', 'client', (int)$ra['client_id'], 'counselor reopened a report');
         page_footer();
         exit;

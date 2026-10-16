@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.47' => [
+        'Progress reports can cover only the period since the last report, and can include barriers and recommendations. Choose Final report when training ends: it adds skill levels and scored assessments (first and latest), devices and the closure. AI can draft the barriers and recommendations for you to edit, and the Outcome report, funder report and worksite recommendations each have an AI draft button too. The counselor\'s link now shows the report exactly as it was emailed.',
+        'Closing a case schedules follow-up checks at 30, 60 and 90 days. When one is due, a task appears: call the former client and record, under After closure on the client page, whether they are still employed, still using their technology, and whether they need more service (which opens a re-referral task).',
+        'Every closure now sends the outcome survey, with one reminder after a week. A client who prefers phone or post is not emailed: ask by phone and enter the answers on the client page. Survey responses has every answer with a CSV. The Outcome report adds results after training and breakdowns by instructor, age band and vision status (new fields on the client edit page).',
+    ],
     '3.0.46' => [
         'Completing a session can record the goal worked on and, where a track offers several, the service delivered. A logged entry not yet invoiced can be corrected afterwards (hours and miles, with a reason kept in the audit log) on the track page or in the iPhone app, which now lists a track\'s hours. An entry of 0 hours with miles records travel only.',
         'The Dashboard shows your week: hours logged, hours still booked, and your weekly target.',

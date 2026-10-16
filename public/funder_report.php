@@ -116,6 +116,15 @@ if ($m && isset($_GET['pdf'])) {
     exit;
 }
 
+// AI narrative summary from this agency's figures (3.0.47; counts only).
+$aiNarrative = null;
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['ai_narrative']) && $m) {
+    csrf_check();
+    $facts = 'Funding agency: ' . $agency . "\nPeriod: " . fmt_date($from) . ' to ' . fmt_date($to) . "\n"
+        . implode("\n", array_map(fn($r) => $r[0] . ': ' . $r[1], funder_stat_rows($agency, $from, $to, $m, $retentionPct, $goalPct)));
+    $nr = report_ai_narrative('report to the funding agency ' . $agency, $facts, (int)$user['id']);
+    if ($nr['ok']) { $aiNarrative = $nr['text']; audit($user['id'], 'ai.draft', 'report', null, 'funder report narrative'); } else flash($nr['error'], 'error');
+}
 page_header('Funder report', $user, 'analytics');
 ?>
 <style>.kv{display:grid;grid-template-columns:auto 1fr;gap:.25rem 1rem;margin:0}.kv dt{font-weight:600}.kv dd{margin:0}</style>
@@ -151,6 +160,7 @@ if ($period['notes']) echo '<p>' . h(implode(' ', $period['notes'])) . '</p>';
   <div class="card stat"><span class="stat-num"><?= $retentionPct === null ? '<span aria-hidden="true">—</span><span class="visually-hidden">Not applicable (no follow-up checks answered in this period)</span>' : $retentionPct . '%' ?></span><span class="stat-label">Device still in use</span></div>
 </div>
 
+<?= report_ai_narrative_card('funder_report.php?agency=' . rawurlencode($agency) . '&from=' . rawurlencode($from) . '&to=' . rawurlencode($to), $aiNarrative, 'this funder report') ?>
 <section class="card" aria-labelledby="fr-sum">
   <h2 id="fr-sum">Summary — <?= h($agency) ?></h2>
   <dl class="kv">

@@ -7,7 +7,16 @@ declare(strict_types=1);
 // $headingLevel is the level of the report's title heading; its sections sit one level
 // below. A page that embeds the HTML under its own headings passes a deeper level.
 
-function build_track_report(int $trackId, string $preparedBy, string $intro = '', int $headingLevel = 1): ?array {
+/* $opts (3.0.47): 'since' (Y-m-d) limits the session log, attendance and goal progress notes to
+   the reporting period (totals stay all-time); 'final' makes it the Final Report at closure,
+   with skill levels, devices and the closure; 'barriers' and 'recommendations' add those
+   sections. */
+function build_track_report(int $trackId, string $preparedBy, string $intro = '', int $headingLevel = 1, array $opts = []): ?array {
+    $since = isset($opts['since']) && is_string($opts['since']) ? valid_date($opts['since']) : null;
+    $final = !empty($opts['final']);
+    $barriers = trim((string)($opts['barriers'] ?? ''));
+    $recommend = trim((string)($opts['recommendations'] ?? ''));
+    $title = $final ? 'Final Report' : 'Training Progress Report';
     $stmt = db()->prepare('SELECT t.*, c.id AS cid, c.name AS client_name, c.dob, c.email AS client_email, c.phone AS client_phone,
             c.status AS client_status, c.counselor_name, c.counselor_email, c.counselor_phone, c.counselor_agency, c.vr_case_number, c.ipe_goal, c.ipe_date, c.ipe_amended_on
         FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.id = ?');
@@ -21,9 +30,18 @@ function build_track_report(int $trackId, string $preparedBy, string $intro = ''
     $goals->execute([$trackId]);
     $goals = $goals->fetchAll();
 
-    $logs = db()->prepare('SELECT * FROM work_logs WHERE track_id = ? ORDER BY work_date');
-    $logs->execute([$trackId]);
+    $logs = db()->prepare('SELECT * FROM work_logs WHERE track_id = ?' . ($since ? ' AND work_date >= ?' : '') . ' ORDER BY work_date');
+    $logs->execute($since ? [$trackId, $since] : [$trackId]);
     $logs = $logs->fetchAll();
+    // Goal progress notes and attendance in the reporting period (3.0.47).
+    $gp = db()->prepare('SELECT p.*, g.specific_goal FROM goal_progress p JOIN smart_goals g ON g.id = p.goal_id WHERE g.track_id = ?'
+        . ($since ? ' AND p.created_at >= ?' : '') . ' ORDER BY p.created_at');
+    $gp->execute($since ? [$trackId, $since . ' 00:00:00'] : [$trackId]);
+    $progressNotes = $gp->fetchAll();
+    $at = db()->prepare("SELECT start_at, status FROM scheduled_sessions WHERE track_id = ? AND start_at < NOW() AND status IN ('Completed','No Show','Cancelled')"
+        . ($since ? ' AND start_at >= ?' : '') . ' ORDER BY start_at');
+    $at->execute($since ? [$trackId, $since . ' 00:00:00'] : [$trackId]);
+    $attendance = $at->fetchAll();
 
     $r = track_rollup($trackId);
     $achieved = count(array_filter($goals, fn($g) => $g['status'] === 'Achieved'));
@@ -52,7 +70,7 @@ function build_track_report(int $trackId, string $preparedBy, string $intro = ''
     $tableEnd = '</table></div>';
 
     $html = '<div style="font-family:Segoe UI,Arial,sans-serif;color:#1a1a2e;background:#ffffff;padding:16px;border-radius:4px;max-width:52rem;font-size:1rem;">';
-    $html .= '<h' . $hTop . ' style="font-size:1.45em;margin:0 0 2px;color:#1e3a8a;">Training Progress Report</h' . $hTop . '>';
+    $html .= '<h' . $hTop . ' style="font-size:1.45em;margin:0 0 2px;color:#1e3a8a;">' . h($title) . '</h' . $hTop . '>';
     $html .= '<p style="margin:0 0 16px;color:#3d3d56;' . $pW . '">' . h(brand('org')) . ' &middot; Prepared ' . h(date('F j, Y')) . ' by ' . h($preparedBy) . '</p>';
 
     if ($intro !== '') {
@@ -76,6 +94,7 @@ function build_track_report(int $trackId, string $preparedBy, string $intro = ''
         ['Training track', $t['title'] . ' (' . $t['status'] . ')'],
         ['Authorization #', $t['auth_number'] . ' — ' . $t['funding_agency']],
         ['Authorization period', fmt_date($t['start_date']) . ' to ' . fmt_date($t['expiration_date'])],
+        ...($since ? [['Reporting period', fmt_date($since) . ' to ' . fmt_date(date('Y-m-d'))]] : []),
         ['Authorized', fmt_hours($r['authorized_hours']) . ' at ' . fmt_money($r['hourly_rate']) . ' per hour (' . fmt_money($r['authorized_funds']) . ')'
             . ($r['mileage_rate'] > 0 ? ' plus mileage at ' . fmt_mileage_rate((float)$r['mileage_rate']) . ' per mile' : '')],
     ];
@@ -107,19 +126,28 @@ function build_track_report(int $trackId, string $preparedBy, string $intro = ''
         $html .= '<p>No goals recorded for this track.</p>';
     } else {
         $html .= $table('goals');
-        $html .= '<tr><th scope="col" style="' . $th . '">Specific objective</th><th scope="col" style="' . $th . '">Measurable criteria</th><th scope="col" style="' . $th . '">Focus area</th><th scope="col" style="' . $th . '">Hours</th><th scope="col" style="' . $th . '">Target date</th><th scope="col" style="' . $th . '">Status</th></tr>';
+        $html .= '<tr><th scope="col" style="' . $th . '">Specific objective</th><th scope="col" style="' . $th . '">Measurable criteria</th><th scope="col" style="' . $th . '">Focus area</th><th scope="col" style="' . $th . '">Hours</th><th scope="col" style="' . $th . '">Target date</th><th scope="col" style="' . $th . '">Status</th><th scope="col" style="' . $th . '">Progress</th></tr>';
         foreach ($goals as $g) {
             $html .= '<tr><th scope="row" style="' . $td . 'font-weight:400;">' . h($g['specific_goal']) . '</th>'
                 . '<td style="' . $td . '">' . h($g['measurable_metric']) . '</td>'
                 . '<td style="' . $td . '">' . h($g['focus_area'] ?? '—') . '</td>'
                 . '<td style="' . $tdR . '">' . ((float)$g['goal_hours'] > 0 ? h(number_format((float)$g['goal_hours'], 2)) : '—') . '</td>'
                 . '<td style="' . $td . '">' . h(fmt_date($g['target_date'])) . '</td>'
-                . '<td style="' . $td . '">' . h($g['status']) . '</td></tr>';
+                . '<td style="' . $td . '">' . h($g['status']) . '</td>'
+                . '<td style="' . $tdR . '">' . (int)($g['progress_pct'] ?? 0) . '%</td></tr>';
         }
         $html .= $tableEnd;
     }
+    // Progress recorded on the goals in the period, and attendance (3.0.47).
+    $extra = report_extra_sections($t, $progressNotes, $attendance, $since, $final, $barriers, $recommend);
+    foreach ($extra as [$key, $label, $lines]) {
+        $html .= $section($key, h($label));
+        $html .= '<ul style="margin:0 0 8px;padding-left:1.4em;' . $pW . '">';
+        foreach ($lines as $ln) $html .= '<li>' . h($ln) . '</li>';
+        $html .= '</ul>';
+    }
 
-    $html .= $section('log', 'Session Log');
+    $html .= $section('log', $since ? 'Session Log for the Period' : 'Session Log');
     if (!$logs) {
         $html .= '<p>No sessions logged for this track.</p>';
     } else {
@@ -149,7 +177,7 @@ function build_track_report(int $trackId, string $preparedBy, string $intro = ''
     // Plain-text rendering — sent via the same mail path as OTP codes for reliable delivery.
     // Built as the lines before the client & authorization rows ($head), those rows,
     // and the lines after them ($L), so the AI version can swap in masked rows.
-    $head = ['TRAINING PROGRESS REPORT', brand('org'), 'Prepared ' . date('F j, Y') . ' by ' . $preparedBy, ''];
+    $head = [strtoupper($title), brand('org'), 'Prepared ' . date('F j, Y') . ' by ' . $preparedBy, ''];
     if ($intro !== '') { $head[] = $intro; $head[] = ''; }
     $head[] = '=== CLIENT & AUTHORIZATION ===';
     $L = [];
@@ -169,10 +197,16 @@ function build_track_report(int $trackId, string $preparedBy, string $intro = ''
         $L[] = ($i + 1) . '. [' . $g['status'] . '] ' . $g['specific_goal'];
         $L[] = '   Measure: ' . $g['measurable_metric'];
         $L[] = '   Focus: ' . ($g['focus_area'] ?? '—') . '  |  Target: ' . fmt_date($g['target_date'])
-            . ((float)$g['goal_hours'] > 0 ? '  |  Hours toward this goal: ' . number_format((float)$g['goal_hours'], 2) : '');
+            . ((float)$g['goal_hours'] > 0 ? '  |  Hours toward this goal: ' . number_format((float)$g['goal_hours'], 2) : '')
+            . '  |  Progress: ' . (int)($g['progress_pct'] ?? 0) . '%';
+    }
+    foreach ($extra as [, $label, $lines]) {
+        $L[] = '';
+        $L[] = '=== ' . strtoupper($label) . ' ===';
+        foreach ($lines as $ln) $L[] = '- ' . $ln;
     }
     $L[] = '';
-    $L[] = '=== SESSION LOG ===';
+    $L[] = $since ? '=== SESSION LOG FOR THE PERIOD ===' : '=== SESSION LOG ===';
     if (!$logs) $L[] = 'No sessions logged for this track.';
     foreach ($logs as $l) {
         $L[] = '- ' . fmt_date($l['work_date']) . ' | ' . number_format((float)$l['hours'], 2) . ' hours'
@@ -197,9 +231,63 @@ function build_track_report(int $trackId, string $preparedBy, string $intro = ''
     return [
         'html' => $html,
         'text' => $plain($rows),
-        'ai_text' => $plain($aiRows),
+        'ai_text' => strtr($plain($aiRows), array_merge(...array_map(fn($x) => $x[3] ?? [], $extra ?: [[]]))),
         // No client name in the subject (3.0.36): the authorization number identifies the case.
-        'subject' => 'Training Progress Report — Authorization ' . $t['auth_number'],
+        'subject' => $title . ' — Authorization ' . $t['auth_number'],
         'track' => $t,
     ];
+}
+
+/**
+ * The report's added sections (3.0.47), each [key, label, lines]: progress recorded on the
+ * goals and attendance (for the period when there is one), barriers and recommendations
+ * when given, and for a final report the closure, skill levels and devices.
+ */
+function report_extra_sections(array $t, array $progressNotes, array $attendance, ?string $since, bool $final, string $barriers, string $recommend): array {
+    $out = [];
+    if ($progressNotes) {
+        $out[] = ['progress', 'Goal progress' . ($since ? ' this period' : ''), array_map(fn($p) => fmt_date(substr((string)$p['created_at'], 0, 10)) . ': '
+            . $p['specific_goal'] . ' — ' . $p['status'] . ', ' . (int)$p['progress_pct'] . '%' . ($p['note'] ? '. ' . $p['note'] : ''), $progressNotes)];
+    }
+    if ($attendance) {
+        $n = fn(string $st) => count(array_filter($attendance, fn($a) => $a['status'] === $st));
+        $lines = [$n('Completed') . ' attended, ' . $n('No Show') . ' missed, ' . $n('Cancelled') . ' cancelled.'];
+        foreach ($attendance as $a) if ($a['status'] !== 'Completed') $lines[] = fmt_date(substr((string)$a['start_at'], 0, 10)) . ': ' . ($a['status'] === 'No Show' ? 'missed' : 'cancelled');
+        $out[] = ['attendance', 'Attendance' . ($since ? ' this period' : ''), $lines];
+    }
+    if ($barriers !== '') $out[] = ['barriers', 'Barriers', preg_split('/\R+/', $barriers)];
+    if ($recommend !== '') $out[] = ['recommend', 'Recommendations', preg_split('/\R+/', $recommend)];
+    if ($final) {
+        $cid = (int)$t['cid'];
+        // Only this episode's closure: a final report written before the case closes has none yet.
+        $cl = function_exists('client_last_closure') && str_starts_with((string)$t['client_status'], 'Closed') ? client_last_closure($cid) : null;
+        if ($cl) {
+            $o = ['Reason: ' . $cl['reason'] . ($cl['note'] ? ' (' . $cl['note'] . ')' : '') . ', ' . fmt_date(substr((string)$cl['closed_at'], 0, 10)) . '.'];
+            if ($cl['employed'] !== null) $o[] = (int)$cl['employed'] === 1 ? 'Employed' . ($cl['employer'] ? ' at ' . $cl['employer'] : '') . ($cl['job_title'] ? ' as ' . $cl['job_title'] : '')
+                . ($cl['hours_per_week'] !== null ? ', ' . (float)$cl['hours_per_week'] . ' hours a week' : '') . ($cl['hourly_wage'] !== null ? ' at ' . fmt_money((float)$cl['hourly_wage']) . ' an hour' : '') . '.' : 'Not employed at closure.';
+            if ($cl['independence_outcome']) $o[] = 'Independence outcome: ' . $cl['independence_outcome'] . '.';
+            // For the AI draft, the employer and the closure note become placeholders (they can
+            // identify the client); the wage and hours stay as plain figures.
+            $mask = array_filter([(string)$cl['employer'] => '[EMPLOYER]', (string)$cl['note'] => '[CLOSURE NOTE]'], fn($v, $k) => trim((string)$k) !== '', ARRAY_FILTER_USE_BOTH);
+            $out[] = ['closure', 'Closure and outcome', $o, $mask];
+        }
+        // Skill levels: the first and the latest rating of each skill.
+        $q = db()->prepare('SELECT s.skill, c.level, c.assessed_at FROM client_competency c JOIN curriculum_skills s ON s.id = c.skill_id WHERE c.client_id = ? ORDER BY c.assessed_at, c.id');
+        $q->execute([$cid]);
+        $first = []; $last = [];
+        foreach ($q->fetchAll() as $c) { $first[$c['skill']] ??= (int)$c['level']; $last[$c['skill']] = (int)$c['level']; }
+        if ($first) $out[] = ['skills', 'Skill levels, first and latest', array_map(fn($k) => $k . ': ' . $first[$k] . ' to ' . $last[$k], array_keys($first))];
+        $q = db()->prepare('SELECT i.name, a.assessed_on, a.pct FROM client_scored_assessments a JOIN assessment_instruments i ON i.id = a.instrument_id WHERE a.client_id = ? ORDER BY a.assessed_on, a.id');
+        $q->execute([$cid]);
+        $sc = [];
+        foreach ($q->fetchAll() as $a) $sc[$a['name']][] = $a;
+        $lines = [];
+        foreach ($sc as $name => $rows) $lines[] = $name . ': ' . (float)$rows[0]['pct'] . '% (' . fmt_date($rows[0]['assessed_on']) . ')' . (count($rows) > 1 ? ' to ' . (float)end($rows)['pct'] . '% (' . fmt_date(end($rows)['assessed_on']) . ')' : '');
+        if ($lines) $out[] = ['scores', 'Scored assessments, first and latest', $lines];
+        $q = db()->prepare('SELECT e.name, l.loaned_at, l.returned_at FROM equipment_loans l JOIN equipment e ON e.id = l.equipment_id WHERE l.client_id = ? ORDER BY l.loaned_at');
+        $q->execute([$cid]);
+        $dev = array_map(fn($l) => $l['name'] . ', loaned ' . fmt_date($l['loaned_at']) . ($l['returned_at'] ? ', returned ' . fmt_date($l['returned_at']) : ', still with the client'), $q->fetchAll());
+        if ($dev) $out[] = ['devices', 'Devices provided', $dev];
+    }
+    return $out;
 }

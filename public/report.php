@@ -12,8 +12,19 @@ $posted = $_SERVER['REQUEST_METHOD'] === 'POST';
 // (after an AI draft), or the values kept across an error redirect (keep_input()).
 $refill = !$posted && old_in('send_report') !== '';
 $introIn = $posted ? (is_string($_POST['intro'] ?? null) ? $_POST['intro'] : '') : old_in('intro');
+// 3.0.47: the reporting period (since the last report, by default), barriers and
+// recommendations, and a Final Report for closing.
+$fieldIn = fn(string $k): string => $posted ? (is_string($_POST[$k] ?? null) ? $_POST[$k] : '') : old_in($k);
+$tq = db()->prepare('SELECT last_report_at FROM training_tracks WHERE id = ?');
+$tq->execute([$trackId]);
+$lastReportAt = $tq->fetchColumn() ?: null;
+$finalMode = $fieldIn('report_kind') === 'final' || (!$posted && !$refill && ($_GET['final'] ?? '') === '1');
+$periodOn = $lastReportAt && !$finalMode && ($posted || $refill ? $fieldIn('period') === '1' : true);
+$barriersIn = $fieldIn('barriers');
+$recommendIn = $fieldIn('recommendations');
 // The page's own h1 and "Preview" h2 sit above the embedded report, so its title is an h3.
-$report = build_track_report($trackId, $user['name'], trim($introIn), 3);
+$report = build_track_report($trackId, $user['name'], trim($introIn), 3,
+    ['since' => $periodOn ? $lastReportAt : null, 'final' => $finalMode, 'barriers' => $barriersIn, 'recommendations' => $recommendIn]);
 if (!$report) { flash('Training track not found.', 'error'); redirect('clients.php'); }
 scope_check_client_id((int)$report['track']['cid'], $user);
 $t = $report['track'];
@@ -48,14 +59,15 @@ if ($posted && isset($_POST['ai_draft']) && !ai_feature_enabled('draft')) {
     $clientRow = $cr->fetch() ?: ['name' => $t['client_name'] ?? ''];
     $res = ai_run('draft',
         ai_system_base() . ' You are drafting a brief cover note (2–3 short paragraphs) that a VR instructor will put at '
-            . 'the top of a training progress report to the counselor. Summarize progress and next steps warmly and professionally. '
+            . 'the top of a ' . ($finalMode ? 'final report at the close of training, summarizing what the client achieved and the outcome' : 'training progress report') . ' to the counselor. Summarize progress and next steps warmly and professionally. '
             . 'Do not restate the tables of hours — those follow below your note. Details in square brackets, such as [CLIENT] '
             . 'or [COUNSELOR], were withheld for privacy: keep them as placeholders and do not invent names, dates or numbers.',
         "Write the cover note for this training progress report.\n\n" . $report['ai_text'],
         900, $clientRow, (int)$user['id']);
     if ($res['ok']) {
         // The details withheld from the AI are put back here, as amendment_request.php does.
-        $restore = ['[CLIENT]' => (string)($t['client_name'] ?? ''), '[COUNSELOR]' => trim((string)($t['counselor_name'] ?? '')), '[AUTH]' => trim((string)($t['auth_number'] ?? ''))];
+        $restore = ['[CLIENT]' => (string)($t['client_name'] ?? ''), '[COUNSELOR]' => trim((string)($t['counselor_name'] ?? '')), '[AUTH]' => trim((string)($t['auth_number'] ?? '')),
+            '[EMPLOYER]' => (string)(client_last_closure((int)$t['cid'])['employer'] ?? '')];
         $aiDraft = strtr($res['text'], array_filter($restore, fn($v) => $v !== ''));
         // A message the user already typed is kept: the draft goes below it, never in its place.
         $typedIntro = trim($introIn) !== '';
@@ -66,6 +78,27 @@ if ($posted && isset($_POST['ai_draft']) && !ai_feature_enabled('draft')) {
         audit($user['id'], 'ai.draft', 'client', (int)$t['cid'], 'VRC progress cover note');
     }
     else flash($res['error'], 'error');
+}
+
+// AI: draft the barriers and recommendations (3.0.47). Each fills its box only when the box
+// is empty; text already typed is kept and the draft goes below it.
+if ($posted && isset($_POST['ai_sections']) && ai_feature_enabled('draft')) {
+    $cr = db()->prepare('SELECT * FROM clients WHERE id = ?');
+    $cr->execute([(int)$t['cid']]);
+    $sec = report_ai_sections($report['ai_text'], $cr->fetch() ?: ['name' => $t['client_name'] ?? ''], (int)$user['id'], $finalMode);
+    if ($sec['ok']) {
+        $restore = ['[CLIENT]' => (string)($t['client_name'] ?? ''), '[COUNSELOR]' => trim((string)($t['counselor_name'] ?? '')), '[AUTH]' => trim((string)($t['auth_number'] ?? '')),
+            '[EMPLOYER]' => (string)(client_last_closure((int)$t['cid'])['employer'] ?? '')];
+        $fill = fn(string $mine, string $draft): string => trim($mine) === '' ? strtr($draft, array_filter($restore, fn($v) => $v !== '')) : rtrim($mine) . "\n" . strtr($draft, array_filter($restore, fn($v) => $v !== ''));
+        $barriersIn = $fill($barriersIn, $sec['barriers']);
+        $recommendIn = $fill($recommendIn, $sec['recommendations']);
+        $report = build_track_report($trackId, $user['name'], trim($introIn), 3,
+            ['since' => $periodOn ? $lastReportAt : null, 'final' => $finalMode, 'barriers' => $barriersIn, 'recommendations' => $recommendIn]);
+        flash('Barriers and recommendations drafted. Read and edit them below before sending.');
+        audit($user['id'], 'ai.draft', 'client', (int)$t['cid'], ($finalMode ? 'final' : 'progress') . ' report barriers and recommendations');
+    } else {
+        flash($sec['error'], 'error');
+    }
 }
 
 if ($posted && isset($_POST['send_report'])) {
@@ -117,7 +150,7 @@ if ($posted && isset($_POST['send_report'])) {
         redirect('report.php?track=' . $trackId);
     }
     // Same send path as OTP codes (plain text via Graph) — most reliable delivery.
-    $ackUrl = create_report_ack((int)$t['cid'], $trackId, $to);
+    $ackUrl = create_report_ack((int)$t['cid'], $trackId, $to, $report['text']);
     $body = $report['text']
         . "\n\n---\nElectronically signed by {$user['name']} on " . date('F j, Y \a\t g:i A') . " (" . cfg('name') . ")."
         . "\n\n" . email_template('report_cover', ['ack' => $ackUrl])[1];
@@ -135,7 +168,7 @@ if ($posted && isset($_POST['send_report'])) {
             db()->beginTransaction();
             db()->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,?)')->execute([
                 (int)$t['cid'], 'Progress Report',
-                'Training report emailed to VRC',
+                $finalMode ? 'Final report emailed to VRC' : 'Training report emailed to VRC',
                 "Report for track “{$t['title']}” (Auth {$t['auth_number']}) emailed to {$to}"
                     . ($ccOk ? " (cc: {$user['email']})" : '') . ", electronically signed by {$user['name']}.",
                 $user['id'],
@@ -220,6 +253,21 @@ page_header('Training report', $user, 'clients');
       <span class="hint" id="ai-draft-hint">Generates a cover note from this track's progress and adds it below anything you have already typed — you can edit it before sending.</span>
       <?php endif; ?>
     </div>
+    <fieldset class="field"><legend>Kind of report</legend>
+      <label><input type="radio" name="report_kind" value="progress"<?= $finalMode ? '' : ' checked' ?>> Progress report</label>
+      <label><input type="radio" name="report_kind" value="final"<?= $finalMode ? ' checked' : '' ?>> Final report (closing: adds skill levels, devices and the closure)</label>
+    </fieldset>
+    <?php if ($lastReportAt): ?>
+    <div class="field"><label><input type="checkbox" name="period" value="1"<?= $periodOn ? ' checked' : '' ?>> Cover only the period since the last report (<?= fmt_date($lastReportAt) ?>); totals stay for the whole authorization</label></div>
+    <?php endif; ?>
+    <div class="field"><label for="barriers">Barriers (optional)</label>
+      <textarea id="barriers" name="barriers" rows="2"><?= h($barriersIn) ?></textarea></div>
+    <div class="field"><label for="recommendations">Recommendations (optional)</label>
+      <textarea id="recommendations" name="recommendations" rows="2"><?= h($recommendIn) ?></textarea></div>
+    <button type="submit" name="refresh_preview" value="1" class="btn btn-secondary btn-sm" formnovalidate>Update the preview</button>
+    <?php if (ai_feature_enabled('draft')): ?>
+    <button type="submit" name="ai_sections" value="1" class="btn btn-secondary btn-sm" formnovalidate>Draft barriers and recommendations with AI</button>
+    <?php endif; ?>
     <div class="field">
       <label><input type="checkbox" name="cc_self" value="1"<?= $ccChecked ? ' checked' : '' ?>> Send a copy to me (<?= h($user['email']) ?>)</label>
     </div>

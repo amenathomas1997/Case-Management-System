@@ -163,6 +163,8 @@ function client_closure_record(int $clientId, string $status, array $d, ?int $ac
     db()->prepare('INSERT INTO client_closures (client_id, status, reason, note, employed, employer, job_title, job_start, hours_per_week, hourly_wage, independence_outcome, closed_by)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')->execute([$clientId, $status, $d['reason'], $d['note'], $d['employed'], $d['employer'], $d['job_title'],
         $d['job_start'], $d['hours_per_week'], $d['hourly_wage'], $d['independence_outcome'], $actor]);
+    // 30, 60 and 90-day follow-up checks after every closure (3.0.47).
+    closure_followups_schedule($clientId, (int)db()->lastInsertId());
 }
 
 /** The latest closure recorded for a client, or null. */

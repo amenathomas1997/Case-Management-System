@@ -227,7 +227,15 @@ function funder_metrics(string $agency, string $from, string $to, string $rt = '
     $closedTotal = (int)array_sum(array_column($closures, 'n'));
     $rehab = 0; foreach ($closures as $c) if ($c['new_status'] === 'Closed - Rehabilitated') $rehab = (int)$c['n'];
 
-    return compact('servedTotal', 'totals', 'expenses', 'byCat', 'goals', 'ret', 'avgGain', 'closures', 'closedTotal', 'rehab');
+    // Closure follow-ups answered in the period (3.0.47): still employed, still using the technology.
+    try {
+        $cfu = db()->prepare("SELECT COUNT(*) n, COALESCE(SUM(f.still_employed = 1),0) emp, COALESCE(SUM(f.still_employed IS NOT NULL),0) emp_asked,
+                COALESCE(SUM(f.still_using_tech = 1),0) tech, COALESCE(SUM(f.still_using_tech IS NOT NULL),0) tech_asked
+            FROM closure_followups f WHERE f.status = 'Completed' AND f.completed_at BETWEEN ? AND ? AND f.$clientsOfAgency");
+        $cfu->execute([$from, $to . ' 23:59:59', $agency]); $closeFu = $cfu->fetch();
+    } catch (PDOException $e) { $closeFu = ['n' => 0, 'emp' => 0, 'emp_asked' => 0, 'tech' => 0, 'tech_asked' => 0]; }
+
+    return compact('servedTotal', 'totals', 'expenses', 'byCat', 'goals', 'ret', 'avgGain', 'closures', 'closedTotal', 'rehab', 'closeFu');
 }
 
 /** Shared row set for the funder report's exports (label, value). */
@@ -247,6 +255,12 @@ function funder_stat_rows(string $agency, string $from, string $to, array $m, ?i
         ['Cases closed', (string)$m['closedTotal']],
         ['Rehabilitation rate', $m['closedTotal'] ? round($m['rehab'] / $m['closedTotal'] * 100) . '% (' . $m['rehab'] . ' rehabilitated)' : 'n/a'],
     ];
+    // After closure (3.0.47): the 30, 60 and 90-day follow-up checks answered in the period.
+    $cf = $m['closeFu'] ?? ['n' => 0];
+    if ((int)$cf['n'] > 0) {
+        $rows[] = ['Still employed at follow-up', (int)$cf['emp_asked'] ? round(100 * (int)$cf['emp'] / (int)$cf['emp_asked']) . '% of ' . (int)$cf['emp_asked'] . ' asked' : 'n/a'];
+        $rows[] = ['Still using the technology at follow-up', (int)$cf['tech_asked'] ? round(100 * (int)$cf['tech'] / (int)$cf['tech_asked']) . '% of ' . (int)$cf['tech_asked'] . ' asked' : 'n/a'];
+    }
     return $rows;
 }
 

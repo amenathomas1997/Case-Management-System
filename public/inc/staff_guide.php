@@ -333,6 +333,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 
 <?= $sgH(4, 'guide-case-close') ?>
 <p>On the client's edit page, choose a Closed status. Closing the case then asks why (Employed, Goals met, Declined further services, Unable to contact, Moved away, Health or medical, Not eligible, Transferred to another provider, or Other with a note) and, if you know it, the outcome: employed or not, the employer, job title, start date, hours a week and wage, or an independence outcome. It lists anything still open on the record, such as active tracks, unbilled work, loaned items, future sessions and unpaid invoices, each with a link. The reasons and employment at closure appear on the Outcome report. A case closed in the app asks the reason and employment; closed by voice, its reason is recorded as Not recorded and can be added later.</p>
+<p>After closing, the client page has an After closure section. Follow-up checks are scheduled at 30, 60 and 90 days; when one is due a task appears. Call the client, answer Still employed, Still using the technology, Living or working independently and Needs more service (Yes, No or Not asked), and choose Save. Needs more service opens a re-referral task. The outcome survey is emailed when the case closes, with one reminder a week later; Email the survey sends it again. For a client who prefers phone or post, open Enter survey answers taken by phone and enter the two ratings from 1 to 10.</p>
 
 <?= $sgH(4, 'guide-counselor-replace') ?>
 <p>Open the Counselor portal page (administrators). On the counselor's row, open Replace with a new counselor, enter the new counselor's name and email (and agency and phone if they differ), and choose Replace counselor. Every one of their clients moves to the new counselor, each gets a case note, their draft invoices are addressed to the new counselor, and the old counselor's portal link stops working. Then send the new counselor a portal link. The client's VR case number and IPE employment goal are under Plan for employment on the client's edit page; they print on reports and invoices.</p>
@@ -650,7 +651,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <?= $sgH(3, 'guide-reports') ?>
 <p>Open Business analytics. The Reports list comes first, then the charts. You see only the reports your permissions allow. Billable value is not the same as cash received.</p>
 <?= $sgH(4, 'guide-report-outcomes') ?>
-<p>Clients served, hours by RSA category and program, closures and the rehabilitation rate for a period. Agencies often ask for it at contract renewal. Exports to CSV.</p>
+<p>Clients served, hours by RSA category and program, closures and the rehabilitation rate for a period. Agencies often ask for it at contract renewal. Exports to CSV. Results after training gives devices still in use, skill gains, goals achieved and the closure follow-up results; tables then count clients served by instructor, age band and vision status. Draft a narrative summary with AI sends only the figures, never names, for you to edit. Survey responses, linked at the bottom, lists every outcome survey answer with a CSV.</p>
 <?= $sgH(4, 'guide-report-funder') ?>
 <p>One report for each funding agency. It covers clients served, hours, goals, device retention, assessment gains and closures. View it as a page, a letterhead PDF or CSV.</p>
 <?= $sgH(4, 'guide-report-agency') ?>
@@ -671,6 +672,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>To send a progress report to the counselor, choose Email report to VRC. Check the content and recipient before you send.</li>
   <li>For a statement, open the collapsed Billing and statements. Choose Download PDF statement or Download accessible HTML statement. The billing CSV exports are there too.</li>
 </ol>
+<p>On the report page, Cover only the period since the last report limits the sessions, goal notes and attendance to the period since the last report was sent. Choose Final report when training ends: it adds skill levels and scored assessments (first and latest), devices and the closure. Barriers and Recommendations are optional; Draft barriers and recommendations with AI fills them for you to edit. Choose Update the preview to see the changes before you send.</p>
 <p>When a track's progress report is due (weekly, every two weeks or monthly), a task appears for the client's instructor: Write and send the progress report. Open the track, choose Email report to VRC, add a short narrative, sign and send. Nothing goes to the counselor until a person sends it, unless an administrator turns on automatic sending under Administration, Scheduled reports.</p>
 
 <?= $sgH(3, 'guide-ai') ?>

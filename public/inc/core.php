@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.46';
+const APP_VERSION = '3.0.47';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1256,10 +1256,12 @@ function session_remote_input(array $post): array {
  * counted as sent and the 30-day resend guard does not block a retry; callers
  * tell the user on false. */
 function send_outcome_survey(int $clientId): bool {
-    $c = db()->prepare('SELECT name, email, email_verified FROM clients WHERE id = ?');
+    $c = db()->prepare('SELECT name, email, email_verified, a11y_contact FROM clients WHERE id = ?');
     $c->execute([$clientId]);
     $client = $c->fetch();
     if (!$client || !filter_var($client['email'] ?? '', FILTER_VALIDATE_EMAIL) || (int)$client['email_verified'] === 0) return false;
+    // A client who prefers phone or post is asked by phone instead (3.0.47: client.php has the form).
+    if (in_array($client['a11y_contact'] ?? '', ['Phone', 'Postal mail'], true)) return false;
     $token = bin2hex(random_bytes(24));
     db()->prepare('INSERT INTO surveys (client_id, token) VALUES (?,?)')->execute([$clientId, $token]);
     $surveyId = (int)db()->lastInsertId();
@@ -1272,10 +1274,16 @@ function send_outcome_survey(int $clientId): bool {
 }
 
 /** Create an acknowledgment token for an emailed report; returns the public confirm URL. */
-function create_report_ack(int $clientId, int $trackId, string $sentTo): string {
+function create_report_ack(int $clientId, int $trackId, string $sentTo, ?string $reportText = null): string {
     $token = bin2hex(random_bytes(24));
-    db()->prepare('INSERT INTO report_acks (client_id, track_id, token, sent_to) VALUES (?,?,?,?)')
-        ->execute([$clientId, $trackId, $token, $sentTo]);
+    // A copy of the report as sent (3.0.47), so it can be read back later as it was.
+    try {
+        db()->prepare('INSERT INTO report_acks (client_id, track_id, token, sent_to, report_text) VALUES (?,?,?,?,?)')
+            ->execute([$clientId, $trackId, $token, $sentTo, $reportText]);
+    } catch (PDOException $e) {
+        if ((string)$e->getCode() !== '42S22') throw $e; // mig_3.0.47 not run yet
+        db()->prepare('INSERT INTO report_acks (client_id, track_id, token, sent_to) VALUES (?,?,?,?)')->execute([$clientId, $trackId, $token, $sentTo]);
+    }
     return cfg('base_url') . '/ack.php?t=' . $token;
 }
 
@@ -1641,3 +1649,7 @@ require_once __DIR__ . '/session_changes.php';
 require_once __DIR__ . '/amendments.php';
 // Correcting logged work, and each person's week (3.0.46).
 require_once __DIR__ . '/work_logs.php';
+// AI drafting help for every report (3.0.47).
+require_once __DIR__ . '/report_ai.php';
+// After closure: follow-up checks, phone surveys, outcome measures (3.0.47).
+require_once __DIR__ . '/outcome_followups.php';

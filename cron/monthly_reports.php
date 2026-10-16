@@ -109,7 +109,7 @@ foreach ($tracks as $t) {
             "Automatic {$label} progress report: every session and the totals from the start of this authorization to " . fmt_date(date('Y-m-d')) . '.'
             . ($t['last_report_at'] ? ' The previous report was sent on ' . fmt_date((string)$t['last_report_at']) . '.' : ''));
         if (!$report) continue;
-        $ackUrl = create_report_ack((int)$t['cid'], (int)$t['id'], $to);
+        $ackUrl = create_report_ack((int)$t['cid'], (int)$t['id'], $to, $report['text']);
         [, $ackLine] = email_template('report_cover', ['ack' => $ackUrl]);
         $body = $report['text'] . "\n\n---\n" . $ackLine;
         if (!send_app_mail($to, $report['subject'], $body)) {

@@ -93,6 +93,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($raw !== null && $planDates[$pk] === null) { $errors[$pk] = $pl . ': enter a valid date, today or earlier, or leave it blank.'; set_form_errors($errors); }
     }
     $planVals = [$gIn('vr_case_number'), $gIn('ipe_goal'), $planDates['ipe_date'], $planDates['ipe_amended_on']];
+    // Vision status and age of onset (3.0.47), for the Outcome report's breakdowns.
+    $visionIn = in_array($_POST['vision_status'] ?? '', VISION_STATUSES, true) ? $_POST['vision_status'] : null;
+    $onsetRaw = $gIn('vision_onset_age');
+    $onsetIn = $onsetRaw !== null && ctype_digit($onsetRaw) && (int)$onsetRaw <= 120 ? (int)$onsetRaw : null;
+    if ($onsetRaw !== null && $onsetIn === null) { $errors['vision_onset_age'] = 'Age when vision loss began: enter a whole number of years from 0 to 120, or leave it blank.'; set_form_errors($errors); }
+    $visionVals = [$visionIn, $onsetIn];
     $vals = [
         $name,
         valid_date($dobIn),
@@ -176,6 +182,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     . ($unarchive ? ', archived_at=NULL' : '') . ' WHERE id=?')->execute($vals);
                 $pdo->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=? WHERE id=?')->execute([...$guardianVals, (int)$client['id']]);
                 $pdo->prepare('UPDATE clients SET vr_case_number=?, ipe_goal=?, ipe_date=?, ipe_amended_on=? WHERE id=?')->execute([...$planVals, (int)$client['id']]);
+                $pdo->prepare('UPDATE clients SET vision_status=?, vision_onset_age=? WHERE id=?')->execute([...$visionVals, (int)$client['id']]);
                 // A portal link already emailed to the old address stops working when
                 // the address changes: it may belong to someone else now.
                 if (trim((string)($client['email'] ?? '')) !== '' && strcasecmp((string)($emailIn ?? ''), trim((string)$client['email'])) !== 0) {
@@ -258,7 +265,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 audit($user['id'], 'client.unarchive', 'client', (int)$client['id'], 'reopened as ' . $status);
                 flash('This record was archived; re-opening it returned it to the active client lists.');
             }
-            if ($status === 'Closed - Rehabilitated' && $client['status'] !== 'Closed - Rehabilitated') {
+            // Every closure is surveyed (3.0.47), not only Closed - Rehabilitated.
+            if (str_starts_with($status, 'Closed') && !str_starts_with((string)$client['status'], 'Closed')) {
                 // One survey per closure: re-opening and re-closing a case must
                 // not email the client again within 30 days of the last survey.
                 $recentSurvey = db()->prepare('SELECT COUNT(*) FROM surveys WHERE client_id = ? AND sent_at > DATE_SUB(NOW(), INTERVAL 30 DAY)');
@@ -266,6 +274,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ((int)$recentSurvey->fetchColumn() === 0) {
                     if (send_outcome_survey((int)$client['id'])) {
                         flash('An outcome survey was emailed to the client.');
+                    } elseif (client_survey_by_phone((int)$client['id'])) {
+                        flash('The client prefers phone or post, so the outcome survey was not emailed. Ask the questions by phone and enter the answers under After closure on the client page.', 'info');
                     } elseif (filter_var($vals[2] ?? '', FILTER_VALIDATE_EMAIL) && $emailVerified !== 1) {
                         // send_outcome_survey() skips an address not yet confirmed with the
                         // client: nothing failed, so this is not reported as an error.
@@ -307,6 +317,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newId = (int)db()->lastInsertId();
             db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=? WHERE id=?')->execute([...$guardianVals, $newId]);
             db()->prepare('UPDATE clients SET vr_case_number=?, ipe_goal=?, ipe_date=?, ipe_amended_on=? WHERE id=?')->execute([...$planVals, $newId]);
+            db()->prepare('UPDATE clients SET vision_status=?, vision_onset_age=? WHERE id=?')->execute([...$visionVals, $newId]);
             web_once_set($clientKey, $newId);
             record_status_change($newId, null, $status, $user['id'], 'Client created');
             on_hold_save($newId, $status, '', trim((string)($_POST['status_note'] ?? '')), $holdUntil);
@@ -346,6 +357,10 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
     </div>
     <div class="field"><label for="dob">Date of birth</label>
       <input type="date" id="dob" name="dob" max="<?= date('Y-m-d') ?>" value="<?= $v('dob') ?>" <?= field_aria('dob') ?>><?= field_error('dob') ?></div>
+    <div class="field"><label for="vision_status">Vision status</label>
+      <select id="vision_status" name="vision_status"><option value="">Not recorded</option><?= select_options(VISION_STATUSES, html_entity_decode($v('vision_status'), ENT_QUOTES) ?: null) ?></select></div>
+    <div class="field"><label for="vision_onset_age">Age when vision loss began</label>
+      <input type="number" id="vision_onset_age" name="vision_onset_age" min="0" max="120" value="<?= $v('vision_onset_age') ?>" <?= field_aria('vision_onset_age') ?>><?= field_error('vision_onset_age') ?></div>
     <div class="field"><label for="email">Email</label>
       <input type="email" id="email" name="email" value="<?= $v('email') ?>" <?= field_aria('email') ?>><?= field_error('email') ?></div>
     <?php if ($client && trim((string)($client['email'] ?? '')) !== '' && (int)$client['email_verified'] !== 1): ?>

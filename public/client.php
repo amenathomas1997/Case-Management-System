@@ -899,6 +899,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['withdraw_release'])) 
     }
     redirect("client.php?id=$id#releases-h");
 }
+/* ---- POST: after closure (3.0.47): send the outcome survey, enter phone answers, record a follow-up check ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_survey'])) {
+    $open = db()->prepare("SELECT sent_at FROM surveys WHERE client_id = ? AND completed_at IS NULL AND sent_at > DATE_SUB(NOW(), INTERVAL 30 DAY) ORDER BY id DESC LIMIT 1");
+    $open->execute([$id]);
+    if ($was = $open->fetchColumn()) flash('A survey was emailed on ' . fmt_date((string)$was) . ' and is not answered yet. Enter the answers by phone instead, or wait for the reminder.', 'error');
+    elseif (send_outcome_survey($id)) { audit($user['id'], 'survey.send', 'client', $id, 'outcome survey emailed'); flash('Outcome survey emailed.'); }
+    else flash('The survey was not emailed: the client has no confirmed email address, prefers phone or post, or the email could not be sent. Ask the questions by phone and enter the answers here.', 'error');
+    redirect("client.php?id=$id#after-h");
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['phone_survey'])) {
+    $err = survey_record_phone($id, (int)($_POST['satisfaction'] ?? 0), (int)($_POST['goals_met'] ?? 0), is_string($_POST['comments'] ?? null) ? $_POST['comments'] : '', (int)$user['id']);
+    if ($err !== null) {
+        keep_input();
+        keep_field_errors([$err => ($err === 'satisfaction' ? 'Satisfaction' : 'Goals met') . ': enter a rating from 1 to 10.']);
+        redirect("client.php?id=$id&phone_survey=1#phone-survey");
+    }
+    flash('Survey answers recorded.');
+    redirect("client.php?id=$id#after-h");
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['closure_followup'])) {
+    $yn = fn(string $k) => ($_POST[$k] ?? '') === 'yes' ? 1 : (($_POST[$k] ?? '') === 'no' ? 0 : null);
+    $err = closure_followup_record((int)($_POST['followup_id'] ?? 0), $id, $yn('still_employed'), $yn('still_using_tech'), $yn('independent'), $yn('needs_service'),
+        is_string($_POST['fu_notes'] ?? null) ? $_POST['fu_notes'] : '', (int)$user['id']);
+    if ($err !== null) flash($err, 'error');
+    else flash($yn('needs_service') === 1 ? 'Follow-up recorded. Because the client needs more service, a re-referral task was added.' : 'Follow-up recorded.');
+    redirect("client.php?id=$id#after-h");
+}
 
 /* ---- Data for tabs ---- */
 // Notes filter: 'all' (default) or 'general' (hide notes tied to a track).
@@ -1233,6 +1260,7 @@ if ($hasA11y): ?>
     <dl class="props">
       <dt>Client type</dt><dd><?= h($client['client_type'] ?? 'VR') ?><?= ($client['client_type'] ?? '') === 'Pre-ETS' && !empty($client['school']) ? ' · ' . h($client['school']) : '' ?></dd>
       <dt>Date of birth</dt><dd><?= fmt_date($client['dob']) ?></dd>
+      <?php if (!empty($client['vision_status']) || isset($client['vision_onset_age'])): ?><dt>Vision</dt><dd><?= h((string)($client['vision_status'] ?? 'Not recorded')) ?><?= isset($client['vision_onset_age']) ? ', since age ' . (int)$client['vision_onset_age'] : '' ?></dd><?php endif; ?>
       <?php // Only one valid address becomes a link: a stored list or '?bcc=' text must not add recipients. ?>
       <dt>Email</dt><dd><?= $client['email'] ? (filter_var($client['email'], FILTER_VALIDATE_EMAIL) ? '<a href="mailto:' . h($client['email']) . '">' . h($client['email']) . '</a>' : h($client['email']) . ' (not a valid address)') : '—' ?>
         <?php if (trim((string)($client['email'] ?? '')) !== '' && (int)$client['email_verified'] !== 1): ?>
@@ -1435,6 +1463,66 @@ $relDefaultSigner = !empty($client['guardian_name']) && !empty($client['dob']) &
   <?php endif; ?>
   <?php endif; ?>
 </section>
+<?php
+// After closure (3.0.47): the outcome survey and the 30, 60 and 90-day follow-up checks.
+$closeFus = closure_followups($id);
+$svq = db()->prepare('SELECT * FROM surveys WHERE client_id = ? ORDER BY id DESC LIMIT 5');
+$svq->execute([$id]);
+$surveysHere = $svq->fetchAll();
+if (str_starts_with((string)$client['status'], 'Closed') || $closeFus || $surveysHere):
+    $ynOut = fn($v) => $v === null ? 'not asked' : ((int)$v === 1 ? 'yes' : 'no'); ?>
+<section class="card" aria-labelledby="after-h">
+  <h2 id="after-h">After closure</h2>
+  <h3>Outcome survey</h3>
+  <?php if (!$surveysHere): ?><p>No survey sent yet.</p><?php else: ?>
+  <ul>
+    <?php foreach ($surveysHere as $sv): ?>
+    <li><?= $sv['completed_at'] ? 'Answered ' . fmt_date($sv['completed_at']) . (($sv['channel'] ?? 'Email') === 'Phone' ? ' by phone' : '') . ': satisfaction ' . (int)$sv['satisfaction'] . ' of 10, goals met ' . (int)$sv['goals_met'] . ' of 10' . ($sv['comments'] ? '. "' . h($sv['comments']) . '"' : '')
+        : 'Emailed ' . fmt_date($sv['sent_at']) . ', not answered yet' . (!empty($sv['reminded_at']) ? ' (reminder sent ' . fmt_date($sv['reminded_at']) . ')' : '') ?></li>
+    <?php endforeach; ?>
+  </ul>
+  <?php endif; ?>
+  <form method="post" action="client.php?id=<?= $id ?>" class="inline-form"><?= csrf_field() ?>
+    <button type="submit" name="send_survey" value="1" class="btn btn-secondary btn-sm">Email the survey</button>
+  </form>
+  <details id="phone-survey"<?= isset($_GET['phone_survey']) ? ' open' : '' ?>><summary>Enter survey answers taken by phone</summary>
+    <form method="post" action="client.php?id=<?= $id ?>"><?= csrf_field() ?>
+      <div class="field"><label for="ps_sat">Satisfaction, 1 to 10 <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+        <input type="number" id="ps_sat" name="satisfaction" min="1" max="10" required value="<?= h(old_in('satisfaction')) ?>" <?= field_aria('satisfaction') ?>><?= field_error('satisfaction') ?></div>
+      <div class="field"><label for="ps_goals">Goals met, 1 to 10 <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+        <input type="number" id="ps_goals" name="goals_met" min="1" max="10" required value="<?= h(old_in('goals_met')) ?>" <?= field_aria('goals_met') ?>><?= field_error('goals_met') ?></div>
+      <div class="field"><label for="ps_com">Comments</label>
+        <textarea id="ps_com" name="comments" rows="3" maxlength="2000"><?= h(old_in('comments')) ?></textarea></div>
+      <button type="submit" name="phone_survey" value="1" class="btn btn-primary btn-sm">Save survey answers</button>
+    </form>
+  </details>
+  <h3>Follow-up checks</h3>
+  <?php if (!$closeFus): ?><p>None scheduled. Checks are scheduled at 30, 60 and 90 days when the closure is recorded.</p><?php endif; ?>
+  <?php foreach ($closeFus as $fu): $fuLabel = (int)$fu['interval_days'] . '-day check'; ?>
+    <?php if ($fu['status'] !== 'Pending'): ?>
+    <p><strong><?= $fuLabel ?></strong>, recorded <?= fmt_date($fu['completed_at']) ?><?= $fu['by_name'] ? ' by ' . h($fu['by_name']) : '' ?>: still employed <?= $ynOut($fu['still_employed']) ?>; still using the technology <?= $ynOut($fu['still_using_tech']) ?>; independent <?= $ynOut($fu['independent']) ?>; needs more service <?= $ynOut($fu['needs_service']) ?>.<?= $fu['notes'] ? ' ' . h($fu['notes']) : '' ?></p>
+    <?php elseif ($fu['due_on'] > date('Y-m-d')): ?>
+    <p><strong><?= $fuLabel ?></strong>, due <?= fmt_date($fu['due_on']) ?>.</p>
+    <?php else: ?>
+    <form method="post" action="client.php?id=<?= $id ?>" class="fu-item"><?= csrf_field() ?>
+      <input type="hidden" name="followup_id" value="<?= (int)$fu['id'] ?>">
+      <fieldset><legend><?= $fuLabel ?>, due <?= fmt_date($fu['due_on']) ?></legend>
+      <?php foreach (['still_employed' => 'Still employed?', 'still_using_tech' => 'Still using the technology?', 'independent' => 'Living or working independently?', 'needs_service' => 'Needs more service?'] as $k => $q): ?>
+        <fieldset class="fu-use"><legend><?= $q ?><span class="visually-hidden"> (<?= $fuLabel ?>)</span></legend>
+          <label><input type="radio" name="<?= $k ?>" value="yes"> Yes</label>
+          <label><input type="radio" name="<?= $k ?>" value="no"> No</label>
+          <label><input type="radio" name="<?= $k ?>" value="" checked> Not asked</label>
+        </fieldset>
+      <?php endforeach; ?>
+      <div class="field"><label for="fu_notes_<?= (int)$fu['id'] ?>">Notes</label>
+        <input type="text" id="fu_notes_<?= (int)$fu['id'] ?>" name="fu_notes" maxlength="1000"></div>
+      </fieldset>
+      <button type="submit" name="closure_followup" value="1" class="btn btn-primary btn-sm">Save the <?= $fuLabel ?></button>
+    </form>
+    <?php endif; ?>
+  <?php endforeach; ?>
+</section>
+<?php endif; ?>
 <section class="card" aria-labelledby="tr-sum-h">
   <h2 id="tr-sum-h">Training tracks summary</h2>
   <?php if (!$tracks): ?><p class="muted">No training tracks yet. <a href="track_edit.php?client_id=<?= $id ?>">Add a training track</a>.</p>
