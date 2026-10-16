@@ -29,6 +29,8 @@ struct ClientEditSheet: View {
     @State private var guardianName = ""
     @State private var guardianPhone = ""
     @State private var guardianEmail = ""
+    @State private var vrCaseNumber = ""
+    @State private var ipeGoal = ""
     @State private var staff: [StaffMember] = []
     /// The staff list could not be loaded: said, with a retry, instead of a picker with no names.
     @State private var staffError: String?
@@ -67,6 +69,8 @@ struct ClientEditSheet: View {
         _guardianName = State(initialValue: existing.guardianName ?? "")
         _guardianPhone = State(initialValue: existing.guardianPhone ?? "")
         _guardianEmail = State(initialValue: existing.guardianEmail ?? "")
+        _vrCaseNumber = State(initialValue: existing.vrCaseNumber ?? "")
+        _ipeGoal = State(initialValue: existing.ipeGoal ?? "")
         _clientType = State(initialValue: existing.clientType ?? "VR")
         _a11yScreenReader = State(initialValue: existing.a11yScreenReader ?? false)
         _a11yFormat = State(initialValue: existing.a11yFormat ?? "")
@@ -102,7 +106,7 @@ struct ClientEditSheet: View {
         [name, phone, email, address, status, statusNote, counselorName, counselorAgency,
          counselorEmail, counselorPhone, String(assignedTo), clientType, a11yScreenReader ? "1" : "0",
          a11yFormat, a11yPrimaryTech, a11yContact, a11yNotes, confirmEmail ? "1" : "0",
-         guardianName, guardianPhone, guardianEmail]
+         guardianName, guardianPhone, guardianEmail, vrCaseNumber, ipeGoal]
     }
     /// The same fields as the form opens with them (see init and the property defaults).
     private static func values(of c: ClientInfo?) -> [String] {
@@ -110,7 +114,7 @@ struct ClientEditSheet: View {
          c?.counselorName ?? "", c?.counselorAgency ?? "", c?.counselorEmail ?? "", c?.counselorPhone ?? "",
          String(c?.assignedTo ?? 0), c?.clientType ?? "VR", (c?.a11yScreenReader ?? false) ? "1" : "0",
          c?.a11yFormat ?? "", c?.a11yPrimaryTech ?? "", c?.a11yContact ?? "", c?.a11yNotes ?? "", "0",
-         c?.guardianName ?? "", c?.guardianPhone ?? "", c?.guardianEmail ?? ""]
+         c?.guardianName ?? "", c?.guardianPhone ?? "", c?.guardianEmail ?? "", c?.vrCaseNumber ?? "", c?.ipeGoal ?? ""]
     }
     private var hasChanges: Bool { values != Self.values(of: existing) }
     @State private var askingDiscard = false
@@ -196,6 +200,10 @@ struct ClientEditSheet: View {
                     CaptionedField(label: "Agency / district", text: $counselorAgency)
                     CaptionedField(label: "Counselor email", text: $counselorEmail, keyboard: .emailAddress).textInputAutocapitalization(.never)
                     CaptionedField(label: "Counselor phone", text: $counselorPhone, keyboard: .phonePad)
+                }
+                Section("Plan for employment (IPE)") {
+                    CaptionedField(label: "VR case or participant number", text: $vrCaseNumber)
+                    CaptionedField(label: "IPE employment goal", text: $ipeGoal)
                 }
                 Section("Parent or guardian") {
                     CaptionedField(label: "Guardian name", text: $guardianName)
@@ -291,6 +299,7 @@ struct ClientEditSheet: View {
                 "counselor_name": counselorName, "counselor_agency": counselorAgency,
                 "counselor_email": counselorEmail, "counselor_phone": counselorPhone,
                 "guardian_name": guardianName, "guardian_phone": guardianPhone, "guardian_email": guardianEmail,
+                "vr_case_number": vrCaseNumber, "ipe_goal": ipeGoal,
                 "client_type": clientType, "a11y_screen_reader": a11yScreenReader ? 1 : 0,
                 "a11y_format": a11yFormat, "a11y_primary_tech": a11yPrimaryTech,
                 "a11y_contact": a11yContact, "a11y_notes": a11yNotes,

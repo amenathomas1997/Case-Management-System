@@ -72,6 +72,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_portal'])) {
     redirect('counselors.php');
 }
 
+/* ---- Replace a counselor on every one of their clients in one step (3.0.45) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['replace_counselor'])) {
+    $oldEmail = strtolower(trim(is_string($_POST['email'] ?? null) ? $_POST['email'] : ''));
+    $in = fn(string $k): string => trim(is_string($_POST[$k] ?? null) ? $_POST[$k] : '');
+    $newEmail = strtolower($in('new_email'));
+    $newName = $in('new_name'); $newAgency = $in('new_agency'); $newPhone = $in('new_phone');
+    $key = 'new_' . sprintf('%u', crc32($oldEmail));
+    $err = null;
+    if (!filter_var($newEmail, FILTER_VALIDATE_EMAIL) || mb_strlen($newEmail) > 190) $err = 'Enter the new counselor\'s email address.';
+    elseif ($newEmail === $oldEmail) $err = 'The new email is the same as the current one.';
+    elseif ($newName === '' || mb_strlen($newName) > 120) $err = 'Enter the new counselor\'s name (120 characters or fewer).';
+    elseif (mb_strlen($newAgency) > 190 || mb_strlen($newPhone) > 40) $err = 'The agency or phone is too long.';
+    if ($err !== null) { keep_input(); keep_field_errors([$key => $err]); redirect('counselors.php#' . $key); }
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $q = $pdo->prepare('SELECT id, name, counselor_name, counselor_agency FROM clients WHERE LOWER(counselor_email) = ? AND archived_at IS NULL FOR UPDATE');
+        $q->execute([$oldEmail]);
+        $moved = $q->fetchAll();
+        $oldName = $moved[0]['counselor_name'] ?? $oldEmail;
+        $up = $pdo->prepare('UPDATE clients SET counselor_name = ?, counselor_email = ?, counselor_agency = ?, counselor_phone = ?, counselor_verified = 1 WHERE id = ?');
+        $note = $pdo->prepare("INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?, 'Case Note', 'VR counselor changed', ?, ?)");
+        $bill = $pdo->prepare("UPDATE invoices i JOIN training_tracks t ON t.id = i.track_id SET i.bill_to = ? WHERE t.client_id = ? AND i.status = 'Draft'");
+        foreach ($moved as $c) {
+            $agency = $newAgency !== '' ? $newAgency : (string)($c['counselor_agency'] ?? '');
+            $up->execute([$newName, $newEmail, $agency !== '' ? $agency : null, $newPhone !== '' ? $newPhone : null, (int)$c['id']]);
+            $note->execute([(int)$c['id'], 'VR counselor changed from ' . $oldName . ' (' . $oldEmail . ') to ' . $newName . ' (' . $newEmail . ').', $user['id']]);
+            $bill->execute([implode("\n", array_filter([$newName, $agency, $newEmail], fn($v) => $v !== '')), (int)$c['id']]);
+        }
+        // The old counselor's portal link no longer opens.
+        $pdo->prepare('DELETE FROM vrc_tokens WHERE counselor_email = ?')->execute([$oldEmail]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+    audit($user['id'], 'vrcportal.replace', 'counselor', null, $oldEmail . ' → ' . $newEmail . ': ' . count($moved) . ' client(s)');
+    flash(count($moved) . ' client' . (count($moved) === 1 ? '' : 's') . ' moved from ' . $oldName . ' to ' . $newName . '. Their records and draft invoices now name ' . $newName
+        . ', and ' . $oldName . '\'s portal link was turned off. Send ' . $newName . ' a portal link below.');
+    redirect('counselors.php');
+}
+
 /* ---- Turn off a counselor's portal link (e.g. they have left, or the link was shared) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['revoke_portal'])) {
     $email = strtolower(trim(is_string($_POST['email'] ?? null) ? $_POST['email'] : ''));
@@ -129,6 +171,20 @@ page_header('Counselor portal', $user, 'referrals');
             onclick="return confirm(<?= h(json_encode('Email a portal link to ' . $who . '? Any previous link stops working.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">
             <?= !$tk ? 'Send portal link' : ($tk['live'] ? 'Resend / reset link' : 'Send a new link') ?><span class="visually-hidden"> for <?= h($who) ?></span></button>
         </form>
+        <?php if ((int)$c['clients'] > 0): $rk = 'new_' . sprintf('%u', crc32(strtolower($c['email']))); $rMine = old_in('email') === $c['email'] && old_in('replace_counselor') !== ''; ?>
+        <details<?= has_field_error($rk) ? ' open' : '' ?>><summary>Replace with a new counselor<span class="visually-hidden"> for <?= h($who) ?></span></summary>
+          <form method="post" action="counselors.php" class="stacked" novalidate><?= csrf_field() ?>
+            <input type="hidden" name="email" value="<?= h($c['email']) ?>">
+            <p class="hint" id="<?= $rk ?>">Moves all <?= (int)$c['clients'] ?> of <?= h($who) ?>'s clients to the new counselor, adds a note to each, updates draft invoices and turns off <?= h($who) ?>'s portal link.</p>
+            <?= field_error($rk) ?>
+            <div class="field"><label for="<?= $rk ?>-n">New counselor's name</label><input type="text" id="<?= $rk ?>-n" name="new_name" maxlength="120" value="<?= $rMine ? h(old_in('new_name')) : '' ?>"></div>
+            <div class="field"><label for="<?= $rk ?>-e">New counselor's email</label><input type="email" id="<?= $rk ?>-e" name="new_email" maxlength="190" value="<?= $rMine ? h(old_in('new_email')) : '' ?>"></div>
+            <div class="field"><label for="<?= $rk ?>-a">Agency (leave blank to keep <?= h($c['agency'] ?? 'the current one') ?>)</label><input type="text" id="<?= $rk ?>-a" name="new_agency" maxlength="190" value="<?= $rMine ? h(old_in('new_agency')) : '' ?>"></div>
+            <div class="field"><label for="<?= $rk ?>-p">Phone</label><input type="tel" id="<?= $rk ?>-p" name="new_phone" maxlength="40" value="<?= $rMine ? h(old_in('new_phone')) : '' ?>"></div>
+            <button type="submit" name="replace_counselor" value="1" class="btn btn-secondary btn-sm" onclick="return confirm(<?= h(json_encode('Move all of ' . $who . '\'s clients to the new counselor? Their portal link stops working.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">Replace counselor<span class="visually-hidden"> for <?= h($who) ?></span></button>
+          </form>
+        </details>
+        <?php endif; ?>
         <?php if ($tk && $tk['live']): ?>
         <form method="post" action="counselors.php" class="inline-form"><?= csrf_field() ?>
           <input type="hidden" name="email" value="<?= h($c['email']) ?>">

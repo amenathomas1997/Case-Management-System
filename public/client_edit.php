@@ -27,7 +27,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'counselor_name' => [120, 'Counselor name'], 'counselor_agency' => [190, 'Agency / district'],
         'counselor_email' => [190, 'Counselor email'], 'counselor_phone' => [40, 'Counselor phone'],
         'a11y_primary_tech' => [120, 'Primary assistive technology'],
-        'guardian_name' => [120, 'Guardian name'], 'guardian_phone' => [40, 'Guardian phone'], 'guardian_email' => [190, 'Guardian email']];
+        'guardian_name' => [120, 'Guardian name'], 'guardian_phone' => [40, 'Guardian phone'], 'guardian_email' => [190, 'Guardian email'],
+        'vr_case_number' => [60, 'VR case number'], 'ipe_goal' => [255, 'IPE employment goal']];
     foreach ($limits as $k => [$max, $label]) {
         if (is_string($_POST[$k] ?? null) && mb_strlen(trim($_POST[$k])) > $max) {
             $errors[$k] = $label . ' is too long (' . number_format($max) . ' characters maximum).';
@@ -84,6 +85,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Guardian details (3.0.37): saved with their own statement, after the main save.
     $gIn = fn(string $k): ?string => (is_string($_POST[$k] ?? null) && trim($_POST[$k]) !== '') ? trim($_POST[$k]) : null;
     $guardianVals = [$gIn('guardian_name'), $gIn('guardian_phone'), $gIn('guardian_email')];
+    // The plan (3.0.45): VR case number, IPE employment goal, IPE date and latest amendment.
+    $planDates = [];
+    foreach (['ipe_date' => 'IPE date', 'ipe_amended_on' => 'IPE amendment date'] as $pk => $pl) {
+        $raw = $gIn($pk);
+        $planDates[$pk] = $raw === null ? null : valid_date($raw, 1990, (int)date('Y'));
+        if ($raw !== null && $planDates[$pk] === null) { $errors[$pk] = $pl . ': enter a valid date, today or earlier, or leave it blank.'; set_form_errors($errors); }
+    }
+    $planVals = [$gIn('vr_case_number'), $gIn('ipe_goal'), $planDates['ipe_date'], $planDates['ipe_amended_on']];
     $vals = [
         $name,
         valid_date($dobIn),
@@ -166,6 +175,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, client_type=?, school=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, preferred_language=?, counselor_verified=?, email_verified=?'
                     . ($unarchive ? ', archived_at=NULL' : '') . ' WHERE id=?')->execute($vals);
                 $pdo->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=? WHERE id=?')->execute([...$guardianVals, (int)$client['id']]);
+                $pdo->prepare('UPDATE clients SET vr_case_number=?, ipe_goal=?, ipe_date=?, ipe_amended_on=? WHERE id=?')->execute([...$planVals, (int)$client['id']]);
                 // A portal link already emailed to the old address stops working when
                 // the address changes: it may belong to someone else now.
                 if (trim((string)($client['email'] ?? '')) !== '' && strcasecmp((string)($emailIn ?? ''), trim((string)$client['email'])) !== 0) {
@@ -296,6 +306,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, preferred_language, counselor_verified, email_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
             $newId = (int)db()->lastInsertId();
             db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=? WHERE id=?')->execute([...$guardianVals, $newId]);
+            db()->prepare('UPDATE clients SET vr_case_number=?, ipe_goal=?, ipe_date=?, ipe_amended_on=? WHERE id=?')->execute([...$planVals, $newId]);
             web_once_set($clientKey, $newId);
             record_status_change($newId, null, $status, $user['id'], 'Client created');
             on_hold_save($newId, $status, '', trim((string)($_POST['status_note'] ?? '')), $holdUntil);
@@ -462,6 +473,18 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
     <?php endif; ?>
     <div class="field"><label for="counselor_phone">Counselor phone</label>
       <input type="tel" id="counselor_phone" name="counselor_phone" value="<?= $v('counselor_phone') ?>" <?= field_aria('counselor_phone') ?>><?= field_error('counselor_phone') ?></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Plan for employment (IPE)</legend>
+    <div class="field"><label for="vr_case_number">VR case or participant number</label>
+      <input type="text" id="vr_case_number" name="vr_case_number" maxlength="60" value="<?= $v('vr_case_number') ?>" <?= field_aria('vr_case_number') ?>><?= field_error('vr_case_number') ?></div>
+    <div class="field"><label for="ipe_goal">IPE employment goal</label>
+      <input type="text" id="ipe_goal" name="ipe_goal" maxlength="255" value="<?= $v('ipe_goal') ?>" <?= field_aria('ipe_goal') ?>><?= field_error('ipe_goal') ?></div>
+    <div class="field"><label for="ipe_date">IPE date</label>
+      <input type="date" id="ipe_date" name="ipe_date" value="<?= $v('ipe_date') ?>" <?= field_aria('ipe_date') ?>><?= field_error('ipe_date') ?></div>
+    <div class="field"><label for="ipe_amended_on">Latest IPE amendment</label>
+      <input type="date" id="ipe_amended_on" name="ipe_amended_on" value="<?= $v('ipe_amended_on') ?>" <?= field_aria('ipe_amended_on') ?>><?= field_error('ipe_amended_on') ?></div>
   </fieldset>
 
   <fieldset>

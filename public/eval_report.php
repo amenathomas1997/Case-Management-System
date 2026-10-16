@@ -9,7 +9,7 @@ $user = require_login();
 require_perm('reports');
 
 $aid = (int)($_GET['assessment'] ?? 0);
-$stmt = db()->prepare('SELECT a.*, c.id AS cid, c.name AS client_name, c.dob, c.counselor_name, c.counselor_email, c.counselor_agency
+$stmt = db()->prepare('SELECT a.*, c.id AS cid, c.name AS client_name, c.dob, c.counselor_name, c.counselor_email, c.counselor_agency, c.ipe_goal
     FROM tech_assessments a JOIN clients c ON c.id = a.client_id WHERE a.id = ?');
 $stmt->execute([$aid]);
 $a = $stmt->fetch();
@@ -24,7 +24,9 @@ $defaults = [
         . ($a['hardware_details'] ? "Hardware: {$a['hardware_details']}\n" : '')
         . ($a['software_version'] ? "Software: {$a['software_version']}\n" : '')
         . "Estimated training: [hours] hours of individualized instruction.",
-    'justification' => "The recommended technology is necessary for the client to access print material, complete essential job functions, and achieve the vocational goal identified in their Individualized Plan for Employment. Without this technology and associated training, the client cannot independently perform the tasks required.",
+    // The IPE employment goal is named when it is on file (3.0.45).
+    'justification' => "The recommended technology is necessary for the client to access print material, complete essential job functions, and achieve the vocational goal identified in their Individualized Plan for Employment"
+        . (trim((string)($a['ipe_goal'] ?? '')) !== '' ? ' (' . trim((string)$a['ipe_goal']) . ')' : '') . ". Without this technology and associated training, the client cannot independently perform the tasks required.",
 ];
 // After a sign-in (session timeout) or a stale-token redirect, what the evaluator
 // typed comes back as old input on a GET, as on report.php; it replaces the defaults.

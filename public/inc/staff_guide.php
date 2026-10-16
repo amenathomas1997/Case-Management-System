@@ -23,6 +23,7 @@ if (!function_exists('staff_guide_topics')) {
                 'guide-case-close' => 'How do I close a case?',
                 'guide-waitlist' => 'How do I use the referral waitlist?',
                 'guide-counselor-access' => 'How do I give a VR counselor access?',
+                'guide-counselor-replace' => 'What if a counselor leaves?',
             ]],
             'guide-notes' => ['How do I write a case note?', [
                 'guide-note-lock' => 'How do I correct a note after it locks?',
@@ -332,6 +333,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 
 <?= $sgH(4, 'guide-case-close') ?>
 <p>On the client's edit page, choose a Closed status. Closing the case then asks why (Employed, Goals met, Declined further services, Unable to contact, Moved away, Health or medical, Not eligible, Transferred to another provider, or Other with a note) and, if you know it, the outcome: employed or not, the employer, job title, start date, hours a week and wage, or an independence outcome. It lists anything still open on the record, such as active tracks, unbilled work, loaned items, future sessions and unpaid invoices, each with a link. The reasons and employment at closure appear on the Outcome report. A case closed in the app asks the reason and employment; closed by voice, its reason is recorded as Not recorded and can be added later.</p>
+
+<?= $sgH(4, 'guide-counselor-replace') ?>
+<p>Open the Counselor portal page (administrators). On the counselor's row, open Replace with a new counselor, enter the new counselor's name and email (and agency and phone if they differ), and choose Replace counselor. Every one of their clients moves to the new counselor, each gets a case note, their draft invoices are addressed to the new counselor, and the old counselor's portal link stops working. Then send the new counselor a portal link. The client's VR case number and IPE employment goal are under Plan for employment on the client's edit page; they print on reports and invoices.</p>
 
 <?= $sgH(4, 'guide-waitlist') ?>
 <ol>

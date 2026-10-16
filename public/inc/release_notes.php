@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.45' => [
+        'Each client now has their VR case or participant number, IPE employment goal, IPE date and latest IPE amendment (edit page, and the iPhone app for the number and goal). They print on progress reports and invoices, and the evaluation report\'s justification names the goal.',
+        'On the Counselor portal page, Replace with a new counselor moves every client of a counselor who has left to the new one in one step, with a note on each client, and turns off the old counselor\'s portal link.',
+    ],
     '3.0.44' => [
         'Amendment requests are followed to their answer: record a request as sent on the amendment page (what you asked for, and the letter, kept on the track), get a follow-up task, then record the reply. An approved change opens the track ready to enter it, and the two are linked. The track and Compliance say when an amendment is awaiting a reply.',
         'Putting a client On Hold now needs a reason (for example, waiting for the authorization) and can have an expected return date; a check-in task appears about every three weeks and on the return date. Setting a client to Active Training without an authorized track gives a reminder.',

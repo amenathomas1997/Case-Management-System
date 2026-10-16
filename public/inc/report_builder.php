@@ -9,7 +9,7 @@ declare(strict_types=1);
 
 function build_track_report(int $trackId, string $preparedBy, string $intro = '', int $headingLevel = 1): ?array {
     $stmt = db()->prepare('SELECT t.*, c.id AS cid, c.name AS client_name, c.dob, c.email AS client_email, c.phone AS client_phone,
-            c.status AS client_status, c.counselor_name, c.counselor_email, c.counselor_phone, c.counselor_agency
+            c.status AS client_status, c.counselor_name, c.counselor_email, c.counselor_phone, c.counselor_agency, c.vr_case_number, c.ipe_goal, c.ipe_date, c.ipe_amended_on
         FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.id = ?');
     $stmt->execute([$trackId]);
     $t = $stmt->fetch();
@@ -70,6 +70,9 @@ function build_track_report(int $trackId, string $preparedBy, string $intro = ''
         ['Client', $t['client_name'] . ($t['dob'] ? ' (date of birth ' . fmt_date($t['dob']) . ')' : '')],
         ['Case status', $t['client_status']],
         ['Vocational Rehabilitation (VR) counselor', $counselor],
+        // The plan's goal and the VR case number (3.0.45), when on file.
+        ...(trim((string)($t['vr_case_number'] ?? '')) !== '' ? [['VR case number', (string)$t['vr_case_number']]] : []),
+        ...(trim((string)($t['ipe_goal'] ?? '')) !== '' ? [['IPE employment goal', $t['ipe_goal'] . ($t['ipe_date'] ? ' (IPE ' . fmt_date($t['ipe_date']) . ($t['ipe_amended_on'] ? ', amended ' . fmt_date($t['ipe_amended_on']) : '') . ')' : '')]] : []),
         ['Training track', $t['title'] . ' (' . $t['status'] . ')'],
         ['Authorization #', $t['auth_number'] . ' — ' . $t['funding_agency']],
         ['Authorization period', fmt_date($t['start_date']) . ' to ' . fmt_date($t['expiration_date'])],
@@ -188,7 +191,7 @@ function build_track_report(int $trackId, string $preparedBy, string $intro = ''
     // agency, and the authorization number become placeholders before the text leaves
     // (ai_run()'s redaction masks the client's own fields, not these).
     $aiMask = ['Client' => '[CLIENT]', 'Vocational Rehabilitation (VR) counselor' => $counselor !== '' ? '[COUNSELOR]' : '',
-        'Authorization #' => '[AUTH] — ' . $t['funding_agency']];
+        'Authorization #' => '[AUTH] — ' . $t['funding_agency'], 'VR case number' => '[CASE NUMBER]'];
     $aiRows = array_map(fn($row) => array_key_exists($row[0], $aiMask) ? [$row[0], $aiMask[$row[0]]] : $row, $rows);
 
     return [

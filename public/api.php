@@ -718,7 +718,7 @@ switch ($action) {
         $id = (int)($_GET['id'] ?? 0);
         api_require_client($id, $userId);
         record_client_view($userId, $id, 'iPhone app');
-        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email FROM clients WHERE id = ?');
+        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email, vr_case_number, ipe_goal, ipe_date, ipe_amended_on FROM clients WHERE id = ?');
         $c->execute([$id]);
         $client = $c->fetch();
         if (!$client) fail('Client not found.', 404);
@@ -1328,6 +1328,7 @@ switch ($action) {
             'a11y_contact' => [40, 'Preferred contact method'], 'a11y_notes' => [API_TEXT_BYTES, 'Accessibility notes'],
             'school' => [190, 'School'],
             'guardian_name' => [120, 'Guardian name'], 'guardian_phone' => [40, 'Guardian phone'], 'guardian_email' => [190, 'Guardian email'],
+            'vr_case_number' => [60, 'VR case number'], 'ipe_goal' => [255, 'IPE employment goal'], 'ipe_date' => [10, 'IPE date'], 'ipe_amended_on' => [10, 'IPE amendment date'],
         ];
         $keep = function (string $k) use ($input, $old, $limits) {
             if (!array_key_exists($k, $input)) return $old[$k] ?? null;
@@ -1357,6 +1358,11 @@ switch ($action) {
         // As client_edit.php: a date of birth later this year is a mistyped year.
         if ($dob !== null && $dob !== ($old['dob'] ?? null) && $dob > date('Y-m-d')) {
             fail('The date of birth cannot be in the future. Check the year.', 422);
+        }
+        // IPE dates (3.0.45): a value sent must be a real date, today or earlier (blank clears it).
+        foreach (['ipe_date' => 'IPE date', 'ipe_amended_on' => 'IPE amendment date'] as $pk => $pl) {
+            $pv = $keep($pk);
+            if ($pv !== null && $pv !== ($old[$pk] ?? null) && (valid_date($pv, 1990, (int)date('Y')) === null)) fail($pl . ': enter a valid date (YYYY-MM-DD), today or earlier.', 422);
         }
         $statusNote = api_text($input, 'status_note', 255, 'Status note');
         // On Hold needs a reason (3.0.44); on_hold_until (YYYY-MM-DD) is optional.
@@ -1453,8 +1459,8 @@ switch ($action) {
                 db()->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, client_type=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, counselor_verified=?, school=?, email_verified=?'
                     . ($unarchive ? ', archived_at=NULL' : '') . ' WHERE id=?')->execute($vals);
                 // Guardian details (3.0.37): a field the app did not send keeps its value.
-                db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=? WHERE id=?')
-                    ->execute([$keep('guardian_name'), $keep('guardian_phone'), $keep('guardian_email'), $cid]);
+                db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=?, vr_case_number=?, ipe_goal=?, ipe_date=?, ipe_amended_on=? WHERE id=?')
+                    ->execute([$keep('guardian_name'), $keep('guardian_phone'), $keep('guardian_email'), $keep('vr_case_number'), $keep('ipe_goal'), $keep('ipe_date'), $keep('ipe_amended_on'), $cid]);
                 // A portal link already emailed to the old address stops working when the
                 // address changes: it may belong to someone else now (client_edit.php).
                 if (trim((string)($old['email'] ?? '')) !== '' && strcasecmp((string)($clientEmail ?? ''), trim((string)$old['email'])) !== 0) {
@@ -1500,8 +1506,8 @@ switch ($action) {
             } else {
                 db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, counselor_verified, school, email_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
                 $cid = (int)db()->lastInsertId();
-                db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=? WHERE id=?')
-                    ->execute([$keep('guardian_name'), $keep('guardian_phone'), $keep('guardian_email'), $cid]);
+                db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=?, vr_case_number=?, ipe_goal=?, ipe_date=?, ipe_amended_on=? WHERE id=?')
+                    ->execute([$keep('guardian_name'), $keep('guardian_phone'), $keep('guardian_email'), $keep('vr_case_number'), $keep('ipe_goal'), $keep('ipe_date'), $keep('ipe_amended_on'), $cid]);
                 record_status_change($cid, null, $status, $userId, 'Client created (mobile)');
                 on_hold_save($cid, $status, '', (string)$statusNote, $holdUntil);
                 if ($closing) client_closure_record($cid, $status, $closureData, $userId);

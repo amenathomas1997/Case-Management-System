@@ -163,6 +163,11 @@ struct ClientInfo: Decodable {
     var guardianName: String?
     var guardianPhone: String?
     var guardianEmail: String?
+    /// The plan (3.0.45): VR case number, IPE employment goal and dates ("YYYY-MM-DD").
+    var vrCaseNumber: String?
+    var ipeGoal: String?
+    var ipeDate: String?
+    var ipeAmendedOn: String?
 }
 
 let clientTypes = ["VR", "Pre-ETS"]

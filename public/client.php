@@ -1329,6 +1329,9 @@ if ($hasA11y): ?>
         <p class="hint"><strong>Unverified — confirm before reports are sent.</strong> This address has not been confirmed (one from the public referral form is not checked), so no monthly progress report, counselor portal link or email filing uses it yet. <a href="client_edit.php?id=<?= $id ?>">Confirm the counselor email on the edit page</a>.</p>
         <?php endif; ?></dd>
       <dt>Phone</dt><dd><?= h($client['counselor_phone'] ?? '—') ?></dd>
+      <?php // The plan (3.0.45). ?>
+      <dt>VR case number</dt><dd><?= h($client['vr_case_number'] ?? '') ?: '—' ?></dd>
+      <dt>IPE employment goal</dt><dd><?= h($client['ipe_goal'] ?? '') ?: '—' ?><?= !empty($client['ipe_date']) ? ' (IPE ' . fmt_date($client['ipe_date']) . (!empty($client['ipe_amended_on']) ? ', amended ' . fmt_date($client['ipe_amended_on']) : '') . ')' : '' ?></dd>
     </dl>
   </section>
 </div>

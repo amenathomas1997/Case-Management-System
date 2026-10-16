@@ -18,7 +18,7 @@ if (!empty($_GET['invoice'])) {
     $trackId = (int)($_GET['track'] ?? 0);
 }
 $stmt = db()->prepare('SELECT t.*, c.name AS client_name, c.assigned_to, c.counselor_name, c.counselor_agency, c.counselor_email, c.counselor_verified,
-    c.address AS client_address, c.email AS client_email, c.email_verified AS client_email_verified FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.id = ?');
+    c.address AS client_address, c.email AS client_email, c.email_verified AS client_email_verified, c.vr_case_number FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.id = ?');
 $stmt->execute([$trackId]);
 $t = $stmt->fetch();
 if (!$t) { flash('That training track no longer exists.', 'error'); redirect('clients.php'); }
@@ -137,7 +137,10 @@ if (($_GET['format'] ?? '') === 'html') {
         $invoice ? ['Invoice date' => $docDate, 'Printed' => date('F j, Y')] : ['Statement date' => $docDate], [
         $invoice ? 'Invoice number' : 'Statement number' => $docNumber,
         'Bill to' => implode("\n", $billTo),
-        'Authorization' => $private ? 'Private pay' : $authNo, 'Client' => $t['client_name'], 'Service' => $t['title'],
+        'Authorization' => $private ? 'Private pay' : $authNo, 'Client' => $t['client_name'],
+        // The VR agency's case number (3.0.45), when it is on file.
+        ] + (!$private && trim((string)($t['vr_case_number'] ?? '')) !== '' ? ['VR case number' => (string)$t['vr_case_number']] : []) + [
+        'Service' => $t['title'],
         'Rehabilitation Services Administration (RSA) program' => track_program_label($t),
         $periodLabel => $periodText,
         'Rate' => $rateText,
@@ -284,6 +287,7 @@ $leftLines = $billTo;
 $rightLines = [
     $private ? 'Private pay' : 'Authorization number: ' . $authNo,
     'Client: ' . $t['client_name'],
+    ...(!$private && trim((string)($t['vr_case_number'] ?? '')) !== '' ? ['VR case number: ' . $t['vr_case_number']] : []),
     'Service: ' . $t['title'],
     'RSA program: ' . track_program_label($t),
     $periodLabel . ': ' . $periodText,
