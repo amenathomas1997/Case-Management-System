@@ -6,6 +6,9 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.52' => [
+        'Offer times on a client\'s appointment or reschedule request (Client portal requests, Offer times): up to three times, each checked against the instructor\'s calendar and the authorization. The client is emailed, picks one in their portal and confirms it: the session is booked (or moved), they get the calendar invitation, and the request closes.',
+    ],
     '3.0.51' => [
         'Letters: Write a letter on a client\'s page fills in a welcome, appointment, missed-appointment, equipment loan or return, referral acknowledgement or completion letter from the record. Check it, then save it to their documents (and portal), keep it as a note, or download it to print. Administrators change the wording on the Letters page.',
         'The client portal now shows the client\'s practice updates with your feedback (add it under Daily work, Homework support), their finished homework, and a summary of each finished training plan. When you send a progress or final report you can also put a copy in the client\'s portal.',

@@ -581,4 +581,14 @@ return [
     'Finished training' => 'Capacitación terminada',
     'hours of training.' => 'horas de capacitación.',
     'minutes' => 'minutos',
+
+    // ---- portal.php: times offered on a request (3.0.52) ----
+    'Choose a time' => 'Elija una hora',
+    'Confirm this time' => 'Confirmar esta hora',
+    'Choose one of the times first.' => 'Primero elija una de las horas.',
+    'Your session is booked. It is listed under Upcoming sessions.' => 'Su sesión quedó reservada. Aparece en Próximas sesiones.',
+    'That time is no longer offered.' => 'Esa hora ya no está disponible.',
+    'That time is too soon to book now. Your instructor has been told and will offer new times.' => 'Esa hora ya está demasiado próxima para reservarla. Avisamos a su instructor, que le ofrecerá otras horas.',
+    'The session to move is no longer booked. Your instructor has been told.' => 'La sesión que quería cambiar ya no está reservada. Avisamos a su instructor.',
+    'That time is no longer free. Your instructor has been told and will offer new times.' => 'Esa hora ya no está libre. Avisamos a su instructor, que le ofrecerá otras horas.',
 ];

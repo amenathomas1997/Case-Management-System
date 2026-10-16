@@ -61,6 +61,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     redirect('portal_requests.php');
 }
 
+/* Times offered for an appointment or reschedule request (3.0.52): the client confirms one in the portal. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['offer_times'])) {
+    $id = (int)($_POST['id'] ?? 0);
+    $r = db()->prepare('SELECT pr.client_id, c.name AS client_name, c.assigned_to FROM portal_requests pr JOIN clients c ON c.id = pr.client_id WHERE pr.id = ?');
+    $r->execute([$id]);
+    $row = $r->fetch();
+    if (!$row || (caseload_scoped() && (int)$row['assigned_to'] !== (int)$user['id'])) { flash('That request is not on your caseload.', 'error'); redirect('portal_requests.php'); }
+    $starts = [];
+    foreach ([1, 2, 3] as $n) { $v = trim((string)($_POST['time' . $n] ?? '')); if ($v !== '') $starts[] = strtotime($v) ?: -1; }
+    $_POST['offer_req'] = (string)$id; // refills only this request's form
+    if (in_array(-1, $starts, true)) { keep_input(); flash('One of the times could not be read. Enter each as a date and time.', 'error'); redirect('portal_requests.php#offer-' . $id); }
+    $staff = (int)($_POST['staff'] ?? 0);
+    $su = db()->prepare('SELECT COUNT(*) FROM users WHERE id = ? AND is_active = 1');
+    $su->execute([$staff]);
+    if (!(int)$su->fetchColumn()) { keep_input(); flash('Choose who will run the session.', 'error'); redirect('portal_requests.php#offer-' . $id); }
+    $res = offer_times_save($id, $starts, (int)($_POST['minutes'] ?? 60), $staff, (int)($_POST['track_id'] ?? 0) ?: null, !empty($_POST['remote']),
+        (string)($_POST['location'] ?? ''), (int)$user['id']);
+    if ($res['error'] !== null) { keep_input(); flash($res['error'], 'error'); redirect('portal_requests.php#offer-' . $id); }
+    flash($res['offered'] . ' time' . ($res['offered'] === 1 ? '' : 's') . ' offered to ' . $row['client_name'] . '. They choose one in their portal.'
+        . (empty($res['emailed']) ? ' They were not emailed (they prefer phone or post, or have no confirmed email): tell them the times are waiting.' : '')
+        . ($res['refused'] ? ' Not offered: ' . implode(' ', $res['refused']) : ''));
+    redirect('portal_requests.php');
+}
+
 /* A copy of the record, published to the client's portal for a records request (3.0.38). */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['publish_copy'])) {
     $id = (int)($_POST['id'] ?? 0);
@@ -137,6 +161,33 @@ page_header('Client requests', $user, 'portal_requests');
           <?php endif; ?>
           <button type="submit" name="set_status" value="1" class="btn btn-secondary btn-sm">Save<span class="visually-hidden"> status for <?= $which ?></span></button>
         </form>
+        <?php if (in_array($r['type'], OFFER_REQUEST_TYPES, true) && !in_array($r['status'], ['Done', 'Declined'], true)):
+            $open = request_offers((int)$r['id']);
+            $staffList ??= db()->query('SELECT id, name FROM users WHERE is_active = 1 ORDER BY name')->fetchAll();
+            $trq = db()->prepare("SELECT id, title FROM training_tracks WHERE client_id = ? AND status = 'Active' ORDER BY id DESC");
+            $trq->execute([(int)$r['cid']]);
+            $trackList = $trq->fetchAll();
+            $rid = (int)$r['id'];
+            $assignedQ = db()->prepare('SELECT assigned_to FROM clients WHERE id = ?'); $assignedQ->execute([(int)$r['cid']]); $defStaff = (int)$assignedQ->fetchColumn() ?: (int)$user['id']; ?>
+        <?php if ($open): ?><p>Offered: <?= h(implode('; ', array_map(fn($o) => date('D, M j g:i A', strtotime($o['start_at'])), $open))) ?></p><?php endif; ?>
+        <details id="offer-<?= $rid ?>"><summary><?= $open ? 'Offer different times' : 'Offer times' ?><span class="visually-hidden"> for <?= $which ?></span></summary>
+          <form method="post" action="portal_requests.php" class="stacked"><?= csrf_field() ?>
+            <input type="hidden" name="id" value="<?= $rid ?>">
+            <?php foreach ([1 => 'First time', 2 => 'Second time', 3 => 'Third time'] as $n => $lbl): ?>
+            <div class="field"><label for="t<?= $n ?>-<?= $rid ?>"><?= $lbl ?></label><input type="datetime-local" id="t<?= $n ?>-<?= $rid ?>" name="time<?= $n ?>" value="<?= old_in('offer_req') === (string)$rid ? h(old_in('time' . $n)) : '' ?>"></div>
+            <?php endforeach; ?>
+            <?php if ($r['type'] === 'appointment'): ?><div class="field"><label for="len-<?= $rid ?>">Length</label><select id="len-<?= $rid ?>" name="minutes"><?php foreach ([30, 45, 60, 90, 120, 180] as $mn): ?><option value="<?= $mn ?>"<?= $mn === 60 ? ' selected' : '' ?>><?= $mn ?> minutes</option><?php endforeach; ?></select></div><?php endif; ?>
+            <div class="field"><label for="st-<?= $rid ?>">With</label><select id="st-<?= $rid ?>" name="staff"><?php foreach ($staffList as $sl): ?><option value="<?= (int)$sl['id'] ?>"<?= (int)$sl['id'] === $defStaff ? ' selected' : '' ?>><?= h($sl['name']) ?></option><?php endforeach; ?></select></div>
+            <?php if ($r['type'] === 'reschedule'): ?><p>The session keeps its length.</p><?php endif; ?>
+            <?php if ($r['type'] === 'appointment' && $trackList): ?>
+            <div class="field"><label for="tr-<?= $rid ?>">Training track</label><select id="tr-<?= $rid ?>" name="track_id"><?php foreach ($trackList as $tl): ?><option value="<?= (int)$tl['id'] ?>"><?= h($tl['title']) ?></option><?php endforeach; ?></select></div>
+            <?php endif; ?>
+            <div class="field"><label><input type="checkbox" name="remote" value="1"> Remote</label></div>
+            <div class="field"><label for="loc-<?= $rid ?>">Location</label><input type="text" id="loc-<?= $rid ?>" name="location" maxlength="190"></div>
+            <button type="submit" name="offer_times" value="1" class="btn btn-primary btn-sm">Offer these times<span class="visually-hidden"> for <?= $which ?></span></button>
+          </form>
+        </details>
+        <?php endif; ?>
         <?php if ($r['type'] === 'records' && !in_array($r['status'], ['Done', 'Declined'], true)): ?>
         <form method="post" action="portal_requests.php" class="inline-form"><?= csrf_field() ?>
           <input type="hidden" name="id" value="<?= (int)$r['id'] ?>">

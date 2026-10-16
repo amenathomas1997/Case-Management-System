@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.51';
+const APP_VERSION = '3.0.52';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -313,6 +313,12 @@ const EMAIL_TEMPLATES = [
     'session_booked_client_es' => ['Session booked (client, Spanish)', 'Su sesión de capacitación con {org_short}',
         "Hola, {name}:\n\nSu capacitación en tecnología de asistencia está programada:\n\n{sessions}\n\nAdjuntamos una invitación de calendario para que la agregue a su calendario. Si necesita otra hora, responda a este correo o comuníquese con {contact}.\n",
         '{name} {sessions} {contact} {org_short} {org}'],
+    'times_offered' => ['Times offered for a session (client)', 'Choose a time for your training session — {org_short}',
+        "Hello {name},\n\nYour instructor has offered some times for your training session. Open your portal to choose the one that suits you:\n\n{link}\n\nIf none of them work, send a new request from the portal.\n",
+        '{name} {link} {org_short} {org}'],
+    'times_offered_es' => ['Times offered for a session (client, Spanish)', 'Elija una hora para su sesión de capacitación — {org_short}',
+        "Hola, {name}:\n\nSu instructor le ofrece algunas horas para su sesión de capacitación. Abra su portal para elegir la que le convenga:\n\n{link}\n\nSi ninguna le sirve, envíe una nueva solicitud desde el portal.\n",
+        '{name} {link} {org_short} {org}'],
     'session_moved_client' => ['Session moved (client)', 'Your training session with {org_short} has a new time',
         "Hello {name},\n\nYour training session was moved. The new time is:\n\n{sessions}\n\nThe attached calendar update replaces the old time in your calendar. If the new time does not work, reply to this email or contact {contact}.\n",
         '{name} {sessions} {contact} {org_short} {org}'],
@@ -405,6 +411,7 @@ const EMAIL_TEMPLATE_REQUIRED = [
     'session_booked_client' => '{sessions}', 'session_booked_client_es' => '{sessions}', 'session_cancelled_client' => '{sessions}', 'session_moved_client' => '{sessions}', 'session_moved_client_es' => '{sessions}', 'session_cancelled_client_es' => '{sessions}',
     'report_cover' => '{ack}',
     'referral_closed' => '{ref}',
+    'times_offered' => '{link}', 'times_offered_es' => '{link}',
 ];
 
 /** Render a template: admin override from settings, else the built-in default. */
@@ -1663,3 +1670,5 @@ require_once __DIR__ . '/list_exports.php';
 require_once __DIR__ . '/client_timeline.php';
 // Portal history, report copies, practice feedback and letters (3.0.51).
 require_once __DIR__ . '/portal_history.php';
+// Times offered on a portal request (3.0.52).
+require_once __DIR__ . '/request_offers.php';

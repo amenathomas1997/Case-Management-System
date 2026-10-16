@@ -336,6 +336,17 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         redirect('portal.php?t=' . $token . '&lang=' . page_lang());
     }
+    // The client confirms one of the times offered on their request (3.0.52).
+    if (isset($_POST['confirm_offer'])) {
+        $offer = (int)($_POST['offer_id'] ?? 0);
+        if ($offer <= 0) flash_ui('Choose one of the times first.', 'error');
+        else {
+            $res = offer_confirm($offer, (int)$client['id']);
+            if ($res['error'] === null) flash_ui('Your session is booked. It is listed under Upcoming sessions.');
+            else flash_ui($res['error'], 'error');
+        }
+        redirect('portal.php?t=' . $token . '&lang=' . page_lang() . '#req-h');
+    }
     if (isset($_POST['new_request'])) {
         $type = in_array($_POST['req_type'] ?? '', ['appointment', 'reschedule', 'cancel', 'device', 'other', 'records', 'correction'], true) ? $_POST['req_type'] : 'other';
         $sessionId = (int)($_POST['session_id'] ?? 0) ?: null;
@@ -1065,7 +1076,19 @@ if ($devLoans || $devRepairs || $devChecks): ?>
       <span class="muted">· <?= en(fmt_date($rq['created_at'])) ?></span><?php if (isset(RECORDS_REQUEST_TYPES[$rq['type']]) && !in_array($rq['status'], ['Done', 'Declined'], true)): ?> <?= t('We answer within 30 days.') ?><?php endif; ?>
       <?php if (!empty($rq['outcome'])): ?><br><?= en((string)$rq['outcome']) ?><?php endif; ?>
       <?php // The whole request, with its line breaks (a list of times stays a list). ?>
-      <?= $rq['details'] ? '<br>' . nl2br(h((string)$rq['details'])) : '' ?></li>
+      <?= $rq['details'] ? '<br>' . nl2br(h((string)$rq['details'])) : '' ?>
+      <?php $offers = !$caseClosed && in_array($rq['type'], OFFER_REQUEST_TYPES, true) && !in_array($rq['status'], ['Done', 'Declined'], true) ? request_offers((int)$rq['id']) : [];
+      if ($offers): ?>
+      <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked"><?= csrf_field() ?>
+        <fieldset><legend><?= t('Choose a time') ?></legend>
+        <?php foreach ($offers as $i => $of): $ots = strtotime($of['start_at']); ?>
+          <label><input type="radio" name="offer_id" value="<?= (int)$of['id'] ?>"<?= $i === 0 ? ' checked' : '' ?>> <?= page_lang() === 'es' ? h(portal_when_es($ots)) : en(date('l, F j \a\t g:i A', $ots)) ?>,
+            <?= (int)round((strtotime($of['end_at']) - $ots) / 60) ?> <?= t('minutes') ?><?= (int)$of['is_remote'] ? ', ' . h(__('Remote')) : ($of['location'] ? ', ' . en((string)$of['location']) : '') ?><?= $of['staff_name'] ? ', ' . t('with') . ' ' . h((string)$of['staff_name']) : '' ?></label>
+        <?php endforeach; ?>
+        </fieldset>
+        <button type="submit" name="confirm_offer" value="1" class="btn btn-primary btn-sm"><?= t('Confirm this time') ?><span class="visually-hidden"> — <?= t($typeLabels[$rq['type']] ?? 'Request') ?>, <?= en(fmt_date($rq['created_at'])) ?></span></button>
+      </form>
+      <?php endif; ?></li>
   <?php endforeach; ?>
   </ul>
   <?php endif; ?>

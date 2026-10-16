@@ -560,6 +560,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Do the work, such as booking the session on Session schedule.</li>
   <li>Update the request's status.</li>
 </ol>
+<p>For an appointment or reschedule request, open Offer times on the request. Enter up to three dates and times, the length, who will run it, the training track for a new appointment, and remote or the location, then choose Offer these times. A time that clashes with the instructor's calendar or falls outside the authorization is not offered, and the message says why. The client is emailed and chooses a time in their portal; confirming books the session (or moves the one to reschedule), sends their calendar invitation and closes the request. You are told when a client chooses, or when the time they chose was no longer free.</p>
 
 <?= $sgH(4, 'guide-documents') ?>
 <ol>

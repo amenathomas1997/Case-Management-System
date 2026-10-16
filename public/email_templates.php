@@ -31,6 +31,8 @@ const TPL_REQUIRED = [
     'session_moved_client' => ['{sessions}' => 'the new session time'],
     'report_cover' => ['{ack}' => 'the confirmation link'],
     'referral_closed' => ['{ref}' => 'the referral reference number'],
+    'times_offered' => ['{link}' => 'the portal link'],
+    'times_offered_es' => ['{link}' => 'the portal link'],
 ];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tpl']) && $key !== '') {
