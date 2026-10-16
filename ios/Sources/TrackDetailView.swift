@@ -190,71 +190,7 @@ struct TrackDetailView: View {
                                     hoursRemaining: savedTrack == nil ? track.hoursRemaining : max(0, authorized - track.hoursWorked),
                                     pctUsed: savedTrack == nil ? track.pctUsed : (authorized > 0 ? track.hoursWorked / authorized * 100 : 0))
                 }
-                Section(goalsLoaded ? "SMART goals (\(goals.count))" : "SMART goals") {
-                    if !goalsLoaded {
-                        if error == nil { ProgressView("Loading goals…") }
-                    } else if goals.isEmpty {
-                        Text("No goals yet.").foregroundStyle(Color.secondaryText)
-                    }
-                    ForEach(goals) { goal in
-                        let short = "\(goalPosition(goal)): \(shortGoalText(goal.specificGoal))"
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(goal.specificGoal).font(.body.weight(.medium))
-                            Text(goal.measurableMetric).font(.callout).foregroundStyle(Color.secondaryText)
-                            if let target = goal.targetDate {
-                                Text("Target: \(formatDate(target))").font(.caption).foregroundStyle(Color.secondaryText)
-                            }
-                            let pct = goal.progressPct ?? 0
-                            ProgressView(value: Double(pct), total: 100) {
-                                Text("\(pct)% · \(goal.status)").font(.caption).foregroundStyle(Color.secondaryText)
-                            }
-                            // Each control names its goal briefly: the full objective is the text just
-                            // above, and the Buttons rotor and Voice Control still tell goals apart.
-                            .accessibilityLabel("Progress, \(short)")
-                            .accessibilityValue("\(pct) percent, \(goal.status)")
-                            Picker("Status", selection: statusBinding(for: goal)) {
-                                ForEach(goalStatuses, id: \.self) { Text($0) }
-                            }
-                            .pickerStyle(.segmented)
-                            .disabled(savingGoals.contains(goal.id))
-                            .accessibilityLabel("Status, \(short)")
-                            .accessibilityHint("Asks before saving: a new status changes the recorded progress.")
-                            // Body-size text and 44-point targets (caption-size controls were about 16 points tall).
-                            HStack {
-                                Button { recordingStatus = nil; recordingGoal = goal } label: {
-                                    Label("Record progress", systemImage: "chart.line.uptrend.xyaxis")
-                                        .frame(minHeight: 44).contentShape(Rectangle())
-                                }
-                                .buttonStyle(.borderless)
-                                .accessibilityLabel("Record progress, \(short)")
-                                .accessibilityInputLabels(["Record progress", "Record progress, \(short)"])
-                                Spacer()
-                                NavigationLink { GoalHistoryView(goalId: goal.id, goalText: goal.specificGoal) } label: {
-                                    Text("History").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
-                                }
-                                .accessibilityLabel("History, \(short)")
-                                .accessibilityInputLabels(["History", "History, \(short)"])
-                            }
-                        }
-                        .padding(.vertical, 3)
-                        // VoiceOver: the goal is one stop, read in full; Record progress is the
-                        // double-tap, and every control is on the Actions rotor (a status change
-                        // still asks first, as the status control does).
-                        .accessibilityElement(children: VoiceOverRows.children)
-                        .accessibilityLabel(goalSummary(goal))
-                        .accessibilityAction { recordingStatus = nil; recordingGoal = goal }
-                        .accessibilityActions {
-                            Button("Record progress") { recordingStatus = nil; recordingGoal = goal }
-                            if !savingGoals.contains(goal.id) {
-                                ForEach(goalStatuses.filter { $0 != goal.status }, id: \.self) { status in
-                                    Button("Mark \(status)") { statusBinding(for: goal).wrappedValue = status }
-                                }
-                            }
-                            Button("History") { historyGoal = goal }
-                        }
-                    }
-                    Button { showingAddGoal = true } label: { Label("Add goal", systemImage: "plus") }
-                }
+                goalsSection
                 Section(notesHeader) {
                     if !notesLoaded {
                         if error == nil { ProgressView("Loading notes…") }
@@ -335,48 +271,7 @@ struct TrackDetailView: View {
                     }
                 }
                 hoursSection
-                Section(expensesLoaded ? "Billable expenses (\(expenses.count))" : "Billable expenses") {
-                    if !expensesLoaded {
-                        if error == nil { ProgressView("Loading expenses…") }
-                    } else if expenses.isEmpty {
-                        Text("No expenses logged on this track.").foregroundStyle(Color.secondaryText)
-                            .accessibilityFocused($focusedExpense, equals: 0)
-                    }
-                    ForEach(expenses) { expense in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("\(expense.amountText) · \(expense.description)").font(.body)
-                                // Billed or not is said in words, not shown by the Delete button alone.
-                                Text("\(formatDate(expense.expenseDate)) · \(expense.isBilled ? "On an invoice" : "Not yet billed")")
-                                    .font(.caption).foregroundStyle(Color.secondaryText)
-                            }
-                            Spacer()
-                            // An expense already on an invoice stays (the invoice totals would no longer match).
-                            if !expense.isBilled {
-                                // The darker alert red (system red text was 3.5:1), on a 44-point target.
-                                Button(role: .destructive) { deletingExpense = expense } label: {
-                                    Text("Delete").foregroundStyle(Color.alertRed)
-                                        .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
-                                }
-                                .buttonStyle(.borderless)
-                                .disabled(deletingExpenseBusy)
-                                .accessibilityLabel("Delete expense: \(expense.summary)")
-                                .accessibilityInputLabels(["Delete", "Delete expense"])
-                            }
-                        }
-                        .padding(.vertical, 2)
-                        // VoiceOver: one stop per expense; Delete (which asks first) is on the
-                        // Actions rotor.
-                        .accessibilityElement(children: VoiceOverRows.children)
-                        .accessibilityLabel("\(expense.amountText), \(expense.description). \(formatDate(expense.expenseDate)). \(expense.isBilled ? "On an invoice" : "Not yet billed")")
-                        .accessibilityFocused($focusedExpense, equals: expense.id)
-                        .accessibilityActions {
-                            if !expense.isBilled && !deletingExpenseBusy {
-                                Button("Delete expense", role: .destructive) { deletingExpense = expense }
-                            }
-                        }
-                    }
-                }
+                expensesSection
                 Section("Actions") {
                     // Opens with this track chosen (its unsaved entry, if any, comes back with it).
                     if api.can("clients") {
@@ -630,6 +525,121 @@ struct TrackDetailView: View {
     }
 
     /// Hours logged on this track, each correctable or deletable while unbilled (3.0.46). Its
+    /// The track's SMART goals (its own property, to keep the body quick to type-check).
+    @ViewBuilder private var goalsSection: some View {
+        Section(goalsLoaded ? "SMART goals (\(goals.count))" : "SMART goals") {
+            if !goalsLoaded {
+                if error == nil { ProgressView("Loading goals…") }
+            } else if goals.isEmpty {
+                Text("No goals yet.").foregroundStyle(Color.secondaryText)
+            }
+            ForEach(goals) { goal in
+                let short = "\(goalPosition(goal)): \(shortGoalText(goal.specificGoal))"
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(goal.specificGoal).font(.body.weight(.medium))
+                    Text(goal.measurableMetric).font(.callout).foregroundStyle(Color.secondaryText)
+                    if let target = goal.targetDate {
+                        Text("Target: \(formatDate(target))").font(.caption).foregroundStyle(Color.secondaryText)
+                    }
+                    let pct = goal.progressPct ?? 0
+                    ProgressView(value: Double(pct), total: 100) {
+                        Text("\(pct)% · \(goal.status)").font(.caption).foregroundStyle(Color.secondaryText)
+                    }
+                    // Each control names its goal briefly: the full objective is the text just
+                    // above, and the Buttons rotor and Voice Control still tell goals apart.
+                    .accessibilityLabel("Progress, \(short)")
+                    .accessibilityValue("\(pct) percent, \(goal.status)")
+                    Picker("Status", selection: statusBinding(for: goal)) {
+                        ForEach(goalStatuses, id: \.self) { Text($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(savingGoals.contains(goal.id))
+                    .accessibilityLabel("Status, \(short)")
+                    .accessibilityHint("Asks before saving: a new status changes the recorded progress.")
+                    // Body-size text and 44-point targets (caption-size controls were about 16 points tall).
+                    HStack {
+                        Button { recordingStatus = nil; recordingGoal = goal } label: {
+                            Label("Record progress", systemImage: "chart.line.uptrend.xyaxis")
+                                .frame(minHeight: 44).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Record progress, \(short)")
+                        .accessibilityInputLabels(["Record progress", "Record progress, \(short)"])
+                        Spacer()
+                        NavigationLink { GoalHistoryView(goalId: goal.id, goalText: goal.specificGoal) } label: {
+                            Text("History").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                        }
+                        .accessibilityLabel("History, \(short)")
+                        .accessibilityInputLabels(["History", "History, \(short)"])
+                    }
+                }
+                .padding(.vertical, 3)
+                // VoiceOver: the goal is one stop, read in full; Record progress is the
+                // double-tap, and every control is on the Actions rotor (a status change
+                // still asks first, as the status control does).
+                .accessibilityElement(children: VoiceOverRows.children)
+                .accessibilityLabel(goalSummary(goal))
+                .accessibilityAction { recordingStatus = nil; recordingGoal = goal }
+                .accessibilityActions {
+                    Button("Record progress") { recordingStatus = nil; recordingGoal = goal }
+                    if !savingGoals.contains(goal.id) {
+                        ForEach(goalStatuses.filter { $0 != goal.status }, id: \.self) { status in
+                            Button("Mark \(status)") { statusBinding(for: goal).wrappedValue = status }
+                        }
+                    }
+                    Button("History") { historyGoal = goal }
+                }
+            }
+            Button { showingAddGoal = true } label: { Label("Add goal", systemImage: "plus") }
+        }
+    }
+
+    /// Billable expenses on this track (its own property, to keep the body quick to type-check).
+    @ViewBuilder private var expensesSection: some View {
+        Section(expensesLoaded ? "Billable expenses (\(expenses.count))" : "Billable expenses") {
+            if !expensesLoaded {
+                if error == nil { ProgressView("Loading expenses…") }
+            } else if expenses.isEmpty {
+                Text("No expenses logged on this track.").foregroundStyle(Color.secondaryText)
+                    .accessibilityFocused($focusedExpense, equals: 0)
+            }
+            ForEach(expenses) { expense in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(expense.amountText) · \(expense.description)").font(.body)
+                        // Billed or not is said in words, not shown by the Delete button alone.
+                        Text("\(formatDate(expense.expenseDate)) · \(expense.isBilled ? "On an invoice" : "Not yet billed")")
+                            .font(.caption).foregroundStyle(Color.secondaryText)
+                    }
+                    Spacer()
+                    // An expense already on an invoice stays (the invoice totals would no longer match).
+                    if !expense.isBilled {
+                        // The darker alert red (system red text was 3.5:1), on a 44-point target.
+                        Button(role: .destructive) { deletingExpense = expense } label: {
+                            Text("Delete").foregroundStyle(Color.alertRed)
+                                .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(deletingExpenseBusy)
+                        .accessibilityLabel("Delete expense: \(expense.summary)")
+                        .accessibilityInputLabels(["Delete", "Delete expense"])
+                    }
+                }
+                .padding(.vertical, 2)
+                // VoiceOver: one stop per expense; Delete (which asks first) is on the
+                // Actions rotor.
+                .accessibilityElement(children: VoiceOverRows.children)
+                .accessibilityLabel("\(expense.amountText), \(expense.description). \(formatDate(expense.expenseDate)). \(expense.isBilled ? "On an invoice" : "Not yet billed")")
+                .accessibilityFocused($focusedExpense, equals: expense.id)
+                .accessibilityActions {
+                    if !expense.isBilled && !deletingExpenseBusy {
+                        Button("Delete expense", role: .destructive) { deletingExpense = expense }
+                    }
+                }
+            }
+        }
+    }
+
     /// own property: inside the screen's body it made the expression too slow to type-check.
     @ViewBuilder private var hoursSection: some View {
         Section(workLogsLoaded ? "Hours logged (\(workLogs.count))" : "Hours logged") {
