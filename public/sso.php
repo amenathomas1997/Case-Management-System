@@ -125,8 +125,10 @@ if ($oid === '') {
     redirect('login.php');
 }
 
-/* Existing accounts require explicit, authenticated linking; email claims
-   are discovery hints, never proof of ownership of a local account. */
+/* An existing account is matched by email on the first Microsoft sign-in when the
+   person is a member of the configured tenant (owner decision, 2026-10-15: the
+   organisation's own directory vouches for the address). Guest accounts, and
+   anyone whose email differs, link from My Account while signed in. */
 $linkId = (int)($_SESSION['sso_link_user'] ?? 0);
 unset($_SESSION['sso_link_user']);
 $linkUser = $linkId ? require_login() : null;
@@ -144,8 +146,11 @@ if (!$user && $email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL)) {
     $u = db()->prepare('SELECT * FROM users WHERE email = ? AND is_active = 1 AND entra_oid IS NULL');
     $u->execute([$email]);
     if ($user = $u->fetch()) {
-        if (!sso_link_authorized($linkId, $linkUser, (int)$user['id'])) {
-            flash('First sign in with your existing credentials, then use Link Microsoft account in My Account.', 'error');
+        if ($linkId ? !sso_link_authorized($linkId, $linkUser, (int)$user['id'])
+                    : !sso_email_match_allowed($claims, "https://login.microsoftonline.com/{$tenant}/v2.0")) {
+            audit(null, 'login.sso_fail', 'user', (int)$user['id'], 'guest Microsoft account not matched by email: ' . $email);
+            flash($linkId ? 'That Microsoft account could not be linked to this account. Please try again.'
+                : 'Your Microsoft account is a guest in this organisation, so it is not matched by email. First sign in with your existing credentials, then use Link Microsoft account in My Account.', 'error');
             redirect($failTo);
         }
         $bind = db()->prepare('UPDATE users SET entra_oid = ? WHERE id = ? AND entra_oid IS NULL AND is_active = 1');

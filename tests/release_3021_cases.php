@@ -34,40 +34,39 @@ check($autoLog>0 && $expLogs()===3 && str_starts_with((string)$authIssue,'This a
     'Completing a session logs its hours even after the authorization ended, and says so');
 
 /* ---- A client email typed on the public referral form ---- */
-// Converted with the referral but unconfirmed: the app is told, no outcome survey
-// goes to it, and session reminders skip it, telling the instructor and the
-// administrators (on the client's record) instead.
-$db->exec("INSERT INTO referrals(reason,subject,body,counselor_name,counselor_agency,counselor_email,counselor_phone,client_name,client_email,referral_source) VALUES('Synthetic','Synthetic family referral','Synthetic','Synthetic relative','Family','relative@example.invalid','555-0100','Unconfirmed email synthetic client','unconfirmed-client@example.invalid','family')");
+// Since 3.0.31 (owner decision) it is copied as confirmed: the app is told so, and
+// session reminders and the portal link go to it with no confirmation step. The
+// gates still hold for an address marked unconfirmed some other way.
+$db->exec("INSERT INTO referrals(reason,subject,body,counselor_name,counselor_agency,counselor_email,counselor_phone,client_name,client_email,referral_source) VALUES('Synthetic','Synthetic family referral','Synthetic','Synthetic relative','Family','relative@example.invalid','555-0100','Referral email synthetic client','referral-client@example.invalid','family')");
 $emailReferral=(int)$db->lastInsertId();
-$call('convert_referral',['id'=>$emailReferral]);
+$converted=$call('convert_referral',['id'=>$emailReferral]);
 $emailClient=(int)$db->query("SELECT client_id FROM referrals WHERE id=$emailReferral")->fetchColumn();
 $emailRow=$db->query("SELECT email,email_verified FROM clients WHERE id=$emailClient")->fetch();
-check($emailClient>0 && $emailRow['email']==='unconfirmed-client@example.invalid' && (int)$emailRow['email_verified']===0,
-    'A client email copied from the public referral form is kept but marked unconfirmed');
-check(($call('client',[],['id'=>$emailClient])['client']['email_verified']??null)===false,'The app is told the client email is not yet confirmed');
-check(send_outcome_survey($emailClient)===false && (int)$db->query("SELECT COUNT(*) FROM surveys WHERE client_id=$emailClient")->fetchColumn()===0,
-    'No outcome survey goes to an unconfirmed client email');
+check($emailClient>0 && $emailRow['email']==='referral-client@example.invalid' && (int)$emailRow['email_verified']===1 && ($converted['client_email_unconfirmed']??null)===false,
+    'A client email copied from the public referral form is kept as confirmed');
+check(($call('client',[],['id'=>$emailClient])['client']['email_verified']??null)===true,'The app is told the client email is usable');
 $db->prepare("INSERT INTO scheduled_sessions(client_id,user_id,start_at,end_at) VALUES(?,1,?,?)")->execute([$emailClient,"$tomorrow 09:00:00","$tomorrow 10:00:00"]); $heldSession=(int)$db->lastInsertId();
 [$code,$mail]=$cronRun('session_reminders.php',true);
-check($code===0 && !str_contains($mail,'To: unconfirmed-client@example.invalid') && str_contains($mail,'has not been confirmed')
-    && (int)$db->query("SELECT reminder_sent FROM scheduled_sessions WHERE id=$heldSession")->fetchColumn()===1
-    && (int)$db->query("SELECT COUNT(*) FROM notifications WHERE link='client.php?id=$emailClient' AND message LIKE '%not confirmed%'")->fetchColumn()>=1,
-    'Session reminders skip an unconfirmed client email: the instructor is reminded and told, and the administrators are alerted on the client\'s record');
-// The same on the website: conversion keeps the email unconfirmed, and no portal link
-// goes to it until staff confirm it with the client.
-$db->exec("INSERT INTO referrals(reason,subject,body,counselor_name,counselor_agency,counselor_email,counselor_phone,client_name,client_email,referral_source) VALUES('Synthetic','Synthetic self referral','Synthetic','Web unconfirmed synthetic client','Self','web-unconfirmed@example.invalid','555-0101','Web unconfirmed synthetic client','web-unconfirmed@example.invalid','self')");
+check($code===0 && str_contains($mail,'To: referral-client@example.invalid')
+    && (int)$db->query("SELECT reminder_sent FROM scheduled_sessions WHERE id=$heldSession")->fetchColumn()===1,
+    'Session reminders go to a client email copied from the referral form');
+// The same on the website: conversion keeps the email confirmed, and the portal link goes to it.
+$db->exec("INSERT INTO referrals(reason,subject,body,counselor_name,counselor_agency,counselor_email,counselor_phone,client_name,client_email,referral_source) VALUES('Synthetic','Synthetic self referral','Synthetic','Web referral synthetic client','Self','web-referral@example.invalid','555-0101','Web referral synthetic client','web-referral@example.invalid','self')");
 $webReferral=(int)$db->lastInsertId();
 [$code,,$err]=$renderPage('referrals',[],['id'=>(string)$webReferral,'convert'=>'1']);
 $webClient=(int)$db->query("SELECT client_id FROM referrals WHERE id=$webReferral")->fetchColumn();
-check($code===0 && $err==='' && $webClient>0 && (int)$db->query("SELECT email_verified FROM clients WHERE id=$webClient")->fetchColumn()===0,
-    'Converting a referral on the website keeps the client email from the public form unconfirmed' . ($err ? ": $err" : ''));
+check($code===0 && $err==='' && $webClient>0 && (int)$db->query("SELECT email_verified FROM clients WHERE id=$webClient")->fetchColumn()===1,
+    'Converting a referral on the website keeps the client email from the public form as confirmed' . ($err ? ": $err" : ''));
 $portalLinks=fn():int=>(int)$db->query("SELECT COUNT(*) FROM portal_tokens WHERE client_id=$webClient")->fetchColumn();
-[[$code,,$err],$sess]=$pageSession(fn()=>$renderPage('client',['id'=>$webClient],['send_portal'=>'1']));
-check($code===0 && $err==='' && $portalLinks()===0 && str_contains($sess,'has not been confirmed with the client'),
-    'No portal link goes to an unconfirmed client email, and the refusal says why on the send button' . ($err ? ": $err" : ''));
-$db->exec("UPDATE clients SET email_verified=1 WHERE id=$webClient");
 [$code,,$err]=$renderPage('client',['id'=>$webClient],['send_portal'=>'1']);
-check($code===0 && $err==='' && $portalLinks()===1,'Once the email is confirmed the portal link is sent (control for the refusal above)' . ($err ? ": $err" : ''));
+check($code===0 && $err==='' && $portalLinks()===1,'The portal link goes to that email without a confirmation step' . ($err ? ": $err" : ''));
+$db->exec("UPDATE clients SET email_verified=0 WHERE id=$webClient");
+[[$code,,$err],$sess]=$pageSession(fn()=>$renderPage('client',['id'=>$webClient],['send_portal'=>'1']));
+check($code===0 && $err==='' && $portalLinks()===1 && str_contains($sess,'has not been confirmed with the client'),
+    'An address still marked unconfirmed gets no portal link, and the refusal says why' . ($err ? ": $err" : ''));
+check(send_outcome_survey($webClient)===false && (int)$db->query("SELECT COUNT(*) FROM surveys WHERE client_id=$webClient")->fetchColumn()===0,
+    'No outcome survey goes to an address still marked unconfirmed');
+$db->exec("UPDATE clients SET email_verified=1 WHERE id=$webClient");
 
 /* ---- The equipment waitlist ---- */
 // When an item becomes available again, the client who has waited longest is moved

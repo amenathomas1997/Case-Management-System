@@ -88,6 +88,16 @@ function sso_link_authorized(int $intentId, ?array $actor, int $targetId): bool 
     return $intentId > 0 && $actor !== null && $intentId === $targetId && (int)$actor['id'] === $targetId;
 }
 
+/** Whether a first Microsoft sign-in may be matched to an existing account by its
+    email (owner decision, 2026-10-15). Only for a member of the configured tenant,
+    whose email and user name that organisation's administrators control: a guest
+    (B2B) account carries an idp claim naming its home organisation, and its email
+    is not vouched for by this tenant, so it still has to link from My Account. */
+function sso_email_match_allowed(array $claims, string $issuer): bool {
+    $idp = strtolower(trim((string)($claims['idp'] ?? '')));
+    return $idp === '' || $idp === strtolower($issuer);
+}
+
 /** Escape text cells that spreadsheets could interpret as formulas. */
 function csv_cell($v): string {
     $v = (string)$v;

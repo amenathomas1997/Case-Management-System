@@ -18,6 +18,11 @@ check(!sso_link_authorized(0, null, 1), 'Email-only SSO linking is denied');
 check(!sso_link_authorized(1, ['id'=>2], 1), 'Another local session cannot authorize linking');
 check(!sso_link_authorized(1, ['id'=>1], 2), 'Linking intent cannot target another account');
 check(sso_link_authorized(1, ['id'=>1], 1), 'Explicit linking to the authenticated account is allowed');
+$iss='https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0';
+check(sso_email_match_allowed(['email'=>'a@example.org'], $iss), 'A tenant member is matched to an existing account by email');
+check(sso_email_match_allowed(['email'=>'a@example.org','idp'=>strtoupper($iss)], $iss), 'An idp claim naming this tenant is still a member');
+check(!sso_email_match_allowed(['email'=>'a@example.org','idp'=>'https://sts.windows.net/99999999-0000-0000-0000-000000000000/'], $iss), 'A guest from another organisation is not matched by email');
+check(!sso_email_match_allowed(['email'=>'a@example.org','idp'=>'live.com'], $iss), 'A personal Microsoft account invited as a guest is not matched by email');
 // Every leading character a spreadsheet treats as a formula (= + - @), after any
 // leading spaces or control characters, and a leading tab / CR / LF on its own.
 foreach (["=1+1", "  =1+1", "\n=1+1", "@SUM(1)", " @SUM(1)", "-2+3+cmd|' /C calc'!A0", "+cmd|' /C calc'!A0",

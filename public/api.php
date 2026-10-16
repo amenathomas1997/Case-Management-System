@@ -2269,9 +2269,8 @@ switch ($action) {
         $counselorConfirmed = $counselorEmail !== null && !empty($input['confirm_counselor_email']);
         $counselorEmailHeld = $counselorEmail !== null && !$counselorConfirmed;
         // The person's email receives session reminders: only one valid address is copied
-        // (it stays on the referral otherwise). It too was typed into the referral form,
-        // so it is kept unconfirmed (email_verified = 0: no reminders, surveys or portal
-        // link) until staff confirm it with the client on the client's record.
+        // (it stays on the referral otherwise), stored as confirmed (owner decision,
+        // 2026-10-15): reminders, surveys and the portal link use it.
         $clientEmail = trim((string)($ref['client_email'] ?? ''));
         $clientEmailHeld = $clientEmail !== '' && !filter_var($clientEmail, FILTER_VALIDATE_EMAIL);
         $clientEmailKept = $clientEmail !== '' && !$clientEmailHeld ? $clientEmail : null;
@@ -2283,7 +2282,7 @@ switch ($action) {
             $clientAssignee,
             $isCounselor ? $ref['counselor_name'] : null, $counselorEmail,
             $isCounselor ? $ref['counselor_phone'] : null, $isCounselor ? $ref['counselor_agency'] : null,
-            $counselorConfirmed ? 1 : 0, $clientEmailKept !== null ? 0 : 1,
+            $counselorConfirmed ? 1 : 0, 1,
         ]);
         $clientId = (int)db()->lastInsertId();
         record_status_change($clientId, null, 'Pending Assessment', $userId, 'Created from referral #' . $id . ' (mobile)');
@@ -2303,10 +2302,10 @@ switch ($action) {
         audit($userId, 'referral.convert', 'client', $clientId, 'from referral #' . $id . ' (mobile)'
             . ($counselorConfirmed ? '; counselor email confirmed by converter' : ($counselorEmailHeld ? '; counselor email kept unconfirmed' : ''))
             . ($clientEmailHeld ? '; client email not one valid address, left off' : '')
-            . ($clientEmailKept !== null ? '; client email kept unconfirmed' : ''));
-        // client_email_unconfirmed: the client's email was copied but waits for staff to confirm it.
+            . ($clientEmailKept !== null ? '; client email copied' : ''));
+        // client_email_unconfirmed: always false since 3.0.31 (kept for app builds that read it).
         out(['ok' => true, 'client_id' => $clientId, 'counselor_email_held' => $counselorEmailHeld, 'client_email_held' => $clientEmailHeld,
-             'client_email_unconfirmed' => $clientEmailKept !== null]);
+             'client_email_unconfirmed' => false]);
 
     /* ========================= AI drafting ========================= */
     case 'ai_draft': {

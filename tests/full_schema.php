@@ -832,13 +832,18 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
     $db->exec("INSERT INTO clients (id,name,email,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-client@example.invalid','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL,NULL),(3,'Upgraded client with a blank counselor',NULL,'')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
     check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12, mig_3.0.16 and mig_3.0.21 has exactly the fresh-install schema, defaults included');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=1')->fetchColumn()===3,'The 3.0.21 upgrade keeps every existing client\'s email confirmed');
     $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");
     $migrate($root.'/dist/migrations/mig_3.0.21.sql');
     check($shape()===$installed && (int)$db->query('SELECT email_verified FROM clients WHERE id=1')->fetchColumn()===0,
         'Running mig_3.0.21 again changes nothing: the schema stays the same and a client email waiting for confirmation stays unconfirmed');
+    $db->exec("UPDATE clients SET email_verified=0, counselor_verified=0 WHERE id=2");
+    $migrate($root.'/dist/migrations/mig_3.0.31.sql');
+    check($shape()===$installed && (int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=0')->fetchColumn()===0
+        && (int)$db->query('SELECT counselor_verified FROM clients WHERE id=2')->fetchColumn()===0,
+        'mig_3.0.31 confirms client emails waiting for confirmation and leaves counselor emails alone');
     check((int)$db->query('SELECT counselor_verified FROM clients WHERE id=1')->fetchColumn()===1,'The upgrade keeps an existing client\'s counselor email confirmed');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE id IN (2,3) AND counselor_verified=0')->fetchColumn()===2,'The upgrade leaves a client with no counselor email unconfirmed, so a later merge cannot fill in a confirmed address');
     $db->exec("UPDATE clients SET counselor_verified=0 WHERE id=1");

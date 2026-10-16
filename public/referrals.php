@@ -138,15 +138,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // The person's email receives session reminders: only one valid address is copied.
         $clientEmail = trim((string)($ref['client_email'] ?? ''));
         $clientEmailHeld = $clientEmail !== '' && !filter_var($clientEmail, FILTER_VALIDATE_EMAIL);
-        // Whoever sent the public form typed it, so it is stored unconfirmed
-        // (email_verified = 0): no reminder, survey or portal link goes to it until
-        // staff confirm it with the client on the edit page.
+        // Stored as confirmed (owner decision, 2026-10-15): reminders, surveys and the
+        // portal link use the address the referral gave, without a confirmation step.
         $clientEmailCopied = $clientEmail !== '' && !$clientEmailHeld;
         // A confirmed counselor address is stored as verified, so reports and the
         // counselor portal reach it without a second confirmation on the edit page.
         db()->prepare('INSERT INTO clients (name, dob, email, email_verified, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_verified, counselor_phone, counselor_agency)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute([
-            $ref['client_name'], $ref['client_dob'], $clientEmailCopied ? $clientEmail : null, $clientEmailCopied ? 0 : 1, $ref['client_phone'], $ref['client_address'],
+            $ref['client_name'], $ref['client_dob'], $clientEmailCopied ? $clientEmail : null, 1, $ref['client_phone'], $ref['client_address'],
             'Pending Assessment', $isPreETS ? 'Pre-ETS' : 'VR', $ref['school'] ?? null,
             $clientAssignee,
             $isCounselor ? $ref['counselor_name'] : null, $counselorEmail, $counselorConfirmed ? 1 : 0,
@@ -178,11 +177,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $clientAssignee ?? (can('clients') ? (int)$user['id'] : null), (int)$user['id'], 'assess-' . $clientId);
         audit($user['id'], 'referral.convert', 'client', $clientId, 'from referral #' . $id
             . ($counselorConfirmed ? '; counselor email confirmed by converter' : ($counselorEmailHeld ? '; counselor email kept unconfirmed' : ''))
-            . ($clientEmailCopied ? '; client email copied unconfirmed' : ''));
+            . ($clientEmailCopied ? '; client email copied' : ''));
         flash('Referral converted — client record created with an intake note.'
             . ($counselorEmailHeld ? ' The counselor\'s email from the referral form is marked not yet confirmed: no progress report, counselor portal link or email filing uses it until someone confirms it on the client\'s edit page.' : '')
             . ($clientEmailHeld ? ' The email given for the person is not one valid address, so it was left off the client record (it stays on the referral).' : '')
-            . ($clientEmailCopied ? ' The person\'s email from the referral form is marked not yet confirmed: no reminder, survey or portal link goes to it until someone confirms it with the client on the client\'s edit page.' : '')
             . ($clientAssignee === null && !can('clients') ? ' Your account cannot open client records, so the new client and its assessment task are unassigned for a colleague with client access to pick up.' : ''));
         // Staff without client-record access stay on the referral they converted
         // (a caseload-scoped converter can no longer open it once it is converted
