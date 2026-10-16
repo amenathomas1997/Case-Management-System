@@ -384,12 +384,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_homework'])) {
     // A TEXT column (65,535 bytes), as the app's API_TEXT_BYTES allows.
     if (strlen($instructions) > 65535) $hErrs['hw_instructions'] = 'The instructions are too long to save. They can hold 65,535 bytes (accented letters and symbols count as 2 to 4 bytes each); shorten them.';
     if ($dueRaw !== '' && !$due) $hErrs['hw_due'] = 'Enter a valid due date with a four-digit year from 2000 to ' . ((int)date('Y') + 5) . ', or leave it blank.';
+    // The same form sent twice (Enter pressed again while it loads) assigns the homework once.
+    $hwKey = web_idem_key($_POST);
     if ($hErrs) {
         keep_input();
         keep_field_errors($hErrs);
+    } elseif (web_once_get($hwKey) !== null) {
+        flash('This homework was already assigned (the form was sent twice), so it was saved once.', 'info');
     } else {
         db()->prepare('INSERT INTO homework (track_id, title, instructions, assigned_at, due_date, created_by) VALUES (?,?,?,?,?,?)')
             ->execute([$id, $title, $instructions ?: null, date('Y-m-d'), $due, $user['id']]);
+        web_once_set($hwKey, (int)db()->lastInsertId());
         audit($user['id'], 'homework.assign', 'track', $id, $title);
         flash('Homework assigned — it now shows in the client portal.');
     }
@@ -1216,7 +1221,7 @@ $expenses->execute([$id]); $expenses = $expenses->fetchAll();
   <script>document.addEventListener("DOMContentLoaded",function(){var d=document.getElementById("hw-draft-note");if(d){d.focus();if(window.Earcon)Earcon.play("success");}});</script>
   <?php endif; ?>
   <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['hw_title' => 'Title', 'hw_instructions' => 'Instructions', 'hw_due' => 'Due date']) ?>
     <div class="field"><label for="hw_title">Title <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <input type="text" id="hw_title" name="hw_title" required maxlength="190" value="<?= h(old_in('hw_title')) ?>" <?= field_aria('hw_title') ?>><?= field_error('hw_title') ?></div>

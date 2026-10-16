@@ -67,6 +67,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_item'])) {
     if ($errors) { keep_input(); keep_field_errors($errors); redirect('equipment.php'); }
     $iv = $ivRaw !== '' ? (int)$ivRaw : null;
     $life = $lifeRaw !== '' ? (int)$lifeRaw : 36;
+    // The same form sent twice (Enter pressed again while it loads) adds the item once.
+    $itemKey = web_idem_key($_POST);
+    if (web_once_get($itemKey) !== null) {
+        flash('This item was already added (the form was sent twice), so it was saved once.', 'info');
+        redirect('equipment.php');
+    }
     db()->prepare('INSERT INTO equipment (name, category, serial, item_condition, value, purchase_date, useful_life_months, notes, maintenance_interval_days) VALUES (?,?,?,?,?,?,?,?,?)')
         ->execute([$name,
             in_array($_POST['category'] ?? '', EQUIP_CATEGORIES, true) ? $_POST['category'] : 'Other',
@@ -77,7 +83,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_item'])) {
             $life,
             $itemNotes ?: null,
             $iv ?: null]);
-    audit($user['id'], 'equipment.add', 'equipment', (int)db()->lastInsertId(), $name);
+    // Capture the id before audit() inserts its own row and replaces it.
+    $newId = (int)db()->lastInsertId();
+    web_once_set($itemKey, $newId);
+    audit($user['id'], 'equipment.add', 'equipment', $newId, $name);
     flash('Equipment added.');
     redirect('equipment.php');
 }
@@ -369,11 +378,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['log_service'])) {
         redirect(isset($_POST['from_scan']) ? 'equipment.php?scan=' . $eid : 'equipment.php');
     }
     $cost = $costRaw !== '' ? (float)$costRaw : null;
+    // The same service sent twice is logged once.
+    $serviceKey = web_idem_key($_POST);
+    if (web_once_get($serviceKey) !== null) {
+        flash('This service was already logged (the form was sent twice), so it was saved once.', 'info');
+        redirect('equipment.php#inv-h');
+    }
     $pdo = db();
     $pdo->beginTransaction();
     try {
         $pdo->prepare('INSERT INTO equipment_maintenance (equipment_id, service_date, service_type, notes, cost, performed_by) VALUES (?,?,?,?,?,?)')
             ->execute([$eid, $date, $type, $notes ?: null, $cost, $user['id']]);
+        $svcId = (int)$pdo->lastInsertId();
         // Back-filling an older service record must never move "last serviced"
         // backwards (the same rule as the app's equipment_service).
         $pdo->prepare('UPDATE equipment SET last_service_date = ? WHERE id = ? AND (last_service_date IS NULL OR last_service_date < ?)')
@@ -387,6 +403,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['log_service'])) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         throw $e;
     }
+    web_once_set($serviceKey, $svcId);
     audit($user['id'], 'equipment.service', 'equipment', $eid, $type . ' on ' . $date);
     flash('Service logged.');
     redirect('equipment.php#inv-h');
@@ -541,7 +558,7 @@ if (isset($_GET['scan'])) {
       <?php endif; ?>
       <?php $scKey = 'service_date_' . (int)$it['id']; $scNotesKey = 'service_notes_' . (int)$it['id'];
       $oldSc = fn(string $k, string $d = ''): string => (old_in('log_service') !== '' && old_in('equipment_id') === (string)(int)$it['id']) ? old_in($k, $d) : $d; ?>
-      <form method="post" action="equipment.php" class="stacked" style="margin-top:1rem" novalidate><?= csrf_field() ?>
+      <form method="post" action="equipment.php" class="stacked" style="margin-top:1rem" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
         <input type="hidden" name="equipment_id" value="<?= (int)$it['id'] ?>">
         <input type="hidden" name="from_scan" value="1">
         <h2>Log a service</h2>
@@ -718,7 +735,7 @@ page_header('Equipment & loans', $user, 'equipment');
   <?php // After a rejected submission the form comes back filled in, with each error on its field.
   $oldItem = fn(string $k, string $default = ''): string => old_in('add_item') !== '' ? old_in($k, $default) : $default; ?>
   <form method="post" action="equipment.php" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['name' => '', 'serial' => '', 'value' => '', 'purchase_date' => '', 'useful_life_months' => '', 'maintenance_interval_days' => '', 'notes' => ''], ['maintenance_interval_days' => 'maint_interval']) ?>
     <?= $requiredNote ?>
     <div class="grid grid-4">
@@ -799,7 +816,7 @@ page_header('Equipment & loans', $user, 'equipment');
         <span class="<?= $mClass ?>"><?= h($mLabel) ?></span>
         <details class="goal-history"<?= $rowErr ? ' open' : '' ?>>
           <summary>Service<?= $hist ? ' (' . count($hist) . ')' : '' ?><span class="visually-hidden"> — <?= h($i['name']) ?></span></summary>
-          <form method="post" action="equipment.php" class="stacked" novalidate><?= csrf_field() ?>
+          <form method="post" action="equipment.php" class="stacked" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
             <input type="hidden" name="equipment_id" value="<?= $iid ?>">
             <?= form_error_summary([$svcKey => '', $snKey => '', $scostKey => ''], [$svcKey => 'md-' . $iid, $snKey => 'mn-' . $iid, $scostKey => 'mc-' . $iid]) ?>
             <label for="mt-<?= $iid ?>">Type</label>

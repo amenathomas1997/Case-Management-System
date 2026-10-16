@@ -41,7 +41,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reply'])) {
         flash('Not sent: ' . $c['name'] . '\'s record is archived, so neither the client portal nor the counselor portal shows it any more. Reach them another way.', 'error');
         redirect('messages.php?client=' . $cid . '&channel=' . $channel);
     }
-    post_message($cid, $channel, 'staff', (int)$user['id'], $body);
+    // The same message sent twice (Enter pressed again while it loads) is posted once.
+    $msgKey = web_idem_key($_POST);
+    if (web_once_get($msgKey) !== null) {
+        flash('This message was already sent (the form was sent twice), so it was sent once.', 'info');
+        redirect('messages.php?client=' . $cid . '&channel=' . $channel);
+    }
+    web_once_set($msgKey, post_message($cid, $channel, 'staff', (int)$user['id'], $body));
     audit($user['id'], 'message.send', 'client', $cid, $channel);
     // Only promise delivery when the other side has a live portal link to read it on.
     // The counselor portal lists only clients whose counselor email staff have
@@ -113,7 +119,7 @@ if ($openCid) {
       <?php endif; ?>
       <?php // The field and button name who the reply goes to. No maxlength: a browser
       // would cut a long paste silently; the server refuses it with the text kept. ?>
-      <form method="post" action="messages.php" class="stacked"><?= csrf_field() ?>
+      <form method="post" action="messages.php" class="stacked"><?= csrf_field() ?><?= web_idem_field() ?>
         <?= form_error_summary(['body' => 'Reply to the ' . $chanWho]) ?>
         <input type="hidden" name="client_id" value="<?= $openCid ?>"><input type="hidden" name="channel" value="<?= h($openChannel) ?>">
         <?php // Said before the reply is typed: the counselor portal does not show a client

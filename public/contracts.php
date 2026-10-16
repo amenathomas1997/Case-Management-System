@@ -179,9 +179,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['contract_id'])) {
         if ($sErrs) { keep_input(); keep_field_errors($sErrs); redirect($back); }
         // A date left blank on purpose is today's; the confirmation names the date used.
         $spentOn = valid_date($_POST['spent_on'] ?? '') ?? date('Y-m-d');
+        // The same form sent twice records the spend once.
+        $spendKey = web_idem_key($_POST);
+        if (web_once_get($spendKey) !== null) {
+            flash('This spend was already recorded (the form was sent twice), so it was saved once.', 'info');
+            redirect($back);
+        }
         db()->prepare('INSERT INTO contract_spend (contract_id, spent_on, amount, memo, created_by) VALUES (?,?,?,?,?)')
             ->execute([$cid, $spentOn, $spendAmount,
                 mb_substr(contract_text('memo'), 0, 255) ?: null, $user['id']]);
+        // Capture the id before audit() inserts its own row and replaces it.
+        web_once_set($spendKey, (int)db()->lastInsertId());
         audit($user['id'], 'contract.spend', 'contract', $cid, fmt_money($spendAmount));
         flash('Spend of ' . fmt_money($spendAmount) . ' recorded for ' . fmt_date($spentOn) . '.');
     } elseif (isset($_POST['del_spend'])) {
@@ -349,7 +357,7 @@ if (isset($_GET['id'])) {
       </ul>
       <?php else: ?><p class="muted">No spend recorded yet.</p><?php endif; ?>
       <?php $oldS = fn(string $k, string $default = ''): string => old_in('add_spend') !== '' ? h(old_in($k)) : $default; ?>
-      <form method="post" action="contracts.php" class="stacked" style="margin-top:.5rem" novalidate><?= csrf_field() ?>
+      <form method="post" action="contracts.php" class="stacked" style="margin-top:.5rem" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
         <?= form_error_summary(['spend_amount' => '', 'spent_on' => ''], ['spend_amount' => 'amount_s']) ?>
         <p class="hint">Fields marked * are required.</p>
         <input type="hidden" name="contract_id" value="<?= $cid ?>">

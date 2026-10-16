@@ -81,8 +81,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_group'])) {
 
 /* Create a permission group */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group'])) {
-    $gname = trim($_POST['group_name'] ?? '');
-    $gdesc = trim($_POST['group_description'] ?? '');
+    $gname = trim(is_string($_POST['group_name'] ?? null) ? $_POST['group_name'] : '');
+    $gdesc = trim(is_string($_POST['group_description'] ?? null) ? $_POST['group_description'] : '');
     $gperms = array_values(array_intersect((array)($_POST['group_perms'] ?? []), array_keys(PERMISSION_KEYS)));
     $gErrs = [];
     if ($gname === '') $gErrs['group_name'] = 'Enter a name for the group.';
@@ -131,8 +131,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_hours'])) {
 
 /* Add a new user */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user'])) {
-    $name = trim($_POST['name'] ?? '');
-    $email = strtolower(trim($_POST['email'] ?? ''));
+    $name = trim(is_string($_POST['name'] ?? null) ? $_POST['name'] : '');
+    $email = strtolower(trim(is_string($_POST['email'] ?? null) ? $_POST['email'] : ''));
     $pw = $_POST['password'] ?? '';
     $role = in_array($_POST['role'] ?? '', ['admin','instructor'], true) ? $_POST['role'] : 'instructor';
     // A new account is placed in a permission group, so it gets exactly what
@@ -185,7 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_user'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_scheduled_reports'])) {
     $srOutcomes = !empty($_POST['sr_outcomes']);
     $srFunder = !empty($_POST['sr_funder']);
-    $srRaw = is_string($_POST['sr_recipients'] ?? null) ? trim($_POST['sr_recipients']) : '';
+    $srRaw = trim(is_string($_POST['sr_recipients'] ?? null) ? $_POST['sr_recipients'] : '');
     $srParsed = scheduled_reports_parse_recipients($srRaw);
     $srDayRaw = is_string($_POST['sr_day'] ?? null) ? $_POST['sr_day'] : '';
     $srDay = preg_match('/^\d{1,2}$/', $srDayRaw) ? (int)$srDayRaw : 0;

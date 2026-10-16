@@ -1,0 +1,7 @@
+{"case": "jaws-basics", "expect_problems": [],
+ "result": {"ok": true, "sections": [
+   "The learner practised JAWS. They used the links list (Insert+F7) successfully but struggled with headings navigation using the H key, repeatedly landing in forms mode.",
+   "The instructor demonstrated the virtual cursor toggle (Insert+Z) and guided headings navigation.",
+   "The learner's headings navigation improved by the end of the session.",
+   "Practise headings navigation on a news site for 15 minutes daily. Next week: tables."],
+  "questions": [], "homework": [{"title": "Headings practice", "instructions": "Navigate a news site by headings for 15 minutes each day.", "due": ""}]}}

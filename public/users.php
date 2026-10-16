@@ -74,8 +74,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $isSelf = $uid === (int)$user['id'];
 
     if (isset($_POST['save_user'])) {
-        $name = trim($_POST['name'] ?? '');
-        $email = strtolower(trim($_POST['email'] ?? ''));
+        $name = trim(is_string($_POST['name'] ?? null) ? $_POST['name'] : '');
+        $email = strtolower(trim(is_string($_POST['email'] ?? null) ? $_POST['email'] : ''));
         $role = in_array($_POST['role'] ?? '', ['admin', 'instructor'], true) ? $_POST['role'] : $target['role'];
         $gid = (int)($_POST['group_id'] ?? 0) ?: null;
         $hoursRaw = trim((string)($_POST['weekly_hours'] ?? $target['weekly_hours']));

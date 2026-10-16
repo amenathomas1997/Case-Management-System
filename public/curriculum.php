@@ -35,10 +35,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_curriculum'])) {
         keep_field_errors($cErrs);
         redirect('curriculum.php#new-h');
     }
+    // The same form sent twice (Enter pressed again while it loads) creates the
+    // curriculum once; the second answer goes to the curriculum the first created.
+    $curKey = web_idem_key($_POST);
+    if (($firstId = web_once_get($curKey)) !== null) {
+        flash('This curriculum was already created (the form was sent twice), so it was saved once.', 'info');
+        redirect('curriculum.php?manage=' . $firstId);
+    }
     db()->prepare('INSERT INTO curricula (name, tech, description) VALUES (?,?,?)')
         ->execute([$name, $tech !== '' ? $tech : null, $description !== '' ? $description : null]);
     // Capture the id before audit() inserts its own row and replaces it.
     $newCurId = (int)db()->lastInsertId();
+    web_once_set($curKey, $newCurId);
     audit($user['id'], 'curriculum.add', 'curriculum', $newCurId, $name);
     flash('Curriculum created. Add its skills below.');
     redirect('curriculum.php?manage=' . $newCurId);
@@ -154,6 +162,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_competency'])) {
     if (!$client) { flash('Client not found.', 'error'); redirect('clients.php'); }
     scope_check_client($client, $user);
     $curId = (int)($_POST['curriculum_id'] ?? 0);
+    // The same ratings sent twice are saved (and audited) once.
+    $rateKey = web_idem_key($_POST);
+    if (web_once_get($rateKey) !== null) {
+        flash('These skill levels were already saved (the form was sent twice), so they were saved once.', 'info');
+        redirect('curriculum.php?client=' . $cid . '&curriculum=' . $curId);
+    }
     // Current level per skill, to only write history rows when something changed.
     $cur = db()->prepare('SELECT cs.id, (SELECT level FROM client_competency cc WHERE cc.client_id = ? AND cc.skill_id = cs.id ORDER BY cc.assessed_at DESC, cc.id DESC LIMIT 1) AS lvl
         FROM curriculum_skills cs WHERE cs.curriculum_id = ?');
@@ -177,6 +191,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_competency'])) {
         }
         if ($stored !== $newLvl) { $ins->execute([$cid, $sid, $newLvl, null, $user['id']]); $changed++; }
     }
+    web_once_set($rateKey, $cid);
     audit($user['id'], 'competency.save', 'client', $cid, $changed . ' skill(s)');
     flash(($changed ? "Updated {$changed} skill level(s)." : 'No changes.')
         . ($movedElsewhere ? " {$movedElsewhere} skill level(s) you did not change had been updated by someone else since this page opened; those were kept." : ''));
@@ -229,7 +244,7 @@ if (isset($_GET['client'])) {
       <label for="cmastery" class="progress-caption"><strong><?= $mastered ?></strong> of <?= count($skills) ?> skills mastered</label>
       <progress id="cmastery" class="hours" max="<?= count($skills) ?>" value="<?= $mastered ?>" aria-label="Skills mastered"><?= $mastered ?>/<?= count($skills) ?></progress>
     </div>
-    <form method="post" action="curriculum.php" class="stacked"><?= csrf_field() ?>
+    <form method="post" action="curriculum.php" class="stacked"><?= csrf_field() ?><?= web_idem_field() ?>
       <input type="hidden" name="client_id" value="<?= $cid ?>"><input type="hidden" name="curriculum_id" value="<?= $curId ?>">
       <div class="table-scroll" tabindex="0" role="region" aria-label="Competency by skill">
       <table>
@@ -307,7 +322,7 @@ page_header('Curricula', $user, 'templates');
 <section class="card" aria-labelledby="new-h">
   <h2 id="new-h">New curriculum</h2>
   <form method="post" action="curriculum.php" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['name' => 'Name', 'tech' => 'Technology', 'description' => 'Description']) ?>
     <div class="grid grid-4">
       <div class="field"><label for="name">Name <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><input type="text" id="name" name="name" required maxlength="190" placeholder="e.g. JAWS Fundamentals" value="<?= h(old_in('name')) ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>

@@ -19,7 +19,10 @@ try{
     if($id){$record=at_record($id,$actor);$kind=$record['kind'];}
     $def=$kind?at_definition($kind):null;
     if($_SERVER['REQUEST_METHOD']==='POST'){
-        if(isset($_POST['save'])){$id=at_save($kind,$_POST,$actor);flash('AT service record saved.');redirect('at_services.php?id='.$id);}
+        // A new record sent twice (Enter pressed again while it loads) is created once.
+        if(isset($_POST['save'])){$atNew=!(int)($_POST['id']??0);$atKey=$atNew?web_idem_key($_POST):null;
+            if(($firstId=web_once_get($atKey))!==null){flash('This AT service record was already saved (the form was sent twice), so it was saved once.','info');redirect('at_services.php?id='.$firstId);}
+            $id=at_save($kind,$_POST,$actor);web_once_set($atKey,$id);flash('AT service record saved.');redirect('at_services.php?id='.$id);}
         if($record&&(isset($_POST['issue'])||isset($_POST['issue_change']))){
             $due=$_POST['loan_due']??'';
             $issueIn=['client'=>(int)($_POST['loan_client_id']??0),'equipment'=>(int)($_POST['loan_equipment_id']??0),'due'=>is_scalar($due)?trim((string)$due):''];
@@ -215,7 +218,7 @@ if($issueErrors){set_form_errors($issueErrors);echo form_error_summary(['loan_cl
 <?php endif;?>
 <?php if($edit&&$mayEdit):?>
 <h3><?=$record?'Edit record: '.h($record['title']):'New record'?></h3>
-<form method="post" class="stacked"><?=csrf_field()?><input type="hidden" name="id" value="<?=$id?>"><input type="hidden" name="version" value="<?=$formVersion?>">
+<form method="post" class="stacked"><?=csrf_field()?><?=web_idem_field()?><input type="hidden" name="id" value="<?=$id?>"><input type="hidden" name="version" value="<?=$formVersion?>">
 <label for="at-title">Title (required)</label><input type="text" id="at-title" name="title" maxlength="190" required value="<?=h((string)($values['title']??$record['title']??''))?>" <?=field_aria('title')?>><?=field_error('title')?>
 <label for="at-status">Status</label><select id="at-status" name="status" <?=field_aria('status')?>><?php foreach($def['statuses'] as $s):?><option <?=($values['status']??$record['status']??$def['statuses'][0])===$s?'selected':''?>><?=h($s)?></option><?php endforeach;?></select><?=field_error('status')?>
 <?php foreach($fields as $f):$v=(string)($values[$f['key']]??'');$key=$f['key'];

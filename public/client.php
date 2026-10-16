@@ -750,6 +750,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_consent'])) {
     try {
         $lockClient = $pdo->prepare('SELECT id FROM clients WHERE id = ? FOR UPDATE');
         $lockClient->execute([$id]);
+        // A request sent since this page was drawn (from another tab, or by a colleague)
+        // is not replaced unseen: its link would stop working and the guardian would get
+        // a second email. consent_seen is the newest unsigned request the page showed
+        // (0 for none); a page opened before 3.0.32 does not send it and is not checked.
+        $seen = $_POST['consent_seen'] ?? null;
+        if (is_string($seen) && ctype_digit($seen)) {
+            $nq = $pdo->prepare('SELECT id, guardian_name, sent_at FROM consent_forms WHERE client_id = ? AND signed_at IS NULL ORDER BY id DESC LIMIT 1');
+            $nq->execute([$id]);
+            $newest = $nq->fetch();
+            if ($newest && (int)$newest['id'] !== (int)$seen) {
+                $pdo->rollBack();
+                flash('A consent form was already emailed to ' . $newest['guardian_name'] . ' at ' . fmt_datetime($newest['sent_at'])
+                    . ' (from another tab, or by a colleague), so this one was not sent, and that link still works. To send a new one anyway, use the form again on this page.', 'info');
+                redirect("client.php?id=$id");
+            }
+        }
         $pdo->prepare('INSERT INTO consent_forms (client_id, guardian_name, guardian_email, token) VALUES (?,?,?,?)')
             ->execute([$id, $gName, $gEmail, $token]);
         $newFormId = (int)$pdo->lastInsertId();
@@ -1192,6 +1208,7 @@ if ($hasA11y): ?>
       <summary><?= $pendingConsent ? 'Resend the guardian consent request by email' : ($latestSigned ? 'Request a new guardian consent by email' : 'Request guardian consent by email') ?></summary>
       <form method="post" action="client.php?id=<?= $id ?>" class="stacked" id="consent-form" novalidate>
         <?= csrf_field() ?><?= web_idem_field() ?>
+        <input type="hidden" name="consent_seen" value="<?= (int)($pendingConsent['id'] ?? 0) ?>">
         <?= form_error_summary(['guardian_name' => 'Guardian name', 'guardian_email' => 'Guardian email'], ['guardian_name' => 'g_name', 'guardian_email' => 'g_email']) ?>
         <p class="hint">Fields marked * are required.</p>
         <div class="field"><label for="g_name">Guardian name <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>

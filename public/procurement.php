@@ -94,11 +94,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_request'])) {
         redirect('procurement.php');
     }
     scope_check_client_id($cid, $user);
+    // The same form sent twice (Enter pressed again while it loads) creates the
+    // request once; the second answer goes to the request the first created.
+    $reqKey = web_idem_key($_POST);
+    if (($firstId = web_once_get($reqKey)) !== null) {
+        flash('This device request was already created (the form was sent twice), so it was saved once.', 'info');
+        redirect('procurement.php?id=' . $firstId);
+    }
     db()->prepare('INSERT INTO device_requests (client_id, requested_by, device_name, category, justification, status) VALUES (?,?,?,?,?,?)')
         ->execute([$cid, $user['id'], $name,
             in_array($_POST['category'] ?? '', DR_CATEGORIES, true) ? $_POST['category'] : 'Other',
             $justification !== '' ? $justification : null, 'Requested']);
     $rid = (int)db()->lastInsertId();
+    web_once_set($reqKey, $rid);
     audit($user['id'], 'device.request', 'device_request', $rid, $name);
     flash('Device request created.');
     redirect('procurement.php?id=' . $rid);
@@ -139,10 +147,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
         if ($amountRaw === '') $quoteErrors['amount'] = 'Amount is required: enter the quoted price, for example 2995.00.';
         elseif (!preg_match('/^\d{1,8}(\.\d{1,2})?$/D', $amountRaw)) $quoteErrors['amount'] = 'Amount: enter the quoted price in dollars, 0 or more with up to two decimal places, for example 2995.00.';
         if ($quoteErrors) { keep_input(); keep_field_errors($quoteErrors); redirect($back); }
+        // The same quote sent twice is added once.
+        $quoteKey = web_idem_key($_POST);
+        if (web_once_get($quoteKey) !== null) {
+            flash('This quote was already added (the form was sent twice), so it was saved once.', 'info');
+            redirect($back);
+        }
         db()->prepare('INSERT INTO device_request_quotes (request_id, vendor, amount, quote_ref, notes, created_by) VALUES (?,?,?,?,?,?)')
             ->execute([$rid, mb_substr($vendor, 0, 190), (float)$amountRaw,
                 mb_substr(dr_text('quote_ref'), 0, 120) ?: null,
                 mb_substr(dr_text('quote_notes'), 0, 500) ?: null, $user['id']]);
+        web_once_set($quoteKey, (int)db()->lastInsertId());
         if (in_array($r['status'], ['Requested'], true)) db()->prepare("UPDATE device_requests SET status = 'Quoting' WHERE id = ?")->execute([$rid]);
         audit($user['id'], 'device.quote', 'device_request', $rid, $vendor);
         flash('Quote added.');
@@ -350,7 +365,7 @@ if (isset($_GET['id'])) {
       </div>
       <?php else: ?><p class="muted">No quotes yet.</p><?php endif; ?>
       <?php if (!$done): ?>
-      <form method="post" action="procurement.php" class="stacked" style="margin-top:1rem"><?= csrf_field() ?>
+      <form method="post" action="procurement.php" class="stacked" style="margin-top:1rem"><?= csrf_field() ?><?= web_idem_field() ?>
         <input type="hidden" name="rid" value="<?= $rid ?>">
         <?php // After a rejected submission the form comes back filled in, with the error on its field.
         $oldQuote = fn(string $k): string => old_in('add_quote') !== '' ? h(old_in($k)) : ''; ?>
@@ -565,7 +580,7 @@ page_header('Device purchases', $user, 'procurement');
   <?php // After a rejected submission the form comes back filled in, with each error on its field.
   $oldReq = fn(string $k, string $default = ''): string => old_in('add_request') !== '' ? old_in($k, $default) : $default; ?>
   <form method="post" action="procurement.php" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['client_id' => '', 'device_name' => '', 'justification' => '']) ?>
     <p class="hint">Fields marked * are required.</p>
     <div class="grid grid-4">

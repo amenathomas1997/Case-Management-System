@@ -49,9 +49,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     // compares the token's tenant and audience with these).
     $tenant = strtolower(trim(is_string($_POST['tenant_id'] ?? null) ? $_POST['tenant_id'] : ''));
     $client = strtolower(trim(is_string($_POST['client_id'] ?? null) ? $_POST['client_id'] : ''));
-    $secret = trim($_POST['client_secret'] ?? '');
+    $secret = trim(is_string($_POST['client_secret'] ?? null) ? $_POST['client_secret'] : '');
     $enabled = !empty($_POST['enabled']);
-    $apg = trim($_POST['auto_provision_group'] ?? '');
+    $apg = trim(is_string($_POST['auto_provision_group'] ?? null) ? $_POST['auto_provision_group'] : '');
     $current = entra_form_values();
 
     $errors = [];

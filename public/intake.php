@@ -89,10 +89,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_assessment'])) {
     elseif ($date === null) $errs['assessment_date'] = 'Enter the assessment date as a valid date (YYYY-MM-DD) from the year 2000 onwards.';
     elseif ($date > date('Y-m-d')) $errs['assessment_date'] = 'The assessment date cannot be in the future. Check the year.';
     if (!$errs) {
+        // The same draft saved twice (Enter pressed again while it loads) is saved once.
+        $assessKey = web_idem_key($_POST);
+        if (web_once_get($assessKey) !== null) {
+            flash('This assessment was already saved (the form was sent twice), so it was saved once.', 'info');
+            redirect('client.php?id=' . $cid . '&tab=assessments');
+        }
         db()->prepare('INSERT INTO tech_assessments (client_id, assessment_date, primary_disability, primary_tech, hardware_details, software_version, summary, created_by) VALUES (?,?,?,?,?,?,?,?)')
             ->execute([$cid, $date, $fields['primary_disability'] ?: null, $fields['primary_tech'],
                 $fields['hardware_details'] ?: null, $fields['software_version'] ?: null,
                 $fields['summary'] ?: null, $user['id']]);
+        web_once_set($assessKey, (int)db()->lastInsertId());
         complete_task_by_key('assess-' . $cid, $user['id']);
         audit($user['id'], 'assessment.add', 'client', $cid, 'AI-guided intake');
         flash('Assessment saved.');
@@ -188,7 +195,7 @@ page_header('Guided intake', $user, 'clients');
 <section class="card" aria-labelledby="draft-h" style="margin-top:1rem">
   <h2 id="draft-h">Assessment draft — review &amp; save</h2>
   <?php if ($instruments !== ''): ?><p class="muted">Suggested instruments to administer: <strong><?= h($instruments) ?></strong></p><?php endif; ?>
-  <form method="post" action="intake.php?client=<?= $cid ?>" class="stacked" id="draft-form" novalidate><?= csrf_field() ?>
+  <form method="post" action="intake.php?client=<?= $cid ?>" class="stacked" id="draft-form" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
     <?= $saveRefused ? form_error_summary(['assessment_date' => '', 'primary_disability' => '', 'hardware_details' => '', 'software_version' => '', 'summary' => '']) : '' ?>
     <?php // The intake answers and suggestions ride along so a refused save can show them again. ?>
     <?php foreach ($answers as $k => $v): ?><input type="hidden" name="<?= h($k) ?>" value="<?= h($v) ?>"><?php endforeach; ?>

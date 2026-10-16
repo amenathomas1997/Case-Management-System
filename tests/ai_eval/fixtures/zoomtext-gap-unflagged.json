@@ -1,0 +1,7 @@
+{"case": "zoomtext-no-date", "expect_problems": ["no question or [placeholder] flags it", "\"Friday\""],
+ "result": {"ok": true, "sections": [
+   "Client reports eye strain after 20 minutes of reading.",
+   "ZoomText was set to 4x with yellow on black; the client read a 2 page letter with 3 errors.",
+   "The client will try 3x with line focus.",
+   "Practise reading mail each day; follow up on Friday."],
+  "questions": [], "homework": [{"title": "Read mail", "instructions": "Read the mail each day with ZoomText.", "due": ""}]}}

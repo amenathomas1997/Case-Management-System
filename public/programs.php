@@ -29,12 +29,12 @@ function cohort_load(int $id): ?array {
 
 /* ---- Create a cohort ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_cohort'])) {
-    $name = trim($_POST['name'] ?? '');
+    $name = trim(is_string($_POST['name'] ?? null) ? $_POST['name'] : '');
     // Both dates are optional, but a typed one is checked, never dropped: the same
     // year range as the app's cohort dates (api_date), 2000 to five years ahead.
     $maxYear = (int)date('Y') + 5;
-    $startIn = is_string($_POST['start_date'] ?? null) ? trim($_POST['start_date']) : '';
-    $endIn = is_string($_POST['end_date'] ?? null) ? trim($_POST['end_date']) : '';
+    $startIn = trim(is_string($_POST['start_date'] ?? null) ? $_POST['start_date'] : '');
+    $endIn = trim(is_string($_POST['end_date'] ?? null) ? $_POST['end_date'] : '');
     $start = valid_date($startIn, 2000, $maxYear);
     $end = valid_date($endIn, 2000, $maxYear);
     $errors = [];
@@ -57,9 +57,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_cohort'])) {
         redirect('programs.php?id=' . $firstId);
     }
     db()->prepare('INSERT INTO cohorts (name, school, coordinator_id, start_date, end_date, notes) VALUES (?,?,?,?,?,?)')
-        ->execute([mb_substr($name, 0, 190), mb_substr(trim($_POST['school'] ?? ''), 0, 190) ?: null,
+        ->execute([mb_substr($name, 0, 190), mb_substr(trim(is_string($_POST['school'] ?? null) ? $_POST['school'] : ''), 0, 190) ?: null,
             $coordinatorId, $start, $end,
-            mb_substr(trim($_POST['notes'] ?? ''), 0, 2000) ?: null]);
+            mb_substr(trim(is_string($_POST['notes'] ?? null) ? $_POST['notes'] : ''), 0, 2000) ?: null]);
     // Capture the id before audit() inserts its own row and replaces it.
     $cid = (int)db()->lastInsertId();
     web_once_set($cohortKey, $cid);
@@ -106,12 +106,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cohort_id'])) {
         // Checked, never defaulted: a blank date, a zero duration or an unknown
         // activity would file hours under the wrong day or activity without a word.
         $activity = is_string($_POST['activity'] ?? null) ? $_POST['activity'] : '';
-        $dateIn = is_string($_POST['session_date'] ?? null) ? trim($_POST['session_date']) : '';
+        $dateIn = trim(is_string($_POST['session_date'] ?? null) ? $_POST['session_date'] : '');
         // The same year range as the app's log_cohort_session (api_date): a year typed
         // as 26 (0026) or 2062 would file the hours outside every reporting year.
         $maxYear = (int)date('Y') + 5;
         $date = valid_date($dateIn, 2000, $maxYear);
-        $durIn = is_string($_POST['duration_min'] ?? null) ? trim($_POST['duration_min']) : '';
+        $durIn = trim(is_string($_POST['duration_min'] ?? null) ? $_POST['duration_min'] : '');
         $dur = ctype_digit($durIn) ? (int)$durIn : 0;
         $errors = [];
         if (!in_array($activity, PREETS_ACTIVITIES, true)) $errors['activity'] = 'Choose a Pre-ETS activity from the list.';
@@ -128,8 +128,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cohort_id'])) {
             keep_field_errors($errors);
             redirect($back);
         }
-        $topic = mb_substr(trim($_POST['topic'] ?? ''), 0, 190) ?: null;
-        $sessNotes = mb_substr(trim($_POST['notes'] ?? ''), 0, 2000) ?: null;
+        $topic = mb_substr(trim(is_string($_POST['topic'] ?? null) ? $_POST['topic'] : ''), 0, 190) ?: null;
+        $sessNotes = mb_substr(trim(is_string($_POST['notes'] ?? null) ? $_POST['notes'] : ''), 0, 2000) ?: null;
         db()->beginTransaction();
         try {
             // The cohort row is locked first, so a repeated submit (Log session pressed

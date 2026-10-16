@@ -12,12 +12,23 @@ function tpl_refuse(array $errors, string $anchor, string $lib): never {
     keep_field_errors($errors);
     redirect('templates.php?lib=' . $lib . '#' . $anchor);
 }
+/** A posted text field, trimmed; a value that is not a string (name[]=) reads as blank. */
+function tpl_text(string $key): string {
+    return trim(is_string($_POST[$key] ?? null) ? $_POST[$key] : '');
+}
+/** The same add form sent twice (Enter pressed again while it loads) saves once:
+ *  the second answer goes back to the library the first was saved in. */
+function tpl_once(?string $key, string $what, string $back): void {
+    if (web_once_get($key) === null) return;
+    flash('This ' . $what . ' was already added (the form was sent twice), so it was saved once.', 'info');
+    redirect($back);
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_goal_tpl'])) {
-    $cat = trim($_POST['category'] ?? '');
-    $goal = trim($_POST['specific_goal'] ?? '');
-    $metric = trim($_POST['measurable_metric'] ?? '');
-    $focus = trim($_POST['focus_area'] ?? '');
+    $cat = tpl_text('category');
+    $goal = tpl_text('specific_goal');
+    $metric = tpl_text('measurable_metric');
+    $focus = tpl_text('focus_area');
     // Lengths match the columns: too long is explained, never cut short or a failed save.
     $errs = [];
     if ($cat === '') $errs['category'] = 'A category is required.';
@@ -26,9 +37,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_goal_tpl'])) {
     if ($metric === '') $errs['measurable_metric'] = 'Measurable criteria are required.';
     if (mb_strlen($focus) > 190) $errs['focus_area'] = 'Keep the focus area to 190 characters or fewer.';
     if ($errs) tpl_refuse($errs, 'add-goal-tpl-h', 'goals');
+    $tplKey = web_idem_key($_POST);
+    tpl_once($tplKey, 'goal template', 'templates.php?lib=goals');
     db()->prepare('INSERT INTO goal_templates (category, specific_goal, measurable_metric, focus_area) VALUES (?,?,?,?)')
         ->execute([$cat, $goal, $metric, $focus ?: null]);
-    audit($user['id'], 'goal_template.add', 'goal_template', (int)db()->lastInsertId(), $cat . ': ' . $goal);
+    // Capture the id before audit() inserts its own row and replaces it.
+    $newId = (int)db()->lastInsertId();
+    web_once_set($tplKey, $newId);
+    audit($user['id'], 'goal_template.add', 'goal_template', $newId, $cat . ': ' . $goal);
     flash('Goal template added.');
     redirect('templates.php?lib=goals');
 }
@@ -56,19 +72,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_goal_tpl'])) {
     redirect('templates.php?' . http_build_query($gtBack) . '#goals-h');
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assess_tpl'])) {
-    $name = trim($_POST['name'] ?? '');
-    $hardware = trim($_POST['hardware_details'] ?? '');
-    $software = trim($_POST['software_version'] ?? '');
+    $name = tpl_text('name');
+    $hardware = tpl_text('hardware_details');
+    $software = tpl_text('software_version');
     $errs = [];
     if ($name === '') $errs['name'] = 'A template name is required.';
     elseif (mb_strlen($name) > 190) $errs['name'] = 'Keep the template name to 190 characters or fewer.';
     if (mb_strlen($hardware) > 255) $errs['hardware_details'] = 'Keep the hardware details to 255 characters or fewer.';
     if (mb_strlen($software) > 190) $errs['software_version'] = 'Keep the software and version to 190 characters or fewer.';
     if ($errs) tpl_refuse($errs, 'add-assess-tpl-h', 'assessments');
+    $tplKey = web_idem_key($_POST);
+    tpl_once($tplKey, 'assessment template', 'templates.php?lib=assessments');
     $tech = in_array($_POST['primary_tech'] ?? '', TECH_TYPES, true) ? $_POST['primary_tech'] : 'Screen Reader';
     db()->prepare('INSERT INTO assessment_templates (name, primary_tech, hardware_details, software_version, summary) VALUES (?,?,?,?,?)')
-        ->execute([$name, $tech, $hardware ?: null, $software ?: null, trim($_POST['summary'] ?? '') ?: null]);
-    audit($user['id'], 'assessment_template.add', 'assessment_template', (int)db()->lastInsertId(), $name);
+        ->execute([$name, $tech, $hardware ?: null, $software ?: null, tpl_text('summary') ?: null]);
+    $newId = (int)db()->lastInsertId();
+    web_once_set($tplKey, $newId);
+    audit($user['id'], 'assessment_template.add', 'assessment_template', $newId, $name);
     flash('Assessment template added.');
     redirect('templates.php?lib=assessments');
 }
@@ -126,8 +146,8 @@ $assessTpls = $lib === 'assessments' ? db()->query('SELECT * FROM assessment_tem
 
 /* ---- Service bundles ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_bundle'])) {
-    $name = trim($_POST['bundle_name'] ?? '');
-    $bDesc = trim($_POST['bundle_description'] ?? '');
+    $name = tpl_text('bundle_name');
+    $bDesc = tpl_text('bundle_description');
     $ctype = in_array($_POST['bundle_client_type'] ?? '', ['VR','Pre-ETS','Any'], true) ? $_POST['bundle_client_type'] : 'Any';
     $cats = array_values(array_intersect(array_filter((array)($_POST['bundle_categories'] ?? []), 'is_string'), rsa_all_categories()));
     $errs = [];
@@ -140,9 +160,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_bundle'])) {
         $_SESSION['tpl_bundle_cats'] = $cats;
         tpl_refuse($errs, 'add-bundle-h', 'bundles');
     }
+    $tplKey = web_idem_key($_POST);
+    tpl_once($tplKey, 'service bundle', 'templates.php?lib=bundles#bundles-h');
     db()->prepare('INSERT INTO service_bundles (name, client_type, categories, description) VALUES (?,?,?,?)')
         ->execute([$name, $ctype, implode(';', $cats), $bDesc ?: null]);
-    audit($user['id'], 'bundle.add', 'bundle', (int)db()->lastInsertId(), $name);
+    $newId = (int)db()->lastInsertId();
+    web_once_set($tplKey, $newId);
+    audit($user['id'], 'bundle.add', 'bundle', $newId, $name);
     flash('Service bundle added.');
     redirect('templates.php?lib=bundles#bundles-h');
 }
@@ -172,13 +196,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['toggle_bundle'])) {
 
 /* ---- Scored assessment instruments ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_instrument'])) {
-    $name = trim($_POST['instrument_name'] ?? '');
-    $desc = trim($_POST['instrument_desc'] ?? '') ?: null;
+    $name = tpl_text('instrument_name');
+    $desc = tpl_text('instrument_desc') ?: null;
     // The scale is used exactly as entered: a bad one is refused, never replaced.
     $range = ['options' => ['min_range' => -10, 'max_range' => 10]];
     $sMin = filter_var(trim((string)($_POST['scale_min'] ?? '')), FILTER_VALIDATE_INT, $range);
     $sMax = filter_var(trim((string)($_POST['scale_max'] ?? '')), FILTER_VALIDATE_INT, $range);
-    $sLabels = trim($_POST['scale_labels'] ?? '') ?: null;
+    $sLabels = tpl_text('scale_labels') ?: null;
     $lines = array_values(array_filter(array_map('trim', preg_split('/\r?\n/', (string)($_POST['instrument_items'] ?? ''))), fn($l) => $l !== ''));
     // Which way is an improvement: the funder report counts a gain in this direction.
     $direction = $_POST['higher_is_better'] ?? '';
@@ -196,6 +220,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_instrument'])) {
         if (mb_strlen($lab) > 255) { $errs['instrument_items'] = 'Item ' . ($n + 1) . ' is longer than 255 characters — shorten it or split it into two items.'; break; }
     }
     if ($errs) tpl_refuse($errs, 'add-instrument-h', 'instruments');
+    $tplKey = web_idem_key($_POST);
+    tpl_once($tplKey, 'instrument', 'templates.php?lib=instruments#instr-h');
     db()->beginTransaction();
     try {
         db()->prepare('INSERT INTO assessment_instruments (name, description, scale_min, scale_max, scale_labels, higher_is_better) VALUES (?,?,?,?,?,?)')->execute([$name, $desc, $sMin, $sMax, $sLabels, (int)$direction]);
@@ -204,6 +230,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_instrument'])) {
         foreach ($lines as $n => $lab) $ins->execute([$iid, $lab, $n + 1]);
         db()->commit();
     } catch (Throwable $e) { db()->rollBack(); throw $e; }
+    web_once_set($tplKey, $iid);
     audit($user['id'], 'instrument.add', 'instrument', $iid, $name . ' (' . count($lines) . ' items, ' . ($direction === '1' ? 'higher' : 'lower') . ' is better)');
     flash('Assessment instrument added.');
     redirect('templates.php?lib=instruments#instr-h');
@@ -341,7 +368,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
   <details class="mt-1"<?= $tplFormFailed(['category', 'specific_goal', 'measurable_metric', 'focus_area']) ? ' open' : '' ?>>
   <summary accesskey="n" id="add-goal-tpl-h">Add a goal template</summary>
   <form method="post" action="templates.php?lib=goals" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['category' => 'Category', 'specific_goal' => 'Specific objective', 'measurable_metric' => 'Measurable criteria', 'focus_area' => 'Focus area']) ?>
     <p class="hint">Fields marked * are required.</p>
     <div class="field"><label for="category">Category <?= required_mark() ?></label>
@@ -389,7 +416,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
   <details class="mt-1"<?= $tplFormFailed(['name', 'hardware_details', 'software_version']) ? ' open' : '' ?>>
   <summary accesskey="n" id="add-assess-tpl-h">Add an assessment template</summary>
   <form method="post" action="templates.php?lib=assessments" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['name' => 'Template name', 'hardware_details' => 'Hardware details', 'software_version' => 'Software & version']) ?>
     <p class="hint">Fields marked * are required.</p>
     <div class="field"><label for="name">Template name <?= required_mark() ?></label>
@@ -439,7 +466,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
   <details class="mt-1"<?= $tplFormFailed(['bundle_name', 'bundle_description', 'bundle_categories']) ? ' open' : '' ?>>
   <summary accesskey="n" id="add-bundle-h">Add a service bundle</summary>
   <form method="post" action="templates.php?lib=bundles" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['bundle_name' => 'Bundle name', 'bundle_description' => 'Description', 'bundle_categories' => 'RSA categories'], ['bundle_categories' => 'bcat-0']) ?>
     <p class="hint">Fields marked * are required.</p>
     <div class="field"><label for="bundle_name">Bundle name (billing label) <?= required_mark() ?></label>
@@ -503,7 +530,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
   <details class="mt-1"<?= $tplFormFailed(['instrument_name', 'instrument_desc', 'scale_min', 'scale_max', 'scale_labels', 'higher_is_better', 'instrument_items']) ? ' open' : '' ?>>
   <summary accesskey="n" id="add-instrument-h">Add an instrument</summary>
   <form method="post" action="templates.php?lib=instruments" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['instrument_name' => 'Name', 'instrument_desc' => 'Description', 'scale_min' => 'Lowest rating', 'scale_max' => 'Highest rating', 'scale_labels' => 'Rating labels', 'higher_is_better' => 'Higher ratings mean', 'instrument_items' => 'Items'], ['higher_is_better' => 'hib-1']) ?>
     <p class="hint">Fields marked * are required.</p>
     <div class="field"><label for="instrument_name">Name <?= required_mark() ?></label>

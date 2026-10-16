@@ -1,0 +1,7 @@
+{"case": "jaws-basics", "expect_problems": ["\"forms mode\"", "\"Dr.\"", "number not in the notes appears: 45", "homework items: 0"],
+ "result": {"ok": true, "sections": [
+   "Dr. Smith's learner practised JAWS for 45 minutes and used the links list.",
+   "Headings were demonstrated.",
+   "Improved.",
+   "Continue practice. Next week: tables, 15 min."],
+  "questions": [], "homework": []}}

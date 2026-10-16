@@ -779,6 +779,7 @@ try {
     require __DIR__.'/workflow_cases.php';
     require __DIR__.'/release_3021_cases.php';
     require __DIR__.'/session_record_cases.php';
+    require __DIR__.'/consent_race_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 

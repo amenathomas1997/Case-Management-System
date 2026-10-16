@@ -36,9 +36,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_article'])) {
         db()->prepare('UPDATE kb_articles SET title=?, category=?, body=?, is_public=? WHERE id=?')->execute($vals);
         audit($user['id'], 'kb.update', 'kb_article', $id, $title);
     } else {
+        // A new article sent twice (Enter pressed again while it loads) is created once.
+        $kbKey = web_idem_key($_POST);
+        if (($firstId = web_once_get($kbKey)) !== null) {
+            flash('This article was already saved (the form was sent twice), so it was saved once.', 'info');
+            redirect('kb.php?id=' . $firstId);
+        }
         $vals[] = $user['id'];
         db()->prepare('INSERT INTO kb_articles (title, category, body, is_public, created_by) VALUES (?,?,?,?,?)')->execute($vals);
         $id = (int)db()->lastInsertId();
+        web_once_set($kbKey, $id);
         audit($user['id'], 'kb.create', 'kb_article', $id, $title);
     }
     flash('Article saved.');
@@ -75,7 +82,7 @@ if (isset($_GET['edit']) && can('templates')) {
     ?>
     <p><a href="kb.php" style="display:inline-flex; align-items:center; min-height:2.75rem;"><span aria-hidden="true">&larr; </span>Knowledge base</a></p>
     <h1><?= $a['id'] ? 'Edit article' : 'New article' ?></h1>
-    <form method="post" action="kb.php" class="stacked"><?= csrf_field() ?>
+    <form method="post" action="kb.php" class="stacked"><?= csrf_field() ?><?= web_idem_field() ?>
       <input type="hidden" name="id" value="<?= (int)$a['id'] ?>">
       <p class="hint">Fields marked * are required.</p>
       <div class="grid grid-2">

@@ -54,6 +54,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_incident'])) {
     if (mb_strlen($location) > 190) $incErrs['location'] = 'Location is too long (190 characters maximum).';
     if (mb_strlen($action) > 5000) $incErrs['action_taken'] = 'Action taken is too long (5,000 characters maximum).';
     if ($incErrs) { keep_input(); keep_field_errors($incErrs); redirect('incidents.php#add-h'); }
+    // The same report sent twice (Enter pressed again while it loads) is logged once.
+    $incKey = web_idem_key($_POST);
+    if (($firstId = web_once_get($incKey)) !== null) {
+        flash('This incident was already logged (the form was sent twice), so it was saved once.', 'info');
+        redirect('incidents.php#log-h');
+    }
     try {
         db()->prepare('INSERT INTO incidents (client_id, reported_by, incident_date, location, type, severity, description, action_taken) VALUES (?,?,?,?,?,?,?,?)')
             ->execute([$cid, (int)$user['id'], $date, $location !== '' ? $location : null, $type, $sev, $desc, $action !== '' ? $action : null]);
@@ -65,6 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_incident'])) {
         redirect('incidents.php#add-h');
     }
     $iid = (int)db()->lastInsertId();
+    web_once_set($incKey, $iid);
     audit($user['id'], 'incident.add', 'incident', $iid, $type . ' / ' . $sev);
     if (in_array($sev, ['High', 'Critical'], true)) notify_admin_users($sev . ' incident reported (' . $type . ')', 'incidents.php');
     flash('Incident logged.');
@@ -166,7 +173,7 @@ $sevBadge = fn($s) => '<span class="badge ' . ($s === 'Critical' || $s === 'High
 <details class="card mt-1"<?= array_intersect_key(form_errors(), array_flip(['incident_date', 'type', 'severity', 'client_id', 'location', 'description', 'action_taken'])) !== [] ? ' open' : '' ?>>
   <summary accesskey="n" id="add-h">Report an incident</summary>
   <p class="muted">Fields marked with an asterisk (*) are required. Check the details before you log the incident: afterwards only its status can be changed.</p>
-  <form method="post" action="incidents.php" class="stacked" novalidate><?= csrf_field() ?>
+  <form method="post" action="incidents.php" class="stacked" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['incident_date' => 'Date', 'type' => 'Type', 'severity' => 'Severity', 'client_id' => 'Client', 'location' => 'Location', 'description' => 'What happened', 'action_taken' => 'Action taken']) ?>
     <div class="grid grid-4">
       <div class="field"><label for="incident_date">Date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><input type="date" id="incident_date" name="incident_date" required max="<?= date('Y-m-d') ?>" value="<?= h(old_in('incident_date', date('Y-m-d'))) ?>" <?= field_aria('incident_date') ?>><?= field_error('incident_date') ?></div>

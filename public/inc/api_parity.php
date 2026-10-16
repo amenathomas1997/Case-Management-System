@@ -624,23 +624,57 @@ case 'request_consent': {
     elseif (strlen($gEmail) > 190) $cErrs['guardian_email'] = 'Keep the guardian email to 190 characters or fewer.';
     if ($cErrs) out(['ok' => false, 'error' => implode(' ', $cErrs), 'errors' => $cErrs], 422);
     $token = bin2hex(random_bytes(24));
-    db()->prepare('INSERT INTO consent_forms (client_id, guardian_name, guardian_email, token) VALUES (?,?,?,?)')
-        ->execute([$clientId, $gName, $gEmail, $token]);
-    $newFormId = (int)db()->lastInsertId();
     [$subj, $body] = email_template_for_client('consent_request', $client, ['name' => $gName, 'client' => $client['name'], 'link' => cfg('base_url') . '/consent.php?t=' . $token]);
-    if (!send_app_mail($gEmail, $subj, $body)) {
-        db()->prepare('DELETE FROM consent_forms WHERE id = ?')->execute([$newFormId]);
-        fail('The consent email could not be sent, so nothing was changed — any consent link sent earlier still works. Please try again later.', 502);
-    }
+    // As client.php: the client row is locked from the insert to the clean-up, so two
+    // requests sent at once (two devices, or the app and the website) run one after
+    // the other instead of each emailing a link and deleting the other's, which left
+    // the guardian with two emails and no working link.
     $pdo = db();
     $pdo->beginTransaction();
     try {
+        $pdo->prepare('SELECT id FROM clients WHERE id = ? FOR UPDATE')->execute([$clientId]);
+        // consent_seen (optional): the newest unsigned request the app showed (0 for
+        // none). A request sent since then is not replaced unseen.
+        $seen = $input['consent_seen'] ?? null;
+        if (is_int($seen) || (is_string($seen) && ctype_digit($seen))) {
+            $nq = $pdo->prepare('SELECT id, guardian_name, sent_at FROM consent_forms WHERE client_id = ? AND signed_at IS NULL ORDER BY id DESC LIMIT 1');
+            $nq->execute([$clientId]);
+            $newest = $nq->fetch();
+            if ($newest && (int)$newest['id'] !== (int)$seen) {
+                $pdo->rollBack();
+                out(['ok' => false, 'error' => 'A consent form was already emailed to ' . $newest['guardian_name'] . ' at ' . fmt_datetime($newest['sent_at'])
+                    . ' (from another device, or by a colleague), so this one was not sent, and that link still works. Refresh, then send again if a new one is needed.'], 409);
+            }
+        }
+        $pdo->prepare('INSERT INTO consent_forms (client_id, guardian_name, guardian_email, token) VALUES (?,?,?,?)')
+            ->execute([$clientId, $gName, $gEmail, $token]);
+        $newFormId = (int)$pdo->lastInsertId();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+    if (!send_app_mail($gEmail, $subj, $body)) {
+        // Nothing was delivered: drop the new link and leave any earlier one working.
+        $pdo->rollBack();
+        fail('The consent email could not be sent, so nothing was changed — any consent link sent earlier still works. Please try again later.', 502);
+    }
+    // The savepoint keeps the sent link's row if the follow-up fails.
+    try {
+        $pdo->exec('SAVEPOINT consent_sent');
         $pdo->prepare('DELETE FROM consent_forms WHERE client_id = ? AND signed_at IS NULL AND id <> ?')->execute([$clientId, $newFormId]);
         $pdo->prepare('UPDATE clients SET guardian_name = ?, guardian_email = ? WHERE id = ?')->execute([$gName, $gEmail, $clientId]);
         $pdo->commit();
     } catch (Throwable $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
         error_log('Consent follow-up failed: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
+        try {
+            $pdo->exec('ROLLBACK TO SAVEPOINT consent_sent');
+            $pdo->commit();
+        } catch (Throwable $e2) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            error_log('Consent link store failed: ' . get_class($e2) . ' (code ' . $e2->getCode() . ')');
+            audit($userId, 'consent.request_failed', 'client', $clientId, 'to ' . $gEmail . '; emailed, but the link could not be activated');
+            fail("The consent form was emailed to {$gName}, but its link could not be activated, so it will not open. Send it again; any consent link sent earlier still works.", 500);
+        }
         audit($userId, 'consent.request', 'client', $clientId, 'to ' . $gEmail . '; guardian details not saved to the record');
         // Sent, and its link works: answered as a success that says what did not finish,
         // never "nothing was saved", which would invite a second request.

@@ -266,8 +266,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 . $ageNote);
             redirect('client.php?id=' . (int)$client['id']);
         } else {
+            // The same form sent twice (Enter pressed again while it loads) creates the
+            // client once; the second answer goes to the client the first created.
+            $clientKey = web_idem_key($_POST);
+            if (($firstId = web_once_get($clientKey)) !== null) {
+                flash('This client was already created (the form was sent twice), so it was saved once.', 'info');
+                redirect('client.php?id=' . $firstId);
+            }
             db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, preferred_language, counselor_verified, email_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
             $newId = (int)db()->lastInsertId();
+            web_once_set($clientKey, $newId);
             record_status_change($newId, null, $status, $user['id'], 'Client created');
             audit($user['id'], 'client.create', 'client', $newId, $name);
             flash('Client created.' . $ageNote);
@@ -293,7 +301,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
 
 <p class="hint">Fields marked with an asterisk (*) are required.</p>
 <form method="post" class="stacked" novalidate>
-  <?= csrf_field() ?>
+  <?= csrf_field() ?><?= web_idem_field() ?>
   <fieldset>
     <legend>Demographics</legend>
     <div class="field">
