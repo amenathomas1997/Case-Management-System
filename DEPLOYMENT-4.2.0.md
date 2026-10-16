@@ -40,3 +40,6 @@ Verified before commit:
 - full_schema 1424, audit_regression, security, staging_scrub, and run_all.
 - The migration rehearsal matched.
 - Not checked in a browser or with a screen reader.
+
+## Deployed 2026-10-16 18:58 CT
+From 4.1.0 with .audit_work/deploy-4.2.0 (18 files). mig_4.2.0.sql ran (3 statements); all 3 new columns present. Production files matched 4.1.0 before install and match 4.2.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.2.0. Backups: /home/cmsuser/casemanagement_private/deploy-4.2.0-20261016-185842.
