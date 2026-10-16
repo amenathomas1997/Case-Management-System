@@ -8,30 +8,30 @@ $db->exec('UPDATE users SET group_id=NULL WHERE id=1');
 $GLOBALS['CURRENT_PERMS']=array_keys(PERMISSION_KEYS); $GLOBALS['CURRENT_SCOPED']=false;
 
 /* ---- Hours dated after the authorization ended ---- */
-// The app refuses until the user acknowledges it, the website until "Log it anyway"
-// is ticked (and the override is audited), and completing a session logs the hours
-// and says why. Nothing refuses on its own: each surface asks once.
+// Since 3.0.34 (owner decision) work outside the authorization is refused everywhere
+// until an amendment is recorded: no "Log it anyway", no acknowledgement from the app,
+// and completing a session refuses too. Once the authorization is amended it logs.
 $db->exec("INSERT INTO clients(name,status) VALUES('Expired authorization synthetic client','Active Training')"); $expClient=(int)$db->lastInsertId();
 $db->prepare("INSERT INTO training_tracks(client_id,title,auth_number,funding_agency,authorized_hours,hourly_rate,start_date,expiration_date) VALUES(?,'Expired authorization track','EXP-21','Synthetic agency',20,50,?,?)")
     ->execute([$expClient,date('Y-m-d',strtotime('-100 days')),date('Y-m-d',strtotime('-10 days'))]); $expTrack=(int)$db->lastInsertId();
 $expLogs=fn():int=>(int)$db->query("SELECT COUNT(*) FROM work_logs WHERE track_id=$expTrack")->fetchColumn();
 $appLog=['track_id'=>$expTrack,'hours'=>1,'date'=>date('Y-m-d'),'description'=>'Synthetic session after the authorization ended'];
 $refused=$call('log_hours',$appLog,[],false,'This authorization expired on');
-check(str_contains($refused['error'],'Log it on the website to confirm.') && str_starts_with((string)($refused['authorization_issue']??''),'This authorization expired on') && $expLogs()===0,
-    'The app refuses hours dated after the authorization ended, says why, and logs nothing until the user acknowledges it');
-$call('log_hours',$appLog+['authorization_ack'=>true]);
-check($expLogs()===1,'The app logs those hours once the user acknowledges the authorization problem');
+check(str_starts_with((string)($refused['authorization_issue']??''),'This authorization expired on') && str_contains($refused['error'],'Record the amendment') && $expLogs()===0,
+    'The app refuses hours dated after the authorization ended, says to record the amendment, and logs nothing');
+$call('log_hours',$appLog+['authorization_ack'=>true],[],false,'This authorization expired on');
+check($expLogs()===0,'An acknowledgement from an older app build no longer overrides the authorization');
 $webLog=['add_log'=>'1','hours'=>'1','mileage'=>'','work_date'=>date('Y-m-d'),'description'=>'Synthetic web session after the authorization ended'];
-[[$code,,$err],$sess]=$pageSession(fn()=>$renderPage('track',['id'=>$expTrack],$webLog));
-check($code===0 && $err==='' && $expLogs()===1 && str_contains($sess,'log_auth_ack') && str_contains($sess,'This authorization expired on'),
-    'The website refuses those hours with the reason on its "Log it anyway" field' . ($err ? ": $err" : ''));
-[$code,,$err]=$renderPage('track',['id'=>$expTrack],$webLog+['auth_ack'=>'1']);
-check($code===0 && $err==='' && $expLogs()===2 && (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action='hours.auth_override' AND entity_id=$expTrack")->fetchColumn()===1,
-    'Ticking "Log it anyway" logs the hours and records the override in the audit log' . ($err ? ": $err" : ''));
-$authIssue=null;
-$autoLog=auto_log_session($expTrack,date('Y-m-d'),1.0,'Synthetic completed session',1,$authIssue);
-check($autoLog>0 && $expLogs()===3 && str_starts_with((string)$authIssue,'This authorization expired on') && !db()->inTransaction(),
-    'Completing a session logs its hours even after the authorization ended, and says so');
+[[$code,,$err],$sess]=$pageSession(fn()=>$renderPage('track',['id'=>$expTrack],$webLog+['auth_ack'=>'1']));
+check($code===0 && $err==='' && $expLogs()===0 && str_contains($sess,'This authorization expired on') && str_contains($sess,'Record the amendment'),
+    'The website refuses those hours, with or without the old "Log it anyway" box, and says why' . ($err ? ": $err" : ''));
+$blocked=null;
+try { auto_log_session($expTrack,date('Y-m-d'),1.0,'Synthetic completed session',1); } catch (DomainException $e) { $blocked=$e->getMessage(); }
+check(str_starts_with((string)$blocked,'This authorization expired on') && $expLogs()===0 && !db()->inTransaction(),
+    'Completing a session after the authorization ended is refused, with the reason');
+$db->prepare("UPDATE training_tracks SET expiration_date=? WHERE id=?")->execute([date('Y-m-d',strtotime('+30 days')),$expTrack]);
+[$code,,$err]=$renderPage('track',['id'=>$expTrack],$webLog);
+check($code===0 && $err==='' && $expLogs()===1,'Once the authorization is amended the hours are logged' . ($err ? ": $err" : ''));
 
 /* ---- A client email typed on the public referral form ---- */
 // Since 3.0.31 (owner decision) it is copied as confirmed: the app is told so, and

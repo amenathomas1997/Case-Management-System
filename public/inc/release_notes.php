@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '3.0.34' => [
+        'Invoices take part payments with the date the money came in, write-offs with a reason, and can be closed as Denied or Void: their hours go back to unbilled so you can fix them and invoice again. Your vendor number, remit-to address and due date print on every invoice.',
+        'Hours, mileage and expenses outside an authorization (its dates, its hours or its dollars) are refused until the authorization is amended on the track, with a message saying how far over it would go.',
+        'A track can be VR or agency, private pay (invoiced to the client) or no charge (hours logged at $0, never invoiced).',
+    ],
     '3.0.33' => [
         'Administrators: System health (open it from Administration) shows on one page whether every scheduled job, the backups, email and storage are working, with anything that needs attention listed first.',
     ],

@@ -405,7 +405,7 @@ function at_profitability(int $actor): array {
     $q=db()->query('SELECT t.id,t.title,t.service_type,t.funding_agency,c.name AS client_name FROM training_tracks t JOIN clients c ON c.id=t.client_id WHERE 1=1'.(caseload_scoped()?' AND c.assigned_to='.(int)$actor:'').' ORDER BY c.name,t.title');
     $result=[];
     foreach($q->fetchAll() as $t){
-        $id=(int)$t['id'];$s=db()->prepare("SELECT COALESCE(SUM(total_amount),0) billed,COALESCE(SUM(CASE WHEN status='Paid' THEN COALESCE(paid_amount,total_amount) ELSE COALESCE(paid_amount,0) END),0) received FROM invoices WHERE track_id=? AND status IN ('Submitted','Paid')");$s->execute([$id]);$money=$s->fetch();
+        $id=(int)$t['id'];$s=db()->prepare("SELECT COALESCE(SUM(total_amount),0) billed,COALESCE(SUM(COALESCE(paid_amount,0)),0) received FROM invoices WHERE track_id=? AND status IN ('Submitted','Paid')");$s->execute([$id]);$money=$s->fetch();
         $s=db()->prepare('SELECT COALESCE(SUM(amount),0) FROM track_expenses WHERE track_id=?');$s->execute([$id]);$expenses=(float)$s->fetchColumn();
         $s=db()->prepare("SELECT details FROM at_records WHERE kind='cost' AND track_id=? AND status='Recorded'");$s->execute([$id]);foreach($s->fetchAll() as $row)$expenses+=(float)(json_decode($row['details'],true)['amount']??0);
         $s=db()->prepare('SELECT hours,created_by,work_date FROM work_logs WHERE track_id=?');$s->execute([$id]);$labor=0;$unknown=0;
@@ -425,8 +425,8 @@ function at_financials(array $r): array {
     if($r['kind']!=='funding'||!at_can('billing')||!$r['track_id'])return [];
     $q=db()->prepare('SELECT auth_number,authorized_hours,hourly_rate,expiration_date FROM training_tracks WHERE id=?');$q->execute([$r['track_id']]);$t=$q->fetch();if(!$t)return [];
     $q=db()->prepare('SELECT COALESCE(SUM(hours),0) FROM work_logs WHERE track_id=?');$q->execute([$r['track_id']]);$used=(float)$q->fetchColumn();
-    $q=db()->prepare("SELECT COALESCE(SUM(total_amount),0) total,COALESCE(SUM(CASE WHEN status='Paid' THEN COALESCE(paid_amount,total_amount) ELSE COALESCE(paid_amount,0) END),0) paid FROM invoices WHERE track_id=? AND status IN ('Submitted','Paid')");$q->execute([$r['track_id']]);$i=$q->fetch();
-    return ['Authorization'=>$t['auth_number'],'Expires'=>$t['expiration_date']??'Not set','Authorized hours'=>(string)$t['authorized_hours'],'Delivered hours'=>(string)$used,'Submitted to funder'=>number_format((float)$i['total'],2),'Received'=>number_format((float)$i['paid'],2),'Outstanding'=>number_format((float)$i['total']-(float)$i['paid'],2)];
+    $q=db()->prepare("SELECT COALESCE(SUM(total_amount),0) total,COALESCE(SUM(COALESCE(paid_amount,0)),0) paid,COALESCE(SUM(written_off),0) written FROM invoices WHERE track_id=? AND status IN ('Submitted','Paid')");$q->execute([$r['track_id']]);$i=$q->fetch();
+    return ['Authorization'=>$t['auth_number'],'Expires'=>$t['expiration_date']??'Not set','Authorized hours'=>(string)$t['authorized_hours'],'Delivered hours'=>(string)$used,'Submitted to funder'=>number_format((float)$i['total'],2),'Received'=>number_format((float)$i['paid'],2),'Outstanding'=>number_format(max(0,(float)$i['total']-(float)$i['paid']-(float)$i['written']),2)];
 }
 function at_detail(int $id,int $actor): array {
     $r=at_record($id,$actor);$def=at_definition($r['kind']);

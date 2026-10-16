@@ -407,16 +407,15 @@ try {
     check(empty($noRate['ok']) && empty($noAuth['ok']) && $voiceLogs()===0 && !db()->inTransaction(),'Voice refuses to log hours on a track with no hourly rate or a TBD authorization number, and logs nothing');
     $db->exec("UPDATE training_tracks SET auth_number='VOICE-1' WHERE id=$voiceTrack");
     check(!empty(voice_execute('log_hours',$voiceHours,$voiceUser)['ok']) && $voiceLogs()===1,'Voice logs hours once the track has its authorization number, hours and rate');
-    // Hours dated after the authorization ended are logged only once the read-back said
-    // so and the user said yes to it (authorization_ack, set by voice_interpret()).
+    // Hours dated after the authorization ended are refused until an amendment is
+    // recorded (owner decision, 3.0.34): a spoken yes (authorization_ack) no longer overrides it.
     $db->prepare("UPDATE training_tracks SET expiration_date=? WHERE id=?")->execute([date('Y-m-d',strtotime('-8 days')),$voiceTrack]);
     $expiredVoice=voice_execute('log_hours',$voiceHours,$voiceUser);
     check(empty($expiredVoice['ok']) && str_starts_with((string)($expiredVoice['error']??''),'This authorization expired on') && $voiceLogs()===1 && !db()->inTransaction(),
-        'Voice refuses hours dated after the authorization ended unless the user agreed to it, and logs nothing');
+        'Voice refuses hours dated after the authorization ended, and logs nothing');
     $ackedVoice=voice_execute('log_hours',$voiceHours+['authorization_ack'=>1],$voiceUser);
-    check(!empty($ackedVoice['ok']) && $voiceLogs()===2 && !db()->inTransaction()
-        && (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action='hours.log' AND entity_id=$voiceTrack AND detail LIKE '%authorization exception approved%'")->fetchColumn()===1,
-        'Voice logs those hours once the user agreed, and the audit log records the approved exception');
+    check(empty($ackedVoice['ok']) && str_contains((string)($ackedVoice['error']??''),'Record the amendment') && $voiceLogs()===1 && !db()->inTransaction(),
+        'A spoken yes no longer overrides the authorization: voice still refuses, and says to record the amendment');
     $db->exec("UPDATE training_tracks SET expiration_date=NULL WHERE id=$voiceTrack");
     $db->exec("INSERT INTO equipment(name,status) VALUES('Voice synthetic device','Available')"); $voiceItem=(int)$db->lastInsertId();
     $db->prepare("INSERT INTO equipment_reservations(equipment_id,client_id,reserved_by,status) VALUES(?,?,2,'Reserved')")->execute([$voiceItem,$holdClient]); $voiceHold=(int)$db->lastInsertId();
@@ -456,7 +455,7 @@ try {
     $db->prepare("INSERT INTO scheduled_sessions(client_id,track_id,user_id,start_at,end_at,status) VALUES(?,?,1,?,?,'Scheduled')")->execute([$voiceClient,$voiceTrack,date('Y-m-d H:i:s',time()+7200),date('Y-m-d H:i:s',time()+10800)]); $laterSession=(int)$db->lastInsertId();
     $earlyDone=voice_execute('complete_session',['session_id'=>$laterSession],$voiceUser);
     check(empty($earlyDone['ok']) && str_contains((string)($earlyDone['error']??''),'has not started yet') && !db()->inTransaction()
-        && $db->query("SELECT status FROM scheduled_sessions WHERE id=$laterSession")->fetchColumn()==='Scheduled' && $voiceLogs()===2,
+        && $db->query("SELECT status FROM scheduled_sessions WHERE id=$laterSession")->fetchColumn()==='Scheduled' && $voiceLogs()===1,
         'Voice refuses to complete a session that has not started yet, leaves it open and logs nothing');
     $db->exec("UPDATE scheduled_sessions SET status='Cancelled' WHERE id=$laterSession");
     // A client created by voice gets its first status-history entry with the record.
@@ -780,6 +779,7 @@ try {
     require __DIR__.'/release_3021_cases.php';
     require __DIR__.'/session_record_cases.php';
     require __DIR__.'/consent_race_cases.php';
+    require __DIR__.'/billing_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 
@@ -834,7 +834,7 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
     $db->exec("INSERT INTO clients (id,name,email,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-client@example.invalid','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL,NULL),(3,'Upgraded client with a blank counselor',NULL,'')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
     check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12, mig_3.0.16 and mig_3.0.21 has exactly the fresh-install schema, defaults included');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=1')->fetchColumn()===3,'The 3.0.21 upgrade keeps every existing client\'s email confirmed');
     $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");

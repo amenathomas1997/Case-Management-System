@@ -53,7 +53,11 @@ $rehab = 0;
 foreach ($closures as $c) if ($c['status'] === 'Closed - Rehabilitated') $rehab = (int)$c['n'];
 
 /* Payment summary */
-$pay = db()->query("SELECT status, COUNT(*) n, COALESCE(SUM(total_amount),0) amt, COALESCE(SUM(COALESCE(paid_amount, CASE WHEN status='Paid' THEN total_amount ELSE 0 END)),0) paid, COALESCE(SUM(GREATEST(total_amount - COALESCE(paid_amount, CASE WHEN status='Paid' THEN total_amount ELSE 0 END),0)),0) outstanding FROM {$ri} invoices GROUP BY status")->fetchAll();
+// Outstanding is what a sent invoice still owes after payments and write-offs (3.0.34);
+// denied and void invoices owe nothing (their work was released to be billed again).
+$pay = db()->query("SELECT status, COUNT(*) n, COALESCE(SUM(total_amount),0) amt, COALESCE(SUM(COALESCE(paid_amount, 0)),0) paid,
+    COALESCE(SUM(CASE WHEN status IN ('Submitted','Paid') THEN GREATEST(total_amount - COALESCE(paid_amount, 0) - written_off, 0) ELSE 0 END),0) outstanding
+    FROM {$ri} invoices GROUP BY status ORDER BY FIELD(status, 'Draft', 'Submitted', 'Paid', 'Denied', 'Void')")->fetchAll();
 
 /* Average hours per achieved goal. Hours and goals are aggregated in
    separate subqueries — joining both tables directly would repeat every
@@ -160,7 +164,7 @@ page_header('Business analytics', $user, 'analytics');
       <?php foreach ($pay as $p): ?>
         <tr><th scope="row"><?= h($p['status']) ?></th><td class="num"><?= (int)$p['n'] ?></td><td class="num"><?= fmt_money((float)$p['amt']) ?></td>
           <td class="num"><?= fmt_money((float)$p['paid']) ?></td>
-          <td class="num"><?= $p['status'] === 'Draft' ? 'Not yet sent' : fmt_money((float)$p['outstanding']) ?></td></tr>
+          <td class="num"><?= $p['status'] === 'Draft' ? 'Not yet sent' : (in_array($p['status'], ['Denied', 'Void'], true) ? 'Closed' : fmt_money((float)$p['outstanding'])) ?></td></tr>
       <?php endforeach; ?>
       </tbody>
     </table>

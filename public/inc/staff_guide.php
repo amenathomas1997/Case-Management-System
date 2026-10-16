@@ -49,7 +49,9 @@ if (!function_exists('staff_guide_topics')) {
                 'guide-bill-month' => 'How do I bill all unbilled work?',
                 'guide-void' => 'How do I fix a mistake on a draft invoice?',
                 'guide-submit' => 'How do I mark an invoice submitted?',
-                'guide-payment' => 'How do I record a payment?',
+                'guide-payment' => 'How do I record a payment or a write-off?',
+                'guide-denied' => 'What if an invoice is denied or sent in error?',
+                'guide-private-pay' => 'How do I bill a client who pays, or train for free?',
                 'guide-contracts' => 'How do I track grants and contracts?',
             ]],
             'guide-reports' => ['How do I run reports?', [
@@ -394,7 +396,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Under Session note, choose the note type and format (free text, BIRP, PAIP or SOAP), and type the note. The subject is "Session on" and the date unless you enter one. Generate structured note turns rough notes into the format's sections. Leave the note blank to log the hours only.</li>
   <li>Choose Save session. The confirmation says what was saved.</li>
 </ol>
-<p>The hours and the note are saved together: if either is refused, nothing is saved and what you typed stays in the form. If the date is outside the authorization, you get an error. Tick Log it anyway only if the authorization is being renewed or amended. Do not log hours here for a session you will complete on the schedule. That would log them twice. Billable expenses use Log an expense, further down the track.</p>
+<p>The hours and the note are saved together: if either is refused, nothing is saved and what you typed stays in the form. If the work is outside the authorization (its dates, hours or dollars), you get an error: record the amendment on Edit track / authorization first. Do not log hours here for a session you will complete on the schedule. That would log them twice. Billable expenses use Log an expense, further down the track.</p>
 
 <?= $sgH(4, 'guide-complete-session') ?>
 <ol>
@@ -533,7 +535,8 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <p>The guardian signs by typing their full name. The link works for 60 days. A new request turns off any earlier unsigned link. While a request is waiting, the form is called Resend the guardian consent request by email. Authorizations &amp; compliance lists consents that need renewing.</p>
 
 <?= $sgH(3, 'guide-billing') ?>
-<p>Before you bill, check each track's authorization, hours, expenses and rate. Fix mistakes on the track first. Recording work and recording payment are separate steps.</p>
+<p>Before you bill, check each track's authorization, hours, expenses and rate. Fix mistakes on the track first. Recording work and recording payment are separate steps. Your vendor number, remit-to address, tax ID and payment terms print on every invoice; an administrator enters them under Administration, Billing details.</p>
+<p>Work outside an authorization is refused: hours, mileage or expenses dated outside its dates, or that would go over its authorized hours or dollars, cannot be saved on the website, in the app or by voice. The message says how far over it would go. Record the amendment on Edit track / authorization first, then log the work. The track page shows an overrun as, for example, 2 hours over.</p>
 
 <?= $sgH(4, 'guide-bill-month') ?>
 <ol>
@@ -557,18 +560,24 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <?= $sgH(4, 'guide-submit') ?>
 <ol>
   <li>Send the invoice to the funder.</li>
-  <li>Choose Mark submitted on that invoice, then confirm.</li>
+  <li>On that invoice, check Date submitted (today unless you change it), then choose Mark submitted and confirm.</li>
 </ol>
-<p>This starts the aging clock and cannot be undone. Downloading an invoice does not mark it submitted.</p>
+<p>The due date is set from the payment terms and printed on the invoice. Downloading an invoice does not mark it submitted.</p>
 
 <?= $sgH(4, 'guide-payment') ?>
 <ol>
-  <li>Find the submitted invoice.</li>
-  <li>Enter the check or EFT reference.</li>
-  <li>Enter the amount paid, or tick Paid in full.</li>
-  <li>Choose Mark paid, then confirm.</li>
+  <li>Find the submitted invoice and open Record a payment or write-off.</li>
+  <li>Choose A payment received. The amount starts as the balance still owed; change it for a part payment.</li>
+  <li>Enter the date the money was received and the check or EFT reference.</li>
+  <li>Choose Record.</li>
 </ol>
-<p>A paid invoice cannot go back to Submitted. If it was short-paid, it stays under Outstanding. When more money comes, use Record another payment. Do not enter the same payment twice. To fix an amount, use Correct the amount paid, then Save corrected amount.</p>
+<p>An invoice can take any number of payments. When the balance reaches zero it is marked Paid; until then it stays under Outstanding, with what is past due. When the agency will not pay the rest, record A write-off with the reason. A payment or write-off entered by mistake is removed under Payments and write-offs, with the reason; the balance is worked out again.</p>
+
+<?= $sgH(4, 'guide-denied') ?>
+<p>Open Denied or sent in error on the submitted invoice, choose Denied by the funder or Void, give the reason, and choose Close the invoice. It stays on record with its number and reason, and its hours and expenses become unbilled again: correct them on the track, then generate a new invoice. An invoice that already has a payment or write-off recorded cannot be closed: remove those entries first.</p>
+
+<?= $sgH(4, 'guide-private-pay') ?>
+<p>On Edit track / authorization, set Who pays for this training. Private pay needs no authorization number: its invoices are billed to the client, at the hourly fee. No charge logs hours at $0 and is never invoiced. A new track for a client whose referral was quoted a fee starts with that choice. The fee and the free-below income are set under Administration, Billing details, and the public referral form quotes them.</p>
 
 <?= $sgH(4, 'guide-contracts') ?>
 <p>Open Grants &amp; contracts and choose the agreement. Record its budget and deliverables, and review spending. Authorizations &amp; compliance lists authorizations at risk and reports due. Follow each link to fix the record.</p>

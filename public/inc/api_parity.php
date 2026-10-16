@@ -415,13 +415,26 @@ case 'save_track': {
     $reason = trim((string)($input['amendment_reason'] ?? ''));
     if ($title === '') $errors['title'] = 'Track title is required.';
     elseif (mb_strlen($title) > 190) $errors['title'] = 'Keep the track title to 190 characters or fewer.';
-    if ($authNumber === '') $errors['auth_number'] = 'Service authorization number is required — every training track must be tied to an authorization.';
+    // track_edit.php's billing rules (3.0.34): left out, a track keeps its mode (a new one is VR).
+    $billingMode = api_choice($input, 'billing_mode', array_keys(BILLING_MODES), 'Who pays', $track['billing_mode'] ?? 'vr');
+    $isVr = $billingMode === 'vr';
+    if (!$isVr) {
+        if ($agency === '') $agency = $billingMode === 'private' ? 'Private pay' : 'No charge';
+        if ($billingMode === 'none') $rate = 0.0;
+    }
+    $authAmount = array_key_exists('authorized_amount', $input)
+        ? ($input['authorized_amount'] === null || $input['authorized_amount'] === '' ? null : (is_numeric($input['authorized_amount']) ? round((float)$input['authorized_amount'], 2) : -1.0))
+        : ($track && $track['authorized_amount'] !== null ? (float)$track['authorized_amount'] : null);
+    if (!$isVr) $authAmount = null;
+    if ($authAmount !== null && ($authAmount < 0 || $authAmount > 99999999.99)) $errors['authorized_amount'] = 'Enter the authorized dollar amount in dollars and cents, or leave it out to use the authorized hours at the hourly rate.';
+    if ($isVr && $authNumber === '') $errors['auth_number'] = 'Service authorization number is required for a VR or agency track. For a client who pays, or free training, choose Private pay or No charge.';
     elseif (mb_strlen($authNumber) > 80) $errors['auth_number'] = 'Keep the authorization number to 80 characters or fewer.';
     if ($agency === '') $errors['funding_agency'] = 'Funding agency is required.';
     elseif (mb_strlen($agency) > 190) $errors['funding_agency'] = 'Keep the funding agency to 190 characters or fewer.';
-    if ($authHours <= 0) $errors['authorized_hours'] = 'Authorized hours must be greater than zero.';
+    if ($isVr && $authHours <= 0) $errors['authorized_hours'] = 'Authorized hours must be greater than zero.';
+    elseif ($authHours < 0) $errors['authorized_hours'] = 'Authorized hours cannot be negative.';
     elseif ($authHours > 99999.99) $errors['authorized_hours'] = 'Authorized hours must be 99,999.99 or fewer.';
-    if ($rate <= 0) $errors['hourly_rate'] = 'Hourly rate must be greater than zero.';
+    if ($billingMode !== 'none' && $rate <= 0) $errors['hourly_rate'] = 'Hourly rate must be greater than zero.';
     elseif ($rate > 999999.99) $errors['hourly_rate'] = 'Hourly rate must be 999,999.99 or less.';
     if (mb_strlen($reason) > 255) $errors['amendment_reason'] = 'Keep the amendment reason to 255 characters or fewer.';
     // A choice left out keeps the track's value (on an edit) or the website's default;
@@ -472,8 +485,8 @@ case 'save_track': {
         if ($firstId = (int)$dup->fetchColumn()) {
             out(['ok' => true, 'id' => $firstId, 'duplicate' => true, 'message' => 'This track was already created (the form was sent twice), so it was saved once.']);
         }
-        db()->prepare('INSERT INTO training_tracks (client_id, title, service_type, rsa_category, bundle_id, status, auth_number, funding_agency, authorized_hours, hourly_rate, mileage_rate, start_date, expiration_date, report_cadence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-            ->execute(array_merge([$clientId], $vals));
+        db()->prepare('INSERT INTO training_tracks (client_id, title, service_type, rsa_category, bundle_id, status, auth_number, funding_agency, authorized_hours, hourly_rate, mileage_rate, start_date, expiration_date, report_cadence, billing_mode, authorized_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+            ->execute(array_merge([$clientId], $vals, [$billingMode, $authAmount]));
         $newTrackId = (int)db()->lastInsertId();
         audit($userId, 'track.create', 'track', $newTrackId, $title . ' (auth ' . $authNumber . ')');
         out(['ok' => true, 'id' => $newTrackId, 'message' => 'Training track created.']);
@@ -561,6 +574,7 @@ case 'save_track': {
         }
         $vals[] = $id;
         db()->prepare('UPDATE training_tracks SET title=?, service_type=?, rsa_category=?, bundle_id=?, status=?, auth_number=?, funding_agency=?, authorized_hours=?, hourly_rate=?, mileage_rate=?, start_date=?, expiration_date=?, report_cadence=? WHERE id=?')->execute($vals);
+        db()->prepare('UPDATE training_tracks SET billing_mode = ?, authorized_amount = ? WHERE id = ?')->execute([$billingMode, $authAmount, $id]);
         $retotalled = 0;
         if ($draftIds && ($rateChanged || $mileageChanged)) {
             $headerSet = ($rateChanged ? ', i.hourly_rate = ?' : '') . ($mileageChanged ? ', i.mileage_rate = ?' : '');
@@ -788,7 +802,7 @@ case 'invoices': {
     $scoped = caseload_scoped();
     $scopeCond = $scoped ? ' AND c.assigned_to = ?' : '';
     $scopeArg = $scoped ? [$userId] : [];
-    $statusFilter = is_string($_GET['status'] ?? null) && in_array($_GET['status'], ['Draft', 'Submitted', 'Paid'], true) ? $_GET['status'] : '';
+    $statusFilter = is_string($_GET['status'] ?? null) && in_array($_GET['status'], ['Draft', 'Submitted', 'Paid', 'Denied', 'Void'], true) ? $_GET['status'] : '';
     $listFrom = " FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id
         WHERE 1=1" . $scopeCond;
     $filter = $statusFilter !== '' ? ' AND i.status = ?' : '';
@@ -807,23 +821,24 @@ case 'invoices': {
     $items = [];
     foreach ($stmt->fetchAll() as $i) {
         $total = round((float)$i['total_amount'], 2);
-        // An older Paid invoice with no amount recorded was paid in full (invoices.php).
-        $paid = $i['status'] === 'Paid' ? ($i['paid_amount'] !== null ? round((float)$i['paid_amount'], 2) : $total) : null;
-        $balance = match ($i['status']) { 'Paid' => max(0.0, round($total - (float)$paid, 2)), default => $total };
+        // Payments and write-offs are running totals on the invoice (3.0.34, inc/billing.php).
+        $paid = $i['paid_amount'] !== null ? round((float)$i['paid_amount'], 2) : null;
+        $balance = in_array($i['status'], ['Submitted', 'Paid'], true) ? invoice_balance($i) : ($i['status'] === 'Draft' ? $total : 0.0);
         $items[] = ['id' => (int)$i['id'], 'invoice_number' => (string)$i['invoice_number'], 'status' => (string)$i['status'],
             'client_id' => (int)$i['client_id'], 'client_name' => (string)$i['client_name'], 'track_title' => (string)$i['track_title'],
             'auth_number' => $i['auth_number'], 'funding_agency' => $i['funding_agency'],
             'hours' => (float)$i['hours'], 'total_amount' => $total, 'paid_amount' => $paid, 'balance' => $balance,
-            'short_paid' => $i['status'] === 'Paid' && $balance > 0,
+            'short_paid' => in_array($i['status'], ['Submitted', 'Paid'], true) && $paid !== null && $balance > 0,
+            'written_off' => round((float)$i['written_off'], 2), 'due_date' => $i['due_date'], 'closed_reason' => $i['closed_reason'],
             'days_outstanding' => $i['status'] === 'Submitted' && $i['days_outstanding'] !== null ? (int)$i['days_outstanding'] : null,
             'created_at' => substr((string)$i['created_at'], 0, 10), 'submitted_at' => $i['submitted_at'], 'paid_at' => $i['paid_at'],
             'payment_ref' => $i['payment_ref'], 'can_open_client' => can('clients')];
     }
     // The page's outstanding-by-agency summary and unbilled figure, same scope.
     $ag = db()->prepare("SELECT COALESCE(i.funding_agency, t.funding_agency) AS funding_agency, COUNT(*) n,
-            SUM(i.total_amount - COALESCE(i.paid_amount, 0)) amt, MAX(DATEDIFF(CURDATE(), i.submitted_at)) oldest
+            SUM(i.total_amount - COALESCE(i.paid_amount, 0) - i.written_off) amt, MAX(DATEDIFF(CURDATE(), i.submitted_at)) oldest
         FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id
-        WHERE (i.status = 'Submitted' OR (i.status = 'Paid' AND i.paid_amount IS NOT NULL AND i.paid_amount < i.total_amount))" . $scopeCond . "
+        WHERE " . INVOICE_OPEN_SQL . $scopeCond . "
         GROUP BY COALESCE(i.funding_agency, t.funding_agency) ORDER BY amt DESC");
     $ag->execute($scopeArg);
     $aging = array_map(fn($a) => ['funding_agency' => (string)($a['funding_agency'] ?? ''), 'count' => (int)$a['n'],

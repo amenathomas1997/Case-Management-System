@@ -967,10 +967,11 @@ switch ($action) {
         // Hours are never logged at a $0.00 rate: refused (4xx, so the app reports it
         // rather than retrying) before anything changes, as on the website.
         if ($hours > 0) {
-            $rt = db()->prepare('SELECT hourly_rate FROM training_tracks WHERE id = ?');
+            $rt = db()->prepare('SELECT hourly_rate, billing_mode FROM training_tracks WHERE id = ?');
             $rt->execute([(int)$sess['track_id']]);
-            $sessRate = $rt->fetchColumn();
-            if ($sessRate !== false && (float)$sessRate <= 0) {
+            $sessTrack = $rt->fetch();
+            $sessRate = $sessTrack !== false ? $sessTrack['hourly_rate'] : false;
+            if ($sessRate !== false && track_needs_rate($sessTrack) && (float)$sessRate <= 0) {
                 fail('This track has no hourly rate. Ask an administrator to set the rate on the track before logging hours.', 422);
             }
         }
@@ -1011,7 +1012,7 @@ switch ($action) {
         // succeed or fail together, so a mid-way error can't strand a
         // "Completed" session with no work log.
         // A session outside its track's authorization is still completed and logged;
-        // auto_log_session() hands back the sentence saying so (work_authorization_issue()).
+        // Since 3.0.34 auto_log_session() refuses it instead (a DomainException, answered 422).
         $authIssue = null;
         $linkedHours = null;
         db()->beginTransaction();
@@ -1160,17 +1161,13 @@ switch ($action) {
         }
         // Never snapshot a $0.00 rate (as track.php and auto_log_session refuse). A 4xx,
         // so a queued offline entry is reported as rejected instead of retried forever.
-        if ((float)$trackRow['hourly_rate'] <= 0) {
+        if (track_needs_rate($trackRow) && (float)$trackRow['hourly_rate'] <= 0) {
             fail('This track has no hourly rate. Ask an administrator to set the rate on the track before logging hours.', 422);
         }
-        // Work outside the track's authorization (expired, not started yet, or the track
-        // closed) is logged only once someone confirms it: authorization_ack, sent after
-        // the user turns on the app's acknowledgement in answer to this refusal. App
-        // builds without that switch are sent to the website, which asks the same.
-        $authIssue = work_authorization_issue($trackRow, $date);
-        if ($authIssue !== null && !in_array($input['authorization_ack'] ?? null, [true, 1, '1'], true)) {
-            out(['ok' => false, 'error' => $authIssue . ' Log it on the website to confirm.', 'authorization_issue' => $authIssue], 422);
-        }
+        // Work outside the track's authorization (its dates, hours or dollars) or on a
+        // track that is not Active is refused until an amendment is recorded (3.0.34;
+        // authorization_ack from older app builds no longer overrides it). Checked under
+        // the track's lock below, with the insert.
         $sigPath = save_signature_png(is_string($input['signature_b64'] ?? null) ? $input['signature_b64'] : null);
         // A typed "name as signed" is an attestation on its own, with or without a drawing.
         $signedName = $signedNameIn !== '' ? $signedNameIn : null;
@@ -1178,13 +1175,19 @@ switch ($action) {
         // rate changed while this request ran is never half-applied, and re-checked there.
         db()->beginTransaction();
         try {
-            $lr = db()->prepare('SELECT hourly_rate, mileage_rate FROM training_tracks WHERE id = ? FOR UPDATE');
+            $lr = db()->prepare('SELECT * FROM training_tracks WHERE id = ? FOR UPDATE');
             $lr->execute([$tid]);
             $rates = $lr->fetch();
-            if (!$rates || (float)$rates['hourly_rate'] <= 0) {
+            if (!$rates || (track_needs_rate($rates) && (float)$rates['hourly_rate'] <= 0)) {
                 db()->rollBack();
                 api_discard_upload($sigPath);
                 fail('This track has no hourly rate. Ask an administrator to set the rate on the track before logging hours.', 422);
+            }
+            $block = work_authorization_block($rates, $date, $hours, round($hours * (float)$rates['hourly_rate'], 2) + round($mileage * (float)$rates['mileage_rate'], 2));
+            if ($block !== null) {
+                db()->rollBack();
+                api_discard_upload($sigPath);
+                out(['ok' => false, 'error' => $block, 'authorization_issue' => $block], 422);
             }
             db()->prepare('INSERT INTO work_logs (track_id, work_date, service_type, rsa_category, goal_id, hours, mileage, description, created_by, hourly_rate, mileage_rate, signature_path, signed_name, idem_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
                 ->execute([$tid, $date, $visitType, $visitRsa, $goalId, $hours, $mileage, $desc, $userId,
@@ -1208,7 +1211,6 @@ switch ($action) {
             throw $e;
         }
         audit($userId, 'hours.log', 'track', $tid, $hours . ' hrs (' . $visitRsa . ', mobile)'
-            . ($authIssue !== null ? '; logged outside the authorization, confirmed by the user: ' . $authIssue : '')
             . ($sNote !== '' ? '; session note saved' : ''));
         // note_saved: the session note was saved with the hours (3.0.31).
         out(['ok' => true, 'note_saved' => $sNote !== '']);
@@ -1574,19 +1576,21 @@ switch ($action) {
             fail('Expense date: ' . fmt_date($expenseDate) . ' is in the future. Log an expense once it has been incurred: enter its date, today or earlier.', 422);
         }
         api_require_track($tid, $userId);
-        // As track.php and log_hours: an expense outside the track's authorization (expired,
-        // not started yet, or the track closed) is logged only once someone confirms it
-        // (authorization_ack). App builds without that switch are sent to the website.
-        $et = db()->prepare('SELECT * FROM training_tracks WHERE id = ?');
-        $et->execute([$tid]);
-        $expAuthIssue = work_authorization_issue($et->fetch() ?: [], $expenseDate);
-        if ($expAuthIssue !== null && !in_array($input['authorization_ack'] ?? null, [true, 1, '1'], true)) {
-            out(['ok' => false, 'error' => $expAuthIssue . ' Log it on the website to confirm.', 'authorization_issue' => $expAuthIssue], 422);
-        }
+        // As track.php and log_hours: an expense outside the track's authorization (its
+        // dates or dollars) or on a track that is not Active is refused until an
+        // amendment is recorded (3.0.34), checked under the track's lock.
+        db()->beginTransaction();
         try {
+            $et = db()->prepare('SELECT * FROM training_tracks WHERE id = ? FOR UPDATE');
+            $et->execute([$tid]);
+            $block = work_authorization_block($et->fetch() ?: [], $expenseDate, 0.0, $amount);
+            if ($block !== null) { db()->rollBack(); out(['ok' => false, 'error' => $block, 'authorization_issue' => $block], 422); }
             db()->prepare('INSERT INTO track_expenses (track_id, expense_date, description, amount, created_by, idem_key) VALUES (?,?,?,?,?,?)')
                 ->execute([$tid, $expenseDate, $desc, $amount, $userId, $idem]);
+            $expenseId = (int)db()->lastInsertId();
+            db()->commit();
         } catch (PDOException $e) {
+            if (db()->inTransaction()) db()->rollBack();
             // A retry sent while the first send was still saving met the saved expense on
             // its key: it is the same expense, acknowledged as one.
             if ($idem !== null && (string)($e->errorInfo[0] ?? '') === '23000' && ($savedId = $expenseSaved()) !== null) {
@@ -1594,11 +1598,7 @@ switch ($action) {
             }
             throw $e;
         }
-        $expenseId = (int)db()->lastInsertId();
         audit($userId, 'expense.add', 'track', $tid, fmt_money($amount) . ' (mobile)');
-        if ($expAuthIssue !== null) {
-            audit($userId, 'expense.auth_override', 'track', $tid, 'expense #' . $expenseId . ' logged anyway, confirmed by the user (mobile): ' . $expAuthIssue);
-        }
         out(['ok' => true, 'id' => $expenseId]);
 
     case 'expenses': {

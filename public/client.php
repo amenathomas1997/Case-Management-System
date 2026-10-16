@@ -64,9 +64,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['purge_client'])) {
         // Invoices still awaiting payment, or paid short, are open receivables:
         // they go with the record (the confirmation said so), and the audit entry
         // below keeps their numbers and the amount outstanding.
-        $iq = $pdo->prepare("SELECT i.invoice_number, i.status, i.total_amount - COALESCE(i.paid_amount, 0) AS owed
+        $iq = $pdo->prepare("SELECT i.invoice_number, i.status, i.total_amount - COALESCE(i.paid_amount, 0) - i.written_off AS owed
             FROM invoices i JOIN training_tracks t ON t.id = i.track_id
-            WHERE t.client_id = ? AND (i.status = 'Submitted' OR (i.status = 'Paid' AND i.paid_amount IS NOT NULL AND i.paid_amount < i.total_amount))");
+            WHERE t.client_id = ? AND " . INVOICE_OPEN_SQL);
         $iq->execute([$id]);
         $openInvoices = $iq->fetchAll();
         $purgeTrashIds = [];
@@ -1053,8 +1053,8 @@ page_header($tabLabels[$tab] . ' — ' . $client['name'], $user, 'clients', $tab
   <?php if (can('admin')): ?>
   <p>To dispose of it: <a href="client_export.php?id=<?= $id ?>">export the full file (ZIP)</a> for off-system storage, then purge.</p>
   <?php // Open receivables go with the record: said here and in the confirmation, never silently.
-  $oiq = db()->prepare("SELECT COUNT(*) AS n, COALESCE(SUM(i.total_amount - COALESCE(i.paid_amount, 0)), 0) AS owed FROM invoices i JOIN training_tracks t ON t.id = i.track_id
-      WHERE t.client_id = ? AND (i.status = 'Submitted' OR (i.status = 'Paid' AND i.paid_amount IS NOT NULL AND i.paid_amount < i.total_amount))");
+  $oiq = db()->prepare("SELECT COUNT(*) AS n, COALESCE(SUM(i.total_amount - COALESCE(i.paid_amount, 0) - i.written_off), 0) AS owed FROM invoices i JOIN training_tracks t ON t.id = i.track_id
+      WHERE t.client_id = ? AND " . INVOICE_OPEN_SQL);
   $oiq->execute([$id]);
   $openInv = $oiq->fetch();
   $openInvText = (int)$openInv['n'] > 0 ? (int)$openInv['n'] . ' invoice(s) on this record are still awaiting payment or were paid short (' . fmt_money((float)$openInv['owed']) . ' outstanding). Purging removes them; record any payment on the Invoices page first.' : ''; ?>

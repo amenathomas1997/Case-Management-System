@@ -24,10 +24,16 @@ if (!$csrfStale) csrf_check();
 
 // Referral alerts (in-app and email) sent per hour across all senders; see the save below.
 const REFERRAL_ALERTS_PER_HOUR = 30;
+// The fee rule comes from Administration > Billing details (billing_settings()):
+// {threshold} and {rate} are filled in after translation by fee_copy().
 const INCOME_BRACKETS = [
-    'below_2000' => 'Below $2,000 per month',
-    'above_2000' => '$2,000 per month or more',
+    'below_2000' => 'Below {threshold} per month',
+    'above_2000' => '{threshold} per month or more',
 ];
+function fee_copy(string $s): string {
+    $b = billing_settings();
+    return str_replace(['{threshold}', '{rate}'], ['$' . number_format($b['private_threshold'], 0), '$' . number_format($b['private_rate'], 2)], $s);
+}
 // Preserve the multi-select and structured fields for explicit validation; drop other arrays so a
 // crafted request (e.g. role[]=x) can't cause type errors.
 foreach ($_POST as $k => $v) {
@@ -230,7 +236,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             default => $organization !== '' ? $organization : 'Employer/other',
         };
         $fee = null;
-        if ($role === 'self') $fee = $income === 'below_2000' ? 0.00 : 17.50;
+        if ($role === 'self') $fee = $income === 'below_2000' ? 0.00 : billing_settings()['private_rate'];
         $clientName = $role === 'self' ? trim($_POST['referrer_name']) : trim($_POST['client_name']);
         $clientPhone = $role === 'self' ? trim($_POST['referrer_phone']) : (trim($_POST['client_phone'] ?? '') ?: null);
         $clientEmail = $role === 'self' ? (strtolower($refEmail) ?: null) : (trim($_POST['client_email'] ?? '') ?: null);
@@ -266,7 +272,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 in_array($_POST['contact_first'] ?? '', ['client','referrer'], true) ? $_POST['contact_first'] : null,
                 $consent ? 1 : 0,
                 null, // Historical Pre-ETS data remains readable; new AT referrals never populate it.
-                $role === 'self' ? INCOME_BRACKETS[$income] : null,
+                $role === 'self' ? mb_substr(fee_copy(INCOME_BRACKETS[$income]), 0, 30) : null,
                 $fee, $requestFields['referral_purpose'], $requestFields['requested_service'], $requestFields['specific_needs'],
                 // The language the form was sent in: the client it becomes prefers it.
                 page_lang() === 'es' ? 'es' : 'en',
@@ -378,7 +384,7 @@ echo lang_toggle();
     <?php if ($feeResult === 'free'): ?>
       <p><strong><?= t('Based on the income you reported, our services are provided to you at no cost.') ?></strong></p>
     <?php else: ?>
-      <p><strong><?= t('Based on the income you reported, our services cost $17.50 per hour of training.') ?></strong> <?= t('We\'ll go over the details when we call — no payment is needed now.') ?></p>
+      <p><strong><?= fee_copy(t('Based on the income you reported, our services cost {rate} per hour of training.')) ?></strong> <?= t('We\'ll go over the details when we call — no payment is needed now.') ?></p>
     <?php endif; ?>
   </div>
   <?php endif; ?>
@@ -519,7 +525,7 @@ if ($errors): ?>
     <?php $incomeNum = 0; foreach (INCOME_BRACKETS as $value => $label): ?>
     <div class="field">
       <label><input type="radio" name="income" id="income-<?= $incomeNum++ ?>" value="<?= h($value) ?>" <?= ($_POST['income'] ?? '') === $value ? 'checked' : '' ?> data-req-roles="self">
-        <?= t($label) ?> — <strong><?= t($value === 'below_2000' ? 'free' : '$17.50 per hour') ?></strong></label>
+        <?= fee_copy(t($label)) ?> — <strong><?= fee_copy(t($value === 'below_2000' ? 'free' : '{rate} per hour')) ?></strong></label>
     </div>
     <?php endforeach; ?>
     <?= $err('income') ?>

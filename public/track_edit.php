@@ -35,13 +35,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // here instead of failing the save (or being cut short) in the database.
     if ($title === '') $errors['title'] = 'Track title is required.';
     elseif (mb_strlen($title) > 190) $errors['title'] = 'Keep the track title to 190 characters or fewer.';
-    if ($authNumber === '') $errors['auth_number'] = 'Service authorization number is required — every training track must be tied to an authorization.';
+    // How the work is paid for (3.0.34): a VR authorization needs its number, agency,
+    // hours and rate; private pay needs a rate; no charge logs at $0 and is never invoiced.
+    $billingMode = isset(BILLING_MODES[$_POST['billing_mode'] ?? '']) ? $_POST['billing_mode'] : 'vr';
+    $isVr = $billingMode === 'vr';
+    if (!$isVr) {
+        if ($agency === '') $agency = $billingMode === 'private' ? 'Private pay' : 'No charge';
+        if ($billingMode === 'none') $rate = 0.0;
+    }
+    $amtRaw = is_string($_POST['authorized_amount'] ?? null) ? str_replace([',', '$'], '', trim($_POST['authorized_amount'])) : '';
+    $authAmount = $amtRaw === '' || !$isVr ? null : (is_numeric($amtRaw) ? round((float)$amtRaw, 2) : -1.0);
+    if ($authAmount !== null && ($authAmount < 0 || $authAmount > 99999999.99)) $errors['authorized_amount'] = 'Enter the authorized dollar amount in dollars and cents, such as 4500.00, or leave it blank to use the authorized hours at the hourly rate.';
+    if ($isVr && $authNumber === '') $errors['auth_number'] = 'Service authorization number is required for a VR or agency track. For a client who pays, or free training, choose Private pay or No charge.';
     elseif (mb_strlen($authNumber) > 80) $errors['auth_number'] = 'Keep the authorization number to 80 characters or fewer.';
     if ($agency === '') $errors['funding_agency'] = 'Funding agency is required.';
     elseif (mb_strlen($agency) > 190) $errors['funding_agency'] = 'Keep the funding agency to 190 characters or fewer.';
-    if ($authHours <= 0) $errors['authorized_hours'] = 'Authorized hours must be greater than zero.';
+    if ($isVr && $authHours <= 0) $errors['authorized_hours'] = 'Authorized hours must be greater than zero.';
+    elseif ($authHours < 0) $errors['authorized_hours'] = 'Authorized hours cannot be negative.';
     elseif ($authHours > 99999.99) $errors['authorized_hours'] = 'Authorized hours must be 99,999.99 or fewer.';
-    if ($rate <= 0) $errors['hourly_rate'] = 'Hourly rate must be greater than zero.';
+    if ($billingMode !== 'none' && $rate <= 0) $errors['hourly_rate'] = 'Hourly rate must be greater than zero.' . ($billingMode === 'private' ? ' The private-pay fee is ' . fmt_money(billing_settings()['private_rate']) . ' an hour (Administration > Billing details).' : '');
     elseif ($rate > 999999.99) $errors['hourly_rate'] = 'Hourly rate must be 999,999.99 or less.';
     if (mb_strlen($reason) > 255) $errors['amendment_reason'] = 'Keep the amendment reason to 255 characters or fewer.';
     $status = in_array($_POST['status'] ?? '', TRACK_STATUSES, true) ? $_POST['status'] : 'Active';
@@ -178,6 +190,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 $vals[] = $track['id'];
                 db()->prepare('UPDATE training_tracks SET title=?, service_type=?, rsa_category=?, bundle_id=?, status=?, auth_number=?, funding_agency=?, authorized_hours=?, hourly_rate=?, mileage_rate=?, start_date=?, expiration_date=?, report_cadence=? WHERE id=?')->execute($vals);
+                db()->prepare('UPDATE training_tracks SET billing_mode = ?, authorized_amount = ? WHERE id = ?')->execute([$billingMode, $authAmount, $id]);
+                if (($track['billing_mode'] ?? 'vr') !== $billingMode || ($track['authorized_amount'] === null ? null : round((float)$track['authorized_amount'], 2)) !== $authAmount) {
+                    audit($user['id'], 'track.billing', 'track', $id, 'billing ' . ($track['billing_mode'] ?? 'vr') . ' -> ' . $billingMode
+                        . '; authorized amount ' . ($track['authorized_amount'] ?? 'none') . ' -> ' . ($authAmount ?? 'none'));
+                }
                 // Each re-priced Draft is re-totalled exactly as generate_invoice()
                 // sums it (each line rounded to the cent), and its header names the
                 // new rates. Its expenses are unchanged.
@@ -215,8 +232,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 flash('This track was already created (the form was sent twice), so it was saved once.', 'info');
                 redirect('track.php?id=' . $firstId);
             }
-            db()->prepare('INSERT INTO training_tracks (client_id, title, service_type, rsa_category, bundle_id, status, auth_number, funding_agency, authorized_hours, hourly_rate, mileage_rate, start_date, expiration_date, report_cadence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-                ->execute(array_merge([$clientId], $vals));
+            db()->prepare('INSERT INTO training_tracks (client_id, title, service_type, rsa_category, bundle_id, status, auth_number, funding_agency, authorized_hours, hourly_rate, mileage_rate, start_date, expiration_date, report_cadence, billing_mode, authorized_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+                ->execute(array_merge([$clientId], $vals, [$billingMode, $authAmount]));
             // Capture the id before audit() inserts its own row and replaces it.
             $newTrackId = (int)db()->lastInsertId();
             web_once_set($trackKey, $newTrackId);
@@ -228,6 +245,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $v = fn(string $k, $default = '') => h($_POST[$k] ?? $track[$k] ?? $default);
+// A new track starts from the fee quoted when the client's referral came in (3.0.34):
+// $0 (free) is No charge, an hourly fee is Private pay at that fee; else VR.
+$newMode = 'vr'; $newRate = '';
+if (!$track) {
+    $qf = db()->prepare('SELECT quoted_fee FROM referrals WHERE client_id = ? AND quoted_fee IS NOT NULL ORDER BY id DESC LIMIT 1');
+    $qf->execute([$clientId]);
+    $fee = $qf->fetchColumn();
+    if ($fee !== false) { $newMode = (float)$fee > 0 ? 'private' : 'none'; $newRate = (float)$fee > 0 ? number_format((float)$fee, 2, '.', '') : ''; }
+}
+$curMode = (string)($_POST['billing_mode'] ?? $track['billing_mode'] ?? $newMode);
 // The shared helpers render the error summary, each inline error, and the
 // aria-invalid / aria-describedby that ties an error to its control.
 set_form_errors($errors);
@@ -335,8 +362,15 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
   <fieldset>
     <legend>Service authorization</legend>
     <div class="field">
-      <label for="auth_number">Authorization number <?= required_mark() ?></label>
-      <input type="text" id="auth_number" name="auth_number" required maxlength="80" value="<?= $v('auth_number') ?>" <?= field_aria('auth_number') ?>>
+      <label for="billing_mode">Who pays for this training</label>
+      <select id="billing_mode" name="billing_mode" <?= field_aria('billing_mode', 'billing_mode-hint') ?>>
+        <?php foreach (BILLING_MODES as $mk => $ml): ?><option value="<?= h($mk) ?>"<?= $curMode === $mk ? ' selected' : '' ?>><?= h($ml) ?></option><?php endforeach; ?>
+      </select>
+      <span class="hint" id="billing_mode-hint">VR or agency: needs the authorization below, and work over its dates, hours or dollars is refused until it is amended. Private pay: invoiced to the client. No charge: hours are logged at $0 and never invoiced.</span>
+    </div>
+    <div class="field">
+      <label for="auth_number">Authorization number (required for VR or agency)</label>
+      <input type="text" id="auth_number" name="auth_number" maxlength="80" value="<?= $v('auth_number') ?>" <?= field_aria('auth_number') ?>>
       <?= field_error('auth_number') ?>
     </div>
     <div class="field">
@@ -345,14 +379,20 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
       <?= field_error('funding_agency') ?>
     </div>
     <div class="field">
-      <label for="authorized_hours">Authorized hours (total granted) <?= required_mark() ?></label>
-      <input type="number" id="authorized_hours" name="authorized_hours" step="0.25" min="0.25" required value="<?= $v('authorized_hours') ?>" <?= field_aria('authorized_hours') ?>>
+      <label for="authorized_hours">Authorized hours, total granted (required for VR or agency)</label>
+      <input type="number" id="authorized_hours" name="authorized_hours" step="0.25" min="0" value="<?= $v('authorized_hours') ?>" <?= field_aria('authorized_hours') ?>>
       <?= field_error('authorized_hours') ?>
     </div>
     <div class="field">
-      <label for="hourly_rate">Hourly billing rate (USD) <?= required_mark() ?></label>
-      <span class="hint" id="rate-hint">Enter the hourly rate written on this authorization, in dollars and cents</span>
-      <input type="number" id="hourly_rate" name="hourly_rate" step="0.01" min="0.01" required value="<?= $v('hourly_rate', '') ?>" <?= field_aria('hourly_rate', 'rate-hint') ?>>
+      <label for="authorized_amount">Authorized dollar amount (optional)</label>
+      <span class="hint" id="authorized_amount-hint">When the authorization states a dollar limit. Left blank, the limit is the authorized hours at the hourly rate. Hours, mileage and expenses all count toward it.</span>
+      <input type="text" inputmode="decimal" id="authorized_amount" name="authorized_amount" maxlength="14" value="<?= $v('authorized_amount') ?>" <?= field_aria('authorized_amount', 'authorized_amount-hint') ?>>
+      <?= field_error('authorized_amount') ?>
+    </div>
+    <div class="field">
+      <label for="hourly_rate">Hourly billing rate (USD)</label>
+      <span class="hint" id="rate-hint">The rate on the authorization, or the private-pay fee (<?= fmt_money(billing_settings()['private_rate']) ?> an hour). Not used for No charge.</span>
+      <input type="number" id="hourly_rate" name="hourly_rate" step="0.01" min="0" value="<?= $v('hourly_rate', $newRate) ?>" <?= field_aria('hourly_rate', 'rate-hint') ?>>
       <?= field_error('hourly_rate') ?>
     </div>
     <div class="field">

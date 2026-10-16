@@ -104,17 +104,36 @@ if ($snap && !empty($invoice['period_start'])) {
 // export are); only an ad-hoc statement is dated today.
 $docDate = $invoice ? date('F j, Y', strtotime($invoice['created_at'])) : date('F j, Y');
 $docNumber = $invoice ? $invoice['invoice_number'] : $authNo . '-' . date('Ymd');
+// The organisation's billing details (Administration > Billing details, 3.0.34): who to
+// pay and how VR matches the payment, printed only when they have been entered.
+$bs = billing_settings();
+$private = $invoice ? ($invoice['bill_mode'] ?? 'vr') === 'private' : track_mode($t) === 'private';
+$fromLines = array_values(array_filter(array_merge(explode("\n", str_replace("\r", '', $bs['remit_to'])),
+    [$bs['phone'] !== '' ? 'Phone ' . $bs['phone'] : '', $bs['email']]), fn($v) => trim($v) !== ''));
+$payInfo = array_filter([
+    'Vendor number' => $bs['vendor_number'], 'Tax ID' => $bs['tax_id'],
+    'Payment terms' => $invoice ? 'Due ' . $bs['terms_days'] . ' days after submission' : '',
+    'Due date' => $invoice && !empty($invoice['due_date']) ? fmt_date($invoice['due_date']) : '',
+    'Memo' => $invoice ? (string)($invoice['notes'] ?? '') : '',
+], fn($v) => $v !== '');
+// What has been paid, written off and is still owed; a closed invoice says so.
+$paidSoFar = $invoice ? (float)($invoice['paid_amount'] ?? 0) : 0.0;
+$writtenOff = $invoice ? (float)($invoice['written_off'] ?? 0) : 0.0;
+$closedNote = $invoice && in_array($invoice['status'], ['Denied', 'Void'], true)
+    ? 'This invoice is ' . strtoupper($invoice['status']) . ($invoice['closed_reason'] ? ': ' . $invoice['closed_reason'] : '') . '. Nothing is owed on it; its work was released to be invoiced again.' : '';
 
 // The same authorized data is available as a portable, semantic HTML report.
 if (($_GET['format'] ?? '') === 'html') {
     $doc = new AccessibleDocument(ucfirst(strtolower($docTitle)) . ' — ' . $t['client_name']);
-    $doc->paragraph(brand('org') . "\n" . brand('tagline'));
-    $doc->heading('Bill to and service authorization');
+    $doc->paragraph(implode("\n", array_filter(array_merge([brand('org'), brand('tagline')], $fromLines))));
+    if ($closedNote !== '') $doc->paragraph($closedNote);
+    if ($payInfo) { $doc->heading('Payment details'); $doc->properties($payInfo); }
+    $doc->heading($private ? 'Bill to' : 'Bill to and service authorization');
     $doc->properties(array_merge(
         $invoice ? ['Invoice date' => $docDate, 'Printed' => date('F j, Y')] : ['Statement date' => $docDate], [
         $invoice ? 'Invoice number' : 'Statement number' => $docNumber,
         'Bill to' => implode("\n", $billTo),
-        'Authorization' => $authNo, 'Client' => $t['client_name'], 'Service' => $t['title'],
+        'Authorization' => $private ? 'Private pay' : $authNo, 'Client' => $t['client_name'], 'Service' => $t['title'],
         'Rehabilitation Services Administration (RSA) program' => track_program_label($t),
         $periodLabel => $periodText,
         'Rate' => $rateText,
@@ -135,11 +154,14 @@ if (($_GET['format'] ?? '') === 'html') {
     $totals = ['Total hours (' . number_format($r['hours_worked'], 2) . ' hours)' => fmt_money($r['billed_amount'])];
     if ($r['mileage_amount'] > 0) $totals['Total mileage (' . number_format($r['mileage'], 1) . ' miles)'] = fmt_money($r['mileage_amount']);
     if ($expTotal > 0) $totals['Total expenses'] = fmt_money($expTotal);
-    $totals[$invoice ? 'TOTAL DUE' : 'TOTAL (ALL WORK TO DATE, INCLUDING PREVIOUSLY INVOICED)'] = fmt_money($invoice ? (float)$invoice['total_amount'] : $r['total_billed'] + $expTotal);
+    $totals[$invoice ? ($paidSoFar > 0 || $writtenOff > 0 ? 'INVOICE TOTAL' : 'TOTAL DUE') : 'TOTAL (ALL WORK TO DATE, INCLUDING PREVIOUSLY INVOICED)'] = fmt_money($invoice ? (float)$invoice['total_amount'] : $r['total_billed'] + $expTotal);
+    if ($paidSoFar > 0) $totals['Paid'] = fmt_money($paidSoFar);
+    if ($writtenOff > 0) $totals['Written off'] = fmt_money($writtenOff);
+    if ($invoice && ($paidSoFar > 0 || $writtenOff > 0)) $totals['BALANCE DUE'] = fmt_money(invoice_balance($invoice));
     $doc->heading('Totals');
     $doc->properties($totals);
-    $doc->heading('Authorization usage');
-    $doc->paragraph('Authorization usage: ' . fmt_hours($authUsage['hours_worked']) . ' of ' . fmt_hours($authUsage['authorized_hours']) . ' authorized hours used (' . $authUsage['pct_used'] . '%). Remaining: ' . fmt_hours($authUsage['hours_remaining']) . ' / ' . fmt_money($authUsage['funds_remaining']) . '. Prepared by ' . $user['name'] . '.');
+    if (!$private) $doc->heading('Authorization usage');
+    if (!$private) $doc->paragraph('Authorization usage: ' . fmt_hours($authUsage['hours_worked']) . ' of ' . fmt_hours($authUsage['authorized_hours']) . ' authorized hours used (' . $authUsage['pct_used'] . '%). Remaining: ' . fmt_hours($authUsage['hours_remaining']) . ' / ' . fmt_money($authUsage['funds_remaining']) . '. Prepared by ' . $user['name'] . '.');
     // A download of the client's billing record is listed in their audit history.
     audit((int)$user['id'], 'invoice.download', $invoice ? 'invoice' : 'track', $invoice ? (int)$invoice['id'] : $trackId, ($invoice ? 'invoice ' . $invoice['invoice_number'] : 'statement') . ' (accessible HTML)');
     $doc->download('invoice_' . ($invoice['id'] ?? 'track_' . $trackId) . '.html');
@@ -231,12 +253,16 @@ $pdf->SetFont('Helvetica', '', 10);
 $pdf->SetTextColor(60, 60, 60);
 $pdf->Cell(120, 5, pdf_txt(brand('tagline')), 0, 0);
 $pdf->Cell(0, 5, pdf_txt('Date: ' . $docDate), 0, 1, 'R');
-$pdf->Cell(120, 5, '', 0, 0);
-$pdf->Cell(0, 5, pdf_txt(($invoice ? 'Invoice #: ' : 'Statement #: ') . $docNumber), 0, 1, 'R');
-if ($invoice) {
-    $pdf->Cell(120, 5, '', 0, 0);
-    $pdf->Cell(0, 5, pdf_txt('Printed: ' . date('F j, Y')), 0, 1, 'R');
+// The remit-to lines run down the left, beside the number, due date and vendor number.
+$rightHead = [($invoice ? 'Invoice #: ' : 'Statement #: ') . $docNumber];
+if ($invoice) $rightHead[] = 'Printed: ' . date('F j, Y');
+foreach ($payInfo as $k => $v) if ($k !== 'Memo') $rightHead[] = $k . ': ' . $v;
+for ($n = 0; $n < max(count($fromLines), count($rightHead)); $n++) {
+    $pdf->Cell(120, 5, pdf_txt($fromLines[$n] ?? ''), 0, 0);
+    $pdf->Cell(0, 5, pdf_txt($rightHead[$n] ?? ''), 0, 1, 'R');
 }
+if (isset($payInfo['Memo'])) $pdf->Cell(0, 5, pdf_txt('Memo: ' . $payInfo['Memo']), 0, 1, 'L');
+if ($closedNote !== '') { $pdf->SetFont('Helvetica', 'B', 10); $pdf->MultiCell(0, 5, pdf_txt($closedNote), 0, 'L'); $pdf->SetFont('Helvetica', '', 10); }
 $pdf->Ln(4);
 $pdf->SetDrawColor(30, 58, 138);
 $pdf->SetLineWidth(0.6);
@@ -248,11 +274,11 @@ $pdf->SetTextColor(0, 0, 0);
 $half = 92;
 $pdf->SetFont('Helvetica', 'B', 10);
 $pdf->Cell($half, 5, 'BILL TO', 0, 0);
-$pdf->Cell(0, 5, 'SERVICE AUTHORIZATION', 0, 1);
+$pdf->Cell(0, 5, $private ? 'SERVICE' : 'SERVICE AUTHORIZATION', 0, 1);
 $pdf->SetFont('Helvetica', '', 10);
 $leftLines = $billTo;
 $rightLines = [
-    'Authorization number: ' . $authNo,
+    $private ? 'Private pay' : 'Authorization number: ' . $authNo,
     'Client: ' . $t['client_name'],
     'Service: ' . $t['title'],
     'RSA program: ' . track_program_label($t),
@@ -322,7 +348,11 @@ if ($expTotal > 0) {
     $rowsT[] = ['Total expenses', fmt_money($expTotal), false];
 }
 $grand = $invoice ? (float)$invoice['total_amount'] : $r['total_billed'] + $expTotal;
-$rowsT[] = [$invoice ? 'TOTAL DUE' : 'TOTAL (ALL WORK TO DATE, INCLUDING PREVIOUSLY INVOICED)', fmt_money($grand), true];
+$settled = $invoice && ($paidSoFar > 0 || $writtenOff > 0);
+$rowsT[] = [$invoice ? ($settled ? 'INVOICE TOTAL' : 'TOTAL DUE') : 'TOTAL (ALL WORK TO DATE, INCLUDING PREVIOUSLY INVOICED)', fmt_money($grand), !$settled];
+if ($paidSoFar > 0) $rowsT[] = ['Paid', fmt_money($paidSoFar), false];
+if ($writtenOff > 0) $rowsT[] = ['Written off', fmt_money($writtenOff), false];
+if ($settled) $rowsT[] = ['BALANCE DUE', fmt_money(invoice_balance($invoice)), true];
 foreach ($rowsT as [$label, $val, $bold]) {
     $pdf->SetFont('Helvetica', $bold ? 'B' : '', $bold ? 11 : 10);
     $pdf->Cell($labelW, 7, pdf_txt($label), 0, 0, 'R');
@@ -331,7 +361,7 @@ foreach ($rowsT as [$label, $val, $bold]) {
 $pdf->Ln(4);
 $pdf->SetFont('Helvetica', '', 9);
 $pdf->SetTextColor(60, 60, 60);   // #3C3C3C: 11:1 on white (small text needs 7:1)
-$pdf->MultiCell(0, 5, pdf_txt('Authorization usage: ' . fmt_hours($authUsage['hours_worked']) . ' of ' . fmt_hours($authUsage['authorized_hours']) . ' authorized hours used (' . $authUsage['pct_used'] . '%). Remaining: ' . fmt_hours($authUsage['hours_remaining']) . ' / ' . fmt_money($authUsage['funds_remaining']) . '. Prepared by ' . $user['name'] . '.'));
+if (!$private) $pdf->MultiCell(0, 5, pdf_txt('Authorization usage: ' . fmt_hours($authUsage['hours_worked']) . ' of ' . fmt_hours($authUsage['authorized_hours']) . ' authorized hours used (' . $authUsage['pct_used'] . '%). Remaining: ' . fmt_hours($authUsage['hours_remaining']) . ' / ' . fmt_money($authUsage['funds_remaining']) . '. Prepared by ' . $user['name'] . '.'));
 
 $filename = 'invoice_' . preg_replace('/[^A-Za-z0-9]+/', '_', $t['client_name']) . '_' . preg_replace('/[^A-Za-z0-9]+/', '_', $authNo) . '_' . date('Ymd') . '.pdf';
 // Built as a string and sent with this page's own headers: FPDF's download output

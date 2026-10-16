@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '3.0.33';
+const APP_VERSION = '3.0.34';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -916,9 +916,9 @@ function log_line_amounts(array $log, float $fallbackRate, float $fallbackMileag
  *   since expenses are billed against the same authorization.
  */
 function track_rollup(int $trackId): array {
-    $t = db()->prepare('SELECT authorized_hours, hourly_rate, mileage_rate FROM training_tracks WHERE id = ?');
+    $t = db()->prepare('SELECT * FROM training_tracks WHERE id = ?');
     $t->execute([$trackId]);
-    $track = $t->fetch();
+    $track = $t->fetch() ?: [];
     $authHours = (float)($track['authorized_hours'] ?? 0);
     $rate = (float)($track['hourly_rate'] ?? 0);
     $mileageRate = (float)($track['mileage_rate'] ?? 0);
@@ -943,7 +943,8 @@ function track_rollup(int $trackId): array {
         FROM track_expenses WHERE track_id = ?');
     $e->execute([$today, $trackId]);
     $exp = $e->fetch();
-    $inv = db()->prepare("SELECT COALESCE(SUM(total_amount),0) AS total,
+    // Denied and void invoices stay on record, but their work was released to be billed again.
+    $inv = db()->prepare("SELECT COALESCE(SUM(CASE WHEN status NOT IN ('Denied','Void') THEN total_amount ELSE 0 END),0) AS total,
         COALESCE(SUM(CASE WHEN status IN ('Submitted','Paid') THEN total_amount ELSE 0 END),0) AS submitted
         FROM invoices WHERE track_id = ?");
     $inv->execute([$trackId]);
@@ -953,7 +954,15 @@ function track_rollup(int $trackId): array {
     $hoursAmount = (float)$sums['hours_amount'];
     $mileageAmount = (float)$sums['mileage_amount'];
     $expensesAmount = (float)$exp['total'];
+    // The dollar limit: the authorization's own amount when one was entered (3.0.34),
+    // else the authorized hours at the hourly rate. Overruns are reported, signed, by
+    // hours_over and funds_over (positive only when over).
+    $authFunds = $track && $track['authorized_amount'] !== null ? (float)$track['authorized_amount'] : $authHours * $rate;
+    $used = round($hoursAmount + $mileageAmount + $expensesAmount, 2);
     return [
+        'billing_mode' => (string)($track['billing_mode'] ?? 'vr'),
+        'hours_over' => max(0.0, round($worked - $authHours, 2)),
+        'funds_over' => max(0.0, round($used - $authFunds, 2)),
         'authorized_hours' => $authHours,
         'hourly_rate' => $rate,
         'mileage_rate' => $mileageRate,
@@ -965,8 +974,8 @@ function track_rollup(int $trackId): array {
         'expenses_amount' => $expensesAmount,
         'invoiced_amount' => (float)$invoiced['total'],
         'submitted_amount' => (float)$invoiced['submitted'],
-        'authorized_funds' => $authHours * $rate,
-        'funds_remaining' => max(0.0, round($authHours * $rate - $hoursAmount - $mileageAmount - $expensesAmount, 2)),
+        'authorized_funds' => $authFunds,
+        'funds_remaining' => max(0.0, round($authFunds - $used, 2)),
         'unbilled_hours' => (float)$sums['unbilled'],
         'unbilled_mileage' => (float)$sums['unbilled_mileage'],
         'unbilled_amount' => (float)$sums['unbilled_amount'],
@@ -1199,10 +1208,12 @@ function generate_invoice(int $trackId, ?int $userId, ?string $until = null): ?i
     $pdo = db();
     $pdo->beginTransaction();
     try {
-        $t = $pdo->prepare('SELECT client_id, hourly_rate, mileage_rate, auth_number, funding_agency FROM training_tracks WHERE id = ? FOR UPDATE');
+        $t = $pdo->prepare('SELECT client_id, hourly_rate, mileage_rate, auth_number, funding_agency, billing_mode FROM training_tracks WHERE id = ? FOR UPDATE');
         $t->execute([$trackId]);
         $track = $t->fetch();
-        if (!$track) { $pdo->rollBack(); return null; }
+        // A no-charge track (3.0.34) is never invoiced: its hours are logged at $0.
+        if (!$track || track_mode($track) === 'none') { $pdo->rollBack(); return null; }
+        $private = track_mode($track) === 'private';
         // Bill each log at the rate in force when it was entered (snapshot column),
         // falling back to the track's current rate for older logs; each line is
         // rounded to the cent first, as log_line_amounts() prints it. Locking reads,
@@ -1231,18 +1242,20 @@ function generate_invoice(int $trackId, ?int $userId, ?string $until = null): ?i
         $dates = array_filter([$sums['d1'], $sums['d2'], $exp['d1'], $exp['d2']]);
         // A counselor email not yet confirmed (counselor_verified = 0, e.g. typed on
         // the public referral form) is left off the bill-to, as client_edit.php does.
-        $c = $pdo->prepare('SELECT counselor_name, counselor_agency, counselor_email, counselor_verified FROM clients WHERE id = ?');
+        // A private-pay invoice is billed to the client (name, address and a confirmed email).
+        $c = $pdo->prepare('SELECT name, address, email, email_verified, counselor_name, counselor_agency, counselor_email, counselor_verified FROM clients WHERE id = ?');
         $c->execute([(int)$track['client_id']]);
         $counselor = $c->fetch() ?: [];
-        $billTo = implode("\n", array_filter(array_map(fn($v) => trim((string)$v),
-            [$counselor['counselor_name'] ?? null, $counselor['counselor_agency'] ?? null,
+        $billTo = implode("\n", array_filter(array_map(fn($v) => trim((string)$v), $private
+            ? [$counselor['name'] ?? null, $counselor['address'] ?? null, (int)($counselor['email_verified'] ?? 0) === 1 ? ($counselor['email'] ?? null) : null]
+            : [$counselor['counselor_name'] ?? null, $counselor['counselor_agency'] ?? null,
                 (int)($counselor['counselor_verified'] ?? 0) === 1 ? ($counselor['counselor_email'] ?? null) : null]), fn($v) => $v !== ''));
         // Number the invoice from its own id after the insert — collision-free
         // even for two invoices created at the same instant.
         $pdo->prepare('INSERT INTO invoices (track_id, invoice_number, hours, hours_amount, mileage, mileage_amount, expenses_amount, total_amount, created_by,
-                auth_number, funding_agency, bill_to, hourly_rate, mileage_rate, period_start, period_end) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+                auth_number, funding_agency, bill_mode, bill_to, hourly_rate, mileage_rate, period_start, period_end) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
             ->execute([$trackId, 'PENDING', $sums['h'], $hoursAmt, $sums['m'], $milesAmt, $expAmt, round($hoursAmt + $milesAmt + $expAmt, 2), $userId,
-                $track['auth_number'], $track['funding_agency'], $billTo, $track['hourly_rate'], $track['mileage_rate'],
+                $private ? '' : $track['auth_number'], $private ? 'Private pay' : $track['funding_agency'], $private ? 'private' : 'vr', $billTo, $track['hourly_rate'], $track['mileage_rate'],
                 $dates ? min($dates) : null, $dates ? max($dates) : null]);
         $invId = (int)$pdo->lastInsertId();
         $pdo->prepare('UPDATE invoices SET invoice_number = ? WHERE id = ?')
@@ -1473,9 +1486,10 @@ function work_authorization_issue(array $track, string $workDate): ?string {
  * The rate is read under the track's row lock (track_edit.php re-prices unbilled
  * work under that lock), so a rate corrected at the same moment either applies
  * here or re-prices this log, never neither.
- * A session outside the track's authorization (work_authorization_issue()) is
- * still logged, never refused: $authIssue receives that sentence (else null) for
- * the caller to add to its success message.
+ * Since 3.0.34 a session outside the track's authorization (its dates, hours or
+ * dollars: work_authorization_block()) is refused with that sentence, like a track
+ * with no rate; $authIssue is always null (kept for the callers' signatures). A
+ * no-charge track logs its hours at $0.
  */
 function auto_log_session(int $trackId, string $date, float $hours, string $description, int $userId, ?string &$authIssue = null, float $mileage = 0.0): int {
     $authIssue = null;
@@ -1493,17 +1507,22 @@ function auto_log_session(int $trackId, string $date, float $hours, string $desc
         $t = $pdo->prepare('SELECT * FROM training_tracks WHERE id = ? FOR UPDATE');
         $t->execute([$trackId]);
         $track = $t->fetch() ?: [];
-        if ($track && (float)$track['hourly_rate'] <= 0) {
+        if ($track && track_needs_rate($track) && (float)$track['hourly_rate'] <= 0) {
             throw new DomainException('This track has no hourly rate. Ask an administrator to set the rate on the track before logging hours.');
+        }
+        // Outside the authorization's dates, hours or dollars: refused until an amendment
+        // is recorded (owner decision, 3.0.34). The session stays Scheduled.
+        if ($track && ($block = work_authorization_block($track, $date, $hours,
+                round($hours * (float)$track['hourly_rate'], 2) + round(max(0.0, min(1000.0, $mileage)) * (float)$track['mileage_rate'], 2))) !== null) {
+            throw new DomainException($block);
         }
         $cats = $track ? track_visit_categories($track) : [];
         $pdo->prepare('INSERT INTO work_logs (track_id, work_date, service_type, rsa_category, hours, mileage, description, created_by, hourly_rate, mileage_rate) VALUES (?,?,?,?,?,?,?,?,?,?)')
             ->execute([$trackId, $date, $track['service_type'] ?? null, $cats[0] ?? null, $hours, max(0.0, min(1000.0, $mileage)), $description, $userId,
                 $track['hourly_rate'] ?? null, $track['mileage_rate'] ?? null]);
         $logId = (int)$pdo->lastInsertId();
-        $issue = $track ? work_authorization_issue($track, $date) : null;
         if ($own) $pdo->commit();
-        $authIssue = $issue;
+        $authIssue = null;
         return $logId;
     } catch (Throwable $e) {
         if ($own && $pdo->inTransaction()) $pdo->rollBack();
@@ -1522,3 +1541,6 @@ function track_visit_categories(array $track): array {
 }
 const GOAL_STATUSES = ['Not Started','In Progress','Achieved'];
 const TRACK_STATUSES = ['Active','Completed','Cancelled'];
+
+// Billing rules shared by every page, the API and voice (3.0.34).
+require_once __DIR__ . '/billing.php';

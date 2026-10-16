@@ -21,9 +21,15 @@ struct InvoiceItem: Decodable, Identifiable {
     let submittedAt: String?
     let paidAt: String?
     let canOpenClient: Bool
+    /// 3.0.34 servers: the amount written off, the due date from the payment terms, and why
+    /// a Denied or Void invoice was closed (absent from older servers).
+    let writtenOff: Double
+    let dueDate: String?
+    let closedReason: String?
     private enum CodingKeys: String, CodingKey {
         case id, invoiceNumber, status, clientId, clientName, trackTitle, authNumber, fundingAgency, hours, totalAmount
         case paidAmount, balance, shortPaid, daysOutstanding, createdAt, submittedAt, paidAt, canOpenClient
+        case writtenOff, dueDate, closedReason
     }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -45,6 +51,9 @@ struct InvoiceItem: Decodable, Identifiable {
         submittedAt = try? c.decodeIfPresent(String.self, forKey: .submittedAt)
         paidAt = try? c.decodeIfPresent(String.self, forKey: .paidAt)
         canOpenClient = (try? c.decode(Bool.self, forKey: .canOpenClient)) ?? false
+        writtenOff = (try? c.decode(Double.self, forKey: .writtenOff)) ?? 0
+        dueDate = try? c.decodeIfPresent(String.self, forKey: .dueDate)
+        closedReason = try? c.decodeIfPresent(String.self, forKey: .closedReason)
     }
 }
 
@@ -61,14 +70,17 @@ struct InvoicesResponse: Decodable {
 
 extension InvoiceItem {
     var statusText: String {
+        if status == "Denied" || status == "Void" { return status + ((closedReason ?? "").isEmpty ? "" : ": \(closedReason!)") }
+        if shortPaid { return "\(status == "Paid" ? "Paid" : "Part-paid"): \(String(format: "$%.2f", balance)) still owed" }
         if status == "Submitted", let days = daysOutstanding { return "Submitted, \(days) day\(days == 1 ? "" : "s") outstanding" }
-        if shortPaid { return "Paid, short-paid: \(String(format: "$%.2f", balance)) still owed" }
         return status
     }
     var datesText: String {
         var parts = ["Created \(formatDate(createdAt))"]
         if let submittedAt { parts.append("submitted \(formatDate(submittedAt))") }
-        if let paidAt { parts.append("paid \(formatDate(paidAt))") }
+        if let dueDate, status == "Submitted" { parts.append("due \(formatDate(dueDate))") }
+        if let paidAt { parts.append("last payment \(formatDate(paidAt))") }
+        if writtenOff > 0 { parts.append(String(format: "$%.2f written off", writtenOff)) }
         return parts.joined(separator: ", ")
     }
     var spoken: String {
@@ -100,8 +112,10 @@ struct InvoicesView: View {
                     Text("Draft").tag("Draft")
                     Text("Submitted").tag("Submitted")
                     Text("Paid").tag("Paid")
+                    Text("Denied").tag("Denied")
+                    Text("Void").tag("Void")
                 }
-                Text("Read only. Submitting, recording payments and voiding drafts are on the website.")
+                Text("Read only. Submitting, recording payments and write-offs, and closing denied invoices are on the website.")
                     .font(.callout).foregroundStyle(Color.secondaryText)
             }
             if let d = data {

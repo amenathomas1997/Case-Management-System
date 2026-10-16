@@ -170,7 +170,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
     $hasHours = $hoursRaw !== '' || !$hasNote;
     // As for session completion (auto_log_session) and the voice assistant: work
     // is never snapshotted at a $0.00 rate. What was typed is kept.
-    if ($hasHours && (float)$track['hourly_rate'] <= 0) {
+    if ($hasHours && track_needs_rate($track) && (float)$track['hourly_rate'] <= 0) {
         keep_input();
         flash('Nothing was saved: this training track has no hourly rate yet. Enter its hourly billing rate under Edit track / authorization, then log the hours. To save only the note, clear Hours worked.', 'error');
         redirect("track.php?id=$id#logs");
@@ -214,15 +214,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
     $sSubject = is_string($_POST['subject'] ?? null) ? trim($_POST['subject']) : '';
     if ($sSubject === '' && is_string($_POST['session_subject'] ?? null)) $sSubject = trim($_POST['session_subject']);
     if ($sSubject === '' && $date) $sSubject = 'Session on ' . fmt_date($date);
-    // Work dated outside the authorization, or on a track that is not Active, is
-    // logged only once "Log it anyway" is ticked (the authorization is being
-    // renewed or amended); the override is audited. A note on its own is not work.
-    $authIssue = ($hasHours && $date && !$futureDate) ? work_authorization_issue($track, $date) : null;
-    $authAcked = ($_POST['auth_ack'] ?? '') === '1';
+    // Work outside the authorization (its dates, hours or dollars) or on a track that is
+    // not Active is refused until an amendment is recorded (owner decision, 3.0.34); it
+    // is checked again under the track's lock below. A note on its own is not work.
+    $authIssue = null;
     $lErrs = [];
     if (!$date) $lErrs['work_date'] = 'Enter a valid date with a four-digit year from 2000 on, no later than today.';
     elseif ($futureDate) $lErrs['work_date'] = 'The date ' . fmt_date($date) . ' is in the future. A session is recorded once it has taken place: enter the session date, today or earlier.';
-    if ($authIssue !== null && !$authAcked) $lErrs['log_auth_ack'] = $authIssue . ' Check the date, or tick "Log it anyway" if the authorization is being renewed or amended.';
     if ($hasHours) {
         if (!$rsaOk) $lErrs['visit_rsa_category'] = 'RSA service delivered this visit: choose one of the services listed for this track.';
         if (!$typeOk) $lErrs['visit_service_type'] = 'Service type: choose one of the service types listed.';
@@ -267,14 +265,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
         db()->beginTransaction();
         try {
             if ($hasHours) {
-                $rq = db()->prepare('SELECT hourly_rate, mileage_rate FROM training_tracks WHERE id = ? FOR UPDATE');
+                $rq = db()->prepare('SELECT * FROM training_tracks WHERE id = ? FOR UPDATE');
                 $rq->execute([$id]);
                 $rates = $rq->fetch();
-                if (!$rates || (float)$rates['hourly_rate'] <= 0) {
+                if (!$rates || (track_needs_rate($rates) && (float)$rates['hourly_rate'] <= 0)) {
                     db()->rollBack();
                     keep_input();
                     flash('Nothing was saved: this training track has no hourly rate yet. Enter its hourly billing rate under Edit track / authorization, then log the hours.', 'error');
                     redirect("track.php?id=$id#logs");
+                }
+                $block = work_authorization_block($rates, $date, $hours, round($hours * (float)$rates['hourly_rate'], 2) + round($mileage * (float)$rates['mileage_rate'], 2));
+                if ($block !== null) {
+                    db()->rollBack();
+                    keep_input();
+                    if ($hwRows = posted_note_homework($_POST)) $_SESSION['tn_homework'] = ['track' => $id, 'rows' => $hwRows];
+                    keep_field_errors(['hours' => $block]);
+                    redirect("track.php?id=$id#log-session-h");
                 }
                 db()->prepare('INSERT INTO work_logs (track_id, work_date, service_type, rsa_category, goal_id, hours, mileage, description, created_by, hourly_rate, mileage_rate, idem_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
                     ->execute([$id, $date, $visitType, $visitRsa, $goalId, $hours, $mileage, $desc, $user['id'],
@@ -294,12 +300,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
             throw $e;
         }
         if ($hasHours) audit($user['id'], 'hours.log', 'track', $id, $hours . ' hrs on ' . $date . ' (' . $visitRsa . ')');
-        if ($authIssue !== null) {
-            audit($user['id'], 'hours.auth_override', 'track', $id, 'log #' . $logId . ' logged anyway: ' . $authIssue);
-        }
         flash(($hasHours && $hasNote ? fmt_hours($hours) . ' logged and the session note saved.' : ($hasHours ? 'Hours logged.' : 'Session note saved.'))
-            . ($added ? ' ' . $added . ' homework item' . ($added === 1 ? '' : 's') . ' added to the client portal.' : '')
-            . ($authIssue !== null ? ' ' . $authIssue . ' They were logged anyway, as you confirmed.' : ''));
+            . ($added ? ' ' . $added . ' homework item' . ($added === 1 ? '' : 's') . ' added to the client portal.' : ''));
         // Documentation reminder: active-training sessions should have homework.
         $hwq = db()->prepare('SELECT COUNT(*) FROM homework WHERE track_id = ?');
         $hwq->execute([$id]);
@@ -441,31 +443,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_expense'])) {
     if ($amt <= 0) $eErrs['exp_amount'] = 'Enter a positive amount in dollars and cents, such as 150.00.';
     if (!$expDate) $eErrs['exp_date'] = 'Enter a valid date with a four-digit year from 2000 on, no later than today, or leave it blank for today.';
     elseif ($expFuture) $eErrs['exp_date'] = 'The date ' . fmt_date($expDate) . ' is in the future. Log an expense once it has been incurred: enter its date, today or earlier.';
-    // As for hours: an expense outside the authorization, or on a track that is not
-    // Active, needs "Log it anyway", and the override is audited.
-    $expAuthIssue = ($expDate && !$expFuture) ? work_authorization_issue($track, $expDate) : null;
-    if ($expAuthIssue !== null && ($_POST['exp_auth_ack'] ?? '') !== '1') {
-        $eErrs['exp_auth_ack'] = $expAuthIssue . ' Check the date, or tick "Log it anyway" if the authorization is being renewed or amended.';
-    }
+    // As for hours: an expense outside the authorization (its dates or dollars), or on
+    // a track that is not Active, is refused until an amendment is recorded (3.0.34),
+    // checked under the track's lock with the insert.
     if ($eErrs) {
         keep_input();
         keep_field_errors($eErrs);
     }
     else {
+        db()->beginTransaction();
         try {
+            $lt = db()->prepare('SELECT * FROM training_tracks WHERE id = ? FOR UPDATE');
+            $lt->execute([$id]);
+            $block = work_authorization_block($lt->fetch() ?: $track, $expDate, 0.0, $amt);
+            if ($block !== null) {
+                db()->rollBack();
+                keep_input();
+                keep_field_errors(['exp_amount' => $block]);
+                redirect("track.php?id=$id#expenses");
+            }
             db()->prepare('INSERT INTO track_expenses (track_id, expense_date, description, amount, created_by, idem_key) VALUES (?,?,?,?,?,?)')
                 ->execute([$id, $expDate, $desc, $amt, $user['id'], $expKey]);
+            db()->commit();
         } catch (PDOException $e) {
+            if (db()->inTransaction()) db()->rollBack();
             // Only a clash on the form's key means "already logged" (a concurrent copy won).
             if ((string)$e->getCode() === '23000') $expAlready();
             throw $e;
         }
-        $expId = (int)db()->lastInsertId();
         audit($user['id'], 'expense.add', 'track', $id, fmt_money($amt) . ' ' . $desc);
-        if ($expAuthIssue !== null) {
-            audit($user['id'], 'expense.auth_override', 'track', $id, 'expense #' . $expId . ' logged anyway: ' . $expAuthIssue);
-        }
-        flash('Expense logged — it will be included on the next invoice.' . ($expAuthIssue !== null ? ' ' . $expAuthIssue . ' It was logged anyway, as you confirmed.' : ''));
+        flash('Expense logged' . (track_mode($track) === 'none' ? '.' : ' — it will be included on the next invoice.'));
     }
     redirect("track.php?id=$id#expenses");
 }
@@ -730,20 +737,25 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
 <div class="grid grid-4">
   <div class="card stat"><span class="stat-num"><?= fmt_hours($r['hours_worked']) ?></span><span class="stat-label">Total hours worked</span></div>
   <div class="card stat"><span class="stat-num"><?= fmt_money($r['total_billed']) ?></span><span class="stat-label">Value of all logged work, invoiced or not<?= $r['mileage_amount'] > 0 ? ' (including ' . fmt_money($r['mileage_amount']) . ' mileage)' : '' ?></span></div>
-  <?php // With nothing authorized, "0 hours remaining" and "0%" would read as used up. ?>
-  <?php if ($noAuthHours): ?>
+  <?php // A private-pay or no-charge track has no authorization to count down (3.0.34). ?>
+  <?php if (track_mode($track) !== 'vr'): ?>
+  <div class="card stat"><span class="stat-label">Billing:</span> <strong><?= track_mode($track) === 'private' ? 'Private pay, ' . fmt_money((float)$track['hourly_rate']) . ' an hour, invoiced to the client' : 'No charge: hours are logged at $0 and never invoiced' ?></strong></div>
+  <?php elseif ($noAuthHours): // With nothing authorized, "0 hours remaining" and "0%" would read as used up. ?>
   <div class="card stat"><span class="stat-label">Authorized hours remaining:</span> <strong>No authorization entered</strong> <a href="track_edit.php?id=<?= $id ?>">Edit track<span class="visually-hidden"> to enter the authorized hours</span></a></div>
   <?php else: ?>
-  <div class="card stat"><span class="stat-num"><?= fmt_hours($r['hours_remaining']) ?></span><span class="stat-label">Authorized hours remaining</span></div>
+  <?php // An overrun (older work, or an authorization amended down) is said as such, never as 0 remaining. ?>
+  <div class="card stat"><span class="stat-num"><?= $r['hours_over'] > 0 ? fmt_hours($r['hours_over']) . ' over' : fmt_hours($r['hours_remaining']) ?></span><span class="stat-label"><?= $r['hours_over'] > 0 ? 'Over the authorized hours: no more can be logged until it is amended' : 'Authorized hours remaining' ?></span></div>
   <?php endif; ?>
-  <?php if ($noAuthFunds): ?>
+  <?php if (track_mode($track) !== 'vr'): ?>
+  <?php elseif ($noAuthFunds): ?>
   <div class="card stat"><span class="stat-label">Authorized funds remaining:</span> <strong><?= $noFundsText ?></strong> <a href="track_edit.php?id=<?= $id ?>">Edit track<span class="visually-hidden"> to enter the authorization</span></a></div>
   <?php else: ?>
-  <div class="card stat"><span class="stat-num"><?= fmt_money($r['funds_remaining']) ?></span><span class="stat-label">Authorized funds remaining<?= $r['expenses_amount'] > 0 ? ' (after logged work and ' . fmt_money($r['expenses_amount']) . ' of expenses)' : '' ?></span></div>
+  <div class="card stat"><span class="stat-num"><?= $r['funds_over'] > 0 ? fmt_money($r['funds_over']) . ' over' : fmt_money($r['funds_remaining']) ?></span><span class="stat-label"><?= $r['funds_over'] > 0 ? 'Over the authorized amount' : 'Authorized funds remaining' ?><?= $r['expenses_amount'] > 0 ? ' (after logged work and ' . fmt_money($r['expenses_amount']) . ' of expenses)' : '' ?></span></div>
   <?php endif; ?>
 </div>
 
-<?php if ($noAuthHours): ?>
+<?php if (track_mode($track) !== 'vr'): // nothing authorized to use up ?>
+<?php elseif ($noAuthHours): ?>
 <p class="card"><strong>Authorization usage:</strong> No authorization entered. <a href="track_edit.php?id=<?= $id ?>">Edit track<span class="visually-hidden"> to enter the authorized hours</span></a></p>
 <?php else: ?>
 <div class="progress-wrap card">
@@ -769,24 +781,20 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     <span class="hint">An AI draft of practice for the learner, from the note you just saved. You review it before assigning.</span>
   </form>
   <?php endif; ?>
-  <?php if ((float)$track['hourly_rate'] <= 0): ?>
+  <?php if (track_needs_rate($track) && (float)$track['hourly_rate'] <= 0): ?>
   <p class="alert alert-error" role="note">Hours cannot be logged to this track yet because it has no hourly rate. <a href="track_edit.php?id=<?= $id ?>">Enter the hourly billing rate</a> first.</p>
   <?php endif; ?>
   <form method="post" action="track.php?id=<?= $id ?>#log-session-h" class="stacked" novalidate>
     <?= csrf_field() ?><?= web_idem_field() ?>
-    <?php $logSumLabels = ['work_date' => 'Date', 'log_auth_ack' => 'Authorization', 'visit_rsa_category' => 'RSA service delivered this visit', 'visit_service_type' => 'Service type',
+    <?php $logSumLabels = ['work_date' => 'Date', 'visit_rsa_category' => 'RSA service delivered this visit', 'visit_service_type' => 'Service type',
         'goal_id' => 'Goal this session advanced', 'hours' => 'Hours worked', 'mileage' => 'Mileage', 'description' => 'Activity description',
         'subject' => 'Note subject', 'note_content' => 'Note'];
-    $logSumAnchors = ['goal_id' => 'log_goal', 'log_auth_ack' => 'log_auth_ack', 'subject' => 'tn_subject', 'note_content' => 'tn_body'];
+    $logSumAnchors = ['goal_id' => 'log_goal', 'subject' => 'tn_subject', 'note_content' => 'tn_body'];
     foreach (array_keys($tnHomework ?? []) as $k) { $logSumLabels['tn_hw_due_' . $k] = 'Homework due date'; $logSumAnchors['tn_hw_due_' . $k] = 'thwd' . (int)$k; }
     echo form_error_summary($logSumLabels, $logSumAnchors); ?>
     <div class="field"><label for="work_date">Date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <input type="date" id="work_date" name="work_date" accesskey="t" required min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('work_date', date('Y-m-d'))) ?>" <?= field_aria('work_date') ?>><?= field_error('work_date') ?></div>
     <?php // Shown once the date was refused as outside the authorization (or a ticked box is being kept). ?>
-    <?php if (has_field_error('log_auth_ack') || old_in('auth_ack') === '1'): ?>
-    <div class="field"><label><input type="checkbox" id="log_auth_ack" name="auth_ack" value="1"<?= old_in('auth_ack') === '1' ? ' checked' : '' ?> <?= field_aria('log_auth_ack') ?>>
-      Log it anyway (the authorization is being renewed or amended)<span class="visually-hidden">, these hours</span></label><?= field_error('log_auth_ack') ?></div>
-    <?php endif; ?>
     <?php $visitCats = track_visit_categories($track); ?>
     <div class="field"><label for="visit_rsa_category">RSA service delivered this visit <span class="hint"><?= count($visitCats) > 1 ? 'Choose which of this program\'s categories was delivered — it drives state reporting' : 'This track bills a single category' ?></span></label>
       <select id="visit_rsa_category" name="visit_rsa_category" <?= field_aria('visit_rsa_category') ?>><?= select_options($visitCats, old_in('visit_rsa_category') ?: ($visitCats[0] ?? null)) ?></select><?= field_error('visit_rsa_category') ?></div>
@@ -888,7 +896,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   $billableTotal = round($r['billable_amount'] + $r['billable_expenses'], 2); ?>
   <p>On invoices so far, including drafts: <?= fmt_money($r['invoiced_amount']) ?> (<?= fmt_money($r['submitted_amount']) ?> submitted to the funder or paid). Not yet on an invoice: <?= fmt_money($unbilledTotal) ?><?= $r['unbilled_expenses'] > 0 ? ' (including ' . fmt_money($r['unbilled_expenses']) . ' of expenses)' : '' ?>.<?= $billableTotal < $unbilledTotal ? ' ' . fmt_money(round($unbilledTotal - $billableTotal, 2)) . ' of that is dated after today and is invoiced once its date has come.' : '' ?></p>
   <?php // Expenses or mileage alone are billable too, so any billable item offers the button. ?>
-  <?php if (($r['billable_hours'] > 0 || $r['billable_mileage'] > 0 || $r['billable_expenses'] > 0) && can('billing')): ?>
+  <?php if (($r['billable_hours'] > 0 || $r['billable_mileage'] > 0 || $r['billable_expenses'] > 0) && can('billing') && track_mode($track) !== 'none'): ?>
   <form method="post" action="track.php?id=<?= $id ?>" class="inline-form">
     <?= csrf_field() ?>
     <button type="submit" name="mark_billed" value="1" class="btn btn-secondary btn-sm"
@@ -1268,14 +1276,10 @@ $expenses->execute([$id]); $expenses = $expenses->fetchAll();
   <h3>Log an expense</h3>
   <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate>
     <?= csrf_field() ?><?= web_idem_field() ?>
-    <?= form_error_summary(['exp_date' => 'Date', 'exp_auth_ack' => 'Authorization', 'exp_description' => 'Description', 'exp_amount' => 'Amount'], ['exp_auth_ack' => 'exp_auth_ack']) ?>
+    <?= form_error_summary(['exp_date' => 'Date', 'exp_description' => 'Description', 'exp_amount' => 'Amount']) ?>
     <div class="field"><label for="exp_date">Date</label>
       <input type="date" id="exp_date" name="exp_date" min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('exp_date', date('Y-m-d'))) ?>" <?= field_aria('exp_date') ?>><?= field_error('exp_date') ?></div>
     <?php // Shown once the date was refused as outside the authorization (or a ticked box is being kept). ?>
-    <?php if (has_field_error('exp_auth_ack') || old_in('exp_auth_ack') === '1'): ?>
-    <div class="field"><label><input type="checkbox" id="exp_auth_ack" name="exp_auth_ack" value="1"<?= old_in('exp_auth_ack') === '1' ? ' checked' : '' ?> <?= field_aria('exp_auth_ack') ?>>
-      Log it anyway (the authorization is being renewed or amended)<span class="visually-hidden">, this expense</span></label><?= field_error('exp_auth_ack') ?></div>
-    <?php endif; ?>
     <div class="field"><label for="exp_description">Description <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <input type="text" id="exp_description" name="exp_description" required maxlength="255" value="<?= h(old_in('exp_description')) ?>" <?= field_aria('exp_description') ?>><?= field_error('exp_description') ?></div>
     <div class="field"><label for="exp_amount">Amount (USD) <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>

@@ -238,6 +238,10 @@ function voice_single_goal(int $cid): ?array {
  * 0 hours) or a track left at a fresh install's 0.00 rate. Voice never logs hours
  * to one: they would be billed at $0, or at a rate nobody entered. */
 function voice_track_incomplete(array $track): bool {
+    // Only a VR track needs an authorization; a no-charge track logs at $0 (3.0.34).
+    $mode = track_mode($track);
+    if ($mode === 'none') return false;
+    if ($mode === 'private') return (float)($track['hourly_rate'] ?? 0) <= 0;
     $auth = trim((string)($track['auth_number'] ?? ''));
     return $auth === '' || strcasecmp($auth, 'TBD') === 0
         || (float)($track['authorized_hours'] ?? 0) <= 0 || (float)($track['hourly_rate'] ?? 0) <= 0;
@@ -593,12 +597,12 @@ function voice_execute(string $do, array $in, array $user): array {
                     if ($own) db()->rollBack();
                     return ['ok' => false, 'error' => 'That training track changed and is no longer ready for hours. Check it on screen. Nothing was logged.'];
                 }
-                // Work dated outside the authorization is logged only when the confirmation read
-                // that out and the user said yes to it (authorization_ack, set by voice_interpret()).
-                $issue = work_authorization_issue($locked, $date);
-                if ($issue !== null && !in_array($in['authorization_ack'] ?? null, [true, 1, '1'], true)) {
+                // Work outside the authorization (its dates, hours or dollars) is refused until an
+                // amendment is recorded on the website (3.0.34): a spoken yes no longer overrides it.
+                $block = work_authorization_block($locked, $date, $hours, round($hours * (float)$locked['hourly_rate'], 2));
+                if ($block !== null) {
                     if ($own) db()->rollBack();
-                    return ['ok' => false, 'error' => $issue . ' Nothing was logged. Ask again, and I will read that out before you confirm.'];
+                    return ['ok' => false, 'error' => $block];
                 }
                 // Same RSA category rule as the app and website: the first category the track (or its bundle) offers.
                 $cats = track_visit_categories($locked);
@@ -615,7 +619,7 @@ function voice_execute(string $do, array $in, array $user): array {
                 if ($own && db()->inTransaction()) db()->rollBack();
                 return voice_write_failed($e);
             }
-            audit($uid, 'hours.log', 'track', (int)$track['id'], $hours . ' hrs (voice)' . ($issue !== null ? ' — authorization exception approved: ' . $issue : ''));
+            audit($uid, 'hours.log', 'track', (int)$track['id'], $hours . ' hrs (voice)');
             return ['ok' => true, 'speak' => $hours . ' hours logged.'] + $logsLink;
         case 'add_goal':
             if ($cid <= 0) return ['ok' => false, 'error' => 'Missing client.'];
@@ -759,7 +763,7 @@ function voice_execute(string $do, array $in, array $user): array {
             if ($hours > 0) {
                 // Hours go only to a track that can bill them; the session stays open until it can.
                 $tq = db()->prepare('SELECT * FROM training_tracks WHERE id = ?'); $tq->execute([(int)$sess['track_id']]); $trk = $tq->fetch();
-                if ($trk && (float)$trk['hourly_rate'] <= 0) return ['ok' => false, 'error' => VOICE_NO_RATE . ' The session was not completed.'];
+                if ($trk && track_needs_rate($trk) && (float)$trk['hourly_rate'] <= 0) return ['ok' => false, 'error' => VOICE_NO_RATE . ' The session was not completed.'];
                 if ($trk && voice_track_incomplete($trk)) return ['ok' => false, 'error' => 'That training track is missing its authorization number or authorized hours. Enter them on the website first. The session was not completed.'];
                 // Hours already logged for that day are never logged a second time by voice.
                 if (voice_hours_logged_that_day($sess)) return ['ok' => false, 'error' => VOICE_ALREADY_LOGGED . ' The session was not completed.'];
@@ -1031,13 +1035,13 @@ function voice_interpret(array $in, array $user): array {
                     'client.php?id=' . (int)$client['id'], 'Go to ' . $client['name'] . "'s record");
                 if (voice_track_incomplete($trk)) return voice_elsewhere($client, $trk['title'] . ' is missing its authorization number, authorized hours or hourly rate, so hours cannot be logged to it yet. Nothing was logged. Those are entered on the website, on the track.',
                     'track_edit.php?id=' . (int)$trk['id'], 'Go to edit the training track ' . $trk['title']);
-                // Work dated outside the authorization is read out before the question; the
-                // spoken yes is the acknowledgement, carried to the commit as authorization_ack.
-                $issue = work_authorization_issue($trk, $date);
+                // Work outside the authorization is said now, before any question: it cannot be
+                // logged until an amendment is recorded on the website (3.0.34).
+                $block = work_authorization_block($trk, $date, $hrs, round($hrs * (float)$trk['hourly_rate'], 2));
+                if ($block !== null) return voice_elsewhere($client, $block, 'track_edit.php?id=' . (int)$trk['id'], 'Go to edit the training track ' . $trk['title']);
                 $hp = ['client_id' => (int)$client['id'], 'hours' => $hrs, 'description' => $desc, 'date' => $date];
-                if ($issue !== null) $hp['authorization_ack'] = 1;
                 return ['ok' => true, 'action' => 'confirm', 'do' => 'log_hours', 'params' => $hp, 'speak' => 'Log ' . $hrs . ' hours for ' . $client['name'] . ' on ' . voice_say_date($date) . ': ' . $desc . '?'
-                    . ($issue !== null ? ' ' . $issue . ' Log it anyway?' : '') . ' Say yes to save.'];
+                    . ' Say yes to save.'];
             case 'goal':
                 $g = trim((string)($cmd['goal'] ?? $cmd['text'] ?? '')); if ($g === '') return ['ok' => true, 'action' => 'answer', 'speak' => 'What is the goal?'];
                 if (!voice_single_track((int)$client['id'])) return voice_elsewhere($client, voice_track_problem($client) . ' Nothing was added. You can add the goal on screen, from their record.',
@@ -1135,7 +1139,7 @@ function voice_interpret(array $in, array $user): array {
                 $logs = '';
                 if ($sess['track_id']) {
                     $tq = db()->prepare('SELECT * FROM training_tracks WHERE id = ?'); $tq->execute([(int)$sess['track_id']]); $trk = $tq->fetch();
-                    if ($hrs > 0 && $trk && (float)$trk['hourly_rate'] <= 0) return ['ok' => true, 'action' => 'answer', 'speak' => 'Completing ' . $client['name'] . "'s session would log its hours to " . $trk['title'] . '. ' . VOICE_NO_RATE];
+                    if ($hrs > 0 && $trk && track_needs_rate($trk) && (float)$trk['hourly_rate'] <= 0) return ['ok' => true, 'action' => 'answer', 'speak' => 'Completing ' . $client['name'] . "'s session would log its hours to " . $trk['title'] . '. ' . VOICE_NO_RATE];
                     if ($hrs > 0 && $trk && voice_track_incomplete($trk)) return ['ok' => true, 'action' => 'answer', 'speak' => 'Completing ' . $client['name'] . "'s session would log its hours to " . $trk['title'] . ', which is missing its authorization number or authorized hours. Enter them on the website, on the track, first.'];
                     // Hours already logged for that day may be this session's: the website asks which case it is.
                     if ($hrs > 0 && voice_hours_logged_that_day($sess)) return voice_elsewhere($client, VOICE_ALREADY_LOGGED . ' Nothing was changed.',

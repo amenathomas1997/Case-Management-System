@@ -50,6 +50,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_retention'])) {
     redirect('admin.php#retention-h');
 }
 
+/* Billing details printed on every invoice, and the private-pay fee rule (3.0.34) */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_billing'])) {
+    $in = fn(string $k): string => trim(is_string($_POST[$k] ?? null) ? $_POST[$k] : '');
+    $v = ['vendor_number' => $in('billing_vendor_number'), 'tax_id' => $in('billing_tax_id'), 'remit_to' => $in('billing_remit_to'),
+        'phone' => $in('billing_phone'), 'email' => strtolower($in('billing_email')), 'terms_days' => $in('billing_terms_days'),
+        'private_rate' => $in('billing_private_rate'), 'private_threshold' => str_replace(',', '', $in('billing_private_threshold'))];
+    $bErrs = [];
+    if (mb_strlen($v['vendor_number']) > 40) $bErrs['billing_vendor_number'] = 'Keep the vendor number to 40 characters or fewer.';
+    if ($v['tax_id'] !== '' && !preg_match('/^[0-9-]{9,11}$/', $v['tax_id'])) $bErrs['billing_tax_id'] = 'Enter the tax ID (EIN) as 9 digits, with or without the hyphen, such as 12-3456789, or leave it blank.';
+    if (mb_strlen($v['remit_to']) > 300) $bErrs['billing_remit_to'] = 'Keep the remit-to address to 300 characters or fewer.';
+    if (mb_strlen($v['phone']) > 30 || !preg_match('/^[0-9+() \-]*$/', $v['phone'])) $bErrs['billing_phone'] = 'Enter the billing phone using only digits, spaces, plus, hyphens and parentheses (30 characters at most), or leave it blank.';
+    if ($v['email'] !== '' && (!filter_var($v['email'], FILTER_VALIDATE_EMAIL) || strlen($v['email']) > 190)) $bErrs['billing_email'] = 'Enter the billing email in the form name@example.com, or leave it blank.';
+    if (!ctype_digit($v['terms_days']) || (int)$v['terms_days'] > 365) $bErrs['billing_terms_days'] = 'Enter the payment terms as a whole number of days from 0 to 365, such as 30.';
+    if (!is_numeric($v['private_rate']) || (float)$v['private_rate'] <= 0 || (float)$v['private_rate'] > 999.99) $bErrs['billing_private_rate'] = 'Enter the private-pay hourly fee as an amount more than $0, such as 17.50.';
+    if (!is_numeric($v['private_threshold']) || (float)$v['private_threshold'] <= 0) $bErrs['billing_private_threshold'] = 'Enter the monthly income below which training is free, such as 2000.';
+    if ($bErrs) { keep_input(); keep_field_errors($bErrs); redirect('admin.php#billing-h'); }
+    $v['private_rate'] = number_format((float)$v['private_rate'], 2, '.', '');
+    $v['private_threshold'] = number_format((float)$v['private_threshold'], 2, '.', '');
+    foreach ($v as $k => $val) set_setting('billing_' . $k, $val);
+    audit($user['id'], 'settings.billing', 'settings', null, 'vendor ' . ($v['vendor_number'] ?: '(none)') . ', terms ' . $v['terms_days'] . ' days, private pay ' . $v['private_rate'] . '/hour below ' . $v['private_threshold'] . '/month free');
+    flash('Billing details saved. They print on every invoice from now on.');
+    redirect('admin.php#billing-h');
+}
+
 /* Support phone number shown to clients and referrers on the public pages */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_support_phone'])) {
     $phone = trim(is_string($_POST['support_phone'] ?? null) ? $_POST['support_phone'] : '');
@@ -229,6 +253,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
     <li><a href="#people-h">People &amp; permissions</a></li>
     <li><a href="#signin-h">Sign-in &amp; security</a></li>
     <li><a href="#forms-h">Forms &amp; email</a></li>
+    <li><a href="#billing-h">Billing details</a></li>
     <li><a href="#data-h">Data</a></li>
     <li><a href="#scheduled-h">Scheduled reports</a></li>
     <li><a href="#ai-h">AI</a></li>
@@ -411,6 +436,40 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
       <?= field_error('support_phone') ?>
     </div>
     <button type="submit" name="save_support_phone" value="1" class="btn btn-secondary btn-sm">Save support phone number</button>
+  </form>
+</section>
+
+<section class="card" aria-labelledby="billing-h">
+  <h2 id="billing-h">Billing details</h2>
+  <p class="muted">Printed on every invoice, in the PDF and the accessible version. VR payment systems match payments on the vendor number and the remit-to address.</p>
+  <?php $bs = billing_settings(); $bv = fn(string $k, string $cur) => old_in('save_billing') !== '' ? old_in('billing_' . $k) : $cur; ?>
+  <form method="post" action="admin.php#billing-h" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['billing_vendor_number' => 'Vendor number', 'billing_tax_id' => 'Tax ID', 'billing_remit_to' => 'Remit-to address', 'billing_phone' => 'Billing phone',
+        'billing_email' => 'Billing email', 'billing_terms_days' => 'Payment terms', 'billing_private_rate' => 'Private-pay hourly fee', 'billing_private_threshold' => 'Free below this monthly income']) ?>
+    <div class="grid grid-2">
+      <div class="field"><label for="billing_vendor_number">VR vendor or provider number</label>
+        <input type="text" id="billing_vendor_number" name="billing_vendor_number" maxlength="40" autocomplete="off" value="<?= h($bv('vendor_number', $bs['vendor_number'])) ?>" <?= field_aria('billing_vendor_number') ?>><?= field_error('billing_vendor_number') ?></div>
+      <div class="field"><label for="billing_tax_id">Tax ID (EIN)</label>
+        <input type="text" id="billing_tax_id" name="billing_tax_id" maxlength="11" autocomplete="off" value="<?= h($bv('tax_id', $bs['tax_id'])) ?>" <?= field_aria('billing_tax_id') ?>><?= field_error('billing_tax_id') ?></div>
+    </div>
+    <div class="field"><label for="billing_remit_to">Remit-to address</label>
+      <textarea id="billing_remit_to" name="billing_remit_to" rows="3" maxlength="300" <?= field_aria('billing_remit_to') ?>><?= h($bv('remit_to', $bs['remit_to'])) ?></textarea><?= field_error('billing_remit_to') ?></div>
+    <div class="grid grid-2">
+      <div class="field"><label for="billing_phone">Billing phone</label>
+        <input type="text" id="billing_phone" name="billing_phone" inputmode="tel" maxlength="30" autocomplete="off" value="<?= h($bv('phone', $bs['phone'])) ?>" <?= field_aria('billing_phone') ?>><?= field_error('billing_phone') ?></div>
+      <div class="field"><label for="billing_email">Billing email</label>
+        <input type="email" id="billing_email" name="billing_email" maxlength="190" autocomplete="off" value="<?= h($bv('email', $bs['email'])) ?>" <?= field_aria('billing_email') ?>><?= field_error('billing_email') ?></div>
+    </div>
+    <div class="field"><label for="billing_terms_days">Payment terms (days after the invoice is submitted)</label>
+      <input type="text" inputmode="numeric" id="billing_terms_days" name="billing_terms_days" maxlength="3" value="<?= h($bv('terms_days', (string)$bs['terms_days'])) ?>" <?= field_aria('billing_terms_days') ?>><?= field_error('billing_terms_days') ?></div>
+    <h3 id="private-fee-h">Private-pay fee</h3>
+    <div class="grid grid-2">
+      <div class="field"><label for="billing_private_rate">Private-pay hourly fee (dollars)</label>
+        <input type="text" inputmode="decimal" id="billing_private_rate" name="billing_private_rate" maxlength="7" value="<?= h($bv('private_rate', number_format($bs['private_rate'], 2, '.', ''))) ?>" <?= field_aria('billing_private_rate') ?>><?= field_error('billing_private_rate') ?></div>
+      <div class="field"><label for="billing_private_threshold">Free below this monthly income (dollars)</label>
+        <input type="text" inputmode="decimal" id="billing_private_threshold" name="billing_private_threshold" maxlength="10" value="<?= h($bv('private_threshold', number_format($bs['private_threshold'], 0, '.', ''))) ?>" <?= field_aria('billing_private_threshold') ?>><?= field_error('billing_private_threshold') ?></div>
+    </div>
+    <button type="submit" name="save_billing" value="1" class="btn btn-secondary btn-sm">Save billing details</button>
   </form>
 </section>
 
