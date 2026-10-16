@@ -17,7 +17,7 @@
     initial.set(f, values(f));
     if (Array.from(f.elements).some(function (e) {
       return e.name && /^(submit|hidden)$/.test(e.type) && (window.cmsRestoredFields || []).indexOf(e.name) >= 0
-        && /^(add_note|add_track_note|save_assessment|save_note|gen_track_note|generate_note|ai_do|generate)$/.test(e.name);
+        && /^(add_note|add_track_note|add_log|save_assessment|save_note|gen_track_note|generate_note|ai_do|generate)$/.test(e.name);
     })) restored.add(f);
   });
   function changed(except) { return forms.find(function (f) { return f !== except && (restored.has(f) || values(f) !== initial.get(f)); }); }
@@ -83,7 +83,7 @@
     dirtyForm = form; destination = action; priorFocus = document.activeElement;
     // Prefer known note saves; otherwise offer only a single explicitly labelled Save action.
     // Do not guess between multiple actions or submit AI generation/deletion buttons.
-    saveButton = form.querySelector('button[name="add_note"], button[name="add_track_note"], button[name="save_assessment"]');
+    saveButton = form.querySelector('button[name="add_note"], button[name="add_track_note"], button[name="add_log"], button[name="save_assessment"]');
     if (!saveButton) {
       var saves = Array.from(form.elements).filter(function (e) {
         return e.type === 'submit' && !e.disabled && /^(Save|Guardar)(\s|$)/i.test((e.textContent || e.value || '').trim());

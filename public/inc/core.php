@@ -1451,7 +1451,7 @@ function work_authorization_issue(array $track, string $workDate): ?string {
  * still logged, never refused: $authIssue receives that sentence (else null) for
  * the caller to add to its success message.
  */
-function auto_log_session(int $trackId, string $date, float $hours, string $description, int $userId, ?string &$authIssue = null): int {
+function auto_log_session(int $trackId, string $date, float $hours, string $description, int $userId, ?string &$authIssue = null, float $mileage = 0.0): int {
     $authIssue = null;
     $year = (int)substr($date, 0, 4);
     if ($year < 2000 || $year > (int)date('Y') + 5) {
@@ -1471,8 +1471,8 @@ function auto_log_session(int $trackId, string $date, float $hours, string $desc
             throw new DomainException('This track has no hourly rate. Ask an administrator to set the rate on the track before logging hours.');
         }
         $cats = $track ? track_visit_categories($track) : [];
-        $pdo->prepare('INSERT INTO work_logs (track_id, work_date, service_type, rsa_category, hours, description, created_by, hourly_rate, mileage_rate) VALUES (?,?,?,?,?,?,?,?,?)')
-            ->execute([$trackId, $date, $track['service_type'] ?? null, $cats[0] ?? null, $hours, $description, $userId,
+        $pdo->prepare('INSERT INTO work_logs (track_id, work_date, service_type, rsa_category, hours, mileage, description, created_by, hourly_rate, mileage_rate) VALUES (?,?,?,?,?,?,?,?,?,?)')
+            ->execute([$trackId, $date, $track['service_type'] ?? null, $cats[0] ?? null, $hours, max(0.0, min(1000.0, $mileage)), $description, $userId,
                 $track['hourly_rate'] ?? null, $track['mileage_rate'] ?? null]);
         $logId = (int)$pdo->lastInsertId();
         $issue = $track ? work_authorization_issue($track, $date) : null;

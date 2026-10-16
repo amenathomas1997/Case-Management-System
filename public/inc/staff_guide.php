@@ -26,7 +26,7 @@ if (!function_exists('staff_guide_topics')) {
                 'guide-homework-draft' => 'How do I draft homework from a session note?',
             ]],
             'guide-sessions' => ['How do I schedule and log a session?', [
-                'guide-log-session' => 'How do I log hours for a session?',
+                'guide-log-session' => 'How do I record a session (hours and note)?',
                 'guide-complete-session' => 'How do I complete a session?',
                 'guide-groups' => 'How do I run a group session?',
             ]],
@@ -125,7 +125,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Choose Go to main menu near the top of the page. The menu has six groups. Press H to move from group to group.</li>
   <li>Open Daily work &amp; review. It lists what needs your attention, grouped by when it is due.</li>
   <li>Open Client records and choose a client. Press H to move through the sections of their record.</li>
-  <li>Open one of the client's training tracks. Use the On this page links to jump to Log a session.</li>
+  <li>Open one of the client's training tracks. Use the On this page links to jump to Record a session.</li>
   <li>Come back to this guide when you need it. Each topic below starts with a “How do I” question.</li>
 </ol>
 
@@ -224,7 +224,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Help &amp; account: W Staff knowledge base · X AI tools · U User guide · A My Account · Z Administration · 9 Notifications</li>
   <li>Getting around: 0 Go to main menu · M Skip to main content · S Site search</li>
   <li>N opens the page's add form: Add a task, Schedule a session, Add a note, Loan an item out, Report an incident, New contract, New device request, or the Add form in a template library.</li>
-  <li>T, on a training track, moves to the Log a session form.</li>
+  <li>T, on a training track, moves to the Record a session form; N there moves to its session note.</li>
 </ul>
 <p>These shortcuts work on every page of this site. Letter keys work in the JAWS virtual cursor, not in Forms Mode.</p>
 <ul>
@@ -340,7 +340,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Choose Save note. When you edit a note, the button is Save changes.</li>
   <li>Read the message, and check the note is in the list.</li>
 </ol>
-<p>For a note about one training track, open the track. Choose Case notes in the On this page links, then open Add a note. After you complete a session, the confirmation has a link, Write the session note. It opens that form for you.</p>
+<p>For a note about one training track, open the track and choose Record a session in the On this page links. Write the note there, with the hours or without them. After you complete a session, the confirmation has a link, Write the session note. It opens that form for you.</p>
 <p>The notes list shows the newest 20 notes. Choose Show all notes to see the rest. Client Notes also lists track notes. The General only filter hides them.</p>
 <p>Documentation review (in Daily work &amp; review) checks recent notes for missing sections and placeholders. For each flagged note, do one of these:</p>
 <ul>
@@ -386,22 +386,22 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <p>Use this for work that was not a scheduled session, or for a session with no track.</p>
 <ol>
   <li>Open the training track.</li>
-  <li>Choose Log a session in the On this page links. The form is near the top.</li>
+  <li>Choose Record a session in the On this page links. The form is near the top.</li>
   <li>Enter the date and the RSA service delivered.</li>
   <li>If you like, choose the goal this session advanced.</li>
-  <li>Enter hours worked. Use quarter hours, such as 1.5.</li>
-  <li>Enter mileage, if any, and an activity description.</li>
-  <li>To write the session note at the same time, type it in Session note. It is saved as a free-text case note on the track, with the subject "Session on" and the date, unless you enter a subject. Leave it blank to log the hours only.</li>
-  <li>Choose Log hours. The confirmation says the hours were logged and the session note saved.</li>
+  <li>Enter hours worked. Use quarter hours, such as 1.5. Leave it blank to save only a note.</li>
+  <li>Enter mileage, if any, and an activity description. The description is needed with hours.</li>
+  <li>Under Session note, choose the note type and format (free text, BIRP, PAIP or SOAP), and type the note. The subject is "Session on" and the date unless you enter one. Generate structured note turns rough notes into the format's sections. Leave the note blank to log the hours only.</li>
+  <li>Choose Save session. The confirmation says what was saved.</li>
 </ol>
-<p>The hours and the note are saved together: if either is refused, nothing is saved and what you typed stays in the form. For a structured note (BIRP, PAIP or SOAP), or a note on its own, use Add a note under Case notes for this track. If the date is outside the authorization, you get an error. Tick Log it anyway only if the authorization is being renewed or amended. Do not log hours here for a session you will complete on the schedule. That would log them twice. Billable expenses use Log an expense, further down the track.</p>
+<p>The hours and the note are saved together: if either is refused, nothing is saved and what you typed stays in the form. If the date is outside the authorization, you get an error. Tick Log it anyway only if the authorization is being renewed or amended. Do not log hours here for a session you will complete on the schedule. That would log them twice. Billable expenses use Log an expense, further down the track.</p>
 
 <?= $sgH(4, 'guide-complete-session') ?>
 <ol>
   <li>Open Session schedule.</li>
   <li>Press H to find Ended sessions awaiting an outcome.</li>
   <li>In the session's row, choose an outcome: Completed, Cancelled or No Show.</li>
-  <li>To write the session note at the same time, open Add the session note now in the same row and type the note. It is shown only for a session linked to a track, and it is saved only with Completed.</li>
+  <li>To change the hours, add miles or write the session note, open Hours, miles and session note in the same row. Hours start as the scheduled length. It is shown only for a session linked to a track, and it is saved only with Completed.</li>
   <li>Choose Save, then confirm. The confirmation says what was logged and that the note was saved.</li>
   <li>If you did not write the note in the row, choose Write the session note in the confirmation, and write it on the track.</li>
 </ol>

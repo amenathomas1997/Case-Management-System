@@ -569,7 +569,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
                 redirect('schedule.php#s-' . $sid);
             }
         }
-        $hours = ($to === 'Completed' && $sess['track_id'] && !$linkLogId) ? schedule_hours($sess) : 0.0;
+        // Hours and miles typed in the row (prefilled with the scheduled length) are
+        // what gets logged; left blank, the scheduled length is. Checked as the track
+        // page checks them; miles typed for an outcome that logs no hours are refused
+        // with the row kept, never dropped.
+        $logsHours = $to === 'Completed' && $sess['track_id'] && !$linkLogId;
+        $hRaw = is_string($_POST['session_hours'] ?? null) ? trim($_POST['session_hours']) : '';
+        $mRaw = is_string($_POST['session_miles'] ?? null) ? trim($_POST['session_miles']) : '';
+        $miles = $mRaw === '' ? 0.0 : (is_numeric($mRaw) ? round((float)$mRaw, 1) : -1.0);
+        $hours = !$logsHours ? 0.0 : ($hRaw === '' ? schedule_hours($sess) : (is_numeric($hRaw) ? round((float)$hRaw, 2) : -1.0));
+        $rowErrs = [];
+        // 0 (a session too short to bill, as its prefill says) completes it without hours.
+        if ($logsHours && ($hours < 0 || $hours > 24)) $rowErrs['session_hours_' . $sid] = 'Enter the hours worked as a number from 0 to 24, such as 1.5.';
+        if ($hours < 0.01) $hours = 0.0;
+        if (!$rowErrs && $logsHours && $hours === 0.0 && $miles > 0) $rowErrs['session_miles_' . $sid] = 'Miles are logged with hours: enter the hours worked, or clear the miles.';
+        if ($miles < 0 || $miles > 1000) $rowErrs['session_miles_' . $sid] = 'Mileage must be a number from 0 to 1000 miles.';
+        elseif ($miles > 0 && !$logsHours) $rowErrs['session_miles_' . $sid] = 'Miles are logged with the session\'s hours, so only when it is marked Completed and logs hours. Clear the miles to record this outcome.';
+        if ($rowErrs) {
+            keep_input();
+            keep_field_errors($rowErrs);
+            flash('Nothing was changed for the ' . $which . ': ' . implode(' ', $rowErrs), 'error');
+            redirect('schedule.php#s-' . $sid);
+        }
         // Hours already logged for that day (by voice, the app or the track page) are
         // not logged a second time without the user saying which case this is.
         if ($hours > 0 && !$separate && ($cands = schedule_logged_candidates($sess))) {
@@ -608,7 +629,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
             if ($claimed && $hours > 0) {
                 // The hours are the instructor's who taught the session, whoever records it.
                 $logId = auto_log_session((int)$sess['track_id'], date('Y-m-d', strtotime($sess['start_at'])), $hours,
-                    schedule_log_description($sess), (int)$sess['user_id'], $authIssue);
+                    schedule_log_description($sess), (int)$sess['user_id'], $authIssue, $miles);
                 db()->prepare('UPDATE scheduled_sessions SET work_log_id = ? WHERE id = ?')
                     ->execute([$logId, $sid]);
             }
@@ -633,7 +654,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
         if ($claimed) {
             $act = ['Completed' => 'session.complete', 'Cancelled' => 'session.cancel', 'No Show' => 'session.no_show'][$to] ?? 'session.status';
             audit($user['id'], $act, 'session', $sid, 'client #' . (int)$sess['client_id']
-                . ($hours > 0 ? ', ' . fmt_hours($hours) . ' logged' : '') . ($linkLogId ? ', linked to work log #' . $linkLogId . ' (hours already logged)' : ''));
+                . ($hours > 0 ? ', ' . fmt_hours($hours) . ' logged' . ($miles > 0 ? ' and ' . $miles . ' mi' : '') : '') . ($linkLogId ? ', linked to work log #' . $linkLogId . ' (hours already logged)' : ''));
             // Flash text is escaped, so the "write the session note" link is drawn by
             // the page — when the note was not written in the row.
             if ($to === 'Completed' && $sess['track_id'] && !$noteSaved) {
@@ -643,7 +664,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
             if ($linkLogId) {
                 flash('Completed: the ' . $which . ', linked to the ' . fmt_hours((float)$linked['hours']) . ' already logged' . $onTrack . '. No more hours were logged.' . $noteMsg);
             } elseif ($hours > 0) {
-                flash('Completed: the ' . $which . ' — ' . fmt_hours($hours) . ' logged' . ($onTrack ?: ' to the training track') . '.' . ($authIssue ? ' ' . $authIssue : '') . $noteMsg);
+                flash('Completed: the ' . $which . ' — ' . fmt_hours($hours) . ($miles > 0 ? ' and ' . rtrim(rtrim(number_format($miles, 1), '0'), '.') . ' miles' : '') . ' logged' . ($onTrack ?: ' to the training track') . '.' . ($authIssue ? ' ' . $authIssue : '') . $noteMsg);
             } elseif ($to === 'Completed') {
                 flash('Completed: the ' . $which . ($sess['track_id'] ? ' (it was too short to log any hours).' : ' (no track linked, so no hours were logged).') . $noteMsg);
             } else {
@@ -734,10 +755,10 @@ function session_row(array $s, string $csrf): void {
     // for: it is then completed by linking them, or by logging more for a separate visit.
     $cands = ($started && $hrs > 0 && $s['status'] === 'Scheduled') ? schedule_logged_candidates($s) : [];
     $onTrack = $s['track_title'] ? ' "' . $s['track_title'] . '"' : '';
+    // %H% is replaced by the hours typed in the row (the scheduled length unless changed).
     $completeMsg = !$s['track_id'] ? 'Mark completed? No training track is linked, so no hours will be logged.'
-        : ($hrs > 0 ? 'Mark completed? This logs ' . fmt_hours($hrs) . ' to the training track' . $onTrack . '.'
-            : 'Mark completed? The session is too short to log any hours to the training track.');
-    $separateMsg = 'Mark completed and log hours as well? This logs ' . fmt_hours($hrs) . ' to the training track' . $onTrack . ', beside the hours already logged for that day.';
+        : 'Mark completed? This logs %H% to the training track' . $onTrack . '.';
+    $separateMsg = 'Mark completed and log hours as well? This logs %H% to the training track' . $onTrack . ', beside the hours already logged for that day.';
     $linkedMsg = 'Mark completed as the hours already logged? The session is linked to them and no more hours are logged.';
     $js = fn(string $m): string => h(json_encode($m, JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)); ?>
     <tr>
@@ -769,17 +790,23 @@ function session_row(array $s, string $csrf): void {
             <?php if ($started): ?><option value="No Show">No Show</option><?php endif; ?>
           </select>
           <button type="submit" name="set_status" value="1" class="btn btn-secondary btn-sm"
-            onclick="var s=document.getElementById('st-<?= (int)$s['id'] ?>').value,t=document.getElementById('sn-<?= (int)$s['id'] ?>'),n=(t&&t.value.trim()!=='')?' The session note is saved with it.':'';return s===''||confirm(s==='Completed'?<?= $js($completeMsg) ?>+n:(s==='Completed_separate'?<?= $js($separateMsg) ?>+n:(s.indexOf('Completed_logged_')===0?<?= $js($linkedMsg) ?>+n:'Record this session as '+s+'? This cannot be changed back. Choose OK to record it, or Cancel to leave the session as it is.')));">Save<span class="visually-hidden"> status for <?= $which ?></span></button>
-          <?php // The session note, written here with the outcome (saved on the track when
-          // the session is marked Completed). Collapsed to keep the row short; open when
-          // it was refused or holds what was typed. No track: nowhere to save it.
-          if ($started && $s['track_id']): $snErr = 'session_note_' . (int)$s['id'];
-            $snMine = old_in('session_id') === (string)$s['id'];
-            $snOpen = has_field_error($snErr) || ($snMine && trim(old_in('session_note')) !== ''); ?>
+            onclick="var s=document.getElementById('st-<?= (int)$s['id'] ?>').value,t=document.getElementById('sn-<?= (int)$s['id'] ?>'),hf=document.getElementById('sh-<?= (int)$s['id'] ?>'),hv=hf&&hf.value.trim()!==''?hf.value.trim():'<?= h(rtrim(rtrim(number_format($hrs, 2, '.', ''), '0'), '.')) ?>',hs=hv+(Number(hv)===1?' hour':' hours'),n=(t&&t.value.trim()!=='')?' The session note is saved with it.':'';return s===''||confirm(s==='Completed'?(<?= $s['track_id'] ? '1' : '0' ?>&&!(Number(hv)>0)?'Mark completed? No hours are logged.':<?= $js($completeMsg) ?>.replace('%H%',hs))+n:(s==='Completed_separate'?<?= $js($separateMsg) ?>.replace('%H%',hs)+n:(s.indexOf('Completed_logged_')===0?<?= $js($linkedMsg) ?>+n:'Record this session as '+s+'? This cannot be changed back. Choose OK to record it, or Cancel to leave the session as it is.')));">Save<span class="visually-hidden"> status for <?= $which ?></span></button>
+          <?php // Hours, miles and the session note, recorded with the outcome (the hours
+          // prefilled with the scheduled length; all saved on the track when the session
+          // is marked Completed). Collapsed to keep the row short; open when something
+          // was refused or holds what was typed. No track: nowhere to save them.
+          if ($started && $s['track_id']): $sidS = (string)(int)$s['id']; $snErr = 'session_note_' . $sidS;
+            $snMine = old_in('session_id') === $sidS;
+            $snOpen = has_field_error($snErr) || has_field_error('session_hours_' . $sidS) || has_field_error('session_miles_' . $sidS)
+                || ($snMine && (trim(old_in('session_note')) !== '' || trim(old_in('session_miles')) !== '')); ?>
           <details<?= $snOpen ? ' open' : '' ?>>
-            <summary>Add the session note now<span class="visually-hidden"> for the <?= $which ?></span></summary>
-            <div class="field"><label for="sn-<?= (int)$s['id'] ?>">Session note<span class="visually-hidden"> for the <?= $which ?></span> <span class="hint">optional — saved as a case note on the training track when the session is marked Completed</span></label>
-              <textarea id="sn-<?= (int)$s['id'] ?>" name="session_note" rows="4" <?= field_aria($snErr) ?>><?= $snMine ? h(old_in('session_note')) : '' ?></textarea><?= field_error($snErr) ?></div>
+            <summary>Hours, miles and session note<span class="visually-hidden"> for the <?= $which ?></span></summary>
+            <div class="field"><label for="sh-<?= $sidS ?>">Hours worked<span class="visually-hidden"> for the <?= $which ?></span></label>
+              <input type="text" inputmode="decimal" autocomplete="off" id="sh-<?= $sidS ?>" name="session_hours" value="<?= h($snMine && old_in('session_hours') !== '' ? old_in('session_hours') : rtrim(rtrim(number_format($hrs, 2, '.', ''), '0'), '.')) ?>" <?= field_aria('session_hours_' . $sidS) ?>><?= field_error('session_hours_' . $sidS) ?></div>
+            <div class="field"><label for="sm-<?= $sidS ?>">Miles driven<span class="visually-hidden"> for the <?= $which ?></span></label>
+              <input type="text" inputmode="decimal" autocomplete="off" id="sm-<?= $sidS ?>" name="session_miles" value="<?= $snMine ? h(old_in('session_miles')) : '' ?>" <?= field_aria('session_miles_' . $sidS) ?>><?= field_error('session_miles_' . $sidS) ?></div>
+            <div class="field"><label for="sn-<?= $sidS ?>">Session note<span class="visually-hidden"> for the <?= $which ?></span></label>
+              <textarea id="sn-<?= $sidS ?>" name="session_note" rows="4" <?= field_aria($snErr) ?>><?= $snMine ? h(old_in('session_note')) : '' ?></textarea><?= field_error($snErr) ?></div>
           </details>
           <?php endif; ?>
         </form>
@@ -793,7 +820,7 @@ function session_row(array $s, string $csrf): void {
 // joins the flash confirmation (moved and focused with it); without scripts it stays here.
 $noteLink = $_SESSION['session_note_link'] ?? null; unset($_SESSION['session_note_link']);
 if (is_array($noteLink) && can('clients')): ?>
-<div class="alert alert-info" id="session-note-next"><a href="track.php?id=<?= (int)$noteLink['track'] ?>&amp;write_note=1#add-track-note">Write the session note<?= $noteLink['title'] !== '' ? ' on the training track "' . h($noteLink['title']) . '"' : ' on its training track' ?></a></div>
+<div class="alert alert-info" id="session-note-next"><a href="track.php?id=<?= (int)$noteLink['track'] ?>#log-session-h">Write the session note<?= $noteLink['title'] !== '' ? ' on the training track "' . h($noteLink['title']) . '"' : ' on its training track' ?></a></div>
 <script>(function(){var a=document.getElementById('flash-messages'),p=document.getElementById('session-note-next');if(a&&p)a.appendChild(p);})();</script>
 <?php endif; ?>
 <div class="page-actions"><a class="btn btn-secondary" href="capacity.php">Capacity planning</a>

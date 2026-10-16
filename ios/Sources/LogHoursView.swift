@@ -23,6 +23,8 @@ struct LogHoursView: View {
     @State private var hoursText = "1"
     @State private var mileage = ""
     @State private var descriptionText = ""
+    /// The session note, saved with the hours as a case note on the track (log_hours session_note, 3.0.31).
+    @State private var sessionNote = ""
     @State private var busy = false
     @State private var error: String?
     @State private var confirmation: String?
@@ -48,7 +50,8 @@ struct LogHoursView: View {
     /// The description as it is sent: spaces or blank lines alone are no description.
     private var trimmedDescription: String { descriptionText.trimmingCharacters(in: .whitespacesAndNewlines) }
     /// An entry typed but not yet logged, which closing the sheet would throw away.
-    private var hasEntry: Bool { !trimmedDescription.isEmpty || !mileage.isEmpty }
+    private var trimmedNote: String { sessionNote.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var hasEntry: Bool { !trimmedDescription.isEmpty || !mileage.isEmpty || !trimmedNote.isEmpty }
 
     var body: some View {
         NavigationStack {
@@ -137,6 +140,9 @@ struct LogHoursView: View {
                 CaptionedField(label: "Mileage (optional, 0 to 1000 miles)", text: $mileage, keyboard: .decimalPad)
                 CaptionedField(label: "What did you work on? (required)", text: $descriptionText,
                                prompt: "What did you work on?", lines: 3...8)
+                // The session's case note, saved with the hours in one step (as on the website).
+                CaptionedField(label: "Session note (optional)", text: $sessionNote,
+                               prompt: "Progress, concerns, plan for next time", lines: 3...12)
                 Button {
                     Task { await submit() }
                 } label: {
@@ -179,6 +185,7 @@ struct LogHoursView: View {
                 dismiss()
             }
             .onChange(of: descriptionText) { _ in saveDraft() }
+            .onChange(of: sessionNote) { _ in saveDraft() }
             .onChange(of: mileage) { _ in saveDraft() }
             .onChange(of: hours) { newValue in
                 if Self.parsedHours(hoursText) != newValue { hoursText = Self.hoursString(newValue) }
@@ -207,7 +214,7 @@ struct LogHoursView: View {
 
     private func saveDraft() {
         guard let tid = draftTrackId else { return }
-        var fields = ["description": descriptionText, "mileage": mileage]
+        var fields = ["description": descriptionText, "mileage": mileage, "session_note": sessionNote]
         // The rest of the entry travels only with text: a draft with nothing typed is removed.
         if fields.values.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
             fields["hours"] = String(hours)
@@ -226,9 +233,11 @@ struct LogHoursView: View {
         guard let draft = DraftStore.load(key: draftKey(trackId), owner: api.userId) else { return }
         let text = draft["description"] ?? ""
         let miles = draft["mileage"] ?? ""
-        guard !text.isEmpty || !miles.isEmpty else { return }
+        let note = draft["session_note"] ?? ""
+        guard !text.isEmpty || !miles.isEmpty || !note.isEmpty else { return }
         descriptionText = text
         mileage = miles
+        sessionNote = note
         if let h = draft["hours"].flatMap(Double.init), Self.hoursRange.contains(h) { hours = h }
         var checks: [String] = []
         // 2000 through today, as the date picker allows (yyyy-MM-dd compares as text).
@@ -399,17 +408,20 @@ struct LogHoursView: View {
             "idem_key": idemKey,
         ]
         if let selectedGoal { body["goal_id"] = selectedGoal }
+        let withNote = !trimmedNote.isEmpty
+        if withNote { body["session_note"] = trimmedNote }
         // Only once the person turned it on, in answer to the server's authorization problem.
         if authorizationIssue != nil && authorizationAck { body["authorization_ack"] = true }
         do {
             let result: SaveAck = try await api.call("log_hours", body: body)
             confirmation = result.deduplicated == true
                 ? "These hours were already logged from an earlier try, so they were not logged twice."
-                : String(format: "%.2f hours logged.", hours)
+                : String(format: withNote ? "%.2f hours logged and the session note saved." : "%.2f hours logged.", hours)
             announce(confirmation!)
             clearDraft(trackId)
             descriptionText = ""
             mileage = ""
+            sessionNote = ""
             idemKey = UUID().uuidString     // the next entry is a new one
             clearAuthorizationIssue()
         } catch APIError.network {
@@ -421,6 +433,7 @@ struct LogHoursView: View {
                 clearDraft(trackId)
                 descriptionText = ""
                 mileage = ""
+                sessionNote = ""
                 idemKey = UUID().uuidString
                 clearAuthorizationIssue()
             } catch {

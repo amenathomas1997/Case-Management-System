@@ -19,8 +19,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.example.cms
-        MARKETING_VERSION: "3.0.28"
-        CURRENT_PROJECT_VERSION: "33"
+        MARKETING_VERSION: "3.0.31"
+        CURRENT_PROJECT_VERSION: "34"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 
@@ -65,8 +65,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.example.cms.widget
-        MARKETING_VERSION: "3.0.28"
-        CURRENT_PROJECT_VERSION: "33"
+        MARKETING_VERSION: "3.0.31"
+        CURRENT_PROJECT_VERSION: "34"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 

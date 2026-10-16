@@ -1095,6 +1095,12 @@ switch ($action) {
         $mileage = round(api_number($input, 'mileage', 'Mileage') ?? 0.0, 1);
         if ($mileage < 0 || $mileage > 1000) fail('Mileage must be between 0 and 1000 miles per entry.', 422);
         $signedNameIn = api_text($input, 'signed_name', 120, 'Signed name');
+        // The session note (optional), saved with the hours as a free-text case note on
+        // the track, as the website's Record a session saves one; its subject defaults
+        // to the session's date.
+        $sNote = api_text($input, 'session_note', API_TEXT_BYTES, 'The session note');
+        $sSubject = api_text($input, 'session_subject', 255, 'The session note subject');
+        if ($sSubject === '') $sSubject = 'Session on ' . fmt_date($date);
         // Idempotency: a replayed offline entry (same key) is acknowledged, not
         // billed twice — the response may have been lost even though the first
         // request committed. Checked before the track, its client and the choices
@@ -1159,6 +1165,12 @@ switch ($action) {
             db()->prepare('INSERT INTO work_logs (track_id, work_date, service_type, rsa_category, goal_id, hours, mileage, description, created_by, hourly_rate, mileage_rate, signature_path, signed_name, idem_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
                 ->execute([$tid, $date, $visitType, $visitRsa, $goalId, $hours, $mileage, $desc, $userId,
                     $rates['hourly_rate'], $rates['mileage_rate'], $sigPath, $signedName, $idem]);
+            // The hours and the note are saved together or not at all; the note carries
+            // the entry's key too, as the website's does.
+            if ($sNote !== '') {
+                require_once __DIR__ . '/inc/workflows.php'; // track_note_create()
+                track_note_create((int)$trackRow['client_id'], $tid, $sSubject, assemble_note(['note_type' => 'Case Note', 'body' => $sNote]), $userId, $idem);
+            }
             db()->commit();
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
@@ -1172,8 +1184,10 @@ switch ($action) {
             throw $e;
         }
         audit($userId, 'hours.log', 'track', $tid, $hours . ' hrs (' . $visitRsa . ', mobile)'
-            . ($authIssue !== null ? '; logged outside the authorization, confirmed by the user: ' . $authIssue : ''));
-        out(['ok' => true]);
+            . ($authIssue !== null ? '; logged outside the authorization, confirmed by the user: ' . $authIssue : '')
+            . ($sNote !== '' ? '; session note saved' : ''));
+        // note_saved: the session note was saved with the hours (3.0.31).
+        out(['ok' => true, 'note_saved' => $sNote !== '']);
 
     case 'save_client': { // create (id=0) or update
         $cid = (int)($input['id'] ?? 0);

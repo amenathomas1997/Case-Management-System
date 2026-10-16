@@ -143,26 +143,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_goal'])) {
     redirect("track.php?id=$id#goals");
 }
 
-/* ---- POST: log hours ---- */
+/* ---- POST: record a session — its hours, its note, or both, from one form ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
-    // The same form sent twice (Enter pressed again while it loads) is logged once:
-    // its key is stored in work_logs.idem_key, as the app's entries are.
+    // The same form sent twice (Enter pressed again while it loads) is saved once:
+    // its key is stored in work_logs.idem_key and on the note (client_notes.idem_key),
+    // as the app's entries are.
     $logKey = web_idem_key($_POST);
-    $logDup = db()->prepare('SELECT id FROM work_logs WHERE idem_key = ?');
+    $logDup = db()->prepare('SELECT id FROM work_logs WHERE idem_key = ? UNION SELECT id FROM client_notes WHERE idem_key = ?');
     $logAlready = function () use ($logKey, $logDup, $id): void {
         if ($logKey === null) return;
-        $logDup->execute([$logKey]);
+        $logDup->execute([$logKey, $logKey]);
         if ($logDup->fetchColumn()) {
-            flash('These hours were already logged (the form was sent twice), so they were saved once.', 'info');
+            flash('This session was already saved (the form was sent twice), so it was saved once.', 'info');
             redirect("track.php?id=$id#logs");
         }
     };
     $logAlready();
+    $hoursRaw = is_string($_POST['hours'] ?? null) ? trim($_POST['hours']) : '';
+    // The session note: type, format, structured sections and narrative, as the
+    // client's Add a note form takes them. Pages opened before 3.0.31 post the
+    // narrative as session_note and its subject as session_subject.
+    $noteIn = $_POST;
+    if (trim(is_string($noteIn['body'] ?? null) ? $noteIn['body'] : '') === '' && is_string($_POST['session_note'] ?? null)) $noteIn['body'] = $_POST['session_note'];
+    $na = assemble_note($noteIn);
+    $hasNote = $na['body'] !== '';
+    $hasHours = $hoursRaw !== '' || !$hasNote;
     // As for session completion (auto_log_session) and the voice assistant: work
     // is never snapshotted at a $0.00 rate. What was typed is kept.
-    if ((float)$track['hourly_rate'] <= 0) {
+    if ($hasHours && (float)$track['hourly_rate'] <= 0) {
         keep_input();
-        flash('Nothing was logged: this training track has no hourly rate yet. Enter its hourly billing rate under Edit track / authorization, then log the hours.', 'error');
+        flash('Nothing was saved: this training track has no hourly rate yet. Enter its hourly billing rate under Edit track / authorization, then log the hours. To save only the note, clear Hours worked.', 'error');
         redirect("track.php?id=$id#logs");
     }
     // A year from 2000 on and never after today (hours are logged for a session
@@ -172,7 +182,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
     // be billed, or overflow the column).
     $date = valid_date(is_string($_POST['work_date'] ?? null) ? $_POST['work_date'] : '', 2000, (int)date('Y') + 5);
     $futureDate = $date !== null && $date > date('Y-m-d');
-    $hoursRaw = is_string($_POST['hours'] ?? null) ? trim($_POST['hours']) : '';
     $hours = is_numeric($hoursRaw) ? round((float)$hoursRaw, 2) : 0.0;
     $mileRaw = is_string($_POST['mileage'] ?? null) ? trim($_POST['mileage']) : '';
     $mileage = $mileRaw === '' ? 0.0 : (is_numeric($mileRaw) ? round((float)$mileRaw, 1) : -1.0);
@@ -201,80 +210,100 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
     $rsaOk = $rawRsa === '' || in_array($rawRsa, $offered, true);
     // The description is a TEXT column (65,535 bytes), as the app's API_TEXT_BYTES allows.
     $descTooLong = strlen($desc) > 65535;
-    // The session note, optional: saved with the hours as a free-text case note on
-    // this track (as the Add a note form saves one). Its subject defaults to the
-    // session's date. Both are checked as that form checks them.
-    $sNote = is_string($_POST['session_note'] ?? null) ? trim($_POST['session_note']) : '';
-    $sSubject = is_string($_POST['session_subject'] ?? null) ? trim($_POST['session_subject']) : '';
+    // The note's subject defaults to the session's date.
+    $sSubject = is_string($_POST['subject'] ?? null) ? trim($_POST['subject']) : '';
+    if ($sSubject === '' && is_string($_POST['session_subject'] ?? null)) $sSubject = trim($_POST['session_subject']);
     if ($sSubject === '' && $date) $sSubject = 'Session on ' . fmt_date($date);
-    $sNoteTooLong = strlen($sNote) > 65535;
-    $sSubjectTooLong = mb_strlen($sSubject) > 255;
     // Work dated outside the authorization, or on a track that is not Active, is
     // logged only once "Log it anyway" is ticked (the authorization is being
-    // renewed or amended); the override is audited.
-    $authIssue = ($date && !$futureDate) ? work_authorization_issue($track, $date) : null;
+    // renewed or amended); the override is audited. A note on its own is not work.
+    $authIssue = ($hasHours && $date && !$futureDate) ? work_authorization_issue($track, $date) : null;
     $authAcked = ($_POST['auth_ack'] ?? '') === '1';
-    if (!$date || $futureDate || $hours < 0.01 || $hours > 24 || $mileage < 0 || $mileage > 1000 || $desc === '' || $descTooLong || !$typeOk || !$rsaOk || !$goalOk
-        || $sNoteTooLong || ($sNote !== '' && $sSubjectTooLong) || ($authIssue !== null && !$authAcked)) {
-        keep_input();
-        $lErrs = [];
-        if (!$date) $lErrs['work_date'] = 'Enter a valid date with a four-digit year from 2000 on, no later than today.';
-        elseif ($futureDate) $lErrs['work_date'] = 'The date ' . fmt_date($date) . ' is in the future. Hours are logged once a session has taken place: enter the session date, today or earlier.';
-        if ($authIssue !== null && !$authAcked) $lErrs['log_auth_ack'] = $authIssue . ' Check the date, or tick "Log it anyway" if the authorization is being renewed or amended.';
+    $lErrs = [];
+    if (!$date) $lErrs['work_date'] = 'Enter a valid date with a four-digit year from 2000 on, no later than today.';
+    elseif ($futureDate) $lErrs['work_date'] = 'The date ' . fmt_date($date) . ' is in the future. A session is recorded once it has taken place: enter the session date, today or earlier.';
+    if ($authIssue !== null && !$authAcked) $lErrs['log_auth_ack'] = $authIssue . ' Check the date, or tick "Log it anyway" if the authorization is being renewed or amended.';
+    if ($hasHours) {
         if (!$rsaOk) $lErrs['visit_rsa_category'] = 'RSA service delivered this visit: choose one of the services listed for this track.';
         if (!$typeOk) $lErrs['visit_service_type'] = 'Service type: choose one of the service types listed.';
         if (!$goalOk) $lErrs['goal_id'] = 'Goal this session advanced: that goal is not on this track any more. Choose one of the goals listed, or None.';
-        if ($hours < 0.01 || $hours > 24) $lErrs['hours'] = 'Enter the hours worked as a number more than 0 and no more than 24, such as 1.5.';
+        if ($hours < 0.01 || $hours > 24) $lErrs['hours'] = $hoursRaw === '' ? 'Enter the hours worked, or write a session note to save the note on its own.' : 'Enter the hours worked as a number more than 0 and no more than 24, such as 1.5.';
         if ($mileage < 0 || $mileage > 1000) $lErrs['mileage'] = 'Mileage must be a number from 0 to 1000 miles per entry.';
-        if ($desc === '') $lErrs['description'] = 'Describe the activity.';
+        if ($desc === '') $lErrs['description'] = 'Describe the activity, for the hours on the invoice.';
         elseif ($descTooLong) $lErrs['description'] = 'The activity description is too long to save. It can hold 65,535 bytes (accented letters and symbols count as 2 to 4 bytes each); shorten it.';
-        if ($sNote !== '' && $sSubjectTooLong) $lErrs['session_subject'] = 'Keep the session note subject to 255 characters or fewer.';
-        if ($sNoteTooLong) $lErrs['session_note'] = 'The session note is too long to save. A note can hold 65,535 bytes, and accented letters and symbols count as 2 to 4 bytes each. Shorten it, or add the rest as a separate note.';
+    }
+    if ($hasNote) {
+        if (mb_strlen($sSubject) > 255) $lErrs['subject'] = 'Keep the note subject to 255 characters or fewer.';
+        // Each section and the assembled note are TEXT columns (65,535 bytes), as on client.php.
+        $tooLong = [];
+        foreach ($na['cols'] as $i => $v) if ($v !== null && strlen($v) > 65535) $tooLong[] = NOTE_FORMATS[$na['format']][$i];
+        if ($tooLong || strlen($na['body']) > 65535) {
+            $lErrs['note_content'] = 'The note is too long to save'
+                . ($tooLong ? ' (the ' . implode(', ', $tooLong) . ' section' . (count($tooLong) === 1 ? ' is' : 's are') . ' over the limit)' : '')
+                . '. A note can hold 65,535 bytes, and accented letters and symbols count as 2 to 4 bytes each. Shorten it, or add the rest as a separate note.';
+        }
+        // A ticked homework row's due date is checked as the Assign homework form checks
+        // it, and reported on that row, never dropped (the portal would show none).
+        $hwMaxYear = (int)date('Y') + 5;
+        foreach (posted_note_homework($_POST) as $k => $hwRow) {
+            if (!$hwRow['include'] || trim($hwRow['title']) === '' || trim($hwRow['due']) === '') continue;
+            if (!valid_date($hwRow['due'], 2000, $hwMaxYear)) {
+                $lErrs['tn_hw_due_' . $k] = 'Homework item ' . ($k + 1) . ': enter a valid due date with a four-digit year from 2000 to ' . $hwMaxYear . ', or clear it.';
+            }
+        }
+    }
+    if ($lErrs) {
+        keep_input();
+        // Generated homework rows are arrays, which keep_input() leaves out: hold
+        // them for the next page so they stay in the form until the session is saved.
+        if ($hwRows = posted_note_homework($_POST)) $_SESSION['tn_homework'] = ['track' => $id, 'rows' => $hwRows];
         keep_field_errors($lErrs);
     } else {
         // The rate snapshot is read under the track's row lock, in one transaction
         // with the insert (track_edit.php re-prices unbilled work under that lock),
         // so a rate saved at this moment either applies here or re-prices this log.
-        // The session note, when there is one, is saved in the same transaction: the
-        // hours and the note are recorded together or not at all.
-        $noteId = null;
+        // The hours, the note and its homework are saved together or not at all.
+        $noteId = null; $logId = null; $added = 0;
         db()->beginTransaction();
         try {
-            $rq = db()->prepare('SELECT hourly_rate, mileage_rate FROM training_tracks WHERE id = ? FOR UPDATE');
-            $rq->execute([$id]);
-            $rates = $rq->fetch();
-            if (!$rates || (float)$rates['hourly_rate'] <= 0) {
-                db()->rollBack();
-                keep_input();
-                flash('Nothing was logged: this training track has no hourly rate yet. Enter its hourly billing rate under Edit track / authorization, then log the hours.', 'error');
-                redirect("track.php?id=$id#logs");
+            if ($hasHours) {
+                $rq = db()->prepare('SELECT hourly_rate, mileage_rate FROM training_tracks WHERE id = ? FOR UPDATE');
+                $rq->execute([$id]);
+                $rates = $rq->fetch();
+                if (!$rates || (float)$rates['hourly_rate'] <= 0) {
+                    db()->rollBack();
+                    keep_input();
+                    flash('Nothing was saved: this training track has no hourly rate yet. Enter its hourly billing rate under Edit track / authorization, then log the hours.', 'error');
+                    redirect("track.php?id=$id#logs");
+                }
+                db()->prepare('INSERT INTO work_logs (track_id, work_date, service_type, rsa_category, goal_id, hours, mileage, description, created_by, hourly_rate, mileage_rate, idem_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+                    ->execute([$id, $date, $visitType, $visitRsa, $goalId, $hours, $mileage, $desc, $user['id'],
+                        $rates['hourly_rate'], $rates['mileage_rate'], $logKey]);
+                $logId = (int)db()->lastInsertId();
             }
-            db()->prepare('INSERT INTO work_logs (track_id, work_date, service_type, rsa_category, goal_id, hours, mileage, description, created_by, hourly_rate, mileage_rate, idem_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-                ->execute([$id, $date, $visitType, $visitRsa, $goalId, $hours, $mileage, $desc, $user['id'],
-                    $rates['hourly_rate'], $rates['mileage_rate'], $logKey]);
-            $logId = (int)db()->lastInsertId();
-            if ($sNote !== '') {
-                // A free-text case note by the person logging, as the Add a note form
-                // saves one; it carries the form's key too, as that form's note does.
-                $noteId = track_note_create((int)$track['client_id'], $id, $sSubject, assemble_note(['note_type' => 'Case Note', 'body' => $sNote]), (int)$user['id'], $logKey);
+            if ($hasNote) {
+                $noteId = track_note_create((int)$track['client_id'], $id, $sSubject, $na, (int)$user['id'], $logKey);
+                // Homework captured by the generator attaches to THIS track (shows in the portal).
+                $added = save_note_homework((int)$track['client_id'], $id, $_POST, (int)$user['id']);
             }
             db()->commit();
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
-            // Only a clash on the form's key means "already logged" (a concurrent copy won).
+            // Only a clash on the form's key means "already saved" (a concurrent copy won).
             if ($e instanceof PDOException && (string)$e->getCode() === '23000') $logAlready();
             throw $e;
         }
-        audit($user['id'], 'hours.log', 'track', $id, $hours . ' hrs on ' . $date . ' (' . $visitRsa . ')');
+        if ($hasHours) audit($user['id'], 'hours.log', 'track', $id, $hours . ' hrs on ' . $date . ' (' . $visitRsa . ')');
         if ($authIssue !== null) {
             audit($user['id'], 'hours.auth_override', 'track', $id, 'log #' . $logId . ' logged anyway: ' . $authIssue);
         }
-        flash(($noteId !== null ? fmt_hours($hours) . ' logged and the session note saved.' : 'Hours logged.')
+        flash(($hasHours && $hasNote ? fmt_hours($hours) . ' logged and the session note saved.' : ($hasHours ? 'Hours logged.' : 'Session note saved.'))
+            . ($added ? ' ' . $added . ' homework item' . ($added === 1 ? '' : 's') . ' added to the client portal.' : '')
             . ($authIssue !== null ? ' ' . $authIssue . ' They were logged anyway, as you confirmed.' : ''));
         // Documentation reminder: active-training sessions should have homework.
         $hwq = db()->prepare('SELECT COUNT(*) FROM homework WHERE track_id = ?');
         $hwq->execute([$id]);
-        if ((int)$hwq->fetchColumn() === 0) {
+        if ($hasHours && (int)$hwq->fetchColumn() === 0) {
             // The save succeeded: a reminder, not an error (no "Error:" prefix or error earcon).
             flash('Reminder: no homework is assigned on this track. Add practice/homework so the session is fully documented.', 'info');
         }
@@ -436,7 +465,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_expense'])) {
     redirect("track.php?id=$id#expenses");
 }
 
-/* ---- POST: add a case note attached to THIS track ---- */
+/* ---- POST: add a case note attached to THIS track (the note-only form before
+   3.0.31; kept for pages opened before then — Record a session now takes notes) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_track_note'])) {
     // The same form sent twice saves the note (and its homework) once: its key is
     // stored in client_notes.idem_key, as the app's notes are.
@@ -498,7 +528,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_track_note'])) {
         }
         flash('Note added to this track.' . ($added ? ' ' . $added . ' homework item' . ($added === 1 ? '' : 's') . ' added to the client portal.' : ''));
     }
-    redirect("track.php?id=$id#notes");
+    // Errors are shown on Record a session, which holds the note fields since 3.0.31.
+    redirect("track.php?id=$id" . ($tnErrs ? "#log-session-h" : "#notes"));
 }
 
 /* ---- POST: generate a structured note from messy notes (no redirect; re-renders) ---- */
@@ -529,7 +560,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['gen_track_note'])) {
             // A section the AI left empty keeps whatever was typed in it.
             for ($i = 0; $i < 4; $i++) if (($tnSections[$i] ?? '') === '') $tnSections[$i] = trim(old_in('sec' . ($i + 1)));
             $tnHomework = array_map(fn($hw) => $hw + ['include' => true], $g['homework']) ?: null;
-            flash('Generated a ' . $tnFormat . ' note — review the sections, then Save note. Text left in the narrative box is saved after the sections under "Narrative" — clear that box if the sections already cover it.');
+            flash('Generated a ' . $tnFormat . ' note — review the sections, then Save session. Text left in the narrative box is saved after the sections under "Narrative" — clear that box if the sections already cover it.');
         }
         else flash($g['error'], 'error');
         audit($user['id'], 'ai.draft', 'client', (int)$track['client_id'], 'track note generate (' . $tnFormat . ')');
@@ -621,7 +652,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   <p id="onpage-h"><strong>On this page</strong></p>
   <ul>
     <li><a href="#authorization">Service authorization</a></li>
-    <li><a href="#log-session-h">Log a session</a></li>
+    <li><a href="#log-session-h">Record a session</a></li>
     <li><a href="#notes">Case notes</a></li>
     <li><a href="#goals"><abbr title="Specific, Measurable, Attainable, Relevant, Time-bound">SMART</abbr> goals</a></li>
     <li><a href="#homework">Homework</a></li>
@@ -720,7 +751,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
 
 <section id="logs" class="card" aria-labelledby="logs-h">
   <h2 id="logs-h">Hours &amp; billing tracker</h2>
-  <h3 id="log-session-h">Log a session</h3>
+  <h3 id="log-session-h">Record a session</h3>
   <?php // Just after hours and a session note were saved together: offer an AI homework draft from that note.
   $savedNote = null;
   if (isset($_GET['saved_note']) && function_exists('ai_feature_enabled') && ai_feature_enabled('homework_draft')) {
@@ -736,11 +767,14 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   <?php if ((float)$track['hourly_rate'] <= 0): ?>
   <p class="alert alert-error" role="note">Hours cannot be logged to this track yet because it has no hourly rate. <a href="track_edit.php?id=<?= $id ?>">Enter the hourly billing rate</a> first.</p>
   <?php endif; ?>
-  <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate>
+  <form method="post" action="track.php?id=<?= $id ?>#log-session-h" class="stacked" novalidate>
     <?= csrf_field() ?><?= web_idem_field() ?>
-    <?= form_error_summary(['work_date' => 'Date', 'log_auth_ack' => 'Authorization', 'visit_rsa_category' => 'RSA service delivered this visit', 'visit_service_type' => 'Service type',
+    <?php $logSumLabels = ['work_date' => 'Date', 'log_auth_ack' => 'Authorization', 'visit_rsa_category' => 'RSA service delivered this visit', 'visit_service_type' => 'Service type',
         'goal_id' => 'Goal this session advanced', 'hours' => 'Hours worked', 'mileage' => 'Mileage', 'description' => 'Activity description',
-        'session_subject' => 'Session note subject', 'session_note' => 'Session note'], ['goal_id' => 'log_goal', 'log_auth_ack' => 'log_auth_ack']) ?>
+        'subject' => 'Note subject', 'note_content' => 'Note'];
+    $logSumAnchors = ['goal_id' => 'log_goal', 'log_auth_ack' => 'log_auth_ack', 'subject' => 'tn_subject', 'note_content' => 'tn_body'];
+    foreach (array_keys($tnHomework ?? []) as $k) { $logSumLabels['tn_hw_due_' . $k] = 'Homework due date'; $logSumAnchors['tn_hw_due_' . $k] = 'thwd' . (int)$k; }
+    echo form_error_summary($logSumLabels, $logSumAnchors); ?>
     <div class="field"><label for="work_date">Date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <input type="date" id="work_date" name="work_date" accesskey="t" required min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('work_date', date('Y-m-d'))) ?>" <?= field_aria('work_date') ?>><?= field_error('work_date') ?></div>
     <?php // Shown once the date was refused as outside the authorization (or a ticked box is being kept). ?>
@@ -762,24 +796,86 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
         <?php endforeach; ?>
       </select><?= field_error('goal_id') ?></div>
     <?php endif; ?>
-    <div class="field"><label for="hours">Hours worked <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-      <span class="hint" id="hours-hint">Decimals allowed, e.g., 1.5</span>
-      <input type="number" id="hours" name="hours" step="0.25" min="0.25" max="24" required value="<?= h(old_in('hours')) ?>" <?= field_aria('hours', 'hours-hint') ?>><?= field_error('hours') ?></div>
+    <div class="field"><label for="hours">Hours worked</label>
+      <span class="hint" id="hours-hint">Such as 1.5. Leave blank to save only the session note.</span>
+      <input type="number" id="hours" name="hours" step="0.25" min="0.25" max="24" value="<?= h(old_in('hours')) ?>" <?= field_aria('hours', 'hours-hint') ?>><?= field_error('hours') ?></div>
     <div class="field"><label for="mileage">Mileage / travel (miles)</label>
       <span class="hint" id="mileage-hint">Miles driven for this session, up to 1000</span>
       <input type="text" inputmode="decimal" autocomplete="off" id="mileage" name="mileage" value="<?= h(old_in('mileage', '0')) ?>" <?= field_aria('mileage', 'mileage-hint') ?>><?= field_error('mileage') ?></div>
-    <div class="field"><label for="description">Activity description <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-      <textarea id="description" name="description" required rows="3" <?= field_aria('description') ?>><?= h(old_in('description')) ?></textarea><?= field_error('description') ?></div>
-    <?php // The session's case note, written here with its hours (saved together, as
-    // a free-text note on this track). The Add a note form below still takes a
-    // structured note, or one on its own. ?>
-    <div class="field"><label for="session_note">Session note <span class="hint">optional — saved with the hours as a case note on this track</span></label>
-      <span class="hint" id="session_note-hint">What happened in the session: progress, concerns, and the plan for next time. Leave it blank to log the hours only.</span>
-      <textarea id="session_note" name="session_note" rows="4" <?= field_aria('session_note', 'session_note-hint') ?>><?= h(old_in('session_note')) ?></textarea><?= field_error('session_note') ?></div>
-    <div class="field"><label for="session_subject">Session note subject <span class="hint">optional — left blank, it is "Session on" followed by the session date</span></label>
-      <input type="text" id="session_subject" name="session_subject" maxlength="255" value="<?= h(old_in('session_subject')) ?>" <?= field_aria('session_subject') ?>><?= field_error('session_subject') ?></div>
-    <button type="submit" name="add_log" value="1" class="btn btn-primary">Log hours</button>
+    <div class="field"><label for="description">Activity description</label>
+      <span class="hint" id="description-hint">Needed with hours: it goes on the invoice.</span>
+      <textarea id="description" name="description" rows="3" <?= field_aria('description', 'description-hint') ?>><?= h(old_in('description')) ?></textarea><?= field_error('description') ?></div>
+    <?php // The session note, saved with the hours (or on its own when Hours worked is
+    // blank): the same note the client's Add a note form takes, with the AI generator. ?>
+    <h4 id="session-note-h">Session note</h4>
+    <?php
+    $tnCurFmt = $tnSections !== null ? $tnFormat : (old_in('note_format') ?: 'free');
+    if (!isset(NOTE_FORMATS[$tnCurFmt])) $tnCurFmt = 'free';
+    $tnSecVals = [];
+    for ($i = 0; $i < 4; $i++) $tnSecVals[$i] = $tnSections[$i] ?? old_in('sec' . ($i + 1));
+    $tnLabels = NOTE_FORMATS[$tnCurFmt === 'free' ? 'BIRP' : $tnCurFmt];
+    ?>
+    <div class="grid grid-2">
+      <div class="field"><label for="tn_type">Note type</label>
+        <select id="tn_type" name="note_type" accesskey="n"><?= select_options(NOTE_TYPES, old_in('note_type') ?: null) ?></select></div>
+      <div class="field"><label for="tn_format">Note format</label>
+        <select id="tn_format" name="note_format">
+          <?php foreach (NOTE_FORMATS as $fk => $labs): ?>
+          <option value="<?= h($fk) ?>" <?= $tnCurFmt === $fk ? 'selected' : '' ?>><?= $fk === 'free' ? 'Free text' : $fk . ' (' . implode(', ', $labs) . ')' ?></option>
+          <?php endforeach; ?>
+        </select></div>
+    </div>
+    <div class="field"><label for="tn_subject">Note subject</label>
+      <span class="hint" id="tn_subject-hint">Left blank, it is "Session on" and the date.</span>
+      <input type="text" id="tn_subject" name="subject" maxlength="255" value="<?= h(old_in('subject', old_in('session_subject'))) ?>" <?= field_aria('subject', 'tn_subject-hint') ?>><?= field_error('subject') ?></div>
+    <fieldset id="tn-struct" <?= $tnCurFmt === 'free' ? 'hidden' : '' ?>>
+      <legend class="legend-h"><span id="tn-fmt-name"><?= h($tnCurFmt === 'free' ? 'BIRP' : $tnCurFmt) ?></span> <span class="hint">structured case-note sections</span></legend>
+      <?php for ($i = 0; $i < 4; $i++): $n = $i + 1; ?>
+      <div class="field"><label for="tn_sec<?= $n ?>" id="tn-lbl-sec<?= $n ?>"><?= h($tnLabels[$i]) ?></label>
+        <textarea id="tn_sec<?= $n ?>" name="sec<?= $n ?>" rows="2"><?= h($tnSecVals[$i]) ?></textarea></div>
+      <?php endfor; ?>
+    </fieldset>
+    <div class="field"><label for="tn_body">Note</label>
+      <span class="hint" id="tn_body-hint">What happened, progress, concerns and the plan for next time. Or paste rough notes and use Generate structured note. Leave the note blank to log only the hours.</span>
+      <textarea id="tn_body" name="body" rows="5" <?= field_aria('note_content', 'tn_body-hint') ?>><?= h(old_in('body', old_in('session_note'))) ?></textarea><?= field_error('note_content') ?></div>
+    <?php if ($tnQuestions): ?>
+    <div class="alert alert-success" role="note"><strong>Before you save — double-check:</strong>
+      <ul style="margin:.3rem 0 0"><?php foreach ($tnQuestions as $q): ?><li><?= h($q) ?></li><?php endforeach; ?></ul></div>
+    <?php endif; ?>
+    <?php if ($tnHomework): ?>
+    <fieldset>
+      <legend class="legend-h">Homework from this note <span class="hint">checked items are added to this client's portal when you save</span></legend>
+      <?php foreach ($tnHomework as $k => $hw): $hwItem = '<span class="visually-hidden"> (homework item ' . ((int)$k + 1) . ')</span>'; ?>
+      <div class="field" style="border-top:1px solid var(--line);padding-top:.5rem;margin-top:.5rem">
+        <label><input type="checkbox" name="hw_include[<?= (int)$k ?>]" value="1" <?= ($hw['include'] ?? true) ? 'checked' : '' ?>> Add this homework<?= $hwItem ?></label>
+        <label for="thwt<?= (int)$k ?>">Title<?= $hwItem ?></label>
+        <input type="text" id="thwt<?= (int)$k ?>" name="hw_title[<?= (int)$k ?>]" maxlength="190" value="<?= h($hw['title']) ?>">
+        <label for="thwi<?= (int)$k ?>">Instructions<?= $hwItem ?></label>
+        <input type="text" id="thwi<?= (int)$k ?>" name="hw_instructions[<?= (int)$k ?>]" maxlength="1000" value="<?= h($hw['instructions']) ?>">
+        <label for="thwd<?= (int)$k ?>">Due date (optional)<?= $hwItem ?></label>
+        <input type="date" id="thwd<?= (int)$k ?>" name="hw_due[<?= (int)$k ?>]" value="<?= h($hw['due']) ?>" <?= field_aria('tn_hw_due_' . (int)$k) ?>><?= field_error('tn_hw_due_' . (int)$k) ?>
+      </div>
+      <?php endforeach; ?>
+    </fieldset>
+    <?php endif; ?>
+    <button type="submit" name="add_log" value="1" class="btn btn-primary">Save session</button>
+    <?php if (function_exists('ai_feature_enabled') && ai_feature_enabled('draft')): ?>
+    <button type="submit" name="gen_track_note" value="1" class="btn btn-secondary" formnovalidate>Generate structured note</button>
+    <?php endif; ?>
   </form>
+  <script>
+  (function(){
+    var FMT = <?= json_encode(NOTE_FORMATS, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    var sel = document.getElementById('tn_format'), fs = document.getElementById('tn-struct'), nm = document.getElementById('tn-fmt-name');
+    function sync(){
+      var f = sel.value, labels = FMT[f] && FMT[f].length ? FMT[f] : FMT.BIRP;
+      fs.hidden = (f === 'free');
+      if (nm) nm.textContent = (f === 'free' ? 'BIRP' : f);
+      for (var i = 0; i < 4; i++){ var l = document.getElementById('tn-lbl-sec' + (i+1)); if (l) l.textContent = labels[i]; }
+    }
+    sel.addEventListener('change', sync); sync();
+  })();
+  </script>
 
   <h3>Log entries (<?= count($logs) ?>)</h3>
   <?php $unbilledTotal = round($r['unbilled_amount'] + $r['unbilled_expenses'], 2);
@@ -837,91 +933,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
 
 <section id="notes" class="card" aria-labelledby="tnotes-h">
   <h2 id="tnotes-h">Case notes for this track (<?= count($notes) ?>)</h2>
-  <p class="muted">Notes recorded here are attached to this training track. General notes that aren't about a specific track belong on the client's <a href="client.php?id=<?= (int)$track['client_id'] ?>&amp;tab=notes">Client Notes</a> tab.</p>
-  <?php // Open when the note was refused, generated or restored, or a link asks for it (write_note=1).
-  $tnOpen = isset($_GET['write_note']) || $tnSections !== null || $tnHomework
-      || array_filter(array_keys(form_errors()), fn($k) => in_array($k, ['subject', 'note_content'], true) || str_starts_with((string)$k, 'tn_hw_due_'))
-      || array_filter(['subject', 'body', 'sec1', 'sec2', 'sec3', 'sec4'], fn($k) => trim(old_in($k)) !== ''); ?>
-  <h3 class="visually-hidden">Add a note</h3>
-  <details id="add-track-note"<?= $tnOpen ? ' open' : '' ?>>
-  <summary accesskey="n">Add a note</summary>
-  <form method="post" action="track.php?id=<?= $id ?>#notes" class="stacked" novalidate>
-    <?= csrf_field() ?><?= web_idem_field() ?>
-    <?php // A refused homework due date links to that row's date field.
-    $tnSumLabels = ['subject' => 'Subject', 'note_content' => 'Note'];
-    $tnSumAnchors = ['subject' => 'tn_subject', 'note_content' => 'tn_body'];
-    foreach (array_keys($tnHomework ?? []) as $k) { $tnSumLabels['tn_hw_due_' . $k] = 'Homework due date'; $tnSumAnchors['tn_hw_due_' . $k] = 'thwd' . (int)$k; }
-    echo form_error_summary($tnSumLabels, $tnSumAnchors); ?>
-    <?php
-    $tnCurFmt = $tnSections !== null ? $tnFormat : (old_in('note_format') ?: 'free');
-    if (!isset(NOTE_FORMATS[$tnCurFmt])) $tnCurFmt = 'free';
-    $tnSecVals = [];
-    for ($i = 0; $i < 4; $i++) $tnSecVals[$i] = $tnSections[$i] ?? old_in('sec' . ($i + 1));
-    $tnLabels = NOTE_FORMATS[$tnCurFmt === 'free' ? 'BIRP' : $tnCurFmt];
-    ?>
-    <div class="grid grid-2">
-      <div class="field"><label for="tn_type">Note type</label>
-        <select id="tn_type" name="note_type"><?= select_options(NOTE_TYPES, old_in('note_type') ?: null) ?></select></div>
-      <div class="field"><label for="tn_format">Note format</label>
-        <select id="tn_format" name="note_format">
-          <?php foreach (NOTE_FORMATS as $fk => $labs): ?>
-          <option value="<?= h($fk) ?>" <?= $tnCurFmt === $fk ? 'selected' : '' ?>><?= $fk === 'free' ? 'Free text' : $fk . ' (' . implode(', ', $labs) . ')' ?></option>
-          <?php endforeach; ?>
-        </select></div>
-    </div>
-    <div class="field"><label for="tn_subject">Subject <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-      <input type="text" id="tn_subject" name="subject" required maxlength="255" value="<?= h(old_in('subject')) ?>" <?= field_aria('subject') ?>><?= field_error('subject') ?></div>
-    <fieldset id="tn-struct" <?= $tnCurFmt === 'free' ? 'hidden' : '' ?>>
-      <legend class="legend-h"><span id="tn-fmt-name"><?= h($tnCurFmt === 'free' ? 'BIRP' : $tnCurFmt) ?></span> <span class="hint">structured case-note sections</span></legend>
-      <?php for ($i = 0; $i < 4; $i++): $n = $i + 1; ?>
-      <div class="field"><label for="tn_sec<?= $n ?>" id="tn-lbl-sec<?= $n ?>"><?= h($tnLabels[$i]) ?></label>
-        <textarea id="tn_sec<?= $n ?>" name="sec<?= $n ?>" rows="2"><?= h($tnSecVals[$i]) ?></textarea></div>
-      <?php endfor; ?>
-    </fieldset>
-    <div class="field"><label for="tn_body">Narrative note / paste messy session notes here</label>
-      <span class="hint" id="tn_body-hint">Type a note, or paste rough notes and use "Generate structured note". When the structured sections are filled in, text left in this box is saved too, after them under "Narrative" — clear it if the sections already cover it.</span>
-      <textarea id="tn_body" name="body" rows="4" <?= field_aria('note_content', 'tn_body-hint') ?>><?= h(old_in('body')) ?></textarea><?= field_error('note_content') ?></div>
-    <?php if ($tnQuestions): ?>
-    <div class="alert alert-success" role="note"><strong>Before you save — double-check:</strong>
-      <ul style="margin:.3rem 0 0"><?php foreach ($tnQuestions as $q): ?><li><?= h($q) ?></li><?php endforeach; ?></ul></div>
-    <?php endif; ?>
-    <?php if ($tnHomework): ?>
-    <fieldset>
-      <legend class="legend-h">Homework from this note <span class="hint">checked items are added to this client's portal when you save</span></legend>
-      <?php foreach ($tnHomework as $k => $hw): $hwItem = '<span class="visually-hidden"> (homework item ' . ((int)$k + 1) . ')</span>'; ?>
-      <div class="field" style="border-top:1px solid var(--line);padding-top:.5rem;margin-top:.5rem">
-        <label><input type="checkbox" name="hw_include[<?= (int)$k ?>]" value="1" <?= ($hw['include'] ?? true) ? 'checked' : '' ?>> Add this homework<?= $hwItem ?></label>
-        <label for="thwt<?= (int)$k ?>">Title<?= $hwItem ?></label>
-        <input type="text" id="thwt<?= (int)$k ?>" name="hw_title[<?= (int)$k ?>]" maxlength="190" value="<?= h($hw['title']) ?>">
-        <label for="thwi<?= (int)$k ?>">Instructions<?= $hwItem ?></label>
-        <input type="text" id="thwi<?= (int)$k ?>" name="hw_instructions[<?= (int)$k ?>]" maxlength="1000" value="<?= h($hw['instructions']) ?>">
-        <label for="thwd<?= (int)$k ?>">Due date (optional)<?= $hwItem ?></label>
-        <input type="date" id="thwd<?= (int)$k ?>" name="hw_due[<?= (int)$k ?>]" value="<?= h($hw['due']) ?>" <?= field_aria('tn_hw_due_' . (int)$k) ?>><?= field_error('tn_hw_due_' . (int)$k) ?>
-      </div>
-      <?php endforeach; ?>
-    </fieldset>
-    <?php endif; ?>
-    <button type="submit" name="add_track_note" value="1" class="btn btn-primary">Save note</button>
-    <?php if (function_exists('ai_feature_enabled') && ai_feature_enabled('draft')): ?>
-    <button type="submit" name="gen_track_note" value="1" class="btn btn-secondary" formnovalidate>Generate structured note</button>
-    <span class="hint">Paste your messy session notes above, pick a format, then Generate — it drafts the sections, flags anything missing, and pulls out homework for the portal.</span>
-    <?php endif; ?>
-  </form>
-  <script>
-  (function(){
-    var FMT = <?= json_encode(NOTE_FORMATS, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
-    var sel = document.getElementById('tn_format'), fs = document.getElementById('tn-struct'), nm = document.getElementById('tn-fmt-name');
-    function sync(){
-      var f = sel.value, labels = FMT[f] && FMT[f].length ? FMT[f] : FMT.BIRP;
-      fs.hidden = (f === 'free');
-      if (nm) nm.textContent = (f === 'free' ? 'BIRP' : f);
-      for (var i = 0; i < 4; i++){ var l = document.getElementById('tn-lbl-sec' + (i+1)); if (l) l.textContent = labels[i]; }
-    }
-    sel.addEventListener('change', sync); sync();
-  })();
-  </script>
-  </details>
-  <?= details_open_on_hash('add-track-note') ?>
+  <p class="muted">Write a note for this track under <a href="#log-session-h">Record a session</a>, with or without hours. General notes that aren't about a specific track belong on the client's <a href="client.php?id=<?= (int)$track['client_id'] ?>&amp;tab=notes">Client Notes</a> tab.</p>
   <?php if (!$notes): ?><p class="muted">No notes recorded for this track yet.</p><?php endif; ?>
   <?php $hwDraftOn = function_exists('ai_feature_enabled') && ai_feature_enabled('homework_draft');
   foreach ($notes as $tn):
