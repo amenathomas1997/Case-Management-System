@@ -16,3 +16,6 @@ Verified before commit:
 - full_schema 1082 (run with the test process's mailer failing, as on CI), audit_regression 61, security 67, staging_scrub 34, and run_all.
 - The migration was rehearsed: a 3.0.41 schema plus mig_3.0.42 matches a fresh 3.0.42 schema, and re-running it is safe.
 - Not checked in a browser or with a screen reader.
+
+## Deployed 2026-10-16 12:03 CT
+From 3.0.41 with .audit_work/deploy-3.0.42 (built by .audit_work/make_deploy.sh). 1 migration statement ran. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.42). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.42-20261016-120336.
