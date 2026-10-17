@@ -88,9 +88,9 @@ fun NoticeText(message: String?) {
 
 /** Says something to TalkBack without showing it (a screen that moved on, a list that loaded). */
 @Composable
-fun Announce(message: String?) {
+fun Announce(message: String?, key: Any? = message) {
     val view = LocalView.current
-    LaunchedEffect(message) { if (!message.isNullOrBlank()) @Suppress("DEPRECATION") view.announceForAccessibility(message) }
+    LaunchedEffect(key) { if (!message.isNullOrBlank()) @Suppress("DEPRECATION") view.announceForAccessibility(message) }
 }
 
 @Composable

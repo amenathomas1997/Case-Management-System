@@ -4,7 +4,7 @@ The Android app uses the same server, the same sign-in and the same records as t
 
 ## What it does
 
-Nearly everything the iPhone app does.
+Everything the iPhone app does.
 
 - **Sign in** with email, password and the emailed code (or an authenticator app's code). A build without a server asks for the organisation's web address first.
 - **Home**: the dashboard's counts, authorizations ending soon, the newest referrals and case notes, unread alerts, and anything waiting to send.
@@ -32,7 +32,21 @@ Nearly everything the iPhone app does.
   - Offline entries
   - My account: change your password, the authenticator app, your calendar address, sign out everywhere, and sign out
 
-Still only on the website and the iPhone app: the AI tools and voice assistant, scored assessments, AT services, programs, contracts, bookings, procurement, accommodations, competencies, the knowledge base, signatures and uploading documents.
+Also, as in the iPhone app:
+- **AI help**, when your organisation has it switched on:
+  - the AI tools: plain language, translation, curriculum drafts, questions about your caseload or the knowledge base, and a review of clients at risk
+  - for a client: device recommendations, a progress summary, an intake assessment draft, and a case summary saved as a note
+  - in a case note: cleaning up a written note, and drafting BIRP, PAIP or SOAP sections (with any homework they mention) from rough notes
+  - every AI result is a draft that staff review; nothing is saved on its own
+- **The voice assistant:** say or type a request, and it saves only after you say yes.
+- **Assessments:** scored assessments and curriculum competencies.
+- **AT services:** trials, setups, funding, repairs, licenses, reuse, resources and the rest, with forms built from what the server describes.
+- **Programs and business records:** Pre-ETS programs, grants and contracts, interpreter and transport bookings, device procurement, worksite accommodations, the knowledge base, the counselor portal, client portal requests, staff utilization and the documentation review.
+- **Signatures and documents:**
+  - the client signs on the phone when a session is completed or hours are logged (a typed name also counts)
+  - documents are uploaded from the phone's file picker, up to 25 MB
+
+Only on the website: the AT services profitability report and staff matching, and administration such as users, settings and lists.
 
 ## Without a signal
 

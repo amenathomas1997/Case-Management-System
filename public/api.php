@@ -3314,7 +3314,8 @@ switch ($action) {
     }
     case 'add_booking': {
         $cid = (int)($input['client_id'] ?? 0); api_require_client($cid, $userId);
-        $types = ['Interpreter','CART captioning','Transportation','Note-taker','Other'];
+        // The organisation's own list (Lists and time limits), as the website's booking form offers (4.14.0).
+        $types = array_values(array_unique(array_merge(cms_list_items('booking_types'), ['Other'])));
         $neededAt = api_datetime($input, 'needed_at', 'Needed at');
         // As access_bookings.php: whole minutes from 0 to 1440 (blank is 0), refused
         // rather than clamped, so the provider is never booked for another length.

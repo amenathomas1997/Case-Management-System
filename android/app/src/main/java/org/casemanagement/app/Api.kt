@@ -48,6 +48,9 @@ class Api(context: Context) {
         private set
     var aiEnabled by mutableStateOf(false)
         private set
+    /** The AI features switched on for this account (draft, recommend, intake, voice and the rest). */
+    var aiFeatures by mutableStateOf<List<String>>(emptyList())
+        private set
     var serverVersion by mutableStateOf<String?>(null)
         private set
     /** Why the app went back to Sign in by itself (an expired session), shown there once. */
@@ -72,6 +75,9 @@ class Api(context: Context) {
 
     /** Until the first answer, everything shows (the server enforces access either way). */
     fun can(perm: String) = !permsLoaded || perms.contains(perm)
+
+    /** An AI feature this account may use (the server checks again). */
+    fun aiHas(feature: String) = aiEnabled && aiFeatures.contains(feature)
 
     init {
         pendingSync = ownPending(loadQueue())
@@ -230,6 +236,53 @@ class Api(context: Context) {
         } finally { conn.disconnect() }
     }
 
+    /**
+     * Uploads a document without holding it in memory: the file (already copied to [file], at most
+     * 25 MB) is sent as base64 straight from disk inside the JSON body, with an exact length.
+     */
+    suspend fun uploadDocument(clientId: Int, category: String, title: String, filename: String, file: java.io.File) = withContext(Dispatchers.IO) {
+        val sessionToken = token
+        val prefix = "{\"client_id\":$clientId,\"category\":${JSONObject.quote(category)},\"title\":${JSONObject.quote(title)},\"filename\":${JSONObject.quote(filename)},\"data_b64\":\""
+        val suffix = "\"}"
+        val n = file.length()
+        val b64Len = 4 * ((n + 2) / 3)
+        val pre = prefix.toByteArray(Charsets.UTF_8); val suf = suffix.toByteArray(Charsets.UTF_8)
+        val conn = (URL(url("upload_document", emptyMap())).openConnection() as HttpURLConnection)
+        try {
+            conn.connectTimeout = 20_000; conn.readTimeout = 120_000
+            conn.requestMethod = "POST"; conn.doOutput = true
+            conn.setRequestProperty("X-App-Version", APP_VERSION)
+            conn.setRequestProperty("Authorization", "Bearer $sessionToken")
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setFixedLengthStreamingMode(pre.size + b64Len + suf.size)
+            conn.outputStream.use { out ->
+                out.write(pre)
+                // Base64 in whole 3-byte groups, written as it is read.
+                file.inputStream().buffered().use { input ->
+                    val enc = java.util.Base64.getEncoder()
+                    val buf = ByteArray(3 * 16384)
+                    var carry = ByteArray(0)
+                    while (true) {
+                        val r = input.read(buf); if (r < 0) break
+                        val chunk = carry + buf.copyOf(r)
+                        val whole = chunk.size - chunk.size % 3
+                        out.write(enc.encode(chunk.copyOf(whole)))
+                        carry = chunk.copyOfRange(whole, chunk.size)
+                    }
+                    if (carry.isNotEmpty()) out.write(enc.encode(carry))
+                }
+                out.write(suf)
+            }
+            val status = conn.responseCode
+            val text = (if (status >= 400) conn.errorStream else conn.inputStream)?.bufferedReader()?.use { it.readText() } ?: ""
+            val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
+            if (status == 401) withContext(Dispatchers.Main) { if (json.optBoolean("wipe")) wipeThisPhone() else expireSession() }
+            if (status !in 200..299 || !json.optBoolean("ok")) throw ApiException(json.optString("error").ifEmpty { "The document was not uploaded." }, status)
+        } catch (e: IOException) {
+            throw ApiException(NO_CONNECTION, 0, network = true)
+        } finally { conn.disconnect() }
+    }
+
     /* ---------- Sign-in ---------- */
 
     /** The email last signed in with, offered when signing back in. */
@@ -255,6 +308,7 @@ class Api(context: Context) {
         perms = me.optJSONArray("perms").strings(); store.put("userPerms", perms.joinToString(","))
         scoped = me.optBoolean("scoped"); store.put("userScoped", scoped)
         aiEnabled = me.optBoolean("ai_enabled")
+        aiFeatures = me.optJSONArray("ai_features").strings()
         serverVersion = me.optString("server_version").ifEmpty { null }
         me.optString("timezone").takeIf { it.isNotEmpty() && java.util.TimeZone.getAvailableIDs().contains(it) }?.let { serverZone = it; store.put("serverZone", it); org.casemanagement.app.ui.serverZoneId = it }
         permsLoaded = true; store.put("userPermsLoaded", true)
@@ -307,7 +361,7 @@ class Api(context: Context) {
 
     private fun clearIdentity(keepQueue: Boolean = true) {
         docsFolder.deleteRecursively()
-        perms = emptyList(); permsLoaded = false; scoped = false; aiEnabled = false; serverVersion = null
+        perms = emptyList(); permsLoaded = false; scoped = false; aiEnabled = false; aiFeatures = emptyList(); serverVersion = null
         store.remove("userPerms", "userPermsLoaded", "userScoped", "formOptions")
         if (!keepQueue) store.remove(QUEUE_KEY)
         pendingSync = ownPending(loadQueue())

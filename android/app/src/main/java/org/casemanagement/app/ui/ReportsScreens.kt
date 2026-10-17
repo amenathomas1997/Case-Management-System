@@ -25,7 +25,6 @@ import org.casemanagement.app.str
 import org.json.JSONObject
 import java.util.Locale
 
-private fun money(d: Double) = "$" + String.format(Locale.US, "%,.2f", d)
 
 /** Search clients, case notes, referrals and tracks, as the website's search. */
 @Composable

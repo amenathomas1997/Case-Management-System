@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.14.0' => [
+        'The Android app (4.14.0) now has every screen the iPhone app has: the AI tools and AI help for each client (recommendations, progress summary, intake draft, case summary, cleaning up a note, and BIRP, PAIP or SOAP sections drafted from rough notes), the voice assistant, scored assessments, curriculum competencies, AT services, Pre-ETS programs, grants and contracts, bookings, device procurement, worksite accommodations, the knowledge base, the counselor portal, client portal requests, staff utilization, the documentation review, the client signature when completing a session or logging hours, and uploading documents.',
+        'Interpreter and transport bookings made in the apps accept your own booking types from Lists and time limits.',
+    ],
     '4.13.0' => [
         'The Android app (4.13.0) now does almost everything the iPhone app does: add and edit clients, training tracks with goals, progress and expenses, documents and homework, scheduling and moving sessions, referrals (assign, close, reopen, make a client), equipment loans and returns, device follow-ups, search, the pipeline, waitlist, compliance, invoices, incidents, and your password, authenticator app and calendar address. With no connection it shows the last saved copy of your clients, a client, the schedule and follow-ups, and keeps progress, expenses, follow-ups and homework to send later.',
     ],

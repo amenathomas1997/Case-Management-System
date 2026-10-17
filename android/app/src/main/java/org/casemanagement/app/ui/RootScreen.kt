@@ -123,6 +123,11 @@ private val titles = mapOf(
     "clientEdit" to "Client details", "track" to "Training track", "trackEdit" to "Track details", "newSession" to "Schedule a session",
     "equipment" to "Equipment", "followups" to "Device follow-ups", "docs" to "Documents and homework", "search" to "Search",
     "pipeline" to "Pipeline", "waitlist" to "Waitlist", "compliance" to "Compliance", "invoices" to "Invoices", "incidents" to "Incidents",
+    "voice" to "Voice assistant", "clientAi" to "AI help", "aiTools" to "AI tools", "scored" to "Scored assessment", "scoredList" to "Scored assessments",
+    "scoredNew" to "Give an assessment", "competency" to "Competencies", "at" to "AT services", "atRecord" to "AT service", "atEdit" to "AT service",
+    "programs" to "Pre-ETS programs", "cohort" to "Cohort", "contracts" to "Grants and contracts", "contract" to "Contract", "bookings" to "Bookings",
+    "procurement" to "Device procurement", "deviceRequest" to "Device request", "accommodations" to "Worksite accommodations", "worksite" to "Worksite assessment",
+    "kb" to "Knowledge base", "kbEdit" to "Article", "counselors" to "Counselor portal", "portalRequests" to "Client requests", "utilization" to "Utilization", "docReview" to "Documentation review",
 )
 
 @Composable
@@ -154,6 +159,34 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("compliance") { ComplianceScreen(api, nav) }
         composable("invoices") { InvoicesScreen(api) }
         composable("incidents") { IncidentsScreen(api) }
+        val n = { e: androidx.navigation.NavBackStackEntry, k: String -> e.arguments?.getString(k)?.toIntOrNull() ?: 0 }
+        composable("voice/{clientId}/{name}") { VoiceScreen(api, nav, n(it, "clientId"), it.arguments?.getString("name") ?: "") }
+        composable("clientAi/{clientId}") { ClientAiScreen(api, nav, n(it, "clientId")) }
+        composable("aiTools") { AiToolsScreen(api) }
+        composable("scoredList/{clientId}") { ScoredAssessmentsScreen(api, nav, n(it, "clientId")) }
+        composable("scored/{id}") { ScoredAssessmentScreen(api, n(it, "id")) }
+        composable("scoredNew/{clientId}") { ScoredNewScreen(api, nav, n(it, "clientId")) }
+        composable("competency/{clientId}") { CompetencyScreen(api, n(it, "clientId")) }
+        composable("at") { AtServicesScreen(api, nav) }
+        composable("at/{kind}") { AtListScreen(api, nav, it.arguments?.getString("kind") ?: "") }
+        composable("atRecord/{id}") { AtRecordScreen(api, nav, n(it, "id")) }
+        composable("atEdit/{kind}/{id}/{parent}") { AtEditScreen(api, nav, it.arguments?.getString("kind") ?: "", n(it, "id"), n(it, "parent")) }
+        composable("programs") { ProgramsScreen(api, nav) }
+        composable("cohort/{id}") { CohortScreen(api, n(it, "id")) }
+        composable("contracts") { ContractsScreen(api, nav) }
+        composable("contract/{id}") { ContractScreen(api, n(it, "id")) }
+        composable("bookings") { BookingsScreen(api) }
+        composable("procurement") { ProcurementScreen(api, nav) }
+        composable("deviceRequest/{id}") { DeviceRequestScreen(api, n(it, "id")) }
+        composable("accommodations") { AccommodationsScreen(api, nav) }
+        composable("worksite/{id}") { WorksiteScreen(api, nav, n(it, "id")) }
+        composable("kb") { KnowledgeScreen(api, nav) }
+        composable("kb/{id}") { KnowledgeArticleScreen(api, nav, n(it, "id")) }
+        composable("kbEdit/{id}") { KnowledgeEditScreen(api, nav, n(it, "id")) }
+        composable("counselors") { CounselorsScreen(api) }
+        composable("portalRequests") { PortalRequestsScreen(api, nav) }
+        composable("utilization") { UtilizationScreen(api) }
+        composable("docReview") { DocReviewScreen(api, nav) }
         composable("messages") { MessagesScreen(api, nav) }
         composable("thread/{clientId}") { ThreadScreen(api, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0) }
         composable("account") { AccountScreen(api, nav) }

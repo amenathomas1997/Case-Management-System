@@ -136,6 +136,9 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, on
     var note by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var logged by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    val signature = remember { SignatureState() }
+    var signedName by remember { mutableStateOf("") }
+    val density = androidx.compose.ui.platform.LocalDensity.current.density
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -150,6 +153,8 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, on
                 val body = JSONObject().put("session_id", s.optInt("id")).put("outcome", outcome).put("hours", h)
                 if (m > 0) body.put("mileage", m)
                 if (note.isNotBlank()) body.put("session_note", note.trim())
+                signature.png(density)?.let { body.put("signature_b64", it) }
+                if (signedName.isNotBlank()) body.put("signed_name", signedName.trim().take(120))
                 workLogId?.let { body.put("work_log_id", it) }
                 val r = api.call("complete_session", body = body)
                 onDone("Session completed. " + (r.str("warning") ?: ""))
@@ -162,13 +167,16 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, on
     }
 
     AlertDialog(
-        onDismissRequest = onCancel,
+        // Not closed by a tap outside: a client's finger slipping while signing must not lose the entry.
+        onDismissRequest = {},
         title = { Text("Complete: " + s.optString("client"), modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal)
                 Field("Miles driven", miles, { miles = it }, hint = "0 if none", keyboard = KeyboardType.Decimal)
                 Field("Session note", note, { note = it }, hint = "optional", singleLine = false, minLines = 3)
+                SignaturePad(signature)
+                Field("Client's typed name", signedName, { signedName = it }, hint = "optional; counts as their acknowledgement")
                 ErrorText(error)
                 logged.forEach { w ->
                     TextButton(onClick = { send("completed_logged", w.optInt("id")) }) {

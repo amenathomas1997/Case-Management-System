@@ -28,19 +28,40 @@ import java.util.Date
 
 @Composable
 fun MoreScreen(api: Api, nav: NavHostController) {
+    // Grouped under headings, so a screen reader can jump from group to group.
     Page {
+        Heading("Everyday")
         if (api.can("clients")) ListRow(listOf("Search"), onClick = { nav.navigate("search") })
         ListRow(listOf("Alerts"), onClick = { nav.navigate("alerts") })
         if (api.can("referrals")) ListRow(listOf("Referrals"), onClick = { nav.navigate("referrals") })
         if (api.can("clients")) ListRow(listOf("Messages"), onClick = { nav.navigate("messages") })
+        if (api.can("clients")) ListRow(listOf("Client portal requests"), onClick = { nav.navigate("portalRequests") })
+        if (api.aiHas("voice") && api.can("clients")) ListRow(listOf("Voice assistant"), onClick = { nav.navigate("voice/0/-") })
+        if (api.aiEnabled) ListRow(listOf("AI tools"), onClick = { nav.navigate("aiTools") })
+        ListRow(listOf("Offline entries" + if (api.pendingSync > 0) " (${api.pendingSync} waiting)" else ""), onClick = { nav.navigate("offline") })
+
+        Heading("Services")
+        if (api.can("clients")) ListRow(listOf("AT services"), onClick = { nav.navigate("at") })
         if (api.can("equipment")) ListRow(listOf("Equipment"), onClick = { nav.navigate("equipment") })
         if (api.can("clients")) ListRow(listOf("Device follow-ups"), onClick = { nav.navigate("followups") })
+        if (api.can("procurement")) ListRow(listOf("Device procurement"), onClick = { nav.navigate("procurement") })
+        if (api.can("clients")) ListRow(listOf("Worksite accommodations"), onClick = { nav.navigate("accommodations") })
+        if (api.can("schedule")) ListRow(listOf("Interpreter and transport bookings"), onClick = { nav.navigate("bookings") })
+        if (api.can("programs")) ListRow(listOf("Pre-ETS programs"), onClick = { nav.navigate("programs") })
+        ListRow(listOf("Knowledge base"), onClick = { nav.navigate("kb") })
+
+        Heading("Reports and records")
         if (api.can("clients")) ListRow(listOf("Pipeline"), onClick = { nav.navigate("pipeline") })
         if (api.can("referrals")) ListRow(listOf("Waitlist"), onClick = { nav.navigate("waitlist") })
         if (api.can("clients")) ListRow(listOf("Compliance"), onClick = { nav.navigate("compliance") })
-        if (api.can("billing")) ListRow(listOf("Invoices"), onClick = { nav.navigate("invoices") })
+        if (api.can("clients")) ListRow(listOf("Documentation review"), onClick = { nav.navigate("docReview") })
         if (api.can("clients")) ListRow(listOf("Incidents"), onClick = { nav.navigate("incidents") })
-        ListRow(listOf("Offline entries" + if (api.pendingSync > 0) " (${api.pendingSync} waiting)" else ""), onClick = { nav.navigate("offline") })
+        if (api.can("billing")) ListRow(listOf("Invoices"), onClick = { nav.navigate("invoices") })
+        if (api.can("billing")) ListRow(listOf("Grants and contracts"), onClick = { nav.navigate("contracts") })
+        if (api.can("analytics")) ListRow(listOf("Staff utilization"), onClick = { nav.navigate("utilization") })
+
+        Heading("Account and administration")
+        if (api.can("admin")) ListRow(listOf("Counselor portal"), onClick = { nav.navigate("counselors") })
         ListRow(listOf("My account"), onClick = { nav.navigate("account") })
         Text("Everything else is on the website, ${ServerAddress.host(api.base)}.")
     }

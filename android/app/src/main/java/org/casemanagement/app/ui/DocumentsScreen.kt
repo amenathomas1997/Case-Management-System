@@ -40,12 +40,14 @@ fun DocumentsScreen(api: Api, clientId: Int) {
     var busy by remember { mutableStateOf(false) }
     var completing by remember { mutableStateOf<JSONObject?>(null) }
     var assigning by remember { mutableStateOf(false) }
+    var uploading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     Show(state, "documents and homework") { (docs, hw) ->
         Page {
             NoticeText(notice)
             ErrorText(error)
             Heading("Documents (${docs.size})")
+            if (api.can("clients")) SecondaryButton("Upload a document") { uploading = true }
             if (docs.isEmpty()) Text("No documents.")
             docs.forEach { d ->
                 ListRow(listOf(d.optString("title").ifEmpty { d.optString("orig_name") }, d.optString("category") + ", " + whenText(d.str("created_at"))),
@@ -83,6 +85,7 @@ fun DocumentsScreen(api: Api, clientId: Int) {
             }
         }, { completing = null })
     }
+    if (uploading) UploadDocumentDialog(api, clientId, onDone = { m -> uploading = false; notice = m; state.reload() }, onCancel = { uploading = false })
     if (assigning) AssignHomeworkDialog(api, clientId, onDone = { m -> assigning = false; notice = m; state.reload() }, onCancel = { assigning = false })
 }
 
