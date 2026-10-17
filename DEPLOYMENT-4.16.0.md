@@ -89,3 +89,15 @@ The owner asked for all five follow-ups to staff agreements (2026-10-17): privac
 **Accepted:** the quiz says which questions were wrong and allows another try at once, so it can be passed by retrying. It is a training check, not an exam, and every attempt is kept for the administrator to see.
 
 **Not covered:** while held, a person still sees their own tasks and alerts, which can name a client, and authorization alert emails still reach them. Both are rare for someone new.
+
+## Deployed 2026-10-17 12:19 CT
+From 4.15.0 with .audit_work/deploy-4.16.0: 26 files, including cron/daily_alerts.php, at 1536601.
+- mig_4.16.0.sql ran (12 statements), and the 5 new tables and columns are present.
+- Production files matched 4.15.0 before install and match 4.16.0 after; .htaccess unchanged.
+- Smoke checks passed, and health reports 4.16.0. CI passed all three jobs: PHP, Android and iOS.
+
+On the live site the starting privacy training and exit acknowledgement are off until edited, and the hold is set to "new staff". Nothing is turned on yet, so nobody is held.
+
+The apps need their 4.16.0 builds on TestFlight and Google Play; the website works now.
+
+Backups: /home/cmsuser/casemanagement_private/deploy-4.16.0-20261017-121928.
