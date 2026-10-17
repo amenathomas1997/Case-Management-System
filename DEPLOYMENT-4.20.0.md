@@ -72,3 +72,11 @@ The owner asked to build the improvements from the comparison with off-the-shelf
 **Accepted:**
 - A group session puts one event per member in the instructor's calendar.
 - English place names inside the Spanish time list are not marked as English (browsers drop markup inside options).
+
+## Deployed
+
+2026-10-17 15:41 CT, after CI passed all three jobs on 13251c8. Every replaced file matched 4.19.1 first. The backup is at /home/cmsuser/casemanagement_private/deploy-4.20.0-20261017-154147. All 9 migration statements ran and the new tables and columns are present; every installed file matches the release, and health.php reports 4.20.0.
+
+Published as the GitHub release v4.20.0 (latest), with the install bundle and the verified signed package.
+
+Nothing changes on the live site until the owner adds Calendars.ReadWrite to the Microsoft app (if Teams links are used) and staff turn on Outlook sync, or until self-booking is turned on.
