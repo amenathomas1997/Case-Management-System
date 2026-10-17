@@ -11,12 +11,16 @@ import java.util.Locale
 /** The website's dashboard: counts, authorizations ending soon, the newest referrals and notes. */
 @Composable
 fun DashboardScreen(api: Api, nav: NavHostController) {
-    val state = rememberLoaded(api.userId) { api.call("dashboard") to (try { api.call("notifications", mapOf("count_only" to "1")).optInt("unread") } catch (e: Exception) { 0 }) }
-    Show(state, "the dashboard") { (d, unread) ->
+    val state = rememberLoaded(api.userId) {
+        Triple(api.call("dashboard"), try { api.call("notifications", mapOf("count_only" to "1")).optInt("unread") } catch (e: Exception) { 0 },
+            try { api.call("agreements").optInt("needed") } catch (e: Exception) { 0 })
+    }
+    Show(state, "the dashboard") { (d, unread, toSign) ->
         Page {
             Heading("Hello, ${api.userName.substringBefore(' ')}", large = true)
             api.updateNotice?.let { NoticeText(it) }
             if (api.pendingSync > 0) ListRow(listOf("${api.pendingSync} offline ${if (api.pendingSync == 1) "entry" else "entries"} waiting to send"), onClick = { nav.navigate("offline") })
+            if (toSign > 0) ListRow(listOf(if (toSign == 1) "An agreement to sign" else "$toSign agreements to sign"), action = "read and sign", onClick = { nav.navigate("agreements") })
             if (unread > 0) ListRow(listOf("$unread unread ${if (unread == 1) "alert" else "alerts"}"), onClick = { nav.navigate("alerts") })
 
             Heading("At a glance")

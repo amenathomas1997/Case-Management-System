@@ -127,7 +127,7 @@ private val titles = mapOf(
     "scoredNew" to "Give an assessment", "competency" to "Competencies", "at" to "AT services", "atRecord" to "AT service", "atEdit" to "AT service",
     "programs" to "Pre-ETS programs", "cohort" to "Cohort", "contracts" to "Grants and contracts", "contract" to "Contract", "bookings" to "Bookings",
     "procurement" to "Device procurement", "deviceRequest" to "Device request", "accommodations" to "Worksite accommodations", "worksite" to "Worksite assessment",
-    "kb" to "Knowledge base", "kbEdit" to "Article", "counselors" to "Counselor portal", "portalRequests" to "Client requests", "utilization" to "Utilization", "docReview" to "Documentation review",
+    "agreements" to "My agreements", "agreement" to "Agreement", "agreementCopy" to "Signed copy", "kb" to "Knowledge base", "kbEdit" to "Article", "counselors" to "Counselor portal", "portalRequests" to "Client requests", "utilization" to "Utilization", "docReview" to "Documentation review",
 )
 
 @Composable
@@ -187,6 +187,9 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("portalRequests") { PortalRequestsScreen(api, nav) }
         composable("utilization") { UtilizationScreen(api) }
         composable("docReview") { DocReviewScreen(api, nav) }
+        composable("agreements") { AgreementsScreen(api, nav) }
+        composable("agreement/{id}") { AgreementScreen(api, nav, n(it, "id")) }
+        composable("agreementCopy/{id}") { AgreementCopyScreen(api, n(it, "id")) }
         composable("messages") { MessagesScreen(api, nav) }
         composable("thread/{clientId}") { ThreadScreen(api, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0) }
         composable("account") { AccountScreen(api, nav) }

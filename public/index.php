@@ -131,6 +131,12 @@ if (can('billing')) {
 page_header('Dashboard', $user, 'dashboard');
 ?>
 <h1>Caseload Dashboard</h1>
+<?php $toSign = staff_agreements_needed((int)$user['id']); if ($toSign > 0): // 4.15.0 ?>
+<section class="card alert-info" aria-labelledby="agreements-heading">
+  <h2 id="agreements-heading"><?= $toSign === 1 ? 'An agreement to sign' : $toSign . ' agreements to sign' ?></h2>
+  <p>Please read and sign <?= $toSign === 1 ? 'it' : 'them' ?>. <a href="agreements.php">Open My agreements</a></p>
+</section>
+<?php endif; ?>
 
 <?php if ($showWhatsNew): // Read once in page order, right after the h1 and before Today; not a live region. ?>
 <section class="card alert-info" aria-labelledby="whats-new-heading">

@@ -97,7 +97,9 @@ if (!$viewer) echo lang_toggle();
   <li>Delete the old secret in Microsoft Entra.</li>
 </ol>
 <h3 id="admin-joining">Someone joining</h3>
-<p>Open Administration, People and permissions, Add a team member. Choose their permission group, and leave the password empty: they are emailed an invitation to choose their own, which works for 7 days. Then open their user page and record the dates of their confidentiality agreement and privacy training. Both are renewed yearly; Compliance and the daily tasks remind you.</p>
+<p>Open Administration, People and permissions, Add a team member. Choose their permission group, and leave the password empty: they are emailed an invitation to choose their own, which works for 7 days. Once signed in, they sign the agreements you have turned on (Staff agreements, below) from their Home page. Record the date of their privacy training on their user page. Both are renewed yearly; Compliance and the daily tasks remind you.</p>
+<h3 id="admin-agreements">Staff agreements</h3>
+<p>Open Administration, Staff agreements. A starting confidentiality agreement is there to edit: change its text (a line starting with # is a heading, a line starting with - is a list item), tick On, and save. Each staff member then sees it on their Home page, reads it and signs by typing their name, on the website or the phone apps. The page lists who has signed, with each signed copy exactly as it read. Staff are asked again a year after signing, or when you change the text (tick "small correction" for a typo, so nobody signs again). Add other agreements, such as an acceptable use policy, the same way.</p>
 <h3 id="admin-leaving">Someone leaving</h3>
 <ol>
   <li>Open their user page in User management. Under "If they are leaving" it lists what they still hold.</li>

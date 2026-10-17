@@ -17,6 +17,7 @@
 		23A72AAEFA6F137121D56567 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0EA7B70530855DDC7989821 /* DashboardView.swift */; };
 		2C76023A04981D1A70FADE61 /* AppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66DF903720C7C8E5FEF5CE13 /* AppIntents.swift */; };
 		2D04B71DB81503D9B531E57E /* ContractsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D25D57525AD69C7F3CF9BFC8 /* ContractsView.swift */; };
+		321B6E361378246795D0474D /* AgreementsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81C70524937E04F0E1DBC03A /* AgreementsView.swift */; };
 		35D6C961E8D154951192A737 /* VoiceAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE55F4B084B791474211097F /* VoiceAssistant.swift */; };
 		3621C4154F60C5EBA4B6011C /* WaitlistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E462ABFBBCD318CCFC39974 /* WaitlistView.swift */; };
 		45795D7978888167B6D3C8C6 /* NotificationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597ABD1562B745DF87A9F42A /* NotificationsView.swift */; };
@@ -118,6 +119,7 @@
 		6EF0D2B71508A87B548B7827 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		775188868D4A424AE1DA1533 /* ATServicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ATServicesView.swift; sourceTree = "<group>"; };
 		7EEBE1B9872AD80C86E8151F /* CounselorsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CounselorsView.swift; sourceTree = "<group>"; };
+		81C70524937E04F0E1DBC03A /* AgreementsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgreementsView.swift; sourceTree = "<group>"; };
 		828AD6B9EB66FA3A3E9D4779 /* ProcurementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcurementView.swift; sourceTree = "<group>"; };
 		86B6703BE951CD983631880B /* CaseManagement.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CaseManagement.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		86FB60BE1EE5F7391D7BDD8E /* ReferralsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferralsView.swift; sourceTree = "<group>"; };
@@ -147,6 +149,7 @@
 				E43B35FD256946A91D63E9A5 /* AccessibilityHelpers.swift */,
 				3F5ABE5F52628FE66F1801C8 /* AccommodationsView.swift */,
 				2A5A97A9D97F74DB9471D58D /* AccountView.swift */,
+				81C70524937E04F0E1DBC03A /* AgreementsView.swift */,
 				BB35AEA838959C5BED3A33E6 /* AIToolsView.swift */,
 				99277E65950AB5FBC9C9CF40 /* API.swift */,
 				66DF903720C7C8E5FEF5CE13 /* AppIntents.swift */,
@@ -326,6 +329,7 @@
 				1F8C08B2CC958EC0A4C7D4C0 /* AccessibilityHelpers.swift in Sources */,
 				BCAA369F92E8752DFB1F08DC /* AccommodationsView.swift in Sources */,
 				E3F6F890D066042E9FA926D6 /* AccountView.swift in Sources */,
+				321B6E361378246795D0474D /* AgreementsView.swift in Sources */,
 				2C76023A04981D1A70FADE61 /* AppIntents.swift in Sources */,
 				075C75FE11EF98845F20AC63 /* BookingsView.swift in Sources */,
 				17910F6BE528E88C84AE022E /* ClientEditSheet.swift in Sources */,
@@ -397,14 +401,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.11.0;
+				MARKETING_VERSION = 4.15.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -488,14 +492,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.11.0;
+				MARKETING_VERSION = 4.15.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -507,7 +511,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -515,7 +519,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.11.0;
+				MARKETING_VERSION = 4.15.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -528,7 +532,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 51;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -536,7 +540,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.11.0;
+				MARKETING_VERSION = 4.15.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;

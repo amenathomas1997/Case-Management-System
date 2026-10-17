@@ -119,7 +119,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 . ($emailChanged ? ', entra_oid = NULL' : '') . ' WHERE id = ?')
                 ->execute([$name, $email, $role, $gid, $hours, $active, $uid]);
             // The confidentiality agreement and privacy training dates (3.0.55).
-            $db->prepare('UPDATE users SET confidentiality_signed_on = ?, privacy_training_on = ? WHERE id = ?')->execute([$dates['confidentiality_signed_on'], $dates['privacy_training_on'], $uid]);
+            // While staff sign the confidentiality agreement themselves (4.15.0), its date comes only from their signature.
+            if (staff_agreements_has_confidentiality()) $db->prepare('UPDATE users SET privacy_training_on = ? WHERE id = ?')->execute([$dates['privacy_training_on'], $uid]);
+            else $db->prepare('UPDATE users SET confidentiality_signed_on = ?, privacy_training_on = ? WHERE id = ?')->execute([$dates['confidentiality_signed_on'], $dates['privacy_training_on'], $uid]);
             // A reset link or sign-in code already emailed (to the old address, or
             // to someone being deactivated) must not outlive the change.
             if ($emailChanged || !$active) {
@@ -483,8 +485,13 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
       <div class="field"><label for="u_hours">Weekly available hours <?= required_mark() ?></label>
         <span class="hint" id="u_hours-hint">A number from 0 to 80, in half-hour steps (enter 0 for none).</span>
         <input type="number" id="u_hours" name="weekly_hours" required min="0" max="80" step="0.5" value="<?= h(old_in('weekly_hours', (string)(float)$edit['weekly_hours'])) ?>" <?= field_aria('weekly_hours', 'u_hours-hint') ?>><?= field_error('weekly_hours') ?></div>
+      <?php if (staff_agreements_has_confidentiality()): // 4.15.0: staff sign it themselves; the date comes from their signature ?>
+      <p>Confidentiality agreement: <?= !empty($edit['confidentiality_signed_on']) ? 'signed ' . fmt_date((string)$edit['confidentiality_signed_on']) : 'not signed' ?>. Staff sign it themselves (Staff agreements), so the date is not typed here.</p>
+      <input type="hidden" name="confidentiality_signed_on" value="<?= h((string)($edit['confidentiality_signed_on'] ?? '')) ?>">
+      <?php else: ?>
       <div class="field"><label for="u_conf">Confidentiality agreement signed on (renewed yearly)</label>
         <input type="date" id="u_conf" name="confidentiality_signed_on" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('confidentiality_signed_on', (string)($edit['confidentiality_signed_on'] ?? ''))) ?>" <?= field_aria('confidentiality_signed_on') ?>><?= field_error('confidentiality_signed_on') ?></div>
+      <?php endif; ?>
       <div class="field"><label for="u_priv">Privacy training completed on (renewed yearly)</label>
         <input type="date" id="u_priv" name="privacy_training_on" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('privacy_training_on', (string)($edit['privacy_training_on'] ?? ''))) ?>" <?= field_aria('privacy_training_on') ?>><?= field_error('privacy_training_on') ?></div>
       <div class="field"><label><input type="checkbox" name="is_active" value="1" <?= $checkedActive ? 'checked' : '' ?>>

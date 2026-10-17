@@ -6,6 +6,9 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.15.0' => [
+        'Staff agreements: an administrator writes the agreements staff must sign (Administration, Staff agreements; a starting confidentiality agreement is there to edit). Each staff member reads and signs their own by typing their name, from My agreements on the website or in the phone apps, and is asked again a year later or when the text changes. Each signed copy keeps the exact text signed, and Compliance lists anyone who still needs to sign.',
+    ],
     '4.14.0' => [
         'The Android app (4.14.0) now has every screen the iPhone app has: the AI tools and AI help for each client (recommendations, progress summary, intake draft, case summary, cleaning up a note, and BIRP, PAIP or SOAP sections drafted from rough notes), the voice assistant, scored assessments, curriculum competencies, AT services, Pre-ETS programs, grants and contracts, bookings, device procurement, worksite accommodations, the knowledge base, the counselor portal, client portal requests, staff utilization, the documentation review, the client signature when completing a session or logging hours, and uploading documents.',
         'Interpreter and transport bookings made in the apps accept your own booking types from Lists and time limits.',

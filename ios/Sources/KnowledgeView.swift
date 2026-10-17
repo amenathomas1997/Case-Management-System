@@ -301,7 +301,7 @@ struct KBEditSheet: View {
 }
 
 /// One piece of an article body.
-private enum KBBlock {
+enum KBBlock {
     case heading(String)
     /// A list item with its bullet ("•") or number ("2.").
     case item(marker: String, text: String)
@@ -313,7 +313,7 @@ private enum KBBlock {
 /// one (numbered on from the first item's number, and a line right after an item continues
 /// it); a "---" line is dropped; blank lines separate paragraphs, which keep their line
 /// breaks. The text is shown as written (no markdown is read into it).
-private func kbBlocks(_ body: String) -> [KBBlock] {
+func kbBlocks(_ body: String) -> [KBBlock] {
     func match(_ line: String, _ pattern: String) -> [String]? {
         guard let re = try? NSRegularExpression(pattern: pattern),
               let m = re.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) else { return nil }
@@ -359,4 +359,22 @@ private func kbBlocks(_ body: String) -> [KBBlock] {
     }
     flush()
     return blocks
+}
+
+/// Article or agreement text as headings, list items and paragraphs, one VoiceOver element each.
+struct KBBlocksView: View {
+    let text: String
+    var body: some View {
+        ForEach(Array(kbBlocks(text).enumerated()), id: \.offset) { _, b in
+            switch b {
+            case .heading(let t):
+                Text(t).font(.headline).padding(.top, 4).accessibilityAddTraits(.isHeader)
+            case .item(let marker, let t):
+                HStack(alignment: .firstTextBaseline, spacing: 6) { Text(marker).font(.body); Text(t).font(.body) }
+                    .accessibilityElement(children: .combine)
+            case .paragraph(let t):
+                Text(t).font(.body)
+            }
+        }
+    }
 }

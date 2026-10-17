@@ -171,6 +171,7 @@ struct DashboardView: View {
                     if api.can("schedule") { MoreToolLink(title: "Interpreter / transport bookings", systemImage: "hands.sparkles") { BookingsView() } }
                     if api.can("billing") { MoreToolLink(title: "Grants & contracts", systemImage: "doc.text.magnifyingglass") { ContractsView() } }
                     MoreToolLink(title: "Knowledge base", systemImage: "book") { KnowledgeView() }
+                    MoreToolLink(title: "My agreements", subtitle: "Staff agreements to read and sign", systemImage: "signature") { AgreementsView() }
                     MoreToolLink(title: "Help and glossary", subtitle: "What the abbreviations and terms mean", systemImage: "questionmark.circle") { GlossaryView() }
                     if let url = workflowURL("help.php#staff-guide") {
                         WebPageLink(url: url, page: $webPage) { webToolRow("User guide", subtitle: "The staff guide on the website, opened in the app", systemImage: "book.closed") }

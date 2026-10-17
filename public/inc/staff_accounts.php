@@ -55,7 +55,17 @@ function staff_compliance_list(): array {
         return [];
     }
     $out = [];
-    foreach ($rows as $r) if ($n = staff_compliance_notes($r)) $out[] = $r + ['notes' => $n];
+    // Agreements staff sign themselves (4.15.0): everyone's latest signatures in one query.
+    $latest = [];
+    try { $latest = staff_agreement_latest(); } catch (Throwable $e) {}
+    $signedConf = staff_agreements_has_confidentiality();
+    foreach ($rows as $r) {
+        $n = staff_compliance_notes($r);
+        // With a confidentiality agreement staff sign, its own state replaces the recorded date's.
+        if ($signedConf) $n = array_values(array_filter($n, fn($x) => !str_starts_with($x, 'Confidentiality agreement')));
+        $n = array_merge($n, staff_agreement_notes((int)$r['id'], $latest));
+        if ($n) $out[] = $r + ['notes' => $n];
+    }
     return $out;
 }
 

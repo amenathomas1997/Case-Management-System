@@ -62,6 +62,7 @@ fun MoreScreen(api: Api, nav: NavHostController) {
 
         Heading("Account and administration")
         if (api.can("admin")) ListRow(listOf("Counselor portal"), onClick = { nav.navigate("counselors") })
+        ListRow(listOf("My agreements"), onClick = { nav.navigate("agreements") })
         ListRow(listOf("My account"), onClick = { nav.navigate("account") })
         Text("Everything else is on the website, ${ServerAddress.host(api.base)}.")
     }

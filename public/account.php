@@ -152,6 +152,11 @@ page_header('My Account', $user, 'account');
 <button type="submit" name="save_display_controls" value="1" class="btn btn-primary">Save display settings</button>
 </form>
 </section>
+<section class="card" aria-labelledby="agreements-link-h">
+  <h2 id="agreements-link-h">My agreements</h2>
+  <?php $toSign = staff_agreements_needed((int)$user['id']); ?>
+  <p><?= $toSign > 0 ? ($toSign === 1 ? 'One agreement needs' : $toSign . ' agreements need') . ' your signature.' : 'Read the agreements you have signed, or sign one that is due.' ?> <a href="agreements.php">Open My agreements</a></p>
+</section>
 <?php if (entra_cfg()): ?>
 <section class="card" aria-labelledby="microsoft-link-h">
   <h2 id="microsoft-link-h">Microsoft sign-in</h2>

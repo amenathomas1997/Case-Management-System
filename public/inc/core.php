@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.14.0';
+const APP_VERSION = '4.15.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1733,3 +1733,5 @@ require_once __DIR__ . '/custom_reports.php';
 require_once __DIR__ . '/session_plan.php';
 // Each staff member's Zoom and Microsoft (Teams) connection (4.10.0).
 require_once __DIR__ . '/meetings.php';
+// Agreements staff read and sign themselves (4.15.0).
+require_once __DIR__ . '/staff_agreements.php';

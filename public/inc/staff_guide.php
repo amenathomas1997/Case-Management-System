@@ -94,6 +94,7 @@ if (!function_exists('staff_guide_topics')) {
             ]],
             'guide-android' => ['How do I use the Android app?', []],
             'guide-account' => ['How do I change my account and display settings?', []],
+            'guide-agreements' => ['How do I sign a staff agreement?', []],
             'guide-admin' => ['Administration', [
                 'guide-audit' => 'How do I read the audit log?',
                 'guide-templates' => 'How do I manage templates?',
@@ -760,6 +761,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 
 <?= $sgH(3, 'guide-android') ?>
 <p>The Android app signs in and works on the same records as the website and the iPhone app. Its tabs are Home, Clients, Schedule, Tasks and More. More has search, alerts, referrals, messages, equipment, device follow-ups, the pipeline, waitlist, compliance, invoices, incidents, offline entries and your account. With TalkBack, each row in a list is one stop; double tap it to open it or to see what you can do with it. With no connection, the app shows the last saved copy of your clients, a client, the schedule and follow-ups, and keeps case notes, hours, check-ins, completed tasks, goal progress, expenses, device follow-ups and completed homework on the phone (it needs a screen lock) to send once you are back online, each only once. It also has the AI tools and the voice assistant (when your organisation has AI switched on), scored assessments, competencies, AT services, programs, contracts, bookings, procurement, worksite accommodations, the knowledge base and client portal requests. A client can sign on the phone when you complete a session or log hours, and you can upload documents from the phone.</p>
+
+<?= $sgH(3, 'guide-agreements') ?>
+<p>When an agreement needs your signature, your Home page says so. Open My agreements (from Home, or My Account), choose the agreement and read it. Tick that you have read it and agree, type your full name as it is on your account, and choose Sign the agreement. A copy of exactly what you signed is kept, and you can read it from My agreements. You are asked again a year later, or when the agreement changes. In the phone apps it is under More, My agreements.</p>
 
 <?= $sgH(3, 'guide-account') ?>
 <p>Open My Account. It holds only your own settings. Administrators also find an Administration link near the top; agency-wide settings are there (see <a href="#guide-admin">Administration</a>). Press H to move between the sections:</p>
