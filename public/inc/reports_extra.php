@@ -253,7 +253,7 @@ function data_quality_checks(?int $scopeUser): array {
         $rows("SELECT c.id client_id, c.name, 'no active track' detail FROM clients c WHERE c.status = 'Active Training' AND c.archived_at IS NULL" . $scope . "
             AND NOT EXISTS (SELECT 1 FROM training_tracks t WHERE t.client_id = c.id AND t.status = 'Active') ORDER BY c.name")];
     $checks[] = ['missing', 'Open clients missing key details', 'Add them on the client\'s edit page.',
-        $rows("SELECT c.id client_id, c.name, CONCAT_WS(', ', IF(c.dob IS NULL, 'date of birth', NULL), IF(COALESCE(c.counselor_email, '') = '' AND c.client_type = 'VR', 'VR counselor', NULL),
+        $rows("SELECT c.id client_id, c.name, CONCAT_WS(', ', IF(COALESCE(c.state, '') = '', 'state (reminders and texts follow it)', NULL), IF(c.dob IS NULL, 'date of birth', NULL), IF(COALESCE(c.counselor_email, '') = '' AND c.client_type = 'VR', 'VR counselor', NULL),
                 IF(NOT EXISTS (SELECT 1 FROM tech_assessments a WHERE a.client_id = c.id AND COALESCE(a.primary_disability, '') <> '') AND COALESCE(c.vision_status, '') = '', 'disability or vision status', NULL)) detail
             FROM clients c WHERE c.status NOT LIKE 'Closed%' AND c.archived_at IS NULL" . $scope . "
             HAVING detail <> '' ORDER BY c.name")];

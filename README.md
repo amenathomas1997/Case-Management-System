@@ -63,7 +63,7 @@ This program is free software: you can redistribute it and/or modify it under th
 
 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
-Security problems: see [SECURITY.md](SECURITY.md).
+Security problems: see [SECURITY.md](SECURITY.md). When something goes wrong: [RUNBOOK.md](RUNBOOK.md). For your own security risk assessment: [RISK-ASSESSMENT.md](RISK-ASSESSMENT.md).
 
 ### Third-party code
 

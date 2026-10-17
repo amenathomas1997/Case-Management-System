@@ -16,6 +16,10 @@ if (in_array(($argv[1] ?? ''), ['page','page_post'], true)) {
     if ($argv[1] === 'page_post') {
         $_SERVER['REQUEST_METHOD']='POST';
         $_POST=json_decode($argv[4],true)+['csrf'=>'synthetic-csrf'];
+        // State became required in 4.19.0: tests written before then get a synthetic one; a test that
+        // sends the field itself (even empty) is checked as it is.
+        if (basename($argv[2])==='client_edit.php' && !array_key_exists('state',$_POST) && !isset($_POST['delete_client'])) $_POST['state']='IA';
+        if (basename($argv[2])==='community_referral.php' && !array_key_exists('client_state',$_POST)) $_POST['client_state']='IA';
         $_SESSION['csrf']='synthetic-csrf';
         // CMS_TEST_FILES (JSON field => path) posts files; CMS_TEST_SESSION_ADD (JSON) adds session values (3.0.55).
         foreach ((array)json_decode((string)getenv('CMS_TEST_FILES'), true) as $fk => $fp) $_FILES[$fk] = ['name' => basename((string)$fp), 'tmp_name' => (string)$fp, 'error' => UPLOAD_ERR_OK, 'size' => (int)filesize((string)$fp)];
@@ -839,6 +843,7 @@ try {
     require __DIR__.'/v416_cases.php';
     require __DIR__.'/v417_cases.php';
     require __DIR__.'/v418_cases.php';
+    require __DIR__.'/v419_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 

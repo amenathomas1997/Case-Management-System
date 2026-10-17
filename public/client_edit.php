@@ -105,6 +105,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stateIn = us_state(is_string($_POST['state'] ?? null) ? $_POST['state'] : null);
     $zoneIn = us_zone(is_string($_POST['time_zone'] ?? null) ? $_POST['time_zone'] : null);
     $placeVals = [$stateIn, $zoneIn];
+    // Required (4.19.0) for a new client, and for one whose state is already known: it sets the time zone
+    // reminders and texts follow. An older record with none can still be saved (and closed); Data quality lists it.
+    if ($stateIn === null && (!$client || !empty($client['state']))) { $errors['state'] = 'State: choose the state the client lives in. It sets their time zone for reminders and texts.'; set_form_errors($errors); }
     $vals = [
         $name,
         valid_date($dobIn),
@@ -402,8 +405,9 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
     <?php endif; ?>
     <div class="field"><label for="address">Address</label>
       <input type="text" id="address" name="address" value="<?= $v('address') ?>" <?= field_aria('address') ?>><?= field_error('address') ?></div>
-    <div class="field"><label for="state">State</label>
-      <select id="state" name="state"><?= kv_options(US_STATES, html_entity_decode($v('state'), ENT_QUOTES), 'Not recorded') ?></select></div>
+    <?php $stateRequired = !$client || !empty($client['state']); ?>
+    <div class="field"><label for="state">State<?= $stateRequired ? ' <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span>' : ' <span class="hint">not recorded yet: choose it, so reminders and texts follow their time zone</span>' ?></label>
+      <select id="state" name="state" <?= $stateRequired ? 'required ' : '' ?><?= field_aria('state') ?>><?= kv_options(US_STATES, html_entity_decode($v('state'), ENT_QUOTES), 'Choose a state') ?></select><?= field_error('state') ?></div>
     <div class="field"><label for="time_zone">Time zone for the client's emails and portal</label>
       <select id="time_zone" name="time_zone"><?= kv_options(US_TIME_ZONES, html_entity_decode($v('time_zone'), ENT_QUOTES), 'The state\'s usual zone, or the office\'s') ?></select></div>
   </fieldset>

@@ -20,6 +20,8 @@ require __DIR__ . '/core.php';
    answer 400; everything else 500. */
 set_exception_handler(static function (Throwable $e): void {
     error_log(sprintf('Uncaught %s (code %s) at %s:%d', get_class($e), (string)$e->getCode(), $e->getFile(), $e->getLine()));
+    // Bad input (an array where text is expected) is the caller's mistake, not a fault: not recorded for the watchdog.
+    if (!($e instanceof TypeError || $e instanceof ValueError) && function_exists('app_error_record')) app_error_record(get_class($e), $e->getFile(), $e->getLine());
     // Public client pages (portal, survey, consent, referral) may be in Spanish,
     // and their visitors have no staff account: send them back to the page
     // they were on (their private link), not to the staff sign-in. The text is

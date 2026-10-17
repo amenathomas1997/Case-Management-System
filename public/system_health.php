@@ -152,7 +152,7 @@ if ($dbOk) {
 }
 
 $latest = $dbOk ? (string)(setting('update_latest') ?? '') : '';
-$checked = $dbOk ? (string)(setting('update_checked') ?? '') : '';
+$checked = $dbOk ? update_checked_words() : '';
 $stateWord = ['fresh' => 'Working', 'waiting' => 'Waiting for its first run', 'stale' => 'Overdue', 'overdue' => 'Never ran', 'unreadable' => 'Cannot be checked', 'unchecked' => 'Not checked'];
 
 page_header('System health', $user, 'admin', [['admin.php', 'Administration']]);
@@ -249,6 +249,7 @@ page_header('System health', $user, 'admin', [['admin.php', 'Administration']]);
   <h2 id="db-h">Database and versions</h2>
   <dl class="props">
     <dt>Database</dt><dd><?= $dbOk ? 'Answering; ' . $dbTables . ' tables, ' . h($bytes($dbSize)) : '<strong>Not answering</strong>' ?></dd>
+    <dt>Time zone</dt><dd><?= h((US_TIME_ZONES[date_default_timezone_get()] ?? date_default_timezone_get()) . ' (' . date('T') . ')') ?>: every time on this site is shown in it. Change it on <a href="settings.php">Settings</a>, Time zone.</dd>
     <dt>Case Management System</dt><dd>Version <?= h(APP_VERSION) ?><?= $latest !== '' ? (version_compare($latest, APP_VERSION, '>') ? '; version ' . h($latest) . ' is available' : '; up to date') . ($checked !== '' ? ' (checked ' . h($checked) . ')' : '') : '' ?></dd>
     <dt>PHP</dt><dd><?= h(PHP_VERSION) ?></dd>
     <dt>Database server</dt><dd><?= h($dbVersion ?: 'unknown') ?></dd>
@@ -272,6 +273,16 @@ page_header('System health', $user, 'admin', [['admin.php', 'Administration']]);
     <dt>Requests in the last 7 days</dt><dd><?= $aiCalls ?><?= $aiFails ? ", $aiFails failed" : '' ?></dd>
     <dt>Last failed request</dt><dd><?= $aiLastFail ? h($when($aiLastFail)) : 'none' ?></dd>
   </dl>
+</section>
+
+<?php $pageErrors = function_exists('app_errors_since') ? array_reverse(app_errors_since(time() - 7 * 86400)) : []; // 4.19.0 ?>
+<section class="card" aria-labelledby="errors-h">
+  <h2 id="errors-h">Page and job errors in the last 7 days (<?= count($pageErrors) ?>)</h2>
+  <?php if (!$pageErrors): ?><p>None.</p><?php else: ?>
+  <p>Each is a page or scheduled job that failed. The watchdog emails the backup address within the hour. The kind of failure and where in the code are kept here; the detail is in the server's PHP error log.</p>
+  <ol><?php foreach (array_slice(app_errors_summary($pageErrors), 0, 30) as $line): ?><li><?= h($line) ?></li><?php endforeach; ?></ol>
+  <p>The newest was <?= h(date('F j \a\t g:i a', strtotime((string)$pageErrors[0]['at']))) ?>.</p>
+  <?php endif; ?>
 </section>
 
 <section class="card" aria-labelledby="log-h">

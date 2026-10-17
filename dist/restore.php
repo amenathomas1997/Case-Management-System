@@ -30,6 +30,8 @@ $ask = function (string $prompt, bool $hidden = true): string {
 };
 $say = fn(string $s) => fwrite(STDOUT, $s . "\n");
 
+// An option given twice arrives as a list; refuse it rather than guess which was meant.
+foreach ($opt as $k => $v) if (is_array($v)) { fwrite(STDERR, "--$k was given more than once.\n"); exit(2); }
 $zipPath = (string)$opt['zip'];
 $private = rtrim((string)$opt['private'], '/');
 if (!is_file($zipPath)) { $say("Step 1 failed: the backup file $zipPath was not found."); exit(1); }

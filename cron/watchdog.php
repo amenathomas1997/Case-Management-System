@@ -73,13 +73,28 @@ if (!isset($problems['db']) && is_file($healthFile)) {
 }
 
 $alerted = 0;
+/* 5. Page errors (4.19.0): every page or job that failed since the administrators were last told, at
+   most one email an hour. The cursor moves only once an email went, so none is missed. */
+if (function_exists('app_errors_due') && !isset($problems['db'])) {
+    try {
+        if ($due = app_errors_due(time())) {
+            [$upTo, $errs, $since] = $due;
+            $to = cfg('backup_email');
+            $body = "The Case Management System watchdog found " . count($errs) . ' page or job error' . (count($errs) === 1 ? '' : 's') . ' since ' . date('M j g:i a', $since) . ":\n\n- "
+                . implode("\n- ", array_slice(app_errors_summary($errs), 0, 15)) . "\n\nSystem health lists them. The server's PHP error log has the detail.\nNew errors are told at most once an hour.\n";
+            if ($to && send_app_mail($to, 'CMS health alert: page errors', $body)) { app_errors_told($upTo); $alerted++; }
+            elseif (!$to) error_log('CMS watchdog (no backup_email configured): ' . count($errs) . ' page errors');
+        }
+    } catch (Throwable $e) { error_log('watchdog: the error check failed (' . get_class($e) . ')'); }
+}
+
 $alertTo = cfg('backup_email');
 foreach ($problems as $key => $msg) {
     if (($state[$key] ?? 0) > time() - 6 * 3600) continue; // already alerted recently
     if (!$alertTo) { error_log("CMS watchdog (no backup_email configured): {$key} — {$msg}"); continue; }
     $ok = send_app_mail($alertTo,
         'CMS health alert: ' . (str_starts_with($key, 'job_') ? 'scheduled job' : $key),
-        "The Case Management System watchdog found a problem:\n\n{$msg}\n\nChecked at " . date('Y-m-d H:i:s') . " server time.\nThis alert repeats at most every 6 hours while the problem persists.\n");
+        "The Case Management System watchdog found a problem:\n\n{$msg}\n\nChecked at " . date('Y-m-d H:i:s') . " server time.\n" . "This alert repeats at most every 6 hours while the problem persists.\n");
     if ($ok) { $state[$key] = time(); $alerted++; }
 }
 // Clear state for resolved issues

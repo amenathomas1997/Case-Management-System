@@ -18,7 +18,7 @@ const CONFIG_OVERRIDES = [
     'app.backup_email' => ['Backup and alert address', 'email', 'addresses'],
     'app.session_timeout_minutes' => ['Sign out after this many idle minutes (5 to 480)', 'minutes', 'signin'],
     'app.otp_expiry_minutes' => ['Sign-in codes last this many minutes (3 to 30)', 'otp', 'signin'],
-    'app.timezone' => ['Time zone (times already recorded are then shown in the new zone)', 'timezone', 'signin'],
+    'app.timezone' => ['Your organisation\'s main time zone: every date and time is shown in it, and the scheduled jobs and update checks follow it (times already recorded are then shown in the new zone)', 'timezone', 'time'],
     'brand.name' => ['System name', 'text', 'brand'],
     'brand.short' => ['Short name (page header)', 'text', 'brand'],
     'brand.org' => ['Organisation name (letterhead)', 'text', 'brand'],
@@ -184,7 +184,7 @@ function update_check(): array {
         if ($rel === null) return ['ok' => false, 'latest' => null];
         set_setting('update_latest', $rel['version']);
         set_setting('update_notes', mb_substr($rel['notes'], 0, 500));
-        set_setting('update_checked', date('Y-m-d H:i'));
+        set_setting('update_checked', date('c'));
         return ['ok' => true, 'latest' => $rel['version']];
     }
     $ch = curl_init($url);
@@ -195,8 +195,15 @@ function update_check(): array {
     if (!is_array($m) || !preg_match('/^\d+(\.\d+){1,3}$/', (string)($m['latest'] ?? ''))) return ['ok' => false, 'latest' => null];
     set_setting('update_latest', (string)$m['latest']);
     set_setting('update_notes', mb_substr((string)($m['notes'] ?? ''), 0, 500));
-    set_setting('update_checked', date('Y-m-d H:i'));
+    set_setting('update_checked', date('c'));
     return ['ok' => true, 'latest' => (string)$m['latest']];
+}
+
+/** When updates were last checked, in the organisation's time zone, with its name: "October 17, 2026 at 2:30 pm CDT". */
+function update_checked_words(): string {
+    $raw = (string)(setting('update_checked') ?? '');
+    $ts = $raw !== '' ? strtotime($raw) : false;
+    return $ts ? date('F j, Y \a\t g:i a T', $ts) : '';
 }
 
 /* ---------- The app icon (4.3.0) ---------- */

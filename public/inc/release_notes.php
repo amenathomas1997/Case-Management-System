@@ -6,10 +6,16 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.19.0' => [
+        'Each client\'s state is now asked for: on the client form, the referral form and in the phone apps. It sets the time zone their reminders and texts follow. Data quality lists current clients who still have none.',
+        'Page errors are recorded (where they happened, never what was on the page) and the watchdog emails them within the hour; System health lists the last 7 days.',
+        'Check for updates now says when checking is off, and how to turn it on, instead of saying the server could not be reached.',
+        'Your organisation\'s main time zone has its own place at the top of Settings, and System health names it. Every date and time follows it, including when updates were last checked, which now shows the zone (for example CDT).',
+    ],
     '4.18.0' => [
         'One-button updates: set "Where to check for new versions" to github (Settings, Updates), and Administration, Software update downloads the newest release from GitHub, checks the publisher\'s signature, backs up the files it replaces, applies the database changes and installs it, putting everything back if a step fails. New installations are set up this way.',
         'Phone apps (Administration): download your own Android and iPhone apps\' source, already set to your name, icon, app ID and this server, with the steps to build them and hand them to your staff through Google Play, TestFlight or a direct download.',
-        'Texts to a client whose state is not on their record go only while it is daytime everywhere in the US (about 1 to 7 p.m. Central in summer), and their record says so; add their state to text them in their own daytime.',
+        'Texts to a client whose state is not on their record go only while it is daytime everywhere in the US (the record shows those hours in your own time zone), and their record says so; add their state to text them in their own daytime.',
         'The phone apps target Android 16 and are ready for Google Play and TestFlight.',
     ],
     '4.17.0' => [

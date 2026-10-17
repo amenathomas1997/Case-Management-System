@@ -3,6 +3,96 @@ declare(strict_types=1);
 // Running the system safely (3.0.53): the mail log, the automatic backup check, and the
 // Microsoft Graph secret's expiry date. Shown on System health (system_health.php).
 
+/* ---------- Page errors (4.19.0): recorded for the watchdog, which emails the administrators ---------- */
+
+/** The error record, in the private folder (never the web folder), or null when there is none. */
+function app_error_log_path(): ?string {
+    $dir = $GLOBALS['CMS_PRIVATE_DIR'] ?? null;
+    if (!$dir) { $u = (string)(cfg('upload_dir') ?? ''); $dir = $u !== '' ? dirname($u) : null; }
+    return $dir ? rtrim((string)$dir, '/') . '/app_errors.log' : null;
+}
+
+/**
+ * Record that a page or job failed: the kind of failure and where in the code, never its message (which
+ * can quote client data). The same failure in the same place is recorded at most once a minute, so a
+ * flood (a bot sending bad requests) cannot push real errors out of the record.
+ */
+function app_error_record(string $kind, string $file, int $line): void {
+    try {
+        $path = app_error_log_path();
+        if ($path === null) return;
+        $page = PHP_SAPI === 'cli' ? 'cron/' . basename((string)($_SERVER['SCRIPT_NAME'] ?? 'job')) : basename((string)parse_url((string)($_SERVER['SCRIPT_NAME'] ?? ''), PHP_URL_PATH));
+        $entry = ['at' => date('c'), 'kind' => mb_substr($kind, 0, 80), 'where' => basename($file) . ':' . $line, 'page' => mb_substr($page, 0, 60)];
+        $lock = @fopen($path . '.lock', 'c+');
+        if (!$lock || !flock($lock, LOCK_EX)) return;
+        try {
+            $seen = json_decode((string)stream_get_contents($lock), true) ?: [];
+            $key = md5($entry['kind'] . '|' . $entry['where'] . '|' . $entry['page']);
+            $minute = (int)floor(time() / 60);
+            if (($seen[$key] ?? -1) === $minute) return; // already recorded this minute
+            $seen = array_filter($seen, fn($m) => $m >= $minute - 1); // only the last minute or two are needed
+            $seen[$key] = $minute;
+            ftruncate($lock, 0); rewind($lock); fwrite($lock, (string)json_encode($seen));
+            // Rotated under the same lock, so two pages never both rename it.
+            if (is_file($path) && filesize($path) > 1048576) @rename($path, $path . '.1');
+            @file_put_contents($path, json_encode($entry) . "\n", FILE_APPEND);
+        } finally {
+            flock($lock, LOCK_UN); fclose($lock);
+        }
+    } catch (Throwable $e) {}
+}
+
+/**
+ * Errors to tell the administrators about now: [the time to record once they are told, the errors], or
+ * null when there are none, or when they were told less than an hour ago (what is new waits for the next
+ * hour; nothing is lost). The cursor moves only when an alert was sent (app_errors_told).
+ */
+function app_errors_due(int $now): ?array {
+    // The cursor is the second up to which errors were told: the next ones start after it.
+    $told = (int)(setting('errors_cursor') ?? 0);
+    $cursor = max($told ? $told + 1 : $now - 15 * 60, $now - 7 * 86400);
+    if ((int)(setting('errors_alerted_at') ?? 0) > $now - 3600) return null;
+    $errs = app_errors_since($cursor);
+    return $errs ? [$now, $errs, $cursor] : null;
+}
+
+/** The administrators were told about the errors up to $upTo. */
+function app_errors_told(int $upTo): void {
+    set_setting('errors_cursor', (string)$upTo);
+    set_setting('errors_alerted_at', (string)$upTo);
+}
+
+/** Errors recorded since $since (a timestamp), oldest first: [['at', 'kind', 'where', 'page'], ...]. */
+function app_errors_since(int $since): array {
+    $path = app_error_log_path();
+    $out = [];
+    foreach ([$path . '.1', $path] as $f) {
+        if ($path === null || !is_file($f)) continue;
+        foreach (file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+            $e = json_decode($line, true);
+            if (is_array($e) && strtotime((string)($e['at'] ?? '')) >= $since) $out[] = $e;
+        }
+    }
+    return $out;
+}
+
+/** The same errors counted by kind and place: "PDOException at clients.php:120 (clients.php), 3 times". */
+function app_errors_summary(array $errors): array {
+    $count = [];
+    foreach ($errors as $e) {
+        $k = ($e['kind'] ?? '?') . ' at ' . ($e['where'] ?? '?') . (($e['page'] ?? '') !== '' ? ' (' . $e['page'] . ')' : '');
+        $count[$k] = ($count[$k] ?? 0) + 1;
+    }
+    arsort($count);
+    return array_map(fn($k, $n) => $k . ($n > 1 ? ", $n times" : ''), array_keys($count), $count);
+}
+
+// A fatal error (out of memory, a timeout, a missing function) ends a page without reaching any handler.
+register_shutdown_function(static function (): void {
+    $e = error_get_last();
+    if ($e && in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) app_error_record('Fatal error', (string)$e['file'], (int)$e['line']);
+});
+
 /** What kind of recipient an address is, for the mail log (the address itself is never kept). */
 function mail_recipient_type(string $to): string {
     $to = strtolower(trim($to));

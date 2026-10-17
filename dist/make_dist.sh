@@ -17,7 +17,7 @@ fi
 # tracked file edited since the last commit (a debug line, a hard-coded value, a
 # change nobody reviewed) would ship as it is on this machine. The bundle is built
 # only from committed content: commit (or undo) such changes first.
-CHANGED=$(git status --porcelain --untracked-files=no -- public cron dist/migrations dist/install.php dist/schema_full.sql LICENSE)
+CHANGED=$(git status --porcelain --untracked-files=no -- public cron dist/migrations dist/install.php dist/restore.php dist/schema_full.sql LICENSE README.md RUNBOOK.md SECURITY.md RISK-ASSESSMENT.md)
 if [ -n "$CHANGED" ]; then
   echo "Refusing to build: these tracked files have changes that are not committed. Commit or undo them first:" >&2
   echo "$CHANGED" >&2
@@ -28,6 +28,10 @@ mkdir -p "$STAGE/docroot" "$STAGE/cron" "$STAGE/migrations" "$STAGE/src"
 git ls-files -z -- public cron dist/migrations dist/install.php dist/schema_full.sql | tar --null -T - -cf - | tar -xf - -C "$STAGE/src"
 # The licence the software is conveyed under travels with it (GPL-3, section 4).
 cp LICENSE "$STAGE/LICENSE"
+# What to do when something goes wrong, the security policy, and a start on a risk assessment (4.19.0).
+cp README.md RUNBOOK.md SECURITY.md RISK-ASSESSMENT.md "$STAGE/"
+# The restore script RUNBOOK.md and Help rely on, beside them (run with php restore.php from this folder).
+cp dist/restore.php "$STAGE/restore.php"
 cp -R "$STAGE/src/public/." "$STAGE/docroot/"
 cp -R "$STAGE/src/cron/." "$STAGE/cron/"
 cp -R "$STAGE/src/dist/migrations/." "$STAGE/migrations/"

@@ -30,6 +30,66 @@ val A11Y_FORMATS = listOf("Standard print", "Large print", "Plain text", "Braill
 val A11Y_CONTACTS = listOf("No preference", "Email", "Phone", "Client portal", "Postal mail")
 val BUILT_IN_STATUSES = listOf("Pending Assessment", "Waitlist", "Active Training", "On Hold", "Closed - Rehabilitated", "Closed - Other")
 
+/** The states and territories a client can live in (the server's US_STATES, 4.19.0): code to name. */
+val US_STATES = listOf(
+    "AL" to "Alabama",
+    "AK" to "Alaska",
+    "AZ" to "Arizona",
+    "AR" to "Arkansas",
+    "CA" to "California",
+    "CO" to "Colorado",
+    "CT" to "Connecticut",
+    "DE" to "Delaware",
+    "DC" to "District of Columbia",
+    "FL" to "Florida",
+    "GA" to "Georgia",
+    "HI" to "Hawaii",
+    "ID" to "Idaho",
+    "IL" to "Illinois",
+    "IN" to "Indiana",
+    "IA" to "Iowa",
+    "KS" to "Kansas",
+    "KY" to "Kentucky",
+    "LA" to "Louisiana",
+    "ME" to "Maine",
+    "MD" to "Maryland",
+    "MA" to "Massachusetts",
+    "MI" to "Michigan",
+    "MN" to "Minnesota",
+    "MS" to "Mississippi",
+    "MO" to "Missouri",
+    "MT" to "Montana",
+    "NE" to "Nebraska",
+    "NV" to "Nevada",
+    "NH" to "New Hampshire",
+    "NJ" to "New Jersey",
+    "NM" to "New Mexico",
+    "NY" to "New York",
+    "NC" to "North Carolina",
+    "ND" to "North Dakota",
+    "OH" to "Ohio",
+    "OK" to "Oklahoma",
+    "OR" to "Oregon",
+    "PA" to "Pennsylvania",
+    "RI" to "Rhode Island",
+    "SC" to "South Carolina",
+    "SD" to "South Dakota",
+    "TN" to "Tennessee",
+    "TX" to "Texas",
+    "UT" to "Utah",
+    "VT" to "Vermont",
+    "VA" to "Virginia",
+    "WA" to "Washington",
+    "WV" to "West Virginia",
+    "WI" to "Wisconsin",
+    "WY" to "Wyoming",
+    "AS" to "American Samoa",
+    "GU" to "Guam",
+    "MP" to "Northern Mariana Islands",
+    "PR" to "Puerto Rico",
+    "VI" to "U.S. Virgin Islands",
+)
+
 /** A tick box that is one stop, read with its label and state. */
 @Composable
 fun Tick(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
@@ -68,6 +128,9 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
     var email by rememberSaveable { mutableStateOf(c.str("email") ?: "") }
     var emailConfirmed by rememberSaveable { mutableStateOf(false) }
     var address by rememberSaveable { mutableStateOf(c.str("address") ?: "") }
+    var usState by rememberSaveable { mutableStateOf(c.str("state") ?: "") }
+    // Required for a new client and for one whose state is known (as the website); an older record with none can still be saved.
+    val stateRequired = id == 0 || !c.str("state").isNullOrEmpty()
     var assigned by rememberSaveable { mutableStateOf(if (c.isNull("assigned_to") || !c.has("assigned_to")) (if (id == 0) api.userId else 0) else c.optInt("assigned_to")) }
     var counselorName by rememberSaveable { mutableStateOf(c.str("counselor_name") ?: "") }
     var counselorAgency by rememberSaveable { mutableStateOf(c.str("counselor_agency") ?: "") }
@@ -114,6 +177,8 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         Field("Email", email, { email = it }, keyboard = KeyboardType.Email)
         if (email.isNotBlank() && (c.optBoolean("email_verified").not() || email.trim() != (c.str("email") ?: ""))) Tick("I confirmed this email address with the client", emailConfirmed) { emailConfirmed = it }
         Field("Address", address, { address = it }, singleLine = false)
+        // Required (4.19.0): it sets the client's time zone for reminders and texts.
+        Choice(if (stateRequired) "State (required)" else "State, not recorded yet", usState, listOf("" to "Choose a state") + US_STATES) { usState = it }
         if (api.scoped) Text("Assigned instructor: you. Your account works only its own caseload, so clients you add or edit stay assigned to you.")
         else Choice("Assigned instructor", assigned.toString(), listOf("0" to "Unassigned") + staff.map { it.optInt("id").toString() to it.optString("name") }) { assigned = it.toInt() }
         Heading("VR counselor")
@@ -129,6 +194,7 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         ErrorText(error)
         PrimaryButton(if (id == 0) "Add client" else "Save changes", busy = busy, enabled = name.isNotBlank()) {
             if (closing && reason.isEmpty()) { error = "Choose why the case is closed."; return@PrimaryButton }
+            if (usState.isEmpty() && stateRequired) { error = "Choose the state the client lives in. It sets their time zone for reminders and texts."; return@PrimaryButton }
             scope.launchSave({ busy = it }, { error = it }) {
                 val b = JSONObject().put("id", id).put("name", name.trim()).put("status", status).put("client_type", type)
                     .put("dob", dob.trim()).put("phone", phone.trim()).put("email", email.trim()).put("address", address.trim())
@@ -136,6 +202,8 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
                     .put("counselor_email", counselorEmail.trim()).put("counselor_phone", counselorPhone.trim())
                     .put("a11y_format", format).put("a11y_contact", contact).put("a11y_primary_tech", tech.trim())
                 if (!api.scoped) b.put("assigned_to", assigned)
+                // Sent only when chosen: a server before 4.19.0 ignores it, and an empty one is refused.
+                if (usState.isNotEmpty()) b.put("state", usState)
                 if (texting?.optBoolean("opted_out") != true) b.put("sms_consent", smsConsent && phone.isNotBlank()).put("sms_consent_source", smsSource)
                 if (statusChanged && statusNote.isNotBlank()) b.put("status_note", statusNote.trim())
                 if (emailConfirmed) b.put("email_verified", true)

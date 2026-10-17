@@ -1,5 +1,65 @@
 import SwiftUI
 
+/// The states and territories a client can live in (the server's US_STATES, 4.19.0): code and name.
+let usStates: [(code: String, name: String)] = [
+    ("AL", "Alabama"),
+    ("AK", "Alaska"),
+    ("AZ", "Arizona"),
+    ("AR", "Arkansas"),
+    ("CA", "California"),
+    ("CO", "Colorado"),
+    ("CT", "Connecticut"),
+    ("DE", "Delaware"),
+    ("DC", "District of Columbia"),
+    ("FL", "Florida"),
+    ("GA", "Georgia"),
+    ("HI", "Hawaii"),
+    ("ID", "Idaho"),
+    ("IL", "Illinois"),
+    ("IN", "Indiana"),
+    ("IA", "Iowa"),
+    ("KS", "Kansas"),
+    ("KY", "Kentucky"),
+    ("LA", "Louisiana"),
+    ("ME", "Maine"),
+    ("MD", "Maryland"),
+    ("MA", "Massachusetts"),
+    ("MI", "Michigan"),
+    ("MN", "Minnesota"),
+    ("MS", "Mississippi"),
+    ("MO", "Missouri"),
+    ("MT", "Montana"),
+    ("NE", "Nebraska"),
+    ("NV", "Nevada"),
+    ("NH", "New Hampshire"),
+    ("NJ", "New Jersey"),
+    ("NM", "New Mexico"),
+    ("NY", "New York"),
+    ("NC", "North Carolina"),
+    ("ND", "North Dakota"),
+    ("OH", "Ohio"),
+    ("OK", "Oklahoma"),
+    ("OR", "Oregon"),
+    ("PA", "Pennsylvania"),
+    ("RI", "Rhode Island"),
+    ("SC", "South Carolina"),
+    ("SD", "South Dakota"),
+    ("TN", "Tennessee"),
+    ("TX", "Texas"),
+    ("UT", "Utah"),
+    ("VT", "Vermont"),
+    ("VA", "Virginia"),
+    ("WA", "Washington"),
+    ("WV", "West Virginia"),
+    ("WI", "Wisconsin"),
+    ("WY", "Wyoming"),
+    ("AS", "American Samoa"),
+    ("GU", "Guam"),
+    ("MP", "Northern Mariana Islands"),
+    ("PR", "Puerto Rico"),
+    ("VI", "U.S. Virgin Islands"),
+]
+
 struct ClientEditSheet: View {
     @EnvironmentObject var api: API
     @Environment(\.dismiss) private var dismiss
@@ -16,6 +76,9 @@ struct ClientEditSheet: View {
     @State private var phone = ""
     @State private var email = ""
     @State private var address = ""
+    @State private var usState = ""
+    /// Required for a new client and for one whose state is known (as the website); an older record with none can still be saved.
+    private var stateRequired: Bool { existing == nil || !(existing?.state ?? "").isEmpty }
     @State private var status = "Pending Assessment"
     @State private var statusNote = ""
     /// Closing a case (3.0.35): why, and whether the person was employed at closure.
@@ -68,6 +131,7 @@ struct ClientEditSheet: View {
         _phone = State(initialValue: existing.phone ?? "")
         _email = State(initialValue: existing.email ?? "")
         _address = State(initialValue: existing.address ?? "")
+        _usState = State(initialValue: existing.state ?? "")
         _status = State(initialValue: existing.status)
         _assignedTo = State(initialValue: existing.assignedTo ?? 0)
         _counselorName = State(initialValue: existing.counselorName ?? "")
@@ -116,7 +180,7 @@ struct ClientEditSheet: View {
         [name, phone, email, address, status, statusNote, counselorName, counselorAgency,
          counselorEmail, counselorPhone, String(assignedTo), clientType, a11yScreenReader ? "1" : "0",
          a11yFormat, a11yPrimaryTech, a11yContact, a11yNotes, confirmEmail ? "1" : "0",
-         guardianName, guardianPhone, guardianEmail, vrCaseNumber, ipeGoal]
+         guardianName, guardianPhone, guardianEmail, vrCaseNumber, ipeGoal, usState]
     }
     /// The same fields as the form opens with them (see init and the property defaults).
     private static func values(of c: ClientInfo?) -> [String] {
@@ -124,7 +188,7 @@ struct ClientEditSheet: View {
          c?.counselorName ?? "", c?.counselorAgency ?? "", c?.counselorEmail ?? "", c?.counselorPhone ?? "",
          String(c?.assignedTo ?? 0), c?.clientType ?? "VR", (c?.a11yScreenReader ?? false) ? "1" : "0",
          c?.a11yFormat ?? "", c?.a11yPrimaryTech ?? "", c?.a11yContact ?? "", c?.a11yNotes ?? "", "0",
-         c?.guardianName ?? "", c?.guardianPhone ?? "", c?.guardianEmail ?? "", c?.vrCaseNumber ?? "", c?.ipeGoal ?? ""]
+         c?.guardianName ?? "", c?.guardianPhone ?? "", c?.guardianEmail ?? "", c?.vrCaseNumber ?? "", c?.ipeGoal ?? "", c?.state ?? ""]
     }
     private var hasChanges: Bool { values != Self.values(of: existing) || smsConsent != (texting?.agreed ?? false) }
     @State private var askingDiscard = false
@@ -168,6 +232,11 @@ struct ClientEditSheet: View {
                         }
                     }
                     CaptionedField(label: "Address", text: $address)
+                    // Required (4.19.0): it sets the client's time zone for reminders and texts.
+                    Picker(stateRequired ? "State (required)" : "State, not recorded yet", selection: $usState) {
+                        Text("Choose a state").tag("")
+                        ForEach(usStates, id: \.code) { Text($0.name).tag($0.code) }
+                    }
                 }
                 Section("Case status") {
                     Picker("Status", selection: $status) {
@@ -314,6 +383,10 @@ struct ClientEditSheet: View {
                     surveySent = try? c.decodeIfPresent(Bool.self, forKey: .surveySent)
                 }
             }
+            if usState.isEmpty && stateRequired {
+                showFormError("Choose the state the client lives in. It sets their time zone for reminders and texts.", in: &error)
+                return
+            }
             if status.hasPrefix("Closed") && (existing?.status ?? "") != status && closureReason.isEmpty {
                 showFormError("Choose why the case is closing.", in: &error)
                 return
@@ -340,6 +413,8 @@ struct ClientEditSheet: View {
             // stored state (and confirms an address staff typed themselves).
             let emailStaysUnconfirmed = offersEmailConfirmation && !confirmEmail
             if offersEmailConfirmation && confirmEmail { body["email_verified"] = true }
+            // Sent only when chosen: a server before 4.19.0 ignores it, and an empty one is refused.
+            if !usState.isEmpty { body["state"] = usState }
             if texting?.optedOut != true {
                 body["sms_consent"] = smsConsent && !phone.trimmingCharacters(in: .whitespaces).isEmpty
                 body["sms_consent_source"] = smsSource

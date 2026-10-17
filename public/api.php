@@ -41,6 +41,8 @@ function api_exception_out(Throwable $e, string $fallback = 'Something went wron
     $act = is_string($_GET['action'] ?? null) ? substr((string)preg_replace('/[^A-Za-z0-9_]/', '', $_GET['action']), 0, 40) : '';
     $state = $e instanceof PDOException ? (string)($e->errorInfo[0] ?? $e->getCode()) : (string)$e->getCode();
     error_log('api.php: action=' . $act . ' ' . get_class($e) . ' code=' . $state . ' at ' . basename($e->getFile()) . ':' . $e->getLine());
+    // Bad input is the caller's mistake, not a fault in the system: only real failures are recorded for the watchdog.
+    if (!($e instanceof TypeError || $e instanceof ValueError || $e instanceof JsonException) && function_exists('app_error_record')) app_error_record(get_class($e) . ($act !== '' ? " ($act)" : ''), $e->getFile(), $e->getLine());
     if (!headers_sent()) header('Content-Type: application/json; charset=UTF-8');
     if ($e instanceof TypeError || $e instanceof ValueError || $e instanceof JsonException) fail('Invalid input.', 400);
     if ($e instanceof PDOException) {
@@ -779,7 +781,7 @@ switch ($action) {
         $id = (int)($_GET['id'] ?? 0);
         api_require_client($id, $userId);
         record_client_view($userId, $id, api_app_name());
-        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email, vr_case_number, ipe_goal, ipe_date, ipe_amended_on FROM clients WHERE id = ?');
+        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email, vr_case_number, ipe_goal, ipe_date, ipe_amended_on, state, time_zone FROM clients WHERE id = ?');
         $c->execute([$id]);
         $client = $c->fetch();
         if (!$client) fail('Client not found.', 404);
@@ -1365,6 +1367,12 @@ switch ($action) {
         // don't send dob, and a missing status must not silently reset it).
         // A value that IS sent must be valid: it is refused, not swapped for another.
         $status = api_choice($input, 'status', cms_choices('client_statuses', $old['status'] ?? null), 'Status', null) ?? ($old['status'] ?? 'Pending Assessment');
+        // Where the client lives (4.19.0): an app that sends it must send a real state (it sets their time
+        // zone); older app builds that send nothing keep what is stored.
+        $placeSent = array_key_exists('state', $input);
+        $stateApi = $placeSent ? us_state(is_string($input['state']) ? $input['state'] : null) : null;
+        if ($placeSent && $stateApi === null) fail('Choose the state the client lives in: it sets their time zone for reminders and texts.', 422);
+        $zoneApi = array_key_exists('time_zone', $input) ? us_zone(is_string($input['time_zone']) ? $input['time_zone'] : null) : ($old['time_zone'] ?? null);
         $limits = [
             'email' => [190, 'Email'], 'phone' => [40, 'Phone'], 'address' => [255, 'Address'],
             'counselor_name' => [120, 'Counselor name'], 'counselor_email' => [190, 'Counselor email'],
@@ -1557,6 +1565,8 @@ switch ($action) {
                 on_hold_save($cid, $status, '', (string)$statusNote, $holdUntil);
                 if ($closing) client_closure_record($cid, $status, $closureData, $userId);
             }
+            // Where the client lives (4.19.0), in the same save.
+            if ($placeSent) db()->prepare('UPDATE clients SET state = ?, time_zone = ? WHERE id = ?')->execute([$stateApi, $zoneApi, $cid]);
             db()->commit();
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();

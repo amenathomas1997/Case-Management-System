@@ -13,6 +13,7 @@ require __DIR__ . '/inc/core.php';
 ini_set('display_errors', '0');
 set_exception_handler(static function (Throwable $e): void {
     error_log(sprintf('Uncaught %s (code %s) at %s:%d', get_class($e), (string)$e->getCode(), $e->getFile(), $e->getLine()));
+    if (function_exists('app_error_record')) app_error_record(get_class($e), $e->getFile(), $e->getLine());
     if (headers_sent()) return; // part of the calendar already left: add nothing to it
     while (ob_get_level() > 0) ob_end_clean();
     http_response_code(503);

@@ -417,14 +417,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 53;
+				CURRENT_PROJECT_VERSION = 55;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.17.0;
+				MARKETING_VERSION = 4.19.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -508,14 +508,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 53;
+				CURRENT_PROJECT_VERSION = 55;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.17.0;
+				MARKETING_VERSION = 4.19.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -527,7 +527,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 53;
+				CURRENT_PROJECT_VERSION = 55;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -535,7 +535,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.17.0;
+				MARKETING_VERSION = 4.19.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -548,7 +548,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 53;
+				CURRENT_PROJECT_VERSION = 55;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -556,7 +556,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.17.0;
+				MARKETING_VERSION = 4.19.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;

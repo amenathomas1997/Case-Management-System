@@ -163,5 +163,48 @@ want_schema=$(sed -n "s/^const DB_SCHEMA_VERSION = '\([0-9.]*\)';.*/\1/p" "$ROOT
 if [ -n "$want_schema" ] && [ "$(dbquery "SELECT value FROM settings WHERE name='schema_version'")" = "$want_schema" ]; then pass "A fresh install records database version $want_schema (3.0.54)"; else fail "schema_version not recorded as $want_schema"; fi
 if [ "$(dbquery "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name='scheduled_sessions' AND column_name='checked_in_at'")" = "1" ]; then pass "Fresh schema includes scheduled_sessions.checked_in_at (3.0.28)"; else fail "checked_in_at column missing from the fresh schema"; fi
 
+# ---- Updating the installed site (4.19.0): a signed package of a made-up next version, applied by the
+# updater from the command line (where its test key and fake GitHub work), then checked over HTTP. ----
+cat > "$TMP/update_e2e.php" << 'EOF'
+<?php
+[$self, $docroot, $root, $tmp] = $argv;
+require $docroot . '/inc/core.php';
+require_once $docroot . '/inc/updater.php';
+$key = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+putenv('CMS_TEST_UPDATE_KEY=' . openssl_pkey_get_details($key)['key']);
+$zipPath = "$tmp/cms-update-99.0.0.zip";
+$z = new ZipArchive(); $z->open($zipPath, ZipArchive::CREATE);
+$m = ['version' => '99.0.0', 'notes' => '- Synthetic next version', 'files' => [], 'exec' => ['cron/backup.sh']];
+$add = function (string $name, string $data) use ($z, &$m) { $z->addFromString($name, $data); $m['files'][$name] = hash('sha256', $data); };
+$it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator("$root/public", FilesystemIterator::SKIP_DOTS));
+foreach ($it as $f) { $rel = substr($f->getPathname(), strlen("$root/public/")); if ($rel !== 'updates.json' && !str_ends_with($rel, '.DS_Store')) $add("docroot/$rel", (string)file_get_contents($f->getPathname())); }
+foreach (glob("$root/cron/*") as $f) $add('cron/' . basename($f), (string)file_get_contents($f));
+$add('docroot/e2e_probe.php', "<?php echo 'UPDATED TO 99.0.0';");
+$add('docroot/inc/config_path.php', "<?php return '/wrong';");
+$add('cron/watchdog.php', (string)file_get_contents("$root/cron/watchdog.php") . "\n// e2e update marker\n");
+$z->addFromString('manifest.json', json_encode($m)); $z->close();
+openssl_sign((string)file_get_contents($zipPath), $sig, $key, OPENSSL_ALGO_SHA256);
+file_put_contents("$zipPath.sig", base64_encode($sig));
+file_put_contents("$tmp/release.json", json_encode(['tag_name' => 'v99.0.0', 'assets' => [
+    ['name' => 'cms-update-99.0.0.zip', 'browser_download_url' => 'https://github.com/e2e/cms-update-99.0.0.zip'],
+    ['name' => 'cms-update-99.0.0.zip.sig', 'browser_download_url' => 'https://github.com/e2e/cms-update-99.0.0.zip.sig']]]));
+putenv('CMS_TEST_UPDATES=' . json_encode(['https://api.github.com/repos/' . UPDATE_REPO . '/releases/latest' => "$tmp/release.json",
+    'https://github.com/e2e/cms-update-99.0.0.zip' => $zipPath, 'https://github.com/e2e/cms-update-99.0.0.zip.sig' => "$zipPath.sig"]));
+$rel = updater_latest();
+$plan = updater_inspect(updater_download($rel));
+if ($plan['problems']) { echo 'PROBLEMS: ' . implode(' ', $plan['problems']) . "\n"; exit(1); }
+echo implode(' ', updater_apply(updater_dir() . '/cms-update-99.0.0.zip', $plan, 1)), "\n";
+EOF
+if grep -q "'update_url' => 'github'" "$PRIVATE/config.php"; then pass "A new installation checks GitHub releases for updates"; else fail "The installer did not set update_url to github"; fi
+cfgpath_before=$(cat "$DOCROOT/inc/config_path.php")
+if out=$(php "$TMP/update_e2e.php" "$DOCROOT" "$ROOT" "$TMP" 2>&1); then pass "The updater installs a signed package on the installed site: $(printf '%s' "$out" | head -c 160)"; else fail "The update failed: $out"; fi
+probe=$(curl -s "$BASE/e2e_probe.php")
+if [ "$probe" = "UPDATED TO 99.0.0" ]; then pass "The updated site serves the new version's pages"; else fail "The new page is not served: $probe"; fi
+login2=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/login.php")
+if [ "$login2" = "200" ]; then pass "The site still works after the update"; else fail "login.php answers $login2 after the update"; fi
+if [ "$(cat "$DOCROOT/inc/config_path.php")" = "$cfgpath_before" ]; then pass "The site's own config_path.php is kept"; else fail "config_path.php was replaced"; fi
+if grep -q "e2e update marker" "$PRIVATE/cron/watchdog.php" 2>/dev/null; then pass "The scheduled jobs in the installer's cron folder are updated"; else fail "cron/watchdog.php was not updated (is the installer's cron folder at $PRIVATE/cron?)"; fi
+if ls "$PRIVATE"/updates/backup-*.zip >/dev/null 2>&1 && [ ! -f "$PRIVATE/updates/in-progress.json" ]; then pass "The replaced files are kept in a backup, and no install is left unfinished"; else fail "No backup, or the install marker was left behind"; fi
+
 if [ "$failed" -ne 0 ]; then echo "installer_e2e: FAILED"; exit 1; fi
 echo "installer_e2e: all checks passed"

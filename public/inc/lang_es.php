@@ -243,6 +243,7 @@ return [
     'Their address' => 'Dirección de la persona',
     'Their state' => 'Estado donde vive la persona',
     'Not given' => 'No indicado',
+    'Choose a state' => 'Elija un estado',
     'Grade level' => 'Grado escolar',
     'Parent / guardian name' => 'Nombre del padre, madre o tutor',
     'Parent / guardian phone' => 'Teléfono del padre, madre o tutor',

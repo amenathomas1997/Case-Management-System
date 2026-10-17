@@ -607,7 +607,7 @@ host=<?= htmlspecialchars($dbHost) ?>
       <code>0 8 * * * php <?= htmlspecialchars($cronDir) ?>/at_reminders.php</code><br>
       <code>*/15 * * * * php <?= htmlspecialchars($cronDir) ?>/ingest_email.php</code> (needs Graph)<br>
       <code>*/10 * * * * php <?= htmlspecialchars($cronDir) ?>/watchdog.php</code><br>
-      <code>45 2 * * 1 php <?= htmlspecialchars($cronDir) ?>/weekly_offsite.php</code>
+      <code>45 2 * * * php <?= htmlspecialchars($cronDir) ?>/weekly_offsite.php</code>
       <?php if ($cronShift !== ''): ?><br><strong>Server clock:</strong> <?= htmlspecialchars($cronShift) ?><?php endif; ?></li>
     <li>After the first night, confirm a <code>cms_*.sql.gz</code> file appeared in <code><?= htmlspecialchars($privateDir) ?>/backups</code>. The watchdog emails <code><?= htmlspecialchars($adminEmail) ?></code> if no backup is newer than 48 hours.</li>
   </ol>

@@ -18,6 +18,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['check_updates'])) {
         flash(version_compare((string)$uc['latest'], APP_VERSION, '>')
             ? 'A newer version is available: v' . $uc['latest'] . '.'
             : 'You are up to date (v' . APP_VERSION . ').');
+    } elseif ((($GLOBALS['CONFIG']['app']['update_url'] ?? null) ?: 'off') === 'off') {
+        // Off is a choice, not a failure (4.19.0): say how to turn it on.
+        flash('Checking for updates is off on this site. To check this system\'s GitHub releases, and install them with one button, set "Where to check for new versions" to github on Settings, Updates.', 'error');
     } else {
         flash('The update server could not be reached. Try again later.', 'error');
     }
@@ -450,7 +453,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
   <h3 id="updates-h">Software updates</h3>
   <?php
   $updLatest = setting('update_latest');
-  $updChecked = setting('update_checked');
+  $updChecked = update_checked_words();
   $updNewer = $updLatest !== null && version_compare($updLatest, APP_VERSION, '>');
   ?>
   <p>

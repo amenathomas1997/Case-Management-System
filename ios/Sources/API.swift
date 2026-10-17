@@ -170,6 +170,9 @@ struct ClientInfo: Decodable {
     var ipeAmendedOn: String?
     /// The client's school (4.0.0); nil from an older server.
     var school: String?
+    /// Where they live (4.19.0): a two-letter state code, and a time zone only when one was picked.
+    var state: String?
+    var timeZone: String?
 }
 
 /// The choices the website's Lists and time limits page sets (4.5.0), kept on the phone from

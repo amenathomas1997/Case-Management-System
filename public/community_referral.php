@@ -7,6 +7,9 @@ register_translations(referral_form_translations());
 // Copy used only on this page ('Email' alone is the field label, a noun).
 register_translations(['Email us at' => 'Escríbanos a', 'required: choose at least one' => 'obligatorio: elija al menos uno',
     'The date of birth cannot be in the future. Please check the year.' => 'La fecha de nacimiento no puede ser una fecha futura. Revise el año.',
+    'Their state: choose the state they live in.' => 'Estado donde vive la persona: elija el estado.',
+    'Your state' => 'Su estado',
+    'State: choose the state you live in.' => 'Estado: elija el estado donde vive.',
     'Enter the date of birth as a valid date, from the year 1900 onwards.' => 'Escriba la fecha de nacimiento como una fecha válida, a partir del año 1900.',
     'Their email: enter one valid address, for example name@example.org, or leave it blank.' => 'Correo electrónico de la persona: escriba una sola dirección válida, por ejemplo nombre@ejemplo.org, o déjelo en blanco.',
     'Please also correct the following:' => 'Corrija también lo siguiente:',
@@ -163,6 +166,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $refPhone = trim($_POST['referrer_phone'] ?? '');
     if ($refEmail === '' && $refPhone === '') $errors['referrer_contact'] = 'Give at least one way to reach you.';
     elseif ($refEmail !== '' && !filter_var($refEmail, FILTER_VALIDATE_EMAIL)) $errors['referrer_email'] = 'Your email: enter one valid address, for example name@example.org.';
+    // Their state sets the time zone their reminders and texts follow (4.19.0: referrals come from every state).
+    if (us_state(is_string($_POST['client_state'] ?? null) ? $_POST['client_state'] : null) === null) $errors['client_state'] = $role === 'self' ? 'State: choose the state you live in.' : 'Their state: choose the state they live in.';
     // Bad dates or over-length names would otherwise crash the insert and lose the referral.
     // Same bounds as a staff edit: a mistyped year would reach RSA-911 as an age.
     $dobIn = trim($_POST['client_dob'] ?? '');
@@ -587,6 +592,13 @@ if ($errors): ?>
   </fieldset>
   <?php endif; ?>
 
+  <?php // Asked of every referrer, self-referrers included (4.19.0): it sets the person's time zone for reminders and texts. ?>
+  <div class="field">
+    <label for="client_state"><span data-self-text<?= $role === 'self' ? '' : ' hidden' ?>><?= t('Your state') ?></span><span data-other-text<?= $role === 'self' ? ' hidden' : '' ?>><?= t('Their state') ?></span> <span aria-hidden="true">*</span></label>
+    <select id="client_state" name="client_state" required <?= $aria('client_state') ?>><?= kv_options(US_STATES, html_entity_decode($old('client_state'), ENT_QUOTES), __('Choose a state'), true) ?></select>
+    <?= $err('client_state') ?>
+  </div>
+
   <fieldset data-role="counselor school medical family agency other">
     <legend><h2 class="legend-h"><?= t('About the person you\'re referring') ?></h2></legend>
     <div class="field">
@@ -607,8 +619,6 @@ if ($errors): ?>
     <div class="field"><label for="client_address"><?= t('Their address') ?></label>
       <input type="text" id="client_address" name="client_address" maxlength="255" value="<?= $old('client_address') ?>" <?= $aria('client_address') ?>>
       <?= $err('client_address') ?></div>
-    <div class="field"><label for="client_state"><?= t('Their state') ?></label>
-      <select id="client_state" name="client_state"><?= kv_options(US_STATES, html_entity_decode($old('client_state'), ENT_QUOTES), __('Not given'), true) ?></select></div>
 
     <div class="field" data-role="school">
       <label for="grade_level"><?= t('Grade level') ?></label>

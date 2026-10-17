@@ -14,7 +14,7 @@ require_perm('admin');
 
 const CIMPORT_KINDS = ['clients' => 'Clients', 'authorizations' => 'Open authorizations'];
 const CIMPORT_COLUMNS = [
-    'clients' => ['name', 'dob', 'email', 'phone', 'address', 'client_type', 'status', 'instructor_email', 'counselor_name', 'counselor_email', 'counselor_phone', 'counselor_agency', 'guardian_name', 'guardian_phone', 'guardian_email', 'vr_case_number', 'school'],
+    'clients' => ['name', 'dob', 'email', 'phone', 'address', 'client_type', 'status', 'instructor_email', 'counselor_name', 'counselor_email', 'counselor_phone', 'counselor_agency', 'guardian_name', 'guardian_phone', 'guardian_email', 'vr_case_number', 'school', 'state'],
     'authorizations' => ['client_name', 'client_dob', 'auth_number', 'funding_agency', 'authorized_hours', 'hourly_rate', 'authorized_amount', 'mileage_rate', 'start_date', 'expiration_date', 'title', 'rsa_category'],
 ];
 $kindIn = $_POST['kind'] ?? $_GET['kind'] ?? '';
@@ -90,6 +90,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
             if (!in_array($type, cms_list_items('client_types'), true)) { $skip($name, 'client_type must be one of: ' . implode(', ', cms_list_items('client_types'))); continue; }
             $status = $get($row, 'status') ?: 'Pending Assessment';
             if (!in_array($status, ['Pending Assessment', 'Waitlist', 'Active Training'], true)) { $skip($name, 'status must be Pending Assessment, Waitlist or Active Training (On Hold needs a reason, so set it on the client page)'); continue; }
+            // The state (4.19.0): two letters (IA) or the name (Iowa). It sets the client's time zone for reminders and texts.
+            $stRaw = $get($row, 'state');
+            $st = $stRaw === '' ? null : (us_state($stRaw) ?? (($k = array_search(mb_strtolower($stRaw), array_map('mb_strtolower', US_STATES), true)) !== false ? (string)$k : null));
+            if ($stRaw !== '' && $st === null) { $skip($name, 'state must be a US state, such as IA or Iowa'); continue; }
             $ie = strtolower($get($row, 'instructor_email'));
             if ($ie !== '' && !isset($staff[$ie])) { $skip($name, 'instructor_email does not match an active staff account with access to client records'); continue; }
             $key = mb_strtolower($name) . '|' . $dob;
@@ -99,7 +103,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
             $seen[$key] = $line;
             $cut = fn(string $c, int $n) => ($v = mb_substr($get($row, $c), 0, $n)) !== '' ? $v : null;
             $valid[] = [$name, $dob ?: null, $emails['email'], $cut('phone', 40), $cut('address', 255), $status, $type, $cut('school', 190), $ie !== '' ? $staff[$ie] : null,
-                $cut('counselor_name', 120), $emails['counselor_email'], $cut('counselor_phone', 40), $cut('counselor_agency', 190), $cut('guardian_name', 120), $cut('guardian_phone', 40), $emails['guardian_email'], $cut('vr_case_number', 60)];
+                $cut('counselor_name', 120), $emails['counselor_email'], $cut('counselor_phone', 40), $cut('counselor_agency', 190), $cut('guardian_name', 120), $cut('guardian_phone', 40), $emails['guardian_email'], $cut('vr_case_number', 60), $st];
             $results[] = ['line' => $line, 'name' => $name, 'ok' => true, 'msg' => $type . ' · ' . $status . ($dob ? ' · born ' . fmt_date($dob) : '')];
         } else {
             $cname = (string)preg_replace('/\s+/u', ' ', $get($row, 'client_name')); $label = $cname ?: '(blank)';
@@ -141,8 +145,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
         try {
             foreach ($valid as $v) {
                 if ($kind === 'clients') {
-                    db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, guardian_name, guardian_phone, guardian_email, vr_case_number, email_verified, counselor_verified)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0)')->execute($v);
+                    db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, guardian_name, guardian_phone, guardian_email, vr_case_number, state, email_verified, counselor_verified)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0)')->execute($v);
                     record_status_change((int)db()->lastInsertId(), null, $v[5], (int)$user['id'], 'Client imported from a spreadsheet');
                 } else {
                     db()->prepare("INSERT INTO training_tracks (client_id, title, rsa_category, status, auth_number, funding_agency, authorized_hours, authorized_amount, hourly_rate, mileage_rate, start_date, expiration_date, billing_mode)
