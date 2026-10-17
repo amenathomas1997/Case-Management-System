@@ -62,3 +62,7 @@ The owner asked for all texting features (2026-10-17). Texts go through Twilio; 
 - A client with no state or time zone is texted by the office's time zone.
 - A staff message longer than 1,600 characters is cut to 1,600 in the text (the full message stays in the portal; the box says the limit).
 - With Twilio Advanced Opt-Out on, START and HELP may be answered twice (by Twilio and by the system).
+
+## Deployed
+
+2026-10-17 13:07 CT with `.audit_work/make_deploy.sh 4.16.0 4.17.0` and its deploy.sh, after CI passed all three jobs on 6c520ce. Every replaced file matched 4.16.0 first. The website, cron folder and database were backed up to /home/cmsuser/casemanagement_private/deploy-4.17.0-20261017-130705. All 17 migration statements ran and the new columns and tables are present; every installed file matches the release. health.php reports 4.17.0, and the sign-in page and updates.json show 4.17.0. Both webhooks (sms_inbound.php, sms_status.php) refuse an unsigned request (403). Texting stays off until the Twilio account is entered on Settings, Text messages.
