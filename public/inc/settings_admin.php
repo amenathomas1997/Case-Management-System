@@ -45,6 +45,10 @@ const CONFIG_OVERRIDES = [
     'meet.ms_client_id' => ['Microsoft app (client) ID', 'text', 'meetings'],
     'meet.ms_client_secret' => ['Microsoft app client secret', 'secret', 'meetings'],
     // (Missing means yes: see YESNO_DEFAULT_YES.)
+    'qbo.client_id' => ['QuickBooks app Client ID (developer.intuit.com)', 'text', 'quickbooks'],
+    'qbo.client_secret' => ['QuickBooks app Client secret', 'secret', 'quickbooks'],
+    'qbo.sandbox' => ['Use QuickBooks\' sandbox company (for trying it out)', 'yesno', 'quickbooks'],
+    'qbo.private_names' => ['Private-pay invoices name the client in QuickBooks (no: "Private pay client" and a number; Intuit does not sign health-privacy agreements)', 'yesno', 'quickbooks'],
     'meet.calendar_first_name' => ['Outlook calendar events name the client\'s first name (no: "Client session" only)', 'yesno', 'meetings'],
 ];
 
@@ -141,7 +145,7 @@ function brand_rgb(string $key = 'color_dark'): array {
 /* ---------- Safe upgrades (3.0.54) ---------- */
 
 /** The database version this code needs: the newest migration it ships. */
-const DB_SCHEMA_VERSION = '4.20.0';
+const DB_SCHEMA_VERSION = '4.21.0';
 
 /** The database version recorded by the migrations, or null for a database from before 3.0.54. */
 function db_schema_version(): ?string {

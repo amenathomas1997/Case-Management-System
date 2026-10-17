@@ -212,6 +212,15 @@ try {
 } catch (Throwable $e) {
     error_log('daily_alerts: Graph expiry check skipped (' . get_class($e) . ')');
 }
+// QuickBooks Online (4.21.0): submitted invoices sent, and payments made there brought back.
+try {
+    if (function_exists('qbo_sync_all') && qbo_app() && qbo_connection()) {
+        [$qOk, $qBad] = qbo_sync_all();
+        if ($qBad) notify_admin_users($qBad . ' invoice' . ($qBad === 1 ? '' : 's') . ' could not be sent to QuickBooks. See Administration, QuickBooks.', 'qbo.php');
+    }
+} catch (Throwable $e) {
+    error_log('daily_alerts: QuickBooks skipped (' . get_class($e) . ')');
+}
 // Updates (3.0.54): checked every day; administrators are told once about each new version,
 // and when the database needs an upgrade for the files installed.
 try {

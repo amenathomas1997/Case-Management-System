@@ -74,6 +74,7 @@ $avgRow = db()->query("SELECT AVG(track_hours) avg_hours FROM (
    permission checks those pages make). */
 $reports = array_filter([
     ['business_summary.php', 'Business summary', 'Referrals, new clients, clients served, sessions, no-shows, hours, closures and the rehabilitation rate for a period, compared with the period before and last year, month by month; CSV and accessible HTML.', can('analytics')],
+    ['at_act_report.php', 'AT Act report', 'Device demonstrations, short-term device loans and device reuse for a federal fiscal year, in the categories of the AT Act Annual Progress Report (NATADS); on screen or as a spreadsheet.', can('analytics')],
     ['outcomes.php', 'Outcome report', 'Clients served, hours by RSA category and program, closures and the rehabilitation rate for a period, as agencies ask for at contract renewal; exports to CSV.', can('analytics')],
     ['funder_report.php', 'Funder outcome report', 'One report per funding agency with clients served, hours, goal achievement, device retention, assessment score gains and closures; as a page, letterhead PDF or CSV.', can('analytics')],
     ['agency_report.php', 'Agency billing summary', 'Billing totals per funding agency for a date range, for quarterly reconciliation with state VR.', can('billing')],

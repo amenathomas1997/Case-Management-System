@@ -2261,6 +2261,9 @@ switch ($action) {
         api_require_client($cid, $userId);
         try {
             $newLoan = loan_equipment($eid, $cid, $loanDue, $loanNotes ?: null, $userId);
+            // Why it is lent and to whom (4.21.0), when the app sends them.
+            db()->prepare('UPDATE equipment_loans SET purpose = ?, borrower_type = ? WHERE id = ?')->execute([
+                is_string($input['purpose'] ?? null) && isset(LOAN_PURPOSES[$input['purpose']]) ? $input['purpose'] : null, is_string($input['borrower_type'] ?? null) && isset(BORROWER_TYPES[$input['borrower_type']]) ? $input['borrower_type'] : null, $newLoan]);
             // The hand-off (4.0.0): condition_out and the client's typed accepted_name.
             loan_handoff_out($newLoan, is_string($input['condition_out'] ?? null) ? $input['condition_out'] : null, is_string($input['accepted_name'] ?? null) ? $input['accepted_name'] : null);
         } catch (DomainException $e) { fail($e->getMessage(), 409); }

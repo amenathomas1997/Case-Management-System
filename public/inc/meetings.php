@@ -80,7 +80,7 @@ function meeting_open(string $sealed): ?string {
 
 /** POST or GET returning [status, decoded JSON or null]. Tests set CMS_TEST_MEETINGS to a JSON map of URL => reply. */
 function meeting_http(string $method, string $url, array $headers, ?string $body): array {
-    if (($fake = getenv('CMS_TEST_MEETINGS')) !== false && $fake !== '') {
+    if (PHP_SAPI === 'cli' && ($fake = getenv('CMS_TEST_MEETINGS')) !== false && $fake !== '') {
         $map = (array)json_decode($fake, true);
         foreach ($map as $prefix => $reply) if (str_starts_with($url, $prefix)) return [(int)($reply['status'] ?? 200), $reply['body'] ?? null];
         return [599, null];

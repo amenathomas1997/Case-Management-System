@@ -122,7 +122,7 @@ function sms_first_name(string $name): string {
 /** Send one text through the service. Returns [provider id|null, status, error|null]. */
 function sms_provider_send(string $to, string $body): array {
     // Tests: CMS_TEST_SMS=ok answers as the service would; =fail refuses.
-    if (($fake = getenv('CMS_TEST_SMS')) !== false && $fake !== '') {
+    if (PHP_SAPI === 'cli' && ($fake = getenv('CMS_TEST_SMS')) !== false && $fake !== '') {
         return $fake === 'fail' ? [null, 'failed', 'Synthetic refusal'] : ['SM' . bin2hex(random_bytes(16)), 'queued', null];
     }
     $cfg = sms_cfg();

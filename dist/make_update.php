@@ -42,6 +42,12 @@ foreach (array_filter(explode("\n", trim($git("tag -l 'v*'")))) as $t) {
 }
 foreach ($known as $k => $list) $known[$k] = array_values(array_unique($list));
 $current = array_fill_keys(array_map($pkgName, $files), true);
+// The order files are swapped in (every updater follows the package's list): files new in this release
+// first, so nothing that requires them arrives before them; then the rest; the files every page loads
+// (bootstrap.php, core.php) last, once everything they require is in place.
+$isNew = fn(string $f) => !isset($earlier[$pkgName($f)]);
+$last = ['public/inc/core.php' => 2, 'public/inc/bootstrap.php' => 1];
+usort($files, fn($a, $b) => [$last[$a] ?? 0, $isNew($a) ? 0 : 1, $a] <=> [$last[$b] ?? 0, $isNew($b) ? 0 : 1, $b]);
 $removed = array_values(array_filter(array_keys($earlier), fn($f) => !isset($current[$f]) && !in_array(preg_replace('~^docroot/~', 'public/', $f), $skip, true)));
 // The release notes, from the tagged code itself, so what the site shows is signed too.
 $notesFile = tempnam(sys_get_temp_dir(), 'notes');

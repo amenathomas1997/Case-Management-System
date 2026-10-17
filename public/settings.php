@@ -8,7 +8,7 @@ $user = require_login();
 require_perm('admin');
 csrf_check();
 
-const SETTINGS_GROUPS = ['time' => 'Time zone', 'graph' => 'Microsoft Graph email', 'addresses' => 'Email addresses', 'signin' => 'Sign-in', 'brand' => 'Branding', 'legal' => 'Privacy notice', 'updates' => 'Updates', 'meetings' => 'Online meetings (Zoom and Teams)', 'texting' => 'Text messages (Twilio)'];
+const SETTINGS_GROUPS = ['time' => 'Time zone', 'graph' => 'Microsoft Graph email', 'addresses' => 'Email addresses', 'signin' => 'Sign-in', 'brand' => 'Branding', 'legal' => 'Privacy notice', 'updates' => 'Updates', 'meetings' => 'Online meetings (Zoom and Teams)', 'texting' => 'Text messages (Twilio)', 'quickbooks' => 'QuickBooks Online'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_group'])) {
     $group = is_string($_POST['save_group']) && isset(SETTINGS_GROUPS[$_POST['save_group']]) ? $_POST['save_group'] : '';

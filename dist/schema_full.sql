@@ -555,6 +555,7 @@ CREATE TABLE `equipment` (
   `maintenance_interval_days` int(10) unsigned DEFAULT NULL,
   `last_service_date` date DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `at_type` varchar(60) DEFAULT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
@@ -603,6 +604,9 @@ CREATE TABLE `equipment_loans` (
   `accepted_name` varchar(120) DEFAULT NULL,
   `accepted_at` datetime DEFAULT NULL,
   `created_by` int(10) unsigned DEFAULT NULL,
+  `purpose` varchar(20) DEFAULT NULL,
+  `borrower_type` varchar(20) DEFAULT NULL,
+  `decision` varchar(20) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `equipment_id` (`equipment_id`),
   KEY `client_id` (`client_id`),
@@ -788,6 +792,10 @@ CREATE TABLE `invoices` (
   `period_start` date DEFAULT NULL,
   `period_end` date DEFAULT NULL,
   `vendor_number` varchar(80) DEFAULT NULL,
+  `qbo_id` varchar(40) DEFAULT NULL,
+  `qbo_synced_at` datetime DEFAULT NULL,
+  `qbo_error` varchar(255) DEFAULT NULL,
+  `qbo_status` varchar(20) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `invoice_number` (`invoice_number`),
   KEY `track_id` (`track_id`),
@@ -907,6 +915,35 @@ CREATE TABLE `staff_availability` (
   PRIMARY KEY (`id`),
   KEY `user_day` (`user_id`,`weekday`),
   CONSTRAINT `fk_avail_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `qbo_connection`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `qbo_connection` (
+  `id` tinyint(3) unsigned NOT NULL,
+  `realm_id` varchar(40) NOT NULL,
+  `sandbox` tinyint(1) NOT NULL DEFAULT 0,
+  `company_name` varchar(190) DEFAULT NULL,
+  `access_token` text NOT NULL,
+  `refresh_token` text NOT NULL,
+  `expires_at` datetime NOT NULL,
+  `refresh_expires_at` datetime DEFAULT NULL,
+  `connected_by` int(10) unsigned DEFAULT NULL,
+  `connected_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `qbo_customers`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `qbo_customers` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `name_key` char(40) NOT NULL,
+  `display_name` varchar(190) NOT NULL,
+  `qbo_id` varchar(40) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `name_key` (`name_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `messages`;
@@ -8578,6 +8615,7 @@ CREATE TABLE IF NOT EXISTS `invoice_payments` (
   `note` varchar(255) DEFAULT NULL,
   `recorded_by` int(10) unsigned DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `qbo_id` varchar(40) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `invoice_id` (`invoice_id`),
   CONSTRAINT `fk_payment_invoice` FOREIGN KEY (`invoice_id`) REFERENCES `invoices` (`id`) ON DELETE CASCADE

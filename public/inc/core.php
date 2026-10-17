@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.20.0';
+const APP_VERSION = '4.21.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1745,6 +1745,8 @@ require_once __DIR__ . '/session_plan.php';
 require_once __DIR__ . '/meetings.php';
 require_once __DIR__ . '/calendar_sync.php';
 require_once __DIR__ . '/self_booking.php';
+require_once __DIR__ . '/at_act.php';
+require_once __DIR__ . '/qbo.php';
 // Agreements staff read and sign themselves (4.15.0).
 require_once __DIR__ . '/staff_agreements.php';
 // Staff training with a quiz, and holding back client records until it is done (4.16.0).

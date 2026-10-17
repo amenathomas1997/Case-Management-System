@@ -71,7 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_item'])) {
         flash('This item was already added (the form was sent twice), so it was saved once.', 'info');
         redirect('equipment.php');
     }
-    db()->prepare('INSERT INTO equipment (name, category, serial, item_condition, value, purchase_date, useful_life_months, notes, maintenance_interval_days) VALUES (?,?,?,?,?,?,?,?,?)')
+    db()->prepare('INSERT INTO equipment (name, category, serial, item_condition, value, purchase_date, useful_life_months, notes, maintenance_interval_days, at_type) VALUES (?,?,?,?,?,?,?,?,?,?)')
         ->execute([$name,
             in_array($_POST['category'] ?? '', cms_list_items('equipment_categories'), true) ? $_POST['category'] : 'Other',
             $serial ?: null,
@@ -80,7 +80,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_item'])) {
             $purchase,
             $life,
             $itemNotes ?: null,
-            $iv ?: null]);
+            $iv ?: null,
+            is_string($_POST['at_type'] ?? null) && in_array($_POST['at_type'], AT_ACT_TYPES, true) ? $_POST['at_type'] : null]);
     // Capture the id before audit() inserts its own row and replaces it.
     $newId = (int)db()->lastInsertId();
     web_once_set($itemKey, $newId);
@@ -115,6 +116,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['loan_out'])) {
         // client's hold is fulfilled, anyone else's hold returns to the waitlist, and
         // the staff member who made that hold is notified.
         $newLoan = loan_equipment($eid, $cid, $due, $loanNotes ?: null, (int)$user['id']);
+        // Why it is lent and to whom (4.21.0), for the AT Act report.
+        db()->prepare('UPDATE equipment_loans SET purpose = ?, borrower_type = ? WHERE id = ?')->execute([
+            is_string($_POST['purpose'] ?? null) && isset(LOAN_PURPOSES[$_POST['purpose']]) ? $_POST['purpose'] : null, is_string($_POST['borrower_type'] ?? null) && isset(BORROWER_TYPES[$_POST['borrower_type']]) ? $_POST['borrower_type'] : null, $newLoan]);
         loan_handoff_out($newLoan, is_string($_POST['condition_out'] ?? null) ? $_POST['condition_out'] : null, is_string($_POST['accepted_name'] ?? null) ? $_POST['accepted_name'] : null);
     } catch (DomainException $e) {
         keep_input(); keep_field_errors(['loan_equipment_id' => 'Item: ' . lcfirst($e->getMessage())]); redirect('equipment.php');
@@ -726,6 +730,10 @@ page_header('Equipment & loans', $user, 'equipment');
         <input type="date" id="due_date" name="due_date" value="<?= h($oldLoan('due_date', date('Y-m-d', strtotime('+' . cms_number('loan_due_days') . ' days')))) ?>" <?= field_aria('loan_due_date') ?>><?= field_error('loan_due_date') ?></div>
       <div class="field"><label for="lo_notes">Loan notes</label>
         <input type="text" id="lo_notes" name="notes" maxlength="255" value="<?= h($oldLoan('notes')) ?>" <?= field_aria('loan_notes') ?>><?= field_error('loan_notes') ?></div>
+      <div class="field"><label for="lo_purpose">Why it is lent</label>
+        <select id="lo_purpose" name="purpose"><option value="">Not recorded</option><?php foreach (LOAN_PURPOSES as $pk => $pl): ?><option value="<?= $pk ?>"<?= $oldLoan('purpose') === $pk ? ' selected' : '' ?>><?= h($pl) ?></option><?php endforeach; ?></select></div>
+      <div class="field"><label for="lo_borrower">Who borrows it</label>
+        <select id="lo_borrower" name="borrower_type"><option value="">Not recorded</option><?php foreach (BORROWER_TYPES as $bk => $bl): ?><option value="<?= $bk ?>"<?= $oldLoan('borrower_type') === $bk ? ' selected' : '' ?>><?= h($bl) ?></option><?php endforeach; ?></select></div>
       <div class="field"><label for="lo_cond">Condition as it goes out</label>
         <select id="lo_cond" name="condition_out"><option value="">Not recorded</option><?= select_options(cms_list_items('equipment_conditions'), $oldLoan('condition_out') ?: null) ?></select></div>
       <div class="field"><label for="lo_accept">Client's name, typed by the client, accepting the loan agreement</label>
@@ -749,6 +757,8 @@ page_header('Equipment & loans', $user, 'equipment');
         <input type="text" id="name" name="name" required maxlength="190" value="<?= h($oldItem('name')) ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
       <div class="field"><label for="category">Category</label>
         <select id="category" name="category"><?= select_options(cms_list_items('equipment_categories'), $oldItem('category', 'Other')) ?></select></div>
+      <div class="field"><label for="at_type">AT Act type</label>
+        <select id="at_type" name="at_type"><option value="">Guessed from the category</option><?= select_options(AT_ACT_TYPES, $oldItem('at_type') ?: null) ?></select></div>
       <div class="field"><label for="serial">Serial number</label>
         <input type="text" id="serial" name="serial" maxlength="120" value="<?= h($oldItem('serial')) ?>" <?= field_aria('serial') ?>><?= field_error('serial') ?></div>
       <div class="field"><label for="item_condition">Condition</label>
