@@ -67,3 +67,6 @@ The owner asked to "continue building": the Android app now has every screen the
 **Tests:**
 - Web: full_schema, audit_regression, security, staging_scrub and run_all pass.
 - Android: unit tests pass, including the voice yes/no rules and reading times, and lint reports no errors.
+
+## Deployed 2026-10-17 10:36 CT
+The web part went from 4.13.0 with .audit_work/deploy-4.14.0: 5 files at 2271614, no migration. Production files matched 4.13.0 before install and match 4.14.0 after, and smoke checks passed. CI passed all three jobs: PHP, Android and iOS. The Android app is not on Google Play yet. Backups: /home/cmsuser/casemanagement_private/deploy-4.14.0-20261017-103611.
