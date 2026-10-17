@@ -202,6 +202,47 @@ foreach ($unconfirmed as [$clientId, $label]) {
         . 'Confirm it on the client\'s edit page.', 'client.php?id=' . $clientId);
 }
 if ($unconfirmed) echo count($unconfirmed) . " client(s) were not emailed: their email address has not been confirmed (the administrators were told).\n";
+// Text messages (4.17.0), to clients who agreed: the same reminders (answerable with C, R or X),
+// one text for homework assigned since the last run, and texts held overnight that may go now.
+if (sms_enabled()) {
+    $texted = 0;
+    try {
+        $rows = db()->query("SELECT s.* FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
+            WHERE s.status = 'Scheduled' AND s.sms_reminder_sent = 0 AND s.start_at > NOW()
+              AND s.start_at < DATE_ADD(CURDATE(), INTERVAL " . (cms_number('session_reminder_days') + 1) . " DAY)
+              AND c.sms_consent_at IS NOT NULL AND c.sms_opted_out_at IS NULL AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%'")->fetchAll();
+        $markText = db()->prepare('UPDATE scheduled_sessions SET sms_reminder_sent = 1 WHERE id = ?');
+        foreach ($rows as $s) {
+            $c = sms_client((int)$s['client_id']);
+            if (!$c || sms_client_blocked($c)) continue;
+            $r = sms_to_client((int)$c['id'], sms_session_text($c, $s, 'reminder'), 'reminder', (int)$s['id']);
+            // Marked once logged (sent, or held for the morning), so it is never texted twice.
+            if (in_array($r['status'], ['sent', 'held'], true)) { $markText->execute([(int)$s['id']]); $texted++; }
+        }
+        // New homework: one text per client, however many were assigned.
+        $hw = db()->query("SELECT t.client_id, COUNT(*) n, GROUP_CONCAT(h.id) ids FROM homework h JOIN training_tracks t ON t.id = h.track_id JOIN clients c ON c.id = t.client_id
+            WHERE h.sms_notified = 0 AND h.status = 'Assigned' AND h.assigned_at >= DATE_SUB(CURDATE(), INTERVAL 2 DAY)
+              AND c.sms_consent_at IS NOT NULL AND c.sms_opted_out_at IS NULL GROUP BY t.client_id")->fetchAll();
+        foreach ($hw as $h) {
+            $c = sms_client((int)$h['client_id']);
+            if (!$c || sms_client_blocked($c)) continue;
+            $n = (int)$h['n'];
+            $es = client_lang($c) === 'es';
+            $body = $es ? 'Hola ' . sms_first_name((string)$c['name']) . ', tiene ' . ($n === 1 ? 'una tarea nueva' : "$n tareas nuevas") . ' en su portal de ' . (brand('short') ?: cfg('name')) . '. Responda STOP para no recibir mensajes.'
+                : 'Hi ' . sms_first_name((string)$c['name']) . ', you have ' . ($n === 1 ? 'new homework' : "$n new homework assignments") . ' in your ' . (brand('short') ?: cfg('name')) . ' portal. Reply STOP to stop texts.';
+            $r = sms_to_client((int)$c['id'], $body, 'homework');
+            if (in_array($r['status'], ['sent', 'held'], true)) db()->exec('UPDATE homework SET sms_notified = 1 WHERE id IN (' . implode(',', array_map('intval', explode(',', (string)$h['ids']))) . ')');
+        }
+        // Homework for clients who do not take texts, and homework older than two days, is marked too,
+        // so a later agreement (or texting set up later) never texts old homework.
+        db()->exec("UPDATE homework h JOIN training_tracks t ON t.id = h.track_id JOIN clients c ON c.id = t.client_id SET h.sms_notified = 1
+            WHERE h.sms_notified = 0 AND (c.sms_consent_at IS NULL OR c.sms_opted_out_at IS NOT NULL OR h.assigned_at < DATE_SUB(CURDATE(), INTERVAL 2 DAY))");
+    } catch (Throwable $e) {
+        error_log('session_reminders: texts skipped (' . get_class($e) . ')');
+    }
+    $flushed = sms_flush_held();
+    echo "Texts: {$texted} reminder(s), {$flushed} held text(s) sent.\n";
+}
 // The run itself completed: its heartbeat is recorded even when a reminder email
 // failed (those are reported below, and the mail failure is noted for System health).
 record_heartbeat('session_reminders');

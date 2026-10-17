@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.17.0' => [
+        'Text messages through Twilio (Administration, Text messages, has the setup steps): session reminders a client can answer with C to confirm, R to reschedule or X to ask to cancel; texts when a session is booked, moved or cancelled; one text when homework is assigned; and replies that land in the client\'s message thread.',
+        'Texts go only to clients who agreed to them at that number (recorded on the client\'s edit page, in the phone apps, or from the referral form\'s "OK to text"), only from 8 a.m. to 8 p.m. in the client\'s time zone, and carry a first name and a time, never case details. STOP and START are honoured at once.',
+        'Messages: tick "Also send it as a text message" on the website or in either phone app. Staff can add their mobile number on My Account to get urgent alerts by text, at most one every 15 minutes and never with client details.',
+    ],
     '4.16.0' => [
         'Staff training: an administrator writes a reading and a short quiz (Administration, Staff training; a starting privacy training is there to edit). Staff take it from My training on the website or in the phone apps; passing the privacy training records its yearly date.',
         'Client records can wait until required agreements and training are done: for new staff (the built-in choice), for everyone after a few days to catch up, or never (Staff training, Before client records open).',

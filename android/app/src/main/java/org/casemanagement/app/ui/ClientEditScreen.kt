@@ -45,7 +45,9 @@ fun Tick(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
 @Composable
 fun ClientEditScreen(api: Api, nav: NavHostController, id: Int) {
     val loaded = rememberLoaded(id) {
-        val c = if (id > 0) api.call("client", mapOf("id" to id.toString())).optJSONObject("client") else null
+        val r = if (id > 0) api.call("client", mapOf("id" to id.toString())) else null
+        // The texting agreement (4.17.0) rides along on the client, as the form reads it.
+        val c = r?.optJSONObject("client")?.put("_texting", r.optJSONObject("texting"))
         val staff = if (api.scoped) emptyList() else try { api.call("staff").optJSONArray("staff").objects().filter { it.optBoolean("can_clients", true) } } catch (e: Exception) { emptyList() }
         (c ?: JSONObject()) to staff
     }
@@ -78,6 +80,9 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
     var reason by rememberSaveable { mutableStateOf("") }
     var reasonNote by rememberSaveable { mutableStateOf("") }
     var employed by rememberSaveable { mutableStateOf("") }
+    val texting = c.optJSONObject("_texting")
+    var smsConsent by rememberSaveable { mutableStateOf(texting?.optBoolean("agreed") ?: false) }
+    var smsSource by rememberSaveable { mutableStateOf(texting?.str("source") ?: "In person") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -98,7 +103,14 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         }
         Choice("Client type", type, types.map { it to it }) { type = it }
         Field("Date of birth", dob, { dob = it }, hint = "optional, year-month-day")
-        Field("Phone", phone, { phone = it }, keyboard = KeyboardType.Phone)
+        // A new number needs the client's agreement again (the server clears it too).
+        Field("Phone", phone, { phone = it; if (it.trim() != (c.str("phone") ?: "").trim()) smsConsent = false }, keyboard = KeyboardType.Phone)
+        // Texts (4.17.0), as the website's client form: after STOP, only the client's START turns them back on.
+        if (texting?.optBoolean("opted_out") == true) Text(texting.optString("words"))
+        else if (phone.isNotBlank()) {
+            Tick("The client agreed to text messages at this number", smsConsent) { smsConsent = it }
+            if (smsConsent) Choice("How they agreed", smsSource, listOf("In person", "By phone", "In writing", "Referral form", "Client portal").map { it to it }) { smsSource = it }
+        }
         Field("Email", email, { email = it }, keyboard = KeyboardType.Email)
         if (email.isNotBlank() && (c.optBoolean("email_verified").not() || email.trim() != (c.str("email") ?: ""))) Tick("I confirmed this email address with the client", emailConfirmed) { emailConfirmed = it }
         Field("Address", address, { address = it }, singleLine = false)
@@ -124,6 +136,7 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
                     .put("counselor_email", counselorEmail.trim()).put("counselor_phone", counselorPhone.trim())
                     .put("a11y_format", format).put("a11y_contact", contact).put("a11y_primary_tech", tech.trim())
                 if (!api.scoped) b.put("assigned_to", assigned)
+                if (texting?.optBoolean("opted_out") != true) b.put("sms_consent", smsConsent && phone.isNotBlank()).put("sms_consent_source", smsSource)
                 if (statusChanged && statusNote.isNotBlank()) b.put("status_note", statusNote.trim())
                 if (emailConfirmed) b.put("email_verified", true)
                 if (counselorConfirmed) b.put("counselor_verified", true)

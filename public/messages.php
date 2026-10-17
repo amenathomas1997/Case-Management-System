@@ -47,8 +47,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reply'])) {
         flash('This message was already sent (the form was sent twice), so it was sent once.', 'info');
         redirect('messages.php?client=' . $cid . '&channel=' . $channel);
     }
-    web_once_set($msgKey, post_message($cid, $channel, 'staff', (int)$user['id'], $body));
+    $newMsg = post_message($cid, $channel, 'staff', (int)$user['id'], $body);
+    web_once_set($msgKey, $newMsg);
     audit($user['id'], 'message.send', 'client', $cid, $channel);
+    // Also as a text (4.17.0), when asked and the client agreed to texts.
+    if ($channel === 'client' && !empty($_POST['by_text'])) {
+        $t = sms_to_client($cid, (brand('short') ?: cfg('name')) . ': ' . $body, 'message', null, (int)$user['id']);
+        if ($t['ok']) db()->prepare("UPDATE messages SET via = 'text' WHERE id = ?")->execute([$newMsg]);
+        flash($t['ok'] ? ($t['status'] === 'held' ? 'Text: ' . $t['message'] : 'Also sent as a text message.') : 'Not sent as a text: ' . $t['message'], $t['ok'] ? 'success' : 'error');
+    }
     // A short email with the portal link (no message text), at most once a day (3.0.40).
     $noticed = message_notice($cid, $channel);
     // Only promise delivery when the other side has a live portal link to read it on.
@@ -113,7 +120,7 @@ if ($openCid) {
           <li class="msg <?= $m['sender'] === 'staff' ? 'out' : 'in' ?>">
             <span class="visually-hidden"><?= h($who) ?>:</span>
             <div class="msg-body"><?= nl2br(h($m['body'])) ?></div>
-            <div class="msg-meta"><span aria-hidden="true"><?= h($who) ?> · </span><?= fmt_datetime($m['created_at']) ?></div>
+            <div class="msg-meta"><span aria-hidden="true"><?= h($who) ?> · </span><?= fmt_datetime($m['created_at']) ?><?= ($m['via'] ?? 'portal') === 'text' ? ', by text' : '' ?></div>
           </li>
         <?php endforeach; ?>
         </ol>
@@ -134,6 +141,10 @@ if ($openCid) {
         <label for="body">Reply to the <?= $chanWho ?> <?= required_mark() ?></label>
         <p class="hint" id="body-hint">Up to 5,000 characters. It appears on the <?= $openChannel === 'client' ? "client's" : "counselor's" ?> portal.</p>
         <textarea id="body" name="body" rows="3" required <?= field_aria('body', 'body-hint', $unconfirmed ? 'counselor-unconfirmed' : '') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?>
+        <?php if ($openChannel === 'client' && sms_enabled()): $smsWhy = sms_client_blocked(sms_client($openCid)); // 4.17.0 ?>
+        <?php if ($smsWhy === null): ?><div class="field"><label><input type="checkbox" name="by_text" value="1"> Also send it as a text message <span class="hint">up to 1,600 characters; sent from 8 a.m. to 8 p.m. their time</span></label></div>
+        <?php else: ?><p class="muted">Not by text: <?= h($smsWhy) ?></p><?php endif; ?>
+        <?php endif; ?>
         <button type="submit" name="reply" value="1" class="btn btn-primary">Send to the <?= $chanWho ?></button>
       </form>
     </section>

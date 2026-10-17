@@ -157,7 +157,7 @@ function offer_confirm(int $offerId, int $clientId): array {
             return ['error' => $gone, 'session_id' => null];
         }
         if ($moving) {
-            $pdo->prepare("UPDATE scheduled_sessions SET start_at = ?, end_at = ?, reminder_sent = 0, ics_sequence = ics_sequence + 1 WHERE id = ?")
+            $pdo->prepare("UPDATE scheduled_sessions SET start_at = ?, end_at = ?, reminder_sent = 0, sms_reminder_sent = 0, client_reply = NULL, client_reply_at = NULL, ics_sequence = ics_sequence + 1 WHERE id = ?")
                 ->execute([$o['start_at'], $o['end_at'], (int)$moving['id']]);
             $sid = (int)$moving['id'];
             $after = ['moved', (string)$moving['start_at']];

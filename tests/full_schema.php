@@ -317,7 +317,7 @@ try {
         'verify'=>'redirect','ai'=>'AI assistant','intake'=>'Guided intake','recommend'=>'AT recommendations','amendment_request'=>'Amendment request',
         'progress_review'=>'Progress review','translate'=>'Translate','remediate'=>'Remediation','ask'=>'Ask your caseload','kb_ask'=>'Ask the knowledge base',
         'curriculum_ai'=>'Curriculum generator','workflows'=>'Daily action center','privacy'=>'Privacy notice',
-        'release'=>'Release of information','vendors'=>'Vendor agreements','privacy_incidents'=>'Privacy incidents','survey_responses'=>'Survey responses','authorizations'=>'Incoming authorizations','business_summary'=>'Business summary','attendance'=>'Attendance and no-shows','unused_authorizations'=>'Unused authorizations','data_quality'=>'Data quality','exports'=>'Spreadsheet downloads','client_timeline'=>'Timeline','letters'=>'Letters','settings'=>'Settings','upgrade'=>'Database upgrade','client_import'=>'Import clients and authorizations','funding_agencies'=>'Funding agencies','pricing'=>'Pricing rules','wording'=>'Public wording','lists'=>'Lists and time limits','custom_reports'=>'Custom reports','agreements'=>'My agreements','staff_agreements'=>'Staff agreements','training'=>'My training','staff_training'=>'Staff training','credentials'=>'My credentials','staff_report'=>'Staff compliance report'];
+        'release'=>'Release of information','vendors'=>'Vendor agreements','privacy_incidents'=>'Privacy incidents','survey_responses'=>'Survey responses','authorizations'=>'Incoming authorizations','business_summary'=>'Business summary','attendance'=>'Attendance and no-shows','unused_authorizations'=>'Unused authorizations','data_quality'=>'Data quality','exports'=>'Spreadsheet downloads','client_timeline'=>'Timeline','letters'=>'Letters','settings'=>'Settings','upgrade'=>'Database upgrade','client_import'=>'Import clients and authorizations','funding_agencies'=>'Funding agencies','pricing'=>'Pricing rules','wording'=>'Public wording','lists'=>'Lists and time limits','custom_reports'=>'Custom reports','agreements'=>'My agreements','staff_agreements'=>'Staff agreements','training'=>'My training','staff_training'=>'Staff training','credentials'=>'My credentials','staff_report'=>'Staff compliance report','sms'=>'Text messages'];
     $showsOwnContent=function(string $page,string $html)use($pageMarkers):bool{
         $marker=$pageMarkers[$page]??null;
         if($marker===null)return false;
@@ -837,6 +837,7 @@ try {
     require __DIR__.'/v414_cases.php';
     require __DIR__.'/v415_cases.php';
     require __DIR__.'/v416_cases.php';
+    require __DIR__.'/v417_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 
@@ -894,7 +895,7 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
     $db->exec("INSERT INTO clients (id,name,email,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-client@example.invalid','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL,NULL),(3,'Upgraded client with a blank counselor',NULL,'')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37','3.0.38','3.0.39','3.0.40','3.0.42','3.0.43','3.0.44','3.0.45','3.0.47','3.0.48','3.0.49','3.0.50','3.0.51','3.0.52','3.0.53','3.0.54','3.0.55','4.0.0','4.1.0','4.2.0','4.3.0','4.4.0','4.5.0','4.6.0','4.7.0','4.8.0','4.9.0','4.10.0','4.11.0','4.15.0','4.16.0'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37','3.0.38','3.0.39','3.0.40','3.0.42','3.0.43','3.0.44','3.0.45','3.0.47','3.0.48','3.0.49','3.0.50','3.0.51','3.0.52','3.0.53','3.0.54','3.0.55','4.0.0','4.1.0','4.2.0','4.3.0','4.4.0','4.5.0','4.6.0','4.7.0','4.8.0','4.9.0','4.10.0','4.11.0','4.15.0','4.16.0','4.17.0'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
     check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12, mig_3.0.16 and mig_3.0.21 has exactly the fresh-install schema, defaults included');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=1')->fetchColumn()===3,'The 3.0.21 upgrade keeps every existing client\'s email confirmed');
     $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");

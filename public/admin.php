@@ -527,6 +527,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
     <a class="btn btn-secondary" href="staff_training.php">Staff training</a>
     <a class="btn btn-secondary" href="credentials.php?all=1">Staff credentials</a>
     <a class="btn btn-secondary" href="staff_report.php">Staff compliance report</a>
+    <a class="btn btn-secondary" href="sms.php">Text messages</a>
     <a class="btn btn-secondary" href="funding_agencies.php">Funding agencies</a>
     <a class="btn btn-secondary" href="pricing.php">Pricing rules</a>
     <a class="btn btn-secondary" href="lists.php">Lists and time limits</a>

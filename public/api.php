@@ -840,7 +840,11 @@ switch ($action) {
         $releases = array_map(fn($r) => ['id' => (int)$r['id'], 'recipient_type' => $r['recipient_type'], 'recipient_name' => $r['recipient_name'],
             'status' => release_status($r), 'signed_name' => $r['signed_name'], 'signed_at' => $r['signed_at'], 'expires_on' => $r['expires_on'],
             'info_scope' => $r['info_scope'], 'purpose' => $r['purpose'], 'method' => $r['method']], client_releases($id));
-        out(['ok' => true, 'client' => $client, 'notes' => $notes, 'notes_total' => $notesTotal, 'notes_offset' => $notesOffset, 'tracks' => $tracks, 'releases' => $releases]);
+        // Texts (4.17.0): whether this client can be texted, and their agreement in words.
+        $smsRow = sms_client($id);
+        $texting = ['enabled' => sms_enabled(), 'agreed' => !empty($smsRow['sms_consent_at']), 'opted_out' => !empty($smsRow['sms_opted_out_at']),
+            'source' => $smsRow['sms_consent_source'] ?? null, 'words' => $smsRow ? sms_client_words($smsRow) : '', 'blocked' => sms_client_blocked($smsRow), 'sources' => SMS_CONSENT_SOURCES];
+        out(['ok' => true, 'client' => $client, 'notes' => $notes, 'notes_total' => $notesTotal, 'notes_offset' => $notesOffset, 'tracks' => $tracks, 'releases' => $releases, 'texting' => $texting]);
 
     case 'add_note': {
         $cid = (int)($input['client_id'] ?? 0);
@@ -1628,7 +1632,12 @@ switch ($action) {
             $nc = db()->prepare('SELECT name, dob, phone, email FROM clients WHERE id = ?'); $nc->execute([$cid]); $ncr = $nc->fetch() ?: [];
             $dupWarning = duplicate_warning_text(possible_duplicate_clients((string)($ncr['name'] ?? ''), $ncr['dob'] ?? null, $ncr['phone'] ?? null, $ncr['email'] ?? null, $cid), caseload_scoped() ? $userId : null) ?: null;
         }
-        out(['ok' => true, 'client_id' => $cid, 'unarchived' => $unarchive, 'survey_sent' => $surveySent, 'duplicate_warning' => $dupWarning]);
+        // Texts (4.17.0): the agreement as sent, or as it was; a new number clears it.
+        // An app that does not send the agreement keeps it only while the number stays the same.
+        $smsAgreed = array_key_exists('sms_consent', $input) ? !empty($input['sms_consent'])
+            : (!empty($old['sms_consent_at']) && sms_number((string)($old['phone'] ?? '')) === sms_number((string)($input['phone'] ?? $old['phone'] ?? '')));
+        $smsNote = sms_consent_save($cid, $smsAgreed, is_string($input['sms_consent_source'] ?? null) ? $input['sms_consent_source'] : (string)($old['sms_consent_source'] ?? ''), $old['phone'] ?? null, $userId);
+        out(['ok' => true, 'client_id' => $cid, 'unarchived' => $unarchive, 'survey_sent' => $surveySent, 'duplicate_warning' => $dupWarning, 'sms_note' => $smsNote]);
     }
 
     case 'goals':
@@ -2558,6 +2567,8 @@ switch ($action) {
             $isCounselor ? $ref['counselor_phone'] : null, $isCounselor ? $ref['counselor_agency'] : null,
             $counselorConfirmed ? 1 : 0, 1,
         ]);
+        // The self-referrer's agreement to texts (4.17.0) goes with them.
+        if (!empty($ref['sms_ok'])) db()->prepare("UPDATE clients SET sms_consent_at = ?, sms_consent_source = 'Referral form' WHERE id = LAST_INSERT_ID()")->execute([$ref['created_at']]);
         $clientId = (int)db()->lastInsertId();
         // As on the website: the referral's language, and its state with that state's time zone (4.1.0).
         apply_referral_language($clientId, $ref);
@@ -3900,12 +3911,12 @@ switch ($action) {
         api_require_client($cid, $userId);
         db()->prepare("UPDATE messages SET read_at = NOW() WHERE client_id = ? AND channel = ? AND sender <> 'staff' AND read_at IS NULL")
             ->execute([$cid, $channel]);
-        $m = db()->prepare('SELECT m.id, m.channel, m.sender, m.body, m.created_at, u.name AS staff_name
+        $m = db()->prepare('SELECT m.id, m.channel, m.sender, m.body, m.created_at, m.via, u.name AS staff_name
             FROM messages m LEFT JOIN users u ON u.id = m.staff_id WHERE m.client_id = ? AND m.channel = ? ORDER BY m.created_at');
         $m->execute([$cid, $channel]);
         $c = db()->prepare('SELECT name, counselor_name FROM clients WHERE id = ?'); $c->execute([$cid]); $cRow = $c->fetch();
         out(['ok' => true, 'client_name' => (string)($cRow['name'] ?? ''), 'counselor_name' => $cRow['counselor_name'] ?? null,
-             'channel' => $channel, 'messages' => $m->fetchAll()]);
+             'channel' => $channel, 'messages' => $m->fetchAll(), 'text_enabled' => sms_enabled(), 'text_blocked' => sms_client_blocked(sms_client($cid))]);
     }
     case 'post_message': {
         $cid = (int)($input['client_id'] ?? 0);
@@ -3922,9 +3933,23 @@ switch ($action) {
         if ($archName !== false) {
             fail('Not sent: ' . $archName . '\'s record is archived, so neither the client portal nor the counselor portal shows it any more. Reach them another way.', 409);
         }
+        // The same message sent again after a lost reply (the apps' idem_key) is posted, and texted, once.
+        $idem = preg_match('/^[0-9a-fA-F-]{36}$/', (string)($input['idem_key'] ?? '')) ? strtoupper($input['idem_key']) : null;
+        if ($idem !== null) {
+            $seen = db()->prepare('SELECT id FROM messages WHERE staff_id = ? AND idem_key = ? AND client_id = ?');
+            $seen->execute([$userId, $idem, $cid]);
+            if ($seenId = $seen->fetchColumn()) out(['ok' => true, 'id' => (int)$seenId, 'delivered' => true, 'warning' => null, 'texted' => null, 'repeat' => true]);
+        }
         $id = post_message($cid, $channel, 'staff', $userId, $body);
+        if ($idem !== null) db()->prepare('UPDATE messages SET idem_key = ? WHERE id = ?')->execute([$idem, $id]);
         // The website's code (messages.php), so a search of the audit log finds both channels.
         audit($userId, 'message.send', 'client', $cid, $channel . ' (mobile)');
+        // Also as a text (4.17.0), when asked.
+        $textResult = null;
+        if ($channel === 'client' && !empty($input['by_text'])) {
+            $textResult = sms_to_client($cid, (brand('short') ?: cfg('name')) . ': ' . $body, 'message', null, $userId);
+            if ($textResult['ok']) db()->prepare("UPDATE messages SET via = 'text' WHERE id = ?")->execute([$id]);
+        }
         message_notice($cid, $channel); // 3.0.40: a short "new message" email, at most once a day
         // Same check as the website (messages.php): the portal is the only way the
         // other side reads a message, so say when there is no live link to read it on.
@@ -3948,7 +3973,9 @@ switch ($action) {
             : ($counselorUnconfirmed
                 ? 'Message saved, but this client\'s counselor email has not been confirmed, so the counselor portal does not show this client yet. Confirm it on the client\'s record.'
                 : 'Message saved, but this client\'s counselor has no active portal link, so they cannot read it yet. An administrator can send one from the counselor portal screen.'));
-        out(['ok' => true, 'id' => $id, 'delivered' => $delivered, 'warning' => $warning]);
+        if ($textResult && $textResult['ok']) { $delivered = true; $warning = $textResult['status'] === 'held' ? 'Text: ' . $textResult['message'] : null; }
+        elseif ($textResult) $warning = trim(($warning ? $warning . ' ' : '') . 'Not sent as a text: ' . $textResult['message']);
+        out(['ok' => true, 'id' => $id, 'delivered' => $delivered, 'warning' => $warning, 'texted' => $textResult['status'] ?? null]);
     }
 
     /* ---------- Incident & safety log (v2.54 parity) ---------- */

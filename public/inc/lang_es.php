@@ -2,6 +2,7 @@
 // Spanish translations for the public-facing pages (referral form, consent,
 // survey, client portal). Keys are the exact English source strings.
 return [
+    'You may text me at this number about my appointments (reply STOP at any time)' => 'Pueden enviarme mensajes de texto a este número sobre mis citas (puedo responder STOP en cualquier momento)',
     'Breadcrumb' => 'Ruta de navegación',
     'Go to main menu' => 'Ir al menú principal',
     'Privacy notice' => 'Aviso de privacidad',

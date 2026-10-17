@@ -91,4 +91,6 @@ file_put_contents($stateFile, json_encode($state), LOCK_EX);
 // completed and the database answered (an unreachable database leaves it stale,
 // which is the point). Never a reason for the watchdog itself to fail.
 try { if (!isset($problems['db'])) set_setting('heartbeat_watchdog', date('c')); } catch (Throwable $e) {}
+// Texts held for the client's 8 a.m. go out within ten minutes of it (4.17.0): this job runs every ten minutes.
+try { if (!isset($problems['db']) && function_exists('sms_enabled') && sms_enabled()) sms_flush_held(); } catch (Throwable $e) {}
 echo $problems ? count($problems) . " problem(s), {$alerted} alert(s) sent: " . implode(' | ', $problems) . "\n" : "All healthy.\n";

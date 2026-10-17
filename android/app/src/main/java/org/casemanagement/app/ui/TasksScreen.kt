@@ -204,6 +204,9 @@ fun ThreadScreen(api: Api, clientId: Int) {
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
+    var byText by rememberSaveable { mutableStateOf(false) }
+    // One key per message typed, so a send retried after a lost reply is posted (and texted) once.
+    var sendKey by rememberSaveable { mutableStateOf(java.util.UUID.randomUUID().toString()) }
     val scope = rememberCoroutineScope()
     Show(state, "the conversation") { r ->
         Page {
@@ -211,15 +214,22 @@ fun ThreadScreen(api: Api, clientId: Int) {
             Choice("With", channel, listOfNotNull("client" to "The client", r.str("counselor_name")?.let { "counselor" to "The counselor, $it" })) { channel = it }
             r.optJSONArray("messages").objects().forEach { m ->
                 val who = m.str("staff_name") ?: when (m.optString("sender")) { "client" -> r.optString("client_name"); "counselor" -> r.str("counselor_name") ?: "The counselor"; else -> "Staff" }
-                ListRow(listOf(who + ", " + whenText(m.str("created_at")), m.optString("body")))
+                ListRow(listOf(who + ", " + whenText(m.str("created_at")) + (if (m.str("via") == "text") ", by text" else ""), m.optString("body")))
             }
             NoticeText(notice)
             Field("Your message", text, { text = it }, singleLine = false, minLines = 3)
+            // Texts (4.17.0): offered when the client agreed to them; otherwise why not.
+            val textable = channel == "client" && r.optBoolean("text_enabled")
+            if (textable && r.str("text_blocked") == null) Tick("Also send it as a text message", byText) { byText = it }
+            else if (textable) Text("Not by text: " + r.optString("text_blocked"))
             ErrorText(error)
             PrimaryButton("Send", busy = busy, enabled = text.isNotBlank()) {
                 scope.launchSave({ busy = it }, { error = it }) {
-                    val res = api.call("post_message", body = JSONObject().put("client_id", clientId).put("channel", channel).put("body", text.trim()))
+                    val res = api.call("post_message", body = JSONObject().put("client_id", clientId).put("channel", channel).put("body", text.trim())
+                        .put("by_text", byText && channel == "client" && r.str("text_blocked") == null).put("idem_key", sendKey))
                     text = ""
+                    byText = false
+                    sendKey = java.util.UUID.randomUUID().toString()
                     notice = res.str("warning") ?: "Message sent."
                     state.reload()
                 }

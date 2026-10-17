@@ -43,16 +43,24 @@ struct ClientEditSheet: View {
     @State private var a11yNotes = ""
     /// Staff confirmed the unconfirmed client email with the client (sent as email_verified).
     @State private var confirmEmail = false
+    /// Texts (4.17.0): the agreement as the record has it, and how it was given.
+    private let texting: ClientTexting?
+    @State private var smsConsent = false
+    @State private var smsSource = "In person"
+    private static let smsSources = ["In person", "By phone", "In writing", "Referral form", "Client portal"]
     @State private var busy = false
     @State private var error: String?
 
     /// The form is filled from the record before it is first drawn, so it is never shown blank
     /// (and can't be saved with defaults) while the staff list is still loading.
     /// `emailVerified`: the record's email_verified (nil from a server that does not report it).
-    init(existing: ClientInfo?, emailVerified: Bool? = nil,
+    init(existing: ClientInfo?, emailVerified: Bool? = nil, texting: ClientTexting? = nil,
          onSaved: @escaping (_ clientId: Int, _ message: String) -> Void) {
         self.existing = existing
         self.onSaved = onSaved
+        self.texting = texting
+        _smsConsent = State(initialValue: texting?.agreed ?? false)
+        _smsSource = State(initialValue: texting?.source ?? "In person")
         emailUnconfirmed = emailVerified == false
             && !(existing?.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         guard let existing else { return }
@@ -118,7 +126,7 @@ struct ClientEditSheet: View {
          c?.a11yFormat ?? "", c?.a11yPrimaryTech ?? "", c?.a11yContact ?? "", c?.a11yNotes ?? "", "0",
          c?.guardianName ?? "", c?.guardianPhone ?? "", c?.guardianEmail ?? "", c?.vrCaseNumber ?? "", c?.ipeGoal ?? ""]
     }
-    private var hasChanges: Bool { values != Self.values(of: existing) }
+    private var hasChanges: Bool { values != Self.values(of: existing) || smsConsent != (texting?.agreed ?? false) }
     @State private var askingDiscard = false
 
     var body: some View {
@@ -128,6 +136,21 @@ struct ClientEditSheet: View {
                 Section("Client") {
                     CaptionedField(label: "Full name (required)", text: $name, prompt: "Full name")
                     CaptionedField(label: "Phone", text: $phone, keyboard: .phonePad)
+                        // A new number needs the client's agreement again (the server clears it too).
+                        .onChange(of: phone) { new in
+                            if new.trimmingCharacters(in: .whitespaces) != (existing?.phone ?? "").trimmingCharacters(in: .whitespaces) { smsConsent = false }
+                        }
+                    // Texts (4.17.0), as the website's client form: after STOP, only the client's START turns them back on.
+                    if texting?.optedOut == true {
+                        Text(texting?.words ?? "")
+                    } else if !phone.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Toggle("The client agreed to text messages at this number", isOn: $smsConsent)
+                        if smsConsent {
+                            Picker("How they agreed", selection: $smsSource) {
+                                ForEach(Self.smsSources, id: \.self) { Text($0).tag($0) }
+                            }
+                        }
+                    }
                     CaptionedField(label: "Email", text: $email, keyboard: .emailAddress).textInputAutocapitalization(.never)
                     // An address from the public referral form, not yet checked: said in words,
                     // with the confirmation beside it (as the counselor email on the website).
@@ -317,6 +340,10 @@ struct ClientEditSheet: View {
             // stored state (and confirms an address staff typed themselves).
             let emailStaysUnconfirmed = offersEmailConfirmation && !confirmEmail
             if offersEmailConfirmation && confirmEmail { body["email_verified"] = true }
+            if texting?.optedOut != true {
+                body["sms_consent"] = smsConsent && !phone.trimmingCharacters(in: .whitespaces).isEmpty
+                body["sms_consent_source"] = smsSource
+            }
             let result: SaveResult = try await api.call("save_client", body: body)
             // Saving an archived record with an open status re-opens it, as on the website.
             var message = result.unarchived

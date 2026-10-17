@@ -12,6 +12,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_alert_email'])) 
     flash(['now' => 'Urgent alerts will be emailed to you as they happen (at most one email every 15 minutes), with one email a day when you have unread alerts.', 'daily' => 'You will get one email a day when you have unread alerts.', 'off' => 'Alerts will no longer be emailed; they stay in Alerts in the app and on the website.'][$how]);
     redirect('account.php#alerts-h');
 }
+// Your mobile number, and whether urgent alerts are texted to it (4.17.0).
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_mobile'])) {
+    $raw = is_string($_POST['mobile'] ?? null) ? trim($_POST['mobile']) : '';
+    $mobile = $raw === '' ? null : sms_number($raw);
+    if ($raw !== '' && $mobile === null) { keep_input(); keep_field_errors(['mobile' => 'Enter a mobile number such as 515-555-0100, or leave it empty.']); redirect('account.php#mobile-h'); }
+    $alerts = !empty($_POST['alert_sms']) && $mobile !== null ? 1 : 0;
+    db()->prepare('UPDATE users SET mobile = ?, alert_sms = ? WHERE id = ?')->execute([$mobile, $alerts, (int)$user['id']]);
+    audit((int)$user['id'], 'user.mobile', 'user', (int)$user['id'], $alerts ? 'urgent alerts by text on' : 'urgent alerts by text off');
+    flash($mobile === null ? 'Mobile number removed.' : 'Mobile number saved.' . ($alerts ? ' Urgent alerts are texted to it (at most one every 15 minutes, never with client details).' : ''));
+    redirect('account.php#mobile-h');
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_display_controls'])) {
     $visibility = $_POST['display_controls'] ?? null;
     if (!is_string($visibility) || !in_array($visibility, ['show', 'hide'], true)) {
@@ -273,6 +284,15 @@ page_header('My Account', $user, 'account');
         <button type="submit" name="totp_begin" value="1" class="btn btn-secondary">Set up authenticator app</button>
       </form>
     <?php endif; ?>
+
+    <h2 id="mobile-h">Your mobile number</h2>
+    <?php $mq = db()->prepare('SELECT mobile, alert_sms FROM users WHERE id = ?'); $mq->execute([(int)$user['id']]); $mine = $mq->fetch() ?: []; ?>
+    <form method="post" action="account.php" class="stacked" novalidate><?= csrf_field() ?>
+      <div class="field"><label for="mobile">Mobile number <span class="hint">optional; for urgent alerts by text and test texts</span></label>
+        <input type="tel" id="mobile" name="mobile" maxlength="20" autocomplete="tel" value="<?= h(old_in('mobile', (string)($mine['mobile'] ?? ''))) ?>" <?= field_aria('mobile') ?>><?= field_error('mobile') ?></div>
+      <?php if (sms_enabled()): ?><div class="field"><label><input type="checkbox" name="alert_sms" value="1" <?= !empty($mine['alert_sms']) ? 'checked' : '' ?>> Text me when an urgent alert comes in <span class="hint">at most one text every 15 minutes, never with client details</span></label></div><?php endif; ?>
+      <button type="submit" name="save_mobile" value="1" class="btn btn-secondary btn-sm">Save</button>
+    </form>
 
     <h2 id="alerts-h">How alerts reach you</h2>
     <?php $ae = db()->prepare('SELECT alert_email FROM users WHERE id = ?'); $ae->execute([$user['id']]); $alertHow = (string)($ae->fetchColumn() ?: 'off'); ?>

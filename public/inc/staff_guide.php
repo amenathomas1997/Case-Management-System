@@ -96,6 +96,7 @@ if (!function_exists('staff_guide_topics')) {
             'guide-account' => ['How do I change my account and display settings?', []],
             'guide-agreements' => ['How do I sign a staff agreement?', []],
             'guide-staff-training' => ['How do I take staff training or record a credential?', []],
+            'guide-texting' => ['How do I text a client?', []],
             'guide-admin' => ['Administration', [
                 'guide-audit' => 'How do I read the audit log?',
                 'guide-templates' => 'How do I manage templates?',
@@ -768,6 +769,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 
 <?= $sgH(3, 'guide-staff-training') ?>
 <p>When training is waiting for you, your Home page says so. Open My training, choose the training, read it, and answer each question by choosing one answer; then choose Check my answers. If you do not pass, the questions you got wrong are marked, and you can try again at once. If your Home page says client records open once you finish, sign the agreements and pass the training it names: client records open as soon as you do. Keep your certifications (such as CPR) under My credentials in My Account, with their expiry dates; you are reminded before one expires. In the phone apps these are under More.</p>
+
+<?= $sgH(3, 'guide-texting') ?>
+<p>A client is texted only if they agreed. Ask them, then on their edit page tick "The client agreed to text messages at this number" next to their phone, choose how they agreed, and save; changing the number clears the agreement until you record it again. They then get session reminders they can answer (C confirms, R and X come to you as requests), notices when a session is booked, moved or cancelled, and a text when you assign homework. To text a message, open Messages, write to the client and tick "Also send it as a text message"; their texted replies appear in the same conversation, marked "by text". Texts sent after 8 p.m. their time go at 8 a.m. If a client replies STOP, only their own START turns texts back on. For urgent alerts by text, add your mobile under My Account. In the phone apps, the same choices are on the client's edit screen and under a conversation's message box.</p>
 
 <?= $sgH(3, 'guide-account') ?>
 <p>Open My Account. It holds only your own settings. Administrators also find an Administration link near the top; agency-wide settings are there (see <a href="#guide-admin">Administration</a>). Press H to move between the sections:</p>

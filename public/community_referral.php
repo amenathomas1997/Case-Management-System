@@ -296,6 +296,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 page_lang() === 'es' ? 'es' : 'en',
             ]);
             $refId = (int)$pdo->lastInsertId();
+            // Their own agreement to texts (4.17.0), only from someone referring themselves with a phone number.
+            if ($role === 'self' && !empty($_POST['sms_ok']) && sms_number((string)$clientPhone) !== null) $pdo->prepare('UPDATE referrals SET sms_ok = 1 WHERE id = ?')->execute([$refId]);
             // The state the person lives in (4.1.0), carried to the client with its time zone.
             if ($askPricing && isset(VR_CASE_ANSWERS[$vrCase])) $pdo->prepare('UPDATE referrals SET vr_case_open = ? WHERE id = ?')->execute([$vrCase, $refId]);
             if (($refState = us_state(is_string($_POST['client_state'] ?? null) ? $_POST['client_state'] : null)) !== null) {
@@ -501,6 +503,8 @@ if ($errors): ?>
         <input type="tel" id="referrer_phone" name="referrer_phone" maxlength="40" autocomplete="tel" value="<?= $old('referrer_phone') ?>" <?= isset($errors['referrer_contact']) ? 'aria-invalid="true" aria-describedby="err-referrer_contact"' : $aria('referrer_phone') ?>>
         <?= $err('referrer_phone') ?>
       </div>
+      <?php // 4.17.0: someone referring themselves can agree to texts about their appointments. ?>
+      <div class="field" data-role="self"><label><input type="checkbox" name="sms_ok" value="1" <?= !empty($_POST['sms_ok']) ? 'checked' : '' ?>> <?= t('You may text me at this number about my appointments (reply STOP at any time)') ?></label></div>
       <div class="field">
         <label for="referrer_email"><?= t('Your email') ?></label>
         <input type="email" id="referrer_email" name="referrer_email" maxlength="190" autocomplete="email" value="<?= $old('referrer_email') ?>" <?= isset($errors['referrer_contact']) ? 'aria-invalid="true" aria-describedby="err-referrer_contact"' : $aria('referrer_email') ?>>

@@ -316,6 +316,10 @@ CREATE TABLE `clients` (
   `vision_status` varchar(40) DEFAULT NULL,
   `vision_onset_age` tinyint(3) unsigned DEFAULT NULL,
   `archived_at` datetime DEFAULT NULL,
+  `sms_consent_at` datetime DEFAULT NULL,
+  `sms_consent_source` varchar(60) DEFAULT NULL,
+  `sms_consent_by` int(10) unsigned DEFAULT NULL,
+  `sms_opted_out_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_assigned_to` (`assigned_to`),
   KEY `idx_status` (`status`),
@@ -724,6 +728,7 @@ CREATE TABLE `homework` (
   `client_reported_at` datetime DEFAULT NULL,
   `created_by` int(10) unsigned DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `sms_notified` tinyint(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   KEY `track_id` (`track_id`),
   CONSTRAINT `homework_ibfk_1` FOREIGN KEY (`track_id`) REFERENCES `training_tracks` (`id`) ON DELETE CASCADE
@@ -866,9 +871,12 @@ CREATE TABLE `messages` (
   `body` text NOT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `read_at` datetime DEFAULT NULL,
+  `via` varchar(10) NOT NULL DEFAULT 'portal',
+  `idem_key` char(36) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_thread` (`client_id`,`channel`,`created_at`),
   KEY `idx_unread` (`channel`,`read_at`),
+  KEY `idx_idem` (`staff_id`,`idem_key`),
   CONSTRAINT `fk_msg_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
@@ -1002,6 +1010,7 @@ CREATE TABLE `referrals` (
   `consent_confirmed` tinyint(1) NOT NULL DEFAULT 0,
   `preets_services` varchar(255) DEFAULT NULL,
   `preferred_language` varchar(5) NOT NULL DEFAULT 'en',
+  `sms_ok` tinyint(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   KEY `idx_status` (`status`),
   KEY `idx_assigned_to` (`assigned_to`),
@@ -1064,6 +1073,9 @@ CREATE TABLE `scheduled_sessions` (
   `series_uid` char(32) DEFAULT NULL,
   `ics_sequence` smallint(5) unsigned NOT NULL DEFAULT 0,
   `checked_in_at` datetime DEFAULT NULL,
+  `sms_reminder_sent` tinyint(1) NOT NULL DEFAULT 0,
+  `client_reply` varchar(20) DEFAULT NULL,
+  `client_reply_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `client_id` (`client_id`),
   KEY `idx_user_start` (`user_id`,`start_at`),
@@ -1110,6 +1122,32 @@ CREATE TABLE `settings` (
   `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `sms_log`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `sms_log` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `direction` varchar(3) NOT NULL,
+  `client_id` int(10) unsigned DEFAULT NULL,
+  `user_id` int(10) unsigned DEFAULT NULL,
+  `session_id` int(10) unsigned DEFAULT NULL,
+  `phone` varchar(20) NOT NULL,
+  `body` text NOT NULL,
+  `purpose` varchar(20) NOT NULL,
+  `status` varchar(20) NOT NULL,
+  `provider_sid` varchar(64) DEFAULT NULL,
+  `error` varchar(255) DEFAULT NULL,
+  `send_after` datetime DEFAULT NULL,
+  `sent_by` int(10) unsigned DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `provider_sid` (`provider_sid`),
+  KEY `client` (`client_id`,`created_at`),
+  KEY `held` (`status`,`send_after`),
+  CONSTRAINT `fk_sms_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `smart_goals`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -1400,6 +1438,8 @@ CREATE TABLE `users` (
   `privacy_training_on` date DEFAULT NULL,
   `alert_email` varchar(10) NOT NULL DEFAULT 'off',
   `exit_requested_at` datetime DEFAULT NULL,
+  `mobile` varchar(20) DEFAULT NULL,
+  `alert_sms` tinyint(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   UNIQUE KEY `email` (`email`),
   KEY `idx_cal_token` (`cal_token`),

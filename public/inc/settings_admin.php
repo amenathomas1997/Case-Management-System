@@ -35,6 +35,10 @@ const CONFIG_OVERRIDES = [
     'app.update_url' => ['Where to check for new versions (an https address, or off)', 'url', 'updates'],
     // Online meetings (4.10.0): the apps registered with Zoom and Microsoft, which each staff
     // member then connects to their own account on My Account.
+    // Text messages (4.17.0): the Twilio account that sends them.
+    'sms.account_sid' => ['Twilio Account SID', 'text', 'texting'],
+    'sms.auth_token' => ['Twilio Auth Token', 'secret', 'texting'],
+    'sms.from' => ['Sending number (such as +15155550100) or Messaging Service SID (starts MG)', 'text', 'texting'],
     'meet.zoom_client_id' => ['Zoom app Client ID', 'text', 'meetings'],
     'meet.zoom_client_secret' => ['Zoom app Client secret', 'secret', 'meetings'],
     'meet.ms_tenant' => ['Microsoft directory (tenant) ID, or organizations', 'text', 'meetings'],
@@ -132,7 +136,7 @@ function brand_rgb(string $key = 'color_dark'): array {
 /* ---------- Safe upgrades (3.0.54) ---------- */
 
 /** The database version this code needs: the newest migration it ships. */
-const DB_SCHEMA_VERSION = '4.16.0';
+const DB_SCHEMA_VERSION = '4.17.0';
 
 /** The database version recorded by the migrations, or null for a database from before 3.0.54. */
 function db_schema_version(): ?string {

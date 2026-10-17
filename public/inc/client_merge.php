@@ -31,6 +31,8 @@ function move_client_records(PDO $pdo, int $keepId, int $mergeId): void {
     foreach (CLIENT_MERGE_TABLES as $table) {
         $pdo->prepare("UPDATE `$table` SET client_id = ? WHERE client_id = ?")->execute([$keepId, $mergeId]);
     }
+    // A STOP on either record holds for the merged one (4.17.0): texts never resume after it.
+    $pdo->prepare('UPDATE clients k JOIN clients m ON m.id = ? SET k.sms_opted_out_at = COALESCE(k.sms_opted_out_at, m.sms_opted_out_at) WHERE k.id = ?')->execute([$mergeId, $keepId]);
     // A privacy incident that lists both records keeps one entry (3.0.38); the duplicate's
     // own entries move to the kept record.
     try {
@@ -49,7 +51,7 @@ const CLIENT_MERGE_TABLES = [
     'referrals', 'tasks', 'client_scored_assessments', 'access_bookings',
     'client_competency', 'device_requests', 'equipment_reservations',
     'portal_requests', 'worksite_assessments', 'at_records', 'client_closures',
-    'client_note_revisions', 'client_releases', 'amendment_requests', 'closure_followups', 'incoming_authorizations',
+    'client_note_revisions', 'client_releases', 'amendment_requests', 'closure_followups', 'incoming_authorizations', 'sms_log',
 ];
 
 // Blank profile fields on the kept record that the duplicate can fill. Each fill

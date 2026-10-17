@@ -339,7 +339,9 @@ struct ClientDetail: Decodable {
     let notesTotal: Int?
     /// Releases of information, newest first ([] from an older server).
     var releases: [ClientRelease] = []
-    private enum CodingKeys: String, CodingKey { case client, notes, tracks, notesTotal, releases }
+    /// Whether the client agreed to texts (4.17.0; nil from an older server).
+    var texting: ClientTexting?
+    private enum CodingKeys: String, CodingKey { case client, notes, tracks, notesTotal, releases, texting }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         client = try c.decode(ClientInfo.self, forKey: .client)
@@ -347,7 +349,18 @@ struct ClientDetail: Decodable {
         tracks = try c.decode([Track].self, forKey: .tracks)
         notesTotal = try? c.decodeIfPresent(Int.self, forKey: .notesTotal)
         releases = (try? c.decodeIfPresent([ClientRelease].self, forKey: .releases)) ?? []
+        texting = try? c.decodeIfPresent(ClientTexting.self, forKey: .texting)
     }
+}
+
+/// A client's agreement to text messages (4.17.0), as the website's client page says it.
+struct ClientTexting: Decodable {
+    let enabled: Bool
+    let agreed: Bool
+    let optedOut: Bool
+    let source: String?
+    let words: String
+    let blocked: String?
 }
 
 struct Session: Decodable, Identifiable {
@@ -522,12 +535,17 @@ struct ThreadMessage: Decodable, Identifiable {
     let body: String
     let createdAt: String
     let staffName: String?
+    /// "text" when it went (or came) by text message (4.17.0).
+    let via: String?
 }
 struct ThreadResponse: Decodable {
     let clientName: String
     let counselorName: String?
     let channel: String
     let messages: [ThreadMessage]
+    /// Texting (4.17.0): set up, and why this client cannot be texted (nil: they can).
+    let textEnabled: Bool?
+    let textBlocked: String?
 }
 
 // MARK: - Incidents (v2.54 parity)

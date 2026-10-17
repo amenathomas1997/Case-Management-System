@@ -42,7 +42,7 @@ function session_move(int $sid, int $start, int $end, int $actor, bool $confirme
     }
     $warnings = session_move_warnings($sess, $start, $end);
     if ($warnings && !$confirmed) return ['error' => null, 'warnings' => $warnings, 'moved' => false];
-    $u = db()->prepare("UPDATE scheduled_sessions SET start_at = ?, end_at = ?, reminder_sent = 0, ics_sequence = ics_sequence + 1 WHERE id = ? AND status = 'Scheduled'");
+    $u = db()->prepare("UPDATE scheduled_sessions SET start_at = ?, end_at = ?, reminder_sent = 0, sms_reminder_sent = 0, client_reply = NULL, client_reply_at = NULL, ics_sequence = ics_sequence + 1 WHERE id = ? AND status = 'Scheduled'");
     $u->execute([date('Y-m-d H:i:s', $start), date('Y-m-d H:i:s', $end), $sid]);
     if ($u->rowCount() !== 1) return ['error' => 'That session changed meanwhile, so it was not moved.', 'warnings' => [], 'moved' => false];
     audit($actor, 'session.move', 'session', $sid, 'client #' . (int)$sess['client_id'] . ': ' . date('Y-m-d H:i', strtotime((string)$sess['start_at']))

@@ -1273,6 +1273,7 @@ if ($hasA11y): ?>
         <p class="hint"><strong>Unverified — confirm before anything is sent.</strong> This address came from the public referral form and has not been confirmed with the client, so no session reminder, outcome survey or portal link goes to it yet. <a href="client_edit.php?id=<?= $id ?>">Confirm it on the edit page</a>.</p>
         <?php endif; ?></dd>
       <dt>Phone</dt><dd><?= tel_link($client['phone'] ?? null) ?></dd>
+      <?php if (sms_enabled()): ?><dt>Text messages</dt><dd><?= h(sms_client_words($client)) ?></dd><?php endif; ?>
       <dt>Address</dt><dd><?= directions_link($client['address'] ?? null) ?></dd>
       <?php if (!empty($client['state']) || client_zone($client)): // 4.1.0 ?>
       <dt>State and time zone</dt><dd><?= h(implode('; ', array_filter([US_STATES[$client['state'] ?? ''] ?? '', ($cz = client_zone($client)) ? zone_difference_text($cz) : '']))) ?></dd>

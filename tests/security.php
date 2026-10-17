@@ -37,14 +37,14 @@ $cells = ['comma, here', 'quote " here', 'backslash\\"quote', "line\nbreak"];
 write_csv_row($csv, $cells); rewind($csv);
 check(fgetcsv($csv, 0, ',', '"', '') === $cells, 'CSV safely round-trips quotes, backslashes, commas and newlines');
 fclose($csv);
-// Product rules: the system never sends text messages and never takes payments,
-// so no SMS gateway or payment processor may appear anywhere in the web app, the
-// scheduled jobs, the installer or the iOS app. A term counts inside identifiers
-// too (send_sms, SmsGateway, StripeClient, twilio_sid): a lower-case spelling must
-// not be part of a longer lower-case word ("mechanisms", "striped" are fine), and
-// a capitalised one may follow a lower-case letter (camelCase: sendSms).
-$productTerms = ['sms', 'twilio', 'nexmo', 'vonage', 'plivo', 'messagebird', 'textmagic', 'clicksend', 'stripe', 'paypal', 'braintree', 'squareup'];
-$alternatives = ['(?i:authorize\.net)', 'PayPal', 'MessageBird', 'TextMagic', 'ClickSend', 'BrainTree', 'SquareUp'];
+// Product rules: the system never takes payments, so no payment processor may appear
+// anywhere in the web app, the scheduled jobs, the installer or the iOS app. (Text
+// messages were allowed on the owner's request in 4.17.0: through Twilio only, from
+// inc/sms.php, checked below.) A term counts inside identifiers too (StripeClient,
+// paypal_id): a lower-case spelling must not be part of a longer lower-case word
+// ("striped" is fine), and a capitalised one may follow a lower-case letter (camelCase).
+$productTerms = ['stripe', 'paypal', 'braintree', 'squareup'];
+$alternatives = ['(?i:authorize\.net)', 'PayPal', 'BrainTree', 'SquareUp'];
 foreach ($productTerms as $term) {
     $alternatives[] = '(?<![a-z])' . $term;
     $alternatives[] = '(?<![A-Z])' . ucfirst($term);
@@ -73,7 +73,19 @@ foreach (['public', 'cron', 'dist', 'ios'] as $dir) {
         }
     }
 }
-check($found === [], 'No SMS/texting or payment-processor code anywhere' . ($found ? ': ' . implode(', ', $found) : ''));
+check($found === [], 'No payment-processor code anywhere' . ($found ? ': ' . implode(', ', $found) : ''));
+// Texts go out through one place: only inc/sms.php calls the texting service, and no other
+// texting service is used.
+$smsCallers = [];
+foreach (['public', 'cron'] as $dir) {
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator(dirname(__DIR__) . '/' . $dir, FilesystemIterator::SKIP_DOTS)) as $file) {
+        if (!str_ends_with($file->getFilename(), '.php')) continue;
+        $text = (string)file_get_contents($file->getPathname());
+        $rel = substr($file->getPathname(), strlen(dirname(__DIR__)) + 1);
+        if ((str_contains($text, 'api.twilio.com') && $rel !== 'public/inc/sms.php') || preg_match('/\b(?:nexmo|vonage|plivo|messagebird|textmagic|clicksend)\b/i', $text)) $smsCallers[] = $rel;
+    }
+}
+check($smsCallers === [], 'Texts are sent only from inc/sms.php, through Twilio' . ($smsCallers ? ': ' . implode(', ', $smsCallers) : ''));
 // Returning to a page after signing in. These helpers live in inc/bootstrap.php,
 // which cannot load without the configuration and database, so just these
 // functions are taken from it.

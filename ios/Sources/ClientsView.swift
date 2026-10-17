@@ -498,7 +498,7 @@ struct ClientDetailView: View {
         }
         .sheet(isPresented: $showingEditClient, onDismiss: announceSheetResult) {
             if let client = detail?.client {
-                ClientEditSheet(existing: client, emailVerified: emailVerified) { _, message in
+                ClientEditSheet(existing: client, emailVerified: emailVerified, texting: detail?.texting) { _, message in
                     confirmation = message; sheetResult = message
                     Task { await reload() }
                 }

@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.16.0';
+const APP_VERSION = '4.17.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -266,6 +266,15 @@ function notify_user(int $userId, string $message, ?string $link = null, bool $u
     // who chose "at once" (4.0.0): never the alert's words, which can name a client, only a
     // sign-in link, and at most one such email every 15 minutes.
     if (!$urgent) return;
+    // By text too, to a staff member who chose it (4.17.0): never the alert's words, at most every 15 minutes.
+    try {
+        $tkey = 'alert_texted_' . $userId;
+        if (function_exists('sms_to_staff') && (($last = setting($tkey)) === null || strtotime($last) <= time() - 900)) {
+            if (sms_to_staff($userId, 'New urgent alert in ' . (brand('short') ?: cfg('name')) . '. Sign in to read it: ' . cfg('base_url') . '/notifications.php', 'alert')) set_setting($tkey, date('c'));
+        }
+    } catch (Throwable $e) {
+        error_log('notify_user alert text: ' . get_class($e));
+    }
     try {
         $u = db()->prepare("SELECT email, alert_email FROM users WHERE id = ? AND is_active = 1");
         $u->execute([$userId]);
@@ -1740,3 +1749,5 @@ require_once __DIR__ . '/staff_agreements.php';
 require_once __DIR__ . '/staff_training.php';
 // Staff credentials with expiry dates (4.16.0).
 require_once __DIR__ . '/staff_credentials.php';
+// Text messages: reminders, replies, two-way messages, staff alerts (4.17.0).
+require_once __DIR__ . '/sms.php';

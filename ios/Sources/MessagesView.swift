@@ -184,6 +184,10 @@ struct MessageThreadView: View {
     /// with: sending the same text again reuses the key, so a server that recognises it does not
     /// save the message twice (changed text is a new message with a new key).
     @State private var unconfirmed: [String: (text: String, key: String)] = [:]
+    /// Texts (4.17.0): whether this client can be texted, and staff's choice to also text this reply.
+    @State private var textEnabled = false
+    @State private var textBlocked: String?
+    @State private var byText = false
 
     /// `startChannel` is the conversation shown first ("client" or "counselor").
     init(clientId: Int, clientName: String, startChannel: String = "client", drafts: Binding<[String: String]>? = nil) {
@@ -269,6 +273,14 @@ struct MessageThreadView: View {
                 }
             }
 
+            if channel == "client" && textEnabled {
+                if textBlocked == nil {
+                    Toggle("Also send it as a text message", isOn: $byText).padding(.horizontal)
+                } else {
+                    Text("Not by text: \(textBlocked ?? "")").font(.callout).foregroundStyle(Color.secondaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal)
+                }
+            }
             HStack(spacing: 8) {
                 // Both the field and the button name who the message goes to.
                 TextField(channel == "counselor" ? "Message to counselor…" : "Message to client…", text: draft, axis: .vertical).lineLimit(1...4)
@@ -305,7 +317,7 @@ struct MessageThreadView: View {
                     .background(mine ? Color.brandFill : Color(.secondarySystemBackground),
                                 in: RoundedRectangle(cornerRadius: 12))
                 // Caption size in the 7:1 secondary-text colour (caption2 in system secondary was about 3.4:1).
-                Text("\(senderLabel(m)) · \(formatDateTime(m.createdAt))")
+                Text("\(senderLabel(m))\(m.via == "text" ? ", by text" : "") · \(formatDateTime(m.createdAt))")
                     .font(.caption).foregroundStyle(Color.secondaryText)
             }
             if !mine { Spacer(minLength: 40) }
@@ -313,7 +325,7 @@ struct MessageThreadView: View {
         .id(m.id)
         // One element per message, spoken sender first.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(senderLabel(m)): \(m.body)")
+        .accessibilityLabel("\(senderLabel(m))\(m.via == "text" ? ", by text" : ""): \(m.body)")
         .accessibilityValue(formatDateTime(m.createdAt))
         .accessibilityFocused($focusedMessage, equals: m.id)
     }
@@ -336,6 +348,8 @@ struct MessageThreadView: View {
             guard requested == channel else { return }   // the channel changed while this was loading
             messages = r.messages
             counselorName = r.counselorName
+            textEnabled = r.textEnabled ?? false
+            textBlocked = r.textBlocked
             loaded = true
             guard focusNewest else { return }
             if let newest = messages.last?.id {
@@ -359,7 +373,9 @@ struct MessageThreadView: View {
         unconfirmed[target] = (text: text, key: key)
         do {
             let r: PostMessageResponse = try await api.call("post_message",
-                body: ["client_id": clientId, "channel": target, "body": text, "idem_key": key])
+                body: ["client_id": clientId, "channel": target, "body": text, "idem_key": key,
+                       "by_text": target == "client" && byText && textEnabled && textBlocked == nil])
+            byText = false
             unconfirmed[target] = nil
             if draftText(target) == text { setDraft(target, "") }
             await load()
@@ -369,6 +385,10 @@ struct MessageThreadView: View {
                 let message = r.warning ?? "Message saved, but \(who) no active portal link, so it cannot be read yet."
                 if target == channel { notice = message }
                 announce(message)
+            } else if let warning = r.warning {
+                // Sent, with something to know (a text held until 8 a.m., or one that could not go).
+                if target == channel { notice = warning }
+                announce("Message sent. " + warning)
             } else {
                 announce("Message sent")
             }

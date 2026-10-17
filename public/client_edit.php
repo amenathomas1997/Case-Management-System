@@ -199,6 +199,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->prepare('UPDATE clients SET state=?, time_zone=? WHERE id=?')->execute([...$placeVals, (int)$client['id']]);
                 // A portal link already emailed to the old address stops working when
                 // the address changes: it may belong to someone else now.
+                // Texts (4.17.0): the agreement as recorded here; a new number needs it again.
+                $smsNote = sms_consent_save((int)$client['id'], !empty($_POST['sms_consent']), (string)($_POST['sms_consent_source'] ?? ''), (string)($client['phone'] ?? ''), (int)$user['id']);
                 if (trim((string)($client['email'] ?? '')) !== '' && strcasecmp((string)($emailIn ?? ''), trim((string)$client['email'])) !== 0) {
                     $pr = $pdo->prepare('DELETE FROM portal_tokens WHERE client_id = ?');
                     $pr->execute([(int)$client['id']]);
@@ -317,6 +319,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 . ($portalRevoked > 0 ? ' The email address changed, so the portal link sent to the old address was turned off. Send a new portal link when the client needs one.' : '')
                 . ($redraftedInvoices > 0 ? ' ' . $redraftedInvoices . ' draft invoice' . ($redraftedInvoices === 1 ? ' now bills' : 's now bill') . ' the counselor as entered here.' : '')
                 . $ageNote
+                . (($smsNote ?? null) ? ' ' . $smsNote : '')
                 . ($status === 'Active Training' && $client['status'] !== 'Active Training' && ($an = active_without_authorization((int)$client['id'])) ? ' ' . $an : ''));
             redirect('client.php?id=' . (int)$client['id']);
         } else {
@@ -334,11 +337,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             db()->prepare('UPDATE clients SET vision_status=?, vision_onset_age=? WHERE id=?')->execute([...$visionVals, $newId]);
             db()->prepare('UPDATE clients SET state=?, time_zone=? WHERE id=?')->execute([...$placeVals, $newId]);
             web_once_set($clientKey, $newId);
+            $smsNote = sms_consent_save($newId, !empty($_POST['sms_consent']), (string)($_POST['sms_consent_source'] ?? ''), null, (int)$user['id']);
             record_status_change($newId, null, $status, $user['id'], 'Client created');
             on_hold_save($newId, $status, '', trim((string)($_POST['status_note'] ?? '')), $holdUntil);
             if ($closing) client_closure_record($newId, $status, $closureData, (int)$user['id']);
             audit($user['id'], 'client.create', 'client', $newId, $name);
-            flash('Client created.' . $ageNote);
+            flash('Client created.' . $ageNote . (($smsNote ?? null) ? ' ' . $smsNote : ''));
             redirect('client.php?id=' . $newId);
         }
     }
@@ -388,6 +392,14 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
     <?php endif; ?>
     <div class="field"><label for="phone">Phone</label>
       <input type="tel" id="phone" name="phone" value="<?= $v('phone') ?>" <?= field_aria('phone') ?>><?= field_error('phone') ?></div>
+    <?php // Text messages (4.17.0): the client's agreement, for this number. ?>
+    <?php if ($client && !empty($client['sms_opted_out_at'])): ?>
+    <p>Text messages: <?= h(sms_client_words($client)) ?></p>
+    <?php else: $smsOn = $src !== null ? $raw('sms_consent') !== null : (bool)($client['sms_consent_at'] ?? false); ?>
+    <div class="field"><label><input type="checkbox" name="sms_consent" value="1" <?= $smsOn ? 'checked' : '' ?>> The client agreed to text messages at this number <span class="hint">reminders and notices about their sessions; they can reply STOP at any time<?= $client && !empty($client['sms_consent_at']) ? '. ' . h(sms_client_words($client)) : '' ?></span></label></div>
+    <div class="field"><label for="sms_consent_source">How they agreed</label>
+      <select id="sms_consent_source" name="sms_consent_source"><?= select_options(SMS_CONSENT_SOURCES, $raw('sms_consent_source') ?? $client['sms_consent_source'] ?? 'In person') ?></select></div>
+    <?php endif; ?>
     <div class="field"><label for="address">Address</label>
       <input type="text" id="address" name="address" value="<?= $v('address') ?>" <?= field_aria('address') ?>><?= field_error('address') ?></div>
     <div class="field"><label for="state">State</label>

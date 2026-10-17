@@ -184,6 +184,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $isCounselor ? $ref['counselor_phone'] : null, $isCounselor ? $ref['counselor_agency'] : null,
         ]);
         $clientId = (int)db()->lastInsertId();
+        if (!empty($ref['sms_ok'])) db()->prepare("UPDATE clients SET sms_consent_at = ?, sms_consent_source = 'Referral form' WHERE id = ?")->execute([$ref['created_at'], $clientId]);
         apply_referral_language($clientId, $ref);
         client_apply_state($clientId, $ref['client_state'] ?? null);   // 4.1.0: their state and its time zone   // Spanish referral form → Spanish client emails
         if (!empty($ref['guardian_name'])) {
