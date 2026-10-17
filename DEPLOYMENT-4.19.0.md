@@ -62,3 +62,15 @@ The owner asked for all the production-readiness work (2026-10-17), and for a de
   - the API saving state outside the transaction
   - missing-key safety in the error summary
   - three doc claims corrected
+
+## Deployed
+
+2026-10-17 14:52 CT with `.audit_work/make_deploy.sh 4.18.0 4.19.0` and its deploy.sh, after CI passed all three jobs on eb524a2. Every replaced file matched 4.18.0 first. The website, cron folder and database were backed up to /home/cmsuser/casemanagement_private/deploy-4.19.0-20261017-145212. There was no database change. Every installed file matches the release. health.php, updates.json and the sign-in page report 4.19.0.
+
+Published as the GitHub release v4.19.0 (latest). It carries:
+- the install bundle, which now includes restore.php and the four documents
+- the signed update package, verified with the built-in key
+
+A site on 4.18.0 with Settings, Updates set to github can now install 4.19.0 with the button. This is the first real one-button update path.
+
+Also checked on the Android emulator: an older client with no state shows "State, not recorded yet". Choosing Iowa and saving stored IA.
