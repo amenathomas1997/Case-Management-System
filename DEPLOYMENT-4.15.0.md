@@ -61,3 +61,13 @@ Checks before commit:
 - **Unknown apps** were labelled "iPhone app", and the user agent wasn't stored.
 - **One query per person** on the admin and Compliance pages.
 - **The iPhone signed copy** showed a raw timestamp.
+
+## Deployed 2026-10-17 11:45 CT
+From 4.14.0 with .audit_work/deploy-4.15.0: 16 files at 373499f.
+- mig_4.15.0.sql ran (5 statements), and the three new tables are present.
+- Production files matched 4.14.0 before install and match 4.15.0 after; .htaccess unchanged.
+- Smoke checks passed, and health reports 4.15.0. CI passed all three jobs: PHP, Android and iOS.
+- The starting confidentiality agreement is off on the live site until the owner edits and turns it on.
+- The phone apps need their 4.15.0 builds (TestFlight, Google Play) to show My agreements. The website works now.
+
+Backups: /home/cmsuser/casemanagement_private/deploy-4.15.0-20261017-114535.
