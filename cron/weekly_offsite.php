@@ -12,7 +12,7 @@ if (PHP_SAPI !== 'cli') exit('CLI only.');
 // repository layout. Nothing needs editing here for a different install.
 foreach ([
     is_file(__DIR__ . '/cron_config.php') ? (string)(require __DIR__ . '/cron_config.php') : '',
-    '/home/cmsuser/public_html/casemanagement/inc',
+    dirname(__DIR__, 2) . '/public_html/casemanagement/inc',
     dirname(__DIR__) . '/public/inc',
 ] as $inc) {
     $inc = rtrim($inc, '/');

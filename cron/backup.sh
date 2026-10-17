@@ -1,25 +1,34 @@
 #!/bin/bash
 # Nightly CMS database backup with 30-day retention. Cron: 15 2 * * *
 #
-# Site settings. The defaults below are the production values, so this script
-# runs unchanged there. Any other install sets its own values in an optional
-# backup.conf beside this script (plain shell lines such as
+# Site settings. With this script in the private directory's cron/ folder (as the
+# installer sets it up), it needs none: the private directory is the folder above
+# it and the database is the one named in its config.php. Anything else is set in
+# an optional backup.conf beside this script (plain shell lines such as
 # CMS_PRIVATE_DIR='/home/you/cms_private') or in the cron environment, so this
 # file never needs editing:
 #   CMS_PRIVATE_DIR  private directory holding uploads/ and backups/
-#   CMS_DB_NAME      database to dump
+#   CMS_DB_NAME      database to dump (default: the dbname in config.php)
 #   CMS_DB_CNF       option file with [client] user= / password= / host=
 #                    (default: db.cnf inside the private directory, chmod 600)
 set -euo pipefail
 CONF="$(cd "$(dirname "$0")" && pwd)/backup.conf"
 if [ -f "$CONF" ]; then . "$CONF"; fi
-DEFAULT_PRIVATE_DIR=/home/cmsuser/casemanagement_private
-if [ -z "${CMS_PRIVATE_DIR:-}" ] && [ ! -d "$DEFAULT_PRIVATE_DIR" ]; then
+DEFAULT_PRIVATE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -z "${CMS_PRIVATE_DIR:-}" ] && [ ! -f "$DEFAULT_PRIVATE_DIR/config.php" ]; then
   echo "backup.sh: no settings found. Create $CONF with the lines CMS_PRIVATE_DIR='/path/to/private', CMS_DB_NAME='database' and CMS_DB_CNF='/path/to/private/db.cnf' (the installer's success page shows the exact content)." >&2
   exit 1
 fi
 PRIVATE_DIR="${CMS_PRIVATE_DIR:-$DEFAULT_PRIVATE_DIR}"
-DB_NAME="${CMS_DB_NAME:-cms_db}"
+DB_NAME="${CMS_DB_NAME:-}"
+if [ -z "$DB_NAME" ] && [ -f "$PRIVATE_DIR/config.php" ]; then
+  # Read from the DSN text itself, so cron needs no php on its PATH.
+  DB_NAME="$(grep -o 'dbname=[A-Za-z0-9_]*' "$PRIVATE_DIR/config.php" | head -n 1 | cut -d= -f2 || true)"
+fi
+if [ -z "$DB_NAME" ]; then
+  echo "backup.sh: no database name found. Add CMS_DB_NAME='database' to $CONF." >&2
+  exit 1
+fi
 DB_CNF="${CMS_DB_CNF:-$PRIVATE_DIR/db.cnf}"
 # watchdog.php and weekly_offsite.php look for dumps in <private>/backups.
 BACKUP_DIR="$PRIVATE_DIR/backups"

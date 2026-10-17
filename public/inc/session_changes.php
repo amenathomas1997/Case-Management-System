@@ -93,7 +93,7 @@ function session_cancel_many(array $ids, int $actor, string $what): int {
 
 /**
  * Tell the session's instructor (when someone else made the change) with a calendar
- * update for their invite (cms-session-<id>). The first name only, as elsewhere.
+ * update for their invite (ics_uid('session', id)). The first name only, as elsewhere.
  */
 function session_tell_instructor(int $sid, string $what, int $actor, ?string $oldStart): void {
     try {
@@ -105,7 +105,7 @@ function session_tell_instructor(int $sid, string $what, int $actor, ?string $ol
         $first = preg_split('/\s+/u', trim((string)$s['client_name']))[0] ?? '';
         $st = strtotime((string)$s['start_at']); $en = strtotime((string)$s['end_at']);
         $host = parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost';
-        $ics = build_ics('cms-session-' . $sid . '@' . $host, 'AT Training: ' . $first, 'Training session with ' . $first . ".\nDetails: " . cfg('base_url') . '/schedule.php#s-' . $sid,
+        $ics = build_ics(ics_uid('session', $sid), 'AT Training: ' . $first, 'Training session with ' . $first . ".\nDetails: " . cfg('base_url') . '/schedule.php#s-' . $sid,
             (string)($s['location'] ?? ''), $st, $en, (string)cfg('mail_from'), (string)$s['email']);
         if ($what === 'cancelled') $ics = str_replace(["METHOD:REQUEST", "STATUS:CONFIRMED"], ["METHOD:CANCEL", "STATUS:CANCELLED"], $ics);
         $ics = str_replace("DTSTAMP:", 'SEQUENCE:' . ((int)$s['ics_sequence'] + ($what === 'cancelled' ? 1 : 0)) . "\r\nDTSTAMP:", $ics);

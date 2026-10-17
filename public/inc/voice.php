@@ -566,7 +566,7 @@ function voice_execute(string $do, array $in, array $user): array {
                     // The invite is stored by the calendar provider, so it carries what the website's
                     // does: the client's first name and last initial, no notes, and a link to the session.
                     $calName = voice_short_name($clientName);
-                    $ics = build_ics('cms-session-' . $sessionId . '@' . (parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost'),
+                    $ics = build_ics(ics_uid('session', $sessionId),
                         'AT Training: ' . $calName, "Training session with {$calName}.\nDetails: " . cfg('base_url') . '/schedule.php#s-' . $sessionId,
                         $location, $start, $end, cfg('mail_from'), (string)$staff['email']);
                     $inviteSent = send_app_mail_attach((string)$staff['email'],

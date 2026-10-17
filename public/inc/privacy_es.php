@@ -8,8 +8,8 @@ $mailEs = $contact !== '' ? $mail : 'nosotros';
 <h1>Aviso de privacidad</h1>
 <p>Este aviso explica qué información guarda <?= h($org) ?> sobre usted, por qué, con quién se comparte y qué opciones tiene. Cubre este sitio web (incluidos el formulario de referidos, el portal del cliente y el portal del consejero) y la aplicación de iPhone del personal.</p>
 <p>Última actualización: <?= en(fmt_date(PRIVACY_UPDATED)) ?>.</p>
-<?php if ($operator !== '' || $address !== ''): ?>
-<p><?= h($org) ?><?= $operator !== '' ? ' está a cargo de ' . h($operator) : '' ?><?= $address !== '' ? ', ' . h($address) : '' ?>.<?php if ($law !== ''): ?> Cumplimos <?= $law === 'Minnesota privacy law and the federal HIPAA Privacy and Security Rules' ? 'las leyes de privacidad de Minnesota y las Reglas federales de Privacidad y Seguridad de HIPAA' : en($law) ?>.<?php endif; ?></p>
+<?php if ($operator !== '' || $address !== '' || $law !== ''): ?>
+<p><?php if ($operator !== '' || $address !== ''): ?><?= h($org) ?><?= $operator !== '' ? ' está a cargo de ' . h($operator) : '' ?><?= $address !== '' ? ', ' . h($address) : '' ?>.<?php endif; ?><?php if ($law !== ''): ?> Cumplimos <?= brand('privacy_law_es') !== '' ? h(brand('privacy_law_es')) : en($law) ?>.<?php endif; ?></p>
 <?php endif; ?>
 
 <nav aria-labelledby="privacy-toc-h"><h2 id="privacy-toc-h">En esta página</h2>
@@ -22,9 +22,10 @@ $mailEs = $contact !== '' ? $mail : 'nosotros';
   <li><a href="#security">Cómo la protegemos</a></li>
   <li><a href="#keep">Cuánto tiempo la guardamos</a></li>
   <li><a href="#choices">Sus opciones</a></li>
-  <li><a href="#hipaa">Sus derechos bajo HIPAA</a></li>
+<?php if ($hipaa): ?>  <li><a href="#hipaa">Sus derechos bajo HIPAA</a></li><?php endif; ?>
   <li><a href="#iphone">La aplicación de iPhone del personal</a></li>
-  <li><a href="#contact">Preguntas y solicitudes</a></li>
+<?php if ($extraHeading !== ''): ?>  <li><a href="#extra"><?= wording_html('privacy_extra_heading') ?></a></li>
+<?php endif; ?>  <li><a href="#contact">Preguntas y solicitudes</a></li>
 </ul></nav>
 
 <section aria-labelledby="collect"><h2 id="collect">Qué información recopilamos</h2>
@@ -122,6 +123,7 @@ $mailEs = $contact !== '' ? $mail : 'nosotros';
 </ul>
 </section>
 
+<?php if ($hipaa): ?>
 <section aria-labelledby="hipaa"><h2 id="hipaa">Sus derechos bajo HIPAA</h2>
 <p>Tratamos sus registros de servicios y de salud como información de salud protegida bajo las reglas federales de HIPAA. Usted tiene derecho a:</p>
 <ul>
@@ -135,6 +137,7 @@ $mailEs = $contact !== '' ? $mail : 'nosotros';
 <p>Nunca vendemos su información, y le pediremos permiso por escrito antes de usarla para mercadeo o para cualquier fin que no se describa en este aviso. Puede retirar ese permiso en cualquier momento. Si alguna vez ocurre una filtración de su información, se lo diremos.</p>
 <p>Si cree que se violaron sus derechos de privacidad, puede presentar una queja ante nosotros (vea <a href="#contact">Preguntas y solicitudes</a>) o ante el Departamento de Salud y Servicios Humanos de los Estados Unidos, Oficina de Derechos Civiles, en <a href="https://www.hhs.gov/ocr/complaints/" hreflang="en">hhs.gov/ocr/complaints</a> o al 1-800-368-1019. No tomaremos represalias contra usted por presentar una queja.</p>
 </section>
+<?php endif; ?>
 
 <section aria-labelledby="iphone"><h2 id="iphone">La aplicación de iPhone del personal</h2>
 <p>La aplicación de iPhone es para el personal de <?= h($org) ?>. Se conecta solo a este sitio web, por una conexión cifrada.</p>
@@ -146,6 +149,6 @@ $mailEs = $contact !== '' ? $mail : 'nosotros';
 </ul>
 </section>
 
-<section aria-labelledby="contact"><h2 id="contact">Preguntas y solicitudes</h2>
+<?= $extraHtml ?><section aria-labelledby="contact"><h2 id="contact">Preguntas y solicitudes</h2>
 <p>Para hacer una pregunta, pedir una copia o una corrección de su información, o presentar una queja, escriba a <?= $mailEs ?><?= $operator !== '' ? ', o escriba por correo postal a ' . h($operator) . ($address !== '' ? ', ' . h($address) : '') : '' ?>.<?= $operator !== '' ? ' ' . h($operator) . ' atiende las solicitudes de privacidad.' : '' ?> Le responderemos lo antes posible. Si cambiamos este aviso, actualizaremos la fecha que aparece al principio.</p>
 </section>

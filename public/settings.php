@@ -8,7 +8,7 @@ $user = require_login();
 require_perm('admin');
 csrf_check();
 
-const SETTINGS_GROUPS = ['graph' => 'Microsoft Graph email', 'addresses' => 'Email addresses', 'signin' => 'Sign-in and time', 'brand' => 'Branding'];
+const SETTINGS_GROUPS = ['graph' => 'Microsoft Graph email', 'addresses' => 'Email addresses', 'signin' => 'Sign-in and time', 'brand' => 'Branding', 'legal' => 'Privacy notice', 'updates' => 'Updates'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_group'])) {
     $group = is_string($_POST['save_group']) && isset(SETTINGS_GROUPS[$_POST['save_group']]) ? $_POST['save_group'] : '';
@@ -53,6 +53,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_group'])) {
     flash(SETTINGS_GROUPS[$group] . ' saved.' . ($group === 'graph' ? ' Send yourself a test email to check it works.' : ''));
     redirect('settings.php#' . $group . '-h');
 }
+/* The app icon (4.3.0): a square picture made into every size, or back to the built-in ones. */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_icon'])) {
+    if (!empty($_POST['remove_icon'])) {
+        brand_icon_remove();
+        audit($user['id'], 'settings.icon', 'settings', null, 'removed');
+        flash('The built-in icons are back.');
+        redirect('settings.php#icon-h');
+    }
+    $f = $_FILES['icon'] ?? null;
+    $err = !$f || ($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK ? 'Choose a picture to upload.' : brand_icon_save((string)$f['tmp_name']);
+    if ($err !== null) { keep_field_errors(['icon' => $err]); redirect('settings.php#icon-h'); }
+    audit($user['id'], 'settings.icon', 'settings', null, 'uploaded');
+    flash('The app icon is saved. Phones that already added the app to their home screen show it after they add it again.');
+    redirect('settings.php#icon-h');
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test_email'])) {
     $sent = send_app_mail((string)$user['email'], 'Test email from ' . brand('org'), "This is a test email from the Case Management System's Settings page. If you can read it, email is working.\n");
     flash($sent ? 'A test email was sent to ' . $user['email'] . '. Check that it arrived (and not in junk).' : 'The test email could not be sent. Check the Microsoft Graph details.', $sent ? 'success' : 'error');
@@ -78,6 +93,9 @@ $current = function (string $k) {
       <label for="<?= $field ?>"><?= h($label) ?> (<?= $stored !== '' ? 'one is stored here; leave empty to keep it' : (!empty($GLOBALS['CONFIG_FILE']['graph']['client_secret']) ? 'config.php has one; leave empty to keep using it' : 'none set') ?>)</label>
       <input type="password" id="<?= $field ?>" name="<?= $field ?>" autocomplete="off" <?= field_aria($field) ?>><?= field_error($field) ?>
       <?php if ($stored !== ''): ?><label><input type="checkbox" name="<?= $field ?>_clear" value="1"> Remove the stored secret (use config.php's)</label><?php endif; ?>
+      <?php elseif ($kind === 'yesno'): ?>
+      <label for="<?= $field ?>"><?= h($label) ?></label>
+      <select id="<?= $field ?>" name="<?= $field ?>"><option value="">Use config.php (<?= $current($k) === 'yes' ? 'yes' : 'no' ?>)</option><?php foreach (['yes' => 'Yes', 'no' => 'No'] as $yv => $yl): ?><option value="<?= $yv ?>"<?= old_in($field, $stored) === $yv ? ' selected' : '' ?>><?= $yl ?></option><?php endforeach; ?></select><?= field_error($field) ?>
       <?php elseif ($kind === 'timezone'): ?>
       <label for="<?= $field ?>"><?= h($label) ?></label>
       <select id="<?= $field ?>" name="<?= $field ?>"><option value="">Use config.php (<?= h(str_replace('_', ' ', $current($k))) ?>)</option><?php foreach (CONFIG_TIMEZONES as $tz): ?><option value="<?= h($tz) ?>"<?= $stored === $tz ? ' selected' : '' ?>><?= h(str_replace('_', ' ', $tz)) ?></option><?php endforeach; ?></select>
@@ -94,4 +112,14 @@ $current = function (string $k) {
   <?php endif; ?>
 </section>
 <?php endforeach; ?>
+<section class="card" aria-labelledby="icon-h">
+  <h2 id="icon-h">App icon</h2>
+  <p><?= brand_icon_uploaded() ? 'Your own icon is in use.' : 'The built-in icons are in use.' ?> It shows when someone adds the system to their phone's home screen.</p>
+  <form method="post" action="settings.php" enctype="multipart/form-data" class="stacked" novalidate><?= csrf_field() ?>
+    <div class="field"><label for="icon">A square PNG or JPEG picture, at least 512 by 512 pixels</label>
+      <input type="file" id="icon" name="icon" accept="image/png,image/jpeg" <?= field_aria('icon') ?>><?= field_error('icon') ?></div>
+    <?php if (brand_icon_uploaded()): ?><div class="field"><label><input type="checkbox" name="remove_icon" value="1"> Go back to the built-in icons</label></div><?php endif; ?>
+    <button type="submit" name="save_icon" value="1" class="btn btn-primary">Save icon</button>
+  </form>
+</section>
 <?php page_footer();

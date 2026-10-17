@@ -55,6 +55,15 @@ with tempfile.TemporaryDirectory(prefix='cms-cron-test-') as tmp:
     assert '--ignore-table=synthetic_db.settings' in calls[0] and calls[0].endswith(' synthetic_db')
     assert calls[1].endswith(' synthetic_db settings') and "name NOT LIKE '%secret%'" in calls[1] and "name NOT LIKE '%api_key%'" in calls[1]
     print('PASS: The settings table is dumped separately without the stored AI key and Entra client secret')
+    (path / 'config.php').write_text("<?php return ['db' => ['dsn' => 'mysql:host=localhost;dbname=from_config_db', 'user' => 'u', 'pass' => 'p']];\n")
+    dump_log.unlink()
+    named = {k: v for k, v in env.items() if k != 'CMS_DB_NAME'}
+    subprocess.run(['bash', str(script)], env=named, check=True, capture_output=True, text=True)
+    assert dump_log.read_text().splitlines()[0].endswith(' from_config_db')
+    (path / 'config.php').unlink()
+    for extra in (path / 'backups').glob('cms_*.sql.gz'):
+        if extra != files[0]: extra.unlink()
+    print('PASS: Without CMS_DB_NAME the backup dumps the database named in config.php')
     if not Path('/home/cmsuser/casemanagement_private').exists():
         unconfigured = {k: v for k, v in env.items() if not k.startswith('CMS_')}
         result = subprocess.run(['bash', str(script)], env=unconfigured, capture_output=True, text=True)

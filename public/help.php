@@ -105,6 +105,15 @@ if (!$viewer) echo lang_toggle();
   <li>Uncheck Active and save. They are signed out at once, including on their phone.</li>
   <li>Disable their Microsoft 365 account. If you turn on the nightly Microsoft 365 check (Administration, People and permissions), the CMS switches off anyone disabled there by itself.</li>
 </ol>
+<h3 id="admin-own">Making the system your own</h3>
+<p>Everything that names or describes your business is set on screen, under Administration:</p>
+<ul>
+  <li>Settings, Branding: the system's name, your organisation's name, the tagline and colours. Settings, App icon: a square picture for phones' home screens.</li>
+  <li>Settings, Privacy notice: who runs the service, your address, the privacy laws you follow, your host, and whether the HIPAA rights section applies.</li>
+  <li>Public wording: what your organisation does and what a guardian agrees to on the consent form, and an extra section of the privacy notice, in English and Spanish.</li>
+  <li>Pricing rules, Funding agencies, Billing details, Referral form settings and Email templates: your rates, agencies, invoices, referral questions and emails.</li>
+  <li>Settings, Updates: where to check for new versions, or off.</li>
+</ul>
 <h3 id="admin-agency">Taking referrals from a new VR agency</h3>
 <ol>
   <li>Open Administration, Funding agencies, Add an agency. Use the agency's name exactly as it should print on invoices.</li>

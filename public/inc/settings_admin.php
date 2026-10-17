@@ -25,6 +25,14 @@ const CONFIG_OVERRIDES = [
     'brand.tagline' => ['Tagline', 'text', 'brand'],
     'brand.color' => ['Main colour (#RRGGBB)', 'color', 'brand'],
     'brand.color_dark' => ['Dark colour for headers and PDFs (#RRGGBB)', 'color', 'brand'],
+    // The privacy notice (4.3.0): who runs the service, where, the law it follows, its host.
+    'brand.privacy_operator' => ['Who runs the service (a person or organisation)', 'text', 'legal'],
+    'brand.privacy_address' => ['Mailing address', 'text', 'legal'],
+    'brand.privacy_law' => ['The privacy laws you follow (for example, your state\'s law and HIPAA)', 'text', 'legal'],
+    'brand.privacy_law_es' => ['The same laws, in Spanish (for the Spanish notice)', 'text', 'legal'],
+    'brand.privacy_hosting' => ['Who hosts the server', 'text', 'legal'],
+    'brand.hipaa' => ['Show the HIPAA rights section (the laws above are shown either way)', 'yesno', 'legal'],
+    'app.update_url' => ['Where to check for new versions (an https address, or off)', 'url', 'updates'],
 ];
 
 /** The time zones offered (the United States and its territories). */
@@ -70,11 +78,14 @@ function config_override_save(string $k, string $value, int $actor): ?string {
             'otp' => !ctype_digit($value) || (int)$value < 3 || (int)$value > 30,
             'timezone' => !in_array($value, CONFIG_TIMEZONES, true),
             'color' => !preg_match('/^#[0-9a-fA-F]{6}$/', $value),
+            'yesno' => !in_array($value, ['yes', 'no'], true),
+            'url' => $value !== 'off' && (!filter_var($value, FILTER_VALIDATE_URL) || !str_starts_with(strtolower($value), 'https://') || strlen($value) > 190),
             default => mb_strlen($value) > 190,
         };
         if ($bad) return $label . ': ' . match ($kind) {
             'email' => 'enter one email address.', 'minutes' => 'enter a whole number from 5 to 480.', 'otp' => 'enter a whole number from 3 to 30.',
-            'timezone' => 'choose a time zone from the list.', 'color' => 'enter a colour as # and six hex digits, such as #1e3a8a.', default => 'keep it to 190 characters.',
+            'timezone' => 'choose a time zone from the list.', 'color' => 'enter a colour as # and six hex digits, such as #1e3a8a.',
+            'yesno' => 'choose yes or no.', 'url' => 'enter an address starting with https://, or the word off.', default => 'keep it to 190 characters.',
         };
         if ($kind === 'color' && brand_contrast_ratio($value) < 4.5) return $label . ': that colour is too light to read on white (it needs a contrast of at least 4.5 to 1).';
     }
@@ -114,7 +125,7 @@ function brand_rgb(string $key = 'color_dark'): array {
 /* ---------- Safe upgrades (3.0.54) ---------- */
 
 /** The database version this code needs: the newest migration it ships. */
-const DB_SCHEMA_VERSION = '4.2.0';
+const DB_SCHEMA_VERSION = '4.3.0';
 
 /** The database version recorded by the migrations, or null for a database from before 3.0.54. */
 function db_schema_version(): ?string {
@@ -152,7 +163,8 @@ function run_migration_file(string $path): array {
 
 /** Check the vendor's update list. Returns ['ok' => bool, 'latest' => ?string]. Used by Administration and the daily alerts. */
 function update_check(): array {
-    $url = ($GLOBALS['CONFIG']['app']['update_url'] ?? null) ?: 'https://cms.example.org/updates.json';
+    // Off unless set (Settings, Updates, or config.php; the installer fills in the publisher's list).
+    $url = ($GLOBALS['CONFIG']['app']['update_url'] ?? null) ?: 'off';
     if ($url === 'off') return ['ok' => false, 'latest' => null]; // a test or offline copy
     $ch = curl_init($url);
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15]);
@@ -164,4 +176,50 @@ function update_check(): array {
     set_setting('update_notes', mb_substr((string)($m['notes'] ?? ''), 0, 500));
     set_setting('update_checked', date('Y-m-d H:i'));
     return ['ok' => true, 'latest' => (string)$m['latest']];
+}
+
+/* ---------- The app icon (4.3.0) ---------- */
+
+/** Where an uploaded icon is kept, at a size (180, 192, 512 or 1024), or null with no upload folder. */
+function brand_icon_path(int $size): ?string {
+    $dir = (string)(cfg('upload_dir') ?? '');
+    return $dir === '' ? null : rtrim($dir, '/') . '/brand/icon-' . $size . '.png';
+}
+
+/** Whether an administrator's own icon is in use. */
+function brand_icon_uploaded(): bool {
+    $p = brand_icon_path(512);
+    return $p !== null && is_file($p);
+}
+
+/**
+ * Make the app icons from an uploaded square picture (PNG or JPEG, at least 512 pixels).
+ * Returns null when saved, else what is wrong, in words.
+ */
+function brand_icon_save(string $tmpFile): ?string {
+    if (!function_exists('imagecreatefromstring')) return "This server's PHP has no image support (GD), so an icon cannot be made here.";
+    if (@filesize($tmpFile) > 8 * 1024 * 1024) return 'That picture is larger than 8 MB.';
+    $bytes = @file_get_contents($tmpFile);
+    $info = $bytes !== false ? @getimagesizefromstring($bytes) : false;
+    if (!$info || !in_array($info[2], [IMAGETYPE_PNG, IMAGETYPE_JPEG], true)) return 'Choose a PNG or JPEG picture.';
+    [$w, $h] = $info;
+    if ($w < 512 || $h < 512) return 'The picture must be at least 512 by 512 pixels.';
+    if ($w > 4096 || $h > 4096) return 'The picture must be at most 4096 by 4096 pixels.';
+    if (abs($w - $h) > max($w, $h) * 0.05) return 'The picture must be square (as wide as it is tall).';
+    $src = @imagecreatefromstring($bytes);
+    if (!$src) return 'That picture could not be read.';
+    $dir = dirname((string)brand_icon_path(512));
+    if (!is_dir($dir) && !@mkdir($dir, 0750, true)) return 'The icon folder could not be created in the upload folder.';
+    foreach ([180, 192, 512, 1024] as $s) {
+        $im = imagecreatetruecolor($s, $s);
+        imagealphablending($im, false); imagesavealpha($im, true);
+        imagecopyresampled($im, $src, 0, 0, 0, 0, $s, $s, $w, $h);
+        if (!@imagepng($im, (string)brand_icon_path($s))) return 'The icon could not be saved in the upload folder.';
+    }
+    return null;
+}
+
+/** Go back to the built-in icons. */
+function brand_icon_remove(): void {
+    foreach ([180, 192, 512, 1024] as $s) { $p = brand_icon_path($s); if ($p !== null && is_file($p)) @unlink($p); }
 }

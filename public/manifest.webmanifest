@@ -1,7 +1,7 @@
 {
   "name": "Case Management System",
-  "short_name": "CMS",
-  "description": "Case management for Example Agency",
+  "short_name": "Case Management",
+  "description": "Case management for assistive technology services",
   "start_url": "index.php",
   "scope": "./",
   "display": "standalone",

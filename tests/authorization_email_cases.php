@@ -5,6 +5,8 @@ $sample = "From: AGENCY NOTIFY <AGENCY.NOTIFY@blind.state.ia.us>\nSent: Tuesday,
     . "Cc: Sam Supervisor <Sam.Supervisor@blind.state.ia.us>\nSubject: Authorization AUTH-2026-09001 has been Approved\n\nDear Counselor, Pat,\n"
     . "This email notification is to notify you that Authorization AUTH-2026-09001 has been approved.\n\nAuthorization Details:\n"
     . "Authorization Number:  AUTH-2026-09001\nClient Name:  Testerly, Zebulon K\nService Category:   Rehabilitation Technology\nAuthorization Amount:  800.00\n\nThank you!";
+// The agency comes from Funding agencies by its domain (no built-in list since 4.3.0).
+$db->exec("INSERT IGNORE INTO funding_agencies(name,state,email_domains) VALUES('Iowa Department for the Blind','IA','blind.state.ia.us')"); agencies_all(true);
 $p = authorization_email_parse($sample);
 check($p && $p['auth_number']==='AUTH-2026-09001' && $p['client_name']==='Zebulon K Testerly' && $p['service_category']==='Rehabilitation Technology'
     && $p['amount']===800.0 && $p['approved_on']==='2026-10-13' && $p['counselor_email']==='pat.counselor@blind.state.ia.us' && $p['counselor_name']==='Pat Counselor'

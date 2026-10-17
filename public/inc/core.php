@@ -16,7 +16,7 @@ require_once __DIR__ . '/voice.php';
 // Core app functions shared by web pages (via bootstrap.php) and CLI cron scripts.
 
 $configPaths = [
-    '/home/cmsuser/casemanagement_private/config.php', // production
+    dirname(__DIR__, 3) . '/casemanagement_private/config.php', // the cPanel layout: a private directory beside public_html
     dirname(__DIR__, 2) . '/private/config.php',            // local dev
 ];
 // inc/config_path.php (written by the installer, never shipped in a bundle) names the private directory that holds config.php; it wins over the built-in list.
@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.2.0';
+const APP_VERSION = '4.3.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -65,12 +65,12 @@ function db(): PDO {
 
 function cfg(string $key) { global $CONFIG; return $CONFIG['app'][$key] ?? null; }
 
-/** White-label branding: config-driven with Example Agency defaults. */
+/** Branding: Settings (or config.php's brand block) over neutral defaults (4.3.0). */
 function brand(string $key): string {
     static $defaults = [
-        'name' => 'Case Management System',       // app name (titles, emails)
-        'short' => 'Example Agency',                       // header brand
-        'org' => 'Example Agency',       // legal/report letterhead
+        'name' => 'Case Management System',               // app name (titles, emails)
+        'short' => 'Case Management',                      // header brand
+        'org' => 'Assistive Technology Services',          // legal/report letterhead
         'tagline' => 'Assistive Technology Training & Consulting',
         'color' => '#1e40af',                              // --brand (8.7:1 on white)
         'color_dark' => '#1e3a8a',                         // --brand-dark (header, PDFs)
@@ -1196,6 +1196,17 @@ function audit(?int $userId, string $action, string $entity = '', ?int $entityId
  * emitted as its own VEVENT with the correct UTC time, which stays accurate
  * across daylight-saving changes (a UTC RRULE would drift an hour).
  */
+/**
+ * A calendar event's ID: <prefix>-<kind>-<id>@<this site's host>. The prefix is setting
+ * ics_uid_prefix ("cms" on a new site; mig_4.3.0 keeps "cms" where invitations already went
+ * out, so a later update or cancellation still finds the event).
+ */
+function ics_uid(string $kind, string|int $id): string {
+    static $prefix = null;
+    $prefix ??= (preg_replace('/[^a-z0-9]/', '', strtolower((string)(setting('ics_uid_prefix') ?? 'cms'))) ?: 'cms');
+    return $prefix . '-' . $kind . '-' . $id . '@' . (parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost');
+}
+
 function build_ics(string $uid, string $title, string $description, string $location, int $startTs, int $endTs, string $organizerEmail, string $attendeeEmail, array $occurrences = [], string $url = ''): string {
     $fmt = fn(int $ts) => gmdate('Ymd\THis\Z', $ts);
     // Collapse any CR/LF before escaping so no value can inject an iCalendar
@@ -1218,7 +1229,7 @@ function build_ics(string $uid, string $title, string $description, string $loca
         if ($location === '') $location = $url;
         $description = trim($description . "\nJoin online: " . $url);
     }
-    $ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//CaseManagement//CMS//EN\r\nMETHOD:REQUEST\r\n";
+    $ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//CaseManagementSystem//CMS//EN\r\nMETHOD:REQUEST\r\n";
     foreach ($occurrences as $i => [$s, $e]) {
         $ics .= "BEGIN:VEVENT\r\nUID:" . ($i === 0 ? $uid : preg_replace('/@/', "-{$i}@", $uid, 1)) . "\r\nDTSTAMP:" . $fmt(time()) . "\r\n"
             . "DTSTART:" . $fmt($s) . "\r\nDTEND:" . $fmt($e) . "\r\n"
@@ -1712,3 +1723,5 @@ require_once __DIR__ . '/api_more.php';
 require_once __DIR__ . '/agencies.php';
 // Pricing rules set on screen (4.2.0).
 require_once __DIR__ . '/pricing.php';
+// Public wording set on screen (4.3.0).
+require_once __DIR__ . '/wording.php';

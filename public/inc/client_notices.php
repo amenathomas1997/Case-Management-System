@@ -232,7 +232,7 @@ function client_sessions_ics(array $rows, string $attendee, string $method, bool
     $host = parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost';
     $fmt = fn(int $ts) => gmdate('Ymd\THis\Z', $ts);
     $esc = fn(string $s) => addcslashes(preg_replace('/[\r\n]+/', ' ', $s), ",;\\");
-    $ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//CaseManagement//CMS//EN\r\nMETHOD:$method\r\n";
+    $ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//CaseManagementSystem//CMS//EN\r\nMETHOD:$method\r\n";
     $lines = [];
     foreach ($rows as $s) {
         $st = strtotime((string)$s['start_at']); $en = strtotime((string)$s['end_at']);
@@ -242,7 +242,7 @@ function client_sessions_ics(array $rows, string $attendee, string $method, bool
         // In the client's own time zone (4.1.0); the calendar file itself is in UTC.
         $tz = client_zone($s);
         $lines[] = '- ' . ($es ? zone_when_es($tz, $st) : zone_date($tz, 'l, F j \a\t g:i A T', $st)) . ($where !== '' ? ', ' . $where : '');
-        $ics .= "BEGIN:VEVENT\r\nUID:cms-client-session-" . (int)$s['id'] . '@' . $host . "\r\nDTSTAMP:" . $fmt(time()) . "\r\n"
+        $ics .= "BEGIN:VEVENT\r\nUID:" . ics_uid('client-session', (int)$s['id']) . "\r\nDTSTAMP:" . $fmt(time()) . "\r\n"
             // SEQUENCE grows with each move (ics_sequence, 3.0.43), so a calendar takes the newest.
         . 'SEQUENCE:' . ((int)($s['ics_sequence'] ?? 0) + ($method === 'CANCEL' ? 1 : 0)) . "\r\nDTSTART:" . $fmt($st) . "\r\nDTEND:" . $fmt($en) . "\r\n"
             . 'SUMMARY:' . $esc(($es ? 'Capacitación con ' : 'Training with ') . brand('short')) . "\r\n"

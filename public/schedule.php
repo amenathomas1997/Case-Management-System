@@ -291,7 +291,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
         throw $e;
     }
     // No session notes in the invite: calendar providers store it (as with the feed).
-    $ics = build_ics('cms-group-' . $groupUid . '@' . (parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost'),
+    $ics = build_ics(ics_uid('group', $groupUid),
         ($isRemote ? 'Remote group session (' : 'Group session (') . count($clientIds) . ' clients)',
         "Group training session with " . count($clientIds) . " clients.\nDetails: " . cfg('base_url') . '/schedule.php',
         $location, $startTs, $endTs, cfg('mail_from'), $staff['email'], [], $meetingUrl ?? '');
@@ -538,7 +538,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         // link to the session in the app for the rest.
         $calName = schedule_short_name($clientName);
         $ics = build_ics(
-            'cms-session-' . $sessionId . '@' . (parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost'),
+            ics_uid('session', $sessionId),
             ($isRemote ? 'Remote AT Training: ' : 'AT Training: ') . $calName,
             "Training session with {$calName}.{$seriesNote}\nDetails: " . cfg('base_url') . '/schedule.php#s-' . $sessionId,
             $location, $startTs, $endTs,

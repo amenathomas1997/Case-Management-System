@@ -27,7 +27,7 @@ if (isset($_GET['template'])) {
     fwrite($out, "\xEF\xBB\xBF");
     write_csv_row($out, CIMPORT_COLUMNS[$kind]);
     write_csv_row($out, $kind === 'clients'
-        ? ['Jordan Example', '1985-04-12', 'jordan@example.org', '555-0100', '1 Main St, Des Moines IA', 'VR', 'Active Training', '', 'Pat Counselor', 'pat@agency.gov', '555-0199', 'State VR', '', '', '', 'VR-12345', '']
+        ? ['Jordan Example', '1985-04-12', 'jordan@example.org', '555-0100', '1 Main St, Springfield', 'VR', 'Active Training', '', 'Pat Counselor', 'pat@agency.gov', '555-0199', 'State VR', '', '', '', 'VR-12345', '']
         : ['Jordan Example', '1985-04-12', 'AUTH-2026-00001', 'State VR', '20', '50.00', '1000.00', '0.655', '2026-10-01', '2027-03-31', 'Screen reader training', 'Rehabilitation Technology']);
     fclose($out);
     exit;

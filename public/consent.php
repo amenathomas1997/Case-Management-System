@@ -164,7 +164,7 @@ echo lang_toggle();
   <p><?= t('You can take back (withdraw) your consent at any time. To do that, contact') ?> <?= $contactHtml ?>.</p>
 <?php else: ?>
   <h1><?= t('Consent for services —') ?> <?= h($form['client_name']) ?></h1>
-  <p><?= h(brand('org')) ?> <?= t('teaches people to use devices and software that help with vision loss. We also teach everyday living skills, offer counseling, and help students get ready for jobs.') ?></p>
+  <p><?= h(brand('org')) ?> <?= wording_html('consent_about') // Public wording (4.3.0) ?></p>
   <?php // Short sentences, one point of view: "we" is the organization, "you" the guardian. ?>
   <p><?= t('In this form, “we” means') ?> <?= h(brand('short')) ?> <?= t('and “you” means the parent or guardian who signs.') ?></p>
   <p><?= t('You are signing as the parent or guardian of') ?> <strong><?= h($form['client_name']) ?></strong>. <?= t('The name on this form is') ?> <strong><?= h($form['guardian_name']) ?></strong>.</p>
@@ -176,10 +176,7 @@ echo lang_toggle();
     <?php else: ?>
     <li><?= t('We may give this student the services described at the top of this page. We will explain each one before it starts.') ?></li>
     <?php endif; ?>
-    <li><?= t("We may talk with the student's school.") ?></li>
-    <li><?= t('If needed, we may also talk with the state agency that helps people with disabilities find work.') ?></li>
-    <li><?= t('We share records only to plan services and to send reports the law requires.') ?></li>
-    <li><?= t('We may contact you about scheduling and progress.') ?></li>
+    <?php foreach (wording_lines_html('consent_points') as $point): ?><li><?= $point ?></li><?php endforeach; ?>
   </ul>
   <p><?= t('You can take back (withdraw) your consent at any time. To do that, contact') ?> <?= $contactHtml ?>.</p>
   <?php $typedSig = $staleSig ?? (is_string($_SESSION[$sigKey] ?? null) ? $_SESSION[$sigKey] : ''); unset($_SESSION[$sigKey]); ?>

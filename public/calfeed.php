@@ -57,7 +57,7 @@ $shortName = function (string $n): string {
 
 header('Content-Type: text/calendar; charset=UTF-8');
 header('Content-Disposition: inline; filename="sessions.ics"');
-echo "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//CaseManagement//CMS//EN\r\n"
+echo "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//CaseManagementSystem//CMS//EN\r\n"
     . "X-WR-CALNAME:" . $esc(brand('short') . ' sessions — ' . $u['name']) . "\r\n"
     . "X-PUBLISHED-TTL:PT1H\r\n";
 foreach ($rows->fetchAll() as $s) {
@@ -73,7 +73,7 @@ foreach ($rows->fetchAll() as $s) {
     $loc = $remote ? ((string)($s['meeting_url'] ?? '') ?: 'Remote / telepractice')
         : (trim((string)($s['location'] ?? '')) !== '' ? 'In person (location on the schedule in the app)' : '');
     echo "BEGIN:VEVENT\r\n"
-        . "UID:cms-cal-" . (int)$s['id'] . "@" . (parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost') . "\r\n"
+        . "UID:" . ics_uid('cal', (int)$s['id']) . "\r\n"
         . "DTSTAMP:" . gmdate('Ymd\THis\Z') . "\r\n"
         . "DTSTART:" . $fmt($s['start_at']) . "\r\nDTEND:" . $fmt($s['end_at']) . "\r\n"
         . "SUMMARY:" . $esc($title) . "\r\n"
@@ -97,7 +97,7 @@ try {
     $bk->execute([(int)$u['id'], (int)$u['id']]);
     foreach ($bk->fetchAll() as $b) {
         $end = date('Y-m-d H:i:s', strtotime((string)$b['needed_at']) + 60 * max(15, (int)($b['duration_min'] ?: 60)));
-        echo "BEGIN:VEVENT\r\nUID:cms-booking-" . (int)$b['id'] . "@" . (parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost') . "\r\n"
+        echo "BEGIN:VEVENT\r\nUID:" . ics_uid('booking', (int)$b['id']) . "\r\n"
             . "DTSTAMP:" . gmdate('Ymd\THis\Z') . "\r\nDTSTART:" . $fmt($b['needed_at']) . "\r\nDTEND:" . $fmt($end) . "\r\n"
             . "SUMMARY:" . $esc(($b['status'] === 'Requested' ? 'Support booking (requested): ' : 'Support booking: ') . $shortName($b['client_name'])) . "\r\n"
             . "STATUS:" . ($b['status'] === 'Confirmed' ? 'CONFIRMED' : 'TENTATIVE') . "\r\nEND:VEVENT\r\n";

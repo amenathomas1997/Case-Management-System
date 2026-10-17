@@ -42,12 +42,12 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
 <link rel="stylesheet" href="assets/styles.css?v=<?= h(APP_VERSION) ?>">
 <?php /* Relative, as the stylesheet is: a site installed in a folder (https://example.org/cms)
          uses its own manifest and icon, not the domain root's. */ ?>
-<link rel="manifest" href="manifest.webmanifest">
+<link rel="manifest" href="manifest.php">
 <?php $brandDark = accessible_brand_color(brand('color_dark'), '#1e3a8a', true); ?>
 <style>:root{--brand:<?= h(accessible_brand_color(brand('color'), '#1e40af')) ?>;--brand-dark:<?= h($brandDark) ?>;--accent:<?= h(accessible_brand_color(brand('accent'), '#134e4a', false, 4.5)) ?>;}</style>
 <?php /* --brand and --brand-dark colour links, buttons and the header, so they need 7:1;
          --accent is not used as text by styles.css, so the default teal (5.5:1) is kept. */ ?>
-<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="apple-touch-icon" href="icon.php?s=180">
 <?php /* The browser toolbar matches the header (the installed brand), not the vendor navy. */ ?>
 <meta name="theme-color" content="<?= h($brandDark) ?>">
 <meta name="apple-mobile-web-app-capable" content="yes">

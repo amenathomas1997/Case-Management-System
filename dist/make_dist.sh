@@ -81,9 +81,9 @@ it EXCEPT these files, which belong to your site and must be kept as they are:
   inc/config_path.php — written by the installer; tells the app where its private
       directory (config.php) is. Without it every page, the mobile app and every
       cron job stop with "Configuration missing."
-  manifest.webmanifest and assets/apple-touch-icon.png, assets/icon-192.png,
-      assets/icon-512.png, assets/icon-1024.png — your name and icons in your
-      colors (the bundle's copies carry the default branding).
+  assets/apple-touch-icon.png, assets/icon-192.png, assets/icon-512.png and
+      assets/icon-1024.png — the icons in your colors (the bundle's copies carry
+      the default branding). An icon uploaded on Settings is kept elsewhere.
 Do not upload install.php or schema_full.sql to an installed site, and keep its
 install.lock. A site installed before inc/config_path.php existed (its installer
 edited the $configPaths list at the top of inc/core.php instead) must create that

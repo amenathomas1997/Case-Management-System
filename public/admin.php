@@ -469,6 +469,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
   <div class="page-actions">
     <a class="btn btn-secondary" href="referral_settings.php">Referral form settings</a>
     <a class="btn btn-secondary" href="email_templates.php">Email templates</a>
+    <a class="btn btn-secondary" href="wording.php">Public wording</a>
     <a class="btn btn-secondary" href="counselors.php">Counselor portal access</a>
   </div>
   <h3 id="support-phone-h">Support phone number</h3>

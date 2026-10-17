@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.3.0' => [
+        'Everything that names your business is set on screen: the branding and app icon (Settings), who runs the service, your address, the laws you follow and whether the HIPAA section applies (Settings, Privacy notice), and the consent form\'s description of your services and an extra privacy section (Public wording), in English and Spanish.',
+        'The system no longer has any one business built in, so other assistive technology businesses can run their own copy. Help has a new Administrator guide section, Making the system your own.',
+    ],
     '4.2.0' => [
         'Pricing rules (Administration) puts every pricing rule on one page: the personal hourly rate, free training below a monthly income, a parent\'s income for a youth under an age you set, whether an open VR case is always billed at the VR rate, and who the referral form asks. Any business using the system can set its own.',
         'Each VR agency can have its own hourly and mileage rate (Funding agencies), for example $40 an hour for one state and $80 for another. A new VR track with no rate typed charges its agency\'s rate, and Pricing rules lists every agency\'s rate.',

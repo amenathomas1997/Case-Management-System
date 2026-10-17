@@ -1,8 +1,8 @@
 <?php
 declare(strict_types=1);
 if(PHP_SAPI!=='cli')exit('CLI only.');
-// Application inc/ directory: optional cron_config.php beside this script (returns the path), then production, then the repository layout.
-foreach([is_file(__DIR__.'/cron_config.php')?(string)(require __DIR__.'/cron_config.php'):'','/home/cmsuser/public_html/casemanagement/inc',dirname(__DIR__).'/public/inc'] as $inc){$inc=rtrim($inc,'/');if($inc!==''&&is_file($inc.'/core.php')){require $inc.'/core.php';break;}}
+// Application inc/ directory: optional cron_config.php beside this script (returns the path), then the cPanel layout (public_html/casemanagement beside the private directory), then the repository layout.
+foreach([is_file(__DIR__.'/cron_config.php')?(string)(require __DIR__.'/cron_config.php'):'',dirname(__DIR__, 2) . '/public_html/casemanagement/inc',dirname(__DIR__).'/public/inc'] as $inc){$inc=rtrim($inc,'/');if($inc!==''&&is_file($inc.'/core.php')){require $inc.'/core.php';break;}}
 if(!function_exists('db')){fwrite(STDERR,"CMS cron: the application's inc/core.php was not found. Create cron_config.php beside this script containing: <?php return '/full/path/to/your/web/docroot/inc';\n");exit(1);}
 require_once $inc.'/at_services.php';
 if(!at_ready()){echo "AT migration has not been installed.\n";exit(1);}

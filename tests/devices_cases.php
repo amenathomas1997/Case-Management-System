@@ -27,6 +27,7 @@ putenv('CMS_TEST_TOKEN');
 check($code===0 && $err==='' && (int)$db->query("SELECT COUNT(*) FROM api_tokens WHERE id=$otherId")->fetchColumn()===0,'An administrator signs one phone out' . ($err ? ": $err" : ''));
 
 /* The privacy notice in Spanish */
+set_setting('cfg.brand.hipaa','yes'); // the HIPAA section shows when Settings says HIPAA applies (4.3.0)
 putenv('CMS_TEST_ANON=1'); putenv('CMS_TEST_SESSION');
 [$code,$out,$err]=$renderPage('privacy',['lang'=>'es']);
 putenv('CMS_TEST_ANON');

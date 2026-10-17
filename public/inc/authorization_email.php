@@ -6,9 +6,6 @@ declare(strict_types=1);
 // sent to AI, and staff confirm the client and every field on the track form before the
 // track is saved.
 
-/** Agencies known by the sending address's domain, when no existing track names one. */
-const AUTH_EMAIL_AGENCIES = ['blind.state.ia.us' => 'Iowa Department for the Blind'];
-
 /**
  * The details of an authorization email, or null when it is not one (no authorization
  * number). Keys: auth_number, client_name (as "First Middle Last"), client_name_raw,
@@ -91,8 +88,8 @@ function authorization_email_agency(string $addr): string {
         WHERE LOWER(c.counselor_email) LIKE ? AND t.funding_agency NOT IN ('Private pay', 'No charge') GROUP BY t.funding_agency ORDER BY COUNT(*) DESC LIMIT 1");
     $q->execute(['%@' . $domain]);
     $a = $q->fetchColumn();
-    // An agency listed with this domain (Funding agencies, 4.1.0), then the built-in one.
-    return $a !== false ? (string)$a : (agency_for_domain($domain) ?? AUTH_EMAIL_AGENCIES[$domain] ?? '');
+    // Else an agency listed with this domain on Funding agencies (4.1.0; no built-in list since 4.3.0).
+    return $a !== false ? (string)$a : (agency_for_domain($domain) ?? '');
 }
 
 /** Clients whose first and last names match the name on the email (a middle name or initial is ignored). */

@@ -2133,7 +2133,7 @@ switch ($action) {
             $calName = count($nameParts) < 2 ? trim($clientName) : $nameParts[0] . ' ' . mb_substr(end($nameParts), 0, 1) . '.';
             // The UID host is this install's own (as calfeed.php), so two installs'
             // session #42 are never taken for one invite by a shared calendar.
-            $ics = build_ics('cms-session-' . $firstId . '@' . (parse_url((string)cfg('base_url'), PHP_URL_HOST) ?: 'localhost'),
+            $ics = build_ics(ics_uid('session', $firstId),
                 ($isRemote ? 'Remote AT Training: ' : 'AT Training: ') . $calName,
                 // build_ics() adds the "Join online" line itself from the link below.
                 "Training session with {$calName}.{$seriesNote}\nDetails: " . cfg('base_url') . '/schedule.php#s-' . $firstId,

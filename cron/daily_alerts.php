@@ -5,11 +5,11 @@ declare(strict_types=1);
 if (PHP_SAPI !== 'cli') exit('CLI only.');
 
 // Where the application's inc/ directory is: an optional cron_config.php beside
-// this script (it returns the path) wins, then the production path, then the
-// repository layout. Nothing needs editing here for a different install.
+// this script (it returns the path) wins, then the cPanel layout (public_html/casemanagement beside the
+// private directory), then the repository layout. Nothing needs editing here for a different install.
 foreach ([
     is_file(__DIR__ . '/cron_config.php') ? (string)(require __DIR__ . '/cron_config.php') : '',
-    '/home/cmsuser/public_html/casemanagement/inc',
+    dirname(__DIR__, 2) . '/public_html/casemanagement/inc',
     dirname(__DIR__) . '/public/inc',
 ] as $inc) {
     $inc = rtrim($inc, '/');

@@ -142,6 +142,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $privacyAddress = field('privacy_address');
     $privacyLaw = field('privacy_law');
     $privacyHosting = field('privacy_hosting');
+    $hipaa = field('hipaa') === 'yes' ? 'yes' : 'no';
     $adminName = field('admin_name');
     $adminEmail = strtolower(field('admin_email'));
     $adminPass = $_POST['admin_pass'] ?? '';
@@ -411,6 +412,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // which law and on whose servers. Empty: that line is left out of the notice.
                 'privacy_operator' => $privacyOperator, 'privacy_address' => $privacyAddress,
                 'privacy_law' => $privacyLaw, 'privacy_hosting' => $privacyHosting,
+                // Whether the privacy notice includes the HIPAA rights section (Settings can change it).
+                'hipaa' => $hipaa,
             ],
             // token_cache: where the Graph access token is cached, beside this config.
             'graph' => ['tenant_id' => '', 'client_id' => '', 'client_secret' => '', 'sender' => $mailFrom,
@@ -420,6 +423,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'entra' => ['enabled' => false, 'tenant_id' => '', 'client_id' => '', 'client_secret' => '', 'auto_provision_group' => ''],
             'app' => [
                 'name' => $brandName, 'base_url' => $baseUrl,
+                // The publisher's list of new versions (Settings, Updates; 'off' to stop checking).
+                'update_url' => 'https://cms.example.org/updates.json',
                 'mail_from' => $mailFrom, 'mail_from_name' => $brandName,
                 // Public contact address shown in the page footer for help requests.
                 // When empty, mail_from is shown instead: set this whenever mail_from is
@@ -510,21 +515,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $notices[] = "Icons: PHP's GD extension is not available, so " . $defaultIcons;
         }
 
-        // ---- Manifest ----
-        $manifestOk = @file_put_contents(__DIR__ . '/manifest.webmanifest', json_encode([
-            'name' => $brandName, 'short_name' => $brandShort,
-            'description' => 'Case management for ' . $brandOrg,
-            // Relative to the manifest, so a site installed in a folder (https://example.org/cms)
-            // opens, and shows the icons of, that folder rather than the domain's root.
-            'start_url' => 'index.php', 'scope' => './', 'display' => 'standalone',
-            'background_color' => $brandDark, 'theme_color' => $brandDark,
-            'icons' => [
-                ['src' => 'assets/icon-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
-                ['src' => 'assets/icon-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
-            ],
-        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)) !== false;
-        if ($manifestOk) $report[] = 'Web-app manifest written.';
-        else $notices[] = 'Web-app manifest: manifest.webmanifest could not be written, so the installable web app still shows the default name. Edit its name, short_name and colors by hand.';
+        // The web-app manifest is manifest.php, built from the branding (4.3.0): nothing to write.
 
         // ---- Upload limits ----
         // A client document can be up to 25 MB. PHP turns away a bigger file, or a
@@ -666,6 +657,8 @@ host=<?= htmlspecialchars($dbHost) ?>
       <input id="privacy_law" name="privacy_law" maxlength="120" autocomplete="off" value="<?= htmlspecialchars(field('privacy_law')) ?>">
       <label for="privacy_hosting">Hosting provider <span class="hint">(where the server runs, e.g. “Linode” or “our own data centre in Chicago”)</span></label>
       <input id="privacy_hosting" name="privacy_hosting" maxlength="190" autocomplete="off" value="<?= htmlspecialchars(field('privacy_hosting')) ?>">
+      <label for="hipaa">Does HIPAA apply to you?</label>
+      <select id="hipaa" name="hipaa"><option value="no"<?= field('hipaa') !== 'yes' ? ' selected' : '' ?>>No</option><option value="yes"<?= field('hipaa') === 'yes' ? ' selected' : '' ?>>Yes</option></select>
     </fieldset>
     <fieldset><legend>Database (empty MariaDB 10.4+ database)</legend>
       <label for="db_host">Database host</label><input id="db_host" name="db_host" autocomplete="off" value="<?= htmlspecialchars(field('db_host', 'localhost')) ?>">

@@ -16,14 +16,17 @@ $aiOn = ai_enabled();
 $aiProvider = $aiOn ? (ai_providers()[ai_cfg()['provider']]['label'] ?? 'an AI service') : '';
 $redact = ai_redaction_on();
 $retYears = (int)(setting('retention_years') ?? '0');
-// Who runs the service. Another installation sets these in $CONFIG['brand'] (privacy_operator,
-// privacy_address, privacy_law, privacy_hosting); this agency's own details are the default
-// only while the agency name is still Example Agency.
-$ownInstall = $org === 'Example Agency';
-$operator = brand('privacy_operator') ?: ($ownInstall ? 'the maintainer' : '');
-$address = brand('privacy_address') ?: ($ownInstall ? '100 Main Street, Springfield' : '');
-$law = brand('privacy_law') ?: ($ownInstall ? 'Minnesota privacy law and the federal HIPAA Privacy and Security Rules' : '');
-$hosting = brand('privacy_hosting') ?: ($ownInstall ? 'Linode' : '');
+// Who runs the service, the law it follows and its host: Administration, Settings, Privacy
+// notice (4.3.0; also $CONFIG['brand'] in config.php). The HIPAA rights section shows only when
+// Settings says HIPAA applies, and Public wording can add a section of the business's own.
+$operator = brand('privacy_operator');
+$address = brand('privacy_address');
+$law = brand('privacy_law');
+$hosting = brand('privacy_hosting');
+$hipaa = brand('hipaa') === 'yes';
+$extraHeading = trim((string)(page_lang() === 'es' && wording_stored('privacy_extra_heading', 'es') !== '' ? wording_stored('privacy_extra_heading', 'es') : wording_stored('privacy_extra_heading', 'en')));
+$extraHtml = $extraHeading === '' ? '' : '<section aria-labelledby="extra"><h2 id="extra">' . wording_html('privacy_extra_heading') . '</h2>'
+    . implode('', array_map(fn($para) => '<p>' . $para . '</p>', wording_paragraphs_html('privacy_extra_body'))) . "</section>\n";
 const PRIVACY_UPDATED = '2026-10-16';
 page_header('Privacy notice', $viewer);
 echo lang_toggle();
@@ -36,8 +39,8 @@ if (page_lang() === 'es') {
 <h1>Privacy notice</h1>
 <p>This notice explains what information <?= h($org) ?> keeps about you, why, who it is shared with, and the choices you have. It covers this website (including the referral form, the client portal and the counselor portal) and the staff iPhone app.</p>
 <p>Last updated <?= h(fmt_date(PRIVACY_UPDATED)) ?>.</p>
-<?php if ($operator !== '' || $address !== ''): ?>
-<p><?= h($org) ?><?= $operator !== '' ? ' is run by ' . h($operator) : '' ?><?= $address !== '' ? ', ' . h($address) : '' ?>.<?php if ($law !== ''): ?> We follow <?= h($law) ?>.<?php endif; ?></p>
+<?php if ($operator !== '' || $address !== '' || $law !== ''): ?>
+<p><?php if ($operator !== '' || $address !== ''): ?><?= h($org) ?><?= $operator !== '' ? ' is run by ' . h($operator) : '' ?><?= $address !== '' ? ', ' . h($address) : '' ?>.<?php endif; ?><?php if ($law !== ''): ?> We follow <?= h($law) ?>.<?php endif; ?></p>
 <?php endif; ?>
 
 <nav aria-labelledby="privacy-toc-h"><h2 id="privacy-toc-h">On this page</h2>
@@ -50,9 +53,10 @@ if (page_lang() === 'es') {
   <li><a href="#security">How we protect it</a></li>
   <li><a href="#keep">How long we keep it</a></li>
   <li><a href="#choices">Your choices</a></li>
-  <li><a href="#hipaa">Your rights under HIPAA</a></li>
+<?php if ($hipaa): ?>  <li><a href="#hipaa">Your rights under HIPAA</a></li><?php endif; ?>
   <li><a href="#iphone">The staff iPhone app</a></li>
-  <li><a href="#contact">Questions and requests</a></li>
+<?php if ($extraHeading !== ''): ?>  <li><a href="#extra"><?= wording_html('privacy_extra_heading') ?></a></li>
+<?php endif; ?>  <li><a href="#contact">Questions and requests</a></li>
 </ul></nav>
 
 <section aria-labelledby="collect"><h2 id="collect">What we collect</h2>
@@ -150,6 +154,7 @@ if (page_lang() === 'es') {
 </ul>
 </section>
 
+<?php if ($hipaa): ?>
 <section aria-labelledby="hipaa"><h2 id="hipaa">Your rights under HIPAA</h2>
 <p>We treat your service and health-related records as protected health information under the federal HIPAA rules. You have the right to:</p>
 <ul>
@@ -163,6 +168,7 @@ if (page_lang() === 'es') {
 <p>We never sell your information, and we will ask for your written permission before using it for marketing or for any purpose not described in this notice. You can withdraw that permission at any time. If a breach of your information ever happens, we will tell you.</p>
 <p>If you believe your privacy rights have been violated, you can complain to us (see <a href="#contact">Questions and requests</a>) or to the U.S. Department of Health and Human Services, Office for Civil Rights, at <a href="https://www.hhs.gov/ocr/complaints/">hhs.gov/ocr/complaints</a> or 1-800-368-1019. We will not retaliate against you for complaining.</p>
 </section>
+<?php endif; ?>
 
 <section aria-labelledby="iphone"><h2 id="iphone">The staff iPhone app</h2>
 <p>The iPhone app is for <?= h($org) ?> staff. It connects only to this website over an encrypted connection.</p>
@@ -174,7 +180,7 @@ if (page_lang() === 'es') {
 </ul>
 </section>
 
-<section aria-labelledby="contact"><h2 id="contact">Questions and requests</h2>
+<?= $extraHtml ?><section aria-labelledby="contact"><h2 id="contact">Questions and requests</h2>
 <p>To ask a question, request a copy or correction of your information, or make a complaint, email <?= $mail ?><?= $operator !== '' ? ', or write to ' . h($operator) . ($address !== '' ? ' at ' . h($address) : '') : '' ?>.<?= $operator !== '' ? ' ' . h($operator) . ' handles privacy requests.' : '' ?> We will answer as soon as we can. If we change this notice, we will update the date at the top.</p>
 </section>
 <?php page_footer();
