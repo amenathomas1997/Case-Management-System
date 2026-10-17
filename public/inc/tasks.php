@@ -66,6 +66,15 @@ function task_visibility_sql(array $user, array &$params): string {
 /** Enforce task visibility on the write, including unassigned-task scope. Only
  *  an Open task can be completed and only a Done one reopened, so a stale
  *  second click never rewrites who completed it, or when. */
+/** Whether a task this person can see is already Done (or, with $done false, already Open). */
+function task_already(int $id, array $user, bool $done): bool {
+    $params = [];
+    $visibility = task_visibility_sql($user, $params);
+    $q = db()->prepare('SELECT 1 FROM tasks t WHERE t.id = ? AND t.status = ' . ($done ? "'Done'" : "'Open'") . ' AND ' . $visibility);
+    $q->execute(array_merge([$id], $params));
+    return (bool)$q->fetchColumn();
+}
+
 function set_task_done(int $id, array $user, bool $done): bool {
     $params = [];
     $visibility = task_visibility_sql($user, $params);

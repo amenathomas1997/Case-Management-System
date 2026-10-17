@@ -106,8 +106,9 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
         <?php
         // Grouped under h3 headings (H or the heading list jumps between groups) below the
         // page's one h2 before <main>, "Low-vision controls", so the page's h1 is preceded by
-        // a single h2, not seven; each link carries a one-sentence hint as its description
-        // (a hidden copy, read with the link: never an extra line), and a separate on-screen
+        // a single h2, not seven; each link carries a one-sentence hint inside it as hidden text
+        // (4.8.0: JAWS skipped it as a description; as part of the link it is read on Tab and
+        // when arrowing, still never an extra line or stop), and a separate on-screen
         // copy, hidden from screen readers, appears on hover or keyboard focus. Groups with
         // no permitted link are left out.
         $script = basename($_SERVER['SCRIPT_NAME'] ?? '');
@@ -119,7 +120,7 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
           <ul aria-labelledby="nav-group-<?= $group ?>">
           <?php foreach ($byGroup[$group] as [$href, $label, $key, , , $hint, $accessKey]):
             $current = $active === $key ? ($script === explode('#', $href, 2)[0] ? 'aria-current="page"' : 'aria-current="true"') : ''; ?>
-            <li class="nav-item"><a href="<?= $href ?>" <?= $current ?><?= $accessKey !== '' ? ' accesskey="' . $accessKey . '"' : '' ?> aria-describedby="nav-hint-<?= $key ?>"><?= h($label) ?></a><span id="nav-hint-<?= $key ?>" hidden><?= h($hint) ?></span><span class="nav-hint" aria-hidden="true"><?= h($hint) ?></span></li>
+            <li class="nav-item"><a href="<?= $href ?>" <?= $current ?><?= $accessKey !== '' ? ' accesskey="' . $accessKey . '"' : '' ?>><?= h($label) ?><span class="nav-hint-sr visually-hidden">: <?= h($hint) ?></span></a><span class="nav-hint" aria-hidden="true"><?= h($hint) ?></span></li>
           <?php endforeach; ?>
           </ul>
         </li>

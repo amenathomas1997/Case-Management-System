@@ -261,6 +261,10 @@ case 'complete_task': {
     // set_task_done() applies the website's visibility on the write, and changes only an
     // Open task to Done (or a Done one back), so a second tap rewrites nothing.
     if (!set_task_done($taskId, $parityUser, !$reopen)) {
+        // Sent again from the phone's offline queue (4.8.0): already done is the wanted result.
+        if (!empty($input['idem_key']) && task_already($taskId, $parityUser, !$reopen)) {
+            out(['ok' => true, 'deduplicated' => true, 'message' => $reopen ? 'The task was already open.' : 'The task was already done.']);
+        }
         fail('The task was unavailable or already in that state.', 409);
     }
     out(['ok' => true, 'message' => $reopen ? 'Task reopened.' : 'Task completed.']);

@@ -744,7 +744,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 <p>The Account screen lets you change your password, set up two-step sign-in, subscribe to your calendar and sign out everywhere. Passkeys are set up on the website, in My Account.</p>
 
 <?= $sgH(4, 'iphone-offline') ?>
-<p>With no connection, notes and hours you enter are kept on the phone. They are sent when the connection comes back. Do not enter them again. Check later that they appear on the website.</p>
+<p>With no connection, notes, hours, check-ins, device follow-ups, expenses, goal progress, completed tasks and completed homework are kept on the phone. They are sent when the connection comes back, each only once. Do not enter them again. Check later that they appear on the website.</p>
 
 <?= $sgH(4, 'iphone-limits') ?>
 <p>Some work is only on the website:</p>

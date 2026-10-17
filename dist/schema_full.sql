@@ -675,9 +675,11 @@ CREATE TABLE `goal_progress` (
   `status` enum('Not Started','In Progress','Achieved') NOT NULL DEFAULT 'In Progress',
   `note` text DEFAULT NULL,
   `recorded_by` int(10) unsigned DEFAULT NULL,
+  `idem_key` char(36) DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `goal_id` (`goal_id`),
+  UNIQUE KEY `idem` (`recorded_by`,`idem_key`),
   CONSTRAINT `goal_progress_ibfk_1` FOREIGN KEY (`goal_id`) REFERENCES `smart_goals` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;

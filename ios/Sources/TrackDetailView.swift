@@ -917,6 +917,8 @@ struct GoalProgressSheet: View {
     /// The person moved the slider: from then on a status change leaves the percent alone.
     @State private var pctEntered = false
     @State private var note = ""
+    /// One key per entry, so a resend (offline queue or a lost reply) is recorded once (4.8.0).
+    @State private var idemKey = UUID().uuidString
     @State private var busy = false
     @State private var error: String?
     @State private var askingDiscard = false
@@ -1007,15 +1009,27 @@ struct GoalProgressSheet: View {
                     progressPct = try? d.container(keyedBy: CodingKeys.self).decodeIfPresent(Int.self, forKey: .progressPct)
                 }
             }
-            var body: [String: Any] = ["id": goal.id, "status": status, "progress_pct": Int(pct), "note": note]
+            var body: [String: Any] = ["id": goal.id, "status": status, "progress_pct": Int(pct), "note": note, "idem_key": idemKey]
             // Reopening an achieved goal and deliberately setting 100% again keeps it there (the
             // website's "Record again to keep it at 100%"); without this the server refuses it.
             if goal.status == "Achieved" && status != "Achieved" && pctEntered && Int(pct) == 100 {
                 body["reopen_confirmed"] = 1
             }
-            let stored: Stored = try await api.call("update_goal", body: body)
-            // Said by the track screen once this sheet has closed (closing it would cut it off).
-            onDone("Progress recorded — \(stored.progressPct ?? Int(pct))%."); dismiss()
+            do {
+                let stored: Stored = try await api.call("update_goal", body: body)
+                // Said by the track screen once this sheet has closed (closing it would cut it off).
+                onDone("Progress recorded — \(stored.progressPct ?? Int(pct))%."); dismiss()
+            } catch APIError.network {
+                // No signal (4.8.0): kept on this phone and recorded when it is back online.
+                // What the goal was when this was written, and when, so a newer entry by someone
+                // else is not overwritten when this one is sent later.
+                var queued = body
+                queued["expected_status"] = goal.status
+                queued["expected_pct"] = goal.progressPct.map { String($0) } ?? ""
+                queued["recorded_at"] = ISO8601DateFormatter().string(from: Date())
+                try api.enqueue("update_goal", body: queued, label: "Goal progress: \(Int(pct))%")
+                onDone("No signal. This progress entry is kept on this iPhone and recorded when you are back online."); dismiss()
+            }
         } catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
     }
 }
@@ -1373,9 +1387,18 @@ struct ExpenseSheet: View {
                    : String(format: "Expense of $%.2f logged.", value))
             dismiss()
         } catch APIError.network {
-            // The request may have arrived: it isn't known whether the expense was logged.
-            showFormError("The connection dropped before the server answered, so it isn't known whether this expense was logged. Check Billable expenses on the track before logging it again.", in: &self.error)
-            busy = false
+            // No signal, or a lost reply (4.8.0): kept on this phone and sent again with the same
+            // key, which the server recognises, so the expense is logged once.
+            var queued: [String: Any] = ["track_id": trackId, "date": APIDate.day(date), "description": descriptionText, "amount": amountText, "idem_key": idemKey]
+            if authorizationIssue != nil && authorizationAck { queued["authorization_ack"] = true }
+            do {
+                try api.enqueue("add_expense", body: queued, label: "Expense: \(descriptionText.prefix(40))")
+                onDone("No signal. This expense is kept on this iPhone and logged when you are back online.")
+                dismiss()
+            } catch {
+                showFormError(error.localizedDescription, in: &self.error)
+                busy = false
+            }
         } catch APIError.server(let message) where message.hasSuffix(Self.authorizationConfirmSuffix) {
             // Outside the authorization (expired, not yet started, or the track not Active): the
             // server names the problem, and the expense is logged only once the person says to.

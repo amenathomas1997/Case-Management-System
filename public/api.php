@@ -1662,6 +1662,13 @@ switch ($action) {
 
     case 'update_goal':
         $gid = (int)($input['id'] ?? 0);
+        // A progress entry sent again (offline queue, or a lost reply) is recognised by its key (4.8.0).
+        $goalIdem = preg_match('/^[0-9a-fA-F-]{36}$/', (string)($input['idem_key'] ?? '')) ? strtoupper($input['idem_key']) : null;
+        if ($goalIdem !== null) {
+            $seen = db()->prepare('SELECT gp.progress_pct FROM goal_progress gp WHERE gp.idem_key = ? AND gp.recorded_by = ? AND gp.goal_id = ?');
+            $seen->execute([$goalIdem, $userId, $gid]);
+            if (($seenPct = $seen->fetchColumn()) !== false) out(['ok' => true, 'deduplicated' => true, 'progress_pct' => (int)$seenPct]);
+        }
         $gs = in_array($input['status'] ?? '', GOAL_STATUSES, true) ? $input['status'] : null;
         if ($gid <= 0 || !$gs) fail('Goal and status are required.');
         $g = db()->prepare('SELECT track_id, status, progress_pct FROM smart_goals WHERE id = ?');
@@ -1684,13 +1691,30 @@ switch ($action) {
             fail('This goal was 100% complete while Achieved. Enter how complete it is now that it is ' . $gs . ' again.', 422);
         }
         $note = api_text($input, 'note', API_TEXT_BYTES, 'The note', true) ?: null;
+        // An entry saved on the phone without a signal (4.8.0) says what the goal was when it was
+        // written, and when. If someone changed the goal since, the entry goes into the history at
+        // its own time but does not overwrite the newer progress.
+        $queuedAt = is_string($input['recorded_at'] ?? null) ? strtotime($input['recorded_at']) : false;
+        $queuedAt = $queuedAt !== false && $queuedAt <= time() + 300 && $queuedAt >= time() - 30 * 86400 ? date('Y-m-d H:i:s', min($queuedAt, time())) : null;
+        $changedSince = array_key_exists('expected_status', $input) && ((string)$input['expected_status'] !== (string)$grow['status']
+            || (string)($input['expected_pct'] ?? '') !== (string)($grow['progress_pct'] ?? ''));
         db()->beginTransaction();
         try {
-            db()->prepare('UPDATE smart_goals SET status = ?, progress_pct = ? WHERE id = ?')->execute([$gs, $pct, $gid]);
-            db()->prepare('INSERT INTO goal_progress (goal_id, progress_pct, status, note, recorded_by) VALUES (?,?,?,?,?)')
-                ->execute([$gid, $pct, $gs, $note, $userId]);
+            if (!$changedSince) db()->prepare('UPDATE smart_goals SET status = ?, progress_pct = ? WHERE id = ?')->execute([$gs, $pct, $gid]);
+            db()->prepare('INSERT INTO goal_progress (goal_id, progress_pct, status, note, recorded_by, idem_key, created_at) VALUES (?,?,?,?,?,?,COALESCE(?, NOW()))')
+                ->execute([$gid, $pct, $gs, $note, $userId, $goalIdem, $queuedAt]);
             db()->commit();
-        } catch (Throwable $e) { db()->rollBack(); throw $e; }
+        } catch (PDOException $e) {
+            if (db()->inTransaction()) db()->rollBack();
+            // The same entry, arriving twice at once: the first one counts.
+            if ($goalIdem !== null && ($e->errorInfo[0] ?? '') === '23000') out(['ok' => true, 'deduplicated' => true, 'progress_pct' => $pct]);
+            throw $e;
+        } catch (Throwable $e) { if (db()->inTransaction()) db()->rollBack(); throw $e; }
+        if ($changedSince) {
+            audit($userId, 'goal.status', 'goal', $gid, $gs . ' ' . $pct . '% (mobile, offline; history only, the goal had changed since)');
+            out(['ok' => true, 'progress_pct' => (int)($grow['progress_pct'] ?? 0), 'kept_newer' => true,
+                'message' => 'Someone recorded newer progress on this goal while you were offline, so your entry was added to its history and the newer progress was kept.']);
+        }
         audit($userId, 'goal.status', 'goal', $gid, $gs . ' ' . $pct . '% (mobile)');
         out(['ok' => true, 'progress_pct' => $pct]);
 
@@ -2018,8 +2042,10 @@ switch ($action) {
         $htid = (int)$hw->fetchColumn();
         if ($htid === 0) fail('Homework not found.', 404);
         api_require_track($htid, $userId);
-        db()->prepare("UPDATE homework SET status = 'Completed' WHERE id = ?")->execute([$hid]);
-        audit($userId, 'homework.complete', 'homework', $hid, 'mobile');
+        // Only an assigned item changes (a resend from the offline queue changes and audits nothing).
+        $hwDone = db()->prepare("UPDATE homework SET status = 'Completed' WHERE id = ? AND status = 'Assigned'");
+        $hwDone->execute([$hid]);
+        if ($hwDone->rowCount() > 0) audit($userId, 'homework.complete', 'homework', $hid, 'mobile');
         out(['ok' => true]);
 
     case 'me':

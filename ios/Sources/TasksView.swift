@@ -197,9 +197,13 @@ struct TasksView: View {
                 .font(.caption).foregroundStyle(Color.secondaryText)
             if let details = task.details, !details.isEmpty { Text(details).font(.callout) }
             HStack(spacing: 16) {
-                Button(task.isOpen ? "Done" : "Reopen") { Task { await setDone(task, reopen: !task.isOpen) } }
-                    .buttonStyle(.borderless)
-                    .frame(minHeight: 44)
+                if queuedTasks.contains(task.id) {
+                    Text("Waiting to send").font(.callout).foregroundStyle(Color.secondaryText)
+                } else {
+                    Button(task.isOpen ? "Done" : "Reopen") { Task { await setDone(task, reopen: !task.isOpen) } }
+                        .buttonStyle(.borderless)
+                        .frame(minHeight: 44)
+                }
                 if task.isOpen && !task.automatic {
                     Button("Edit") { editing = task }
                         .buttonStyle(.borderless)
@@ -215,7 +219,9 @@ struct TasksView: View {
         .accessibilityFocused($focusedTask, equals: task.id)
         .accessibilityAction { announceRowActions() }
         .accessibilityActions {
-            Button(task.isOpen ? "Mark done" : "Reopen") { Task { await setDone(task, reopen: !task.isOpen) } }
+            if !queuedTasks.contains(task.id) {
+                Button(task.isOpen ? "Mark done" : "Reopen") { Task { await setDone(task, reopen: !task.isOpen) } }
+            }
             if task.isOpen && !task.automatic { Button("Edit task") { editing = task } }
             if task.canOpenClient, let id = task.clientId { Button("Open client record") { openClient = id } }
             if task.canOpenReferral, let id = task.referralId { Button("Open referral") { openReferral = id } }
@@ -226,6 +232,9 @@ struct TasksView: View {
         if let message = sheetResult { announceAfterDismiss(message) }
         sheetResult = nil
     }
+
+    /// Tasks completed or reopened without a signal, waiting in the offline queue (4.8.0).
+    @State private var queuedTasks: Set<Int> = []
 
     private func setDone(_ task: TaskItem, reopen: Bool) async {
         // A double tap (or the button and the rotor action together) sends one request.
@@ -244,6 +253,16 @@ struct TasksView: View {
             else if !now.isEmpty { focusedTask = now[min(index, now.count - 1)] }
             else { focusedTask = -1 }
             announceAfterDismiss(result.message ?? (reopen ? "Task reopened." : "Task completed."))
+        } catch APIError.network {
+            // No signal (4.8.0): kept on this phone and sent when it is back online; the server
+            // treats a task already in that state as done.
+            var body: [String: Any] = ["id": task.id, "idem_key": UUID().uuidString]
+            if reopen { body["reopen"] = true }
+            do {
+                try api.enqueue("complete_task", body: body, label: (reopen ? "Reopen task: " : "Task done: ") + String(task.title.prefix(40)))
+                queuedTasks.insert(task.id)
+                announce("No signal. This is kept on this iPhone and saved when you are back online.")
+            } catch { showFormError(error.localizedDescription, in: &self.error) }
         } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 

@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.8.0' => [
+        'JAWS now reads each main menu link\'s short description as you move through the menu (it is part of the link), with no extra line or stop.',
+        'The iPhone app (4.8.0) works without a signal for more things: expenses, goal progress, completing a task and completing homework are kept on the phone and sent when you are back online, each only once, as notes, hours and check-ins already were.',
+    ],
     '4.7.1' => [
         'The main menu has a Referral form link under Clients, to make a referral for someone or share the form\'s link. The referral form is also linked from every page\'s footer and the sign-in page, and the tests now make sure it stays there.',
     ],

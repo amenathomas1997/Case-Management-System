@@ -57,4 +57,4 @@ foreach (['login', 'community_referral', 'privacy', 'help', 'portal', 'forgot'] 
 
 /* The referral form in the main menu, under Clients (owner, 2026-10-16) */
 [$code,$out,$err]=$renderPage('index',[]);
-check(preg_match('~<h3 class="nav-group-title" id="nav-group-clients">Clients</h3>\s*<ul aria-labelledby="nav-group-clients">.*?<a href="community_referral.php"[^>]*>Referral form</a>.*?</ul>~s',$out)===1,'The main menu has a Referral form link under Clients' . ($err ? ": $err" : ''));
+check(preg_match('~<h3 class="nav-group-title" id="nav-group-clients">Clients</h3>\s*<ul aria-labelledby="nav-group-clients">.*?<a href="community_referral.php"[^>]*>Referral form<span class="nav-hint-sr visually-hidden">.*?</ul>~s',$out)===1,'The main menu has a Referral form link under Clients' . ($err ? ": $err" : ''));

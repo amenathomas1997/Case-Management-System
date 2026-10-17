@@ -247,7 +247,9 @@ struct HomeworkSection: View {
                     Button(editText) { editing = item }.font(.callout)
                         .accessibilityLabel("\(editText): \(item.title)")
                         .accessibilityInputLabels([editText, "Edit", "Edit \(item.title)"])
-                    if item.status == "Assigned" {
+                    if queuedHomework.contains(item.id) {
+                        Text("Completed, waiting to send").font(.callout).foregroundStyle(Color.secondaryText)
+                    } else if item.status == "Assigned" {
                         // Completing can't be undone and takes it off the client portal: asked first.
                         Button("Mark completed") { confirmingComplete = item }
                             .font(.callout)
@@ -333,6 +335,9 @@ struct HomeworkSection: View {
         }
     }
 
+    /// Homework marked completed without a signal, waiting in the offline queue (4.8.0).
+    @State private var queuedHomework: Set<Int> = []
+
     private func complete(_ item: HomeworkItem) async {
         // Cleared first so a repeat of the same failure is shown (and announced) again.
         error = nil
@@ -344,6 +349,13 @@ struct HomeworkSection: View {
             try? await Task.sleep(nanoseconds: 150_000_000)   // let the reloaded rows appear first
             if homework.contains(where: { $0.id == item.id }) { focusedStatus = item.id }
             announceAfterDismiss("\(item.title) marked completed.")
+        } catch APIError.network {
+            // No signal (4.8.0): marking homework done is safe to send again, so it waits on the phone.
+            do {
+                try api.enqueue("complete_homework", body: ["id": item.id], label: "Homework done: " + String(item.title.prefix(40)))
+                queuedHomework.insert(item.id)
+                announce("No signal. \(item.title) will be marked completed when you are back online.")
+            } catch { showFormError(error.localizedDescription, in: &self.error) }
         } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
