@@ -28,3 +28,9 @@ The owner reported that Check for updates showed the wrong time and did not upda
 - a stale check not shown as current
 - a failed attempt said
 - an older site's jobs folder found
+
+## Deployed
+
+2026-10-17 15:12 CT, after CI passed all three jobs on ff9c329. Every replaced file matched 4.19.0 first. The backup is at /home/cmsuser/casemanagement_private/deploy-4.19.1-20261017-151239, and every installed file matches the release.
+
+The live site now checks GitHub by default. A check run on the server after the GitHub release v4.19.1 was published reports 4.19.1, "last checked" in CDT. Published as the GitHub release v4.19.1 (latest), with the install bundle and the verified signed package.
