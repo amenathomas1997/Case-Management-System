@@ -338,6 +338,8 @@ try {
             file_put_contents($snapshotDir . '/' . $page . '.html', $html);
         }
         check($showsOwnContent($page,$html), "$page shows its own content" . (isset($pageMarkers[$page]) ? '' : ' (no marker is listed for it in the test)'));
+        // The referral form is linked from every page's footer (owner, 2026-10-16): it must never drop off.
+        if (str_contains($html, '<html')) check(str_contains($html, 'href="community_referral.php"'), "$page links to the referral form in its footer");
         check(!str_contains($html . $errors, $secrets['ai']) && !str_contains($html . $errors, $secrets['entra']), "$page never shows a stored secret");
         if ($page==='client_export') {
             file_put_contents($tmp . '/export.zip',$html);

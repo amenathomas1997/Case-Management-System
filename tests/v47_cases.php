@@ -47,3 +47,10 @@ $db->prepare("INSERT INTO saved_reports(name,owner_id,shared,definition) VALUES(
 $db->exec("UPDATE saved_reports SET owner_id=1 WHERE id=$ny");
 [$code,,$err]=$renderPage('custom_reports',[],['delete_report'=>'1','report_id'=>(string)$ny]);
 check((int)$db->query("SELECT COUNT(*) FROM saved_reports WHERE id=$ny")->fetchColumn()===0,'Its owner can delete a saved report');
+
+/* The referral form link (owner, 2026-10-16): on the sign-in page and every public page, signed out */
+foreach (['login', 'community_referral', 'privacy', 'help', 'portal', 'forgot'] as $publicPage) {
+    putenv('CMS_TEST_ANON=1'); putenv('CMS_TEST_SESSION');
+    try { [$code,$out,$err]=$renderPage($publicPage,[]); } finally { putenv('CMS_TEST_ANON'); }
+    check($code===0 && str_contains($out,'href="community_referral.php"'),"Signed out, $publicPage links to the referral form" . ($err ? ": $err" : ''));
+}
