@@ -25,6 +25,7 @@
 		4E82CF31C62EED4AB880648A /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3700BEC94013DAD600C8D30B /* SearchView.swift */; };
 		56C38842F3C4307644B8B2A1 /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBB32C5C81EDD8CC5067041B /* WidgetShared.swift */; };
 		5AD03B848A2225905E40A07E /* IncidentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00D936D0F5E76C837C52FA1F /* IncidentsView.swift */; };
+		5AE70EB638E476E3FA96C461 /* TrainingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C698B61AB291ED3019D358F /* TrainingView.swift */; };
 		6F11D87D67FDF1C146CBB8CE /* AIToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB35AEA838959C5BED3A33E6 /* AIToolsView.swift */; };
 		707E53F33B6350EABE6ACBA4 /* PipelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6826FC15B6066A74FA0F98E4 /* PipelineView.swift */; };
 		7209274E1632F38209110D41 /* FollowupsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B69D2377DCDD583F59162C6 /* FollowupsView.swift */; };
@@ -116,6 +117,7 @@
 		6A4FE2DE36B30320C058C22A /* EquipmentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EquipmentView.swift; sourceTree = "<group>"; };
 		6B69D2377DCDD583F59162C6 /* FollowupsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowupsView.swift; sourceTree = "<group>"; };
 		6BDEE21DF4CB11527B840DA5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		6C698B61AB291ED3019D358F /* TrainingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingView.swift; sourceTree = "<group>"; };
 		6EF0D2B71508A87B548B7827 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		775188868D4A424AE1DA1533 /* ATServicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ATServicesView.swift; sourceTree = "<group>"; };
 		7EEBE1B9872AD80C86E8151F /* CounselorsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CounselorsView.swift; sourceTree = "<group>"; };
@@ -190,6 +192,7 @@
 				00A5A9D8EE5CBAC58A3DAB1E /* SignatureView.swift */,
 				142F29431CA223E90C3A342F /* TasksView.swift */,
 				5C0720962938F1050375F869 /* TrackDetailView.swift */,
+				6C698B61AB291ED3019D358F /* TrainingView.swift */,
 				39D2F56FEA97A04E7314DC70 /* UploadDocumentSheet.swift */,
 				ED88463141827145F7945DCB /* UtilizationView.swift */,
 				BE55F4B084B791474211097F /* VoiceAssistant.swift */,
@@ -365,6 +368,7 @@
 				EF385D0C30B34C20CA8C44BA /* SignatureView.swift in Sources */,
 				80C6FE18F33E1DF09A87F1DB /* TasksView.swift in Sources */,
 				B8C668D751D0F28C666F3792 /* TrackDetailView.swift in Sources */,
+				5AE70EB638E476E3FA96C461 /* TrainingView.swift in Sources */,
 				B716E5E0C61D9A282C8A6D65 /* UploadDocumentSheet.swift in Sources */,
 				105512E0520973E4DE1BC479 /* UtilizationView.swift in Sources */,
 				35D6C961E8D154951192A737 /* VoiceAssistant.swift in Sources */,
@@ -401,14 +405,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 51;
+				CURRENT_PROJECT_VERSION = 52;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.15.0;
+				MARKETING_VERSION = 4.16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -492,14 +496,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 51;
+				CURRENT_PROJECT_VERSION = 52;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.15.0;
+				MARKETING_VERSION = 4.16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -511,7 +515,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 51;
+				CURRENT_PROJECT_VERSION = 52;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -519,7 +523,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.15.0;
+				MARKETING_VERSION = 4.16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -532,7 +536,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 51;
+				CURRENT_PROJECT_VERSION = 52;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -540,7 +544,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.15.0;
+				MARKETING_VERSION = 4.16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;

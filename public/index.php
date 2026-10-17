@@ -131,6 +131,24 @@ if (can('billing')) {
 page_header('Dashboard', $user, 'dashboard');
 ?>
 <h1>Caseload Dashboard</h1>
+<?php if (!empty($GLOBALS['ACCESS_HOLD'])): // 4.16.0 ?>
+<section class="card alert-info" aria-labelledby="hold-heading">
+  <h2 id="hold-heading">Client records open once you finish</h2>
+  <p><?= h(implode(', ', $GLOBALS['ACCESS_HOLD'])) ?>. <a href="agreements.php">My agreements</a>. <a href="training.php">My training</a></p>
+</section>
+<?php endif; ?>
+<?php $myCreds = credentials_due_for((int)$user['id']); if ($myCreds): // 4.16.0 ?>
+<section class="card alert-info" aria-labelledby="creds-heading">
+  <h2 id="creds-heading"><?= count($myCreds) === 1 ? 'A credential to renew' : count($myCreds) . ' credentials to renew' ?></h2>
+  <p><?= h(implode('; ', array_map(fn($c) => $c['name'] . ', ' . credential_state($c)[1], $myCreds))) ?>. <a href="credentials.php">Open My credentials</a></p>
+</section>
+<?php endif; ?>
+<?php $toTake = training_needed((int)$user['id']); if ($toTake > 0): // 4.16.0 ?>
+<section class="card alert-info" aria-labelledby="training-heading">
+  <h2 id="training-heading"><?= $toTake === 1 ? 'Training to take' : $toTake . ' trainings to take' ?></h2>
+  <p>Please read it and answer the questions. <a href="training.php">Open My training</a></p>
+</section>
+<?php endif; ?>
 <?php $toSign = staff_agreements_needed((int)$user['id']); if ($toSign > 0): // 4.15.0 ?>
 <section class="card alert-info" aria-labelledby="agreements-heading">
   <h2 id="agreements-heading"><?= $toSign === 1 ? 'An agreement to sign' : $toSign . ' agreements to sign' ?></h2>

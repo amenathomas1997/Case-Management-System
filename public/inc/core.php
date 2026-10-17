@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.15.0';
+const APP_VERSION = '4.16.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -102,6 +102,7 @@ const PERMISSION_KEYS = [
 
 $GLOBALS['CURRENT_PERMS'] = null;   // set by resolve_perms() at sign-in check
 $GLOBALS['CURRENT_SCOPED'] = false;
+$GLOBALS['ACCESS_HOLD'] = [];      // what this person must finish before client records (4.16.0)
 
 /**
  * Resolve a user's permission set. Group membership wins; users without a
@@ -1735,3 +1736,7 @@ require_once __DIR__ . '/session_plan.php';
 require_once __DIR__ . '/meetings.php';
 // Agreements staff read and sign themselves (4.15.0).
 require_once __DIR__ . '/staff_agreements.php';
+// Staff training with a quiz, and holding back client records until it is done (4.16.0).
+require_once __DIR__ . '/staff_training.php';
+// Staff credentials with expiry dates (4.16.0).
+require_once __DIR__ . '/staff_credentials.php';

@@ -17,6 +17,8 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_agreem
     $body = is_string($_POST['body'] ?? null) ? str_replace("\r", '', trim($_POST['body'])) : '';
     $active = !empty($_POST['active']) ? 1 : 0;
     $conf = !empty($_POST['counts_as_confidentiality']) ? 1 : 0;
+    $kind = ($_POST['kind'] ?? '') === 'exit' ? 'exit' : 'staff';
+    if ($kind === 'exit') $conf = 0; // the exit acknowledgement never stands for the confidentiality agreement
     $small = !empty($_POST['small_correction']);
     $sfx = $aid > 0 ? '_' . $aid : '';
     $errs = [];
@@ -46,7 +48,11 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_agreem
             if (!$old) { db()->rollBack(); flash('That agreement no longer exists.', 'error'); redirect('staff_agreements.php'); }
             $changed = $old['title'] !== $title || $old['body'] !== $body;
             $version = (int)$old['version'] + ($changed && !$small ? 1 : 0);
-            db()->prepare('UPDATE staff_agreements SET title = ?, body = ?, version = ?, active = ?, counts_as_confidentiality = ?, updated_by = ?, updated_at = NOW() WHERE id = ?')
+            // When it was turned on, and when its text last changed: who must sign by when depends on them.
+            $turnedOn = $active && !(int)$old['active'];
+            $bumped = $version > (int)$old['version'];
+            db()->prepare('UPDATE staff_agreements SET title = ?, body = ?, version = ?, active = ?, counts_as_confidentiality = ?, updated_by = ?, updated_at = NOW()'
+                    . ($turnedOn ? ', activated_at = NOW()' : '') . ($bumped ? ', version_at = NOW()' : '') . ' WHERE id = ?')
                 ->execute([$title, $body, $version, $active, $conf, $user['id'], $aid]);
             // Every change of text is kept: what it said before, what it says now, and who changed it.
             if ($changed) {
@@ -58,7 +64,8 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_agreem
             if ($version > (int)$old['version'] && $conf) db()->exec('UPDATE users SET confidentiality_signed_on = NULL');
             $what = $changed ? ($small ? 'text corrected (no new signatures asked)' : 'text changed: version ' . $version . ', everyone signs again') : 'settings saved';
         } else {
-            db()->prepare('INSERT INTO staff_agreements (title, body, active, counts_as_confidentiality, updated_by) VALUES (?,?,?,?,?)')->execute([$title, $body, $active, $conf, $user['id']]);
+            db()->prepare('INSERT INTO staff_agreements (title, body, kind, active, counts_as_confidentiality, updated_by, activated_at) VALUES (?,?,?,?,?,?,' . ($active ? 'NOW()' : 'NULL') . ')')
+                ->execute([$title, $body, $kind, $active, $conf, $user['id']]);
             $aid = (int)db()->lastInsertId();
             $what = 'added';
         }
@@ -94,6 +101,9 @@ if ($ready && isset($_GET['signature'])) {
 
 $agreements = $ready ? db()->query('SELECT a.*, u.name AS updated_by_name FROM staff_agreements a LEFT JOIN users u ON u.id = a.updated_by ORDER BY a.active DESC, a.title')->fetchAll() : [];
 $staff = $ready ? db()->query('SELECT id, name FROM users WHERE is_active = 1 ORDER BY name')->fetchAll() : [];
+// The exit acknowledgement concerns only people asked to sign it (active or since switched off).
+$leavers = [];
+try { $leavers = $ready ? db()->query('SELECT id, name FROM users WHERE exit_requested_at IS NOT NULL ORDER BY name')->fetchAll() : []; } catch (PDOException $e) {}
 $latest = $ready ? staff_agreement_latest() : [];
 $editing = (int)($_GET['edit'] ?? 0);
 
@@ -107,7 +117,8 @@ page_header('Staff agreements', $user, 'admin', [['admin.php', 'Administration']
 <p><a class="btn btn-secondary" href="staff_agreements.php?new=1#new-h">Write a new agreement</a></p>
 <?php foreach ($agreements as $a): $aid = (int)$a['id']; $sfx = '_' . $aid;
     $signedNow = 0; $rows = [];
-    foreach ($staff as $s) {
+    $who = ($a['kind'] ?? 'staff') === 'exit' ? $leavers : $staff;
+    foreach ($who as $s) {
         $l = $latest[(int)$s['id']][$aid] ?? null;
         $current = $l && (int)$l['version'] === (int)$a['version'] && strtotime(substr((string)$l['signed_at'], 0, 10) . ' +' . STAFF_RENEWAL_DAYS . ' days') >= strtotime(date('Y-m-d'));
         if ($current) $signedNow++;
@@ -115,7 +126,8 @@ page_header('Staff agreements', $user, 'admin', [['admin.php', 'Administration']
     } ?>
 <section class="card" aria-labelledby="agreement-<?= $aid ?>">
   <h2 id="agreement-<?= $aid ?>" tabindex="-1"><?= h($a['title']) ?>: <?= $a['active'] ? 'on' : 'off' ?>, version <?= (int)$a['version'] ?></h2>
-  <p><?= $a['active'] ? $signedNow . ' of ' . count($staff) . ' active staff have signed the current version.' : 'Off: nobody is asked to sign it.' ?><?= $a['counts_as_confidentiality'] ? ' This is the confidentiality agreement.' : '' ?><?= $a['updated_by_name'] ? ' Last changed ' . fmt_datetime($a['updated_at']) . ' by ' . h($a['updated_by_name']) . '.' : '' ?></p>
+  <?php if (($a['kind'] ?? 'staff') === 'exit'): ?><p>The exit acknowledgement: asked only of someone leaving, when an administrator asks them to sign it from their user page.</p><?php endif; ?>
+  <p><?= $a['active'] ? $signedNow . ' of ' . count($who) . (($a['kind'] ?? 'staff') === 'exit' ? ' people asked' : ' active staff') . ' have signed the current version.' : 'Off: nobody is asked to sign it.' ?><?= $a['counts_as_confidentiality'] ? ' This is the confidentiality agreement.' : '' ?><?= $a['updated_by_name'] ? ' Last changed ' . fmt_datetime($a['updated_at']) . ' by ' . h($a['updated_by_name']) . '.' : '' ?></p>
   <?php if ($a['active']): ?>
   <h3>Who has signed</h3>
   <ul>
@@ -131,6 +143,7 @@ page_header('Staff agreements', $user, 'admin', [['admin.php', 'Administration']
   <form method="post" action="staff_agreements.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['title' . $sfx => 'Title', 'body' . $sfx => 'Agreement text'], ['title' . $sfx => 't' . $sfx, 'body' . $sfx => 'b' . $sfx]) ?>
     <input type="hidden" name="agreement_id" value="<?= $aid ?>">
+    <input type="hidden" name="kind" value="<?= h($a['kind'] ?? 'staff') ?>">
     <div class="field"><label for="t<?= $sfx ?>">Title</label>
       <input type="text" id="t<?= $sfx ?>" name="title" maxlength="190" value="<?= h($mine ? old_in('title') : $a['title']) ?>" <?= field_aria('title' . $sfx) ?>><?= field_error('title' . $sfx) ?></div>
     <div class="field"><label for="b<?= $sfx ?>">Agreement text <span class="hint">a line starting with # is a heading, a line starting with - is a list item</span></label>
@@ -153,6 +166,10 @@ page_header('Staff agreements', $user, 'admin', [['admin.php', 'Administration']
       <input type="text" id="nt" name="title" maxlength="190" value="<?= h(old_in('title')) ?>" <?= field_aria('title') ?>><?= field_error('title') ?></div>
     <div class="field"><label for="nb">Agreement text <span class="hint">a line starting with # is a heading, a line starting with - is a list item</span></label>
       <textarea id="nb" name="body" rows="18" <?= field_aria('body') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?></div>
+    <fieldset><legend>Who signs it</legend>
+      <div class="field"><label><input type="radio" name="kind" value="staff" checked> All staff</label></div>
+      <div class="field"><label><input type="radio" name="kind" value="exit"> Someone leaving (an exit acknowledgement)</label></div>
+    </fieldset>
     <div class="field"><label><input type="checkbox" name="counts_as_confidentiality" value="1"> This is the confidentiality agreement (signing it records the date Compliance follows)</label></div>
     <div class="field"><label><input type="checkbox" name="active" value="1"> On: ask staff to sign it now</label></div>
     <button type="submit" name="save_agreement" value="1" class="btn btn-primary">Add the agreement</button>

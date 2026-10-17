@@ -6,6 +6,12 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.16.0' => [
+        'Staff training: an administrator writes a reading and a short quiz (Administration, Staff training; a starting privacy training is there to edit). Staff take it from My training on the website or in the phone apps; passing the privacy training records its yearly date.',
+        'Client records can wait until required agreements and training are done: for new staff (the built-in choice), for everyone after a few days to catch up, or never (Staff training, Before client records open).',
+        'Credentials: each person keeps their certifications and checks with expiry dates (My credentials); administrators see everyone\'s, and are reminded 60 days before one expires.',
+        'The exit acknowledgement: from a user page, ask someone leaving to sign it before their account is switched off. And the Staff compliance report lists every agreement, training and credential, on screen or as a spreadsheet.',
+    ],
     '4.15.0' => [
         'Staff agreements: an administrator writes the agreements staff must sign (Administration, Staff agreements; a starting confidentiality agreement is there to edit). Each staff member reads and signs their own by typing their name, from My agreements on the website or in the phone apps, and is asked again a year later or when the text changes. Each signed copy keeps the exact text signed, and Compliance lists anyone who still needs to sign.',
     ],

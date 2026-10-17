@@ -227,7 +227,7 @@ if ($postMax > 0 && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $postMax) {
 // Every value is read as a single string or number unless its key is one the
 // code reads as a list/object. Anything else is refused up front, so a stray
 // array can never be cast to "Array" or to 1 and written to a record.
-const API_ARRAY_INPUT_KEYS = ['scores', 'levels', 'present', 'homework', 'values', 'history', 'params', 'sections'];
+const API_ARRAY_INPUT_KEYS = ['scores', 'levels', 'present', 'homework', 'values', 'history', 'params', 'sections', 'answers'];
 // A decoded JSON body takes many times its own size in memory, so a body larger than
 // this is decoded only once the caller's token has been checked (below): only the
 // app's own uploads (documents, signatures) need more, and an anonymous caller can
@@ -440,6 +440,10 @@ unset($rawInput);
 
 // Group permissions apply to the app exactly as on the website.
 $resolved = resolve_perms($tok);
+// Client records are held back until required agreements and training are done (4.16.0).
+$holdRow = db()->prepare('SELECT id, created_at FROM users WHERE id = ?');
+$holdRow->execute([(int)$tok['user_id']]);
+$resolved = access_hold_apply($holdRow->fetch() ?: [], $resolved);
 $GLOBALS['CURRENT_PERMS'] = $resolved['perms'];
 $GLOBALS['CURRENT_SCOPED'] = $resolved['scoped'];
 $API_ACTION_PERMS = [
@@ -502,6 +506,10 @@ const API_PARITY_ACTIONS = ['tasks', 'save_task', 'complete_task', 'notification
     'save_track', 'request_consent', 'consents_due', 'pipeline', 'client_history', 'invoices', 'waitlist', 'waitlist_update', 'doc_review',
     'check_in_session'];
 if (isset($API_ACTION_PERMS[$action]) && !can($API_ACTION_PERMS[$action])) {
+    // Held back only until required agreements or training are done (4.16.0): say so.
+    if (!empty($GLOBALS['ACCESS_HOLD']) && in_array($API_ACTION_PERMS[$action], (array)($GLOBALS['PERMS_BEFORE_HOLD'] ?? []), true)) {
+        fail('Client records open once you finish: ' . implode(', ', $GLOBALS['ACCESS_HOLD']) . '. Open My agreements and My training.', 403);
+    }
     fail('Your account does not have access to that area. Ask an administrator if you need it.', 403);
 }
 
@@ -2062,6 +2070,8 @@ switch ($action) {
              // The zone every appointment time is written and read in; app builds from
              // 3.0.21 use it for appointment writes and displays (older ones ignore it).
              'timezone' => date_default_timezone_get(),
+             // What must be finished before client records open (4.16.0); the apps say so.
+             'access_hold' => $GLOBALS['ACCESS_HOLD'] ?? [],
              'server_version' => APP_VERSION]);
 
     case 'schedule_session':

@@ -12,15 +12,18 @@ import java.util.Locale
 @Composable
 fun DashboardScreen(api: Api, nav: NavHostController) {
     val state = rememberLoaded(api.userId) {
-        Triple(api.call("dashboard"), try { api.call("notifications", mapOf("count_only" to "1")).optInt("unread") } catch (e: Exception) { 0 },
-            try { api.call("agreements").optInt("needed") } catch (e: Exception) { 0 })
+        val toDo = (try { api.call("agreements").optInt("needed") } catch (e: Exception) { 0 }) to (try { api.call("training").optInt("needed") } catch (e: Exception) { 0 })
+        Triple(api.call("dashboard"), try { api.call("notifications", mapOf("count_only" to "1")).optInt("unread") } catch (e: Exception) { 0 }, toDo)
     }
     Show(state, "the dashboard") { (d, unread, toSign) ->
         Page {
             Heading("Hello, ${api.userName.substringBefore(' ')}", large = true)
             api.updateNotice?.let { NoticeText(it) }
             if (api.pendingSync > 0) ListRow(listOf("${api.pendingSync} offline ${if (api.pendingSync == 1) "entry" else "entries"} waiting to send"), onClick = { nav.navigate("offline") })
-            if (toSign > 0) ListRow(listOf(if (toSign == 1) "An agreement to sign" else "$toSign agreements to sign"), action = "read and sign", onClick = { nav.navigate("agreements") })
+            if (api.accessHold.isNotEmpty()) NoticeText("Client records open once you finish: " + api.accessHold.joinToString(", ") + ".")
+            val (sign, train) = toSign
+            if (sign > 0) ListRow(listOf(if (sign == 1) "An agreement to sign" else "$sign agreements to sign"), action = "read and sign", onClick = { nav.navigate("agreements") })
+            if (train > 0) ListRow(listOf(if (train == 1) "Training to take" else "$train trainings to take"), action = "open My training", onClick = { nav.navigate("training") })
             if (unread > 0) ListRow(listOf("$unread unread ${if (unread == 1) "alert" else "alerts"}"), onClick = { nav.navigate("alerts") })
 
             Heading("At a glance")

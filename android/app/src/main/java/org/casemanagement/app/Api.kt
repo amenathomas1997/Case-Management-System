@@ -48,6 +48,9 @@ class Api(context: Context) {
         private set
     var aiEnabled by mutableStateOf(false)
         private set
+    /** What must be finished before client records open (4.16.0): the agreements and training named. */
+    var accessHold by mutableStateOf<List<String>>(emptyList())
+        private set
     /** The AI features switched on for this account (draft, recommend, intake, voice and the rest). */
     var aiFeatures by mutableStateOf<List<String>>(emptyList())
         private set
@@ -309,6 +312,7 @@ class Api(context: Context) {
         scoped = me.optBoolean("scoped"); store.put("userScoped", scoped)
         aiEnabled = me.optBoolean("ai_enabled")
         aiFeatures = me.optJSONArray("ai_features").strings()
+        accessHold = me.optJSONArray("access_hold").strings()
         serverVersion = me.optString("server_version").ifEmpty { null }
         me.optString("timezone").takeIf { it.isNotEmpty() && java.util.TimeZone.getAvailableIDs().contains(it) }?.let { serverZone = it; store.put("serverZone", it); org.casemanagement.app.ui.serverZoneId = it }
         permsLoaded = true; store.put("userPermsLoaded", true)
@@ -361,7 +365,7 @@ class Api(context: Context) {
 
     private fun clearIdentity(keepQueue: Boolean = true) {
         docsFolder.deleteRecursively()
-        perms = emptyList(); permsLoaded = false; scoped = false; aiEnabled = false; aiFeatures = emptyList(); serverVersion = null
+        perms = emptyList(); permsLoaded = false; scoped = false; aiEnabled = false; aiFeatures = emptyList(); accessHold = emptyList(); serverVersion = null
         store.remove("userPerms", "userPermsLoaded", "userScoped", "formOptions")
         if (!keepQueue) store.remove(QUEUE_KEY)
         pendingSync = ownPending(loadQueue())

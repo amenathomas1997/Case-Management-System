@@ -95,6 +95,7 @@ if (!function_exists('staff_guide_topics')) {
             'guide-android' => ['How do I use the Android app?', []],
             'guide-account' => ['How do I change my account and display settings?', []],
             'guide-agreements' => ['How do I sign a staff agreement?', []],
+            'guide-staff-training' => ['How do I take staff training or record a credential?', []],
             'guide-admin' => ['Administration', [
                 'guide-audit' => 'How do I read the audit log?',
                 'guide-templates' => 'How do I manage templates?',
@@ -764,6 +765,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 
 <?= $sgH(3, 'guide-agreements') ?>
 <p>When an agreement needs your signature, your Home page says so. Open My agreements (from Home, or My Account), choose the agreement and read it. Tick that you have read it and agree, type your full name as it is on your account, and choose Sign the agreement. A copy of exactly what you signed is kept, and you can read it from My agreements. You are asked again a year later, or when the agreement changes. In the phone apps it is under More, My agreements.</p>
+
+<?= $sgH(3, 'guide-staff-training') ?>
+<p>When training is waiting for you, your Home page says so. Open My training, choose the training, read it, and answer each question by choosing one answer; then choose Check my answers. If you do not pass, the questions you got wrong are marked, and you can try again at once. If your Home page says client records open once you finish, sign the agreements and pass the training it names: client records open as soon as you do. Keep your certifications (such as CPR) under My credentials in My Account, with their expiry dates; you are reminded before one expires. In the phone apps these are under More.</p>
 
 <?= $sgH(3, 'guide-account') ?>
 <p>Open My Account. It holds only your own settings. Administrators also find an Administration link near the top; agency-wide settings are there (see <a href="#guide-admin">Administration</a>). Press H to move between the sections:</p>

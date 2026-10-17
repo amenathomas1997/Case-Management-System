@@ -7,12 +7,23 @@ declare(strict_types=1);
 // The one marked as the confidentiality agreement also sets users.confidentiality_signed_on,
 // which Compliance and the yearly reminders already follow (3.0.55).
 
-/** The agreements staff are asked to sign. */
-function staff_agreements_active(): array {
+/**
+ * The agreements staff are asked to sign: those for all staff and, for someone asked to sign it
+ * because they are leaving (users.exit_requested_at, 4.16.0), the exit acknowledgement.
+ */
+function staff_agreements_active(?int $userId = null): array {
     try {
-        return db()->query('SELECT * FROM staff_agreements WHERE active = 1 ORDER BY counts_as_confidentiality DESC, title')->fetchAll();
+        $leaving = false;
+        if ($userId !== null) {
+            $q = db()->prepare('SELECT exit_requested_at FROM users WHERE id = ?');
+            $q->execute([$userId]);
+            $leaving = (string)$q->fetchColumn() !== '';
+        }
+        return db()->query("SELECT * FROM staff_agreements WHERE active = 1 AND (kind = 'staff'" . ($leaving ? " OR kind = 'exit'" : '') . ') ORDER BY counts_as_confidentiality DESC, kind DESC, title')->fetchAll();
     } catch (PDOException $e) {
-        return []; // before migration 4.15.0
+        // Before migration 4.16.0 (no kind column) every agreement is for all staff.
+        try { return db()->query('SELECT * FROM staff_agreements WHERE active = 1 ORDER BY counts_as_confidentiality DESC, title')->fetchAll(); }
+        catch (PDOException $e2) { return []; } // before migration 4.15.0
     }
 }
 
@@ -38,7 +49,7 @@ function staff_agreement_latest(?int $userId = null): array {
 function staff_agreement_status(int $userId, ?array $latest = null): array {
     $out = [];
     $mine = ($latest ?? staff_agreement_latest($userId))[$userId] ?? [];
-    foreach (staff_agreements_active() as $a) {
+    foreach (staff_agreements_active($userId) as $a) {
         $s = $mine[(int)$a['id']] ?? null;
         $row = $a + ['state' => 'needed', 'signed_at' => null, 'renew_by' => null, 'why' => 'Not signed yet', 'signature_id' => null];
         if ($s) {
@@ -78,9 +89,9 @@ function staff_agreement_hash(string $title, string $body): string {
  * Returns [signature id, null, false] or [null, what is wrong, whether the text changed].
  */
 function staff_agreement_sign(int $userId, int $agreementId, string $typed, int $version, string $via, string $shownHash = ''): array {
-    $a = db()->prepare('SELECT * FROM staff_agreements WHERE id = ? AND active = 1');
-    $a->execute([$agreementId]);
-    $agreement = $a->fetch();
+    // Only an agreement asked of this person (the exit acknowledgement only of someone leaving).
+    $agreement = null;
+    foreach (staff_agreements_active($userId) as $x) if ((int)$x['id'] === $agreementId) $agreement = $x;
     if (!$agreement) return [null, 'That agreement is no longer asked for.', true];
     // The text read is the text signed: any change while it was open, even a small correction,
     // is said and nothing is signed.
@@ -170,5 +181,5 @@ function staff_agreement_notes(int $userId, ?array $latest = null): array {
 
 /** Whether an active agreement stands for the confidentiality agreement (then its own notes are used). */
 function staff_agreements_has_confidentiality(): bool {
-    return (bool)array_filter(staff_agreements_active(), fn($a) => (int)$a['counts_as_confidentiality'] === 1);
+    return (bool)array_filter(staff_agreements_active(), fn($a) => (int)$a['counts_as_confidentiality'] === 1 && ($a['kind'] ?? 'staff') === 'staff');
 }

@@ -34,6 +34,12 @@ struct DashboardView: View {
                     if let notice = api.updateNotice {
                         Text(notice).font(.callout.weight(.medium))
                     }
+                    if !api.accessHold.isEmpty {
+                        // 4.16.0: client records wait until these are done.
+                        NavigationLink { AgreementsView() } label: {
+                            Text("Client records open once you finish: " + api.accessHold.joined(separator: ", ") + ".").font(.callout.weight(.semibold))
+                        }
+                    }
                     if let data {
                         // As on the website, a figure the account has no permission for is left
                         // out (the server sends 0 for it, which would read as a fact).
@@ -172,6 +178,8 @@ struct DashboardView: View {
                     if api.can("billing") { MoreToolLink(title: "Grants & contracts", systemImage: "doc.text.magnifyingglass") { ContractsView() } }
                     MoreToolLink(title: "Knowledge base", systemImage: "book") { KnowledgeView() }
                     MoreToolLink(title: "My agreements", subtitle: "Staff agreements to read and sign", systemImage: "signature") { AgreementsView() }
+                    MoreToolLink(title: "My training", subtitle: "Training to read and pass", systemImage: "graduationcap") { TrainingView() }
+                    MoreToolLink(title: "My credentials", subtitle: "Certifications and their expiry dates", systemImage: "rosette") { CredentialsView() }
                     MoreToolLink(title: "Help and glossary", subtitle: "What the abbreviations and terms mean", systemImage: "questionmark.circle") { GlossaryView() }
                     if let url = workflowURL("help.php#staff-guide") {
                         WebPageLink(url: url, page: $webPage) { webToolRow("User guide", subtitle: "The staff guide on the website, opened in the app", systemImage: "book.closed") }

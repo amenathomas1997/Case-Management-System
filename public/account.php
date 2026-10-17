@@ -152,6 +152,11 @@ page_header('My Account', $user, 'account');
 <button type="submit" name="save_display_controls" value="1" class="btn btn-primary">Save display settings</button>
 </form>
 </section>
+<section class="card" aria-labelledby="training-link-h">
+  <h2 id="training-link-h">My training and credentials</h2>
+  <?php $toTake = training_needed((int)$user['id']); ?>
+  <p><?= $toTake > 0 ? ($toTake === 1 ? 'One training is' : $toTake . ' trainings are') . ' waiting for you. ' : '' ?><a href="training.php">Open My training</a>. <a href="credentials.php">Open My credentials</a></p>
+</section>
 <section class="card" aria-labelledby="agreements-link-h">
   <h2 id="agreements-link-h">My agreements</h2>
   <?php $toSign = staff_agreements_needed((int)$user['id']); ?>

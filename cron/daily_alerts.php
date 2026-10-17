@@ -244,6 +244,15 @@ try {
                 null, null, $due < date('Y-m-d') ? date('Y-m-d') : $due, (int)$adminIds[0], null, 'staffrenew-' . (int)$su['id'] . '-' . $col . '-' . $due);
         }
     }
+    // Credentials (4.16.0): one task for the administrator per credential, 60 days before it expires.
+    foreach (credentials_due() as $rows) {
+        foreach ($rows as $c) {
+            $adminIds = effective_admin_user_ids();
+            if (!$adminIds) break 2;
+            add_task('Renew ' . $c['name'] . ': ' . $c['user_name'], $c['user_name'] . "'s " . $c['name'] . ' ' . credential_state($c)[1] . '. Record the new one under Credentials once renewed.',
+                null, null, $c['expires_on'] < date('Y-m-d') ? date('Y-m-d') : (string)$c['expires_on'], (int)$adminIds[0], null, 'credential-' . (int)$c['id'] . '-' . $c['expires_on']);
+        }
+    }
     $m365 = staff_m365_sync();
     if ($m365['off']) notify_admin_users('Switched off because their Microsoft 365 account is disabled: ' . implode(', ', $m365['off']) . '. Move what they held from their user page.', 'users.php');
     if ($m365['admins']) notify_admin_users('Disabled in Microsoft 365 but still an administrator here (not switched off automatically): ' . implode(', ', $m365['admins']) . '.', 'users.php');

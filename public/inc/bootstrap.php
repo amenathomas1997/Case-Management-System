@@ -620,7 +620,7 @@ function require_login(): array {
         session_start();
         redirect('login.php');
     }
-    $resolved = resolve_perms($userRow);
+    $resolved = access_hold_apply($userRow, resolve_perms($userRow));
     $GLOBALS['CURRENT_PERMS'] = $resolved['perms'];
     $GLOBALS['CURRENT_SCOPED'] = $resolved['scoped'];
     $u['perms'] = $resolved['perms'];
@@ -645,7 +645,7 @@ function optional_login(): ?array {
     $userRow = $row->fetch();
     if (!$userRow) return null;
     $_SESSION['last_activity'] = time();
-    $resolved = resolve_perms($userRow);
+    $resolved = access_hold_apply($userRow, resolve_perms($userRow));
     $GLOBALS['CURRENT_PERMS'] = $resolved['perms'];
     $GLOBALS['CURRENT_SCOPED'] = $resolved['scoped'];
     $u['perms'] = $resolved['perms'];
@@ -656,6 +656,10 @@ function optional_login(): ?array {
 
 /** Gate a page on a permission; redirects with an explanation when denied. */
 function require_perm(string $perm): void {
+    if (!can($perm) && !empty($GLOBALS['ACCESS_HOLD']) && in_array($perm, (array)($GLOBALS['PERMS_BEFORE_HOLD'] ?? []), true)) {
+        flash('Client records open once you finish: ' . implode(', ', $GLOBALS['ACCESS_HOLD']) . '.', 'error');
+        redirect('index.php');
+    }
     if (!can($perm)) {
         flash('Your account does not have access to that area (' . (PERMISSION_KEYS[$perm] ?? $perm) . '). Ask an administrator if you need it.', 'error');
         redirect('index.php');

@@ -5,7 +5,8 @@ declare(strict_types=1);
 // website's rules. Called from api.php for an action it does not handle; null means "not mine".
 
 /** The permission each action needs. */
-const API_MORE_PERMS = ['submit_invoice' => 'billing', 'form_options' => '', 'agreements' => '', 'sign_agreement' => '', 'agreement_copy' => ''];
+const API_MORE_PERMS = ['submit_invoice' => 'billing', 'form_options' => '', 'agreements' => '', 'sign_agreement' => '', 'agreement_copy' => '',
+    'training' => '', 'submit_training' => '', 'credentials' => '', 'save_credential' => '', 'delete_credential' => ''];
 
 function api_more(string $action, array $input, int $userId): ?array {
     if (!array_key_exists($action, API_MORE_PERMS)) return null;
@@ -49,6 +50,62 @@ function api_more(string $action, array $input, int $userId): ?array {
             $c = $q->fetch();
             if (!$c) return ['ok' => false, 'error' => 'That signed copy was not found.', 'status' => 404];
             return ['ok' => true, 'copy' => ['id' => (int)$c['id'], 'title' => $c['title'], 'body' => $c['body'], 'version' => (int)$c['version'], 'signed_name' => $c['signed_name'], 'signed_at' => $c['signed_at']]];
+        }
+        // Staff training (4.16.0): the reading and questions, never which answer is right.
+        case 'training': {
+            $out = [];
+            foreach (training_status($userId) as $m) {
+                [$qs] = training_parse_questions((string)$m['questions']);
+                $out[] = ['id' => (int)$m['id'], 'title' => (string)$m['title'], 'body' => (string)$m['body'], 'version' => (int)$m['version'],
+                    'pass_pct' => (int)$m['pass_pct'], 'required' => (bool)$m['required'], 'state' => $m['state'], 'why' => $m['why'],
+                    'questions' => array_map(fn($q) => ['q' => $q['q'], 'options' => $q['options']], $qs), 'text_hash' => training_hash($m)];
+            }
+            return ['ok' => true, 'training' => $out, 'needed' => count(array_filter($out, fn($m) => $m['state'] === 'needed')), 'access_hold' => $GLOBALS['ACCESS_HOLD'] ?? []];
+        }
+        case 'submit_training': {
+            if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') return ['ok' => false, 'error' => 'Use POST for changes.', 'status' => 405];
+            $appHeader = (string)($_SERVER['HTTP_X_APP_VERSION'] ?? '');
+            $via = str_contains($appHeader, 'Android') ? 'Android app' : ($appHeader !== '' ? 'iPhone app' : 'app');
+            $r = training_submit($userId, (int)($input['id'] ?? 0), (int)($input['version'] ?? 0), is_string($input['text_hash'] ?? null) ? $input['text_hash'] : '',
+                is_array($input['answers'] ?? null) ? $input['answers'] : [], $via);
+            if ($r['error'] !== null) return ['ok' => false, 'error' => $r['error'], 'status' => $r['changed'] ? 409 : 422];
+            return ['ok' => true, 'passed' => $r['passed'], 'score' => $r['score'], 'total' => $r['total'], 'wrong' => $r['wrong'],
+                'message' => $r['passed'] ? 'Passed: ' . $r['score'] . ' of ' . $r['total'] . ' right.' : 'Not passed: ' . $r['score'] . ' of ' . $r['total'] . ' right. Read again, then answer the questions marked.'];
+        }
+        // Your own credentials (4.16.0); administrators keep everyone's on the website.
+        case 'credentials': {
+            return ['ok' => true, 'credentials' => array_map(fn($c) => ['id' => (int)$c['id'], 'name' => $c['name'], 'number' => $c['number'], 'issuer' => $c['issuer'],
+                'issued_on' => $c['issued_on'], 'expires_on' => $c['expires_on'], 'notes' => $c['notes'], 'state' => credential_state($c)[0], 'words' => credential_state($c)[1]], credentials_for($userId)),
+                'types' => cms_list_items('credential_types') ?: CREDENTIAL_TYPES];
+        }
+        case 'save_credential': {
+            $cid = (int)($input['id'] ?? 0);
+            if ($cid > 0) { $q = db()->prepare('SELECT id FROM staff_credentials WHERE id = ? AND user_id = ?'); $q->execute([$cid, $userId]); if (!$q->fetchColumn()) return ['ok' => false, 'error' => 'That credential was not found.', 'status' => 404]; }
+            $s = fn(string $k): string => is_string($input[$k] ?? null) ? trim($input[$k]) : '';
+            $name = $s('name');
+            if ($name === '' || mb_strlen($name) > 120) return ['ok' => false, 'error' => 'Name the credential (120 characters or fewer).', 'status' => 422];
+            $issued = $s('issued_on') === '' ? null : valid_date($s('issued_on'), 1950, (int)date('Y'));
+            $expires = $s('expires_on') === '' ? null : valid_date($s('expires_on'), 1950, (int)date('Y') + 20);
+            if (($s('issued_on') !== '' && $issued === null) || ($s('expires_on') !== '' && $expires === null)) return ['ok' => false, 'error' => 'Enter the dates as year-month-day (issued not in the future).', 'status' => 422];
+            if ($issued && $expires && $expires < $issued) return ['ok' => false, 'error' => 'The expiry date is before the date issued.', 'status' => 422];
+            $vals = [$name, mb_substr($s('number'), 0, 80) ?: null, mb_substr($s('issuer'), 0, 120) ?: null, $issued, $expires, mb_substr($s('notes'), 0, 255) ?: null];
+            // A field the app did not send (notes, from an app that does not show them) keeps its value.
+            if ($cid > 0) db()->prepare('UPDATE staff_credentials SET name = ?, number = ?, issuer = ?, issued_on = ?, expires_on = ?' . (array_key_exists('notes', $input) ? ', notes = ?' : '') . ', updated_at = NOW() WHERE id = ?')
+                ->execute(array_merge(array_key_exists('notes', $input) ? $vals : array_slice($vals, 0, 5), [$cid]));
+            if ($cid > 0) credential_close_tasks($cid);
+            else { db()->prepare('INSERT INTO staff_credentials (name, number, issuer, issued_on, expires_on, notes, user_id, added_by) VALUES (?,?,?,?,?,?,?,?)')->execute(array_merge($vals, [$userId, $userId])); $cid = (int)db()->lastInsertId(); }
+            audit($userId, 'credential.save', 'user', $userId, $name . ($expires ? ', expires ' . $expires : '') . ' (app)');
+            return ['ok' => true, 'id' => $cid];
+        }
+        case 'delete_credential': {
+            $q = db()->prepare('SELECT name FROM staff_credentials WHERE id = ? AND user_id = ?');
+            $q->execute([(int)($input['id'] ?? 0), $userId]);
+            $name = $q->fetchColumn();
+            if ($name === false) return ['ok' => false, 'error' => 'That credential was not found.', 'status' => 404];
+            db()->prepare('DELETE FROM staff_credentials WHERE id = ? AND user_id = ?')->execute([(int)$input['id'], $userId]);
+            credential_close_tasks((int)$input['id']);
+            audit($userId, 'credential.delete', 'user', $userId, $name . ' (app)');
+            return ['ok' => true];
         }
         case 'submit_invoice': {
             $id = (int)($input['id'] ?? 0);

@@ -59,11 +59,17 @@ function staff_compliance_list(): array {
     $latest = [];
     try { $latest = staff_agreement_latest(); } catch (Throwable $e) {}
     $signedConf = staff_agreements_has_confidentiality();
+    // Training (4.16.0) the same way, and credentials expired or expiring.
+    $trained = [];
+    try { $trained = training_latest(); } catch (Throwable $e) {}
+    $takenPrivacy = training_has_privacy();
+    $creds = credentials_due();
     foreach ($rows as $r) {
         $n = staff_compliance_notes($r);
         // With a confidentiality agreement staff sign, its own state replaces the recorded date's.
         if ($signedConf) $n = array_values(array_filter($n, fn($x) => !str_starts_with($x, 'Confidentiality agreement')));
-        $n = array_merge($n, staff_agreement_notes((int)$r['id'], $latest));
+        if ($takenPrivacy) $n = array_values(array_filter($n, fn($x) => !str_starts_with($x, 'Privacy training')));
+        $n = array_merge($n, staff_agreement_notes((int)$r['id'], $latest), training_notes((int)$r['id'], $trained), credential_notes($creds[(int)$r['id']] ?? []));
         if ($n) $out[] = $r + ['notes' => $n];
     }
     return $out;

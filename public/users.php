@@ -114,7 +114,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $emailChanged = $email !== strtolower($target['email']);
         try {
             change_user_access($uid, (int)$user['id'], ['role' => $role, 'group_id' => $gid, 'is_active' => $active],
-                function (PDO $db) use ($name, $email, $role, $gid, $hours, $active, $uid, $emailChanged, $dates): void {
+                function (PDO $db) use ($name, $email, $role, $gid, $hours, $active, $uid, $emailChanged, $dates, $target): void {
+            // Switching someone back on (a rehire) ends an earlier exit request (4.16.0).
+            if ($active && !(int)$target['is_active']) $db->prepare('UPDATE users SET exit_requested_at = NULL WHERE id = ?')->execute([$uid]);
             $db->prepare('UPDATE users SET name = ?, email = ?, role = ?, group_id = ?, weekly_hours = ?, is_active = ?'
                 . ($emailChanged ? ', entra_oid = NULL' : '') . ' WHERE id = ?')
                 ->execute([$name, $email, $role, $gid, $hours, $active, $uid]);
@@ -255,6 +257,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         audit($user['id'], 'user.clear_lockout', 'user', $uid);
         flash('Sign-in lockout cleared for ' . $target['name'] . ' — they can try again right away.');
         redirect('users.php?id=' . $uid);
+    }
+
+    // The exit acknowledgement (4.16.0): asked of this person (it shows on their Home page), or the request withdrawn.
+    if (isset($_POST['request_exit']) || isset($_POST['cancel_exit'])) {
+        $ask = isset($_POST['request_exit']);
+        if ($ask && !array_filter(db()->query("SELECT id FROM staff_agreements WHERE kind = 'exit' AND active = 1")->fetchAll())) {
+            flash('Turn on the exit acknowledgement first (Administration, Staff agreements).', 'error');
+            redirect('users.php?id=' . $uid . '#leaving-h');
+        }
+        db()->prepare('UPDATE users SET exit_requested_at = ' . ($ask ? 'NOW()' : 'NULL') . ' WHERE id = ?')->execute([$uid]);
+        audit($user['id'], $ask ? 'user.exit_requested' : 'user.exit_cancelled', 'user', $uid);
+        if ($ask) notify_user($uid, 'Please sign the exit acknowledgement before your last day.', 'agreements.php');
+        flash($ask ? $target['name'] . ' is asked to sign the exit acknowledgement. It shows on their Home page and in My agreements; its signed copy appears here.' : 'The exit acknowledgement is no longer asked of ' . $target['name'] . '.');
+        redirect('users.php?id=' . $uid . '#leaving-h');
     }
 
     if (isset($_POST['transfer_caseload'])) {
@@ -522,11 +538,35 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
     <?php endif; ?>
   </form>
 
+  <h3 id="creds-h">Credentials</h3>
+  <?php $uc = credentials_for((int)$edit['id']); ?>
+  <p><?= $uc ? h(implode('; ', array_map(fn($c) => $c['name'] . ', ' . credential_state($c)[1], $uc))) . '.' : 'None recorded.' ?> <a href="credentials.php?user=<?= (int)$edit['id'] ?>">Credentials for <?= h($edit['name']) ?></a></p>
   <?php $holds = staff_holdings((int)$edit['id']); $held = array_filter($holds); ?>
   <h3 id="leaving-h">If <?= h($edit['name']) ?> is leaving</h3>
   <?php if ($held): ?>
   <p>Still held: <?= h(implode('; ', array_map(fn($k, $v) => $k . ' ' . $v, array_keys($held), $held))) ?>. The transfer below moves it (open referrals go back to the queue when the receiver cannot open referrals, and sessions for clients outside a limited receiver's caseload stay to be rebooked); then uncheck Active above.</p>
   <?php else: ?><p>Nothing is held: uncheck Active above to switch the account off.</p><?php endif; ?>
+  <?php // 4.16.0: the exit acknowledgement they sign before their account is switched off.
+  $exitSig = null;
+  try {
+      // Only a signature since this request counts (an earlier one may be from a past period of work).
+      $eq = db()->prepare("SELECT s.id, s.signed_at FROM staff_agreement_signatures s JOIN staff_agreements a ON a.id = s.agreement_id AND a.kind = 'exit'
+          WHERE s.user_id = ? AND (? IS NULL OR s.signed_at >= ?) ORDER BY s.id DESC LIMIT 1");
+      $eq->execute([(int)$edit['id'], $edit['exit_requested_at'] ?? null, $edit['exit_requested_at'] ?? null]);
+      $exitSig = $eq->fetch() ?: null;
+  } catch (PDOException $e) {} ?>
+  <h3>Exit acknowledgement</h3>
+  <?php if ($exitSig): ?>
+  <p>Signed <?= fmt_datetime($exitSig['signed_at']) ?>. <a href="staff_agreements.php?signature=<?= (int)$exitSig['id'] ?>">Read the signed exit acknowledgement</a></p>
+  <?php elseif (!empty($edit['exit_requested_at'])): ?>
+  <p>Asked of <?= h($edit['name']) ?> on <?= fmt_date((string)$edit['exit_requested_at']) ?>; not signed yet.</p>
+  <form method="post" action="users.php" class="inline-form"><?= csrf_field() ?><input type="hidden" name="uid" value="<?= (int)$edit['id'] ?>">
+    <button type="submit" name="cancel_exit" value="1" class="btn btn-secondary">Stop asking for it</button></form>
+  <?php else: ?>
+  <p>Before switching the account off, ask them to sign the exit acknowledgement (returned devices, client information deleted, confidentiality continues). It shows on their Home page.</p>
+  <form method="post" action="users.php" class="inline-form"><?= csrf_field() ?><input type="hidden" name="uid" value="<?= (int)$edit['id'] ?>">
+    <button type="submit" name="request_exit" value="1" class="btn btn-secondary">Ask <?= h($edit['name']) ?> to sign the exit acknowledgement</button></form>
+  <?php endif; ?>
   <h3>Caseload transfer</h3>
   <p class="hint" id="to_user-hint">Open referrals go only to someone with access to referrals; otherwise they return to the unassigned referral queue. Someone limited to their own caseload receives only the sessions for clients they receive; any others stay here and are listed for you to rebook. Both people are emailed about the sessions that move.</p>
   <form method="post" action="users.php" class="inline-form"><?= csrf_field() ?>

@@ -37,7 +37,8 @@ if (strlen($token) === 48) {
     $u = $s->fetch();
 }
 if (!$u) { http_response_code(404); exit(calfeed_not_found()); }
-$access = resolve_perms($u);
+// Held back while required agreements or training are outstanding (4.16.0).
+$access = access_hold_apply($u, resolve_perms($u));
 if (!in_array('schedule', $access['perms'], true)) { http_response_code(404); exit(calfeed_not_found()); }
 $scope = $access['scoped'] ? ' AND c.assigned_to = '.(int)$u['id'] : '';
 header('Cache-Control: no-store');

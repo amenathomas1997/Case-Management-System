@@ -423,6 +423,8 @@ struct MeResponse: Decodable {
     let scoped: Bool?
     let aiEnabled: Bool?
     let aiFeatures: [String]?
+    /// What must be finished before client records open (4.16.0); nil from an older server.
+    let accessHold: [String]?
     /// The server's time zone, such as "America/Chicago"; nil from a server that does not report it.
     let timezone: String?
     /// The server's release, such as "3.0.21"; nil from a server that does not report it.
@@ -835,6 +837,8 @@ final class API: ObservableObject {
     @Published var aiEnabled: Bool = false
     /// Enabled AI feature keys (recommend, intake, progress, remediate, ask, kb, translate, curriculum, risk).
     @Published var aiFeatures: [String] = []
+    /// The agreements and training to finish before client records open (4.16.0).
+    @Published var accessHold: [String] = []
     /// The website's release (4.0.0), to say when this app is older than it.
     @Published var serverVersion: String?
     /// "Please update" when the website is a newer major release than this app.
@@ -888,6 +892,7 @@ final class API: ObservableObject {
             scoped = me.scoped ?? false
             aiEnabled = me.aiEnabled ?? false
             aiFeatures = me.aiFeatures ?? []
+            accessHold = me.accessHold ?? []
             serverVersion = me.serverVersion
             permsLoaded = true
             // Appointment times are sent and shown in the server's zone (APIDate); a server that
@@ -1415,6 +1420,7 @@ final class API: ObservableObject {
         scoped = false
         aiEnabled = false
         aiFeatures = []
+        accessHold = []
         syncError = nil
         syncNoticeDismissed = false
         sessionNotice = nil

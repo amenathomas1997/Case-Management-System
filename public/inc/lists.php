@@ -49,6 +49,8 @@ function cms_list_defs(): array {
         'client_statuses' => ['Client statuses (one you add counts as an open case, unless it starts with "Closed - ")', 'list', 'CLIENT_STATUSES', 'clients',
             ['Pending Assessment', 'Waitlist', 'Active Training', 'On Hold', 'Closed - Rehabilitated', 'Closed - Other']],
         'report_cadences' => ['How often automatic progress reports are due (Name | days between reports, 7 to 365)', 'map', 'REPORT_CADENCES', 'services', ['none', 'weekly', 'biweekly', 'monthly']],
+        // 4.16.0: credentials staff keep current (the choices on Credentials).
+        'credential_types' => ['Staff credentials (CPR, certifications, checks)', 'list', 'CREDENTIAL_TYPES', 'services', ['Other']],
         'referral_sources' => ['More referral sources on the referral form (each is asked what "Employer / other" is asked)', 'list', 'REFERRAL_SOURCES_EXTRA', 'clients', [],
             ['counselor', 'self', 'school', 'medical', 'family', 'agency', 'other']],
     ];
