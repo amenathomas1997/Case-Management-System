@@ -179,37 +179,6 @@ fun ReferralsScreen(api: Api, nav: NavHostController) {
     }
 }
 
-@Composable
-fun ReferralScreen(api: Api, id: Int) {
-    val state = rememberLoaded(id) { api.call("referral", mapOf("id" to id.toString())) }
-    var notice by remember { mutableStateOf<String?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    Show(state, "the referral") { r ->
-        val ref = r.optJSONObject("referral") ?: return@Show
-        Page {
-            Heading(ref.optString("client_name"), large = true)
-            NoticeText(notice)
-            ErrorText(error)
-            ListRow(listOf("Status: " + ref.optString("status")))
-            ListRow(listOf("Received " + whenText(ref.str("created_at"))))
-            ref.str("reference")?.let { ListRow(listOf("Reference: $it")) }
-            ref.str("counselor_name")?.let { ListRow(listOf("From: $it", ref.str("counselor_agency") ?: "", ref.str("counselor_email") ?: "", ref.str("counselor_phone") ?: "")) }
-            listOfNotNull(ref.str("client_phone")?.let { "Phone: $it" }, ref.str("client_email")?.let { "Email: $it" }).forEach { ListRow(listOf(it)) }
-            ref.str("assigned_name")?.let { ListRow(listOf("Assigned to $it")) }
-            Heading("The referral")
-            Text(ref.optString("body"))
-            if (ref.optString("status") == "New") PrimaryButton("Mark as reviewed") {
-                scope.launch {
-                    try { api.call("review_referral", body = JSONObject().put("id", id)); notice = "Marked as reviewed."; state.reload() }
-                    catch (e: ApiException) { error = e.message }
-                }
-            }
-            Text("Converting a referral to a client, assigning and closing it are on the website for now.")
-        }
-    }
-}
-
 /** Conversations with clients (and their counselors) through the client portal. */
 @Composable
 fun MessagesScreen(api: Api, nav: NavHostController) {
@@ -241,7 +210,8 @@ fun ThreadScreen(api: Api, clientId: Int) {
             Heading(r.optString("client_name"), large = true)
             Choice("With", channel, listOfNotNull("client" to "The client", r.str("counselor_name")?.let { "counselor" to "The counselor, $it" })) { channel = it }
             r.optJSONArray("messages").objects().forEach { m ->
-                ListRow(listOf((m.str("staff_name") ?: m.optString("sender")) + ", " + whenText(m.str("created_at")), m.optString("body")))
+                val who = m.str("staff_name") ?: when (m.optString("sender")) { "client" -> r.optString("client_name"); "counselor" -> r.str("counselor_name") ?: "The counselor"; else -> "Staff" }
+                ListRow(listOf(who + ", " + whenText(m.str("created_at")), m.optString("body")))
             }
             NoticeText(notice)
             Field("Your message", text, { text = it }, singleLine = false, minLines = 3)

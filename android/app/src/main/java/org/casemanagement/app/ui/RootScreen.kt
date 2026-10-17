@@ -120,6 +120,9 @@ private val titles = mapOf(
     "home" to "Home", "clients" to "Clients", "client" to "Client", "note" to "Add a case note", "hours" to "Log hours",
     "schedule" to "Schedule", "tasks" to "Tasks", "more" to "More", "alerts" to "Alerts", "referrals" to "Referrals",
     "referral" to "Referral", "messages" to "Messages", "thread" to "Conversation", "account" to "My account", "offline" to "Offline entries",
+    "clientEdit" to "Client details", "track" to "Training track", "trackEdit" to "Track details", "newSession" to "Schedule a session",
+    "equipment" to "Equipment", "followups" to "Device follow-ups", "docs" to "Documents and homework", "search" to "Search",
+    "pipeline" to "Pipeline", "waitlist" to "Waitlist", "compliance" to "Compliance", "invoices" to "Invoices", "incidents" to "Incidents",
 )
 
 @Composable
@@ -132,12 +135,25 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("hours/{clientId}/{trackId}") {
             LogHoursScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0)
         }
-        composable("schedule") { ScheduleScreen(api) }
+        composable("schedule") { ScheduleScreen(api, nav) }
         composable("tasks") { TasksScreen(api, nav) }
         composable("more") { MoreScreen(api, nav) }
         composable("alerts") { AlertsScreen(api) }
         composable("referrals") { ReferralsScreen(api, nav) }
-        composable("referral/{id}") { ReferralScreen(api, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
+        composable("referral/{id}") { ReferralScreen(api, nav, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
+        composable("clientEdit/{id}") { ClientEditScreen(api, nav, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
+        composable("track/{clientId}/{trackId}") { TrackScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0) }
+        composable("trackEdit/{clientId}/{trackId}") { TrackEditScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0) }
+        composable("newSession") { NewSessionScreen(api, nav) }
+        composable("equipment") { EquipmentScreen(api) }
+        composable("followups") { FollowupsScreen(api) }
+        composable("docs/{clientId}") { DocumentsScreen(api, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0) }
+        composable("search") { SearchScreen(api, nav) }
+        composable("pipeline") { PipelineScreen(api, nav) }
+        composable("waitlist") { WaitlistScreen(api) }
+        composable("compliance") { ComplianceScreen(api, nav) }
+        composable("invoices") { InvoicesScreen(api) }
+        composable("incidents") { IncidentsScreen(api) }
         composable("messages") { MessagesScreen(api, nav) }
         composable("thread/{clientId}") { ThreadScreen(api, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0) }
         composable("account") { AccountScreen(api, nav) }

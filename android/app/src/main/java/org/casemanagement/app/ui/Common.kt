@@ -230,3 +230,11 @@ fun openLink(context: android.content.Context, intent: android.content.Intent): 
 
 /** Hours as people say them: 1.5 → "1.5", 2.0 → "2". */
 fun hoursText(h: Double): String = if (h == Math.floor(h)) h.toLong().toString() else "%.2f".format(Locale.US, h).trimEnd('0').trimEnd('.')
+
+/** Said when a screen shows the copy kept on the phone because there is no connection. */
+@Composable
+fun OfflineCopyNotice(savedAt: Long?) {
+    if (savedAt == null) return
+    val at = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(Date(savedAt))
+    NoticeText("No connection. This is the copy saved on this phone at $at, so it may be out of date.")
+}

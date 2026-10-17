@@ -31,19 +31,22 @@ import org.json.JSONObject
  * tap offers what can be done with it: check in, complete, record a no-show or cancel, join.
  */
 @Composable
-fun ScheduleScreen(api: Api) {
-    val state = rememberLoaded(api.userId) { api.call("schedule") }
+fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
+    val state = rememberLoaded(api.userId) { api.callCached("schedule", cacheKey = "schedule") }
     var chosen by remember { mutableStateOf<JSONObject?>(null) }
     var completing by remember { mutableStateOf<JSONObject?>(null) }
+    var moving by remember { mutableStateOf<JSONObject?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    Show(state, "the schedule") { r ->
+    Show(state, "the schedule") { (r, savedAt) ->
         val sessions = r.optJSONArray("sessions").objects()
         Page {
+            OfflineCopyNotice(savedAt)
             NoticeText(notice)
+            PrimaryButton("Schedule a session") { nav.navigate("newSession") }
             ErrorText(error)
             val overdue = sessions.filter { it.optBoolean("overdue") }
             if (overdue.isNotEmpty()) {
@@ -81,6 +84,7 @@ fun ScheduleScreen(api: Api) {
                         }
                     }) { Text("Check in now") }
                     if (scheduled) TextButton(onClick = { chosen = null; completing = s }) { Text("Complete the session") }
+                    if (scheduled && !s.optBoolean("overdue")) TextButton(onClick = { chosen = null; moving = s }) { Text("Move to another time") }
                     if (scheduled) TextButton(onClick = {
                         act { api.call("set_session_status", body = JSONObject().put("session_id", id).put("to", "No Show")); "Recorded as a no-show." }
                     }) { Text("Record a no-show") }
@@ -98,6 +102,8 @@ fun ScheduleScreen(api: Api) {
             confirmButton = { TextButton(onClick = { chosen = null }) { Text("Close") } },
         )
     }
+
+    moving?.let { s -> MoveDialog(api, s, onDone = { m -> moving = null; notice = m; state.reload() }, onCancel = { moving = null }) }
 
     completing?.let { s ->
         CompleteDialog(api, s, onDone = { msg -> completing = null; notice = msg; state.reload() }, onCancel = { completing = null })

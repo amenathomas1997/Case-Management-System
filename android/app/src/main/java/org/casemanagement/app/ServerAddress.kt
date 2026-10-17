@@ -8,8 +8,18 @@ import java.net.URI
  * Anything that is not https, or has no host, is refused rather than guessed at.
  */
 object ServerAddress {
-    fun apiUrl(raw: String): String? {
+    /** Plain http to this computer, for a debug build talking to a local test server (never in a release build). */
+    private val devHosts = setOf("10.0.2.2", "localhost", "127.0.0.1")
+
+    fun apiUrl(raw: String, allowDevHttp: Boolean = false): String? {
         var s = raw.trim()
+        if (allowDevHttp && s.lowercase().startsWith("http://")) {
+            val uri = try { URI(s) } catch (e: Exception) { return null }
+            val host = uri.host?.lowercase() ?: return null
+            if (host !in devHosts || uri.rawUserInfo != null) return null
+            val port = if (uri.port > 0) ":${uri.port}" else ""
+            return "http://$host$port/api.php"
+        }
         // No user name or password part, no backslash, no space: "good.org@evil.com" would
         // quietly send everything to evil.com.
         if (s.isEmpty() || s.contains('@') || s.contains('\\') || s.contains(' ')) return null

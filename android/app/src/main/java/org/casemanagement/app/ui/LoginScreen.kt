@@ -37,7 +37,7 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
     // Signing back in to the same account never changes the server.
     val asksForServer = api.builtInServer == null && !reauth
     var server by rememberSaveable { mutableStateOf(api.storedServer) }
-    var email by rememberSaveable { mutableStateOf("") }
+    var email by rememberSaveable { mutableStateOf(if (reauth) api.lastEmail else "") }
     var password by remember { mutableStateOf("") }
     var code by rememberSaveable { mutableStateOf("") }
     var challenge by rememberSaveable { mutableStateOf("") }
@@ -60,7 +60,7 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
         busy = true; error = null
         try {
             if (asksForServer) {
-                if (ServerAddress.apiUrl(server) == null) {
+                if (ServerAddress.apiUrl(server, BuildConfig.DEBUG) == null) {
                     error = "Enter your organisation's web address, such as cms.example.org. It must be a secure (https) address."
                     return
                 }
@@ -93,7 +93,7 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
                 .put("device_name", Api.deviceName)
             if (challenge.isNotEmpty()) body.put("login_challenge", challenge)
             val r = api.call("verify", body = body)
-            api.finishSignIn(r.optString("token"), r.optInt("user_id"), r.optString("name"))
+            api.finishSignIn(r.optString("token"), r.optInt("user_id"), r.optString("name"), email.trim())
         } catch (e: ApiException) {
             error = e.message
         } finally {
@@ -119,7 +119,8 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
                 if (reauth) SecondaryButton("Sign in as someone else instead") { api.abandonReauth() }
             } else {
                 NoticeText(notice)
-                Field("Sign-in code", code, { code = it.filter { c -> c.isDigit() }.take(8) }, hint = codeHelp, keyboard = KeyboardType.NumberPassword,
+                // The instruction was just read in the notice above, so the field's own hint is short.
+                Field("Sign-in code", code, { code = it.filter { c -> c.isDigit() }.take(8) }, hint = "6 digits", keyboard = KeyboardType.NumberPassword,
                     modifier = Modifier.focusRequester(codeFocus))
                 ErrorText(error)
                 PrimaryButton("Sign in", busy = busy, enabled = code.length >= 6) { scope.launch { verify() } }

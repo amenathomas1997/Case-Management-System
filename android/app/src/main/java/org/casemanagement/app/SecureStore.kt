@@ -39,6 +39,9 @@ class SecureStore(context: Context) {
     fun put(key: String, value: Boolean) = prefs.edit().putBoolean(key, value).apply()
     fun remove(vararg keys: String) = prefs.edit().apply { keys.forEach { remove(it) } }.apply()
 
+    /** Removes every key starting with [prefix] (an account's saved lists). */
+    fun removePrefix(prefix: String) = prefs.edit().apply { prefs.all.keys.filter { it.startsWith(prefix) }.forEach { remove(it) } }.apply()
+
     /** Written at once (the offline queue must not be lost if the app is closed straight after). */
     fun putNow(key: String, value: String): Boolean = prefs.edit().putString(key, value).commit()
 

@@ -7,6 +7,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import org.casemanagement.app.ApiException
 
 /** What a screen read from the server: the data, or why it could not be read. */
@@ -48,7 +50,8 @@ fun <T> Show(state: Loaded<T>, what: String, content: @Composable (T) -> Unit) {
             content(data)
         }
         state.loading -> Loading(what)
-        else -> Page {
+        // A plain column: Show is often inside a scrolling Page, and a scroller in a scroller fails.
+        else -> androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
             ErrorText(state.error ?: "Could not load $what.")
             SecondaryButton("Try again") { state.reload() }
         }

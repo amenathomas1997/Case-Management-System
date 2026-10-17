@@ -21,13 +21,17 @@ import org.casemanagement.app.str
 fun ClientsScreen(api: Api, nav: NavHostController) {
     var q by rememberSaveable { mutableStateOf("") }
     var search by rememberSaveable { mutableStateOf("") }
+    // The whole list is kept on the phone for reading without a signal (a search is not).
     val state = rememberLoaded(search) {
-        api.call("clients", if (search.isEmpty()) emptyMap() else mapOf("q" to search)).optJSONArray("clients").objects()
+        if (search.isEmpty()) api.callCached("clients", cacheKey = "clients").let { (r, at) -> r.optJSONArray("clients").objects() to at }
+        else api.call("clients", mapOf("q" to search)).optJSONArray("clients").objects() to null
     }
     Page {
         Field("Search clients", q, { q = it }, hint = "name, phone or email")
         SecondaryButton("Search") { search = q.trim() }
-        Show(state, "clients") { list ->
+        SecondaryButton("Add a client") { nav.navigate("clientEdit/0") }
+        Show(state, "clients") { (list, savedAt) ->
+            OfflineCopyNotice(savedAt)
             Announce(if (search.isNotEmpty()) "${list.size} ${if (list.size == 1) "client" else "clients"} found" else null)
             Heading(if (search.isEmpty()) "All clients (${list.size})" else "Clients matching $search (${list.size})")
             if (list.isEmpty()) Text("No clients found.")
@@ -42,12 +46,13 @@ fun ClientsScreen(api: Api, nav: NavHostController) {
 @Composable
 fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
     val context = LocalContext.current
-    val state = rememberLoaded(id) { api.call("client", mapOf("id" to id.toString())) }
+    val state = rememberLoaded(id) { api.callCached("client", mapOf("id" to id.toString()), "client.$id") }
     var linkError by remember { mutableStateOf<String?>(null) }
-    Show(state, "the client") { r ->
+    Show(state, "the client") { (r, savedAt) ->
         val c = r.optJSONObject("client") ?: return@Show
         Page {
             Heading(c.optString("name"), large = true)
+            OfflineCopyNotice(savedAt)
             ListRow(listOf("Status: " + c.optString("status")))
             c.str("phone")?.let { p -> ListRow(listOf("Phone: $p"), action = "call", onClick = {
                 if (!openLink(context, Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + p.filter { it.isDigit() || it == '+' })))) linkError = "This phone has no app for calls."
@@ -62,6 +67,8 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
             if (a11y.isNotEmpty()) ListRow(listOf("Accessibility: " + a11y.joinToString(", ")))
 
             PrimaryButton("Add a case note") { nav.navigate("note/$id") }
+            SecondaryButton("Documents and homework") { nav.navigate("docs/$id") }
+            SecondaryButton("Edit client details") { nav.navigate("clientEdit/$id") }
 
             val tracks = r.optJSONArray("tracks").objects()
             Heading("Training tracks (${tracks.size})")
@@ -72,10 +79,11 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
                 ListRow(
                     listOf(t.optString("title"), t.optString("status") + (t.str("auth_number")?.let { ", authorization $it" } ?: ""),
                         if (auth > 0) "${hoursText(worked)} of ${hoursText(auth)} hours used" + (t.str("expiration_date")?.let { ", ends " + dayText(it) } ?: "") else "${hoursText(worked)} hours logged"),
-                    action = "log hours on it",
-                    onClick = if (t.optString("status") == "Active") ({ nav.navigate("hours/$id/${t.optInt("id")}") }) else null,
+                    action = "open it",
+                    onClick = { nav.navigate("track/$id/${t.optInt("id")}") },
                 )
             }
+            SecondaryButton("Add a training track") { nav.navigate("trackEdit/$id/0") }
 
             val notes = r.optJSONArray("notes").objects()
             Heading("Case notes (${r.optInt("notes_total", notes.size)})")

@@ -20,3 +20,4 @@ android/*.iml
 android/app/release/
 android/keystore.properties
 *.jks
+private/

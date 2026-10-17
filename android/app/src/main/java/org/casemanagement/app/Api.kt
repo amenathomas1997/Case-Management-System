@@ -31,6 +31,8 @@ class ApiException(message: String, val status: Int = 0, val network: Boolean = 
  */
 class Api(context: Context) {
     val store = SecureStore(context)
+    /** Where opened documents are kept while signed in (emptied whenever the account changes). */
+    val docsFolder = java.io.File(context.applicationContext.cacheDir, "docs")
 
     var token by mutableStateOf(store.string("apiToken"))
         private set
@@ -83,12 +85,13 @@ class Api(context: Context) {
 
     val base: String
         get() = (builtInServer ?: store.string(SecureStore.SERVER_KEY).ifEmpty { null })
-            ?.let { ServerAddress.apiUrl(it) } ?: "https://example.invalid/api.php"
+            ?.let { ServerAddress.apiUrl(it, BuildConfig.DEBUG) } ?: "https://example.invalid/api.php"
 
     /** Another organisation's server: nothing of the last one's (its account, its unsent entries) goes there. */
     fun switchServer(address: String) {
         if (address.trim() == store.string(SecureStore.SERVER_KEY)) return
-        userId = 0; userName = ""; store.remove("userId", "userName")
+        userId = 0; userName = ""; store.remove("userId", "userName", "lastEmail")
+        store.removePrefix("cache.")
         clearIdentity(keepQueue = false)
         store.put(SecureStore.SERVER_KEY, address.trim())
     }
@@ -171,11 +174,71 @@ class Api(context: Context) {
         return json
     }
 
+    /**
+     * [call] for a list the app keeps a copy of (clients, a client, the schedule, follow-ups), as
+     * the iPhone app does: the reply is kept for this account, and with no connection the last copy
+     * is returned with when it was saved, so the screen can say it is not current. Only on a phone
+     * with a screen lock; a refusal (no longer on this caseload) removes the copy.
+     */
+    suspend fun callCached(action: String, query: Map<String, String> = emptyMap(), cacheKey: String): Pair<JSONObject, Long?> {
+        val owner = userId
+        val key = "cache.$owner.$cacheKey"
+        return try {
+            val r = call(action, query)
+            if (owner > 0 && owner == userId && store.phoneCanKeepClientData) {
+                store.put(key, JSONObject().put("savedAt", System.currentTimeMillis()).put("data", r).toString())
+            }
+            r to null
+        } catch (e: ApiException) {
+            if (!e.network) { if (e.status == 403 || e.status == 404) store.remove(key); throw e }
+            val saved = store.string(key).takeIf { it.isNotEmpty() && owner > 0 && store.phoneCanKeepClientData } ?: throw e
+            val o = try { JSONObject(saved) } catch (x: Exception) { throw e }
+            (o.optJSONObject("data") ?: throw e) to o.optLong("savedAt")
+        }
+    }
+
+    /**
+     * A client's document, saved in the app's own temporary folder (removed at sign-out) so
+     * another app can open it. Returns the file.
+     */
+    suspend fun download(documentId: Int, folder: java.io.File): java.io.File = withContext(Dispatchers.IO) {
+        if (!store.phoneCanKeepClientData) throw ApiException("This phone has no screen lock, so documents are not saved on it to open. Open it on the website, or set a screen lock in Settings.")
+        val sessionToken = token
+        val conn = (URL(url("download_document", mapOf("id" to documentId.toString()))).openConnection() as HttpURLConnection)
+        try {
+            conn.connectTimeout = 20_000; conn.readTimeout = 60_000
+            conn.setRequestProperty("X-App-Version", APP_VERSION)
+            conn.setRequestProperty("Authorization", "Bearer $sessionToken")
+            val status = conn.responseCode
+            if (status != 200) {
+                val json = try { JSONObject(conn.errorStream?.bufferedReader()?.readText() ?: "") } catch (e: Exception) { JSONObject() }
+                if (status == 401) withContext(Dispatchers.Main) { if (json.optBoolean("wipe")) wipeThisPhone() else expireSession() }
+                throw ApiException(json.optString("error").ifEmpty { "The document could not be downloaded." }, status)
+            }
+            val original = Regex("filename=\"?([^\";]+)").find(conn.getHeaderField("Content-Disposition") ?: "")?.groupValues?.get(1)
+                ?.replace(Regex("[^A-Za-z0-9._ -]"), "_")?.trim('.', ' ')?.take(80)
+            // The document's number first: two documents with one name never overwrite each other.
+            val name = "$documentId-" + (original?.ifEmpty { null } ?: "document")
+            folder.mkdirs()
+            val file = java.io.File(folder, name)
+            conn.inputStream.use { input -> file.outputStream().use { input.copyTo(it) } }
+            // Signed out (or another account) while it downloaded: nothing of it stays on the phone.
+            if (token != sessionToken) { file.delete(); throw ApiException("Your account changed, so the document was not kept.") }
+            file
+        } catch (e: IOException) {
+            throw ApiException(NO_CONNECTION, 0, network = true)
+        } finally { conn.disconnect() }
+    }
+
     /* ---------- Sign-in ---------- */
 
-    fun finishSignIn(newToken: String, newUserId: Int, name: String) {
+    /** The email last signed in with, offered when signing back in. */
+    val lastEmail: String get() = store.string("lastEmail")
+
+    fun finishSignIn(newToken: String, newUserId: Int, name: String, email: String) {
         reauthRequired = false
-        if (newUserId != userId) { clearIdentity(); syncNotice = null }
+        store.put("lastEmail", email)
+        if (newUserId != userId) { store.removePrefix("cache."); clearIdentity(); syncNotice = null }
         userId = newUserId; store.put("userId", newUserId)
         userName = name; store.put("userName", name)
         sessionNotice = null
@@ -237,11 +300,13 @@ class Api(context: Context) {
         val old = token
         token = ""; store.remove("apiToken")
         reauthRequired = false; sessionNotice = null; syncNotice = null
+        store.removePrefix("cache.")
         clearIdentity(keepQueue = true)
         if (old.isNotEmpty()) scope.launch { try { raw("logout", emptyMap(), JSONObject(), old) } catch (e: Exception) { } }
     }
 
     private fun clearIdentity(keepQueue: Boolean = true) {
+        docsFolder.deleteRecursively()
         perms = emptyList(); permsLoaded = false; scoped = false; aiEnabled = false; serverVersion = null
         store.remove("userPerms", "userPermsLoaded", "userScoped", "formOptions")
         if (!keepQueue) store.remove(QUEUE_KEY)

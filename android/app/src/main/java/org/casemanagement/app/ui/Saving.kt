@@ -32,7 +32,7 @@ fun CoroutineScope.launchSave(setBusy: (Boolean) -> Unit, setError: (String?) ->
  * Saves now, or with no signal keeps it on the phone to send later (the same entry, with the same
  * idem_key, so it can never be saved twice). Says which happened.
  */
-suspend fun saveOrQueue(api: Api, action: String, body: JSONObject, label: String, saved: String = "Saved."): Saved {
+suspend fun saveOrQueue(api: Api, action: String, body: JSONObject, label: String, saved: String = "Saved.", offlineExtras: (JSONObject) -> Unit = {}): Saved {
     val owner = api.userId
     return try {
         val r = api.call(action, body = body)
@@ -41,6 +41,7 @@ suspend fun saveOrQueue(api: Api, action: String, body: JSONObject, label: Strin
         // Already checked in (another phone, or an earlier try whose reply was lost): it is recorded.
         if (e.status == 409 && action == "check_in_session") return Saved(e.message ?: "Already checked in.", JSONObject())
         if (!e.network) throw e
+        offlineExtras(body)
         api.enqueue(action, body, label, owner)
         Saved("No signal. This is kept on this phone and saved when you are back online.", null)
     }

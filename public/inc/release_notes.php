@@ -6,6 +6,9 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.13.0' => [
+        'The Android app (4.13.0) now does almost everything the iPhone app does: add and edit clients, training tracks with goals, progress and expenses, documents and homework, scheduling and moving sessions, referrals (assign, close, reopen, make a client), equipment loans and returns, device follow-ups, search, the pipeline, waitlist, compliance, invoices, incidents, and your password, authenticator app and calendar address. With no connection it shows the last saved copy of your clients, a client, the schedule and follow-ups, and keeps progress, expenses, follow-ups and homework to send later.',
+    ],
     '4.12.0' => [
         'There is now an Android app, using the same sign-in and the same records as the website and the iPhone app. It covers the daily work: the dashboard, clients with case notes and logging hours, the schedule (check in, complete, no-show, cancel, join), tasks, alerts, referrals and messages, and it keeps entries made without a signal until it can send them. Ask your administrator how to install it.',
     ],

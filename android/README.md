@@ -2,30 +2,44 @@
 
 The Android app uses the same server, the same sign-in and the same records as the website and the iPhone app. Anything saved in one shows in the others straight away; the phone keeps nothing of its own except entries written without a signal, until they are sent.
 
-## What it does (first release)
+## What it does
 
-Most of the daily work: the same jobs as the iPhone app's main tabs.
+Nearly everything the iPhone app does.
 
 - **Sign in** with email, password and the emailed code (or an authenticator app's code). A build without a server asks for the organisation's web address first.
 - **Home**: the dashboard's counts, authorizations ending soon, the newest referrals and case notes, unread alerts, and anything waiting to send.
 - **Clients**:
-  - search, and open a client: contact details (a double tap calls or emails), counselor, accessibility preferences, training tracks with the hours used, and case notes
+  - search, add a client, and open a client: contact details (a double tap calls or emails), counselor, accessibility preferences, training tracks and case notes
+  - edit the client's details, including closing a case with its reason
   - add a case note
-  - log hours and mileage on an active track
-- **Schedule**: sessions that ended and wait for an outcome, then upcoming ones by day. For each one:
+  - documents (opened in another app) and homework (complete it, assign it)
+  - a training track: hours used and when the authorization runs out, goals with progress, expenses, log hours, and the track's details
+- **Schedule**: schedule a session (once or weekly, with authorization warnings to approve), then sessions that ended and wait for an outcome, and upcoming ones by day. For each one:
   - check in
   - complete it, with hours, miles and a note (if hours were already logged that day, say whether they are this session's)
+  - move it to another time
   - record a no-show, or cancel
   - join the online meeting
 - **Tasks**: open tasks, soonest first; mark one done or reopen it; add a task.
 - **More**:
+  - Search
   - Alerts, with Mark all as read
-  - Referrals (open, converted, closed), each referral in full, Mark as reviewed
+  - Referrals: each in full, with Mark as reviewed, assign, close, reopen, make a client, or add to an existing client
   - Messages with clients and their counselors
+  - Equipment: lend and return
+  - Device follow-ups: record, skip, ask again later
+  - Pipeline, Waitlist, Compliance, Invoices (mark a draft submitted), Incidents (report one, change its status)
   - Offline entries
-  - My account and Sign out
+  - My account: change your password, the authenticator app, your calendar address, sign out everywhere, and sign out
 
-Everything else (equipment, invoices, reports, AI tools, documents, assessments and the rest of the iPhone app's screens) is still on the website. It will be added to the Android app in later releases.
+Still only on the website and the iPhone app: the AI tools and voice assistant, scored assessments, AT services, programs, contracts, bookings, procurement, accommodations, competencies, the knowledge base, signatures and uploading documents.
+
+## Without a signal
+
+- The last copy of the client list, each client opened, the schedule and device follow-ups is kept, and shown with when it was saved.
+- Case notes, hours, check-ins, completed tasks, goal progress, expenses, device follow-ups and completed homework are kept to send later.
+
+Both happen only on a phone with a screen lock, and everything kept is removed when someone signs out.
 
 ## How it keeps data safe (as the iPhone app does)
 
@@ -58,6 +72,25 @@ You need Android Studio (it includes Java and the Android SDK).
 
    The app is then at `app/build/outputs/apk/debug/app-debug.apk`.
 2. The unit tests run with `./gradlew :app:testDebugUnitTest`, and the CI job builds, tests and lints on every push.
+
+## Testing against a local copy of the website
+
+A debug build (never a release build) may use plain http to the computer it runs on, so the app can be tried on the Android emulator against a local copy of the website with made-up records:
+
+1. Make a local database from `dist/schema_full.sql` and a `private/config.php` that points at it, with `base_url` set to `http://10.0.2.2:8099`.
+2. Start the website with:
+
+   ```bash
+   php -S 0.0.0.0:8099 -t public
+   ```
+
+3. Build without the built-in server:
+
+   ```bash
+   ./gradlew -Pcms.defaultServer= :app:assembleDebug
+   ```
+
+4. Install the app on the emulator, and sign in with the address `http://10.0.2.2:8099`.
 
 ## Another organisation's build
 

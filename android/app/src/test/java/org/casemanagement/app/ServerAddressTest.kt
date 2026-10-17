@@ -17,6 +17,12 @@ class ServerAddressTest {
     @Test fun apiAddressIsKept() =
         assertEquals("https://example.org/api.php", ServerAddress.apiUrl("https://example.org/API.php"))
 
+    @Test fun debugBuildsMayUseThisComputerOverHttp() {
+        assertEquals("http://10.0.2.2:8099/api.php", ServerAddress.apiUrl("http://10.0.2.2:8099", allowDevHttp = true))
+        assertNull(ServerAddress.apiUrl("http://10.0.2.2:8099"))
+        assertNull(ServerAddress.apiUrl("http://example.org", allowDevHttp = true))
+    }
+
     @Test fun insecureOrOddAddressesAreRefused() {
         assertNull(ServerAddress.apiUrl("http://example.org"))
         assertNull(ServerAddress.apiUrl("ftp://example.org"))
