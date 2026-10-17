@@ -381,7 +381,7 @@ function status_badge(string $status): string {
         'Scheduled' => 'badge-active', 'No Show' => 'badge-hold',
         'Waitlist' => 'badge-hold', 'Assigned' => 'badge-active',
     ];
-    $cls = $map[$status] ?? 'badge-pending';
+    $cls = $map[$status] ?? (str_starts_with($status, 'Closed') ? 'badge-closed' : 'badge-pending');
     return '<span class="badge ' . $cls . '">' . t($status) . '</span>';
 }
 

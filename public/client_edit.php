@@ -69,7 +69,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     set_form_errors($errors);
-    $status = in_array($_POST['status'] ?? '', CLIENT_STATUSES, true) ? $_POST['status'] : 'Pending Assessment';
+    $status = in_array($_POST['status'] ?? '', cms_choices('client_statuses', $client['status'] ?? null), true) ? $_POST['status'] : 'Pending Assessment';
     // Closing a case records why, and what the person came away with (3.0.35).
     $closing = str_starts_with($status, 'Closed') && (!$client || $client['status'] !== $status);
     $closureData = null;
@@ -415,7 +415,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       <?php if ($client): ?>
       <span class="hint" id="status-hint">Changing the status to Closed - Rehabilitated emails the client an outcome survey when you save, unless one was sent in the last 30 days.</span>
       <?php endif; ?>
-      <select id="status" name="status"<?= $client ? ' aria-describedby="status-hint" data-was="' . h($client['status']) . '"' : '' ?>><?= select_options(CLIENT_STATUSES, $raw('status') ?? $client['status'] ?? 'Pending Assessment') ?></select>
+      <select id="status" name="status"<?= $client ? ' aria-describedby="status-hint" data-was="' . h($client['status']) . '"' : '' ?>><?= select_options(cms_choices('client_statuses', $client['status'] ?? null), $raw('status') ?? $client['status'] ?? 'Pending Assessment') ?></select>
     </div>
     <?php // Asked only when the case is being closed: the script shows it when a Closed status is
     // chosen; it is shown from the start when that was already chosen or refused.

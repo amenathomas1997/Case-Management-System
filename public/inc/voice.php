@@ -467,7 +467,7 @@ function voice_execute(string $do, array $in, array $user): array {
                 'url' => 'referrals.php?view=' . $rid, 'url_label' => 'Go to the referral for ' . $name];
         case 'set_status':
             if ($cid <= 0) return ['ok' => false, 'error' => 'Missing client.'];
-            $to = (string)($in['status'] ?? ''); if (!in_array($to, CLIENT_STATUSES, true)) return ['ok' => false, 'error' => 'Unknown status.'];
+            $to = (string)($in['status'] ?? ''); if (!in_array($to, client_statuses(), true)) return ['ok' => false, 'error' => 'Unknown status.'];
             db()->beginTransaction();
             try {
                 $cur = db()->prepare('SELECT status, archived_at FROM clients WHERE id = ? FOR UPDATE'); $cur->execute([$cid]); $row = $cur->fetch();
@@ -920,7 +920,7 @@ function voice_interpret(array $in, array $user): array {
         . '"create":"note|task|referral|status|session|hours|goal|check_out|check_in|complete_task|homework_done|add_client|add_track|archive_client|record_progress|complete_session|add_homework",'
         . '"percent":50,"auth":"authorization number","agency":"funding agency",'
         . '"text":"note text","title":"task title","due":"YYYY-MM-DD","reason":"referral reason",'
-        . '"status":"Pending Assessment|Active Training|On Hold|Closed - Rehabilitated|Closed - Other|Waitlist",'
+        . '"status":"' . implode('|', client_statuses()) . '",'
         . '"start_at":"YYYY-MM-DD HH:MM","duration":90,"hours":2.0,"description":"what was done","date":"YYYY-MM-DD","goal":"goal text","metric":"measure","reply":"a short spoken reply"}. '
         . "Guidance: 'go to / open / show <section>' = navigate; 'find/search <words>' = search; 'open/pull up <person>' = open_client; "
         . "'add a note/task/referral/goal', 'log N hours', 'schedule a session', 'mark <person> as <status>' = create with the right create type; "
@@ -1047,7 +1047,7 @@ function voice_interpret(array $in, array $user): array {
                 if (mb_strlen($reason) > 255) return ['ok' => true, 'action' => 'answer', 'speak' => 'That referral reason is too long. Say a shorter reason, or add the details on the website once the referral is created.'];
                 return ['ok' => true, 'action' => 'confirm', 'do' => 'create_referral', 'params' => ['name' => $name, 'reason' => $reason], 'speak' => 'Create a referral for ' . $name . ($reason !== '' ? ', with the reason: ' . $reason : ', with no reason given') . '? Say yes to save.'];
             case 'status':
-                $to = (string)($cmd['status'] ?? ''); if (!in_array($to, CLIENT_STATUSES, true)) return ['ok' => true, 'action' => 'answer', 'speak' => "I'm not sure which status you mean."];
+                $to = (string)($cmd['status'] ?? ''); if (!in_array($to, client_statuses(), true)) return ['ok' => true, 'action' => 'answer', 'speak' => "I'm not sure which status you mean."];
                 $survey = ($to === 'Closed - Rehabilitated' && ($client['status'] ?? '') !== $to) ? ' This also emails them the outcome survey if they have an email address.' : '';
                 $reopen = ($client['archived_at'] ?? null) !== null && !str_starts_with($to, 'Closed') ? ' The record is archived; this returns it to the active lists.' : '';
                 return ['ok' => true, 'action' => 'confirm', 'do' => 'set_status', 'params' => ['client_id' => (int)$client['id'], 'status' => $to], 'speak' => 'Set ' . $client['name'] . ' to ' . $to . '?' . $reopen . $survey . ' Say yes to confirm.'];

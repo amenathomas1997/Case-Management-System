@@ -104,7 +104,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!$errors) {
-        $cadence = in_array($_POST['report_cadence'] ?? '', ['none', 'weekly', 'biweekly', 'monthly'], true) ? $_POST['report_cadence'] : 'monthly';
+        $cadence = is_string($_POST['report_cadence'] ?? null) && isset(report_cadence_choices($track['report_cadence'] ?? null)[$_POST['report_cadence']]) ? $_POST['report_cadence'] : 'monthly';
         $vals = [$title, $serviceType, $rsaCategory, $bundleId, $status, $authNumber, $agency, $authHours, $rate, $mileageRate, $start, $exp, $cadence];
         if ($track) {
             db()->beginTransaction();
@@ -389,8 +389,8 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
       <span class="hint" id="cadence-hint">How often the VR counselor gets an emailed summary</span>
       <select id="report_cadence" name="report_cadence" aria-describedby="cadence-hint">
         <?php $cadCur = $_POST['report_cadence'] ?? $track['report_cadence'] ?? 'monthly';
-        foreach (['monthly' => 'Monthly (default)', 'biweekly' => 'Every two weeks', 'weekly' => 'Weekly', 'none' => 'Off — send manually only'] as $cv => $cl): ?>
-        <option value="<?= $cv ?>" <?= $cadCur === $cv ? 'selected' : '' ?>><?= $cl ?></option>
+        foreach (report_cadence_choices($track['report_cadence'] ?? null) as $cv => $cl): ?>
+        <option value="<?= h($cv) ?>" <?= $cadCur === $cv ? 'selected' : '' ?>><?= h($cl) ?></option>
         <?php endforeach; ?>
       </select>
     </div>

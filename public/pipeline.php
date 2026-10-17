@@ -22,18 +22,16 @@ $cq = db()->prepare("SELECT c.*, u.name AS instructor,
 $cq->execute($scoped ? [(int)$user['id']] : []);
 $clients = $cq->fetchAll();
 
-$stages = [
-    'Pending Assessment' => [],
-    'Waitlist' => [],
-    'Active Training' => [],
-    'On Hold' => [],
-];
+// Every open status, including any an administrator added (4.11.0).
+$stages = array_fill_keys(client_open_statuses(), []);
 $closed = [];
 foreach ($clients as $c) {
     $since = $c['stage_since'] ?? $c['created_at'];
     $c['days_in_stage'] = max(0, (int)floor((time() - strtotime($since)) / 86400));
     if (isset($stages[$c['status']])) {
         $stages[$c['status']][] = $c;
+    } elseif (!str_starts_with($c['status'], 'Closed')) {
+        $stages[$c['status']] = [$c]; // an open status since removed from the list still shows
     } elseif (str_starts_with($c['status'], 'Closed') && strtotime($since) > strtotime('-90 days')) {
         $closed[] = $c;
     }
@@ -71,9 +69,9 @@ page_header('Pipeline', $user, 'pipeline');
     </ul>
   </section>
 
-  <?php foreach ($stages as $stage => $list): ?>
-  <section class="card" aria-labelledby="p-<?= h(str_replace(' ', '-', $stage)) ?>">
-    <h2 id="p-<?= h(str_replace(' ', '-', $stage)) ?>"><?= h($stage) ?> (<?= count($list) ?>)</h2>
+  <?php $stageNum = 0; foreach ($stages as $stage => $list): $stageNum++; ?>
+  <section class="card" aria-labelledby="p-stage-<?= $stageNum ?>">
+    <h2 id="p-stage-<?= $stageNum ?>"><?= h($stage) ?> (<?= count($list) ?>)</h2>
     <?php if (!$list): ?><p class="muted">No clients in this stage.</p><?php endif; ?>
     <ul class="pipeline-list">
     <?php foreach ($list as $c): ?>

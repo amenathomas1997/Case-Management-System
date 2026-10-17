@@ -824,8 +824,10 @@ $scoped = caseload_scoped();
 $scopeAnd = $scoped ? ' AND c.assigned_to = ?' : '';
 $scopeParams = $scoped ? [(int)$user['id']] : [];
 
-$cq = db()->prepare("SELECT id, name FROM clients c WHERE status IN ('Pending Assessment','Active Training','On Hold')" . $scopeAnd . " ORDER BY name");
-$cq->execute($scopeParams);
+// Open cases that can be scheduled: every open status but Waitlist, including added ones (4.11.0).
+$bookable = array_values(array_diff(client_open_statuses(), ['Waitlist']));
+$cq = db()->prepare('SELECT id, name FROM clients c WHERE status IN (' . implode(',', array_fill(0, count($bookable), '?')) . ')' . $scopeAnd . ' ORDER BY name');
+$cq->execute(array_merge($bookable, $scopeParams));
 $clients = $cq->fetchAll();
 $tq = db()->prepare("SELECT t.id, t.client_id, t.title, t.created_at, c.name AS client_name FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.status = 'Active'" . $scopeAnd . " ORDER BY c.name, t.title");
 $tq->execute($scopeParams);

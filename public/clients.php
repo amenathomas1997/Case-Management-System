@@ -68,7 +68,7 @@ $sql = 'SELECT c.*, u.name AS instructor, (SELECT COUNT(*) FROM training_tracks 
 $params = [];
 $sql .= $showArchived ? ' AND c.archived_at IS NOT NULL' : ' AND c.archived_at IS NULL';
 if ($q !== '') { $sql .= ' AND (c.name LIKE ? OR c.email LIKE ? OR c.counselor_name LIKE ?)'; $like = "%$q%"; array_push($params, $like, $like, $like); }
-if (in_array($statusFilter, CLIENT_STATUSES, true)) { $sql .= ' AND c.status = ?'; $params[] = $statusFilter; }
+if (in_array($statusFilter, client_statuses(), true)) { $sql .= ' AND c.status = ?'; $params[] = $statusFilter; }
 if ($who === 'me') { $sql .= ' AND c.assigned_to = ?'; $params[] = $user['id']; }
 elseif ($who === 'unassigned') { $sql .= ' AND c.assigned_to IS NULL'; }
 elseif (str_starts_with($who, 'u')) { $sql .= ' AND c.assigned_to = ?'; $params[] = (int)substr($who, 1); }
@@ -121,7 +121,7 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
       <label for="status">Case status</label>
       <select id="status" name="status">
         <option value="">All statuses</option>
-        <?= select_options(CLIENT_STATUSES, $statusFilter) ?>
+        <?= select_options(client_statuses(), $statusFilter) ?>
       </select>
     </div>
     <div class="field">

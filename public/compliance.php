@@ -58,7 +58,6 @@ usort($authRisk, fn($a, $b) => ($b['expired'] <=> $a['expired']) ?: (max($b['pct
    entered if that is later) — not on the day it was created. A monthly report keeps
    the cron's 1st-of-month rhythm: it is due on the first 1st of a month at least 28
    days after the last report, or 45 days after it if that comes sooner. */
-$minDays = ['weekly' => 7, 'biweekly' => 14, 'monthly' => 28];
 $cad = db()->prepare("SELECT t.id, t.title, t.auth_number, t.report_cadence, t.last_report_at, t.start_date, t.created_at,
         c.id AS cid, c.name AS client, c.counselor_email
     FROM training_tracks t JOIN clients c ON c.id = t.client_id
@@ -67,13 +66,8 @@ $cad = db()->prepare("SELECT t.id, t.title, t.auth_number, t.report_cadence, t.l
 $cad->execute($scopeArg);
 $reportsDue = [];
 foreach ($cad->fetchAll() as $t) {
-    $gap = $minDays[$t['report_cadence']] ?? 28;
     $since = $t['last_report_at'] ?: max((string)$t['start_date'], substr((string)$t['created_at'], 0, 10));
-    $due = date('Y-m-d', strtotime($since . ' +' . $gap . ' days'));
-    if ($t['report_cadence'] === 'monthly' && substr($due, 8, 2) !== '01') {
-        $due = min(date('Y-m-d', strtotime('first day of next month', strtotime($due))),
-            date('Y-m-d', strtotime($since . ' +45 days')));
-    }
+    $due = report_due_date((string)$t['report_cadence'], (string)$since);
     if ($due <= $today) { $t['due'] = $due; $reportsDue[] = $t; }
 }
 
@@ -291,7 +285,7 @@ page_header('Compliance', $user, 'compliance');
     <?php foreach ($reportsDue as $t): ?>
       <tr>
         <td><a href="track.php?id=<?= (int)$t['id'] ?>"><?= h($t['title']) ?><span class="visually-hidden"> for <?= h($t['client']) ?></span></a><br><span class="muted"><?= h($t['client']) ?></span></td>
-        <td><?= h(ucfirst($t['report_cadence'])) ?></td>
+        <td><?= h(report_cadence_label((string)$t['report_cadence'])) ?></td>
         <td><?= $t['last_report_at'] ? fmt_date($t['last_report_at']) : 'never' ?></td>
         <?php // Overdue is said in words, not only by colour and weight. ?>
         <td><?= $t['due'] < $today ? '<strong class="field-error">' . fmt_date($t['due']) . ' — overdue</strong>' : fmt_date($t['due']) . ($t['due'] === $today ? ' — due today' : '') ?></td>

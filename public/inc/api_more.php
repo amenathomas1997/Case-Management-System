@@ -17,7 +17,7 @@ function api_more(string $action, array $input, int $userId): ?array {
         case 'form_options': {
             $keys = ['client_types', 'note_types', 'doc_categories', 'service_types', 'tech_types', 'vision_statuses', 'closure_reasons',
                 'device_request_categories', 'incident_types', 'booking_types', 'equipment_categories', 'equipment_conditions', 'maintenance_types',
-                'competency_levels', 'score_labels'];
+                'competency_levels', 'score_labels', 'client_statuses', 'referral_sources'];
             $lists = [];
             foreach ($keys as $k) $lists[$k] = array_values(array_map('strval', cms_list_items($k)));
             return ['ok' => true, 'lists' => $lists];

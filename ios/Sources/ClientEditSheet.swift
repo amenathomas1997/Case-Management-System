@@ -148,7 +148,8 @@ struct ClientEditSheet: View {
                 }
                 Section("Case status") {
                     Picker("Status", selection: $status) {
-                        ForEach(clientStatuses, id: \.self) { Text($0) }
+                        // A status since removed from the list stays choosable on a record that has it.
+                        ForEach(clientStatuses.contains(status) || status.isEmpty ? clientStatuses : clientStatuses + [status], id: \.self) { Text($0) }
                     }
                     if statusChanged {
                         CaptionedField(label: "Reason for status change", text: $statusNote)

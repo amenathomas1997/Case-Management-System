@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.10.0';
+const APP_VERSION = '4.11.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1139,7 +1139,7 @@ function unbilled_totals(?int $scopeUserId): array {
  * after $since if that comes sooner. Returns YYYY-MM-DD.
  */
 function report_due_date(string $cadence, string $since): string {
-    $gap = ['weekly' => 7, 'biweekly' => 14, 'monthly' => 28][$cadence] ?? 28;
+    $gap = report_cadence_days($cadence); // 4.11.0: an administrator can add others
     $since = substr($since, 0, 10);
     $due = date('Y-m-d', strtotime($since . ' +' . $gap . ' days'));
     if ($cadence === 'monthly' && substr($due, 8, 2) !== '01') {

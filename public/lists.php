@@ -32,6 +32,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_lists'])) {
             if ($g !== $group) continue;
             $text = is_string($_POST[$k] ?? null) ? $_POST[$k] : '';
             if (!empty($_POST[$k . '_reset'])) { $saves['list_' . $k] = ''; continue; }
+            // A list the form did not send is left as it is; an empty one whose built-in list is
+            // empty (the referral sources an organisation adds, 4.11.0) goes back to none.
+            if (!array_key_exists($k, $_POST)) continue;
+            if (trim($text) === '' && (defined($default) ? constant($default) : []) === []) { $saves['list_' . $k] = ''; continue; }
             [$val, $err] = cms_list_parse($k, $text);
             if ($err !== null) { $errs[$k] = $label . ': ' . $err; continue; }
             $saves['list_' . $k] = $val == (defined($default) ? constant($default) : null) ? '' : json_encode($val, JSON_UNESCAPED_UNICODE);

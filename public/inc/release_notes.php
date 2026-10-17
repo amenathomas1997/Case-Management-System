@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.11.0' => [
+        'Lists and time limits now also sets the client statuses (add your own; one starting "Closed - " counts as a closed case), how often automatic progress reports can be due (add a schedule such as Quarterly | 91 days), and extra referral sources on the public referral form (each is asked what Employer / other is asked). The pipeline shows every open status.',
+        'The iPhone app (4.11.0) offers the same client statuses as the website.',
+    ],
     '4.10.0' => [
         'Connect your own Zoom or Microsoft Teams account (My Account, Online meetings), and a remote session booked for you can get its meeting link made there: on Schedule a session, choose Make the meeting link, In Zoom or In Microsoft Teams. A weekly or multi-session series shares one link. An administrator first sets up Zoom and Microsoft on Settings, Online meetings.',
     ],

@@ -13,6 +13,10 @@ const EQUIP_CATEGORIES = ['Braille Display','Screen Reader License','Magnifier',
 const EQUIP_CONDITIONS = ['New','Good','Fair','Needs Repair'];
 const MAINT_TYPES = ['Maintenance','Calibration','Repair','Inspection','Cleaning','Other'];
 const LOAN_CONDITIONS = EQUIP_CONDITIONS;
+// 4.11.0: how often automatic progress reports are due (name => days between reports; none = no
+// reports, and monthly keeps falling on the 1st), and referral sources an organisation adds.
+const REPORT_CADENCES = ['none' => '0', 'weekly' => '7', 'biweekly' => '14', 'monthly' => '28'];
+const REFERRAL_SOURCES_EXTRA = [];
 
 /**
  * key => [label, kind, name of the built-in constant, group] (constant() is resolved only for
@@ -41,6 +45,12 @@ function cms_list_defs(): array {
         'equipment_categories' => ['Equipment categories', 'list', 'EQUIP_CATEGORIES', 'equipment', ['Other']],
         'equipment_conditions' => ['Equipment conditions (items and loans)', 'list', 'EQUIP_CONDITIONS', 'equipment', ['Good', 'Needs Repair']],
         'maintenance_types' => ['Equipment maintenance types', 'list', 'MAINT_TYPES', 'equipment', ['Maintenance', 'Other']],
+        // 4.11.0. An added client status counts as an open case; one starting "Closed - " counts as closed.
+        'client_statuses' => ['Client statuses (one you add counts as an open case, unless it starts with "Closed - ")', 'list', 'CLIENT_STATUSES', 'clients',
+            ['Pending Assessment', 'Waitlist', 'Active Training', 'On Hold', 'Closed - Rehabilitated', 'Closed - Other']],
+        'report_cadences' => ['How often automatic progress reports are due (Name | days between reports, 7 to 365)', 'map', 'REPORT_CADENCES', 'services', ['none', 'weekly', 'biweekly', 'monthly']],
+        'referral_sources' => ['More referral sources on the referral form (each is asked what "Employer / other" is asked)', 'list', 'REFERRAL_SOURCES_EXTRA', 'clients', [],
+            ['counselor', 'self', 'school', 'medical', 'family', 'agency', 'other']],
     ];
 }
 
@@ -152,19 +162,41 @@ function cms_list_parse(string $key, string $text): array {
             [$item, $words] = array_map('trim', explode('|', $line, 2)) + [1 => ''];
             if ($item === '' || $words === '') return [null, 'Line ' . ($i + 1) . ': write the reason, a | and the words the email uses.'];
             if (mb_strlen($item) > 40 || mb_strlen($words) > 200) return [null, 'Line ' . ($i + 1) . ' is too long (40 characters for the reason, 200 for the words).'];
-            if (isset($out[$item])) return [null, $item . ' is listed twice.'];
+            // The database compares names without regard to case, so the list does too.
+            if (in_array(mb_strtolower($item), array_map('mb_strtolower', array_keys($out)), true)) return [null, $item . ' is listed twice.'];
+            if ($key === 'report_cadences') {
+                // The built-in ones keep their days (the reports and the 1st-of-month rule rely on them).
+                if (isset(REPORT_CADENCES[$item])) $words = REPORT_CADENCES[$item];
+                elseif (isset(REPORT_CADENCES[mb_strtolower($item)])) return [null, 'Line ' . ($i + 1) . ': ' . $item . ' is a built-in schedule; write it as ' . mb_strtolower($item) . '.'];
+                elseif (!ctype_digit($words) || (int)$words < 7 || (int)$words > 365) return [null, 'Line ' . ($i + 1) . ': after the | give the days between reports, a whole number from 7 to 365.'];
+                else $words = (string)(int)$words;
+            }
             $out[$item] = $words;
         } else {
             // 40 characters: the size of the record columns these choices are saved in.
             if (mb_strlen($line) > 40) return [null, 'Line ' . ($i + 1) . ' is longer than 40 characters.'];
-            if (in_array($line, $out, true)) return [null, $line . ' is listed twice.'];
+            if (in_array(mb_strtolower($line), array_map('mb_strtolower', $out), true)) return [null, $line . ' is listed twice.'];
+            // A status is closed exactly when it starts "Closed - " (the reports test "Closed").
+            if ($key === 'client_statuses' && str_starts_with(mb_strtolower($line), 'closed') && !str_starts_with($line, 'Closed - ')) {
+                return [null, 'Line ' . ($i + 1) . ': a closed status starts with "Closed - " exactly (for example Closed - Moved away); an open one must not start with "closed".'];
+            }
             $out[] = $line;
         }
     }
     // Words the system uses for something else (a bundle for any client type; files a client shared).
     $reserved = array_values(array_intersect(array_map('mb_strtolower', $def[5] ?? []), array_map('mb_strtolower', $def[1] === 'map' ? array_keys($out) : $out)));
+    if ($key === 'referral_sources') $reserved = array_merge($reserved, array_values(array_intersect(array_map('mb_strtolower', REFERRER_ROLES), array_map('mb_strtolower', $out))));
     if ($reserved) return [null, 'The system already uses ' . implode(', ', $reserved) . ' for something else: choose another name.'];
     $missing = array_values(array_diff($def[4] ?? [], $def[1] === 'map' ? array_keys($out) : $out));
+    // A report schedule still used by an active track stays, or its reports would quietly change pace.
+    if ($key === 'report_cadences' && function_exists('db')) {
+        try {
+            $used = db()->query("SELECT DISTINCT report_cadence FROM training_tracks WHERE status = 'Active'")->fetchAll(PDO::FETCH_COLUMN);
+            $gone = array_values(array_diff(array_map('strval', $used), array_keys($out)));
+            if ($gone) return [null, 'Keep ' . implode(', ', $gone) . ': active training tracks use ' . (count($gone) === 1 ? 'it' : 'them') . '. Change those tracks first.'];
+        } catch (PDOException $e) {
+        }
+    }
     if ($missing) return [null, 'Keep ' . implode(', ', $missing) . ': the system relies on ' . (count($missing) === 1 ? 'it' : 'them') . '. You can add to the list and remove anything else.'];
     if ($def[1] === 'scale') {
         if (count($out) !== count($def[2])) return [null, 'Give exactly ' . count($def[2]) . ' levels, from the lowest to the highest.'];
@@ -178,4 +210,49 @@ function cms_list_text(string $key): string {
     $def = cms_list_defs()[$key];
     $l = cms_list($key);
     return implode("\n", $def[1] === 'map' ? array_map(fn($k, $v) => $k . ' | ' . $v, array_keys($l), $l) : array_values($l));
+}
+
+/** Client statuses offered (4.11.0): the built-in six and any an administrator added. */
+function client_statuses(): array {
+    return cms_list_items('client_statuses');
+}
+
+/** The statuses of an open case, in list order (everything not starting "Closed"). */
+function client_open_statuses(): array {
+    return array_values(array_filter(client_statuses(), fn($s) => !str_starts_with($s, 'Closed')));
+}
+
+/** How often progress reports can be due, name => days (0 = none). */
+function report_cadences(): array {
+    return array_map('intval', cms_list('report_cadences'));
+}
+
+/** The words a cadence shows as ("Biweekly", or an added one as typed). */
+function report_cadence_label(string $c): string {
+    return isset(REPORT_CADENCES[$c]) ? ucfirst($c) : $c;
+}
+
+/** The choices a track's report schedule offers, value => words; a stored one since removed stays. */
+function report_cadence_choices(?string $current = null): array {
+    $out = [];
+    $built = ['monthly' => 'Monthly (default)', 'biweekly' => 'Every two weeks', 'weekly' => 'Weekly'];
+    $all = report_cadences();
+    foreach ($built as $v => $l) if (isset($all[$v])) $out[$v] = $l;
+    foreach ($all as $v => $d) if (!isset(REPORT_CADENCES[$v])) $out[$v] = $v . ' (every ' . $d . ' days)';
+    if ($current !== null && $current !== '' && !isset($out[$current]) && $current !== 'none') $out[$current] = $current;
+    $out['none'] = 'Off — send manually only';
+    return $out;
+}
+
+/** Days between reports for a cadence (28 when it is not known). */
+function report_cadence_days(string $c): int {
+    $d = report_cadences()[$c] ?? null;
+    return $d !== null && $d > 0 ? $d : 28;
+}
+
+/** The same choices as [['value' => ..., 'label' => ...], ...], as the apps read them. */
+function report_cadence_options(?string $current = null): array {
+    $out = [];
+    foreach (report_cadence_choices($current) as $v => $l) $out[] = ['value' => (string)$v, 'label' => $l];
+    return $out;
 }

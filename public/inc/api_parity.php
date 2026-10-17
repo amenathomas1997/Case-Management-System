@@ -112,8 +112,7 @@ function parity_track_choices(array $client, ?array $track): array {
     return [
         'service_types' => cms_choices('service_types', $track['service_type'] ?? null),
         'statuses' => TRACK_STATUSES,
-        'cadences' => [['value' => 'monthly', 'label' => 'Monthly (default)'], ['value' => 'biweekly', 'label' => 'Every two weeks'],
-            ['value' => 'weekly', 'label' => 'Weekly'], ['value' => 'none', 'label' => 'Off — send manually only']],
+        'cadences' => report_cadence_options($track['report_cadence'] ?? null),
         'rsa_categories' => rsa_all_categories(),
         'bundles' => $bundles,
         'client_type' => $clientType,
@@ -498,7 +497,7 @@ case 'save_track': {
         // Every problem, by field, as the page's error summary lists them.
         out(['ok' => false, 'error' => implode(' ', $errors), 'errors' => $errors], 422);
     }
-    $cadence = api_choice($input, 'report_cadence', ['none', 'weekly', 'biweekly', 'monthly'], 'Automatic progress reports', $track['report_cadence'] ?? 'monthly');
+    $cadence = api_choice($input, 'report_cadence', array_map('strval', array_keys(report_cadence_choices($track['report_cadence'] ?? null))), 'Automatic progress reports', $track['report_cadence'] ?? 'monthly');
     $vals = [$title, $serviceType, $rsaCategory, $bundleId, $status, $authNumber, $agency, $authHours, $rate, $mileageRate, $start, $exp, $cadence];
 
     if (!$track) {
@@ -792,7 +791,7 @@ case 'pipeline': {
         WHERE c.archived_at IS NULL" . ($scoped ? ' AND c.assigned_to = ?' : '') . " ORDER BY c.name");
     $cq->execute($scoped ? [$userId] : []);
     $waiting = ['Pending Assessment', 'Waitlist', 'On Hold'];
-    $stages = ['Pending Assessment' => [], 'Waitlist' => [], 'Active Training' => [], 'On Hold' => []];
+    $stages = array_fill_keys(client_open_statuses(), []);
     $closed = [];
     foreach ($cq->fetchAll() as $c) {
         $since = $c['stage_since'] ?? $c['created_at'];
@@ -801,6 +800,7 @@ case 'pipeline': {
             // Waiting stages over 30 days are flagged; a long stay in Active Training is normal.
             'over_30' => in_array($c['status'], $waiting, true) && $days > 30, 'instructor' => $c['instructor']];
         if (isset($stages[$c['status']])) $stages[$c['status']][] = $row;
+        elseif (!str_starts_with($c['status'], 'Closed')) $stages[$c['status']] = [$row];
         elseif (str_starts_with($c['status'], 'Closed') && strtotime($since) > strtotime('-90 days')) $closed[] = $row;
     }
     $stageList = [];

@@ -69,7 +69,15 @@ $aria = function (string $k, string $describe = '') use (&$errors): string {
     if (!$ids) return '';
     return (isset($errors[$k]) ? 'aria-invalid="true" ' : '') . 'aria-describedby="' . implode(' ', $ids) . '"';
 };
-$role = $_POST['role'] ?? (is_string($_GET['role'] ?? '') ? ($_GET['role'] ?? '') : '');
+$role = is_string($_POST['role'] ?? null) ? $_POST['role'] : (is_string($_GET['role'] ?? null) ? $_GET['role'] : '');
+// A referral source an administrator added (Lists and time limits, 4.11.0) is asked what
+// "Employer / other" is asked, and the referral is saved under its own name.
+$source = is_string($role) ? $role : '';
+// Offered only while "Employer / other" is (Referral form settings).
+$extraSources = in_array('other', referral_form_config()['roles'], true) ? cms_list_items('referral_sources') : [];
+$extraSource = $source !== '' && !isset(REFERRER_ROLES[$source]) && in_array($source, $extraSources, true);
+if ($extraSource) $role = 'other';
+$sourceLabel = $extraSource ? $source : (REFERRER_ROLES[$role] ?? '');
 // Only a form from this release posts the structured fields; an older form still
 // open in a browser posts note_type and is accepted as a legacy referral. (The
 // current form sends no note_type, and may send no purpose: see below.)
@@ -120,7 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors['form'] = 'Too many submissions from this connection. Please try again later or contact us directly.';
     }
 
-    if (!isset(REFERRER_ROLES[$role]) || !in_array($role, referral_form_config()['roles'], true)) $errors['role'] = 'I am referring as a…: please choose the one that fits best.';
+    if (!$extraSource && (!isset(REFERRER_ROLES[$role]) || !in_array($role, referral_form_config()['roles'], true))) $errors['role'] = 'I am referring as a…: please choose the one that fits best.';
     // The page script only hides the sections that do not apply to the chosen
     // role, so their inputs still post. Drop them here: answers typed under
     // another role (a relative's date of birth and address, a guardian, a
@@ -263,8 +271,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     referral_source, school, grade_level, guardian_name, guardian_phone,
                     relationship, contact_first, consent_confirmed, preets_services, income_bracket, quoted_fee, referral_purpose, requested_service, specific_needs, preferred_language)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute([
-                REFERRER_ROLES[$role] . ' referral', $noteType,
-                mb_substr(ucfirst($role) . ' referral: ' . $clientName, 0, 255),
+                $sourceLabel . ' referral', $noteType,
+                mb_substr(ucfirst($source) . ' referral: ' . $clientName, 0, 255),
                 // Cap free-text public inputs so an anonymous submitter can't store multi-MB values.
                 mb_substr(trim($_POST['body']), 0, 8000),
                 mb_substr(trim($_POST['referrer_name']), 0, 120), mb_substr($orgLabel, 0, 190), strtolower($refEmail), mb_substr(trim($_POST['referrer_phone']), 0, 40),
@@ -273,7 +281,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $clientPhone,
                 $clientEmail,
                 mb_substr(trim($_POST['client_address'] ?? ''), 0, 255) ?: null,
-                $role,
+                $extraSource ? $source : $role,
                 $role === 'school' ? $organization : null,
                 mb_substr(trim($_POST['grade_level'] ?? ''), 0, 40) ?: null,
                 mb_substr(trim($_POST['guardian_name'] ?? ''), 0, 120) ?: null,
@@ -340,14 +348,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             redirect('community_referral.php?submitted=1' . $done);
         }
-        notify_admin_users('New ' . strtoupper($role) . ' referral: ' . $clientName, 'referrals.php?view=' . $refId);
+        notify_admin_users('New ' . ($extraSource ? $source : strtoupper($role)) . ' referral: ' . $clientName, 'referrals.php?view=' . $refId);
         // The email goes out from the organisation's own mailbox, so it carries
         // none of the anonymous submitter's free text (names, organisation):
         // those are read on the referrals page after signing in.
         notify_admins('New referral received (#' . $refId . ')',
             "A new referral arrived via the referral form.\n\n"
             . 'Referral number: ' . $refId . "\n"
-            . 'Referred as: ' . REFERRER_ROLES[$role] . "\n"
+            . 'Referred as: ' . $sourceLabel . "\n"
             . ($structured ? referral_request_summary($requestFields) . "\n" : '')
             . ($fee !== null ? 'Fee determination: ' . ($fee > 0 ? '$' . number_format($fee, 2) . '/hour' : 'Free') . "\n" : '')
             . "\nThe referrer's and the person's details are on the referrals page. Review it here: " . cfg('base_url') . '/referrals.php?view=' . $refId . "\n");
@@ -461,7 +469,12 @@ if ($errors): ?>
     <legend><h2 class="legend-h"><?= t('I am referring as a…') ?> <span aria-hidden="true">*</span></h2></legend>
     <?php $roleNum = 0; foreach (REFERRER_ROLES as $value => $label): if (!in_array($value, referral_form_config()['roles'], true)) continue; ?>
     <div class="field">
-      <label><input type="radio" name="role" id="role-<?= $roleNum++ ?>" value="<?= h($value) ?>" <?= $role === $value ? 'checked' : '' ?> required data-role-radio> <?= t($label) ?></label>
+      <label><input type="radio" name="role" id="role-<?= $roleNum++ ?>" value="<?= h($value) ?>" <?= $source === $value ? 'checked' : '' ?> required data-role-radio> <?= t($label) ?></label>
+    </div>
+    <?php endforeach; ?>
+    <?php foreach ($extraSources as $value): // added on Lists and time limits (4.11.0) ?>
+    <div class="field">
+      <label><input type="radio" name="role" id="role-<?= $roleNum++ ?>" value="<?= h($value) ?>" <?= $source === $value ? 'checked' : '' ?> required data-role-radio data-acts-as="other"> <?= page_lang() === 'es' ? '<span lang="en">' . h($value) . '</span>' : h($value) ?></label>
     </div>
     <?php endforeach; ?>
     <?= $err('role') ?>
@@ -652,7 +665,7 @@ if ($errors): ?>
     var reqMarks = document.querySelectorAll('[data-role-req]');
     function update() {
         var chosen = document.querySelector('[data-role-radio]:checked');
-        var role = chosen ? chosen.value : null;
+        var role = chosen ? (chosen.getAttribute('data-acts-as') || chosen.value) : null;
         sections.forEach(function (el) {
             var roles = el.getAttribute('data-role').split(' ');
             el.hidden = role !== null && roles.indexOf(role) === -1;

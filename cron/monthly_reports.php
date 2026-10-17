@@ -43,7 +43,6 @@ $tracks = db()->query("SELECT t.id, t.title, t.auth_number, t.report_cadence, t.
     WHERE t.status = 'Active' AND t.report_cadence <> 'none'
       AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%'")->fetchAll();
 
-$minDays = ['weekly' => 7, 'biweekly' => 14, 'monthly' => 28];
 // Owner decision (2026-10-16): a due report waits for a person to write a short narrative
 // and send it from the track's Send report page. This job then only opens a task for the
 // client's instructor (once per report period). Administrators can turn automatic sending
@@ -63,7 +62,9 @@ $notice = db()->prepare('INSERT IGNORE INTO sent_alerts (track_id, alert_key) VA
 
 foreach ($tracks as $t) {
     $cadence = $t['report_cadence'] ?? 'monthly';
-    $gap = $minDays[$cadence] ?? 28;
+    $gap = report_cadence_days($cadence);
+    // The words a report uses: two-week, or an added schedule's own name (4.11.0).
+    $label = ['weekly' => 'weekly', 'biweekly' => 'two-week', 'monthly' => 'monthly'][$cadence] ?? mb_strtolower($cadence);
     // Due when the last report (or, before the first one, the track's start —
     // its start date, or the day it was entered if that is later, so a new track
     // gets its first full period) is at least the cadence gap old.
@@ -77,7 +78,6 @@ foreach ($tracks as $t) {
         $key = 'report-due-' . (int)$t['id'] . '-' . date('Ymd', strtotime((string)$since));
         $taskSeen->execute([$key]);
         if ($taskSeen->fetchColumn()) continue;
-        $label = ['weekly' => 'weekly', 'biweekly' => 'two-week', 'monthly' => 'monthly'][$cadence] ?? 'monthly';
         if (add_task('Write and send the ' . $label . ' progress report: ' . $t['client_name'] . ' — ' . $t['title'],
                 'The counselor\'s ' . $label . ' progress report is due. Open the training track, choose Send report, add a short narrative, sign it and send it.'
                 . (filter_var(strtolower(trim((string)$t['counselor_email'])), FILTER_VALIDATE_EMAIL) && !empty($t['counselor_verified']) ? '' : ' The counselor email is missing or not yet confirmed: fix it on the client\'s edit page first.'),
@@ -102,7 +102,6 @@ foreach ($tracks as $t) {
     // Only the class and code are logged, never client data.
     $emailed = false;
     try {
-        $label = ['weekly' => 'weekly', 'biweekly' => 'two-week', 'monthly' => 'monthly'][$cadence];
         // The report lists every session and the totals since the track began, so
         // the introduction says so rather than naming only the last period.
         $report = build_track_report((int)$t['id'], brand('org'),

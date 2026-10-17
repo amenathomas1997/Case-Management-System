@@ -1347,7 +1347,7 @@ switch ($action) {
         // Fields the app didn't send keep their stored value (older app builds
         // don't send dob, and a missing status must not silently reset it).
         // A value that IS sent must be valid: it is refused, not swapped for another.
-        $status = api_choice($input, 'status', CLIENT_STATUSES, 'Status', null) ?? ($old['status'] ?? 'Pending Assessment');
+        $status = api_choice($input, 'status', cms_choices('client_statuses', $old['status'] ?? null), 'Status', null) ?? ($old['status'] ?? 'Pending Assessment');
         $limits = [
             'email' => [190, 'Email'], 'phone' => [40, 'Phone'], 'address' => [255, 'Address'],
             'counselor_name' => [120, 'Counselor name'], 'counselor_email' => [190, 'Counselor email'],

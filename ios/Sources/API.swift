@@ -215,7 +215,10 @@ var clientTypes: [String] { FormOptions.list("client_types", ["VR", "Pre-ETS"]) 
 let a11yFormats = ["Standard print", "Large print", "Plain text", "Braille-ready (BRF)", "Audio", "Accessible PDF"]
 let a11yContacts = ["No preference", "Email", "Phone", "Client portal", "Postal mail"]
 
-let clientStatuses = ["Pending Assessment", "Waitlist", "Active Training", "On Hold", "Closed - Rehabilitated", "Closed - Other"]
+/// Client statuses: the server's list (4.11.0, an administrator can add some), else the built-in six.
+var clientStatuses: [String] {
+    FormOptions.list("client_statuses", ["Pending Assessment", "Waitlist", "Active Training", "On Hold", "Closed - Rehabilitated", "Closed - Other"])
+}
 var techTypes: [String] {
     FormOptions.list("tech_types", ["Screen Reader", "Magnification", "Braille Display", "Speech-to-Text",
                                     "Independent Living Skills", "Braille Literacy", "Low Vision Devices",
