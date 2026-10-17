@@ -41,3 +41,16 @@ Web 4.22.0. The apps are unchanged; the API adds the office to a client's detail
 **Accepted:** during an update, pages might read office_id before the migration has run. The updater runs migrations before swapping files in, so that never happens.
 
 ## Published (not deployed)
+
+2026-10-17, after CI passed all three jobs on c5aa40a. The GitHub release v4.22.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 310 files, verified with the key built into the code
+
+The live site stays at 4.21.0 until the owner installs this with Administration, Software update.
+
+**Rehearsed before publishing.** The package was installed with the 4.21.0 updater onto a copy of a 4.21.0 site, with its own private and cron folders and a database in the 4.21.0 shape:
+- the real signature verified, and the plan showed no problems
+- the backup was made first
+- the database changes ran (6 statements; database version 4.22.0)
+- 25 files were replaced, the scheduled jobs included
+- afterwards the sign-in page served at 4.22.0, health reported 4.22.0 with the database answering, and clients.office_id was there
