@@ -29,3 +29,6 @@ Verified before commit:
 - The migration rehearsal matched.
 - The iPhone app builds for the simulator.
 - Not checked on a phone.
+
+## Deployed 2026-10-16 21:37 CT
+From 4.7.1 with .audit_work/deploy-4.8.0 (10 files), at 67d32df. mig_4.8.0.sql ran; goal_progress.idem_key present. Production files matched 4.7.1 before install and match 4.8.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.8.0. The JAWS menu hint change is live for everyone. The offline additions reach staff once the iPhone app 4.8.0 (build 49) is on TestFlight. Backups: /home/cmsuser/casemanagement_private/deploy-4.8.0-20261016-213723.
