@@ -63,3 +63,6 @@ The owner asked to test the Android app and to build the rest of its screens.
 - Not run with TalkBack itself: the emulator image has no TalkBack.
 - Not on a real phone, and not against the live site.
 - Still only on the website and the iPhone app: the AI tools and voice assistant, scored assessments, AT services, programs, contracts, bookings, procurement, accommodations, competencies, the knowledge base, signatures and uploading documents.
+
+## Deployed 2026-10-16 23:54 CT
+The web part went from 4.12.0 with .audit_work/deploy-4.13.0: 4 files at a8a16e4, no migration. Production files matched 4.12.0 before install and match 4.13.0 after, and smoke checks passed. CI passed all three jobs: PHP, Android and iOS. The Android app is not on Google Play yet. Backups: /home/cmsuser/casemanagement_private/deploy-4.13.0-20261016-235434.
