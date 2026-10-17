@@ -70,3 +70,10 @@ The owner asked for "an Android app that is in sync with the website and the iPh
 - The Android app has not been run on a phone or an emulator here: there is no Android system image on this Mac.
 - It has not been tried against the live server, and has not been checked with TalkBack.
 - Its first run should be an internal test (Google Play Internal testing, or the debug APK on one phone).
+
+## Deployed 2026-10-16 23:17 CT
+The web part went from 4.11.0 with .audit_work/deploy-4.12.0: 5 files at e035572, no migration. Production files matched 4.11.0 before install and match 4.12.0 after. Smoke checks passed, and health reports 4.12.0. Backups: /home/cmsuser/casemanagement_private/deploy-4.12.0-20261016-231702.
+
+CI's first run failed in the third-party Android setup step (its licence prompt), not in the app. 4003cc0 uses the runner's own Android SDK, and all three jobs then passed, including the Android build, unit tests and lint.
+
+The Android app is not published anywhere yet. The debug APK can be built with android/README.md. Publishing needs the owner's Google Play developer account and upload key.
