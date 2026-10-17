@@ -44,3 +44,20 @@ Verified before commit:
 - full_schema 1444, audit_regression, security, staging_scrub, and run_all.
 - The migration rehearsal matched.
 - Not checked in a browser or with a screen reader.
+
+## Deployed 2026-10-16 19:26 CT
+From 4.2.0 with .audit_work/deploy-4.3.0 (34 files), at 55bb9ed. The first CI run failed on a test-only problem (PHP's file status cache in the test process; cleanup could not remove the icon folder); 55bb9ed fixed it and CI passed.
+
+- **Before:** the checksum check stopped the first attempt. The server's manifest.webmanifest was an older copy (October 8, with absolute paths) that no deploy had changed. Since 4.3.0 no longer uses that file, it was left out of the package and is untouched on the server.
+- **Database:**
+  - mig_4.3.0.sql and the production-only brand_4.3.0.sql ran before the files were installed.
+  - Checked beforehand: the live database had no cfg.* rows.
+  - The branding SQL was dry-run locally: empty rows are filled and set values are kept.
+- **Checked after:**
+  - The sign-in page title is still "Case Management System".
+  - The privacy notice names the maintainer, the Springfield address, the governing law and HIPAA, and shows the HIPAA section.
+  - manifest.php serves the Example Agency name.
+  - icon.php returns a PNG with no Set-Cookie.
+  - Health and smoke checks passed.
+
+Backups: /home/cmsuser/casemanagement_private/deploy-4.3.0-20261016-192633.
