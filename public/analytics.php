@@ -80,6 +80,7 @@ $reports = array_filter([
     ['rsa_report.php', 'RSA-911 case-service export', 'One row per client served in a period with the case-service fields state VR asks for, to preview on screen or download as CSV.', can('billing')],
     ['utilization.php', 'Staff billable utilization', "Each staff member's billable hours and value for a period against their expected capacity, with a utilization rate.", can('analytics')],
     ['capacity.php', 'Capacity planning', 'Committed session hours against available hours per instructor, plus authorized hours not yet scheduled on active tracks.', can('schedule')],
+    ['custom_reports.php', 'Custom reports', 'Build your own report from clients, tracks, hours, invoices, sessions or referrals: choose the columns, filters and grouping, download it, and save it to run again.', can('analytics')],
     ['attendance.php', 'Attendance and no-shows', 'Completed, missed and cancelled sessions for a period by client, instructor, service type or setting, and clients with repeated no-shows; CSV.', can('analytics')],
     ['unused_authorizations.php', 'Unused authorizations', 'Authorizations that ended in a period, with hours and dollars authorized, delivered, invoiced and left unused, by agency, service and instructor; CSV.', can('analytics')],
     ['survey_responses.php', 'Survey responses', 'Every outcome survey answer for a period, by email or phone, with the averages; CSV.', can('analytics')],

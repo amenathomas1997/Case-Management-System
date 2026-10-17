@@ -6,6 +6,9 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.7.0' => [
+        'Custom reports (Business analytics): build your own report from clients, training tracks and authorizations, hours and mileage, invoices, scheduled sessions or referrals. Choose the columns and filters (dates, status, staff, funding agency), group it to get counts and totals, download it as a spreadsheet, and save it, for yourself or shared, to run again.',
+    ],
     '4.6.0' => [
         'Lists and time limits now also sets how many days ahead session and AT service reminders go out, and the windows the documentation review looks at. Pricing rules has a default mileage rate for new tracks (an agency\'s own rate comes first).',
         'The iPhone app (4.6.0) can be built by any organisation: its name, app ID and server are one block of build settings, and a build without a server asks for the organisation\'s web address at sign-in. Your own app is unchanged.',
