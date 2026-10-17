@@ -155,8 +155,10 @@ function agency_bill_to_lines(?string $agency): array {
  * so a client who moves state follows the new state.
  */
 function client_zone(?array $client): ?string {
+    // ...else their office's zone (4.22.0), when they belong to one.
     $tz = us_zone($client['time_zone'] ?? $client['client_time_zone'] ?? null)
-        ?? state_default_zone($client['state'] ?? $client['client_state'] ?? null);
+        ?? state_default_zone($client['state'] ?? $client['client_state'] ?? null)
+        ?? (function_exists('office_zone_for') ? office_zone_for($client) : null);
     return $tz !== null && $tz !== date_default_timezone_get() ? $tz : null;
 }
 

@@ -109,7 +109,7 @@ function letter_template(string $key): string {
 /** The merge values for one client: their latest active track, next session, last missed one and newest loan. */
 function letter_values(int $clientId, string $key = ''): array {
     $one = function (string $sql) use ($clientId) { $q = db()->prepare($sql); $q->execute([$clientId]); return $q->fetch() ?: []; };
-    $c = $one('SELECT c.name, c.counselor_name, c.counselor_agency, c.time_zone, c.state, u.name AS instructor FROM clients c LEFT JOIN users u ON u.id = c.assigned_to WHERE c.id = ?');
+    $c = $one('SELECT c.name, c.counselor_name, c.counselor_agency, c.time_zone, c.state, c.office_id, u.name AS instructor FROM clients c LEFT JOIN users u ON u.id = c.assigned_to WHERE c.id = ?');
     // A completion letter is about the plan just finished; every other letter about the current one.
     $t = $one("SELECT id, title, auth_number, authorized_hours, expiration_date FROM training_tracks WHERE client_id = ? ORDER BY "
         . ($key === 'completion' ? "status = 'Completed' DESC, COALESCE(completed_at, created_at) DESC" : "status = 'Active' DESC, id DESC") . ' LIMIT 1');

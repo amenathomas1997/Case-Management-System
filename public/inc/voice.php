@@ -728,6 +728,7 @@ function voice_execute(string $do, array $in, array $user): array {
             try {
                 db()->prepare("INSERT INTO clients (name, status, assigned_to) VALUES (?, 'Pending Assessment', ?)")->execute([$name, $assign]);
                 $ncid = (int)db()->lastInsertId();
+                office_place_new_client($ncid, $uid);   // 4.22.0
                 record_status_change($ncid, null, 'Pending Assessment', $uid, 'Client created (voice)');
                 if ($own) db()->commit();
             } catch (Throwable $e) {

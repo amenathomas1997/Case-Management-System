@@ -79,13 +79,16 @@ $schoolFilter = is_string($_GET['school'] ?? null) ? trim($_GET['school']) : '';
 if ($typeFilter !== '') { $sql .= ' AND c.client_type = ?'; $params[] = $typeFilter; }
 if ($agencyFilter !== '') { $sql .= ' AND EXISTS (SELECT 1 FROM training_tracks ft WHERE ft.client_id = c.id AND ft.funding_agency = ?)'; $params[] = $agencyFilter; }
 if ($schoolFilter !== '') { $sql .= ' AND c.school LIKE ?'; $params[] = '%' . $schoolFilter . '%'; }
+// One office's clients (4.22.0).
+$officeFilter = offices_on() && is_string($_GET['office'] ?? null) && ctype_digit($_GET['office']) && office_get((int)$_GET['office']) ? (int)$_GET['office'] : 0;
+if ($officeFilter > 0) { $sql .= ' AND c.office_id = ?'; $params[] = $officeFilter; }
 if (caseload_scoped()) { $sql .= ' AND c.assigned_to = ?'; $params[] = $user['id']; }
 // The download has every match, past the screen's 500 rows (3.0.50).
 if (isset($_GET['export'])) {
     $ex = db()->prepare($sql . ' ORDER BY c.name');
     $ex->execute($params);
-    list_export_send('clients', (int)$user['id'], ['Name', 'Status', 'Client type', 'Instructor', 'VR counselor', 'Counselor agency', 'Email', 'Phone', 'Date of birth', 'School', 'Active tracks'],
-        array_map(fn($c) => [$c['name'], $c['status'], $c['client_type'], $c['instructor'], $c['counselor_name'], $c['counselor_agency'], $c['email'], $c['phone'], $c['dob'], $c['school'], (int)$c['active_tracks']], $ex->fetchAll()), ' (filtered)');
+    list_export_send('clients', (int)$user['id'], ['Name', 'Status', 'Client type', 'Instructor', 'VR counselor', 'Counselor agency', 'Email', 'Phone', 'Date of birth', 'School', 'Active tracks', ...(offices_on() ? ['Office'] : [])],
+        array_map(fn($c) => [$c['name'], $c['status'], $c['client_type'], $c['instructor'], $c['counselor_name'], $c['counselor_agency'], $c['email'], $c['phone'], $c['dob'], $c['school'], (int)$c['active_tracks'], ...(offices_on() ? [(string)(office_get((int)($c['office_id'] ?? 0))['name'] ?? '')] : [])], $ex->fetchAll()), ' (filtered)');
 }
 // The list shows at most 500 rows; count every match so the page can say so.
 $cnt = db()->prepare('SELECT COUNT(*) FROM (' . $sql . ') matched');
@@ -147,6 +150,12 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
       <label for="school">School</label>
       <input type="text" id="school" name="school" value="<?= h($schoolFilter) ?>">
     </div>
+    <?php if (offices_on()): ?>
+    <div class="field">
+      <label for="office">Office</label>
+      <select id="office" name="office"><?= office_options($officeFilter ?: null, 'All offices') ?></select>
+    </div>
+    <?php endif; ?>
   </div>
   <button type="submit" class="btn btn-secondary">Apply filters</button>
   <button type="submit" name="export" value="1" class="btn btn-secondary">Download these clients (CSV)</button>

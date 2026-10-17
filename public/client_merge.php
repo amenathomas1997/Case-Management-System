@@ -298,7 +298,8 @@ page_header('Merge clients', $user, 'clients');
           $un = db()->prepare('SELECT name FROM users WHERE id = ?');
           $un->execute([(int)$val]);
           $shown = (string)($un->fetchColumn() ?: 'user #' . (int)$val);
-      } else $shown = (string)$val;
+      } elseif ($f === 'office_id') $shown = (string)(office_get((int)$val)['name'] ?? 'office #' . (int)$val);
+      else $shown = (string)$val;
       // An unconfirmed counselor or client email is copied as unconfirmed, and says so here.
       $fieldLabel = MERGE_FILL_FIELDS[$f] . (($f === 'counselor_email' && array_key_exists('counselor_verified', $dupeRow) && (int)$dupeRow['counselor_verified'] !== 1)
           || ($f === 'email' && (int)$dupeRow['email_verified'] !== 1) ? ' (not yet confirmed)' : ''); ?>

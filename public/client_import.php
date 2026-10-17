@@ -147,7 +147,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
                 if ($kind === 'clients') {
                     db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, guardian_name, guardian_phone, guardian_email, vr_case_number, state, email_verified, counselor_verified)
                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0)')->execute($v);
-                    record_status_change((int)db()->lastInsertId(), null, $v[5], (int)$user['id'], 'Client imported from a spreadsheet');
+                    $newCid = (int)db()->lastInsertId();
+                    office_place_new_client($newCid, (int)$user['id']);   // 4.22.0
+                    record_status_change($newCid, null, $v[5], (int)$user['id'], 'Client imported from a spreadsheet');
                 } else {
                     db()->prepare("INSERT INTO training_tracks (client_id, title, rsa_category, status, auth_number, funding_agency, authorized_hours, authorized_amount, hourly_rate, mileage_rate, start_date, expiration_date, billing_mode)
                         VALUES (?,?,?,'Active',?,?,?,?,?,?,?,?,'vr')")->execute($v);

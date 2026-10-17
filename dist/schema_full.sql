@@ -320,7 +320,9 @@ CREATE TABLE `clients` (
   `sms_consent_source` varchar(60) DEFAULT NULL,
   `sms_consent_by` int(10) unsigned DEFAULT NULL,
   `sms_opted_out_at` datetime DEFAULT NULL,
+  `office_id` int(10) unsigned DEFAULT NULL,
   PRIMARY KEY (`id`),
+  KEY `idx_office` (`office_id`),
   KEY `idx_assigned_to` (`assigned_to`),
   KEY `idx_status` (`status`),
   KEY `idx_archived_at` (`archived_at`)
@@ -946,6 +948,21 @@ CREATE TABLE `qbo_customers` (
   UNIQUE KEY `name_key` (`name_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `offices`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `offices` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `name` varchar(120) NOT NULL,
+  `address` varchar(255) DEFAULT NULL,
+  `phone` varchar(40) DEFAULT NULL,
+  `time_zone` varchar(40) DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `messages`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -1531,7 +1548,9 @@ CREATE TABLE `users` (
   `calendar_sync` tinyint(1) NOT NULL DEFAULT 0,
   `calendar_synced_at` datetime DEFAULT NULL,
   `calendar_error` varchar(255) DEFAULT NULL,
+  `office_id` int(10) unsigned DEFAULT NULL,
   PRIMARY KEY (`id`),
+  KEY `idx_office` (`office_id`),
   UNIQUE KEY `email` (`email`),
   KEY `idx_cal_token` (`cal_token`),
   KEY `idx_entra_oid` (`entra_oid`)

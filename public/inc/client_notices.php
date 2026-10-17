@@ -186,7 +186,7 @@ function client_session_notice_send(array $sessionIds, string $kind): bool {
     // A client who agreed to texts is also texted (4.17.0), whatever happens with the email.
     if (function_exists('sms_session_notice')) sms_session_notice($sessionIds, $kind);
     try {
-        $q = db()->prepare('SELECT s.*, c.name AS client_name, c.email, c.email_verified, c.a11y_contact, c.preferred_language, c.archived_at, c.status AS client_status, c.time_zone AS client_time_zone, c.state AS client_state
+        $q = db()->prepare('SELECT s.*, c.name AS client_name, c.email, c.email_verified, c.a11y_contact, c.preferred_language, c.archived_at, c.status AS client_status, c.time_zone AS client_time_zone, c.state AS client_state, c.office_id AS client_office_id
             FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id WHERE s.id IN (' . implode(',', array_fill(0, count($sessionIds), '?')) . ') ORDER BY s.start_at');
         $q->execute($sessionIds);
         $rows = $q->fetchAll();

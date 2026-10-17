@@ -6,6 +6,9 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.22.0' => [
+        'Offices (Administration, Offices): add your locations, each with its address, phone and time zone. Put staff in an office on their user page and clients on their edit page; a new client starts in your own office. The client list and the Schedule\'s upcoming sessions can show one office, and the client download has an Office column. A client with no state on record gets reminders and texts in their office\'s time zone.',
+    ],
     '4.21.0' => [
         'The AT Act report (Reports): device demonstrations, short-term device loans and device reuse for a federal fiscal year, in the categories of the AT Act Annual Progress Report, on screen or as a spreadsheet. Lending a device now asks why it is lent and who borrows it; each device can have an AT Act type; demonstrations are recorded under AT services, Device demonstrations.',
         'QuickBooks Online (Administration, QuickBooks): connect your company, and each morning submitted invoices go there, to the funding agency (or the private-pay client), with lines for hours, mileage and expenses; payments recorded in QuickBooks come back as payments here.',

@@ -341,7 +341,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_group'])) {
     $attended = $postedIds('attended');
     // Scoped staff complete only their own clients' rows of the group, instead of
     // stopping part-way at the first client that belongs to someone else.
-    $rows = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
+    $rows = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, c.office_id AS client_office_id FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
         WHERE s.group_uid = ? AND s.status = 'Scheduled'" . (caseload_scoped() ? ' AND c.assigned_to = ?' : '') . ' ORDER BY c.name, s.id');
     $rows->execute(caseload_scoped() ? [$uid, (int)$user['id']] : [$uid]);
     $done = 0;
@@ -629,7 +629,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
 /* ---- POST: move a session, or cancel the rest of its series or its whole group (3.0.43) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['move_session']) || isset($_POST['cancel_series']) || isset($_POST['cancel_group']))) {
     $sid = (int)($_POST['session_id'] ?? 0);
-    $q = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id WHERE s.id = ? AND s.status = 'Scheduled'");
+    $q = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, c.office_id AS client_office_id FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id WHERE s.id = ? AND s.status = 'Scheduled'");
     $q->execute([$sid]);
     $sess = $q->fetch();
     if (!$sess) { flash('That session is no longer scheduled.', 'error'); redirect('schedule.php'); }
@@ -669,7 +669,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     $linkLogId = preg_match('/^Completed_logged_(\d+)$/D', $toIn, $lm) ? (int)$lm[1] : 0;
     $separate = $toIn === 'Completed_separate';
     $to = ($linkLogId > 0 || $separate) ? 'Completed' : (in_array($toIn, array_diff(SESSION_STATUSES, ['Scheduled']), true) ? $toIn : null);
-    $st = db()->prepare('SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, t.title AS track_title FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
+    $st = db()->prepare('SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, c.office_id AS client_office_id, t.title AS track_title FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
         LEFT JOIN training_tracks t ON t.id = s.track_id WHERE s.id = ?');
     $st->execute([$sid]);
     $sess = $st->fetch();
@@ -860,13 +860,15 @@ $upClients = db()->prepare("SELECT DISTINCT c.id, c.name FROM scheduled_sessions
 $upClients->execute($scopeParams);
 $upClients = $upClients->fetchAll();
 $upClient = is_string($_GET['client'] ?? null) && ctype_digit($_GET['client']) ? (int)$_GET['client'] : 0;
-$upAnd = $scopeAnd . ($upClient > 0 ? ' AND s.client_id = ?' : '');
-$upParams = $upClient > 0 ? array_merge($scopeParams, [$upClient]) : $scopeParams;
+// One office's sessions (4.22.0): the client's office.
+$upOffice = offices_on() && is_string($_GET['office'] ?? null) && ctype_digit($_GET['office']) && office_get((int)$_GET['office']) ? (int)$_GET['office'] : 0;
+$upAnd = $scopeAnd . ($upClient > 0 ? ' AND s.client_id = ?' : '') . ($upOffice > 0 ? ' AND c.office_id = ?' : '');
+$upParams = array_merge($scopeParams, $upClient > 0 ? [$upClient] : [], $upOffice > 0 ? [$upOffice] : []);
 $ucq = db()->prepare("SELECT COUNT(*) FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
     WHERE s.status = 'Scheduled' AND s.end_at >= NOW()" . $upAnd);
 $ucq->execute($upParams);
 $upcomingTotal = (int)$ucq->fetchColumn();
-$uq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, u.name AS staff_name, t.title AS track_title
+$uq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, c.office_id AS client_office_id, u.name AS staff_name, t.title AS track_title
     FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
     LEFT JOIN users u ON u.id = s.user_id LEFT JOIN training_tracks t ON t.id = s.track_id
     WHERE s.status = 'Scheduled' AND s.end_at >= NOW()" . $upAnd . " ORDER BY s.start_at LIMIT 100");
@@ -874,7 +876,7 @@ $uq->execute($upParams);
 $upcoming = $uq->fetchAll();
 // Every group still awaiting an outcome, whatever the list limit or filter, so a
 // group cut off at the end of the upcoming list still gets its card.
-$gq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, u.name AS staff_name, t.title AS track_title
+$gq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, c.office_id AS client_office_id, u.name AS staff_name, t.title AS track_title
     FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
     LEFT JOIN users u ON u.id = s.user_id LEFT JOIN training_tracks t ON t.id = s.track_id
     WHERE s.status = 'Scheduled' AND s.group_uid IS NOT NULL" . $scopeAnd . " ORDER BY s.start_at, s.id");
@@ -884,14 +886,14 @@ $groupRows = $gq->fetchAll();
 // Sessions whose time has passed but that are still 'Scheduled'. Every one stays
 // listed (no limit) until an outcome is recorded, so a session can never scroll
 // out of reach with its hours unlogged.
-$oq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, u.name AS staff_name, t.title AS track_title
+$oq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, c.office_id AS client_office_id, u.name AS staff_name, t.title AS track_title
     FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
     LEFT JOIN users u ON u.id = s.user_id LEFT JOIN training_tracks t ON t.id = s.track_id
     WHERE s.status = 'Scheduled' AND s.end_at < NOW()" . $scopeAnd . " ORDER BY s.start_at");
 $oq->execute($scopeParams);
 $overdue = $oq->fetchAll();
 
-$rq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, u.name AS staff_name, t.title AS track_title
+$rq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, c.office_id AS client_office_id, u.name AS staff_name, t.title AS track_title
     FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
     LEFT JOIN users u ON u.id = s.user_id LEFT JOIN training_tracks t ON t.id = s.track_id
     WHERE s.status <> 'Scheduled'" . $scopeAnd . " ORDER BY s.start_at DESC LIMIT 30");
@@ -1258,6 +1260,10 @@ foreach ($groupsPending as $uid => $members): if (count($members) < 2) continue;
     <option value="">All clients</option>
     <?php foreach ($upClients as $uc): ?><option value="<?= (int)$uc['id'] ?>" <?= $upClient === (int)$uc['id'] ? 'selected' : '' ?>><?= h($uc['name']) ?></option><?php endforeach; ?>
   </select>
+  <?php if (offices_on()): ?>
+  <label for="up_office">Office</label>
+  <select id="up_office" name="office"><?= office_options($upOffice ?: null, 'All offices') ?></select>
+  <?php endif; ?>
   <button type="submit" class="btn btn-secondary btn-sm">Show upcoming sessions</button>
 </form>
 <?php endif; ?>
@@ -1267,7 +1273,7 @@ foreach ($groupsPending as $uid => $members): if (count($members) < 2) continue;
   <caption class="visually-hidden">Upcoming scheduled sessions</caption>
   <thead><tr><th scope="col">When</th><th scope="col">Client</th><th scope="col">Instructor</th><th scope="col">Location</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
   <tbody>
-  <?php if (!$upcoming): ?><tr><td colspan="6" class="muted">Nothing scheduled<?= $upClient > 0 ? ' for that client' : '' ?>.</td></tr><?php endif; ?>
+  <?php if (!$upcoming): ?><tr><td colspan="6" class="muted">Nothing scheduled<?= $upClient > 0 ? ' for that client' : '' ?><?= $upOffice > 0 ? ' in that office' : '' ?>.</td></tr><?php endif; ?>
   <?php foreach ($upcoming as $s) session_row($s, csrf_token()); ?>
   </tbody>
 </table>

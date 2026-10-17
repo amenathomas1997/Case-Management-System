@@ -91,13 +91,13 @@ function sms_unknown_window(): string {
 
 /** The zones a client may be in: their picked zone or their state's, else anywhere in the US. */
 function sms_client_zones(?array $c): array {
-    $tz = us_zone($c['time_zone'] ?? null) ?? state_default_zone($c['state'] ?? null);
+    $tz = us_zone($c['time_zone'] ?? null) ?? state_default_zone($c['state'] ?? null) ?? (function_exists('office_zone_for') ? office_zone_for($c) : null);
     return $tz !== null ? [$tz] : SMS_UNKNOWN_ZONES;
 }
 
 /** A client row with what texting needs, or null. */
 function sms_client(int $clientId): ?array {
-    $q = db()->prepare('SELECT id, name, phone, status, archived_at, preferred_language, time_zone, state, sms_consent_at, sms_consent_source, sms_opted_out_at, assigned_to FROM clients WHERE id = ?');
+    $q = db()->prepare('SELECT id, name, phone, status, archived_at, preferred_language, time_zone, state, sms_consent_at, sms_consent_source, sms_opted_out_at, assigned_to, office_id FROM clients WHERE id = ?');
     $q->execute([$clientId]);
     return $q->fetch() ?: null;
 }

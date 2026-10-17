@@ -61,7 +61,7 @@ const CLIENT_MERGE_TABLES = [
 const MERGE_FILL_FIELDS = ['dob' => 'Date of birth', 'email' => 'Email', 'phone' => 'Phone', 'address' => 'Address',
     'school' => 'School / district', 'guardian_name' => 'Guardian name', 'guardian_phone' => 'Guardian phone',
     'guardian_email' => 'Guardian email', 'counselor_name' => 'Counselor name', 'counselor_email' => 'Counselor email',
-    'counselor_phone' => 'Counselor phone', 'counselor_agency' => 'Counselor agency', 'assigned_to' => 'Assigned instructor', 'state' => 'State'];
+    'counselor_phone' => 'Counselor phone', 'counselor_agency' => 'Counselor agency', 'assigned_to' => 'Assigned instructor', 'state' => 'State', 'office_id' => 'Office'];
 const MERGE_FILL_OPT_IN = ['email', 'guardian_email', 'counselor_email'];
 /** The fields blank on $t and set on $s, as field => duplicate's value. */
 function merge_fillable(array $t, array $s): array {

@@ -45,7 +45,7 @@ if ((int)db()->query("SELECT GET_LOCK(CONCAT('cms_session_reminders_', MD5(DATAB
 // A client who prefers Phone or Postal mail (a11y_contact) is not emailed (3.0.40): the
 // instructor's reminder says to call them, with their number.
 $sessions = db()->query("SELECT s.*, c.name AS client_name, c.email AS client_email, c.email_verified AS client_email_verified,
-        c.a11y_contact AS client_contact, c.phone AS client_phone, c.time_zone AS client_time_zone, c.state AS client_state,
+        c.a11y_contact AS client_contact, c.phone AS client_phone, c.time_zone AS client_time_zone, c.state AS client_state, c.office_id AS client_office_id,
         (c.archived_at IS NULL AND c.status NOT LIKE 'Closed%') AS client_current,
         u.id AS active_staff_id, u.name AS staff_name, u.email AS staff_email,
         (u.id IS NOT NULL AND (g.id IS NULL OR g.own_caseload_only = 0 OR c.assigned_to = u.id)) AS staff_sees_client,

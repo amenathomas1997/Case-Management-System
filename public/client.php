@@ -1275,6 +1275,9 @@ if ($hasA11y): ?>
       <dt>Phone</dt><dd><?= tel_link($client['phone'] ?? null) ?></dd>
       <?php if (sms_enabled()): ?><dt>Text messages</dt><dd><?= h(sms_client_words($client)) ?></dd><?php endif; ?>
       <dt>Address</dt><dd><?= directions_link($client['address'] ?? null) ?></dd>
+      <?php if ($clientOffice = office_get((int)($client['office_id'] ?? 0))): // 4.22.0 ?>
+      <dt>Office</dt><dd><?= h((string)$clientOffice['name']) ?><?= $clientOffice['phone'] ? ', ' . tel_link((string)$clientOffice['phone']) : '' ?></dd>
+      <?php endif; ?>
       <?php if (!empty($client['state']) || client_zone($client)): // 4.1.0 ?>
       <dt>State and time zone</dt><dd><?= h(implode('; ', array_filter([US_STATES[$client['state'] ?? ''] ?? '', ($cz = client_zone($client)) ? zone_difference_text($cz) : '']))) ?></dd>
       <?php endif; ?>

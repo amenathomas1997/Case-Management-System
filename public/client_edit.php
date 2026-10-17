@@ -105,6 +105,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stateIn = us_state(is_string($_POST['state'] ?? null) ? $_POST['state'] : null);
     $zoneIn = us_zone(is_string($_POST['time_zone'] ?? null) ? $_POST['time_zone'] : null);
     $placeVals = [$stateIn, $zoneIn];
+    // The office (4.22.0), when the organisation uses offices and the form sent one.
+    $officeSent = array_key_exists('office_id', $_POST);
+    $officeIn = $officeSent ? office_input($_POST['office_id'], isset($client['office_id']) ? (int)$client['office_id'] : null) : null;
+    // One closed (or removed) since the form was opened is said, not quietly dropped.
+    if ($officeSent && $officeIn === null && ($_POST['office_id'] ?? '') !== '') { $errors['office_id'] = 'Office: that office has been closed. Choose another, or No office.'; set_form_errors($errors); }
     // Required (4.19.0) for a new client, and for one whose state is already known: it sets the time zone
     // reminders and texts follow. An older record with none can still be saved (and closed); Data quality lists it.
     if ($stateIn === null && (!$client || !empty($client['state']))) { $errors['state'] = 'State: choose the state the client lives in. It sets their time zone for reminders and texts.'; set_form_errors($errors); }
@@ -200,6 +205,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->prepare('UPDATE clients SET vr_case_number=?, ipe_goal=?, ipe_date=?, ipe_amended_on=? WHERE id=?')->execute([...$planVals, (int)$client['id']]);
                 $pdo->prepare('UPDATE clients SET vision_status=?, vision_onset_age=? WHERE id=?')->execute([...$visionVals, (int)$client['id']]);
                 $pdo->prepare('UPDATE clients SET state=?, time_zone=? WHERE id=?')->execute([...$placeVals, (int)$client['id']]);
+                if ($officeSent) $pdo->prepare('UPDATE clients SET office_id=? WHERE id=?')->execute([$officeIn, (int)$client['id']]);
                 // A portal link already emailed to the old address stops working when
                 // the address changes: it may belong to someone else now.
                 // Texts (4.17.0): the agreement as recorded here; a new number needs it again.
@@ -339,6 +345,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             db()->prepare('UPDATE clients SET vr_case_number=?, ipe_goal=?, ipe_date=?, ipe_amended_on=? WHERE id=?')->execute([...$planVals, $newId]);
             db()->prepare('UPDATE clients SET vision_status=?, vision_onset_age=? WHERE id=?')->execute([...$visionVals, $newId]);
             db()->prepare('UPDATE clients SET state=?, time_zone=? WHERE id=?')->execute([...$placeVals, $newId]);
+            if ($officeSent) db()->prepare('UPDATE clients SET office_id=? WHERE id=?')->execute([$officeIn, $newId]);
+            else office_place_new_client($newId, (int)$user['id']);
             web_once_set($clientKey, $newId);
             $smsNote = sms_consent_save($newId, !empty($_POST['sms_consent']), (string)($_POST['sms_consent_source'] ?? ''), null, (int)$user['id']);
             record_status_change($newId, null, $status, $user['id'], 'Client created');
@@ -406,6 +414,12 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
     <div class="field"><label for="address">Address</label>
       <input type="text" id="address" name="address" value="<?= $v('address') ?>" <?= field_aria('address') ?>><?= field_error('address') ?></div>
     <?php $stateRequired = !$client || !empty($client['state']); ?>
+    <?php if (offices_on()): // 4.22.0: a new client starts in the office of the person adding them
+      $myOffice = (int)(db()->query('SELECT o.id FROM users u JOIN offices o ON o.id = u.office_id AND o.is_active = 1 WHERE u.id = ' . (int)$user['id'])->fetchColumn() ?: 0);
+      $officeNow = $raw('office_id') !== null ? (int)$raw('office_id') : ($client ? (int)($client['office_id'] ?? 0) : $myOffice); ?>
+    <div class="field"><label for="office_id">Office</label>
+      <select id="office_id" name="office_id" <?= field_aria('office_id') ?>><?= office_options($officeNow ?: null) ?></select><?= field_error('office_id') ?></div>
+    <?php endif; ?>
     <div class="field"><label for="state">State<?= $stateRequired ? ' <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span>' : ' <span class="hint">not recorded yet: choose it, so reminders and texts follow their time zone</span>' ?></label>
       <select id="state" name="state" <?= $stateRequired ? 'required ' : '' ?><?= field_aria('state') ?>><?= kv_options(US_STATES, html_entity_decode($v('state'), ENT_QUOTES), 'Choose a state') ?></select><?= field_error('state') ?></div>
     <div class="field"><label for="time_zone">Time zone for the client's emails and portal</label>

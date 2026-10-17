@@ -781,10 +781,13 @@ switch ($action) {
         $id = (int)($_GET['id'] ?? 0);
         api_require_client($id, $userId);
         record_client_view($userId, $id, api_app_name());
-        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email, vr_case_number, ipe_goal, ipe_date, ipe_amended_on, state, time_zone FROM clients WHERE id = ?');
+        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email, vr_case_number, ipe_goal, ipe_date, ipe_amended_on, state, time_zone, office_id FROM clients WHERE id = ?');
         $c->execute([$id]);
         $client = $c->fetch();
         if (!$client) fail('Client not found.', 404);
+        // The office that serves them (4.22.0): office_id and its name, null when none.
+        $client['office_id'] = $client['office_id'] !== null ? (int)$client['office_id'] : null;
+        $client['office'] = office_get($client['office_id'])['name'] ?? null;
         $client['a11y_screen_reader'] = (bool)$client['a11y_screen_reader'];
         // counselor_verified: false while a counselor email from the public referral form
         // waits for staff to confirm it (save_client with counselor_verified true).
@@ -1372,6 +1375,11 @@ switch ($action) {
         $placeSent = array_key_exists('state', $input);
         $stateApi = $placeSent ? us_state(is_string($input['state']) ? $input['state'] : null) : null;
         if ($placeSent && $stateApi === null) fail('Choose the state the client lives in: it sets their time zone for reminders and texts.', 422);
+        // The office (4.22.0): sent as an open office's id, or null for none; not sent keeps what is stored
+        // (a new client gets the creating user's office, as on the website).
+        $officeSentApi = array_key_exists('office_id', $input);
+        $officeApi = $officeSentApi ? office_input($input['office_id'], isset($old['office_id']) ? (int)$old['office_id'] : null) : null;
+        if ($officeSentApi && !in_array($input['office_id'], [null, '', 0, '0'], true) && $officeApi === null) fail('Choose an open office, or none.', 422);
         $zoneApi = array_key_exists('time_zone', $input) ? us_zone(is_string($input['time_zone']) ? $input['time_zone'] : null) : ($old['time_zone'] ?? null);
         $limits = [
             'email' => [190, 'Email'], 'phone' => [40, 'Phone'], 'address' => [255, 'Address'],
@@ -1567,6 +1575,8 @@ switch ($action) {
             }
             // Where the client lives (4.19.0), in the same save.
             if ($placeSent) db()->prepare('UPDATE clients SET state = ?, time_zone = ? WHERE id = ?')->execute([$stateApi, $zoneApi, $cid]);
+            if ($officeSentApi) db()->prepare('UPDATE clients SET office_id = ? WHERE id = ?')->execute([$officeApi, $cid]);
+            elseif (!$isUpdate) office_place_new_client($cid, $userId);
             db()->commit();
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
@@ -2588,6 +2598,7 @@ switch ($action) {
         // The self-referrer's agreement to texts (4.17.0) goes with them.
         if (!empty($ref['sms_ok'])) db()->prepare("UPDATE clients SET sms_consent_at = ?, sms_consent_source = 'Referral form' WHERE id = LAST_INSERT_ID()")->execute([$ref['created_at']]);
         $clientId = (int)db()->lastInsertId();
+        office_place_new_client($clientId, $userId);   // 4.22.0: the accepting person's office
         // As on the website: the referral's language, and its state with that state's time zone (4.1.0).
         apply_referral_language($clientId, $ref);
         client_apply_state($clientId, $ref['client_state'] ?? null);
