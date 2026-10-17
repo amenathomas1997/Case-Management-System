@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.8.0';
+const APP_VERSION = '4.9.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1729,3 +1729,5 @@ require_once __DIR__ . '/wording.php';
 require_once __DIR__ . '/lists.php';
 // The custom report builder (4.7.0).
 require_once __DIR__ . '/custom_reports.php';
+// Booking several sessions at once (4.9.0).
+require_once __DIR__ . '/session_plan.php';

@@ -58,15 +58,16 @@ function workflow_acknowledge_note(int $id,int $actor,string $fingerprint,string
     }catch(Throwable $e){if(db()->inTransaction())db()->rollBack();throw $e;}
 }
 /** Warnings include work already delivered AND all scheduled reservations, never cancelled sessions. */
-function workflow_authorization(int $trackId,int $start,int $end,int $weeks=1): array {
+/** $occ (4.9.0): the exact sessions a plan books, [[start, end], ...]; else $weeks weekly from $start. */
+function workflow_authorization(int $trackId,int $start,int $end,int $weeks=1,?array $occ=null): array {
     $q=db()->prepare('SELECT * FROM training_tracks WHERE id=?');$q->execute([$trackId]);$t=$q->fetch();
     if(!$t)return ['Training track is no longer available.'];
     $q=db()->prepare('SELECT COALESCE(SUM(hours),0) FROM work_logs WHERE track_id=?');$q->execute([$trackId]);$used=(float)$q->fetchColumn();
     // Scheduled and proposed time is counted to the quarter hour per session, as completing a session logs it.
     $q=db()->prepare("SELECT COALESCE(SUM(ROUND(TIMESTAMPDIFF(SECOND,start_at,end_at)/900)),0)/4 FROM scheduled_sessions WHERE track_id=? AND status='Scheduled'");$q->execute([$trackId]);$reserved=(float)$q->fetchColumn();
     $proposed=0;$before=false;$after=false;
-    for($w=0;$w<max(1,min(26,$weeks));$w++){
-        $s=$w?strtotime('+'.$w.' week',$start):$start;$e=$w?strtotime('+'.$w.' week',$end):$end;
+    if($occ===null){$occ=[];for($w=0;$w<max(1,min(26,$weeks));$w++)$occ[]=[$w?strtotime('+'.$w.' week',$start):$start,$w?strtotime('+'.$w.' week',$end):$end];}
+    foreach($occ as [$s,$e]){
         $proposed+=round(($e-$s)/3600*4)/4;
         $before=$before || ($t['start_date'] && date('Y-m-d',$s)<$t['start_date']);
         $after=$after || ($t['expiration_date'] && date('Y-m-d',max($s,$e-1))>$t['expiration_date']);

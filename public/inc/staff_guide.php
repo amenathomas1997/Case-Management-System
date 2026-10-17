@@ -410,7 +410,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Open Session schedule.</li>
   <li>Open the collapsed Schedule a session form.</li>
   <li>Choose the client and the training track. Linking a track means completing the session logs its hours.</li>
-  <li>Choose the instructor, date, start time and duration. To repeat weekly, enter the number of weeks.</li>
+  <li>Choose the instructor, date, start time and duration. To repeat weekly, enter the number of weeks. For several days a week, a list of dates, or sessions spread over the whole authorization, open More than one session and choose How often: the sessions are listed for you to check, then tick Book these sessions and schedule again.</li>
   <li>For a remote session, tick Remote / telepractice session and add the meeting link.</li>
   <li>Choose Schedule &amp; send calendar invite.</li>
   <li>If authorization warnings appear, read them. Tick the approval box only if the booking should go ahead.</li>

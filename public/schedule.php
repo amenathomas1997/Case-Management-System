@@ -436,9 +436,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
     $c->execute([$clientId]);
     $client = $c->fetch();
     if (!$client) $errors['client_id'] = 'Choose a client.';
-    $repeatIn = is_string($_POST['repeat_weeks'] ?? null) ? trim($_POST['repeat_weeks']) : '';
-    $repeatWeeks = $repeatIn === '' ? 1 : (ctype_digit($repeatIn) ? (int)$repeatIn : 0);
-    if ($repeatWeeks < 1 || $repeatWeeks > 26) $errors['repeat_weeks'] = 'Enter a number of weeks from 1 to 26 (1 is a single session).';
+    // The sessions to book (4.9.0): once or weekly, several days each week, a list of dates, or
+    // spread over the authorization (inc/session_plan.php).
+    $planPattern = isset(PLAN_PATTERNS[$_POST['plan_pattern'] ?? '']) ? (string)$_POST['plan_pattern'] : 'weekly';
+    $occurrences = [];
+    if (!isset($errors['date']) && !isset($errors['time']) && !isset($errors['duration']) && $f['start'] && $f['end']) {
+        $planTrack = null;
+        // Only this client's own track (its hours are not read for anyone else's).
+        if ($trackId) { $pt = db()->prepare('SELECT * FROM training_tracks WHERE id = ? AND client_id = ?'); $pt->execute([$trackId, $clientId]); $planTrack = $pt->fetch() ?: null; }
+        [$occurrences, $planErr, $planField] = session_plan($_POST, (int)$f['start'], (int)$f['end'], $planTrack);
+        if ($planErr !== null) $errors[$planField] = $planErr;
+    }
+    $repeatWeeks = $planPattern === 'weekly' ? max(1, count($occurrences)) : 1;
     if ($client && $f['staff'] && $f['staff_scoped'] && (int)$client['assigned_to'] !== (int)$f['staff']['id']) {
         $errors['staff_id'] = $f['staff']['name'] . ' only sees clients on their own caseload, and ' . $client['name']
             . ' is not assigned to them. Choose another instructor, or assign the client to them first.';
@@ -454,18 +463,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
     }
     $authWarnings = [];
     if (!$errors && $trackId) {
-        $authWarnings = workflow_authorization($trackId, $f['start'], $f['end'], $repeatWeeks);
+        $authWarnings = workflow_authorization($trackId, $f['start'], $f['end'], $repeatWeeks, $occurrences);
         if ($authWarnings && !schedule_auth_approved('', $authWarnings)) {
             $errors['authorization_ack'] = 'Authorization review: ' . implode(' ', $authWarnings)
                 . ' Review the track, then tick the approval box below if this booking is still appropriate.';
         }
     }
+    // A plan of several days, dates or the whole authorization is shown first, and booked only
+    // once the person ticks "Book these" for that exact list.
+    // Checked together with the authorization review, so both boxes can be ticked in one go.
+    $planHash = '';
+    if (!array_diff_key($errors, ['authorization_ack' => 1]) && $planPattern !== 'weekly') {
+        $planHash = session_plan_hash($occurrences, $clientId, (int)$f['staff']['id'], (int)$trackId, $planPattern);
+        if (($_POST['plan_ok'] ?? '') !== $planHash) {
+            $errors['plan_ok'] = 'Check the ' . count($occurrences) . ' session' . (count($occurrences) === 1 ? '' : 's') . ' listed below (' . rtrim(rtrim(number_format(session_plan_hours($occurrences), 2), '0'), '.') . ' hours), then tick Book these ' . count($occurrences) . ' sessions and schedule again.';
+            $_SESSION['plan_preview'] = ['hash' => $planHash, 'list' => array_map(fn($o) => date('l, F j, Y g:i A', $o[0]) . ' to ' . date('g:i A', $o[1]), $occurrences)];
+        }
+    }
     if ($errors) {
         keep_input();
-        // The approval box comes back only beside the warnings it approves.
-        if (isset($errors['authorization_ack'])) $_SESSION['old_input']['authorization_hash'] = schedule_auth_hash($authWarnings);
+        unset($_SESSION['old_input']['plan_ok']);
+        if (!isset($errors['plan_ok'])) unset($_SESSION['plan_preview']);
+        // The approval box comes back beside the warnings it approves: while they are unapproved,
+        // or (ticked, kept ticked) while the plan still waits to be confirmed.
+        if ($authWarnings && (isset($errors['authorization_ack']) || isset($errors['plan_ok']))) $_SESSION['old_input']['authorization_hash'] = schedule_auth_hash($authWarnings);
         else unset($_SESSION['old_input']['authorization_hash']);
-        unset($_SESSION['old_input']['authorization_ack']);
+        if (isset($errors['authorization_ack']) || !$authWarnings) unset($_SESSION['old_input']['authorization_ack']);
         keep_field_errors($errors);
         redirect('schedule.php');
     }
@@ -479,11 +502,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
     $ins = db()->prepare('INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, notes, is_remote, meeting_url) VALUES (?,?,?,?,?,?,?,?,?)');
     $sessionId = 0;
     $newSessionIds = [];
-    $occurrences = [];
-    for ($w = 0; $w < $repeatWeeks; $w++) {
-        // "+N week" keeps the local start time across daylight-saving changes
-        $occurrences[] = [$w === 0 ? $startTs : strtotime("+{$w} week", $startTs), $w === 0 ? $endTs : strtotime("+{$w} week", $endTs)];
-    }
+    unset($_SESSION['plan_preview']);
+    $count = count($occurrences);
+    // How the series is described in the invite, the flash and the audit log.
+    $seriesWords = $count <= 1 ? '' : ($planPattern === 'weekly' ? "{$count} weekly sessions" : "{$count} sessions (" . mb_strtolower(PLAN_PATTERNS[$planPattern]) . ')');
+    $startTs = $occurrences[0][0] ?? $startTs; $endTs = $occurrences[0][1] ?? $endTs;
     // The whole series is saved or none of it: a failure part-way through must
     // not leave a partial series that a retry would then duplicate.
     db()->beginTransaction();
@@ -501,7 +524,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
             db()->rollBack();
             if (count($booked) === count($occurrences)) {
                 // The same booking, already saved (a repeated submit): nothing is added twice.
-                flash(($repeatWeeks > 1 ? 'That series is' : 'That session is') . ' already on the schedule (' . $client['name'] . ' with ' . $f['staff']['name']
+                flash(($count > 1 ? 'That series is' : 'That session is') . ' already on the schedule (' . $client['name'] . ' with ' . $f['staff']['name']
                     . ', ' . $booked[0] . '), so it was not added again.', 'info');
                 redirect('schedule.php#upcoming-h');
             }
@@ -525,14 +548,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         throw $e;
     }
     // An approval is recorded only when there were warnings to approve, with them.
-    audit($user['id'], 'session.schedule', 'client', $clientId, ($repeatWeeks > 1 ? "series of {$repeatWeeks} weekly sessions" : 'single session')
+    audit($user['id'], 'session.schedule', 'client', $clientId, ($count > 1 ? "series of {$seriesWords}" : 'single session')
         . ($authWarnings ? ' — authorization exception approved: ' . implode(' ', $authWarnings) : ''));
 
     // Calendar invite to the instructor (renders as an Outlook meeting request)
     $clientName = (string)$client['name'];
     $staff = $f['staff'];
     if ($staff) {
-        $seriesNote = $repeatWeeks > 1 ? " (repeats weekly, {$repeatWeeks} sessions)" : '';
+        $seriesNote = $count > 1 ? " ({$seriesWords})" : '';
         // The invite is stored by the calendar provider, so it carries what the calendar
         // feed does: the client's first name and last initial, no session notes, and a
         // link to the session in the app for the rest.
@@ -545,13 +568,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
             cfg('mail_from'), $staff['email'], $occurrences, $meetingUrl ?? ''
         );
         $sent = send_app_mail_attach($staff['email'],
-            ($isRemote ? 'Remote session' : 'Session') . ($repeatWeeks > 1 ? ' series' : '') . ' scheduled — ' . date('D, M j g:i A T', $startTs),
+            ($isRemote ? 'Remote session' : 'Session') . ($count > 1 ? ' series' : '') . ' scheduled — ' . date('D, M j g:i A T', $startTs),
             "A " . ($isRemote ? 'remote ' : '') . "training session{$seriesNote} has been scheduled.\n\nClient: {$clientName}\nWhen: " . date('l, F j, Y g:i A T', $startTs)
             . ' to ' . date('g:i A T', $endTs)
             . ($isRemote ? "\nFormat: Remote / telepractice" . ($meetingUrl ? "\nJoin online: {$meetingUrl}" : '') : ($location !== '' ? "\nWhere: {$location}" : ''))
-            . "\n\nOpen the attached invite to add it to your calendar" . ($repeatWeeks > 1 ? ' — it repeats weekly automatically.' : '.') . "\n",
+            . "\n\nOpen the attached invite to add it to your calendar" . ($count > 1 ? ': it holds every session in the series.' : '.') . "\n",
             [['name' => 'invite.ics', 'mime' => 'text/calendar; method=REQUEST', 'bytes' => $ics]]);
-        flash(($repeatWeeks > 1 ? "Series of {$repeatWeeks} weekly sessions scheduled." : 'Session scheduled.')
+        flash(($count > 1 ? 'Series of ' . $seriesWords . ' scheduled.' : 'Session scheduled.')
             . ($sent ? ' A calendar invite was emailed to ' . $staff['name'] . '.' : ' (Calendar invite email could not be sent.)'));
     }
     redirect('schedule.php');
@@ -965,7 +988,9 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
     <?= csrf_field() ?>
     <?= form_error_summary(['client_id' => 'Client', 'track_id' => 'Training track', 'staff_id' => 'Instructor', 'date' => 'Date',
         'time' => 'Start time', 'duration' => 'Duration (hours)', 'repeat_weeks' => 'Repeat weekly', 'location' => 'Location',
-        'notes' => 'Notes', 'meeting_url' => 'Meeting link', 'authorization_ack' => 'Authorization approval']) ?>
+        'notes' => 'Notes', 'meeting_url' => 'Meeting link', 'authorization_ack' => 'Authorization approval',
+        'plan_days' => 'Days of the week', 'plan_until' => 'Last date', 'plan_dates' => 'Dates', 'plan_ok' => 'Book these sessions'],
+        ['plan_days' => 'plan-day-1', 'plan_ok' => 'plan-preview-h']) ?>
     <div class="grid grid-2">
       <div class="field">
         <label for="client_id">Client <?= required_mark() ?></label>
@@ -995,24 +1020,44 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
       <div class="field"><label for="duration">Duration (hours) <?= required_mark() ?></label>
         <input type="number" id="duration" name="duration" step="0.25" min="0.25" max="12" required value="<?= h(old_in('duration', '1.5')) ?>" <?= field_aria('duration') ?>><?= field_error('duration') ?></div>
       <div class="field"><label for="repeat_weeks">Repeat weekly <span class="hint">1 = single session; e.g., 8 = every week for 8 weeks</span></label>
-        <input type="number" id="repeat_weeks" name="repeat_weeks" min="1" max="26" value="<?= h(old_in('repeat_weeks', '1')) ?>" <?= field_aria('repeat_weeks') ?>><?= field_error('repeat_weeks') ?></div>
+        <input type="number" id="repeat_weeks" name="repeat_weeks" min="1" max="52" value="<?= h(old_in('repeat_weeks', '1')) ?>" <?= field_aria('repeat_weeks') ?>><?= field_error('repeat_weeks') ?></div>
       <div class="field"><label for="location">Location</label>
         <input type="text" id="location" name="location" maxlength="190" value="<?= h(old_in('location')) ?>" <?= field_aria('location') ?>><?= field_error('location') ?></div>
       <div class="field"><label for="notes">Notes</label>
         <input type="text" id="notes" name="notes" maxlength="255" value="<?= h(old_in('notes')) ?>" <?= field_aria('notes') ?>><?= field_error('notes') ?></div>
     </div>
+    <?php // Several sessions at once (4.9.0): collapsed, so a single booking has no extra stops.
+    $planIn = old_in('plan_pattern', 'weekly'); $planDays = array_map('intval', old_in_list('plan_days'));
+    $planOpen = $planIn !== 'weekly' || has_field_error('plan_days') || has_field_error('plan_until') || has_field_error('plan_dates') || has_field_error('plan_ok'); ?>
+    <details<?= $planOpen ? ' open' : '' ?>><summary>More than one session: several days a week, a list of dates, or the whole authorization</summary>
+      <div class="field"><label for="plan_pattern">How often</label>
+        <select id="plan_pattern" name="plan_pattern"><?php foreach (PLAN_PATTERNS as $pk => $pl): ?><option value="<?= $pk ?>"<?= $planIn === $pk ? ' selected' : '' ?>><?= h($pl) ?></option><?php endforeach; ?></select></div>
+      <fieldset id="plan_days"<?= has_field_error('plan_days') ? ' aria-describedby="err-plan_days"' : '' ?>><legend>Days of the week (several days, or the whole authorization)</legend>
+        <?= field_error('plan_days') ?>
+        <?php foreach (PLAN_WEEKDAYS as $dn => $dl): ?><label class="check"><input type="checkbox" id="plan-day-<?= $dn ?>" name="plan_days[]" value="<?= $dn ?>"<?= in_array($dn, $planDays, true) ? ' checked' : '' ?>> <?= $dl ?></label><?php endforeach; ?>
+      </fieldset>
+      <div class="field"><label for="plan_until">Last date (or a number of weeks in Repeat weekly)</label>
+        <input type="date" id="plan_until" name="plan_until" value="<?= h(old_in('plan_until')) ?>" <?= field_aria('plan_until') ?>><?= field_error('plan_until') ?></div>
+      <div class="field"><label for="plan_dates">Dates, one per line (2026-11-03, or 2026-11-03 2:30 PM)</label>
+        <textarea id="plan_dates" name="plan_dates" rows="4" <?= field_aria('plan_dates') ?>><?= h(old_in('plan_dates')) ?></textarea><?= field_error('plan_dates') ?></div>
+      <?php $preview = $_SESSION['plan_preview'] ?? null; if ($preview && has_field_error('plan_ok')): ?>
+      <h3 id="plan-preview-h" tabindex="-1">The sessions this books (<?= count($preview['list']) ?>)</h3>
+      <ul aria-labelledby="plan-preview-h"><?php foreach ($preview['list'] as $pl): ?><li><?= h($pl) ?></li><?php endforeach; ?></ul>
+      <div class="field"><label><input type="checkbox" id="plan_ok" name="plan_ok" value="<?= h($preview['hash']) ?>" <?= field_aria('plan_ok') ?>> Book these <?= count($preview['list']) ?> sessions</label><?= field_error('plan_ok') ?></div>
+      <?php endif; ?>
+    </details>
     <div class="field"><label><input type="checkbox" id="is_remote" name="is_remote" value="1" <?= old_in('is_remote') ? 'checked' : '' ?>> Remote / telepractice session</label></div>
     <div class="field" id="meeting_url_wrap">
       <label for="meeting_url">Meeting link <span class="hint">the video/phone link clients and you will join (https://…); tick Remote above to use it</span></label>
       <input type="url" id="meeting_url" name="meeting_url" maxlength="500" placeholder="https://" value="<?= h(old_in('meeting_url')) ?>" <?= field_aria('meeting_url') ?>><?= field_error('meeting_url') ?></div>
     <?php // The approval box is drawn only beside the authorization warnings it approves
     // (their fingerprint goes with it), never before any warning has been shown. ?>
-    <?php if (old_in('add_session') !== '' && old_in('authorization_hash') !== '' && has_field_error('authorization_ack')): ?>
+    <?php if (old_in('add_session') !== '' && old_in('authorization_hash') !== '' && (has_field_error('authorization_ack') || has_field_error('plan_ok'))): ?>
     <input type="hidden" name="authorization_hash" value="<?= h(old_in('authorization_hash')) ?>">
-    <div class="field"><label><input type="checkbox" id="authorization_ack" name="authorization_ack" value="1" <?= field_aria('authorization_ack') ?>> I reviewed these authorization warnings and approve this booking despite them.</label><?= field_error('authorization_ack') ?></div>
+    <div class="field"><label><input type="checkbox" id="authorization_ack" name="authorization_ack" value="1"<?= old_in('authorization_ack') !== '' ? ' checked' : '' ?> <?= field_aria('authorization_ack') ?>> I reviewed these authorization warnings and approve this booking despite them.</label><?= field_error('authorization_ack') ?></div>
     <?php endif; ?>
     <button type="submit" name="add_session" value="1" class="btn btn-primary"
-      onclick="var w=parseInt(document.getElementById('repeat_weeks').value||'1',10);return w<=1||confirm('Schedule '+w+' weekly sessions? Each must be cancelled individually if plans change.');">Schedule &amp; send calendar invite</button>
+      onclick="var w=parseInt(document.getElementById('repeat_weeks').value||'1',10),p=document.getElementById('plan_pattern');return (p&&p.value!=='weekly')||w<=1||confirm('Schedule '+w+' weekly sessions? Each must be cancelled individually if plans change.');">Schedule &amp; send calendar invite</button>
   </form>
   </details>
 </section>
