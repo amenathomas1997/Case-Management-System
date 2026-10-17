@@ -23,6 +23,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_display_controls
     redirect('account.php#display-settings');
 }
 
+/* ---- Online meetings: disconnect Zoom or Microsoft (4.10.0; connecting is meeting_connect.php) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && is_string($_POST['meeting_disconnect'] ?? null) && isset(MEETING_PROVIDERS[$_POST['meeting_disconnect']])) {
+    $prov = (string)$_POST['meeting_disconnect'];
+    try {
+        meeting_disconnect((int)$user['id'], $prov);
+    } catch (PDOException $e) {
+        flash('Online meetings need a database upgrade first: ask an administrator to run Database upgrade.', 'error');
+        redirect('account.php#meetings-h');
+    }
+    audit((int)$user['id'], 'meeting.disconnect', 'user', (int)$user['id'], $prov);
+    flash(MEETING_PROVIDERS[$prov] . ' is disconnected. Links already made keep working; new remote sessions will not get ' . MEETING_PROVIDERS[$prov] . ' links until you connect again.');
+    redirect('account.php#meetings-h');
+}
+
 /* ---- Phones signed in to the app: sign one out, or report it lost (3.0.39) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['device_signout']) || isset($_POST['device_lost']))) {
     $lost = isset($_POST['device_lost']);
@@ -301,6 +315,29 @@ page_header('My Account', $user, 'account');
         <?= $calPwField ?>
         <button type="submit" name="cal_regen" value="1" class="btn btn-secondary">Create my calendar address</button>
       </form>
+    <?php endif; ?>
+
+    <?php $meetApps = array_filter(array_keys(MEETING_PROVIDERS), fn($p) => meeting_app($p) !== null); ?>
+    <?php if ($meetApps): ?>
+    <h2 id="meetings-h">Online meetings</h2>
+    <p>Connect your own Zoom or Microsoft Teams account, and remote sessions you book for yourself, or an administrator books for you, can get their meeting link made there. Disconnecting Zoom also withdraws it at Zoom; for Microsoft, also remove the app from your Microsoft account's app permissions.</p>
+    <ul>
+    <?php foreach ($meetApps as $prov): $acc = meeting_account((int)$user['id'], $prov); ?>
+      <li>
+      <?php if ($acc): ?>
+        <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
+          <?= h(MEETING_PROVIDERS[$prov]) ?>: connected<?= $acc['account_email'] ? ' as ' . h($acc['account_email']) : '' ?>.
+          <button type="submit" name="meeting_disconnect" value="<?= h($prov) ?>" class="btn btn-secondary btn-sm">Disconnect <?= h(MEETING_PROVIDERS[$prov]) ?></button>
+        </form>
+      <?php else: ?>
+        <form method="post" action="meeting_connect.php?provider=<?= h($prov) ?>" class="inline-form"><?= csrf_field() ?>
+          <?= h(MEETING_PROVIDERS[$prov]) ?>: not connected.
+          <button type="submit" class="btn btn-secondary btn-sm">Connect <?= h(MEETING_PROVIDERS[$prov]) ?></button>
+        </form>
+      <?php endif; ?>
+      </li>
+    <?php endforeach; ?>
+    </ul>
     <?php endif; ?>
 
     <h2 id="phones-h">Phones signed in to the app</h2>

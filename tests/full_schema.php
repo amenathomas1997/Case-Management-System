@@ -19,8 +19,9 @@ if (in_array(($argv[1] ?? ''), ['page','page_post'], true)) {
         $_SESSION['csrf']='synthetic-csrf';
         // CMS_TEST_FILES (JSON field => path) posts files; CMS_TEST_SESSION_ADD (JSON) adds session values (3.0.55).
         foreach ((array)json_decode((string)getenv('CMS_TEST_FILES'), true) as $fk => $fp) $_FILES[$fk] = ['name' => basename((string)$fp), 'tmp_name' => (string)$fp, 'error' => UPLOAD_ERR_OK, 'size' => (int)filesize((string)$fp)];
-        $_SESSION = array_merge($_SESSION, (array)json_decode((string)getenv('CMS_TEST_SESSION_ADD'), true));
     }
+    // CMS_TEST_SESSION_ADD also applies to a page opened without a form (4.10.0: a return from Zoom).
+    $_SESSION = array_merge($_SESSION, (array)json_decode((string)getenv('CMS_TEST_SESSION_ADD'), true));
     session_write_close();
     assert_isolated_page($argv[2]);
     require $argv[2];
@@ -96,7 +97,8 @@ try {
     $start = strpos($core, '$configPaths =');
     $end = $start === false ? false : strpos($core, 'const APP_VERSION', $start);
     if ($start === false || $end === false) throw new RuntimeException('Test harness: could not find the $configPaths block in inc/core.php. Refusing to continue: the copy would load the real configuration.');
-    $core = substr($core, 0, $start) . '$CONFIG = ' . var_export($config, true) . ";\n" . substr($core, $end);
+    // The private directory (for the meeting token key, 4.10.0) is the test's own temporary one.
+    $core = substr($core, 0, $start) . '$CONFIG = ' . var_export($config, true) . ";\n\$GLOBALS['CMS_PRIVATE_DIR'] = " . var_export($tmp, true) . ";\n" . substr($core, $end);
     $core = str_replace('__DIR__', var_export($root . '/public/inc', true), $core);
     file_put_contents($tmp . '/core.php', $core);
     $api = file_get_contents($root . '/public/api.php');
@@ -827,6 +829,7 @@ try {
     require __DIR__.'/v47_cases.php';
     require __DIR__.'/v48_cases.php';
     require __DIR__.'/v49_cases.php';
+    require __DIR__.'/v410_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 
@@ -884,7 +887,7 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
     $db->exec("INSERT INTO clients (id,name,email,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-client@example.invalid','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL,NULL),(3,'Upgraded client with a blank counselor',NULL,'')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37','3.0.38','3.0.39','3.0.40','3.0.42','3.0.43','3.0.44','3.0.45','3.0.47','3.0.48','3.0.49','3.0.50','3.0.51','3.0.52','3.0.53','3.0.54','3.0.55','4.0.0','4.1.0','4.2.0','4.3.0','4.4.0','4.5.0','4.6.0','4.7.0','4.8.0','4.9.0'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37','3.0.38','3.0.39','3.0.40','3.0.42','3.0.43','3.0.44','3.0.45','3.0.47','3.0.48','3.0.49','3.0.50','3.0.51','3.0.52','3.0.53','3.0.54','3.0.55','4.0.0','4.1.0','4.2.0','4.3.0','4.4.0','4.5.0','4.6.0','4.7.0','4.8.0','4.9.0','4.10.0'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
     check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12, mig_3.0.16 and mig_3.0.21 has exactly the fresh-install schema, defaults included');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=1')->fetchColumn()===3,'The 3.0.21 upgrade keeps every existing client\'s email confirmed');
     $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");

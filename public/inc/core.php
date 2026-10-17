@@ -23,11 +23,11 @@ $configPaths = [
 if (is_file(__DIR__ . '/config_path.php')) array_unshift($configPaths, rtrim((string)(require __DIR__ . '/config_path.php'), '/\\') . '/config.php');
 $CONFIG = null;
 foreach ($configPaths as $p) {
-    if (is_file($p)) { $CONFIG = require $p; break; }
+    if (is_file($p)) { $CONFIG = require $p; $GLOBALS['CMS_PRIVATE_DIR'] = dirname($p); break; }
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.9.0';
+const APP_VERSION = '4.10.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1731,3 +1731,5 @@ require_once __DIR__ . '/lists.php';
 require_once __DIR__ . '/custom_reports.php';
 // Booking several sessions at once (4.9.0).
 require_once __DIR__ . '/session_plan.php';
+// Each staff member's Zoom and Microsoft (Teams) connection (4.10.0).
+require_once __DIR__ . '/meetings.php';

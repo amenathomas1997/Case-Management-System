@@ -33,6 +33,13 @@ const CONFIG_OVERRIDES = [
     'brand.privacy_hosting' => ['Who hosts the server', 'text', 'legal'],
     'brand.hipaa' => ['Show the HIPAA rights section (the laws above are shown either way)', 'yesno', 'legal'],
     'app.update_url' => ['Where to check for new versions (an https address, or off)', 'url', 'updates'],
+    // Online meetings (4.10.0): the apps registered with Zoom and Microsoft, which each staff
+    // member then connects to their own account on My Account.
+    'meet.zoom_client_id' => ['Zoom app Client ID', 'text', 'meetings'],
+    'meet.zoom_client_secret' => ['Zoom app Client secret', 'secret', 'meetings'],
+    'meet.ms_tenant' => ['Microsoft directory (tenant) ID, or organizations', 'text', 'meetings'],
+    'meet.ms_client_id' => ['Microsoft app (client) ID', 'text', 'meetings'],
+    'meet.ms_client_secret' => ['Microsoft app client secret', 'secret', 'meetings'],
 ];
 
 /** The time zones offered (the United States and its territories). */
@@ -125,7 +132,7 @@ function brand_rgb(string $key = 'color_dark'): array {
 /* ---------- Safe upgrades (3.0.54) ---------- */
 
 /** The database version this code needs: the newest migration it ships. */
-const DB_SCHEMA_VERSION = '4.9.0';
+const DB_SCHEMA_VERSION = '4.10.0';
 
 /** The database version recorded by the migrations, or null for a database from before 3.0.54. */
 function db_schema_version(): ?string {

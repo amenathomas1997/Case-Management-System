@@ -448,6 +448,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         if ($planErr !== null) $errors[$planField] = $planErr;
     }
     $repeatWeeks = $planPattern === 'weekly' ? max(1, count($occurrences)) : 1;
+    // Make the meeting link in the instructor's own Zoom or Teams (4.10.0).
+    $meetMake = is_string($_POST['meeting_make'] ?? null) && isset(MEETING_PROVIDERS[$_POST['meeting_make']]) ? $_POST['meeting_make'] : '';
+    if ($meetMake !== '') {
+        if (!$f['is_remote']) $errors['meeting_make'] = 'A ' . MEETING_PROVIDERS[$meetMake] . ' link is only for a remote session: tick Remote / telepractice, or choose No.';
+        elseif ($f['meeting_url'] !== null) $errors['meeting_make'] = 'A meeting link is typed above and ' . MEETING_PROVIDERS[$meetMake] . ' would make another: clear the link, or choose No.';
+        elseif (!meeting_app($meetMake)) $errors['meeting_make'] = MEETING_PROVIDERS[$meetMake] . ' is not set up here any more. Choose No, or type a link.';
+        // Only your own account, unless you are an administrator booking for someone (owner rule, 4.10.0).
+        elseif ($f['staff'] && (int)$f['staff']['id'] !== (int)$user['id'] && ($user['role'] ?? '') !== 'admin') $errors['meeting_make'] = 'A meeting can be made only in your own ' . MEETING_PROVIDERS[$meetMake]
+            . ' account. ' . $f['staff']['name'] . ' can make it, or an administrator; otherwise choose No and type a link.';
+        elseif ($f['staff'] && !meeting_account((int)$f['staff']['id'], $meetMake)) $errors['meeting_make'] = $f['staff']['name'] . ' has not connected ' . MEETING_PROVIDERS[$meetMake]
+            . ((int)$f['staff']['id'] === (int)$user['id'] ? '. Connect it on My Account, Online meetings, then schedule again.' : '. They connect it on their My Account page; until then choose No, or type a link.');
+    }
     if ($client && $f['staff'] && $f['staff_scoped'] && (int)$client['assigned_to'] !== (int)$f['staff']['id']) {
         $errors['staff_id'] = $f['staff']['name'] . ' only sees clients on their own caseload, and ' . $client['name']
             . ' is not assigned to them. Choose another instructor, or assign the client to them first.';
@@ -542,6 +554,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         // A weekly series shares one ID, so its rest can be cancelled in one step (3.0.43).
         if (count($newSessionIds) > 1) db()->prepare('UPDATE scheduled_sessions SET series_uid = ? WHERE id IN (' . implode(',', $newSessionIds) . ')')->execute([bin2hex(random_bytes(16))]);
         db()->commit();
+        // The meeting is made once the sessions are saved, so a refused booking never leaves
+        // one behind; every session of the series gets its one link (4.10.0).
+        $meetWhy = null;
+        if ($meetMake !== '') {
+            try {
+                $link = meeting_create($staffId, $meetMake, ($count > 1 ? 'AT Training series: ' : 'AT Training: ') . schedule_short_name((string)$client['name']),
+                    $occurrences[0][0], $occurrences[$count - 1][1], $count > 1, $meetWhy);
+                if ($link !== null) {
+                    db()->prepare('UPDATE scheduled_sessions SET meeting_url = ? WHERE id IN (' . implode(',', $newSessionIds) . ')')->execute([$link]);
+                    $meetingUrl = $link;
+                    audit($user['id'], 'meeting.create', 'client', $clientId, MEETING_PROVIDERS[$meetMake] . ' link for ' . count($newSessionIds) . ' session(s), in ' . $f['staff']['name'] . "'s account");
+                }
+            } catch (Throwable $me) {
+                // The sessions are booked whatever happens here.
+                error_log('meeting_create: ' . get_class($me) . ' ' . $me->getMessage());
+                $meetWhy = MEETING_PROVIDERS[$meetMake] . ' could not be reached, so the session is booked without a link; add one by moving the session.';
+            }
+        }
         client_session_notice($newSessionIds, 'booked'); // 3.0.41: the client's calendar invite
     } catch (Throwable $e) {
         if (db()->inTransaction()) db()->rollBack();
@@ -575,7 +605,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
             . "\n\nOpen the attached invite to add it to your calendar" . ($count > 1 ? ': it holds every session in the series.' : '.') . "\n",
             [['name' => 'invite.ics', 'mime' => 'text/calendar; method=REQUEST', 'bytes' => $ics]]);
         flash(($count > 1 ? 'Series of ' . $seriesWords . ' scheduled.' : 'Session scheduled.')
-            . ($sent ? ' A calendar invite was emailed to ' . $staff['name'] . '.' : ' (Calendar invite email could not be sent.)'));
+            . ($meetMake !== '' && $meetWhy === null ? ' The ' . MEETING_PROVIDERS[$meetMake] . ' link was made in ' . ($staffId === (int)$user['id'] ? 'your' : $staff['name'] . "'s") . ' account.' : '')
+            . ($sent ? ' A calendar invite was emailed to ' . $staff['name'] . '.' : ' (Calendar invite email could not be sent.)')
+            . ($meetWhy !== null ? ' ' . $meetWhy : ''), $meetWhy !== null ? 'error' : 'success');
     }
     redirect('schedule.php');
 }
@@ -977,7 +1009,7 @@ if (is_array($noteLink) && can('clients')): ?>
 
 <?php // Both booking forms start collapsed so the session lists come first; each opens
 // after its own refused or restored entry, or a link to its heading.
-$addOpen = old_in('add_session') !== '' || array_intersect_key(form_errors(), array_flip(['client_id', 'track_id', 'staff_id', 'date', 'time', 'duration', 'repeat_weeks', 'location', 'notes', 'meeting_url', 'authorization_ack']));
+$addOpen = old_in('add_session') !== '' || array_intersect_key(form_errors(), array_flip(['client_id', 'track_id', 'staff_id', 'date', 'time', 'duration', 'repeat_weeks', 'location', 'notes', 'meeting_url', 'meeting_make', 'authorization_ack']));
 $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_errors()), fn($k) => str_starts_with((string)$k, 'g_')); ?>
 <section class="card" aria-labelledby="add-h">
   <h2 class="visually-hidden">Schedule a session</h2>
@@ -988,7 +1020,7 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
     <?= csrf_field() ?>
     <?= form_error_summary(['client_id' => 'Client', 'track_id' => 'Training track', 'staff_id' => 'Instructor', 'date' => 'Date',
         'time' => 'Start time', 'duration' => 'Duration (hours)', 'repeat_weeks' => 'Repeat weekly', 'location' => 'Location',
-        'notes' => 'Notes', 'meeting_url' => 'Meeting link', 'authorization_ack' => 'Authorization approval',
+        'notes' => 'Notes', 'meeting_url' => 'Meeting link', 'meeting_make' => 'Make the meeting link', 'authorization_ack' => 'Authorization approval',
         'plan_days' => 'Days of the week', 'plan_until' => 'Last date', 'plan_dates' => 'Dates', 'plan_ok' => 'Book these sessions'],
         ['plan_days' => 'plan-day-1', 'plan_ok' => 'plan-preview-h']) ?>
     <div class="grid grid-2">
@@ -1050,6 +1082,13 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
     <div class="field" id="meeting_url_wrap">
       <label for="meeting_url">Meeting link <span class="hint">the video/phone link clients and you will join (https://…); tick Remote above to use it</span></label>
       <input type="url" id="meeting_url" name="meeting_url" maxlength="500" placeholder="https://" value="<?= h(old_in('meeting_url')) ?>" <?= field_aria('meeting_url') ?>><?= field_error('meeting_url') ?></div>
+    <?php $meetApps = array_filter(array_keys(MEETING_PROVIDERS), fn($p) => meeting_app($p) !== null); if ($meetApps): ?>
+    <div class="field"><label for="meeting_make">Make the meeting link <span class="hint">in the instructor's own connected account, instead of typing one</span></label>
+      <select id="meeting_make" name="meeting_make" <?= field_aria('meeting_make') ?>>
+        <option value="">No</option>
+        <?php foreach ($meetApps as $mp): ?><option value="<?= h($mp) ?>"<?= old_in('meeting_make') === $mp ? ' selected' : '' ?>>In <?= h(MEETING_PROVIDERS[$mp]) ?></option><?php endforeach; ?>
+      </select><?= field_error('meeting_make') ?></div>
+    <?php endif; ?>
     <?php // The approval box is drawn only beside the authorization warnings it approves
     // (their fingerprint goes with it), never before any warning has been shown. ?>
     <?php if (old_in('add_session') !== '' && old_in('authorization_hash') !== '' && (has_field_error('authorization_ack') || has_field_error('plan_ok'))): ?>

@@ -8,7 +8,7 @@ $user = require_login();
 require_perm('admin');
 csrf_check();
 
-const SETTINGS_GROUPS = ['graph' => 'Microsoft Graph email', 'addresses' => 'Email addresses', 'signin' => 'Sign-in and time', 'brand' => 'Branding', 'legal' => 'Privacy notice', 'updates' => 'Updates'];
+const SETTINGS_GROUPS = ['graph' => 'Microsoft Graph email', 'addresses' => 'Email addresses', 'signin' => 'Sign-in and time', 'brand' => 'Branding', 'legal' => 'Privacy notice', 'updates' => 'Updates', 'meetings' => 'Online meetings (Zoom and Teams)'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_group'])) {
     $group = is_string($_POST['save_group']) && isset(SETTINGS_GROUPS[$_POST['save_group']]) ? $_POST['save_group'] : '';
@@ -90,7 +90,7 @@ $current = function (string $k) {
         $field = str_replace('.', '_', $k); $stored = (string)(setting('cfg.' . $k) ?? ''); ?>
     <div class="field">
       <?php if ($kind === 'secret'): ?>
-      <label for="<?= $field ?>"><?= h($label) ?> (<?= $stored !== '' ? 'one is stored here; leave empty to keep it' : (!empty($GLOBALS['CONFIG_FILE']['graph']['client_secret']) ? 'config.php has one; leave empty to keep using it' : 'none set') ?>)</label>
+      <label for="<?= $field ?>"><?= h($label) ?> (<?= $stored !== '' ? 'one is stored here; leave empty to keep it' : (!empty($GLOBALS['CONFIG_FILE'][explode('.', $k)[0]][explode('.', $k)[1]] ?? null) ? 'config.php has one; leave empty to keep using it' : 'none set') ?>)</label>
       <input type="password" id="<?= $field ?>" name="<?= $field ?>" autocomplete="off" <?= field_aria($field) ?>><?= field_error($field) ?>
       <?php if ($stored !== ''): ?><label><input type="checkbox" name="<?= $field ?>_clear" value="1"> Remove the stored secret (use config.php's)</label><?php endif; ?>
       <?php elseif ($kind === 'yesno'): ?>

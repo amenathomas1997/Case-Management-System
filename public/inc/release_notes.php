@@ -6,6 +6,9 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.10.0' => [
+        'Connect your own Zoom or Microsoft Teams account (My Account, Online meetings), and a remote session booked for you can get its meeting link made there: on Schedule a session, choose Make the meeting link, In Zoom or In Microsoft Teams. A weekly or multi-session series shares one link. An administrator first sets up Zoom and Microsoft on Settings, Online meetings.',
+    ],
     '4.9.0' => [
         'Schedule several sessions at once (Session schedule, Schedule a session, More than one session): on several days each week until a date or for a number of weeks, on a list of dates (each can have its own time), or spread over the whole authorization until its hours are used. The sessions are listed for you to check before they are booked, as one series that can be cancelled together.',
     ],
