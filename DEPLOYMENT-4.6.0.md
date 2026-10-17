@@ -44,3 +44,6 @@ Verified before commit:
 - The migration rehearsal matched.
 - The iPhone app builds for the simulator, and its Info.plist and entitlements show the expected values.
 - Not checked in a browser, with a screen reader, or on a phone.
+
+## Deployed 2026-10-16 20:47 CT
+From 4.5.0 with .audit_work/deploy-4.6.0 (15 files), at 42eba28. mig_4.6.0.sql ran (1 statement). Production files matched 4.5.0 before install and match 4.6.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.6.0. The new time limits and mileage default start at their built-in values, so nothing changes on the live site until an administrator sets them. The iPhone app 4.6.0 (build 48) still needs archiving to TestFlight by the owner. Backups: /home/cmsuser/casemanagement_private/deploy-4.6.0-20261016-204700.
