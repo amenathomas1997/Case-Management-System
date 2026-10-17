@@ -40,3 +40,8 @@ Verified before commit:
 - full_schema 1500, audit_regression, security, staging_scrub, and run_all.
 - The migration rehearsal matched.
 - Not checked in a browser or with a screen reader.
+
+Also (owner, 2026-10-16): the referral form link must stay in every footer and on the sign-in page. It already was. A test now checks that every page rendered in the suite (95), and the public pages signed out, link to community_referral.php (62d22d8).
+
+## Deployed 2026-10-16 21:09 CT
+From 4.6.0 with .audit_work/deploy-4.7.0 (9 files), at 0902efa (the public files are the same at 62d22d8). mig_4.7.0.sql ran (2 statements); saved_reports present. Production files matched 4.6.0 before install and match 4.7.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.7.0. The live sign-in page links to the referral form. Backups: /home/cmsuser/casemanagement_private/deploy-4.7.0-20261016-210928.
