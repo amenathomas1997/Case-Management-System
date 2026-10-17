@@ -39,3 +39,6 @@ Verified before commit:
 - The migration rehearsal matched.
 - Not tried against real Zoom or Microsoft accounts (no app is registered yet).
 - Not checked in a browser or with a screen reader.
+
+## Deployed 2026-10-16 22:07 CT
+From 4.9.0 with .audit_work/deploy-4.10.0 (12 files), at 20921cb. mig_4.10.0.sql ran (2 statements); meeting_accounts present. Production files matched 4.9.0 before install and match 4.10.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.10.0; meeting_connect.php sends a signed-out visitor to sign in. Nothing new shows until Zoom or Microsoft is set up on Settings, Online meetings. Backups: /home/cmsuser/casemanagement_private/deploy-4.10.0-20261016-220739.
