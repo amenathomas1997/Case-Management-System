@@ -298,11 +298,11 @@ function report_table(string $table, int $actor): string {
 }
 
 /* ---------- The equipment hand-off record (4.0.0) ---------- */
-const LOAN_CONDITIONS = ['New', 'Good', 'Fair', 'Needs Repair'];
+// Loan conditions are the equipment conditions on Lists and time limits (4.5.0).
 
 /** Record how an item left (its condition, and the client's typed name accepting the loan agreement). */
 function loan_handoff_out(int $loanId, ?string $condition, ?string $acceptedName): void {
-    $condition = in_array($condition, LOAN_CONDITIONS, true) ? $condition : null;
+    $condition = in_array($condition, cms_list_items('equipment_conditions'), true) ? $condition : null;
     $acceptedName = $acceptedName !== null && trim($acceptedName) !== '' ? mb_substr(trim($acceptedName), 0, 120) : null;
     if ($condition === null && $acceptedName === null) return;
     try {
@@ -313,7 +313,7 @@ function loan_handoff_out(int $loanId, ?string $condition, ?string $acceptedName
 
 /** Record how an item came back; damage found updates the item's own condition. */
 function loan_handoff_in(int $loanId, ?string $condition): void {
-    if (!in_array($condition, LOAN_CONDITIONS, true)) return;
+    if (!in_array($condition, cms_list_items('equipment_conditions'), true)) return;
     try {
         db()->prepare('UPDATE equipment_loans SET condition_in = ? WHERE id = ?')->execute([$condition, $loanId]);
         db()->prepare('UPDATE equipment e JOIN equipment_loans l ON l.equipment_id = e.id SET e.item_condition = ? WHERE l.id = ?')->execute([$condition, $loanId]);

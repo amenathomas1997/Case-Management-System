@@ -87,7 +87,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
             $emails = [];
             foreach (['email', 'counselor_email', 'guardian_email'] as $ec) { $v = $get($row, $ec); if ($v !== '' && !filter_var($v, FILTER_VALIDATE_EMAIL)) { $skip($name, $ec . ' is not an email address'); continue 2; } $emails[$ec] = $v !== '' ? strtolower($v) : null; }
             $type = $get($row, 'client_type') ?: 'VR';
-            if (!in_array($type, CLIENT_TYPES, true)) { $skip($name, 'client_type must be one of: ' . implode(', ', CLIENT_TYPES)); continue; }
+            if (!in_array($type, cms_list_items('client_types'), true)) { $skip($name, 'client_type must be one of: ' . implode(', ', cms_list_items('client_types'))); continue; }
             $status = $get($row, 'status') ?: 'Pending Assessment';
             if (!in_array($status, ['Pending Assessment', 'Waitlist', 'Active Training'], true)) { $skip($name, 'status must be Pending Assessment, Waitlist or Active Training (On Hold needs a reason, so set it on the client page)'); continue; }
             $ie = strtolower($get($row, 'instructor_email'));

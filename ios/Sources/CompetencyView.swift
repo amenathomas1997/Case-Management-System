@@ -7,7 +7,7 @@ struct CompetencyResponse: Decodable { let skills: [CompetencySkill] }
 /// `saved` is how many ratings the server wrote (absent on older servers).
 struct CompetencySaveResponse: Decodable { let ok: Bool; let saved: Int? }
 
-let competencyLevels = ["Not started", "Introduced", "Practicing", "Proficient", "Mastered"]
+var competencyLevels: [String] { FormOptions.list("competency_levels", ["Not started", "Introduced", "Practicing", "Proficient", "Mastered"]) }
 
 struct CompetencyView: View {
     @EnvironmentObject var api: API

@@ -820,6 +820,7 @@ try {
     require __DIR__.'/v42_cases.php';
     require __DIR__.'/v43_cases.php';
     require __DIR__.'/v44_cases.php';
+    require __DIR__.'/v45_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 
@@ -858,6 +859,7 @@ try {
     $db->exec("ALTER TABLE client_documents MODIFY category enum('Authorization','IPE','Release','Report','Resource','Other') NOT NULL DEFAULT 'Other'");
     $migrate($root.'/dist/migrations/mig_3.0.8.sql');
     $migrate($root.'/dist/migrations/mig_4.1.0.sql');
+    $migrate($root.'/dist/migrations/mig_4.5.0.sql');   // its document category is a text column since 4.5.0
     check($shape()===$installed,'mig_3.0.8.sql brings a 3.0.7 database to exactly the installed schema');
     check($db->query("SELECT notes FROM equipment WHERE id=$legacyItem")->fetchColumn()==='From device request #9','The upgrade removes the client name from a legacy inventory note');
     check($followup($returnedLoan)==='Skipped|Device returned' && $followup($loanerLoan)==='Skipped|Repair loaner' && $followup($openLoan)==='Pending|',
@@ -876,7 +878,7 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
     $db->exec("INSERT INTO clients (id,name,email,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-client@example.invalid','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL,NULL),(3,'Upgraded client with a blank counselor',NULL,'')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37','3.0.38','3.0.39','3.0.40','3.0.42','3.0.43','3.0.44','3.0.45','3.0.47','3.0.48','3.0.49','3.0.50','3.0.51','3.0.52','3.0.53','3.0.54','3.0.55','4.0.0','4.1.0','4.2.0','4.3.0','4.4.0'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37','3.0.38','3.0.39','3.0.40','3.0.42','3.0.43','3.0.44','3.0.45','3.0.47','3.0.48','3.0.49','3.0.50','3.0.51','3.0.52','3.0.53','3.0.54','3.0.55','4.0.0','4.1.0','4.2.0','4.3.0','4.4.0','4.5.0'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
     check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12, mig_3.0.16 and mig_3.0.21 has exactly the fresh-install schema, defaults included');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=1')->fetchColumn()===3,'The 3.0.21 upgrade keeps every existing client\'s email confirmed');
     $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");

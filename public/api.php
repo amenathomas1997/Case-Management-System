@@ -948,6 +948,8 @@ switch ($action) {
         ];
         foreach ($secCols as $k => $col) $fields[$k] = array_key_exists($k, $input) ? (string)$input[$k] : (string)($note[$col] ?? '');
         $na = assemble_note($fields);
+        // A note type since removed from the list stays when the app sends it back, or none (4.5.0).
+        if ($fields['note_type'] === (string)$note['note_type']) $na['type'] = (string)$note['note_type'];
         $body = $na['body'];
         if ($subject === '' || $body === '') fail('Subject and note are required.');
         if (mb_strlen($subject) > 255) fail('The subject is too long (255 characters maximum).', 422);
@@ -1254,7 +1256,7 @@ switch ($action) {
         // Only a missing or blank choice falls back to the track's own; a value the
         // track does not offer (for example a category removed from its program while
         // the entry waited offline) is refused with the field named, never swapped.
-        $visitType = api_choice($input, 'service_type', SERVICE_TYPES, 'Service this visit', $trackRow['service_type'] ?? null);
+        $visitType = api_choice($input, 'service_type', cms_choices('service_types', $trackRow['service_type'] ?? null), 'Service this visit', $trackRow['service_type'] ?? null);
         $offered = track_visit_categories($trackRow);
         $rsaIn = $input['rsa_category'] ?? '';
         if ($rsaIn === '') {
@@ -1429,7 +1431,7 @@ switch ($action) {
             $assignedTo = $old['assigned_to'] ?? null;
         }
         // Accessibility profile fields (parity with the web client form).
-        $clientType = api_choice($input, 'client_type', CLIENT_TYPES, 'Client type', null) ?? ($old['client_type'] ?? 'VR');
+        $clientType = api_choice($input, 'client_type', cms_choices('client_types', $old['client_type'] ?? null), 'Client type', null) ?? ($old['client_type'] ?? 'VR');
         $sr = array_key_exists('a11y_screen_reader', $input) ? (!empty($input['a11y_screen_reader']) ? 1 : 0) : (int)($old['a11y_screen_reader'] ?? 0);
         // A counselor email staff type here is confirmed by them. One that is kept as it
         // was keeps its confirmation, so an address that arrived through the public
@@ -1808,7 +1810,7 @@ switch ($action) {
         // Checked against the column sizes so a long (often AI-drafted) answer is
         // reported back to be shortened instead of failing in the database.
         $disability = api_text($input, 'primary_disability', 190, 'Primary disability');
-        $primaryTech = api_choice($input, 'primary_tech', TECH_TYPES, 'Primary technology', 'Screen Reader');
+        $primaryTech = api_choice($input, 'primary_tech', cms_list_items('tech_types'), 'Primary technology', 'Screen Reader');
         $hardware = api_text($input, 'hardware_details', 255, 'Hardware details');
         $software = api_text($input, 'software_version', 190, 'Software and version');
         $summary = api_text($input, 'summary', API_TEXT_BYTES, 'The summary', true);
@@ -1842,7 +1844,7 @@ switch ($action) {
         $dir = cfg('upload_dir');
         if (!is_dir($dir)) mkdir($dir, 0750, true);
         $stored = bin2hex(random_bytes(16)) . '.' . $ext;
-        $category = api_choice($input, 'category', DOC_CATEGORIES, 'Category', 'Other');
+        $category = api_choice($input, 'category', cms_list_items('doc_categories'), 'Category', 'Other');
         // One "_" per character, not per byte (/u), so a non-Latin name stays within
         // its 190 characters; a name that is not valid UTF-8 falls back to a plain one.
         $origName = mb_substr(preg_replace('/[^A-Za-z0-9._ -]/u', '_', $filename) ?? ('file.' . $ext), 0, 190);
@@ -2624,8 +2626,7 @@ switch ($action) {
         $eid = (int)($input['equipment_id'] ?? 0);
         $ex = db()->prepare('SELECT id FROM equipment WHERE id = ?'); $ex->execute([$eid]);
         if (!$ex->fetchColumn()) fail('Item not found.', 404);
-        $types = ['Maintenance','Calibration','Repair','Inspection','Cleaning','Other'];
-        $serviceType = api_choice($input, 'service_type', $types, 'Service type', 'Maintenance');
+        $serviceType = api_choice($input, 'service_type', cms_list_items('maintenance_types'), 'Service type', 'Maintenance');
         $date = api_date($input, 'service_date', 'Service date') ?? date('Y-m-d');
         // "Last serviced" never moves backwards, so a future date (a mis-stepped year
         // picker) could never be corrected. One day of slack covers a phone that is
@@ -2664,10 +2665,9 @@ switch ($action) {
     case 'add_equipment': {
         $name = api_text($input, 'name', 190, 'Item name');
         if ($name === '') fail('Item name is required.');
-        $cats = ['Braille Display','Screen Reader License','Magnifier','Tablet/Phone','Computer','Keyboard/Input','Audio','Other'];
-        $conds = ['New','Good','Fair','Needs Repair'];
-        $category = api_choice($input, 'category', $cats, 'Category', 'Other');
-        $condition = api_choice($input, 'condition', $conds, 'Condition', 'Good');
+        // The lists set on Lists and time limits (4.5.0), as the website uses.
+        $category = api_choice($input, 'category', cms_list_items('equipment_categories'), 'Category', 'Other');
+        $condition = api_choice($input, 'condition', cms_list_items('equipment_conditions'), 'Condition', 'Good');
         $serial = api_text($input, 'serial', 120, 'Serial number');
         $value = api_money($input, 'value');
         $itemNotes = api_text($input, 'notes', 255, 'Notes');
@@ -3464,7 +3464,7 @@ switch ($action) {
         foreach (['primary_disability' => 'DISABILITY', 'primary_tech' => 'TECH', 'hardware_details' => 'HARDWARE', 'software_version' => 'SOFTWARE', 'summary' => 'SUMMARY'] as $k => $tag) {
             $f[$k] = preg_match('/\[' . $tag . '\](.*?)\[\/' . $tag . '\]/s', $txt, $m) ? trim($m[1]) : '';
         }
-        if (!in_array($f['primary_tech'], TECH_TYPES, true)) { foreach (TECH_TYPES as $t) { if (stripos($f['primary_tech'], $t) !== false) { $f['primary_tech'] = $t; break; } } if (!in_array($f['primary_tech'], TECH_TYPES, true)) $f['primary_tech'] = 'Other'; }
+        if (!in_array($f['primary_tech'], cms_list_items('tech_types'), true)) $f['primary_tech'] = tech_type_match((string)$f['primary_tech']) ?? 'Other';
         $instruments = preg_match('/\[INSTRUMENTS\](.*?)\[\/INSTRUMENTS\]/s', $txt, $m) ? trim($m[1]) : '';
         out(['ok' => true, 'fields' => $f, 'instruments' => $instruments]);
     }

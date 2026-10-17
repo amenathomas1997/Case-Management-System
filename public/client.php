@@ -448,6 +448,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
                     flash($kept, 'error');
                     redirect("client.php?id=$id&tab=notes&addendum_to=$noteId#addnote-h");
                 }
+                // A note type since removed from the list is kept when it is sent back unchanged (4.5.0).
+                if (($_POST['note_type'] ?? '') === (string)$note['note_type']) $type = (string)$note['note_type'];
                 $pdo->prepare('UPDATE client_notes SET note_type = ?, note_format = ?, subject = ?, body = ?, birp_behavior = ?, birp_intervention = ?, birp_response = ?, birp_plan = ?, updated_at = NOW(), updated_by = ? WHERE id = ?')
                     ->execute([$type, $noteFormat, $subject, $body, $birpCols[0], $birpCols[1], $birpCols[2], $birpCols[3], $user['id'], $noteId]);
                 // The generator can run on a note being edited too: its checked
@@ -518,7 +520,7 @@ $uploadProblem = fn(int $err): string => in_array($err, [UPLOAD_ERR_INI_SIZE, UP
 /* ---- POST: add tech assessment (optional attachment) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assessment'])) {
     $date = trim((string)($_POST['assessment_date'] ?? ''));
-    $tech = in_array($_POST['primary_tech'] ?? '', TECH_TYPES, true) ? $_POST['primary_tech'] : 'Screen Reader';
+    $tech = in_array($_POST['primary_tech'] ?? '', cms_list_items('tech_types'), true) ? $_POST['primary_tech'] : 'Screen Reader';
     // Everything is checked before the attachment is stored, so a refused form
     // never leaves a client file on disk (limits are the tech_assessments columns).
     $aErrs = [];
@@ -609,7 +611,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assessment'])) {
 /* ---- POST: upload client document ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_document'])) {
     $title = trim((string)($_POST['title'] ?? ''));
-    $category = in_array($_POST['category'] ?? '', DOC_CATEGORIES, true) ? $_POST['category'] : 'Other';
+    $category = in_array($_POST['category'] ?? '', cms_list_items('doc_categories'), true) ? $_POST['category'] : 'Other';
     // Checked before the file is stored (title and orig_name are 190 characters).
     $docFile = is_array($_FILES['document'] ?? null) ? $_FILES['document'] : [];
     $docErr = (int)($docFile['error'] ?? UPLOAD_ERR_NO_FILE);
@@ -1586,7 +1588,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     <?php endif; ?>
     <div class="field">
       <label for="note_type">Note type</label>
-      <select id="note_type" name="note_type"><?= select_options(NOTE_TYPES, $noteSrc !== null ? ($noteIn('note_type') ?: null) : ($editNote['note_type'] ?? ($addendumParent ? 'Addendum' : null))) ?></select>
+      <select id="note_type" name="note_type"><?= select_options(cms_choices('note_types', $editNote['note_type'] ?? null), $noteSrc !== null ? ($noteIn('note_type') ?: null) : ($editNote['note_type'] ?? ($addendumParent ? 'Addendum' : null))) ?></select>
     </div>
     <div class="field">
       <label for="subject">Subject <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
@@ -1865,7 +1867,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     <div class="field"><label for="primary_disability">Primary disability / needs</label>
       <input type="text" id="primary_disability" name="primary_disability" maxlength="190" value="<?= h(old_in('primary_disability')) ?>" <?= field_aria('primary_disability') ?>><?= field_error('primary_disability') ?></div>
     <div class="field"><label for="primary_tech">Primary focus / tech recommended</label>
-      <select id="primary_tech" name="primary_tech"><?= select_options(TECH_TYPES, old_in('primary_tech') ?: ($assessTpl['primary_tech'] ?? null)) ?></select></div>
+      <select id="primary_tech" name="primary_tech"><?= select_options(cms_list_items('tech_types'), old_in('primary_tech') ?: ($assessTpl['primary_tech'] ?? null)) ?></select></div>
     <div class="field"><label for="hardware_details">Hardware details</label>
       <input type="text" id="hardware_details" name="hardware_details" maxlength="255" value="<?= h(old_in('hardware_details', $assessTpl['hardware_details'] ?? '')) ?>" <?= field_aria('hardware_details') ?>><?= field_error('hardware_details') ?></div>
     <div class="field"><label for="software_version">Software &amp; version</label>
@@ -1953,7 +1955,7 @@ $documents = $documents->fetchAll();
     <div class="field"><label for="doc_title">Title <span class="hint">Defaults to the file name</span></label>
       <input type="text" id="doc_title" name="title" maxlength="190" value="<?= h(old_in('title')) ?>" <?= field_aria('title') ?>><?= field_error('title') ?></div>
     <div class="field"><label for="doc_category">Category</label>
-      <select id="doc_category" name="category" aria-describedby="doc-category-hint"><?= select_options(DOC_CATEGORIES, old_in('category') ?: null) ?></select>
+      <select id="doc_category" name="category" aria-describedby="doc-category-hint"><?= select_options(cms_list_items('doc_categories'), old_in('category') ?: null) ?></select>
       <p class="hint" id="doc-category-hint">Documents filed under Resource are shared on the client's portal, where the client can open and download them. Use another category for internal records.</p></div>
     <div class="field"><label for="document">File <?= required_mark() ?> <span class="hint">PDF, Office, text, or image · 25 MB max</span></label>
       <input type="file" id="document" name="document" required accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.rtf,.csv,.png,.jpg,.jpeg" <?= field_aria('document') ?>><?= field_error('document') ?></div>

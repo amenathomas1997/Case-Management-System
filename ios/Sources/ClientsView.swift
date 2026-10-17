@@ -723,7 +723,7 @@ struct AddNoteSheet: View {
     /// gone: closing the sheet moves VoiceOver focus, which cut off a message said from here.
     let onSaved: (String) -> Void
 
-    private let noteTypes = ["Case Note", "Phone Call", "Progress Report", "Monthly Summary", "Intake", "Addendum"]
+    private var noteTypes: [String] { FormOptions.list("note_types", ["Case Note", "Phone Call", "Progress Report", "Monthly Summary", "Intake", "Addendum"]) }
     @State private var noteType = "Case Note"
     @State private var noteFormat = "free"
     @State private var subject = ""

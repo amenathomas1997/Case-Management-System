@@ -26,7 +26,7 @@ struct DeviceRequest: Decodable {
 }
 struct DeviceRequestResponse: Decodable { let request: DeviceRequest; let quotes: [DeviceQuote] }
 
-let deviceCategories = ["Braille Display", "Screen Reader", "Magnifier / CCTV", "AAC Device", "Tablet / Phone", "Computer", "Hearing / Amplification", "Switch / Access", "Software License", "Other"]
+var deviceCategories: [String] { FormOptions.list("device_request_categories", ["Braille Display", "Screen Reader", "Magnifier / CCTV", "AAC Device", "Tablet / Phone", "Computer", "Hearing / Amplification", "Switch / Access", "Software License", "Other"]) }
 
 struct ProcurementView: View {
     @EnvironmentObject var api: API
@@ -447,7 +447,7 @@ struct DeviceNewSheet: View {
     @Environment(\.dismiss) private var dismiss
     let onDone: () -> Void
     @State private var selectedClient: Int?
-    @State private var deviceName = ""; @State private var category = "Other"; @State private var justification = ""
+    @State private var deviceName = ""; @State private var category = deviceCategories.contains("Other") ? "Other" : (deviceCategories.first ?? "Other"); @State private var justification = ""
     @State private var busy = false; @State private var error: String?
     @State private var askingDiscard = false
 

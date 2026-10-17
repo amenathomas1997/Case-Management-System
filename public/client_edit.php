@@ -77,7 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         [$closureData, $closureErrs] = closure_input($_POST);
         if ($closureErrs) { $errors += $closureErrs; set_form_errors($errors); }
     }
-    $clientType = in_array($_POST['client_type'] ?? '', CLIENT_TYPES, true) ? $_POST['client_type'] : 'VR';
+    $clientType = in_array($_POST['client_type'] ?? '', cms_choices('client_types', $client['client_type'] ?? null), true) ? $_POST['client_type'] : 'VR';
     // On Hold needs a reason; a return date is optional (3.0.44).
     [$holdErr, $holdUntil] = on_hold_input($status, (string)($client['status'] ?? ''), is_string($_POST['status_note'] ?? null) ? $_POST['status_note'] : '',
         is_string($_POST['on_hold_until'] ?? null) ? $_POST['on_hold_until'] : '');
@@ -400,7 +400,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
     <legend>Case type</legend>
     <div class="field">
       <label for="client_type">Client type <span class="hint">VR = vocational rehabilitation. Pre-ETS = student with a disability receiving pre-employment transition services (Section 113)</span></label>
-      <select id="client_type" name="client_type"><?= select_options(CLIENT_TYPES, $raw('client_type') ?? $client['client_type'] ?? 'VR') ?></select>
+      <select id="client_type" name="client_type"><?= select_options(cms_choices('client_types', $client['client_type'] ?? null), $raw('client_type') ?? $client['client_type'] ?? 'VR') ?></select>
     </div>
     <div class="field">
       <label for="school">School / district <span class="hint">For Pre-ETS students</span></label>

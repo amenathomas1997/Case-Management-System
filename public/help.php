@@ -112,7 +112,7 @@ if (!$viewer) echo lang_toggle();
   <li>Settings, Privacy notice: who runs the service, your address, the privacy laws you follow, your host, and whether the HIPAA rights section applies.</li>
   <li>Public wording: what your organisation does and what a guardian agrees to on the consent form, and an extra section of the privacy notice, in English and Spanish.</li>
   <li>Pricing rules, Funding agencies, Billing details, Referral form settings and Email templates: your rates, agencies, invoices, referral questions and emails.</li>
-  <li>Lists and time limits: the choices forms offer (vision statuses, closure reasons, device request categories, incident and booking types, release choices, assessment and competency levels), and the percent and days behind authorization warnings, follow-ups, loans and links.</li>
+  <li>Lists and time limits: the choices forms offer (client types, note types, document categories, service types, primary technology, equipment categories, conditions and maintenance types, vision statuses, closure reasons, device request categories, incident and booking types, release choices, assessment and competency levels; values the system relies on always stay), and the percent and days behind authorization warnings, follow-ups, loans and links.</li>
   <li>Settings, Updates: where to check for new versions, or off.</li>
 </ul>
 <h3 id="admin-agency">Taking referrals from a new VR agency</h3>

@@ -502,7 +502,7 @@ struct LoanSheet: View {
 }
 
 /// The conditions an item can be in (equipment.item_condition).
-let loanConditions = ["New", "Good", "Fair", "Needs Repair"]
+var loanConditions: [String] { FormOptions.list("equipment_conditions", ["New", "Good", "Fair", "Needs Repair"]) }
 
 // MARK: - Equipment lifecycle: service history, reservations, add item
 
@@ -517,9 +517,9 @@ struct EquipmentFull: Decodable {
 }
 struct EquipmentDetailResponse: Decodable { let item: EquipmentFull; let maintenance: [MaintenanceEntry] }
 
-let maintenanceTypes = ["Maintenance", "Calibration", "Repair", "Inspection", "Cleaning", "Other"]
-let equipmentCategoriesApp = ["Braille Display", "Screen Reader License", "Magnifier", "Tablet/Phone", "Computer", "Keyboard/Input", "Audio", "Other"]
-let equipmentConditions = ["New", "Good", "Fair", "Needs Repair"]
+var maintenanceTypes: [String] { FormOptions.list("maintenance_types", ["Maintenance", "Calibration", "Repair", "Inspection", "Cleaning", "Other"]) }
+var equipmentCategoriesApp: [String] { FormOptions.list("equipment_categories", ["Braille Display", "Screen Reader License", "Magnifier", "Tablet/Phone", "Computer", "Keyboard/Input", "Audio", "Other"]) }
+var equipmentConditions: [String] { FormOptions.list("equipment_conditions", ["New", "Good", "Fair", "Needs Repair"]) }
 
 /// A service interval typed as whole days from 0 to 3650, the range the server and the website
 /// accept; nil when the text is not one (nothing is rounded or clamped).

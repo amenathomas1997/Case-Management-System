@@ -207,7 +207,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_log'])) {
             $goalId = $goalOk ? (int)$rawGoal : null;
         }
     }
-    $typeOk = $rawType === '' || in_array($rawType, SERVICE_TYPES, true);
+    $typeOk = $rawType === '' || in_array($rawType, cms_choices('service_types', $track['service_type'] ?? null), true);
     $rsaOk = $rawRsa === '' || in_array($rawRsa, $offered, true);
     // The description is a TEXT column (65,535 bytes), as the app's API_TEXT_BYTES allows.
     $descTooLong = strlen($desc) > 65535;
@@ -818,7 +818,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     <div class="field"><label for="visit_rsa_category">RSA service delivered this visit <span class="hint"><?= count($visitCats) > 1 ? 'Choose which of this program\'s categories was delivered — it drives state reporting' : 'This track bills a single category' ?></span></label>
       <select id="visit_rsa_category" name="visit_rsa_category" <?= field_aria('visit_rsa_category') ?>><?= select_options($visitCats, old_in('visit_rsa_category') ?: ($visitCats[0] ?? null)) ?></select><?= field_error('visit_rsa_category') ?></div>
     <div class="field"><label for="visit_service_type">Service type <span class="hint">Internal discipline label</span></label>
-      <select id="visit_service_type" name="visit_service_type" <?= field_aria('visit_service_type') ?>><?= select_options(SERVICE_TYPES, old_in('visit_service_type') ?: ($track['service_type'] ?? 'Assistive Technology')) ?></select><?= field_error('visit_service_type') ?></div>
+      <select id="visit_service_type" name="visit_service_type" <?= field_aria('visit_service_type') ?>><?= select_options(cms_choices('service_types', $track['service_type'] ?? null), old_in('visit_service_type') ?: ($track['service_type'] ?? 'Assistive Technology')) ?></select><?= field_error('visit_service_type') ?></div>
     <?php // Also shown when a refused goal must be corrected, so the error has a field to point to.
     $openGoals = array_filter($goals, fn($g) => $g['status'] !== 'Achieved'); if ($openGoals || has_field_error('goal_id')): ?>
     <div class="field"><label for="log_goal">Goal this session advanced <span class="hint">optional — shows counselors hours invested per goal</span></label>
@@ -849,7 +849,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     ?>
     <div class="grid grid-2">
       <div class="field"><label for="tn_type">Note type</label>
-        <select id="tn_type" name="note_type" accesskey="n"><?= select_options(NOTE_TYPES, old_in('note_type') ?: null) ?></select></div>
+        <select id="tn_type" name="note_type" accesskey="n"><?= select_options(cms_list_items('note_types'), old_in('note_type') ?: null) ?></select></div>
       <div class="field"><label for="tn_format">Note format</label>
         <select id="tn_format" name="note_format">
           <?php foreach (NOTE_FORMATS as $fk => $labs): ?>

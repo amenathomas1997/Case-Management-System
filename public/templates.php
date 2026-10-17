@@ -83,7 +83,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assess_tpl'])) {
     if ($errs) tpl_refuse($errs, 'add-assess-tpl-h', 'assessments');
     $tplKey = web_idem_key($_POST);
     tpl_once($tplKey, 'assessment template', 'templates.php?lib=assessments');
-    $tech = in_array($_POST['primary_tech'] ?? '', TECH_TYPES, true) ? $_POST['primary_tech'] : 'Screen Reader';
+    $tech = in_array($_POST['primary_tech'] ?? '', cms_list_items('tech_types'), true) ? $_POST['primary_tech'] : 'Screen Reader';
     db()->prepare('INSERT INTO assessment_templates (name, primary_tech, hardware_details, software_version, summary) VALUES (?,?,?,?,?)')
         ->execute([$name, $tech, $hardware ?: null, $software ?: null, tpl_text('summary') ?: null]);
     $newId = (int)db()->lastInsertId();
@@ -148,7 +148,7 @@ $assessTpls = $lib === 'assessments' ? db()->query('SELECT * FROM assessment_tem
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_bundle'])) {
     $name = tpl_text('bundle_name');
     $bDesc = tpl_text('bundle_description');
-    $ctype = in_array($_POST['bundle_client_type'] ?? '', ['VR','Pre-ETS','Any'], true) ? $_POST['bundle_client_type'] : 'Any';
+    $ctype = in_array($_POST['bundle_client_type'] ?? '', array_merge(cms_list_items('client_types'), ['Any']), true) ? $_POST['bundle_client_type'] : 'Any';
     $cats = array_values(array_intersect(array_filter((array)($_POST['bundle_categories'] ?? []), 'is_string'), rsa_all_categories()));
     $errs = [];
     if ($name === '') $errs['bundle_name'] = 'A bundle name is required.';
@@ -283,7 +283,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_instrument'])) {
 $instruments = $lib === 'instruments' ? db()->query('SELECT i.*, (SELECT COUNT(*) FROM assessment_instrument_items WHERE instrument_id = i.id) AS n,
     (SELECT COUNT(*) FROM client_scored_assessments WHERE instrument_id = i.id) AS used FROM assessment_instruments i ORDER BY i.name')->fetchAll() : [];
 
-$bundles = $lib === 'bundles' ? db()->query('SELECT * FROM service_bundles ORDER BY active DESC, client_type, name')->fetchAll() : [];
+$bundles = $lib === 'bundles' ? db()->query('SELECT * FROM service_bundles ORDER BY active DESC, FIELD(client_type, \'VR\', \'Pre-ETS\', \'Any\') = 0, FIELD(client_type, \'VR\', \'Pre-ETS\', \'Any\'), client_type, name')->fetchAll() : [];
 // Categories ticked on an "Add bundle" form that was refused (see add_bundle).
 $keptBundleCats = is_array($_SESSION['tpl_bundle_cats'] ?? null) ? $_SESSION['tpl_bundle_cats'] : [];
 unset($_SESSION['tpl_bundle_cats']);
@@ -422,7 +422,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
     <div class="field"><label for="name">Template name <?= required_mark() ?></label>
       <input type="text" id="name" name="name" required maxlength="190" value="<?= h(old_in('name')) ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
     <div class="field"><label for="primary_tech">Primary tech</label>
-      <select id="primary_tech" name="primary_tech"><?= select_options(TECH_TYPES, old_in('primary_tech') ?: null) ?></select></div>
+      <select id="primary_tech" name="primary_tech"><?= select_options(cms_list_items('tech_types'), old_in('primary_tech') ?: null) ?></select></div>
     <div class="field"><label for="hardware_details">Hardware details</label>
       <input type="text" id="hardware_details" name="hardware_details" maxlength="255" value="<?= h(old_in('hardware_details')) ?>" <?= field_aria('hardware_details') ?>><?= field_error('hardware_details') ?></div>
     <div class="field"><label for="software_version">Software &amp; version</label>
@@ -473,7 +473,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
       <span class="hint" id="bundle_name-hint">e.g., “Pre-ETS Rehab Tech”, “Tech Referral”</span>
       <input type="text" id="bundle_name" name="bundle_name" required maxlength="120" value="<?= h(old_in('bundle_name')) ?>" <?= field_aria('bundle_name', 'bundle_name-hint') ?>><?= field_error('bundle_name') ?></div>
     <div class="field"><label for="bundle_client_type">Client type</label>
-      <select id="bundle_client_type" name="bundle_client_type"><?= select_options(['VR', 'Pre-ETS', 'Any'], old_in('bundle_client_type') ?: 'VR') ?></select></div>
+      <select id="bundle_client_type" name="bundle_client_type"><?= select_options(array_merge(cms_list_items('client_types'), ['Any']), old_in('bundle_client_type') ?: 'VR') ?></select></div>
     <div class="field"><label for="bundle_description">Description</label>
       <input type="text" id="bundle_description" name="bundle_description" maxlength="255" value="<?= h(old_in('bundle_description')) ?>" <?= field_aria('bundle_description') ?>><?= field_error('bundle_description') ?></div>
     <fieldset <?= has_field_error('bundle_categories') ? 'aria-describedby="err-bundle_categories"' : '' ?>>

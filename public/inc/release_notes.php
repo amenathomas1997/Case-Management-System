@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.5.0' => [
+        'Lists and time limits now also covers client types, case note types, document categories, service types, primary technology, and equipment categories, conditions and maintenance types. You can add your own; the few the system relies on (such as VR and Pre-ETS) always stay.',
+        'The iPhone app (4.5.0) offers the same lists as the website, read from your server each time you open it.',
+    ],
     '4.4.0' => [
         'Lists and time limits (Administration) lets you change the choices forms offer: vision statuses, why a case or referral is closed, device request categories, incident and booking types, release of information choices, and the assessment and competency level names. Records keep any value you later remove.',
         'It also sets the percent of an authorization that triggers a warning (built-in 80), how many days count as expiring soon, when expiry alerts go out, the closure and device follow-up days, how long loans, counselor links, signing links, consents and releases last.',

@@ -5,9 +5,7 @@ csrf_check();
 $user = require_login();
 require_perm('equipment');
 
-const EQUIP_CATEGORIES = ['Braille Display','Screen Reader License','Magnifier','Tablet/Phone','Computer','Keyboard/Input','Audio','Other'];
-const EQUIP_CONDITIONS = ['New','Good','Fair','Needs Repair'];
-const MAINT_TYPES = ['Maintenance','Calibration','Repair','Inspection','Cleaning','Other'];
+// Equipment categories, conditions and maintenance types are on Lists and time limits (inc/lists.php, 4.5.0).
 
 /** Maintenance status from the last service date + interval. */
 function maint_status(?string $last, $intervalDays): array {
@@ -75,9 +73,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_item'])) {
     }
     db()->prepare('INSERT INTO equipment (name, category, serial, item_condition, value, purchase_date, useful_life_months, notes, maintenance_interval_days) VALUES (?,?,?,?,?,?,?,?,?)')
         ->execute([$name,
-            in_array($_POST['category'] ?? '', EQUIP_CATEGORIES, true) ? $_POST['category'] : 'Other',
+            in_array($_POST['category'] ?? '', cms_list_items('equipment_categories'), true) ? $_POST['category'] : 'Other',
             $serial ?: null,
-            in_array($_POST['item_condition'] ?? '', EQUIP_CONDITIONS, true) ? $_POST['item_condition'] : 'Good',
+            in_array($_POST['item_condition'] ?? '', cms_list_items('equipment_conditions'), true) ? $_POST['item_condition'] : 'Good',
             $valueRaw !== '' ? (float)$valueRaw : null,
             $purchase,
             $life,
@@ -368,7 +366,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['log_service'])) {
     if ($dateRaw === '') $svcErrors['service_date_' . $eid] = 'Service date is required.';
     elseif ($date === null) $svcErrors['service_date_' . $eid] = 'Service date: enter the full date (month, day and year) with a year from 2000 to ' . date('Y') . '.';
     elseif ($date > date('Y-m-d')) $svcErrors['service_date_' . $eid] = 'Service date cannot be in the future.';
-    $type = in_array($_POST['service_type'] ?? '', MAINT_TYPES, true) ? $_POST['service_type'] : 'Maintenance';
+    $type = in_array($_POST['service_type'] ?? '', cms_list_items('maintenance_types'), true) ? $_POST['service_type'] : 'Maintenance';
     $notes = trim((string)($_POST['service_notes'] ?? ''));
     if (mb_strlen($notes) > 500) $svcErrors['service_notes_' . $eid] = 'Service notes must be 500 characters or fewer.';
     $costRaw = equip_amount((string)($_POST['service_cost'] ?? ''));
@@ -537,7 +535,7 @@ if (isset($_GET['scan'])) {
         <form method="post" action="equipment.php"><?= csrf_field() ?>
           <input type="hidden" name="loan_id" value="<?= (int)$it['loan_id'] ?>">
           <div class="field"><label for="ret_cond">Condition as it comes back</label>
-            <select id="ret_cond" name="condition_in"><option value="">Unchanged</option><?= select_options(LOAN_CONDITIONS, null) ?></select></div>
+            <select id="ret_cond" name="condition_in"><option value="">Unchanged</option><?= select_options(cms_list_items('equipment_conditions'), null) ?></select></div>
           <button type="submit" name="return_item" value="1" class="btn btn-primary" onclick="return confirm(<?= h((string)json_encode('Mark ' . $it['name'] . ' returned from ' . ($it['borrower'] ?? 'the client') . '?', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)) ?>);">Mark returned</button>
         </form>
       <?php elseif ($it['status'] === 'Available'): ?>
@@ -568,7 +566,7 @@ if (isset($_GET['scan'])) {
         <h2>Log a service</h2>
         <?= form_error_summary([$scKey => '', $scNotesKey => ''], [$scKey => 'sc_date', $scNotesKey => 'sc_notes']) ?>
         <div class="field"><label for="sc_type">Type</label>
-          <select id="sc_type" name="service_type"><?= select_options(MAINT_TYPES, $oldSc('service_type', 'Maintenance')) ?></select></div>
+          <select id="sc_type" name="service_type"><?= select_options(cms_list_items('maintenance_types'), $oldSc('service_type', 'Maintenance')) ?></select></div>
         <div class="field"><label for="sc_date">Date</label>
           <input type="date" id="sc_date" name="service_date" max="<?= date('Y-m-d') ?>" value="<?= h($oldSc('service_date', date('Y-m-d'))) ?>" <?= field_aria($scKey) ?>><?= field_error($scKey) ?></div>
         <div class="field"><label for="sc_notes">Service notes</label><input type="text" id="sc_notes" name="service_notes" maxlength="500" value="<?= h($oldSc('service_notes')) ?>" <?= field_aria($scNotesKey) ?>><?= field_error($scNotesKey) ?></div>
@@ -729,7 +727,7 @@ page_header('Equipment & loans', $user, 'equipment');
       <div class="field"><label for="lo_notes">Loan notes</label>
         <input type="text" id="lo_notes" name="notes" maxlength="255" value="<?= h($oldLoan('notes')) ?>" <?= field_aria('loan_notes') ?>><?= field_error('loan_notes') ?></div>
       <div class="field"><label for="lo_cond">Condition as it goes out</label>
-        <select id="lo_cond" name="condition_out"><option value="">Not recorded</option><?= select_options(LOAN_CONDITIONS, $oldLoan('condition_out') ?: null) ?></select></div>
+        <select id="lo_cond" name="condition_out"><option value="">Not recorded</option><?= select_options(cms_list_items('equipment_conditions'), $oldLoan('condition_out') ?: null) ?></select></div>
       <div class="field"><label for="lo_accept">Client's name, typed by the client, accepting the loan agreement</label>
         <input type="text" id="lo_accept" name="accepted_name" maxlength="120" autocomplete="off" value="<?= h($oldLoan('accepted_name')) ?>"></div>
     </div>
@@ -750,11 +748,11 @@ page_header('Equipment & loans', $user, 'equipment');
       <div class="field"><label for="name">Item name <?= required_mark() ?></label>
         <input type="text" id="name" name="name" required maxlength="190" value="<?= h($oldItem('name')) ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
       <div class="field"><label for="category">Category</label>
-        <select id="category" name="category"><?= select_options(EQUIP_CATEGORIES, $oldItem('category', 'Other')) ?></select></div>
+        <select id="category" name="category"><?= select_options(cms_list_items('equipment_categories'), $oldItem('category', 'Other')) ?></select></div>
       <div class="field"><label for="serial">Serial number</label>
         <input type="text" id="serial" name="serial" maxlength="120" value="<?= h($oldItem('serial')) ?>" <?= field_aria('serial') ?>><?= field_error('serial') ?></div>
       <div class="field"><label for="item_condition">Condition</label>
-        <select id="item_condition" name="item_condition"><?= select_options(EQUIP_CONDITIONS, $oldItem('item_condition', 'Good')) ?></select></div>
+        <select id="item_condition" name="item_condition"><?= select_options(cms_list_items('equipment_conditions'), $oldItem('item_condition', 'Good')) ?></select></div>
       <div class="field"><label for="value">Value (USD)</label>
         <span class="hint" id="value-hint">Purchase or acquisition cost in dollars, for example 2995.00</span>
         <input type="text" inputmode="decimal" id="value" name="value" value="<?= h($oldItem('value')) ?>" <?= field_aria('value', 'value-hint') ?>><?= field_error('value') ?></div>
@@ -828,7 +826,7 @@ page_header('Equipment & loans', $user, 'equipment');
             <input type="hidden" name="equipment_id" value="<?= $iid ?>">
             <?= form_error_summary([$svcKey => '', $snKey => '', $scostKey => ''], [$svcKey => 'md-' . $iid, $snKey => 'mn-' . $iid, $scostKey => 'mc-' . $iid]) ?>
             <label for="mt-<?= $iid ?>">Type</label>
-            <select id="mt-<?= $iid ?>" name="service_type"><?= select_options(MAINT_TYPES, $oldSvc('service_type', 'Maintenance')) ?></select>
+            <select id="mt-<?= $iid ?>" name="service_type"><?= select_options(cms_list_items('maintenance_types'), $oldSvc('service_type', 'Maintenance')) ?></select>
             <label for="md-<?= $iid ?>">Date</label>
             <input type="date" id="md-<?= $iid ?>" name="service_date" max="<?= date('Y-m-d') ?>" value="<?= h($oldSvc('service_date', date('Y-m-d'))) ?>" <?= field_aria($svcKey) ?>><?= field_error($svcKey) ?>
             <label for="mn-<?= $iid ?>">Service notes</label>

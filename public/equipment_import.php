@@ -10,8 +10,7 @@ $user = require_login();
 require_perm('equipment');
 
 // Must match equipment.php's allowed values.
-const IMPORT_CATEGORIES = ['Braille Display', 'Screen Reader License', 'Magnifier', 'Tablet/Phone', 'Computer', 'Keyboard/Input', 'Audio', 'Other'];
-const IMPORT_CONDITIONS = ['New', 'Good', 'Fair', 'Needs Repair'];
+// Categories and conditions are the ones on Lists and time limits (4.5.0).
 const IMPORT_COLUMNS = ['name', 'category', 'serial', 'condition', 'value', 'maintenance_interval_days', 'notes'];
 const IMPORT_ENCODING_NOTE = 'The file was not saved as UTF-8, so its text was read as Windows-1252 (Excel’s plain “CSV” format). Check names with accents or symbols below; saving as “CSV UTF-8” avoids this.';
 
@@ -117,9 +116,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
         $name = $get($row, 'name');
         if ($name === '') { $results[] = ['line' => $line, 'name' => '(blank)', 'ok' => false, 'msg' => 'Missing name — skipped']; $skipped++; continue; }
         $cat = $get($row, 'category');
-        $cat = in_array($cat, IMPORT_CATEGORIES, true) ? $cat : 'Other';
+        $cat = in_array($cat, cms_list_items('equipment_categories'), true) ? $cat : 'Other';
         $cond = $get($row, 'condition');
-        $cond = in_array($cond, IMPORT_CONDITIONS, true) ? $cond : 'Good';
+        $cond = in_array($cond, cms_list_items('equipment_conditions'), true) ? $cond : 'Good';
         // One plain amount: a dollar sign, spaces and thousands commas are allowed.
         // Anything else ('N/A', '$599 (2023)', '1.299,50') skips the row rather than
         // being read as a different number.
@@ -205,8 +204,8 @@ page_header('Import equipment', $user, 'equipment');
   <ol>
     <li>Download the <a href="equipment_import.php?template=1">CSV template</a> and fill in your devices (one per row).</li>
     <li>Columns: <code>name</code> (required), <code>category</code>, <code>serial</code>, <code>condition</code>, <code>value</code>, <code>maintenance_interval_days</code>, <code>notes</code>.</li>
-    <li>Category must be one of: <?= h(implode(', ', IMPORT_CATEGORIES)) ?> (anything else becomes “Other”).</li>
-    <li>Condition must be one of: <?= h(implode(', ', IMPORT_CONDITIONS)) ?> (anything else becomes “Good”).</li>
+    <li>Category must be one of: <?= h(implode(', ', cms_list_items('equipment_categories'))) ?> (anything else becomes “Other”).</li>
+    <li>Condition must be one of: <?= h(implode(', ', cms_list_items('equipment_conditions'))) ?> (anything else becomes “Good”).</li>
     <li><code>maintenance_interval_days</code> must be a whole number of days from 0 to 3650 (blank or 0 = no service schedule); a row with anything else is skipped.</li>
     <li>A row whose serial number is already in the inventory, or repeats an earlier row's, is skipped, so the same device is never added twice.</li>
     <li>A column with any other heading is not imported; the result names it.</li>

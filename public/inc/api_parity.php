@@ -110,7 +110,7 @@ function parity_track_choices(array $client, ?array $track): array {
             'categories' => bundle_categories($kept), 'available' => false]);
     }
     return [
-        'service_types' => SERVICE_TYPES,
+        'service_types' => cms_choices('service_types', $track['service_type'] ?? null),
         'statuses' => TRACK_STATUSES,
         'cadences' => [['value' => 'monthly', 'label' => 'Monthly (default)'], ['value' => 'biweekly', 'label' => 'Every two weeks'],
             ['value' => 'weekly', 'label' => 'Weekly'], ['value' => 'none', 'label' => 'Off — send manually only']],
@@ -457,7 +457,7 @@ case 'save_track': {
     // A choice left out keeps the track's value (on an edit) or the website's default;
     // one that is not on the list is refused (the page falls back silently, the app is told).
     $status = api_choice($input, 'status', TRACK_STATUSES, 'Status', $track['status'] ?? 'Active');
-    $serviceType = api_choice($input, 'service_type', SERVICE_TYPES, 'Service type', $track['service_type'] ?? 'Assistive Technology');
+    $serviceType = api_choice($input, 'service_type', cms_choices('service_types', $track['service_type'] ?? null), 'Service type', $track['service_type'] ?? 'Assistive Technology');
     // As on the website (Pricing rules, 4.2.0): an open VR case refuses, or warns about, free or personal rate.
     $pricingConflict = pricing_mode_conflict($clientId, $billingMode, $track ?: null, (string)$status);
     if ($pricingConflict && $pricingConflict['block']) $errors['billing_mode'] ??= $pricingConflict['message'];

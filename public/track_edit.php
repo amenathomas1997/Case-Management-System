@@ -67,7 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     elseif ($rate > 999999.99) $errors['hourly_rate'] = 'Hourly rate must be 999,999.99 or less.';
     if (mb_strlen($reason) > 255) $errors['amendment_reason'] = 'Keep the amendment reason to 255 characters or fewer.';
     $status = in_array($_POST['status'] ?? '', TRACK_STATUSES, true) ? $_POST['status'] : 'Active';
-    $serviceType = in_array($_POST['service_type'] ?? '', SERVICE_TYPES, true) ? $_POST['service_type'] : 'Assistive Technology';
+    $serviceType = in_array($_POST['service_type'] ?? '', cms_choices('service_types', $track['service_type'] ?? null), true) ? $_POST['service_type'] : 'Assistive Technology';
     // Free or personal-rate training set up for someone with an open VR case (Pricing rules,
     // 4.2.0): refused, or saved with a warning, as the administrator chose.
     $pricingConflict = pricing_mode_conflict($clientId, $billingMode, $track ?: null, $status);
@@ -317,7 +317,7 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
     </div>
     <div class="field">
       <label for="service_type">Service type</label>
-      <select id="service_type" name="service_type"><?= select_options(SERVICE_TYPES, $_POST['service_type'] ?? $track['service_type'] ?? 'Assistive Technology') ?></select>
+      <select id="service_type" name="service_type"><?= select_options(cms_choices('service_types', $track['service_type'] ?? null), $_POST['service_type'] ?? $track['service_type'] ?? 'Assistive Technology') ?></select>
     </div>
     <?php
     $clientType = $client['client_type'] ?? 'VR';

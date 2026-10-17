@@ -73,7 +73,7 @@ if ($who === 'me') { $sql .= ' AND c.assigned_to = ?'; $params[] = $user['id']; 
 elseif ($who === 'unassigned') { $sql .= ' AND c.assigned_to IS NULL'; }
 elseif (str_starts_with($who, 'u')) { $sql .= ' AND c.assigned_to = ?'; $params[] = (int)substr($who, 1); }
 // Client type, funding agency (any of the client's tracks) and school (3.0.50).
-$typeFilter = in_array($_GET['type'] ?? '', CLIENT_TYPES, true) ? $_GET['type'] : '';
+$typeFilter = in_array($_GET['type'] ?? '', cms_list_items('client_types'), true) ? $_GET['type'] : '';
 $agencyFilter = is_string($_GET['agency'] ?? null) ? trim($_GET['agency']) : '';
 $schoolFilter = is_string($_GET['school'] ?? null) ? trim($_GET['school']) : '';
 if ($typeFilter !== '') { $sql .= ' AND c.client_type = ?'; $params[] = $typeFilter; }
@@ -136,7 +136,7 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
     </div>
     <div class="field">
       <label for="type">Client type</label>
-      <select id="type" name="type"><option value="">All types</option><?= select_options(CLIENT_TYPES, $typeFilter) ?></select>
+      <select id="type" name="type"><option value="">All types</option><?= select_options(cms_list_items('client_types'), $typeFilter) ?></select>
     </div>
     <?php $agencies = db()->query("SELECT DISTINCT funding_agency FROM training_tracks WHERE funding_agency NOT IN ('', 'Private pay', 'No charge') ORDER BY funding_agency")->fetchAll(PDO::FETCH_COLUMN); ?>
     <div class="field">

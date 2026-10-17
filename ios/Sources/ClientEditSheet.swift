@@ -79,8 +79,10 @@ struct ClientEditSheet: View {
         _a11yNotes = State(initialValue: existing.a11yNotes ?? "")
     }
 
-    static let closureReasons = ["Employed", "Goals met", "Declined further services", "Unable to contact", "Moved away",
-                                 "Health or medical", "Not eligible", "Transferred to another provider", "Other"]
+    static var closureReasons: [String] {
+        FormOptions.list("closure_reasons", ["Employed", "Goals met", "Declined further services", "Unable to contact", "Moved away",
+                                             "Health or medical", "Not eligible", "Transferred to another provider", "Other"])
+    }
     private var statusChanged: Bool { existing != nil && existing?.status != status }
 
     /// The unconfirmed email is still the one in the field: it can be confirmed here. A different

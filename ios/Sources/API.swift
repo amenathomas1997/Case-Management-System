@@ -172,16 +172,54 @@ struct ClientInfo: Decodable {
     var school: String?
 }
 
-let clientTypes = ["VR", "Pre-ETS"]
+/// The choices the website's Lists and time limits page sets (4.5.0), kept on the phone from
+/// the last form_options answer: names only, no client information. A list the server has
+/// not sent (an older server, or before the first sign-in) uses the app's built-in one.
+enum FormOptions {
+    static let key = "formOptionLists"
+    /// Read once from UserDefaults and kept in memory (lists are read on every render).
+    private final class Cache: @unchecked Sendable {
+        let lock = NSLock()
+        var lists: [String: [String]]?
+    }
+    private static let cache = Cache()
+    /// Lists whose length the app relies on (0 to 4 scales): any other length uses the built-in one.
+    private static let fixedLength: Set<String> = ["score_labels", "competency_levels"]
+
+    static func list(_ name: String, _ builtIn: [String]) -> [String] {
+        cache.lock.lock(); defer { cache.lock.unlock() }
+        if cache.lists == nil {
+            cache.lists = UserDefaults.standard.dictionary(forKey: key) as? [String: [String]] ?? [:]
+        }
+        let stored = cache.lists?[name] ?? []
+        if stored.isEmpty || (fixedLength.contains(name) && stored.count != builtIn.count) { return builtIn }
+        return stored
+    }
+    static func save(_ lists: [String: [String]]) {
+        cache.lock.lock(); defer { cache.lock.unlock() }
+        UserDefaults.standard.set(lists, forKey: key)
+        cache.lists = lists
+    }
+    /// Back to the built-in lists: on sign-out, and for a server that does not send them.
+    static func clear() {
+        cache.lock.lock(); defer { cache.lock.unlock() }
+        UserDefaults.standard.removeObject(forKey: key)
+        cache.lists = [:]
+    }
+}
+
+var clientTypes: [String] { FormOptions.list("client_types", ["VR", "Pre-ETS"]) }
 let a11yFormats = ["Standard print", "Large print", "Plain text", "Braille-ready (BRF)", "Audio", "Accessible PDF"]
 let a11yContacts = ["No preference", "Email", "Phone", "Client portal", "Postal mail"]
 
 let clientStatuses = ["Pending Assessment", "Waitlist", "Active Training", "On Hold", "Closed - Rehabilitated", "Closed - Other"]
-let techTypes = ["Screen Reader", "Magnification", "Braille Display", "Speech-to-Text",
-                 "Independent Living Skills", "Braille Literacy", "Low Vision Devices",
-                 "Rehabilitation Technology", "Other"]
+var techTypes: [String] {
+    FormOptions.list("tech_types", ["Screen Reader", "Magnification", "Braille Display", "Speech-to-Text",
+                                    "Independent Living Skills", "Braille Literacy", "Low Vision Devices",
+                                    "Rehabilitation Technology", "Other"])
+}
 let goalStatuses = ["Not Started", "In Progress", "Achieved"]
-let docCategories = ["Authorization", "IPE", "Release", "Report", "Resource", "Other"]
+var docCategories: [String] { FormOptions.list("doc_categories", ["Authorization", "IPE", "Release", "Report", "Resource", "Other"]) }
 
 struct Note: Decodable, Identifiable {
     let id: Int
@@ -385,7 +423,7 @@ struct MeResponse: Decodable {
     let serverVersion: String?
 }
 
-let serviceTypes = ["Assistive Technology", "Rehab Teaching", "Counseling", "Pre-ETS", "Other"]
+var serviceTypes: [String] { FormOptions.list("service_types", ["Assistive Technology", "Rehab Teaching", "Counseling", "Pre-ETS", "Other"]) }
 
 struct TracksResponse: Decodable { let tracks: [TrackOption] }
 
@@ -808,6 +846,12 @@ final class API: ObservableObject {
             // does not report it keeps the zone known before (America/Chicago by default).
             if let zone = me.timezone, TimeZone(identifier: zone) != nil {
                 UserDefaults.standard.set(zone, forKey: API.serverTimeZoneKey)
+            }
+            // The organisation's own lists (4.5.0); an older server answers "Unknown action".
+            if let obj = try? await callDict("form_options"), let lists = obj["lists"] as? [String: [String]] {
+                if token == sessionToken { FormOptions.save(lists) }
+            } else if token == sessionToken {
+                FormOptions.clear()   // an older server, or none sent: the built-in lists
             }
         }
     }
@@ -1306,6 +1350,8 @@ final class API: ObservableObject {
     func clearIdentity() {
         // Nothing a previous session downloaded for preview may outlive it.
         PreviewStore.sweep()
+        // Nor another organisation's lists (4.5.0).
+        FormOptions.clear()
         #if os(iOS)
         // Nor client text the app copied, unless something else has been copied since.
         if let count = protectedCopyChangeCount, UIPasteboard.general.changeCount == count {

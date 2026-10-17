@@ -8,18 +8,18 @@ check(cms_list_items('vision_statuses')===VISION_STATUSES && cms_list('score_lab
 check($code===0 && $err==='' && str_contains($out,'Lists and time limits') && str_contains($out,'Vision statuses') && str_contains($out,'Alert this many days before an authorization ends'),'Administrators see the lists and time limits' . ($err ? ": $err" : ''));
 
 /* Lists */
-[$code,,$err]=$renderPage('lists',[],['save_lists'=>'clients','vision_statuses'=>"Blind\nLow vision\nDeafblind",'closure_reasons'=>implode("\n",CLOSURE_REASONS),
+[$code,,$err]=$renderPage('lists',[],['save_lists'=>'clients','client_types'=>implode("\n",CLIENT_TYPES),'note_types'=>implode("\n",NOTE_TYPES),'doc_categories'=>implode("\n",DOC_CATEGORIES),'vision_statuses'=>"Blind\nLow vision\nDeafblind",'closure_reasons'=>implode("\n",CLOSURE_REASONS),
     'referral_close_reasons'=>"Declined services | the person decided not to go ahead\nMoved | the person moved away"]);
 check($code===0 && $err==='' && cms_list_items('vision_statuses')===['Blind','Low vision','Deafblind'] && cms_list('referral_close_reasons')['Moved']==='the person moved away'
     && (string)(setting('list_closure_reasons') ?? '')==='','A business sets its own lists; one left as built in is not stored' . ($err ? ": $err" : ''));
-[$code,,$err]=$renderPage('lists',[],['save_lists'=>'clients','vision_statuses'=>"Blind\nBlind",'closure_reasons'=>'Done','referral_close_reasons'=>'No words here']);
+[$code,,$err]=$renderPage('lists',[],['save_lists'=>'clients','client_types'=>implode("\n",CLIENT_TYPES),'note_types'=>implode("\n",NOTE_TYPES),'doc_categories'=>implode("\n",DOC_CATEGORIES),'vision_statuses'=>"Blind\nBlind",'closure_reasons'=>'Done','referral_close_reasons'=>'No words here']);
 check(cms_list_items('vision_statuses')===['Blind','Low vision','Deafblind'] && (string)(setting('list_closure_reasons') ?? '')==='','A list with a repeat, or a reason without its words, is refused and nothing in the group changes');
-[$code,,$err]=$renderPage('lists',[],['save_lists'=>'services','score_labels'=>"None\nSome\nHalf\nMost",'competency_levels'=>implode("\n",COMPETENCY_LEVELS),'incident_types'=>implode("\n",INCIDENT_TYPES),'booking_types'=>"Interpreter\nReader"]);
+[$code,,$err]=$renderPage('lists',[],['save_lists'=>'services','service_types'=>implode("\n",SERVICE_TYPES),'tech_types'=>implode("\n",TECH_TYPES),'score_labels'=>"None\nSome\nHalf\nMost",'competency_levels'=>implode("\n",COMPETENCY_LEVELS),'incident_types'=>implode("\n",INCIDENT_TYPES),'booking_types'=>"Interpreter\nReader"]);
 check(cms_list('score_labels')===SCORE_LABELS_DEFAULT && cms_list_items('booking_types')===BOOKING_TYPES,'A 0 to 4 scale needs exactly five levels, and nothing else in its group is saved');
 $db->exec("INSERT INTO clients(name,status,assigned_to) VALUES('Lists Synthetic Client','Active Training',1)"); $lsc=(int)$db->lastInsertId();
 [$code,,$err]=$renderPage('client_edit',['id'=>$lsc],['name'=>'Lists Synthetic Client','status'=>'Active Training','client_type'=>'VR','vision_status'=>'Deafblind']);
 check($db->query("SELECT vision_status FROM clients WHERE id=$lsc")->fetchColumn()==='Deafblind','A client record takes a choice from the business\'s own list' . ($err ? ": $err" : ''));
-[$code,,$err]=$renderPage('lists',[],['save_lists'=>'clients','vision_statuses_reset'=>'1','vision_statuses'=>'','closure_reasons'=>implode("\n",CLOSURE_REASONS),'referral_close_reasons_reset'=>'1','referral_close_reasons'=>'']);
+[$code,,$err]=$renderPage('lists',[],['save_lists'=>'clients','client_types'=>implode("\n",CLIENT_TYPES),'note_types'=>implode("\n",NOTE_TYPES),'doc_categories'=>implode("\n",DOC_CATEGORIES),'vision_statuses_reset'=>'1','vision_statuses'=>'','closure_reasons'=>implode("\n",CLOSURE_REASONS),'referral_close_reasons_reset'=>'1','referral_close_reasons'=>'']);
 check(cms_list_items('vision_statuses')===VISION_STATUSES && $db->query("SELECT vision_status FROM clients WHERE id=$lsc")->fetchColumn()==='Deafblind','Going back to the built-in list keeps the values records already have');
 [$code,,$err]=$renderPage('client_edit',['id'=>$lsc],['name'=>'Lists Synthetic Client','status'=>'Active Training','client_type'=>'VR','vision_status'=>'Deafblind','phone'=>'555-0101']);
 check($db->query("SELECT vision_status FROM clients WHERE id=$lsc")->fetchColumn()==='Deafblind','Saving such a client again keeps a vision status since removed from the list' . ($err ? ": $err" : ''));

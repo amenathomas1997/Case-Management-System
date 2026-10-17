@@ -9,7 +9,7 @@ struct Booking: Decodable, Identifiable {
 }
 struct BookingsResponse: Decodable { let bookings: [Booking] }
 
-let bookingTypes = ["Interpreter", "CART captioning", "Transportation", "Note-taker", "Other"]
+var bookingTypes: [String] { FormOptions.list("booking_types", ["Interpreter", "CART captioning", "Transportation", "Note-taker", "Other"]) }
 let bookingStatuses = ["Requested", "Confirmed", "Completed", "Cancelled"]
 
 struct BookingsView: View {
@@ -211,7 +211,8 @@ struct BookingEditSheet: View {
     let onDone: () -> Void
 
     @State private var selectedClient: Int?
-    @State private var serviceType = "Interpreter"
+    // The first type when an organisation removed "Interpreter" from its list (4.5.0).
+    @State private var serviceType = bookingTypes.contains("Interpreter") ? "Interpreter" : (bookingTypes.first ?? "Interpreter")
     @State private var neededAt: Date
     /// The time the form opened with, so a changed time counts as something to keep.
     @State private var openedAt: Date

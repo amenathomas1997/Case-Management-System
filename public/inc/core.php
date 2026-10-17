@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.4.0';
+const APP_VERSION = '4.5.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -850,7 +850,7 @@ function name_key(string $s): string {
 function assemble_note(array $post): array {
     // A field posted as an array (name[]=) counts as blank, never a TypeError.
     $str = fn(string $k): string => is_string($post[$k] ?? null) ? trim($post[$k]) : '';
-    $type = in_array($post['note_type'] ?? '', NOTE_TYPES, true) ? $post['note_type'] : 'Case Note';
+    $type = in_array($post['note_type'] ?? '', cms_list_items('note_types'), true) ? $post['note_type'] : 'Case Note';
     $fmt = isset(NOTE_FORMATS[$str('note_format')]) ? $str('note_format') : 'free';
     $sections = [$str('sec1'), $str('sec2'), $str('sec3'), $str('sec4')];
     $hasSections = $fmt !== 'free' && implode('', $sections) !== '';

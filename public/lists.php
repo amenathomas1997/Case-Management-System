@@ -65,7 +65,8 @@ page_header('Lists and time limits', $user, 'admin', [['admin.php', 'Administrat
         <input type="text" id="<?= $k ?>" name="<?= $k ?>" maxlength="40" value="<?= h($kept($group) ? old_in($k) : $stored) ?>" placeholder="<?= h(implode(', ', $default)) ?>" <?= field_aria($k) ?>><?= field_error($k) ?></div>
       <?php endforeach; ?>
     <?php else: foreach (cms_list_defs() as $k => [$label, $kind, $default, $g]): if ($g !== $group) continue; $own = (string)(setting('list_' . $k) ?? '') !== ''; ?>
-      <div class="field"><label for="<?= $k ?>"><?= h($label) ?><?= $own ? '' : ' (built-in)' ?></label>
+      <?php $locked = cms_list_defs()[$k][4] ?? []; ?>
+      <div class="field"><label for="<?= $k ?>"><?= h($label) ?><?= $own ? '' : ' (built-in)' ?><?= $locked ? '; always keeps ' . h(implode(', ', $locked)) : '' ?></label>
         <textarea id="<?= $k ?>" name="<?= $k ?>" rows="<?= min(12, max(4, count(cms_list($k)) + 1)) ?>" <?= field_aria($k) ?>><?= h($kept($group) ? old_in($k) : cms_list_text($k)) ?></textarea><?= field_error($k) ?></div>
       <?php if ($own): ?><div class="field"><label><input type="checkbox" name="<?= $k ?>_reset" value="1"<?= $kept($group) && old_in($k . '_reset') !== '' ? ' checked' : '' ?>> <?= h(preg_replace('/ \(.*$|, \d+ to \d+.*$|, and .*$/', '', $label)) ?>: go back to the built-in list</label></div><?php endif; ?>
     <?php endforeach; endif; ?>

@@ -8,6 +8,11 @@ declare(strict_types=1);
 const INCIDENT_TYPES = ['Injury', 'Near miss', 'Equipment failure', 'Behavioral', 'Property damage', 'Medical', 'Safety concern', 'Other'];
 const BOOKING_TYPES = ['Interpreter', 'CART captioning', 'Transportation', 'Note-taker', 'Other'];
 const COMPETENCY_LEVELS = [0 => 'Not started', 1 => 'Introduced', 2 => 'Practicing', 3 => 'Proficient', 4 => 'Mastered'];
+// Equipment lists (4.5.0; once in equipment.php and inc/access.php).
+const EQUIP_CATEGORIES = ['Braille Display','Screen Reader License','Magnifier','Tablet/Phone','Computer','Keyboard/Input','Audio','Other'];
+const EQUIP_CONDITIONS = ['New','Good','Fair','Needs Repair'];
+const MAINT_TYPES = ['Maintenance','Calibration','Repair','Inspection','Cleaning','Other'];
+const LOAN_CONDITIONS = EQUIP_CONDITIONS;
 
 /**
  * key => [label, kind, name of the built-in constant, group] (constant() is resolved only for
@@ -26,6 +31,16 @@ function cms_list_defs(): array {
         'booking_types' => ['Access booking types', 'list', 'BOOKING_TYPES', 'services'],
         'release_recipient_types' => ['Who a release of information can go to', 'list', 'RELEASE_RECIPIENT_TYPES', 'privacy'],
         'release_info_items' => ['What a release of information can cover', 'list', 'RELEASE_INFO_ITEMS', 'privacy'],
+        // Lists once held in database enum columns (4.5.0). The fifth item lists the values the
+        // system itself relies on, which stay on the list.
+        'client_types' => ['Client types', 'list', 'CLIENT_TYPES', 'clients', ['VR', 'Pre-ETS'], ['Any']],
+        'note_types' => ['Case note types', 'list', 'NOTE_TYPES', 'clients', ['Case Note', 'Progress Report', 'Monthly Summary', 'Intake', 'Addendum']],
+        'doc_categories' => ['Document categories', 'list', 'DOC_CATEGORIES', 'clients', ['Authorization', 'IPE', 'Release', 'Report', 'Resource', 'Other'], ['Client Upload']],
+        'service_types' => ['Service types (training tracks and visits)', 'list', 'SERVICE_TYPES', 'services', ['Assistive Technology', 'Pre-ETS', 'Other']],
+        'tech_types' => ['Primary technology (assessments)', 'list', 'TECH_TYPES', 'services', ['Screen Reader', 'Other']],
+        'equipment_categories' => ['Equipment categories', 'list', 'EQUIP_CATEGORIES', 'equipment', ['Other']],
+        'equipment_conditions' => ['Equipment conditions (items and loans)', 'list', 'EQUIP_CONDITIONS', 'equipment', ['Good', 'Needs Repair']],
+        'maintenance_types' => ['Equipment maintenance types', 'list', 'MAINT_TYPES', 'equipment', ['Maintenance', 'Other']],
     ];
 }
 
@@ -60,6 +75,20 @@ function cms_list(string $key): array {
         default => array_is_list($v),
     };
     return $ok ? $v : $def[2];
+}
+
+/** A list's items plus a record's current value when it was since removed, so an edit keeps it. */
+function cms_choices(string $key, ?string $current): array {
+    $items = cms_list_items($key);
+    return $current !== null && $current !== '' && !in_array($current, $items, true) ? array_merge($items, [$current]) : $items;
+}
+
+/** The technology type a free-text description names, as a whole word, longest first ("AI" never matches "Braille"). */
+function tech_type_match(string $text): ?string {
+    $items = cms_list_items('tech_types');
+    usort($items, fn($a, $b) => mb_strlen($b) <=> mb_strlen($a));
+    foreach ($items as $t) if ($t !== '' && preg_match('/(?<![\pL\pN])' . preg_quote($t, '/') . '(?![\pL\pN])/iu', $text)) return $t;
+    return null;
 }
 
 /** The plain item names of a list (a map's reasons). */
@@ -117,15 +146,21 @@ function cms_list_parse(string $key, string $text): array {
         if ($def[1] === 'map') {
             [$item, $words] = array_map('trim', explode('|', $line, 2)) + [1 => ''];
             if ($item === '' || $words === '') return [null, 'Line ' . ($i + 1) . ': write the reason, a | and the words the email uses.'];
-            if (mb_strlen($item) > 80 || mb_strlen($words) > 200) return [null, 'Line ' . ($i + 1) . ' is too long (80 characters for the reason, 200 for the words).'];
+            if (mb_strlen($item) > 40 || mb_strlen($words) > 200) return [null, 'Line ' . ($i + 1) . ' is too long (40 characters for the reason, 200 for the words).'];
             if (isset($out[$item])) return [null, $item . ' is listed twice.'];
             $out[$item] = $words;
         } else {
-            if (mb_strlen($line) > 80) return [null, 'Line ' . ($i + 1) . ' is longer than 80 characters.'];
+            // 40 characters: the size of the record columns these choices are saved in.
+            if (mb_strlen($line) > 40) return [null, 'Line ' . ($i + 1) . ' is longer than 40 characters.'];
             if (in_array($line, $out, true)) return [null, $line . ' is listed twice.'];
             $out[] = $line;
         }
     }
+    // Words the system uses for something else (a bundle for any client type; files a client shared).
+    $reserved = array_values(array_intersect(array_map('mb_strtolower', $def[5] ?? []), array_map('mb_strtolower', $def[1] === 'map' ? array_keys($out) : $out)));
+    if ($reserved) return [null, 'The system already uses ' . implode(', ', $reserved) . ' for something else: choose another name.'];
+    $missing = array_values(array_diff($def[4] ?? [], $def[1] === 'map' ? array_keys($out) : $out));
+    if ($missing) return [null, 'Keep ' . implode(', ', $missing) . ': the system relies on ' . (count($missing) === 1 ? 'it' : 'them') . '. You can add to the list and remove anything else.'];
     if ($def[1] === 'scale') {
         if (count($out) !== count($def[2])) return [null, 'Give exactly ' . count($def[2]) . ' levels, from the lowest to the highest.'];
         $out = array_combine(array_keys($def[2]), $out);

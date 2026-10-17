@@ -19,7 +19,7 @@ struct ScoredDetail: Decodable {
 }
 struct ScoredDetailResponse: Decodable { let assessment: ScoredDetail; let items: [ScoredItemRow] }
 
-let scoreLabels = ["0 — Unable", "1 — Maximal assistance", "2 — Moderate assistance", "3 — Minimal assistance / prompts", "4 — Independent"]
+var scoreLabels: [String] { FormOptions.list("score_labels", ["0 — Unable", "1 — Maximal assistance", "2 — Moderate assistance", "3 — Minimal assistance / prompts", "4 — Independent"]) }
 
 /// The lowest total an assessment could score: the items rated times the scale's lowest rating
 /// (a scale whose highest rating is not above its lowest is the 0–4 fallback, as on the
