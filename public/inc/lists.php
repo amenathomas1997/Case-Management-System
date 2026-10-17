@@ -53,6 +53,11 @@ const CMS_NUMBERS = [
     'sign_link_days' => ['A consent or release signing link lasts this many days', 60, 1, 365],
     'consent_valid_days' => ['A signed consent lasts this many days', 365, 30, 3650],
     'release_valid_days' => ['A signed release of information lasts this many days', 365, 30, 3650],
+    // 4.6.0
+    'session_reminder_days' => ['Remind clients and staff of a session this many days ahead (one reminder per session)', 1, 1, 7],
+    'at_reminder_days' => ['Remind staff of AT service deadlines this many days ahead', 7, 1, 60],
+    'doc_audit_note_days' => ['Documentation review: look at case notes from the last this many days', 60, 7, 365],
+    'doc_audit_activity_days' => ['Documentation review: sessions and goal progress count from the last this many days', 30, 7, 365],
 ];
 
 /** key => [label, built-in days]. */

@@ -122,7 +122,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
             // A blank rate takes the agency's own rates (Funding agencies, 4.2.0) when it has them.
             $agencyRate = agency_hourly_rate($agency);
             $hours = $num('authorized_hours', 0.25, 99999.99, true); $rate = $num('hourly_rate', 0.01, 999999.99, $agencyRate === null) ?? $agencyRate;
-            $amount = $num('authorized_amount', 0.01, 99999999.99, false); $mile = $num('mileage_rate', 0, 999.999, false) ?? agency_mileage_rate($agency);
+            $amount = $num('authorized_amount', 0.01, 99999999.99, false); $mile = $num('mileage_rate', 0, 999.999, false) ?? default_mileage_for('vr', $agency);
             foreach (['authorized_hours' => $hours, 'hourly_rate' => $rate, 'authorized_amount' => $amount, 'mileage_rate' => $mile] as $c => $v) if ($v === -1.0) { $skip($label, $c . ' must be a number in range (hours over 0, rate over 0)'); continue 2; }
             $start = $get($row, 'start_date'); $end = $get($row, 'expiration_date'); $maxY = (int)date('Y') + 5;
             if (($start !== '' && !valid_date($start, 2000, $maxY)) || ($end !== '' && !valid_date($end, 2000, $maxY))) { $skip($label, 'Dates must be written 2026-10-01'); continue; }

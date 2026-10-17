@@ -116,6 +116,14 @@ suffix = r'''
         }
         // A spoken answer counts as yes only when it is a short yes and nothing else: a
         // correction, a question, or our own question heard back is asked again.
+        // The organisation's address (4.6.0): https only, never another host than the one typed.
+        let addr: (String) -> String? = { API.apiURL(fromAddress: $0)?.absoluteString }
+        check(addr("cms.example.org") == "https://cms.example.org/api.php" && addr("example.org/cms") == "https://example.org/cms/api.php"
+              && addr("HTTPS://Example.ORG/cms/login.php") == "https://example.org/cms/api.php" && addr("example.org/cms/API.PHP") == "https://example.org/cms/api.php"
+              && addr("example.org:8443") == "https://example.org:8443/api.php", "An organisation's address becomes its https API address")
+        for bad in ["http://cms.example.org", "ftp://x.org", "https:/x.org", "http//x.org", "good.org@evil.com", "x.org\\@evil.com", "", "cms example org", "localhostish"] {
+            check(addr(bad) == nil, "\"\(bad)\" is refused as an organisation's address")
+        }
         for said in ["OK, make it three", "Correct the time", "Yes, Tuesday instead", "You said: Yes", "Say yes to save", "Is it okay?"] {
             check(SpeechController.confirmAnswer(said) == .unclear, "\"\(said)\" is not taken as a yes to save")
         }

@@ -274,11 +274,11 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					28E5479A4D4E8AA21DE97A25 = {
-						DevelopmentTeam = ;
+						DevelopmentTeam = "$(CMS_TEAM)";
 						ProvisioningStyle = Automatic;
 					};
 					FE6A89BC4D40D9769DC13D35 = {
-						DevelopmentTeam = ;
+						DevelopmentTeam = "$(CMS_TEAM)";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -397,15 +397,15 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 46;
-				DEVELOPMENT_TEAM = ;
+				CURRENT_PROJECT_VERSION = 48;
+				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.example.cms;
+				MARKETING_VERSION = 4.6.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -444,6 +444,12 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CMS_BUNDLE_ID = org.example.cms;
+				CMS_DEFAULT_SERVER = cms.example.org;
+				CMS_DISPLAY_NAME = "CMS";
+				CMS_SIGNIN_TITLE = "Case Management System";
+				CMS_SPOKEN_NAME = "Case Management System";
+				CMS_TEAM = ;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -482,15 +488,15 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 46;
-				DEVELOPMENT_TEAM = ;
+				CURRENT_PROJECT_VERSION = 48;
+				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.example.cms;
+				MARKETING_VERSION = 4.6.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -501,16 +507,16 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 46;
-				DEVELOPMENT_TEAM = ;
+				CURRENT_PROJECT_VERSION = 48;
+				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.example.cms.widget;
+				MARKETING_VERSION = 4.6.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -522,16 +528,16 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 46;
-				DEVELOPMENT_TEAM = ;
+				CURRENT_PROJECT_VERSION = 48;
+				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.example.cms.widget;
+				MARKETING_VERSION = 4.6.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -571,6 +577,12 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CMS_BUNDLE_ID = org.example.cms;
+				CMS_DEFAULT_SERVER = cms.example.org;
+				CMS_DISPLAY_NAME = "CMS";
+				CMS_SIGNIN_TITLE = "Case Management System";
+				CMS_SPOKEN_NAME = "Case Management System";
+				CMS_TEAM = ;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;

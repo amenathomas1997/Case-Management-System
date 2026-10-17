@@ -435,7 +435,7 @@ struct AccountView: View {
             }))
             .accessibilityHint("A session starting in 30 minutes, and at 8:00 how many device follow-ups are due today.")
             if notificationsRefused {
-                Text("iOS is not allowing reminders from this app. Turn on Notifications for CMS in the iPhone's Settings, then turn this on again.")
+                Text("iOS is not allowing reminders from this app. Turn on Notifications for \(appDisplayName) in the iPhone's Settings, then turn this on again.")
                     .font(.callout)
             }
         } header: { sectionHeader("Notifications") } footer: {
@@ -458,7 +458,7 @@ struct AccountView: View {
         if allowed {
             announce("Reminders on. They are scheduled the next time the schedule and follow-ups load.")
         } else {
-            showFormError("iOS is not allowing reminders from this app. Turn on Notifications for CMS in the iPhone's Settings, then turn this on again.", in: &error)
+            showFormError("iOS is not allowing reminders from this app. Turn on Notifications for \(appDisplayName) in the iPhone's Settings, then turn this on again.", in: &error)
         }
     }
 

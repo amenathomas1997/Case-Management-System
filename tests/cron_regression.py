@@ -115,6 +115,7 @@ function email_template($name,$args) { return ['Reminder: your session tomorrow'
 function brand($key) { return 'Test'; }
 function record_heartbeat($job) { $GLOBALS['heartbeats'][]=$job; }
 function client_zone($c) { return null; }
+function cms_number($k) { return ['session_reminder_days' => 1, 'at_reminder_days' => 7][$k] ?? 0; }
 function zone_format($tz,$fn) { return $fn(); }
 function zone_date($tz,$f,$ts) { return date($f,$ts); }
 function send_app_mail($to,$subject,$body) { $GLOBALS['to'][]=$to; $GLOBALS['mails'][]=['to'=>$to,'subject'=>$subject,'body'=>$body]; $results=json_decode(getenv('MAIL_RESULTS'),true); return $results[$GLOBALS['calls']++]; }

@@ -5,7 +5,8 @@ import Security
 /// Hardware-encrypted, this-device-only, excluded from backups, and readable only while the
 /// phone is unlocked (the app has no background work that needs it while locked).
 enum Keychain {
-    private static let service = "org.example.cms"
+    /// The app's own ID (4.6.0: CMS_BUNDLE_ID), so each organisation's build keeps its own items.
+    private static let service = Bundle.main.bundleIdentifier ?? "cms"
 
     static func save(_ value: String, for key: String) {
         let base: [String: Any] = [

@@ -14,7 +14,7 @@ $rows=db()->query("SELECT r.*,c.assigned_to,
  FROM at_records r LEFT JOIN clients c ON c.id=r.client_id
  WHERE r.kind IN ('outcome','funding','repair','learning','license')
  AND r.status NOT IN ('Completed','Skipped','Paid','Resolved','Cancelled','Expired')
- HAVING reminder_due<=DATE_ADD(CURDATE(),INTERVAL 7 DAY)")->fetchAll();
+ HAVING reminder_due<=DATE_ADD(CURDATE(),INTERVAL ".cms_number('at_reminder_days')." DAY)")->fetchAll();
 $users=db()->query('SELECT * FROM users WHERE is_active=1')->fetchAll();$sent=0;
 $access=[];foreach($users as $u)$access[(int)$u['id']]=resolve_perms($u);
 foreach($rows as $r){

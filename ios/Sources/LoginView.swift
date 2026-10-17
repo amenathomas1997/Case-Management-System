@@ -6,6 +6,16 @@ struct LoginView: View {
     /// the same account signs in again and carries on where it was.
     var reauth = false
     @State private var email = ""
+    /// The organisation's web address, asked for only by a build that names no server (4.6.0).
+    @State private var serverAddress = UserDefaults.standard.string(forKey: API.serverKey) ?? ""
+    /// Not while signing in again to the same account: the session belongs to its server.
+    private var asksForServer: Bool { API.builtInServer == nil && !reauth }
+    /// The sign-in line this build sets (CMS_SIGNIN_TITLE), else the app's name.
+    private var signInTitle: String {
+        let t = (Bundle.main.object(forInfoDictionaryKey: "CMSSignInTitle") as? String ?? "").trimmingCharacters(in: .whitespaces)
+        if !t.isEmpty && !t.contains("$(") { return t }
+        return Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Case Management"
+    }
     @State private var password = ""
     @State private var code = ""
     @State private var awaitingCode = false
@@ -94,8 +104,17 @@ struct LoginView: View {
                     }
 
                     if !awaitingCode {
-                        Text("Case Management System")
+                        Text(signInTitle)
                             .foregroundStyle(Color.secondaryText)
+                        if asksForServer {
+                            SignInField(label: "Your organisation's web address") {
+                                TextField("Your organisation's web address", text: $serverAddress)
+                                    .textContentType(.URL)
+                                    .keyboardType(.URL)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                            }
+                        }
                         SignInField(label: "Email address") {
                             TextField("Email address", text: $email)
                                 .textContentType(.username)
@@ -249,7 +268,17 @@ struct LoginView: View {
     private func login() async {
         busy = true; error = nil
         api.sessionNotice = nil
-        announce("Signing in")
+        if asksForServer {
+            // Kept before signing in, since every request goes to it; checked first (https only).
+            guard API.apiURL(fromAddress: serverAddress) != nil else {
+                busy = false
+                error = "Enter your organisation's web address, such as cms.example.org. It must be a secure (https) address."
+                return
+            }
+            api.switchServer(to: serverAddress)
+        }
+        // Said and shown: the person hears which server gets their password.
+        announce(asksForServer ? "Signing in to \(API.base.host ?? "your organisation")" : "Signing in")
         do {
             let step: LoginStep = try await api.call("login", body: ["email": email, "password": password])
             apply(step)
@@ -259,7 +288,7 @@ struct LoginView: View {
             // focus no longer exists — and then say that the screen moved on and what to enter.
             focusCodeField(thenSay: "Password accepted. " + codeInstruction)
         } catch {
-            self.error = error.localizedDescription
+            self.error = (asksForServer ? "Signing in to \(API.base.host ?? "your organisation") did not work. Check the address if it is new. " : "") + error.localizedDescription
         }
         busy = false
     }

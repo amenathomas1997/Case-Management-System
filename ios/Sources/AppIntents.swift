@@ -1,7 +1,7 @@
 import AppIntents
 import Foundation
 
-// Siri and the Shortcuts app ("Log hours in Example Agency…"). Each intent runs inside the app's
+// Siri and the Shortcuts app ("Log hours in <the app's name>…"). Each intent runs inside the app's
 // process: the ones that open a screen hand AppNavigation the destination, which MainTabs acts
 // on once the app is unlocked (and only if the account may open it). No intent says anything
 // that identifies a client: Siri's reply can be spoken aloud anywhere.

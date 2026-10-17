@@ -27,7 +27,16 @@ function pricing_settings(): array {
         'youth_age' => $age !== null && ctype_digit($age) && (int)$age <= 30 ? (int)$age : 18,
         'vr_conflict' => isset(PRICING_CONFLICT_CHOICES[$conflict]) ? $conflict : 'warn',
         'ask' => isset(PRICING_ASK_CHOICES[$ask]) ? $ask : 'self',
+        // A new track with no mileage rate typed (and no agency rate) uses this (4.6.0); null: $0.
+        'default_mileage' => is_numeric($dm = (string)(setting('pricing_default_mileage') ?? '')) && (float)$dm >= 0 && (float)$dm <= 999.999 ? round((float)$dm, 3) : null,
     ];
+}
+
+/** The mileage rate for a new track with none typed: the agency's (VR), else the organisation's default, else 0. */
+function default_mileage_for(string $mode, string $agency): float {
+    if ($mode === 'none') return 0.0;
+    if ($mode === 'vr' && ($a = agency_mileage_rate($agency)) !== null) return $a;
+    return pricing_settings()['default_mileage'] ?? 0.0;
 }
 
 /** Whether a referrer in this role answers the income and VR case questions. */

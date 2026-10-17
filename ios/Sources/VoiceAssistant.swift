@@ -212,7 +212,7 @@ final class SpeechController: NSObject, ObservableObject {
         }
         if status != .authorized {
             authDenied = true
-            setError("Speech Recognition is off. Turn it on in Settings › CMS › Speech Recognition, then try again.")
+            setError("Speech Recognition is off. Turn it on in Settings › \(appDisplayName) › Speech Recognition, then try again.")
             return false
         }
         let micOK = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
@@ -220,7 +220,7 @@ final class SpeechController: NSObject, ObservableObject {
         }
         if !micOK {
             authDenied = true
-            setError("Microphone access is off. Turn it on in Settings › CMS › Microphone, then try again.")
+            setError("Microphone access is off. Turn it on in Settings › \(appDisplayName) › Microphone, then try again.")
             return false
         }
         authDenied = false
@@ -376,7 +376,7 @@ final class SpeechController: NSObject, ObservableObject {
                     self.finishListening(submit: true)
                 } else {
                     // Listened the full window and heard nothing audible.
-                    self.endedWithNothing("I didn't hear anything. Tap the microphone and speak after the tap. If this keeps happening, check that Microphone is on in Settings › CMS.")
+                    self.endedWithNothing("I didn't hear anything. Tap the microphone and speak after the tap. If this keeps happening, check that Microphone is on in Settings › \(appDisplayName).")
                 }
             }
         }

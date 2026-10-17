@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.6.0' => [
+        'Lists and time limits now also sets how many days ahead session and AT service reminders go out, and the windows the documentation review looks at. Pricing rules has a default mileage rate for new tracks (an agency\'s own rate comes first).',
+        'The iPhone app (4.6.0) can be built by any organisation: its name, app ID and server are one block of build settings, and a build without a server asks for the organisation\'s web address at sign-in. Your own app is unchanged.',
+    ],
     '4.5.0' => [
         'Lists and time limits now also covers client types, case note types, document categories, service types, primary technology, and equipment categories, conditions and maintenance types. You can add your own; the few the system relies on (such as VR and Pre-ETS) always stay.',
         'The iPhone app (4.5.0) offers the same lists as the website, read from your server each time you open it.',

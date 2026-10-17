@@ -17,7 +17,12 @@ struct TodaySnapshot: Codable {
     let sessions: [Entry]
     let savedAt: Date
 
-    static let groupId = "group.org.example.cms"
+    /// group.<the app's ID> (4.6.0: from CMS_BUNDLE_ID), the same from the app and its widget.
+    static let groupId: String = {
+        var id = Bundle.main.bundleIdentifier ?? "cms"
+        if id.hasSuffix(".widget") { id = String(id.dropLast(".widget".count)) }
+        return "group." + id
+    }()
     static let widgetKind = "CaseManagementWidget"
     private static let fileName = "today.json"
 

@@ -175,6 +175,9 @@ struct ClientInfo: Decodable {
 /// The choices the website's Lists and time limits page sets (4.5.0), kept on the phone from
 /// the last form_options answer: names only, no client information. A list the server has
 /// not sent (an older server, or before the first sign-in) uses the app's built-in one.
+/// The app's name as the home screen shows it (4.6.0: CMS_DISPLAY_NAME), for "Settings › <name>".
+let appDisplayName: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "this app"
+
 enum FormOptions {
     static let key = "formOptionLists"
     /// Read once from UserDefaults and kept in memory (lists are read on every render).
@@ -736,7 +739,49 @@ enum APIError: LocalizedError {
 
 @MainActor
 final class API: ObservableObject {
-    nonisolated static let base = URL(string: "https://cms.example.org/api.php")!
+    /// The organisation's server (4.6.0): the address chosen at sign-in, else the one this build
+    /// names (CMS_DEFAULT_SERVER in project.yml). A build with neither asks at sign-in.
+    nonisolated static var base: URL {
+        let stored = UserDefaults.standard.string(forKey: serverKey)
+        // A build that names its server always uses it; the sign-in choice is only for builds without one.
+        if let s = builtInServer ?? stored, let url = apiURL(fromAddress: s) { return url }
+        return URL(string: "https://example.invalid/api.php")!
+    }
+    /// Where the address chosen at sign-in is kept (kept at sign-out, so it is not typed again).
+    nonisolated static let serverKey = "serverAddress"
+    /// The server this build names, or nil.
+    nonisolated static var builtInServer: String? {
+        let s = (Bundle.main.object(forInfoDictionaryKey: "CMSDefaultServer") as? String ?? "").trimmingCharacters(in: .whitespaces)
+        return s.isEmpty || s.contains("$(") ? nil : s
+    }
+    /// "cms.example.org", "example.org/cms" or "https://example.org/cms/login.php" as the API's
+    /// address (https://…/api.php); nil for anything that is not https or has no host.
+    nonisolated static func apiURL(fromAddress raw: String) -> URL? {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // No other scheme, no user name or password part, no backslash: an address like
+        // "good.org@evil.com" would quietly send everything to evil.com.
+        if s.isEmpty || s.contains("@") || s.contains("\\") || s.contains(" ") { return nil }
+        let lower = s.lowercased()
+        if lower.contains("://") && !lower.hasPrefix("https://") { return nil }
+        if lower.hasPrefix("https://") {
+            s = "https://" + s.dropFirst(8)
+        } else if lower.hasPrefix("http:") || lower.hasPrefix("https:") || lower.hasPrefix("http//") || lower.hasPrefix("https//") {
+            return nil   // a mistyped or insecure scheme, never guessed at
+        } else {
+            s = "https://" + s
+        }
+        guard var c = URLComponents(string: s), c.scheme == "https", let host = c.host?.lowercased(), !host.isEmpty, host.contains(".") || host == "localhost" else { return nil }
+        c.host = host
+        var path = c.path
+        if path.lowercased().hasSuffix("/api.php") { path = String(path.dropLast(8)) + "/api.php" }
+        if !path.hasSuffix("/api.php") {
+            if path.hasSuffix(".php") { path = (path as NSString).deletingLastPathComponent }
+            if !path.hasSuffix("/") { path += "/" }
+            path += "api.php"
+        }
+        c.path = path; c.query = nil; c.fragment = nil; c.user = nil; c.password = nil
+        return c.url
+    }
     /// Where refreshMe keeps the server's time zone for APIDate.
     nonisolated static let serverTimeZoneKey = "serverTimeZone"
     /// Set at the first launch of an install: its absence means the app was just installed.
@@ -1436,6 +1481,19 @@ final class API: ObservableObject {
         sessionNotice = "This phone was reported lost, so the app removed everything it kept here and signed out. Sign in again only if this phone is back with you."
     }
 
+    /// Point the app at another organisation's server (4.6.0, builds that ask at sign-in). When
+    /// it changes, everything kept for the old one goes first: the session (ended at the old
+    /// server), drafts, the copies kept for reading offline and writes waiting to upload.
+    func switchServer(to address: String) {
+        guard let next = API.apiURL(fromAddress: address) else { return }
+        if next != API.base {
+            signOut()
+            try? FileManager.default.removeItem(at: queueURL)
+            pendingSync = 0
+        }
+        UserDefaults.standard.set(address.trimmingCharacters(in: .whitespacesAndNewlines), forKey: API.serverKey)
+    }
+
     func signOut() {
         let old = token
         // Chosen and confirmed: unsaved note and hours drafts go with the account, as do the
@@ -1450,8 +1508,11 @@ final class API: ObservableObject {
 
     /// Asks the server to end a session (best effort: the reply is not waited for or reported).
     private static func revoke(_ sessionToken: String) {
+        // The address is taken now: a server change right after signing out must never send
+        // this token to the new server.
+        let logoutURL = URL(string: API.base.absoluteString + "?action=logout")!
         Task {
-            var request = URLRequest(url: URL(string: API.base.absoluteString + "?action=logout")!)
+            var request = URLRequest(url: logoutURL)
             API.identifyApp(&request)
             request.httpMethod = "POST"
             request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")

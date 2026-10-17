@@ -486,7 +486,7 @@ case 'save_track': {
     if ($start && $exp && $exp < $start) $errors['expiration_date'] = 'Expiration date must be after the start date.';
     // Left out on an edit = keep the track's mileage rate (never re-price to $0 by omission).
     $mileageRaw = trim((string)(($track && !array_key_exists('mileage_rate', $input)) ? ($track['mileage_rate'] ?? '') : ($input['mileage_rate'] ?? '')));
-    $mileageRate = $mileageRaw === '' ? ($isVr && !$track ? (agency_mileage_rate($agency) ?? 0.0) : 0.0) : (float)$mileageRaw;
+    $mileageRate = $mileageRaw === '' ? (!$track ? default_mileage_for($billingMode, $agency) : 0.0) : (float)$mileageRaw;
     if ($mileageRaw !== '' && (!is_numeric($mileageRaw) || $mileageRate < 0 || $mileageRate > 999.999)) {
         $errors['mileage_rate'] = 'Enter the mileage rate in dollars per mile, from 0 to 999.999 (0 when travel is not billable).';
     }

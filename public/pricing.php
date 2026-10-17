@@ -14,6 +14,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_pricing'])) {
     if (!is_numeric($rate) || (float)$rate <= 0 || (float)$rate > 999.99) $errs['personal_rate'] = 'Enter the personal hourly rate as an amount more than $0, such as 17.50.';
     $limit = str_replace(['$', ','], '', $in('free_below'));
     if (!is_numeric($limit) || (float)$limit <= 0 || (float)$limit > 1000000) $errs['free_below'] = 'Enter the monthly income below which training is free, such as 2000.';
+    $mileage = str_replace(['$', ','], '', $in('default_mileage'));
+    if ($mileage !== '' && (!is_numeric($mileage) || (float)$mileage < 0 || (float)$mileage > 999.999)) $errs['default_mileage'] = 'Enter the default mileage rate in dollars a mile, such as 0.655, or leave it blank.';
     $age = $in('youth_age');
     if (!ctype_digit($age) || (int)$age > 30) $errs['youth_age'] = 'Enter an age from 0 to 30, such as 18. 0 means a parent\'s income is never used.';
     $conflict = $in('vr_conflict');
@@ -29,6 +31,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_pricing'])) {
         'pricing_youth_age' => (string)(int)$age,
         'pricing_vr_conflict' => $conflict,
         'pricing_ask' => $ask,
+        'pricing_default_mileage' => $mileage === '' ? '' : number_format((float)$mileage, 3, '.', ''),
     ];
     foreach ($vals as $k => $v) set_setting($k, $v);
     audit($user['id'], 'settings.pricing', 'settings', null, implode(', ', array_map(fn($k, $v) => $k . '=' . $v, array_keys($vals), $vals)));
@@ -47,13 +50,15 @@ page_header('Pricing rules', $user, 'admin', [['admin.php', 'Administration']]);
 <p>Who pays for training, and how much. Each VR agency's own rate is listed below; a rate on an authorization is used for that track. Changes apply to new referrals and tracks, not to invoices already made.</p>
 <form method="post" action="pricing.php" class="stacked" novalidate><?= csrf_field() ?>
   <input type="hidden" name="save_pricing" value="1">
-  <?= form_error_summary(['personal_rate' => 'Personal hourly rate', 'free_below' => 'Free below this monthly income', 'youth_age' => 'Youth age',
-      'vr_conflict' => 'Open VR case and other pricing', 'ask' => 'Who is asked'], ['personal_rate' => 'personal_rate', 'free_below' => 'free_below',
+  <?= form_error_summary(['personal_rate' => 'Personal hourly rate', 'default_mileage' => 'Default mileage rate', 'free_below' => 'Free below this monthly income', 'youth_age' => 'Youth age',
+      'vr_conflict' => 'Open VR case and other pricing', 'ask' => 'Who is asked'], ['personal_rate' => 'personal_rate', 'default_mileage' => 'default_mileage', 'free_below' => 'free_below',
       'youth_age' => 'youth_age', 'vr_conflict' => 'vr_conflict', 'ask' => 'ask']) ?>
   <section class="card" aria-labelledby="personal-h">
     <h2 id="personal-h">Personal cases</h2>
     <div class="field"><label for="personal_rate">Personal hourly rate (dollars)</label>
       <input type="text" inputmode="decimal" id="personal_rate" name="personal_rate" maxlength="7" value="<?= h($val('personal_rate', number_format($p['personal_rate'], 2, '.', ''))) ?>" <?= field_aria('personal_rate') ?>><?= field_error('personal_rate') ?></div>
+    <div class="field"><label for="default_mileage">Default mileage rate for new tracks, dollars a mile (blank for none; an agency's own rate comes first)</label>
+      <input type="text" inputmode="decimal" id="default_mileage" name="default_mileage" maxlength="8" value="<?= h($val('default_mileage', $p['default_mileage'] !== null ? number_format($p['default_mileage'], 3, '.', '') : '')) ?>" <?= field_aria('default_mileage') ?>><?= field_error('default_mileage') ?></div>
   </section>
   <section class="card" aria-labelledby="sliding-h">
     <h2 id="sliding-h">Sliding fee</h2>

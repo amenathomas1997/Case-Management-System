@@ -4,7 +4,7 @@
 <dict>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.org.example.cms</string>
+		<string>group.$(CMS_BUNDLE_ID)</string>
 	</array>
 </dict>
 </plist>

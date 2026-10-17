@@ -57,7 +57,7 @@ $sessions = db()->query("SELECT s.*, c.name AS client_name, c.email AS client_em
     LEFT JOIN `groups` g ON g.id = u.group_id
     LEFT JOIN users a ON a.id = c.assigned_to AND a.is_active = 1
     WHERE s.status = 'Scheduled' AND s.reminder_sent = 0
-      AND s.start_at > NOW() AND s.start_at < DATE_ADD(CURDATE(), INTERVAL 2 DAY)")->fetchAll();
+      AND s.start_at > NOW() AND s.start_at < DATE_ADD(CURDATE(), INTERVAL " . (cms_number('session_reminder_days') + 1) . " DAY)")->fetchAll();
 
 $sent = 0; $failed = []; $unconfirmed = [];
 $mark = db()->prepare('UPDATE scheduled_sessions SET reminder_sent = 1 WHERE id = ?');
@@ -74,8 +74,12 @@ if (!filter_var($contact, FILTER_VALIDATE_EMAIL)) $contact = '';
 $rescheduleOld = 'If you need to reschedule, please reply to this email or call your instructor.';
 foreach ($sessions as $s) {
     $startTs = strtotime($s['start_at']);
-    // Most sessions are tomorrow's; one booked or moved after the last run can be today's.
-    $day = date('Y-m-d', $startTs) === date('Y-m-d') ? 'today' : 'tomorrow';
+    // Most sessions are tomorrow's; one booked or moved after the last run can be today's. With
+    // reminders set further ahead (Lists and time limits, 4.6.0) the day and date are named.
+    $officeDays = (int)round((strtotime(date('Y-m-d', $startTs) . ' 12:00') - strtotime(date('Y-m-d') . ' 12:00')) / 86400);
+    $day = $officeDays <= 0 ? 'today' : ($officeDays === 1 ? 'tomorrow' : 'on ' . date('l, F j', $startTs));
+    // The same day as a noun ("Tomorrow's session", "Friday, October 23's session").
+    $dayNoun = $officeDays <= 0 ? 'today' : ($officeDays === 1 ? 'tomorrow' : date('l, F j', $startTs));
     // With the time zone (e.g. "2:00 PM CDT"): a remote client may be elsewhere.
     $when = date('l, F j \a\t g:i A T', $startTs);
     // The client's own clock (4.1.0): a client in another time zone reads their time, and
@@ -84,7 +88,7 @@ foreach ($sessions as $s) {
     // Counted in days on the client's calendar: far ahead of the office (Guam), "tomorrow"
     // here can be two days away there, so the weekday is said instead.
     $clientDays = (int)zone_format($cz, fn() => (int)round((strtotime(date('Y-m-d', $startTs) . ' 12:00') - strtotime(date('Y-m-d') . ' 12:00')) / 86400));
-    $clientDay = $clientDays <= 0 ? 'today' : ($clientDays === 1 ? 'tomorrow' : 'on ' . zone_date($cz, 'l', $startTs));
+    $clientDay = $clientDays <= 0 ? 'today' : ($clientDays === 1 ? 'tomorrow' : 'on ' . zone_date($cz, 'l, F j', $startTs));
     // A remote session says so and carries its join link (http(s) links only).
     $url = trim((string)($s['meeting_url'] ?? ''));
     $joinLink = !empty($s['is_remote']) && preg_match('~^https?://\S+$~i', $url) ? $url : '';
@@ -163,14 +167,14 @@ foreach ($sessions as $s) {
             . "Cancel it on the Schedule page and book it again with the right instructor if it should go ahead: " . cfg('base_url') . "/schedule.php\n";
         $allSent = ($s['assignee_email']
             ? send_app_mail($s['assignee_email'], $staffSubject, $staffBody . "\n" . $stranded)
-            : notify_admins(ucfirst($day) . "'s session is booked with staff who no longer have this client",
+            : notify_admins(ucfirst($dayNoun) . "'s session is booked with staff who no longer have this client",
                 $staffBody . "\n" . $stranded)) && $allSent;
     } elseif ($s['user_id'] && !$s['active_staff_id']) {
         // The session still belongs to a deactivated (or removed) account, so no
         // staff member would hear about it: the administrators are asked to move it.
         // Any one administrator can act on it, so one successful email is enough.
         $anyAddress = true;
-        $allSent = notify_admins(ucfirst($day) . "'s session belongs to a deactivated account — reassign it",
+        $allSent = notify_admins(ucfirst($dayNoun) . "'s session belongs to a deactivated account — reassign it",
             "A session {$day} is still assigned to a staff account that is no longer active, so no staff member was reminded about it.\n\n"
             . "Client: {$s['client_name']}\nWhen: {$when}{$where}\n\n"
             . "Transfer that account's caseload on its Users page (this moves its upcoming sessions too): " . cfg('base_url') . '/users.php?id=' . (int)$s['user_id'] . "\n"

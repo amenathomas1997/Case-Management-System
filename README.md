@@ -15,6 +15,17 @@ Pricing, funding agencies, branding, email wording, the referral form and other 
 - Install: copy `public/` to the web root and open `install.php` (see `dist/`).
 - Upgrade: copy the new files, then open Administration, Database upgrade.
 
+## The iPhone app
+
+The app in `ios/` is built with Xcode and XcodeGen. Before building it for your organisation, change the block of `CMS_` settings at the top of `ios/project.yml`:
+
+- your app ID and Apple developer team
+- the name under the icon and how VoiceOver says it
+- the sign-in line
+- your server's address
+
+Leave the server empty to have the app ask for it at sign-in. Replace the app icon (ios/Sources/Assets.xcassets/AppIcon.appiconset) and, if you like, the brand colours (the FC colour sets there, which keep 7:1 contrast). Then run `xcodegen generate --spec ios/project.yml --project ios` and archive in Xcode.
+
 ## Licence
 
 Copyright (C) 2026 Example Agency
