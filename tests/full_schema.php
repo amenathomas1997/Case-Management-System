@@ -897,6 +897,7 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=0');
     foreach ($db->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN) as $table) $db->exec('DROP TABLE `' . str_replace('`','``',$table) . '`');
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
-    foreach (glob($tmp . '/*') ?: [] as $file) unlink($file);
-    rmdir($tmp);
+    // Folders too (an uploaded icon is kept in brand/, 4.3.0).
+    $wipe = function (string $dir) use (&$wipe): void { foreach (glob($dir . '/{,.}[!.,!..]*', GLOB_BRACE) ?: [] as $f) is_dir($f) ? $wipe($f) : unlink($f); rmdir($dir); };
+    $wipe($tmp);
 }

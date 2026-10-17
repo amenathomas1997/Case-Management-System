@@ -65,6 +65,6 @@ if (function_exists('imagecreatetruecolor')) {
     [[$code,,$err],$sess]=$pageSession(fn()=>$renderPage('settings',[],['save_icon'=>'1']));
     putenv('CMS_TEST_FILES');
     check(str_contains($sess,'at least 512'),'A picture that is too small is refused, saying why');
-    $renderPage('settings',[],['save_icon'=>'1','remove_icon'=>'1']);
-    check(!brand_icon_uploaded(),'The built-in icons can be put back');
+    [$code,,$err]=$renderPage('settings',[],['save_icon'=>'1','remove_icon'=>'1']);
+    check(!brand_icon_uploaded(),'The built-in icons can be put back' . ($err ? ": $err" : ''));
 }

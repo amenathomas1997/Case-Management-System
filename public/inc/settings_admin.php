@@ -188,6 +188,7 @@ function brand_icon_path(int $size): ?string {
 
 /** Whether an administrator's own icon is in use. */
 function brand_icon_uploaded(): bool {
+    clearstatcache();   // the icon may have been added or removed by another request
     $p = brand_icon_path(512);
     return $p !== null && is_file($p);
 }
