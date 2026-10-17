@@ -32,3 +32,6 @@ Verified before commit:
 - full_schema 1615, audit_regression, security, staging_scrub, and run_all.
 - The migration rehearsal matched.
 - Not checked in a browser or with a screen reader.
+
+## Deployed 2026-10-16 21:57 CT
+From 4.8.0 with .audit_work/deploy-4.9.0 (9 files), at c1eae45. mig_4.9.0.sql ran (1 statement). Production files matched 4.8.0 before install and match 4.9.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.9.0. The deploy script was started again by mistake afterwards; its checksum check stopped it before any backup or change (one backup folder, live still 4.9.0). Backups: /home/cmsuser/casemanagement_private/deploy-4.9.0-20261016-215723.
