@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,28 +7,50 @@ plugins {
 }
 
 fun cms(key: String): String = (project.findProperty("cms.$key") as String?) ?: ""
+
+// The Play Store upload key: android/keystore.properties (never committed; see PLAY_STORE.md)
+// names the key file and its passwords. Without it a release build is made unsigned.
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
 fun quoted(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+// An Android string resource treats ' and " specially: "St. Mary's" must be written St. Mary\'s.
+fun resString(s: String): String = s.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"")
 
 android {
     namespace = "org.casemanagement.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = cms("appId")
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = cms("versionCode").toInt()
         versionName = cms("versionName")
         buildConfigField("String", "DEFAULT_SERVER", quoted(cms("defaultServer")))
         buildConfigField("String", "SPOKEN_NAME", quoted(cms("spokenName")))
         buildConfigField("String", "SIGNIN_TITLE", quoted(cms("signinTitle")))
-        resValue("string", "app_name", cms("displayName"))
+        resValue("string", "app_name", resString(cms("displayName")))
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (keystoreProps.getProperty("storeFile") != null) {
+            create("upload") {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
+            signingConfigs.findByName("upload")?.let { signingConfig = it }
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

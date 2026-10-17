@@ -49,6 +49,7 @@
 		BCAA369F92E8752DFB1F08DC /* AccommodationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F5ABE5F52628FE66F1801C8 /* AccommodationsView.swift */; };
 		C48601D515EEAF3BACF2F91B /* CounselorsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EEBE1B9872AD80C86E8151F /* CounselorsView.swift */; };
 		CC7E66C5E75D7C7055EC784C /* ClientsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1B9EFFA38A78038BB77E74 /* ClientsView.swift */; };
+		CC88602301EEA7E9403F6415 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 8ED86822D421A07ABA82BA4B /* PrivacyInfo.xcprivacy */; };
 		CEA8280E38F746FFE6B7ABDB /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 6EF0D2B71508A87B548B7827 /* PrivacyInfo.xcprivacy */; };
 		D3CEDEA457FC70EA92B87354 /* LogHoursView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0483D06FBD5ECD101421CF97 /* LogHoursView.swift */; };
 		E3F6F890D066042E9FA926D6 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A5A97A9D97F74DB9471D58D /* AccountView.swift */; };
@@ -126,6 +127,7 @@
 		86B6703BE951CD983631880B /* CaseManagement.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CaseManagement.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		86FB60BE1EE5F7391D7BDD8E /* ReferralsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferralsView.swift; sourceTree = "<group>"; };
 		8C0AF7C5BF3C0953C8F7DC5A /* ScoredAssessmentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoredAssessmentsView.swift; sourceTree = "<group>"; };
+		8ED86822D421A07ABA82BA4B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		99277E65950AB5FBC9C9CF40 /* API.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = API.swift; sourceTree = "<group>"; };
 		AA1B9EFFA38A78038BB77E74 /* ClientsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientsView.swift; sourceTree = "<group>"; };
 		AFF872EC8C10701EBC03261F /* CompetencyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompetencyView.swift; sourceTree = "<group>"; };
@@ -217,6 +219,7 @@
 				F8B35BF6B4715F47E4C16CA0 /* CaseManagementWidget.entitlements */,
 				F03D0DE35120F004662335AA /* CaseManagementWidget.swift */,
 				6BDEE21DF4CB11527B840DA5 /* Info.plist */,
+				8ED86822D421A07ABA82BA4B /* PrivacyInfo.xcprivacy */,
 			);
 			path = Widget;
 			sourceTree = "<group>";
@@ -238,6 +241,7 @@
 			buildConfigurationList = C7E782ED9D43B82A82A9926A /* Build configuration list for PBXNativeTarget "CaseManagementWidget" */;
 			buildPhases = (
 				C29CC1CBB13082F0D1FB706E /* Sources */,
+				63B6A27222EDA0FE2E146D24 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -310,6 +314,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		63B6A27222EDA0FE2E146D24 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CC88602301EEA7E9403F6415 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		75EA88055A4DDB1EB6B3DD83 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;

@@ -317,7 +317,7 @@ try {
         'verify'=>'redirect','ai'=>'AI assistant','intake'=>'Guided intake','recommend'=>'AT recommendations','amendment_request'=>'Amendment request',
         'progress_review'=>'Progress review','translate'=>'Translate','remediate'=>'Remediation','ask'=>'Ask your caseload','kb_ask'=>'Ask the knowledge base',
         'curriculum_ai'=>'Curriculum generator','workflows'=>'Daily action center','privacy'=>'Privacy notice',
-        'release'=>'Release of information','vendors'=>'Vendor agreements','privacy_incidents'=>'Privacy incidents','survey_responses'=>'Survey responses','authorizations'=>'Incoming authorizations','business_summary'=>'Business summary','attendance'=>'Attendance and no-shows','unused_authorizations'=>'Unused authorizations','data_quality'=>'Data quality','exports'=>'Spreadsheet downloads','client_timeline'=>'Timeline','letters'=>'Letters','settings'=>'Settings','upgrade'=>'Database upgrade','client_import'=>'Import clients and authorizations','funding_agencies'=>'Funding agencies','pricing'=>'Pricing rules','wording'=>'Public wording','lists'=>'Lists and time limits','custom_reports'=>'Custom reports','agreements'=>'My agreements','staff_agreements'=>'Staff agreements','training'=>'My training','staff_training'=>'Staff training','credentials'=>'My credentials','staff_report'=>'Staff compliance report','sms'=>'Text messages'];
+        'release'=>'Release of information','vendors'=>'Vendor agreements','privacy_incidents'=>'Privacy incidents','survey_responses'=>'Survey responses','authorizations'=>'Incoming authorizations','business_summary'=>'Business summary','attendance'=>'Attendance and no-shows','unused_authorizations'=>'Unused authorizations','data_quality'=>'Data quality','exports'=>'Spreadsheet downloads','client_timeline'=>'Timeline','letters'=>'Letters','settings'=>'Settings','upgrade'=>'Database upgrade','client_import'=>'Import clients and authorizations','funding_agencies'=>'Funding agencies','pricing'=>'Pricing rules','wording'=>'Public wording','lists'=>'Lists and time limits','custom_reports'=>'Custom reports','agreements'=>'My agreements','staff_agreements'=>'Staff agreements','training'=>'My training','staff_training'=>'Staff training','credentials'=>'My credentials','staff_report'=>'Staff compliance report','sms'=>'Text messages','phone_apps'=>'Phone apps'];
     $showsOwnContent=function(string $page,string $html)use($pageMarkers):bool{
         $marker=$pageMarkers[$page]??null;
         if($marker===null)return false;
@@ -838,6 +838,7 @@ try {
     require __DIR__.'/v415_cases.php';
     require __DIR__.'/v416_cases.php';
     require __DIR__.'/v417_cases.php';
+    require __DIR__.'/v418_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 

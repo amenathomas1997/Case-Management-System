@@ -144,3 +144,8 @@ jobs:
       - name: Build, unit tests and lint (debug)
         working-directory: android
         run: ./gradlew --console=plain --no-daemon :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+
+      # The Play Store bundle, shrunk as it ships (unsigned here: the upload key never leaves the owner's Mac).
+      - name: Release bundle (R8 shrinking)
+        working-directory: android
+        run: ./gradlew --console=plain --no-daemon :app:bundleRelease

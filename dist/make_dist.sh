@@ -56,6 +56,10 @@ without the others) and MariaDB 10.4 or newer. MySQL is not supported: the
 schema and the upgrade scripts use MariaDB syntax, and the installer refuses any
 other server.
 
+Updating: from 4.18.0 on, set Settings, Updates to github and use Administration,
+Software update: it installs each new signed release with one button. Installations
+older than 4.18.0 update once by hand, as below.
+
 Existing deployments, in this order:
   1. Back up the database and the docroot.
   2. Apply the migrations/ SQL files newer than your installed version, in version

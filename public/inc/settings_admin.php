@@ -32,7 +32,7 @@ const CONFIG_OVERRIDES = [
     'brand.privacy_law_es' => ['The same laws, in Spanish (for the Spanish notice)', 'text', 'legal'],
     'brand.privacy_hosting' => ['Who hosts the server', 'text', 'legal'],
     'brand.hipaa' => ['Show the HIPAA rights section (the laws above are shown either way)', 'yesno', 'legal'],
-    'app.update_url' => ['Where to check for new versions (an https address, or off)', 'url', 'updates'],
+    'app.update_url' => ['Where to check for new versions (github for one-button updates from the publisher\'s GitHub releases, an https address, or off)', 'url', 'updates'],
     // Online meetings (4.10.0): the apps registered with Zoom and Microsoft, which each staff
     // member then connects to their own account on My Account.
     // Text messages (4.17.0): the Twilio account that sends them.
@@ -90,13 +90,13 @@ function config_override_save(string $k, string $value, int $actor): ?string {
             'timezone' => !in_array($value, CONFIG_TIMEZONES, true),
             'color' => !preg_match('/^#[0-9a-fA-F]{6}$/', $value),
             'yesno' => !in_array($value, ['yes', 'no'], true),
-            'url' => $value !== 'off' && (!filter_var($value, FILTER_VALIDATE_URL) || !str_starts_with(strtolower($value), 'https://') || strlen($value) > 190),
+            'url' => $value !== 'off' && !($k === 'app.update_url' && $value === 'github') && (!filter_var($value, FILTER_VALIDATE_URL) || !str_starts_with(strtolower($value), 'https://') || strlen($value) > 190),
             default => mb_strlen($value) > 190,
         };
         if ($bad) return $label . ': ' . match ($kind) {
             'email' => 'enter one email address.', 'minutes' => 'enter a whole number from 5 to 480.', 'otp' => 'enter a whole number from 3 to 30.',
             'timezone' => 'choose a time zone from the list.', 'color' => 'enter a colour as # and six hex digits, such as #1e3a8a.',
-            'yesno' => 'choose yes or no.', 'url' => 'enter an address starting with https://, or the word off.', default => 'keep it to 190 characters.',
+            'yesno' => 'choose yes or no.', 'url' => $k === 'app.update_url' ? 'enter github, an address starting with https://, or the word off.' : 'enter an address starting with https://, or the word off.', default => 'keep it to 190 characters.',
         };
         if ($kind === 'color' && brand_contrast_ratio($value) < 4.5) return $label . ': that colour is too light to read on white (it needs a contrast of at least 4.5 to 1).';
     }
@@ -177,6 +177,16 @@ function update_check(): array {
     // Off unless set (Settings, Updates, or config.php; the installer fills in the publisher's list).
     $url = ($GLOBALS['CONFIG']['app']['update_url'] ?? null) ?: 'off';
     if ($url === 'off') return ['ok' => false, 'latest' => null]; // a test or offline copy
+    // The publisher's signed GitHub releases (4.18.0): one-button updates on Software update.
+    if ($url === 'github') {
+        require_once __DIR__ . '/updater.php';
+        $rel = updater_latest();
+        if ($rel === null) return ['ok' => false, 'latest' => null];
+        set_setting('update_latest', $rel['version']);
+        set_setting('update_notes', mb_substr($rel['notes'], 0, 500));
+        set_setting('update_checked', date('Y-m-d H:i'));
+        return ['ok' => true, 'latest' => $rel['version']];
+    }
     $ch = curl_init($url);
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15]);
     $resp = curl_exec($ch);

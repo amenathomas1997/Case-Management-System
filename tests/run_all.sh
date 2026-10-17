@@ -23,6 +23,8 @@ run php tests/ai_eval/run.php
 run python3 tests/cron_regression.py
 run python3 tests/installer_gate.py
 if [ -n "${CMS_TEST_DSN:-}" ]; then CMS_TEST_DSN="$(printf %s "$CMS_TEST_DSN" | sed -E "s/dbname=[^;]+/dbname=cms_installer_e2e/")" run bash tests/installer_e2e.sh; else echo "== SKIPPED tests/installer_e2e.sh (set CMS_TEST_DSN to run the installer end to end)"; fi
+# The whole way back from an off-site backup, on synthetic data (its own two databases).
+if [ -n "${CMS_TEST_DSN:-}" ]; then run php tests/restore_drill.php; else echo "== SKIPPED tests/restore_drill.php (set CMS_TEST_DSN to run the restore drill)"; fi
 if command -v swiftc >/dev/null 2>&1; then
   run python3 tests/ios_api_regression.py
 else

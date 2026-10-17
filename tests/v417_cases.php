@@ -5,7 +5,7 @@
 // hour the suite runs: $expect says which (sent now, or held for the morning).
 putenv('CMS_TEST_SMS=ok');
 $sent=fn(int $c,string $purpose):array=>$db->query("SELECT * FROM sms_log WHERE client_id=$c AND purpose=".$db->quote($purpose)." ORDER BY id")->fetchAll();
-$expect=fn(int $c):string=>sms_send_after(client_zone(sms_client($c)))===null?'sent':'held';
+$expect=fn(int $c):string=>sms_send_after_zones(sms_client_zones(sms_client($c)))===null?'sent':'held';
 
 check(!sms_enabled() && sms_to_client(1,'x','message')['status']==='blocked','Nothing is texted until texting is set up');
 $db->exec("INSERT INTO settings(name,value) VALUES ('cfg.sms.account_sid','AC-synthetic'),('cfg.sms.auth_token','synthetic-token'),('cfg.sms.from','+15155550100') ON DUPLICATE KEY UPDATE value=VALUES(value)");
@@ -20,6 +20,15 @@ foreach (array_keys(US_TIME_ZONES) as $tz) {
     if ($h>=8 && $h<20) check($after===null,"A text to $tz goes now, at $h o'clock there");
     else check($after!==null && (int)(new DateTimeImmutable($after))->setTimezone(new DateTimeZone($tz))->format('G')===8 && strtotime($after)>time(),"A text to $tz at $h o'clock there waits for 8 a.m. their time");
 }
+
+// A client with no state or time zone on record (4.17.1): texted only while it is daytime in every US zone.
+$allDay=function(int $ts):bool{ foreach (SMS_UNKNOWN_ZONES as $z) { $h=(int)(new DateTimeImmutable('@'.$ts))->setTimezone(new DateTimeZone($z))->format('G'); if ($h<8||$h>=20) return false; } return true; };
+check(count(sms_client_zones(['state'=>null,'time_zone'=>null]))===8 && sms_client_zones(['state'=>'HI','time_zone'=>null])===['Pacific/Honolulu'] && sms_client_zones(['state'=>'HI','time_zone'=>'America/New_York'])===['America/New_York'],'With no state or zone, a client may be anywhere in the US; a state or picked zone narrows it to one');
+$ua=sms_send_after_zones(SMS_UNKNOWN_ZONES);
+check($ua===null ? $allDay(time()) : (!$allDay(time()) && $allDay(strtotime($ua)) && !$allDay(strtotime($ua)-3600) && strtotime($ua)>time()),'A text to a client of unknown zone waits for the first hour that is daytime from Puerto Rico to Hawaii');
+check((bool)preg_match('/^\d{1,2}(:\d\d)? [ap]\.m\. to \d{1,2}(:\d\d)? [ap]\.m\. office time$/',sms_unknown_window()),'Staff are told those hours in office time ('.sms_unknown_window().')');
+foreach (['13:00','18:59'] as $t) { $ts=strtotime('2026-07-15 '.$t); check($allDay($ts),"In summer, $t Central is daytime everywhere"); }
+foreach (['12:59','19:00','07:00'] as $t) { $ts=strtotime('2026-07-15 '.$t); check(!$allDay($ts),"In summer, $t Central is not"); }
 
 // Agreement: recorded through the app, refused without it.
 $db->exec("INSERT INTO clients(name,assigned_to,status,phone) VALUES('Texty Synthetic Client',1,'Active Training','515-555-0142')"); $tc=(int)$db->lastInsertId();
@@ -201,7 +210,10 @@ check(count($hw)===1 && str_contains($hw[0]['body'],'2 new homework assignments'
 [$code,$html,$err]=$renderPage('sms',[]);
 check(str_contains($html,'https://example.invalid/sms_inbound.php') && str_contains($html,'Texty Synthetic Client') && str_contains($html,'Waiting for 8 a.m.') === ($db->query("SELECT COUNT(*) FROM sms_log WHERE status='held'")->fetchColumn()>0),'The Text messages page gives the webhook address and the log' . ($err ? ": $err" : ''));
 [$code,$html,$err]=$renderPage('client',['id'=>(string)$tc]);
-check(str_contains($html,'Agreed to texts on'),'The client\'s record says whether they agreed to texts' . ($err ? ": $err" : ''));
+check(str_contains($html,'Agreed to texts on') && str_contains($html,'Their state is not on their record'),'The client\'s record says whether they agreed to texts, and that a missing state narrows the hours' . ($err ? ": $err" : ''));
+$db->exec("UPDATE clients SET state='IA' WHERE id=$tc");
+check(!str_contains(sms_client_words(sms_client($tc)),'state is not'),'With a state on record, the note goes away');
+$db->exec("UPDATE clients SET state=NULL WHERE id=$tc");
 
 // The referral form's "OK to text" carries into the client record on conversion.
 $db->exec("INSERT INTO referrals(reason,subject,body,counselor_name,counselor_agency,counselor_email,counselor_phone,client_name,client_phone,referral_source,sms_ok,status) VALUES('Self','Self referral','Synthetic','','','','','Referral Text Synthetic','515-555-0166','self',1,'New')"); $rf=(int)$db->lastInsertId();

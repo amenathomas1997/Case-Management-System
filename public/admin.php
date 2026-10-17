@@ -462,6 +462,9 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
   <form method="post" action="admin.php" class="inline-form"><?= csrf_field() ?>
     <button type="submit" name="check_updates" value="1" class="btn btn-secondary btn-sm">Check for updates</button>
   </form>
+  <?php if ((($GLOBALS['CONFIG']['app']['update_url'] ?? null) ?: 'off') === 'github'): // 4.18.0 ?>
+  <p><a class="btn <?= $updNewer ? 'btn-primary' : 'btn-secondary' ?>" href="update.php"><?= $updNewer ? 'Install the update' : 'Software update' ?></a></p>
+  <?php endif; ?>
 </section>
 
 <section class="card" aria-labelledby="forms-h">
@@ -528,6 +531,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
     <a class="btn btn-secondary" href="credentials.php?all=1">Staff credentials</a>
     <a class="btn btn-secondary" href="staff_report.php">Staff compliance report</a>
     <a class="btn btn-secondary" href="sms.php">Text messages</a>
+    <a class="btn btn-secondary" href="phone_apps.php">Phone apps</a>
     <a class="btn btn-secondary" href="funding_agencies.php">Funding agencies</a>
     <a class="btn btn-secondary" href="pricing.php">Pricing rules</a>
     <a class="btn btn-secondary" href="lists.php">Lists and time limits</a>

@@ -40,15 +40,59 @@ function sms_number(?string $raw): ?string {
     return null;
 }
 
+/**
+ * A client whose state and time zone are both unknown could be anywhere in the US, so they are
+ * texted only while it is 8 a.m. to 8 p.m. in all of these at once: between 8 a.m. in Hawaii and
+ * 8 p.m. in Puerto Rico (1 to 7 p.m. Central in summer). Guam and Samoa share no such hours with the rest.
+ */
+const SMS_UNKNOWN_ZONES = ['America/Puerto_Rico', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Phoenix',
+    'America/Los_Angeles', 'America/Anchorage', 'Pacific/Honolulu'];
+
 /** When a text to someone in [$tz] may go: now, or 8 a.m. their time. Returns a server-time datetime string, or null for now. */
 function sms_send_after(?string $tz): ?string {
-    $zone = new DateTimeZone($tz && in_array($tz, timezone_identifiers_list(), true) ? $tz : date_default_timezone_get());
-    $now = new DateTimeImmutable('now', $zone);
-    $h = (int)$now->format('G');
-    if ($h >= SMS_DAY_START && $h < SMS_DAY_END) return null;
-    $at = $now->setTime(SMS_DAY_START, 0);
-    if ($h >= SMS_DAY_END) $at = $at->modify('+1 day');
-    return $at->setTimezone(new DateTimeZone(date_default_timezone_get()))->format('Y-m-d H:i:s');
+    return sms_send_after_zones([$tz && in_array($tz, timezone_identifiers_list(), true) ? $tz : date_default_timezone_get()]);
+}
+
+/** The same for someone who may be in any of [$zones]: the first moment it is daytime in all of them. */
+function sms_send_after_zones(array $zones): ?string {
+    $daytime = function (int $ts) use ($zones): bool {
+        foreach ($zones as $z) {
+            $h = (int)(new DateTimeImmutable('@' . $ts))->setTimezone(new DateTimeZone($z))->format('G');
+            if ($h < SMS_DAY_START || $h >= SMS_DAY_END) return false;
+        }
+        return true;
+    };
+    $now = time();
+    if ($daytime($now)) return null;
+    // Every US zone changes hour on the hour, so the first daytime moment is the start of an hour.
+    for ($ts = intdiv($now, 3600) * 3600 + 3600, $end = $now + 3 * 86400; $ts <= $end; $ts += 3600) {
+        if ($daytime($ts)) return date('Y-m-d H:i:s', $ts);
+    }
+    return date('Y-m-d H:i:s', intdiv($now, 3600) * 3600 + 86400); // never reached for the zones above
+}
+
+/** Today's hours, in office time, when a client with no state on record can be texted: "1 to 7 p.m.". */
+function sms_unknown_window(): string {
+    $hours = [];
+    $midnight = strtotime('today');
+    for ($i = 0; $i < 24; $i++) {
+        $ts = $midnight + $i * 3600;
+        $ok = true;
+        foreach (SMS_UNKNOWN_ZONES as $z) {
+            $h = (int)(new DateTimeImmutable('@' . $ts))->setTimezone(new DateTimeZone($z))->format('G');
+            if ($h < SMS_DAY_START || $h >= SMS_DAY_END) { $ok = false; break; }
+        }
+        if ($ok) $hours[] = $ts;
+    }
+    if (!$hours) return 'no hours';
+    $fmt = fn(int $ts) => str_replace([':00', 'AM', 'PM'], ['', 'a.m.', 'p.m.'], date('g:i A', $ts));
+    return $fmt($hours[0]) . ' to ' . $fmt(end($hours) + 3600) . ' office time';
+}
+
+/** The zones a client may be in: their picked zone or their state's, else anywhere in the US. */
+function sms_client_zones(?array $c): array {
+    $tz = us_zone($c['time_zone'] ?? null) ?? state_default_zone($c['state'] ?? null);
+    return $tz !== null ? [$tz] : SMS_UNKNOWN_ZONES;
 }
 
 /** A client row with what texting needs, or null. */
@@ -105,11 +149,13 @@ function sms_to_client(int $clientId, string $body, string $purpose, ?int $sessi
     if ($why = sms_client_blocked($c)) return ['ok' => false, 'status' => 'blocked', 'message' => $why];
     $phone = (string)sms_number($c['phone']);
     $body = mb_substr(trim($body), 0, 1600);
-    $after = sms_send_after(client_zone($c));
+    $after = sms_send_after_zones(sms_client_zones($c));
     db()->prepare('INSERT INTO sms_log (direction, client_id, session_id, phone, body, purpose, status, send_after, sent_by) VALUES (?,?,?,?,?,?,?,?,?)')
         ->execute(['out', $clientId, $sessionId, $phone, $body, mb_substr($purpose, 0, 20), $after ? 'held' : 'queued', $after, $sentBy]);
     $id = (int)db()->lastInsertId();
-    if ($after) return ['ok' => true, 'status' => 'held', 'message' => 'It is outside 8 a.m. to 8 p.m. where the client is, so the text goes at 8 a.m. their time.'];
+    if ($after) return ['ok' => true, 'status' => 'held', 'message' => count(sms_client_zones($c)) > 1
+        ? 'The client\'s state is not on their record, so texts go only when it is daytime everywhere in the US (' . sms_unknown_window() . '). This one goes ' . (date('Y-m-d', strtotime($after)) === date('Y-m-d') ? 'at ' . date('g:i A', strtotime($after)) : (date('Y-m-d', strtotime($after)) === date('Y-m-d', strtotime('+1 day')) ? 'tomorrow at ' . date('g:i A', strtotime($after)) : 'on ' . date('D, M j \a\t g:i A', strtotime($after)))) . ' office time. Add their state to text them in their own daytime.'
+        : 'It is outside 8 a.m. to 8 p.m. where the client is, so the text goes at 8 a.m. their time.'];
     return sms_dispatch($id);
 }
 
@@ -354,7 +400,8 @@ function sms_signature_ok(string $url, array $fields, string $signature): bool {
 /** A client's texting standing in words, for their record. */
 function sms_client_words(array $c): string {
     if (!empty($c['sms_opted_out_at'])) return 'Replied STOP on ' . fmt_date((string)$c['sms_opted_out_at']) . '; they can reply START to get texts again.';
-    if (!empty($c['sms_consent_at'])) return 'Agreed to texts on ' . fmt_date((string)$c['sms_consent_at']) . ($c['sms_consent_source'] ? ' (' . $c['sms_consent_source'] . ')' : '') . '.';
+    if (!empty($c['sms_consent_at'])) return 'Agreed to texts on ' . fmt_date((string)$c['sms_consent_at']) . ($c['sms_consent_source'] ? ' (' . $c['sms_consent_source'] . ')' : '') . '.'
+        . (array_key_exists('state', $c) && count(sms_client_zones($c)) > 1 ? ' Their state is not on their record, so texts go only from ' . sms_unknown_window() . '; add it to text them in their own daytime.' : '');
     return 'Has not agreed to texts.';
 }
 

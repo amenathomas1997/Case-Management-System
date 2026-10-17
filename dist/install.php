@@ -423,8 +423,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'entra' => ['enabled' => false, 'tenant_id' => '', 'client_id' => '', 'client_secret' => '', 'auto_provision_group' => ''],
             'app' => [
                 'name' => $brandName, 'base_url' => $baseUrl,
-                // The publisher's list of new versions (Settings, Updates; 'off' to stop checking).
-                'update_url' => 'https://cms.example.org/updates.json',
+                // New versions come from the publisher's signed GitHub releases, installed with one
+                // button on Administration, Software update (Settings, Updates; 'off' to stop checking).
+                'update_url' => 'github',
                 'mail_from' => $mailFrom, 'mail_from_name' => $brandName,
                 // Public contact address shown in the page footer for help requests.
                 // When empty, mail_from is shown instead: set this whenever mail_from is

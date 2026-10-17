@@ -6,6 +6,12 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.18.0' => [
+        'One-button updates: set "Where to check for new versions" to github (Settings, Updates), and Administration, Software update downloads the newest release from GitHub, checks the publisher\'s signature, backs up the files it replaces, applies the database changes and installs it, putting everything back if a step fails. New installations are set up this way.',
+        'Phone apps (Administration): download your own Android and iPhone apps\' source, already set to your name, icon, app ID and this server, with the steps to build them and hand them to your staff through Google Play, TestFlight or a direct download.',
+        'Texts to a client whose state is not on their record go only while it is daytime everywhere in the US (about 1 to 7 p.m. Central in summer), and their record says so; add their state to text them in their own daytime.',
+        'The phone apps target Android 16 and are ready for Google Play and TestFlight.',
+    ],
     '4.17.0' => [
         'Text messages through Twilio (Administration, Text messages, has the setup steps): session reminders a client can answer with C to confirm, R to reschedule or X to ask to cancel; texts when a session is booked, moved or cancelled; one text when homework is assigned; and replies that land in the client\'s message thread.',
         'Texts go only to clients who agreed to them at that number (recorded on the client\'s edit page, in the phone apps, or from the referral form\'s "OK to text"), only from 8 a.m. to 8 p.m. in the client\'s time zone, and carry a first name and a time, never case details. STOP and START are honoured at once.',
