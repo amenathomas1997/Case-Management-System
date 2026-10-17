@@ -61,3 +61,21 @@ Web 4.21.0. The apps are unchanged. Apply dist/migrations/mig_4.21.0.sql, or use
 - **Decisions:** demonstration decisions are one per demonstration, not per person.
 - **Credit memos:** a credit memo in QuickBooks is not brought back.
 - **Update timing:** during the one-button update, a page opened in the milliseconds between swapping equipment.php and core.php can fail once. On a small site that is harmless.
+
+## Published (not deployed)
+
+2026-10-17, after CI passed all three jobs on 81cf3d0. The GitHub release v4.21.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 307 files, verified with the key built into the code; new files first, inc/bootstrap.php and inc/core.php last
+
+The live site stays at 4.20.0 until the owner installs this with Administration, Software update.
+
+**Rehearsed before publishing.** The package was installed with the 4.20.0 updater onto a copy of a 4.20.0 site, with its own private folder, cron folder and a database in the 4.20.0 shape:
+- the real signature verified, and the plan showed no problems
+- the backup was made first
+- the database changes ran (12 statements; database version 4.21.0)
+- 25 files were replaced, the scheduled jobs included
+- served afterwards, the sign-in and referral pages answered 200, and the new pages asked for sign-in
+- there were no PHP errors
+
+The live site has passed the same checks the updater makes: its web folder is writable, and its jobs folder is found (4.19.1).
