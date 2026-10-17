@@ -6,6 +6,9 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.7.1' => [
+        'The main menu has a Referral form link under Clients, to make a referral for someone or share the form\'s link. The referral form is also linked from every page\'s footer and the sign-in page, and the tests now make sure it stays there.',
+    ],
     '4.7.0' => [
         'Custom reports (Business analytics): build your own report from clients, training tracks and authorizations, hours and mileage, invoices, scheduled sessions or referrals. Choose the columns and filters (dates, status, staff, funding agency), group it to get counts and totals, download it as a spreadsheet, and save it, for yourself or shared, to run again.',
     ],

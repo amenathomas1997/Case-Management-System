@@ -54,3 +54,7 @@ foreach (['login', 'community_referral', 'privacy', 'help', 'portal', 'forgot'] 
     try { [$code,$out,$err]=$renderPage($publicPage,[]); } finally { putenv('CMS_TEST_ANON'); }
     check($code===0 && str_contains($out,'href="community_referral.php"'),"Signed out, $publicPage links to the referral form" . ($err ? ": $err" : ''));
 }
+
+/* The referral form in the main menu, under Clients (owner, 2026-10-16) */
+[$code,$out,$err]=$renderPage('index',[]);
+check(preg_match('~<h3 class="nav-group-title" id="nav-group-clients">Clients</h3>\s*<ul aria-labelledby="nav-group-clients">.*?<a href="community_referral.php"[^>]*>Referral form</a>.*?</ul>~s',$out)===1,'The main menu has a Referral form link under Clients' . ($err ? ": $err" : ''));

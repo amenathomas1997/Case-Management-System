@@ -13,6 +13,8 @@ function cms_navigation_items(): array {
         ['workflows.php', 'Daily work & review', 'workflows', null, 'today', 'What needs attention today, documentation review, AI briefings and the referral waitlist.', '3'],
         ['clients.php', 'Client records', 'clients', 'clients', 'clients', 'Find a person and open their notes, assessments, training tracks and documents.', '4'],
         ['referrals.php', 'Incoming referrals', 'referrals', 'referrals', 'clients', 'New requests for services: review, assign or turn into a client record.', 'r'],
+        // The public referral form, for staff to refer someone or share its link (owner, 2026-10-16).
+        ['community_referral.php', 'Referral form', 'referral_form', null, 'clients', 'The public referral form: make a referral for someone, or share its link.', ''],
         ['authorizations.php', 'Incoming authorizations', 'authorizations', 'clients', 'clients', 'Approved authorization emails: paste or forward one, match the client and start the track.', ''],
         ['pipeline.php', 'Intake progress', 'pipeline', 'clients', 'clients', 'Where each new client is in intake, so stalled work is easy to spot.', 'i'],
         ['portal_requests.php', 'Client portal requests', 'portal_requests', 'clients', 'clients', 'Appointment and help requests clients sent from their portal.', 'q'],
