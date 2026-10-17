@@ -128,6 +128,11 @@ function api_datetime(array $src, string $key, string $label): ?string {
 }
 
 /** A supplied choice must be one of the allowed values (422); an absent or blank one returns the default. */
+/** Which app sent the request, for the audit log: the Android app says so in X-App-Version (4.12.0). */
+function api_app_name(): string {
+    return str_contains((string)($_SERVER['HTTP_X_APP_VERSION'] ?? ''), 'Android') ? 'Android app' : 'iPhone app';
+}
+
 function api_choice(array $src, string $key, array $allowed, string $label, ?string $default): ?string {
     $raw = $src[$key] ?? '';
     if ($raw === '') return $default;
@@ -765,7 +770,7 @@ switch ($action) {
     case 'client':
         $id = (int)($_GET['id'] ?? 0);
         api_require_client($id, $userId);
-        record_client_view($userId, $id, 'iPhone app');
+        record_client_view($userId, $id, api_app_name());
         $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email, vr_case_number, ipe_goal, ipe_date, ipe_amended_on FROM clients WHERE id = ?');
         $c->execute([$id]);
         $client = $c->fetch();
@@ -3740,7 +3745,7 @@ switch ($action) {
     case 'track_notes': {
         $trackId = (int)($_GET['track_id'] ?? 0);
         $cid = api_require_track($trackId, $userId);
-        record_client_view($userId, $cid, 'iPhone app');
+        record_client_view($userId, $cid, api_app_name());
         // As the 'client' action: 50 at a time, newest first; notes_total says how many
         // exist and ?notes_offset=50, 100, … fetches the older ones.
         $notesOffset = max(0, (int)($_GET['notes_offset'] ?? 0));

@@ -11,3 +11,12 @@ cron/backup.conf
 ios/*.xcodeproj/project.xcworkspace/xcuserdata/
 tests/__pycache__/
 public/inc/config_path.php
+android/local.properties
+android/.gradle/
+android/build/
+android/app/build/
+android/.idea/
+android/*.iml
+android/app/release/
+android/keystore.properties
+*.jks

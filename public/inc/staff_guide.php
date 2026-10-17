@@ -92,6 +92,7 @@ if (!function_exists('staff_guide_topics')) {
                 'iphone-offline' => 'What happens when I am offline?',
                 'iphone-limits' => 'What do I still do on the website?',
             ]],
+            'guide-android' => ['How do I use the Android app?', []],
             'guide-account' => ['How do I change my account and display settings?', []],
             'guide-admin' => ['Administration', [
                 'guide-audit' => 'How do I read the audit log?',
@@ -756,6 +757,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Equipment import and QR labels.</li>
   <li>Merging and exporting client records.</li>
 </ul>
+
+<?= $sgH(3, 'guide-android') ?>
+<p>The Android app (4.12.0) signs in and works on the same records as the website and the iPhone app. Its tabs are Home, Clients, Schedule, Tasks and More (alerts, referrals, messages, offline entries and your account). With TalkBack, each row in a list is one stop; double tap it to open it or to see what you can do with it. With no connection, case notes, hours, check-ins and completed tasks are kept on the phone (it needs a screen lock) and sent once you are back online, each only once. Equipment, invoices, reports, AI tools and the other screens are still on the website.</p>
 
 <?= $sgH(3, 'guide-account') ?>
 <p>Open My Account. It holds only your own settings. Administrators also find an Administration link near the top; agency-wide settings are there (see <a href="#guide-admin">Administration</a>). Press H to move between the sections:</p>

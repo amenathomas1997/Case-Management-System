@@ -6,6 +6,9 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.12.0' => [
+        'There is now an Android app, using the same sign-in and the same records as the website and the iPhone app. It covers the daily work: the dashboard, clients with case notes and logging hours, the schedule (check in, complete, no-show, cancel, join), tasks, alerts, referrals and messages, and it keeps entries made without a signal until it can send them. Ask your administrator how to install it.',
+    ],
     '4.11.0' => [
         'Lists and time limits now also sets the client statuses (add your own; one starting "Closed - " counts as a closed case), how often automatic progress reports can be due (add a schedule such as Quarterly | 91 days), and extra referral sources on the public referral form (each is asked what Employer / other is asked). The pipeline shows every open status.',
         'The iPhone app (4.11.0) offers the same client statuses as the website.',

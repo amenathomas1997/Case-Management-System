@@ -31,6 +31,8 @@ if (($argv[1] ?? '') === 'api') {
     $_GET = json_decode($argv[3], true);
     // CMS_TEST_TOKEN replaces the signed-in admin's token (unknown, expired, inactive user).
     $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . (getenv('CMS_TEST_TOKEN') ?: str_repeat('a', 64));
+    // CMS_TEST_APP_VERSION: the X-App-Version an app sends (4.12.0: the Android app names itself).
+    if (getenv('CMS_TEST_APP_VERSION')) $_SERVER['HTTP_X_APP_VERSION'] = getenv('CMS_TEST_APP_VERSION');
     $_SERVER['REQUEST_METHOD'] = 'POST';
     assert_isolated_page($argv[2]);
     require $argv[2];
@@ -831,6 +833,7 @@ try {
     require __DIR__.'/v49_cases.php';
     require __DIR__.'/v410_cases.php';
     require __DIR__.'/v411_cases.php';
+    require __DIR__.'/v412_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 
