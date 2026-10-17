@@ -44,6 +44,8 @@ const CONFIG_OVERRIDES = [
     'meet.ms_tenant' => ['Microsoft directory (tenant) ID, or organizations', 'text', 'meetings'],
     'meet.ms_client_id' => ['Microsoft app (client) ID', 'text', 'meetings'],
     'meet.ms_client_secret' => ['Microsoft app client secret', 'secret', 'meetings'],
+    // (Missing means yes: see YESNO_DEFAULT_YES.)
+    'meet.calendar_first_name' => ['Outlook calendar events name the client\'s first name (no: "Client session" only)', 'yesno', 'meetings'],
 ];
 
 /** The time zones offered (the United States and its territories). */
@@ -76,6 +78,9 @@ function config_overrides_apply(): void {
         try { db()->exec('SET time_zone = ' . db()->quote($tz)); } catch (Throwable $e) { db()->exec('SET time_zone = ' . db()->quote(date('P'))); }
     }
 }
+
+/** Yes-or-no settings that mean yes when config.php does not set them. */
+const YESNO_DEFAULT_YES = ['meet.calendar_first_name'];
 
 /** Check and save one setting from the form. Returns an error, or null. An empty value goes back to config.php's. */
 function config_override_save(string $k, string $value, int $actor): ?string {
@@ -136,7 +141,7 @@ function brand_rgb(string $key = 'color_dark'): array {
 /* ---------- Safe upgrades (3.0.54) ---------- */
 
 /** The database version this code needs: the newest migration it ships. */
-const DB_SCHEMA_VERSION = '4.17.0';
+const DB_SCHEMA_VERSION = '4.20.0';
 
 /** The database version recorded by the migrations, or null for a database from before 3.0.54. */
 function db_schema_version(): ?string {

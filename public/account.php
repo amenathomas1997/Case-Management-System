@@ -34,6 +34,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_display_controls
     redirect('account.php#display-settings');
 }
 
+/* ---- Outlook calendar sync (4.20.0): on, with a first sync at once, or off (its events are taken out) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['calendar_sync'])) {
+    $uid = (int)$user['id'];
+    if ($_POST['calendar_sync'] === 'on') {
+        if (!meeting_account($uid, 'microsoft')) { flash('Connect Microsoft first (below), then turn on the Outlook calendar.', 'error'); redirect('account.php#calendar-h'); }
+        db()->prepare('UPDATE users SET calendar_sync = 1 WHERE id = ?')->execute([$uid]);
+        // A first pass of up to 20 seconds; the ten-minute sync carries on with the rest.
+        $r = calendar_sync_user($uid, time() + 20);
+        audit($uid, 'calendar.sync_on', 'user', $uid, $r['error'] ?? ($r['pushed'] . ' sessions'));
+        flash($r['error'] === null ? 'Outlook calendar sync is on: ' . $r['pushed'] . ' sessions are in your Outlook calendar so far, and the rest follow within ten minutes. Your Outlook busy times keep bookings away.' : 'Outlook calendar sync is on, but: ' . $r['error'], $r['error'] === null ? 'success' : 'error');
+    } else {
+        $n = calendar_stop($uid);
+        audit($uid, 'calendar.sync_off', 'user', $uid, $n . ' events removed');
+        flash('Outlook calendar sync is off' . ($n ? '; the ' . $n . ' session events it added were removed from Outlook.' : '.'));
+    }
+    redirect('account.php#calendar-h');
+}
+
 /* ---- Online meetings: disconnect Zoom or Microsoft (4.10.0; connecting is meeting_connect.php) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && is_string($_POST['meeting_disconnect'] ?? null) && isset(MEETING_PROVIDERS[$_POST['meeting_disconnect']])) {
     $prov = (string)$_POST['meeting_disconnect'];
@@ -368,6 +386,23 @@ page_header('My Account', $user, 'account');
       </li>
     <?php endforeach; ?>
     </ul>
+    <?php endif; ?>
+
+    <h2 id="avail-h">My availability</h2>
+    <p><a href="availability.php">My availability</a>: the hours you take sessions, which clients can book in the portal when self-booking is on.</p>
+    <?php if (calendar_available()): $cs = db()->prepare('SELECT calendar_sync, calendar_synced_at, calendar_error FROM users WHERE id = ?'); $cs->execute([(int)$user['id']]); $csr = $cs->fetch() ?: []; ?>
+    <h2 id="calendar-h">Outlook calendar</h2>
+    <p>Put your sessions in your Outlook calendar, kept up to date when they are booked, moved or cancelled. Your other Outlook appointments then count as busy, so no session is offered, booked or moved over them. If you move or delete a session's event in Outlook, you are told, so you can change the session here; Outlook alone never changes a session. It uses your Microsoft connection (Online meetings, below); if you connected Microsoft before October 2026, connect it again to allow the calendar.</p>
+    <?php if (!empty($csr['calendar_sync'])): ?>
+    <p>On<?= !empty($csr['calendar_synced_at']) ? ', last brought up to date ' . h(fmt_datetime((string)$csr['calendar_synced_at'])) : '' ?>.<?= !empty($csr['calendar_error']) ? ' <strong>Problem: ' . h((string)$csr['calendar_error']) . '</strong>' : '' ?></p>
+    <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
+      <button type="submit" name="calendar_sync" value="off" class="btn btn-secondary btn-sm">Turn off and remove the session events</button>
+    </form>
+    <?php else: ?>
+    <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
+      <button type="submit" name="calendar_sync" value="on" class="btn btn-secondary btn-sm">Put my sessions in my Outlook calendar</button>
+    </form>
+    <?php endif; ?>
     <?php endif; ?>
 
     <h2 id="phones-h">Phones signed in to the app</h2>

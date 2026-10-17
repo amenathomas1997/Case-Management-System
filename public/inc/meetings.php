@@ -8,6 +8,11 @@ declare(strict_types=1);
 // the database or its backups; after a restore to another server, people connect again.
 
 const MEETING_PROVIDERS = ['zoom' => 'Zoom', 'microsoft' => 'Microsoft Teams'];
+// Microsoft's connection also asks for Calendars.ReadWrite (4.20.0): the person's own calendar, for
+// inc/calendar_sync.php. What each person actually granted is kept (meeting_accounts.granted_scope) and
+// a renewal asks for that only: Microsoft refuses a renewal asking for more than was granted, which would
+// otherwise break Teams links for everyone who connected before the calendar was added.
+const MEETING_MS_LEGACY_SCOPE = 'offline_access User.Read OnlineMeetings.ReadWrite';
 
 /** The registered app for a provider, or null when an administrator has not set it up. */
 function meeting_app(string $provider): ?array {
@@ -23,7 +28,7 @@ function meeting_app(string $provider): ?array {
         $tenant = preg_match('/^[A-Za-z0-9.-]+$/', (string)($m['ms_tenant'] ?? '')) ? (string)$m['ms_tenant'] : 'organizations';
         return ['id' => (string)$m['ms_client_id'], 'secret' => (string)$m['ms_client_secret'],
             'authorize' => "https://login.microsoftonline.com/{$tenant}/oauth2/v2.0/authorize", 'token' => "https://login.microsoftonline.com/{$tenant}/oauth2/v2.0/token",
-            'scope' => 'offline_access User.Read OnlineMeetings.ReadWrite', 'redirect' => $base . '/meeting_connect.php?provider=microsoft'];
+            'scope' => 'offline_access User.Read OnlineMeetings.ReadWrite Calendars.ReadWrite', 'redirect' => $base . '/meeting_connect.php?provider=microsoft'];
     }
     return null;
 }
@@ -115,9 +120,12 @@ function meeting_account(int $userId, string $provider): ?array {
 /** Keep tokens from a token reply. */
 function meeting_store(int $userId, string $provider, array $tok, string $email): void {
     $expires = date('Y-m-d H:i:s', time() + max(60, (int)($tok['expires_in'] ?? 3600)) - 60);
-    db()->prepare('INSERT INTO meeting_accounts (user_id, provider, account_email, access_token, refresh_token, expires_at) VALUES (?,?,?,?,?,?)
-        ON DUPLICATE KEY UPDATE account_email = VALUES(account_email), access_token = VALUES(access_token), refresh_token = VALUES(refresh_token), expires_at = VALUES(expires_at)')
-        ->execute([$userId, $provider, mb_substr($email, 0, 190), meeting_seal((string)$tok['access_token']), meeting_seal((string)($tok['refresh_token'] ?? '')), $expires]);
+    // The scope Microsoft granted, when the reply names it (Zoom's does not; it is not used for Zoom).
+    $granted = is_string($tok['scope'] ?? null) && $tok['scope'] !== '' ? mb_substr(trim($tok['scope']), 0, 500) : null;
+    db()->prepare('INSERT INTO meeting_accounts (user_id, provider, account_email, access_token, refresh_token, expires_at, granted_scope) VALUES (?,?,?,?,?,?,?)
+        ON DUPLICATE KEY UPDATE account_email = VALUES(account_email), access_token = VALUES(access_token), refresh_token = VALUES(refresh_token), expires_at = VALUES(expires_at),
+            granted_scope = COALESCE(VALUES(granted_scope), granted_scope)')
+        ->execute([$userId, $provider, mb_substr($email, 0, 190), meeting_seal((string)$tok['access_token']), meeting_seal((string)($tok['refresh_token'] ?? '')), $expires, $granted]);
 }
 
 /** A working access token for this person, refreshing it when it has expired; null when not connected or refused. */
@@ -140,7 +148,8 @@ function meeting_access_token(int $userId, string $provider): ?string {
         $tok = null;
         if ($refresh !== null && $refresh !== '') {
             $fields = ['grant_type' => 'refresh_token', 'refresh_token' => $refresh];
-            if ($app['scope'] !== '') $fields['scope'] = $app['scope'];
+            // Only what this person granted (a connection from before 4.20.0 granted the legacy scope).
+            if ($app['scope'] !== '') $fields['scope'] = trim((string)($acc['granted_scope'] ?? '')) ?: MEETING_MS_LEGACY_SCOPE;
             $tok = meeting_token_request($app, $fields);
         }
         if ($tok !== null) {

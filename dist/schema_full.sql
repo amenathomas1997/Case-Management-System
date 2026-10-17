@@ -854,9 +854,59 @@ CREATE TABLE `meeting_accounts` (
   `refresh_token` text NOT NULL,
   `expires_at` datetime NOT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `granted_scope` varchar(500) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `user_provider` (`user_id`,`provider`),
   CONSTRAINT `meeting_accounts_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `calendar_links`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `calendar_links` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `session_id` int(10) unsigned NOT NULL,
+  `user_id` int(10) unsigned NOT NULL,
+  `event_id` varchar(255) NOT NULL,
+  `pushed_hash` char(40) NOT NULL,
+  `event_start` datetime NOT NULL,
+  `event_end` datetime NOT NULL,
+  `outlook_change` varchar(20) DEFAULT NULL,
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `session_user` (`session_id`,`user_id`),
+  KEY `user_id` (`user_id`),
+  CONSTRAINT `fk_callink_session` FOREIGN KEY (`session_id`) REFERENCES `scheduled_sessions` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_callink_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `calendar_busy`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `calendar_busy` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `user_id` int(10) unsigned NOT NULL,
+  `start_at` datetime NOT NULL,
+  `end_at` datetime NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `user_start` (`user_id`,`start_at`),
+  CONSTRAINT `fk_calbusy_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `staff_availability`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `staff_availability` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `user_id` int(10) unsigned NOT NULL,
+  `weekday` tinyint(3) unsigned NOT NULL,
+  `start_time` time NOT NULL,
+  `end_time` time NOT NULL,
+  `is_remote` tinyint(1) NOT NULL DEFAULT 1,
+  `location` varchar(190) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `user_day` (`user_id`,`weekday`),
+  CONSTRAINT `fk_avail_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `messages`;
@@ -1076,6 +1126,7 @@ CREATE TABLE `scheduled_sessions` (
   `sms_reminder_sent` tinyint(1) NOT NULL DEFAULT 0,
   `client_reply` varchar(20) DEFAULT NULL,
   `client_reply_at` datetime DEFAULT NULL,
+  `booked_by_client` tinyint(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   KEY `client_id` (`client_id`),
   KEY `idx_user_start` (`user_id`,`start_at`),
@@ -1440,6 +1491,9 @@ CREATE TABLE `users` (
   `exit_requested_at` datetime DEFAULT NULL,
   `mobile` varchar(20) DEFAULT NULL,
   `alert_sms` tinyint(1) NOT NULL DEFAULT 0,
+  `calendar_sync` tinyint(1) NOT NULL DEFAULT 0,
+  `calendar_synced_at` datetime DEFAULT NULL,
+  `calendar_error` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `email` (`email`),
   KEY `idx_cal_token` (`cal_token`),

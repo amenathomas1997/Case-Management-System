@@ -15,6 +15,7 @@ function session_move_warnings(array $sess, int $start, int $end): array {
         AND start_at < ? AND end_at > ? AND (group_uid IS NULL OR group_uid <> ?)");
     $o->execute([(int)$sess['user_id'], (int)$sess['id'], date('Y-m-d H:i:s', $end), date('Y-m-d H:i:s', $start), (string)($sess['group_uid'] ?? '')]);
     if ((int)$o->fetchColumn() > 0) $out[] = 'The instructor already has a session at that time.';
+    elseif (function_exists('calendar_busy_overlaps') && calendar_busy_overlaps((int)$sess['user_id'], $start, $end)) $out[] = 'The instructor\'s Outlook calendar shows them busy then.';
     if (!empty($sess['track_id'])) {
         $t = db()->prepare('SELECT status, start_date, expiration_date FROM training_tracks WHERE id = ?');
         $t->execute([(int)$sess['track_id']]);

@@ -226,6 +226,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
         $warnings = workflow_authorization($tid, $f['start'], $f['end']);
         if ($warnings) $authLines[] = $members[$cid]['name'] . ': ' . implode(' ', $warnings);
     }
+    // The instructor's Outlook calendar (4.20.0), approved with the rest.
+    if (!$errors && $f['staff'] && function_exists('calendar_busy_overlaps') && calendar_busy_overlaps((int)$f['staff']['id'], $f['start'], $f['end'])) {
+        $authLines[] = $f['staff']['name'] . '\'s Outlook calendar shows them busy then.';
+    }
     if ($authLines && !schedule_auth_approved('g_', $authLines)) {
         $errors['g_authorization_ack'] = 'Authorization review. ' . implode(' ', $authLines)
             . ' Review the tracks, then tick the approval box below if this booking is still appropriate.';
@@ -253,6 +257,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
     // Every client's row is saved or none is, so a retry can't duplicate part of the group.
     db()->beginTransaction();
     try {
+        // The instructor first, as every booking path does (4.20.0), then the clients.
+        session_lock_instructor((int)$staff['id']);
         // The client rows are locked first, so a second press of the button (the invite
         // email can take a while) waits for the first and then finds its sessions.
         $sorted = $clientIds;
@@ -474,11 +480,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         }
     }
     $authWarnings = [];
-    if (!$errors && $trackId) {
-        $authWarnings = workflow_authorization($trackId, $f['start'], $f['end'], $repeatWeeks, $occurrences);
-        if ($authWarnings && !schedule_auth_approved('', $authWarnings)) {
+    if (!$errors && $trackId) $authWarnings = workflow_authorization($trackId, $f['start'], $f['end'], $repeatWeeks, $occurrences);
+    // The instructor's Outlook calendar (4.20.0): a time it shows busy is approved like an authorization question.
+    if (!$errors && $f['staff'] && function_exists('calendar_busy_overlaps')) {
+        $busyDays = [];
+        foreach ($occurrences as [$s0, $e0]) if (calendar_busy_overlaps((int)$f['staff']['id'], $s0, $e0)) $busyDays[] = date('D, M j g:i A', $s0);
+        if ($busyDays) $authWarnings[] = $f['staff']['name'] . '\'s Outlook calendar shows them busy then (' . implode('; ', array_slice($busyDays, 0, 5)) . (count($busyDays) > 5 ? '; and ' . (count($busyDays) - 5) . ' more' : '') . ').';
+    }
+    if (!$errors && $authWarnings) {
+        if (!schedule_auth_approved('', $authWarnings)) {
             $errors['authorization_ack'] = 'Authorization review: ' . implode(' ', $authWarnings)
-                . ' Review the track, then tick the approval box below if this booking is still appropriate.';
+                . ' Review the track and the calendar, then tick the approval box below if this booking is still appropriate.';
         }
     }
     // A plan of several days, dates or the whole authorization is shown first, and booked only
@@ -523,6 +535,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
     // not leave a partial series that a retry would then duplicate.
     db()->beginTransaction();
     try {
+        // The instructor first, as every booking path does (4.20.0), then the client.
+        session_lock_instructor((int)$f['staff']['id']);
         // The client row is locked first, so a second press of the button (the invite
         // email can take a while) waits for the first and then finds its sessions.
         db()->prepare('SELECT id FROM clients WHERE id = ? FOR UPDATE')->execute([$clientId]);

@@ -95,7 +95,7 @@ $current = function (string $k) {
       <?php if ($stored !== ''): ?><label><input type="checkbox" name="<?= $field ?>_clear" value="1"> Remove the stored secret (use config.php's)</label><?php endif; ?>
       <?php elseif ($kind === 'yesno'): ?>
       <label for="<?= $field ?>"><?= h($label) ?></label>
-      <select id="<?= $field ?>" name="<?= $field ?>"><option value="">Use config.php (<?= $current($k) === 'yes' ? 'yes' : 'no' ?>)</option><?php foreach (['yes' => 'Yes', 'no' => 'No'] as $yv => $yl): ?><option value="<?= $yv ?>"<?= old_in($field, $stored) === $yv ? ' selected' : '' ?>><?= $yl ?></option><?php endforeach; ?></select><?= field_error($field) ?>
+      <select id="<?= $field ?>" name="<?= $field ?>"><option value="">Use config.php (<?= $current($k) === 'yes' || ($current($k) === '' && in_array($k, YESNO_DEFAULT_YES, true)) ? 'yes' : 'no' ?>)</option><?php foreach (['yes' => 'Yes', 'no' => 'No'] as $yv => $yl): ?><option value="<?= $yv ?>"<?= old_in($field, $stored) === $yv ? ' selected' : '' ?>><?= $yl ?></option><?php endforeach; ?></select><?= field_error($field) ?>
       <?php elseif ($kind === 'timezone'): ?>
       <label for="<?= $field ?>"><?= h($label) ?></label>
       <select id="<?= $field ?>" name="<?= $field ?>"><option value="">Use config.php (<?= h(US_TIME_ZONES[$current($k)] ?? str_replace('_', ' ', $current($k))) ?>)</option><?php foreach (CONFIG_TIMEZONES as $tz): ?><option value="<?= h($tz) ?>"<?= $stored === $tz ? ' selected' : '' ?>><?= h(US_TIME_ZONES[$tz] ?? str_replace('_', ' ', $tz)) ?></option><?php endforeach; ?></select>

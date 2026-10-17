@@ -172,6 +172,15 @@ function counselor_noshow_notice(int $sessionId): bool {
  * Returns true when an email went.
  */
 function client_session_notice(array $sessionIds, string $kind): bool {
+    $sent = client_session_notice_send($sessionIds, $kind);
+    // The instructor's Outlook calendar follows at once for one session (4.20.0), after the client's
+    // notice so a slow Microsoft never holds it up; a series is left to the ten-minute sync.
+    if (count(array_unique($sessionIds)) === 1 && function_exists('calendar_push_session')) calendar_push_session((int)$sessionIds[0]);
+    return $sent;
+}
+
+/** Tell the client (email with the calendar invite, and a text when they agreed) that sessions were booked, moved or cancelled. */
+function client_session_notice_send(array $sessionIds, string $kind): bool {
     $sessionIds = array_values(array_unique(array_map('intval', $sessionIds)));
     if (!$sessionIds || !in_array($kind, ['booked', 'cancelled', 'moved'], true)) return false;
     // A client who agreed to texts is also texted (4.17.0), whatever happens with the email.

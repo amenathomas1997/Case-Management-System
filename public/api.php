@@ -2147,9 +2147,13 @@ switch ($action) {
         // so a location an older build still sends is not kept where nobody can see it.
         if ($isRemote) $location = '';
         $warnings=[];
-        if ($trackId) {
-            $warnings=workflow_authorization($trackId,$startTs,$endTs,$repeatWeeks);
-            if ($warnings && !in_array($input['authorization_ack']??null,[true,1,'1'],true)) {
+        if ($trackId) $warnings=workflow_authorization($trackId,$startTs,$endTs,$repeatWeeks);
+        // The instructor's Outlook calendar (4.20.0), approved like an authorization question.
+        for ($w = 0; $w < $repeatWeeks; $w++) {
+            if (calendar_busy_overlaps($staffId, $w ? strtotime('+' . $w . ' week', $startTs) : $startTs, $w ? strtotime('+' . $w . ' week', $endTs) : $endTs)) { $warnings[] = 'The instructor\'s Outlook calendar shows them busy then.'; break; }
+        }
+        if ($warnings) {
+            if (!in_array($input['authorization_ack']??null,[true,1,'1'],true)) {
                 // App builds before 3.0.16 never send authorization_ack (newer ones send true
                 // or false) and have no control to approve the warning, so they are told where
                 // it can be done. Either way nothing is booked; the warnings come as a list too.
@@ -2167,6 +2171,7 @@ switch ($action) {
         // not leave a partial series that a retry would then duplicate.
         db()->beginTransaction();
         try {
+            session_lock_instructor($staffId); // as every booking path does (4.20.0)
             for ($w = 0; $w < $repeatWeeks; $w++) {
                 // "+N week" keeps the local start time across daylight-saving changes
                 $s0 = $w === 0 ? $startTs : strtotime("+{$w} week", $startTs);

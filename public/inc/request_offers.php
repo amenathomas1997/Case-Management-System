@@ -15,6 +15,7 @@ function offer_time_problem(int $start, int $end, int $userId, ?int $trackId, ?a
     $o = db()->prepare("SELECT COUNT(*) FROM scheduled_sessions WHERE user_id = ? AND status = 'Scheduled' AND start_at < ? AND end_at > ?" . ($moving ? ' AND id <> ' . (int)$moving['id'] : ''));
     $o->execute([$userId, date('Y-m-d H:i:s', $end), date('Y-m-d H:i:s', $start)]);
     if ((int)$o->fetchColumn() > 0) return 'clashes with another session for the instructor';
+    if (function_exists('calendar_busy_overlaps') && calendar_busy_overlaps($userId, $start, $end)) return 'clashes with the instructor\'s Outlook calendar';
     if ($trackId) {
         if ($moving) {
             // A move uses the hours already reserved, so only the dates and the track are checked.
@@ -137,6 +138,7 @@ function offer_confirm(int $offerId, int $clientId): array {
         }
         $start = strtotime((string)$o['start_at']); $end = strtotime((string)$o['end_at']);
         $instructor = (int)$o['user_id'];
+        session_lock_instructor($instructor); // one booking at a time for this instructor, whatever the path (4.20.0)
         $moving = null;
         if ($req['type'] === 'reschedule' && $req['session_id']) {
             $m = $pdo->prepare('SELECT * FROM scheduled_sessions WHERE id = ? FOR UPDATE');

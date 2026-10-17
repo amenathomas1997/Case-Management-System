@@ -347,6 +347,18 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         redirect('portal.php?t=' . $token . '&lang=' . page_lang());
     }
+    // The client books an open time with their instructor (4.20.0).
+    if (isset($_POST['self_book'])) {
+        $slotStart = ctype_digit((string)($_POST['slot'] ?? '')) ? (int)$_POST['slot'] : 0;
+        $res = ['error' => 'none chosen'];
+        if ($slotStart <= 0) flash_ui('Choose a time first.', 'error');
+        else {
+            $res = self_booking_book($client, $slotStart);
+            if ($res['error'] === null) flash_ui('Your session is booked. It is listed under Upcoming sessions.');
+            else flash_ui($res['error'], 'error');
+        }
+        redirect('portal.php?t=' . $token . '&lang=' . page_lang() . ($res['error'] !== null ? '#book-h' : '#sess-h'));
+    }
     // The client confirms one of the times offered on their request (3.0.52).
     if (isset($_POST['confirm_offer'])) {
         $offer = (int)($_POST['offer_id'] ?? 0);
@@ -812,6 +824,29 @@ document.addEventListener('submit', function (e) {
     <li><?= portal_progress_line($t, $sessions) ?></li>
   <?php endforeach; ?>
   </ul>
+</section>
+<?php endif; ?>
+
+<?php $bookWhy = $client ? self_booking_blocked($client) : 'off'; // 4.20.0 ?>
+<?php if (!in_array($bookWhy, ['off', 'closed', 'no_instructor', 'no_hours', 'no_track'], true)): $bookSlots = $bookWhy === null ? self_booking_slots($client) : []; ?>
+<section class="card" aria-labelledby="book-h">
+  <h2 id="book-h" tabindex="-1"><?= t('Book a session') ?></h2>
+  <?php if ($bookWhy === 'max'): ?>
+  <p><?= t('You have booked as many sessions here as you can for now. Your instructor can book more, or send them a request below.') ?></p>
+  <?php elseif (!$bookSlots): ?>
+  <p><?= t('There are no open times in the next few weeks. Send your instructor a request below.') ?></p>
+  <?php else: ?>
+  <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked"><?= csrf_field() ?>
+    <div class="field"><label for="slot"><?= t('Time with your instructor') ?></label>
+      <select id="slot" name="slot">
+        <option value=""><?= t('Choose a time') ?></option>
+      <?php foreach ($bookSlots as $bs): ?>
+        <option value="<?= (int)$bs['start'] ?>"><?= page_lang() === 'es' ? h(portal_when_es($bs['start'])) : en(portal_date('l, F j \a\t g:i A' . (portal_tz() ? ' T' : ''), $bs['start'])) ?>, <?= (int)round(($bs['end'] - $bs['start']) / 60) ?> <?= t('minutes') ?>, <?= $bs['remote'] ? h(__('online')) : h(__('in person at')) . ' ' . en((string)$bs['location']) ?></option>
+      <?php endforeach; ?>
+      </select></div>
+    <button type="submit" name="self_book" value="1" class="btn btn-primary btn-sm" onclick="return confirm(<?= h(json_encode(__('Book this time?'))) ?>);"><?= t('Book this time') ?></button>
+  </form>
+  <?php endif; ?>
 </section>
 <?php endif; ?>
 

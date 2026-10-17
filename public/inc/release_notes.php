@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.20.0' => [
+        'Your sessions in your Outlook calendar (My Account, Outlook calendar): added, moved and removed as they change here, every ten minutes and at once when booked, moved or cancelled. Your other Outlook appointments count as busy, so no session is offered, booked or moved over them. Moving or deleting a session\'s event in Outlook tells you to change the session here; Outlook alone never changes a session.',
+        'Clients can book their own sessions in the portal: set the hours you take sessions on My Availability, and an administrator turns self-booking on there (length, notice, how far ahead, how many at once). A time is offered only when you are free in the system and in Outlook, and the client\'s authorization covers it. You are told of each booking.',
+        'Scheduling a session at a time your Outlook calendar shows busy asks you to approve it first, as an authorization question does.',
+    ],
     '4.19.1' => [
         'Check for updates now works on a site set up before the update setting existed: it checks this system\'s GitHub releases unless updates are set to off. Administration no longer shows an old check as current: it says when the last check was (in your time zone) and when one failed.',
         'Software update now also updates the scheduled jobs on sites whose jobs folder was set up before the installer wrote its settings file.',

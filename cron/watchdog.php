@@ -108,4 +108,7 @@ file_put_contents($stateFile, json_encode($state), LOCK_EX);
 try { if (!isset($problems['db'])) set_setting('heartbeat_watchdog', date('c')); } catch (Throwable $e) {}
 // Texts held for the client's 8 a.m. go out within ten minutes of it (4.17.0): this job runs every ten minutes.
 try { if (!isset($problems['db']) && function_exists('sms_enabled') && sms_enabled()) sms_flush_held(); } catch (Throwable $e) {}
+// Each staff member's Outlook calendar and their sessions are brought together every ten minutes (4.20.0):
+// last, so a slow Microsoft never delays the alerts or the morning's texts; one run at a time, within 4 minutes.
+try { if (!isset($problems['db']) && function_exists('calendar_sync_all')) calendar_sync_all(240); } catch (Throwable $e) { error_log('watchdog: calendar sync (' . get_class($e) . ')'); }
 echo $problems ? count($problems) . " problem(s), {$alerted} alert(s) sent: " . implode(' | ', $problems) . "\n" : "All healthy.\n";

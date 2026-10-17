@@ -550,6 +550,8 @@ function voice_execute(string $do, array $in, array $user): array {
                 // Voice has no way to record the approval: the booking is made on the website's form.
                 if($warnings)return ['ok'=>false,'error'=>'Authorization review: '.implode(' ',$warnings).' ' . VOICE_AUTH_ON_WEBSITE . ' Nothing was booked.'];
             }
+            // The instructor's Outlook calendar (4.20.0): voice cannot record an approval, so the website's form books over it.
+            if (calendar_busy_overlaps($uid, $start, $end)) return ['ok' => false, 'error' => 'Your Outlook calendar shows you busy then. Choose another time, or book it on the website\'s Schedule page. Nothing was booked.'];
 
             $location = mb_substr(trim((string)($in['location'] ?? '')), 0, 190);
             db()->prepare("INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, status) VALUES (?,?,?,?,?,?, 'Scheduled')")

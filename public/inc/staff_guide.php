@@ -97,6 +97,7 @@ if (!function_exists('staff_guide_topics')) {
             'guide-agreements' => ['How do I sign a staff agreement?', []],
             'guide-staff-training' => ['How do I take staff training or record a credential?', []],
             'guide-texting' => ['How do I text a client?', []],
+            'guide-outlook' => ['How do I put my sessions in Outlook, or let clients book with me?', []],
             'guide-admin' => ['Administration', [
                 'guide-audit' => 'How do I read the audit log?',
                 'guide-templates' => 'How do I manage templates?',
@@ -772,6 +773,9 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
 
 <?= $sgH(3, 'guide-texting') ?>
 <p>A client is texted only if they agreed. Ask them, then on their edit page tick "The client agreed to text messages at this number" next to their phone, choose how they agreed, and save; changing the number clears the agreement until you record it again. They then get session reminders they can answer (C confirms, R and X come to you as requests), notices when a session is booked, moved or cancelled, and a text when you assign homework. To text a message, open Messages, write to the client and tick "Also send it as a text message"; their texted replies appear in the same conversation, marked "by text". Texts sent after 8 p.m. their time go at 8 a.m. If a client replies STOP, only their own START turns texts back on. Record each client's state: without it, texts go only from <?= h(sms_unknown_window()) ?> (daytime everywhere in the US). For urgent alerts by text, add your mobile under My Account. In the phone apps, the same choices are on the client's edit screen and under a conversation's message box.</p>
+
+<?= $sgH(3, 'guide-outlook') ?>
+<p>On My Account, under Online meetings, connect Microsoft, then under Outlook calendar choose Put my sessions in my Outlook calendar. Your sessions then appear in Outlook and follow every booking, move and cancellation within ten minutes. Your other Outlook appointments count as busy: clients are not offered those times, and if you book a session over one you are asked to approve it first. If you move or delete a session's event in Outlook, you get an alert to change the session here too; Outlook alone never moves or cancels a session. To let clients book with you, open My Availability (from My Account) and add the hours you take sessions, online or in person; when an administrator has turned self-booking on, your clients see the open times in their portal, and you are told of each booking.</p>
 
 <?= $sgH(3, 'guide-account') ?>
 <p>Open My Account. It holds only your own settings. Administrators also find an Administration link near the top; agency-wide settings are there (see <a href="#guide-admin">Administration</a>). Press H to move between the sections:</p>
