@@ -81,3 +81,24 @@ set_setting('update_checked','2026-10-17T14:30:00-05:00');
 check(update_checked_words()==='October 17, 2026 at 2:30 pm CDT','When updates were last checked is shown in the time zone, with its name');
 [$code,$html,$err]=$renderPage('system_health',[]);
 check(str_contains($html,'<dt>Time zone</dt>') && str_contains($html,'Central (C'),'System health names the time zone in use'.($err?": $err":''));
+
+// 4.19.1: a site that never chose an update source checks GitHub; an old check is never shown as current.
+$savedUrl=$GLOBALS['CONFIG']['app']['update_url'] ?? null;
+unset($GLOBALS['CONFIG']['app']['update_url']);
+check(update_source()==='github','A site that never chose an update source checks GitHub releases');
+$GLOBALS['CONFIG']['app']['update_url']='off';
+check(update_source()==='off','Only an explicit off turns checking off');
+if ($savedUrl===null) unset($GLOBALS['CONFIG']['app']['update_url']); else $GLOBALS['CONFIG']['app']['update_url']=$savedUrl;
+set_setting('update_latest','3.0.55'); set_setting('update_checked','2026-10-16 17:23');
+$db->exec("INSERT INTO settings(name,value) VALUES('cfg.app.update_url','github') ON DUPLICATE KEY UPDATE value='github'");
+[$code,$html,$err]=$renderPage('admin',[]);
+check(str_contains($html,'Not checked since this version was installed') && !str_contains($html,'Up to date (last checked October 16'),'A check from before this version was installed is not shown as current'.($err?": $err":''));
+set_setting('update_attempted',date('c'));
+[$code,$html,$err]=$renderPage('admin',[]);
+check(str_contains($html,'could not reach the update server'),'A failed check is said, with its time');
+$db->exec("DELETE FROM settings WHERE name IN ('cfg.app.update_url','update_latest','update_checked','update_attempted')");
+// An older site's cron folder (no cron_config.php, the jobs find the app themselves) is still updated.
+$od=$tmp.'/old_layout'; @mkdir("$od/cron",0777,true); file_put_contents("$od/cron/watchdog.php",'<?php');
+$sp=$GLOBALS['CMS_PRIVATE_DIR'] ?? null; $GLOBALS['CMS_PRIVATE_DIR']=$od;
+check(updater_cron_dir()==="$od/cron",'The updater finds an older site\'s jobs folder by its jobs');
+if ($sp===null) unset($GLOBALS['CMS_PRIVATE_DIR']); else $GLOBALS['CMS_PRIVATE_DIR']=$sp;

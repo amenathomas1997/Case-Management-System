@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.19.1' => [
+        'Check for updates now works on a site set up before the update setting existed: it checks this system\'s GitHub releases unless updates are set to off. Administration no longer shows an old check as current: it says when the last check was (in your time zone) and when one failed.',
+        'Software update now also updates the scheduled jobs on sites whose jobs folder was set up before the installer wrote its settings file.',
+    ],
     '4.19.0' => [
         'Each client\'s state is now asked for: on the client form, the referral form and in the phone apps. It sets the time zone their reminders and texts follow. Data quality lists current clients who still have none.',
         'Page errors are recorded (where they happened, never what was on the page) and the watchdog emails them within the hour; System health lists the last 7 days.',

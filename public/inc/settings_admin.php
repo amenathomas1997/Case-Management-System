@@ -172,11 +172,22 @@ function run_migration_file(string $path): array {
     return [$n, null];
 }
 
+/**
+ * Where this site checks for new versions: 'github' (the publisher's signed releases), an https list,
+ * or 'off'. A site that never chose (its config.php predates the setting) checks GitHub (4.19.1):
+ * only an explicit 'off' turns checking off.
+ */
+function update_source(): string {
+    $v = trim((string)($GLOBALS['CONFIG']['app']['update_url'] ?? ''));
+    return $v === '' ? 'github' : $v;
+}
+
 /** Check the vendor's update list. Returns ['ok' => bool, 'latest' => ?string]. Used by Administration and the daily alerts. */
 function update_check(): array {
-    // Off unless set (Settings, Updates, or config.php; the installer fills in the publisher's list).
-    $url = ($GLOBALS['CONFIG']['app']['update_url'] ?? null) ?: 'off';
+    $url = update_source();
     if ($url === 'off') return ['ok' => false, 'latest' => null]; // a test or offline copy
+    // A failed attempt is recorded too, so Administration never shows an old check as current.
+    set_setting('update_attempted', date('c'));
     // The publisher's signed GitHub releases (4.18.0): one-button updates on Software update.
     if ($url === 'github') {
         require_once __DIR__ . '/updater.php';
@@ -199,9 +210,9 @@ function update_check(): array {
     return ['ok' => true, 'latest' => (string)$m['latest']];
 }
 
-/** When updates were last checked, in the organisation's time zone, with its name: "October 17, 2026 at 2:30 pm CDT". */
-function update_checked_words(): string {
-    $raw = (string)(setting('update_checked') ?? '');
+/** When updates were last checked successfully, in the organisation's time zone, with its name: "October 17, 2026 at 2:30 pm CDT". */
+function update_checked_words(string $which = 'update_checked'): string {
+    $raw = (string)(setting($which) ?? '');
     $ts = $raw !== '' ? strtotime($raw) : false;
     return $ts ? date('F j, Y \a\t g:i a T', $ts) : '';
 }

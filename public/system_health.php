@@ -152,6 +152,8 @@ if ($dbOk) {
 }
 
 $latest = $dbOk ? (string)(setting('update_latest') ?? '') : '';
+// A check from before this version was installed says nothing about now (4.19.1).
+if ($latest !== '' && version_compare($latest, APP_VERSION, '<')) $latest = '';
 $checked = $dbOk ? update_checked_words() : '';
 $stateWord = ['fresh' => 'Working', 'waiting' => 'Waiting for its first run', 'stale' => 'Overdue', 'overdue' => 'Never ran', 'unreadable' => 'Cannot be checked', 'unchecked' => 'Not checked'];
 

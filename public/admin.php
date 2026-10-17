@@ -18,7 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['check_updates'])) {
         flash(version_compare((string)$uc['latest'], APP_VERSION, '>')
             ? 'A newer version is available: v' . $uc['latest'] . '.'
             : 'You are up to date (v' . APP_VERSION . ').');
-    } elseif ((($GLOBALS['CONFIG']['app']['update_url'] ?? null) ?: 'off') === 'off') {
+    } elseif (update_source() === 'off') {
         // Off is a choice, not a failure (4.19.0): say how to turn it on.
         flash('Checking for updates is off on this site. To check this system\'s GitHub releases, and install them with one button, set "Where to check for new versions" to github on Settings, Updates.', 'error');
     } else {
@@ -454,18 +454,25 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
   <?php
   $updLatest = setting('update_latest');
   $updChecked = update_checked_words();
+  $updAttempted = update_checked_words('update_attempted');
+  // A check from before this version was installed says nothing about now (4.19.1).
+  $updFresh = $updLatest !== null && version_compare($updLatest, APP_VERSION, '>=');
   $updNewer = $updLatest !== null && version_compare($updLatest, APP_VERSION, '>');
+  $updFailed = $updAttempted !== '' && strtotime((string)setting('update_attempted')) > strtotime((string)(setting('update_checked') ?? '1970-01-01')) + 5;
   ?>
   <p>
     This system is <strong>v<?= h(APP_VERSION) ?></strong>.
-    <?php if ($updNewer): ?><span class="badge badge-pending">Update available: v<?= h($updLatest) ?></span>
+    <?php if (update_source() === 'off'): ?><span class="muted">Checking for updates is off (Settings, Updates).</span>
+    <?php elseif ($updNewer): ?><span class="badge badge-pending">Update available: v<?= h($updLatest) ?></span>
       <?php if (setting('update_notes')): ?><br><span class="muted"><?= h(setting('update_notes')) ?></span><?php endif; ?>
-    <?php elseif ($updChecked): ?><span class="muted">Up to date (last checked <?= h($updChecked) ?>).</span><?php endif; ?>
+    <?php elseif ($updFresh && $updChecked !== ''): ?><span class="muted">Up to date (last checked <?= h($updChecked) ?>).</span>
+    <?php else: ?><span class="muted">Not checked since this version was installed.</span><?php endif; ?>
+    <?php if ($updFailed): ?><br><strong>The last check, <?= h($updAttempted) ?>, could not reach the update server.</strong><?php endif; ?>
   </p>
   <form method="post" action="admin.php" class="inline-form"><?= csrf_field() ?>
     <button type="submit" name="check_updates" value="1" class="btn btn-secondary btn-sm">Check for updates</button>
   </form>
-  <?php if ((($GLOBALS['CONFIG']['app']['update_url'] ?? null) ?: 'off') === 'github'): // 4.18.0 ?>
+  <?php if (update_source() === 'github'): // 4.18.0 ?>
   <p><a class="btn <?= $updNewer ? 'btn-primary' : 'btn-secondary' ?>" href="update.php"><?= $updNewer ? 'Install the update' : 'Software update' ?></a></p>
   <?php endif; ?>
 </section>

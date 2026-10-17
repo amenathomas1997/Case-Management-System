@@ -45,7 +45,7 @@ function updater_test_env(string $name): ?string {
 
 /** Whether this site updates from GitHub (Settings, Updates: "github"). */
 function updater_enabled(): bool {
-    return (($GLOBALS['CONFIG']['app']['update_url'] ?? null) ?: 'off') === 'github';
+    return update_source() === 'github';
 }
 
 /** The private folder where downloads, staging and backups go. */
@@ -64,7 +64,8 @@ function updater_docroot(): string {
 /** The installer's cron folder (private/cron, holding cron_config.php), or null when the jobs live elsewhere. */
 function updater_cron_dir(): ?string {
     $d = rtrim((string)($GLOBALS['CMS_PRIVATE_DIR'] ?? ''), '/') . '/cron';
-    return ($GLOBALS['CMS_PRIVATE_DIR'] ?? '') !== '' && is_file($d . '/cron_config.php') ? $d : null;
+    // The installer's layout has cron_config.php there; an older site's jobs find the app on their own, so the jobs themselves mark the folder.
+    return ($GLOBALS['CMS_PRIVATE_DIR'] ?? '') !== '' && (is_file($d . '/cron_config.php') || is_file($d . '/watchdog.php')) ? $d : null;
 }
 
 /** The marker an install leaves while it swaps files in; still there means it was cut off. */
