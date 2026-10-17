@@ -61,3 +61,6 @@ Verified before commit:
 - The migration rehearsal matched.
 - The iPhone app builds for the simulator.
 - Not checked in a browser, with a screen reader, or on a phone.
+
+## Deployed 2026-10-16 20:06 CT
+From 4.4.0 with .audit_work/deploy-4.5.0 (22 files), at ed9f5ca. mig_4.5.0.sql ran (11 statements) before the files were installed; every converted column kept its values. Production files matched 4.4.0 before install and match 4.5.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.5.0. The iPhone app 4.5.0 (build 47) still needs archiving to TestFlight by the owner. Backups: /home/cmsuser/casemanagement_private/deploy-4.5.0-20261016-200616.
