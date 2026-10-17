@@ -46,3 +46,6 @@ Verified before commit:
 - full_schema 1460, audit_regression, security, staging_scrub, and run_all.
 - The migration rehearsal matched.
 - Not checked in a browser or with a screen reader.
+
+## Deployed 2026-10-16 19:41 CT
+From 4.3.0 with .audit_work/deploy-4.4.0 (35 files), at 6743f71. mig_4.4.0.sql ran (1 statement). Production files matched 4.3.0 before install and match 4.4.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.4.0. Every list and time limit starts at its built-in value, so nothing changes on the live site until an administrator edits one. Backups: /home/cmsuser/casemanagement_private/deploy-4.4.0-20261016-194108.
