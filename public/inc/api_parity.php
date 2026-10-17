@@ -577,7 +577,7 @@ case 'save_track': {
                     $reason !== '' ? $reason : null, $userId]);
         }
         if ($expChanged) {
-            db()->prepare("DELETE FROM sent_alerts WHERE track_id = ? AND alert_key IN ('exp7','exp14','exp30')")->execute([$id]);
+            db()->prepare("DELETE FROM sent_alerts WHERE track_id = ? AND alert_key LIKE 'exp%'")->execute([$id]);
         }
         if ($hoursChanged || $rateChanged || $mileageChanged) {
             db()->prepare("DELETE FROM sent_alerts WHERE track_id = ? AND alert_key IN ('pct80','funds80')")->execute([$id]);

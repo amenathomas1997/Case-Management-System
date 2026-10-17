@@ -650,7 +650,7 @@ $noFundsText = $noAuthHours ? 'No authorization entered' : 'No hourly rate enter
 // An expired authorization is announced whatever the track's status (work logged on a
 // Completed track would still be billed under it); one about to expire, only while Active.
 $authExpired = $track['expiration_date'] && $track['expiration_date'] < date('Y-m-d');
-$expiringSoon = $authExpired || ($track['expiration_date'] && strtotime($track['expiration_date']) < strtotime('+30 days') && $track['status'] === 'Active');
+$expiringSoon = $authExpired || ($track['expiration_date'] && strtotime($track['expiration_date']) < strtotime('+' . cms_number('auth_soon_days') . ' days') && $track['status'] === 'Active');
 // One goal row's typed values after its progress form was refused (see update_goal).
 $gpDraft = $_SESSION['goal_progress_draft'] ?? null;
 unset($_SESSION['goal_progress_draft']);

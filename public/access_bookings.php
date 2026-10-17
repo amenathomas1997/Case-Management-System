@@ -9,7 +9,7 @@ csrf_check();
 $user = require_login();
 require_perm('schedule');
 
-const BOOKING_TYPES = ['Interpreter', 'CART captioning', 'Transportation', 'Note-taker', 'Other'];
+// The booking types are on Lists and time limits (inc/lists.php, 4.4.0).
 const BOOKING_STATUSES = ['Requested', 'Confirmed', 'Completed', 'Cancelled'];
 // What each stored service type is called on screen (CART is spelled out).
 const BOOKING_TYPE_LABELS = ['CART captioning' => 'CART (real-time captioning)'];
@@ -66,7 +66,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_booking'])) {
         if (mb_strlen($in($k)) > $max) $errors[$k] = $label . ' is too long (' . $max . ' characters maximum).';
     }
     if ($errors) { keep_input(); keep_field_errors($errors); redirect('access_bookings.php#new-h'); }
-    $serviceType = in_array($_POST['service_type'] ?? '', BOOKING_TYPES, true) ? $_POST['service_type'] : 'Other';
+    $serviceType = in_array($_POST['service_type'] ?? '', cms_list_items('booking_types'), true) ? $_POST['service_type'] : 'Other';
     $provider = $in('provider') !== '' ? $in('provider') : null;
     $location = $in('location') !== '' ? $in('location') : null;
     $notes = $in('notes') !== '' ? $in('notes') : null;
@@ -170,7 +170,7 @@ page_header('Accommodation bookings', $user, 'schedule');
         </select><?= field_error('client_id') ?></div>
       <?php $pickType = old_in('service_type', 'Interpreter'); ?>
       <div class="field"><label for="service_type">Service</label><select id="service_type" name="service_type">
-        <?php foreach (BOOKING_TYPES as $bt): ?><option value="<?= h($bt) ?>"<?= $bt === $pickType ? ' selected' : '' ?>><?= h(BOOKING_TYPE_LABELS[$bt] ?? $bt) ?></option><?php endforeach; ?>
+        <?php foreach (cms_list_items('booking_types') as $bt): ?><option value="<?= h($bt) ?>"<?= $bt === $pickType ? ' selected' : '' ?>><?= h(BOOKING_TYPE_LABELS[$bt] ?? $bt) ?></option><?php endforeach; ?>
       </select></div>
       <div class="field"><label for="needed_at">When <span class="hint">date and time; leave blank if not known yet</span></label><input type="datetime-local" id="needed_at" name="needed_at" min="2000-01-01T00:00" max="<?= (int)date('Y') + 5 ?>-12-31T23:59" value="<?= h(old_in('needed_at')) ?>" <?= field_aria('needed_at') ?>><?= field_error('needed_at') ?></div>
       <div class="field"><label for="duration_min">Duration (minutes)</label><input type="number" id="duration_min" name="duration_min" min="0" max="1440" step="1" value="<?= h(old_in('duration_min', '60')) ?>" <?= field_aria('duration_min') ?>><?= field_error('duration_min') ?></div>

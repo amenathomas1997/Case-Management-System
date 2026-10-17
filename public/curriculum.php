@@ -13,7 +13,7 @@ $user = require_login();
 // tracking a client's competency needs 'clients'. Each action checks its own.
 if (!can('templates')) require_perm('clients');
 
-const COMPETENCY_LEVELS = [0 => 'Not started', 1 => 'Introduced', 2 => 'Practicing', 3 => 'Proficient', 4 => 'Mastered'];
+// The competency levels are on Lists and time limits (inc/lists.php, 4.4.0).
 
 /* ---- Management actions (require templates permission) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_curriculum'])) {
@@ -255,7 +255,7 @@ if (isset($_GET['client'])) {
           <tr>
             <th scope="row"><label for="lvl-<?= (int)$s['id'] ?>"><?= h($s['skill']) ?></label></th>
             <td><select id="lvl-<?= (int)$s['id'] ?>" name="level[<?= (int)$s['id'] ?>]">
-              <?php foreach (COMPETENCY_LEVELS as $v => $lab): ?><option value="<?= $v ?>" <?= $v === $lvl ? 'selected' : '' ?>><?= h($lab) ?></option><?php endforeach; ?>
+              <?php foreach (cms_list('competency_levels') as $v => $lab): ?><option value="<?= $v ?>" <?= $v === $lvl ? 'selected' : '' ?>><?= h($lab) ?></option><?php endforeach; ?>
             </select><input type="hidden" name="prev[<?= (int)$s['id'] ?>]" value="<?= $lvl ?>"></td>
             <td class="muted"><?= fmt_date($s['at'], true) ?></td>
           </tr>

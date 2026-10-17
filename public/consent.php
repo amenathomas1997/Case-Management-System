@@ -46,7 +46,7 @@ if (strlen($token) === 48) {
     // Nothing is greeted by name or written into a retention-archived record, as on
     // the portal and the survey: its links all read as not recognized.
     $stmt = db()->prepare('SELECT f.*, c.name AS client_name FROM consent_forms f JOIN clients c ON c.id = f.client_id
-        WHERE f.token = ? AND (f.signed_at IS NOT NULL OR f.sent_at > DATE_SUB(NOW(), INTERVAL 60 DAY)) AND c.archived_at IS NULL');
+        WHERE f.token = ? AND (f.signed_at IS NOT NULL OR f.sent_at > DATE_SUB(NOW(), INTERVAL ' . cms_number('sign_link_days') . ' DAY)) AND c.archived_at IS NULL');
     $stmt->execute([$token]);
     $form = $stmt->fetch();
 }

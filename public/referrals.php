@@ -46,7 +46,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $res = referral_close($id, $reason, $note, (int)$user['id']);
         if ($res['error'] !== null) {
             keep_input();
-            keep_field_errors([isset(REFERRAL_CLOSE_REASONS[$reason]) ? 'close_note' : 'close_reason' => $res['error']]);
+            keep_field_errors([isset(cms_list('referral_close_reasons')[$reason]) ? 'close_note' : 'close_reason' => $res['error']]);
             redirect('referrals.php?view=' . $id . '#close-h');
         }
         flash('Referral ' . referral_ref($id) . ' closed: ' . $reason . '.' . ($res['emailed'] ? ' The referrer was emailed the outcome (no client details).' : ' No outcome email was sent: the referral has no usable email address, or the email could not be sent.'));
@@ -438,7 +438,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
       <?= form_error_summary(['close_reason' => 'Reason', 'close_note' => 'Note']) ?>
       <div class="field"><label for="close_reason">Reason</label>
         <select id="close_reason" name="close_reason" <?= field_aria('close_reason') ?>><option value="">Choose a reason</option>
-          <?php foreach (array_keys(REFERRAL_CLOSE_REASONS) as $cr): ?><option value="<?= h($cr) ?>"<?= old_in('close_reason') === $cr ? ' selected' : '' ?>><?= h($cr) ?></option><?php endforeach; ?>
+          <?php foreach (array_keys(cms_list('referral_close_reasons')) as $cr): ?><option value="<?= h($cr) ?>"<?= old_in('close_reason') === $cr ? ' selected' : '' ?>><?= h($cr) ?></option><?php endforeach; ?>
         </select><?= field_error('close_reason') ?></div>
       <div class="field"><label for="close_note">Note for the record (required for Other; never emailed)</label>
         <input type="text" id="close_note" name="close_note" maxlength="255" value="<?= h(old_in('close_note')) ?>" <?= field_aria('close_note') ?>><?= field_error('close_note') ?></div>

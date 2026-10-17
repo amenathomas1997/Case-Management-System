@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/lists.php';   // the lists and time limits set on screen (4.4.0)
 // Referral outcomes and case closure (3.0.35). A referral that does not become a client is
 // Closed with a reason, and the referrer is emailed the outcome automatically (owner
 // decision, 2026-10-16), with the reference number and a general reason only. A referral for
@@ -34,7 +35,7 @@ function referral_ref(int $id): string {
  * and a waitlist entry is closed with it.
  */
 function referral_close(int $id, string $reason, string $note, int $actor): array {
-    if (!isset(REFERRAL_CLOSE_REASONS[$reason])) return ['error' => 'Choose a reason from the list.', 'emailed' => false];
+    if (!isset(cms_list('referral_close_reasons')[$reason])) return ['error' => 'Choose a reason from the list.', 'emailed' => false];
     $note = trim($note);
     if ($reason === 'Other' && $note === '') return ['error' => 'Give a short note for Other.', 'emailed' => false];
     if (mb_strlen($note) > 255) return ['error' => 'Keep the note to 255 characters or fewer.', 'emailed' => false];
@@ -61,7 +62,7 @@ function referral_close(int $id, string $reason, string $note, int $actor): arra
     $emailed = false;
     $to = trim((string)$ref['counselor_email']);
     if (filter_var($to, FILTER_VALIDATE_EMAIL)) {
-        [$subj, $body] = email_template('referral_closed', ['ref' => referral_ref($id), 'date' => fmt_date($ref['created_at']), 'reason' => REFERRAL_CLOSE_REASONS[$reason]]);
+        [$subj, $body] = email_template('referral_closed', ['ref' => referral_ref($id), 'date' => fmt_date($ref['created_at']), 'reason' => cms_list('referral_close_reasons')[$reason]]);
         if (send_app_mail($to, $subj, $body)) {
             $emailed = true;
             db()->prepare('UPDATE referrals SET outcome_emailed_at = NOW() WHERE id = ?')->execute([$id]);
@@ -132,7 +133,7 @@ function closure_input(array $src): array {
     $s = fn(string $k): string => trim(is_string($src[$k] ?? null) ? $src[$k] : '');
     $e = [];
     $reason = $s('closure_reason'); $note = $s('closure_note');
-    if (!in_array($reason, CLOSURE_REASONS, true)) $e['closure_reason'] = 'Choose why the case is closing.';
+    if (!in_array($reason, cms_list_items('closure_reasons'), true)) $e['closure_reason'] = 'Choose why the case is closing.';
     if ($reason === 'Other' && $note === '') $e['closure_note'] = 'Give a short note for Other.';
     if (mb_strlen($note) > 255) $e['closure_note'] = 'Keep the note to 255 characters or fewer.';
     $emp = $s('closure_employed');

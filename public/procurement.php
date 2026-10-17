@@ -103,7 +103,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_request'])) {
     }
     db()->prepare('INSERT INTO device_requests (client_id, requested_by, device_name, category, justification, status) VALUES (?,?,?,?,?,?)')
         ->execute([$cid, $user['id'], $name,
-            in_array($_POST['category'] ?? '', DR_CATEGORIES, true) ? $_POST['category'] : 'Other',
+            in_array($_POST['category'] ?? '', cms_list_items('device_request_categories'), true) ? $_POST['category'] : 'Other',
             $justification !== '' ? $justification : null, 'Requested']);
     $rid = (int)db()->lastInsertId();
     web_once_set($reqKey, $rid);
@@ -594,7 +594,7 @@ page_header('Device purchases', $user, 'procurement');
         <span class="hint" id="category-hint">CCTV: closed-circuit television (video) magnifier. AAC: augmentative and alternative communication.</span>
         <?php // The values are the stored categories; only the shown names spell out the abbreviations (as in recommend.php). ?>
         <select id="category" name="category" aria-describedby="category-hint"><?php $catSel = $oldReq('category', 'Other');
-          foreach (DR_CATEGORIES as $cv): $cl = ['Magnifier / CCTV' => 'Video magnifier (CCTV, closed-circuit television)', 'AAC Device' => 'Communication device (AAC, augmentative and alternative communication)'][$cv] ?? $cv; ?>
+          foreach (cms_list_items('device_request_categories') as $cv): $cl = ['Magnifier / CCTV' => 'Video magnifier (CCTV, closed-circuit television)', 'AAC Device' => 'Communication device (AAC, augmentative and alternative communication)'][$cv] ?? $cv; ?>
           <option value="<?= h($cv) ?>"<?= $cv === $catSel ? ' selected' : '' ?>><?= h($cl) ?></option>
         <?php endforeach; ?></select></div>
     </div>

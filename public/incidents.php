@@ -8,7 +8,7 @@ csrf_check();
 $user = require_login();
 require_perm('clients');
 
-const INCIDENT_TYPES = ['Injury', 'Near miss', 'Equipment failure', 'Behavioral', 'Property damage', 'Medical', 'Safety concern', 'Other'];
+// The incident types are on Lists and time limits (inc/lists.php, 4.4.0).
 const INCIDENT_SEVERITY = ['Low', 'Medium', 'High', 'Critical'];
 const INCIDENT_STATUS = ['Open', 'Under review', 'Closed'];
 
@@ -43,7 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_incident'])) {
     // An incident has already happened: a future date is a mistyped one.
     elseif ($date > date('Y-m-d')) $incErrs['incident_date'] = 'The incident date cannot be in the future. Check the year.';
     $type = $in('type');
-    if (!in_array($type, INCIDENT_TYPES, true)) $incErrs['type'] = 'Choose a type from the list.';
+    if (!in_array($type, cms_list_items('incident_types'), true)) $incErrs['type'] = 'Choose a type from the list.';
     $sev = $in('severity');
     if (!in_array($sev, INCIDENT_SEVERITY, true)) $incErrs['severity'] = 'Choose a severity from the list.';
     $desc = $in('description');
@@ -178,7 +178,7 @@ $sevBadge = fn($s) => '<span class="badge ' . ($s === 'Critical' || $s === 'High
     <?= form_error_summary(['incident_date' => 'Date', 'type' => 'Type', 'severity' => 'Severity', 'client_id' => 'Client', 'location' => 'Location', 'description' => 'What happened', 'action_taken' => 'Action taken']) ?>
     <div class="grid grid-4">
       <div class="field"><label for="incident_date">Date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><input type="date" id="incident_date" name="incident_date" required max="<?= date('Y-m-d') ?>" value="<?= h(old_in('incident_date', date('Y-m-d'))) ?>" <?= field_aria('incident_date') ?>><?= field_error('incident_date') ?></div>
-      <div class="field"><label for="type">Type <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><select id="type" name="type" required <?= field_aria('type') ?>><option value="">Choose a type</option><?php foreach (INCIDENT_TYPES as $t): ?><option<?= old_in('type') === $t ? ' selected' : '' ?>><?= h($t) ?></option><?php endforeach; ?></select><?= field_error('type') ?></div>
+      <div class="field"><label for="type">Type <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><select id="type" name="type" required <?= field_aria('type') ?>><option value="">Choose a type</option><?php foreach (cms_list_items('incident_types') as $t): ?><option<?= old_in('type') === $t ? ' selected' : '' ?>><?= h($t) ?></option><?php endforeach; ?></select><?= field_error('type') ?></div>
       <div class="field"><label for="severity">Severity <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><select id="severity" name="severity" required <?= field_aria('severity') ?>><option value="">Choose a severity</option><?php foreach (INCIDENT_SEVERITY as $s): ?><option<?= old_in('severity') === $s ? ' selected' : '' ?>><?= h($s) ?></option><?php endforeach; ?></select><?= field_error('severity') ?></div>
       <div class="field"><label for="client_id">Client <span class="hint">optional</span></label>
         <select id="client_id" name="client_id" <?= field_aria('client_id') ?>><option value="">— None —</option>

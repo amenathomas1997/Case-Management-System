@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/lists.php';   // the lists and time limits set on screen (4.4.0)
 // Record keeping and privacy (3.0.36). Owner decisions of 2026-10-16:
 // - A case note locks 30 days after it was written. A later change is an Addendum, a new
 //   note linked to the original, and every earlier version of an edited note is kept.
@@ -121,7 +122,7 @@ function typed_name_key(string $s): string {
 function release_status(array $r): string {
     if (!empty($r['withdrawn_at'])) return 'Withdrawn';
     if (!empty($r['signed_at'])) return ($r['expires_on'] !== null && $r['expires_on'] < date('Y-m-d')) ? 'Expired' : 'Current';
-    return strtotime((string)$r['sent_at']) < strtotime('-60 days') ? 'Link expired' : 'Awaiting signature';
+    return strtotime((string)$r['sent_at']) < strtotime('-' . cms_number('sign_link_days') . ' days') ? 'Link expired' : 'Awaiting signature';
 }
 
 /** A client's releases, newest first. */
@@ -179,7 +180,7 @@ function release_input(array $in, string $method): array {
         'recipient_email' => $str('recipient_email'), 'purpose' => $str('purpose'),
         'signed_on' => $str('signed_on'),
     ];
-    $items = is_array($in['info'] ?? null) ? array_values(array_intersect(RELEASE_INFO_ITEMS, array_filter($in['info'], 'is_string'))) : [];
+    $items = is_array($in['info'] ?? null) ? array_values(array_intersect(cms_list_items('release_info_items'), array_filter($in['info'], 'is_string'))) : [];
     $other = $str('info_other');
     if ($other !== '') $items[] = $other;
     $v['info_scope'] = implode('; ', $items);
@@ -189,7 +190,7 @@ function release_input(array $in, string $method): array {
     if ($method === 'Email') {
         if (!filter_var($v['signer_email'], FILTER_VALIDATE_EMAIL) || mb_strlen($v['signer_email']) > 190) $e['signer_email'] = 'Enter a valid email address for the person who signs.';
     } elseif ($v['signer_email'] !== '' && !filter_var($v['signer_email'], FILTER_VALIDATE_EMAIL)) $e['signer_email'] = 'Enter a valid email address, or leave it blank.';
-    if (!in_array($v['recipient_type'], RELEASE_RECIPIENT_TYPES, true)) $e['recipient_type'] = 'Choose who the information goes to.';
+    if (!in_array($v['recipient_type'], cms_list_items('release_recipient_types'), true)) $e['recipient_type'] = 'Choose who the information goes to.';
     if ($v['recipient_name'] === '') $e['recipient_name'] = 'Name the person or organisation that receives the information.';
     elseif (mb_strlen($v['recipient_name']) > 190) $e['recipient_name'] = 'Keep the recipient to 190 characters or fewer.';
     if ($v['recipient_email'] !== '' && (!filter_var($v['recipient_email'], FILTER_VALIDATE_EMAIL) || mb_strlen($v['recipient_email']) > 190)) $e['recipient_email'] = 'Enter a valid email address for the recipient, or leave it blank.';

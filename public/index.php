@@ -36,7 +36,7 @@ if (can('clients')) {
           (SELECT COALESCE(SUM(hours),0) FROM work_logs WHERE track_id = t.id) AS worked
         FROM training_tracks t JOIN clients c ON c.id = t.client_id
         WHERE t.status = 'Active' AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%' AND t.expiration_date IS NOT NULL
-          AND t.expiration_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)" . $scopeAnd . "
+          AND t.expiration_date <= DATE_ADD(CURDATE(), INTERVAL " . cms_number('auth_soon_days') . " DAY)" . $scopeAnd . "
         ORDER BY t.expiration_date");
     $q->execute($scopeParams); $expiring = $q->fetchAll();
     $q = db()->prepare("SELECT n.*, c.name AS client_name FROM client_notes n JOIN clients c ON c.id = n.client_id WHERE 1=1" . $scopeAnd . " ORDER BY n.created_at DESC LIMIT 5");

@@ -88,7 +88,7 @@ function workflow_action_items(array $user): array {
     $covered=[];
     if(can('clients')){
         foreach(workflow_review_notes($actor) as $n)$add('Documentation',$n['client_name'].': '.implode(', ',$n['flags']),null,'workflows.php?view=review#note-'.(int)$n['id'],2);
-        $q=db()->query("SELECT t.*,c.name FROM training_tracks t JOIN clients c ON c.id=t.client_id WHERE t.status='Active' AND t.expiration_date<=DATE_ADD(CURDATE(),INTERVAL 30 DAY)".$scope);
+        $q=db()->query("SELECT t.*,c.name FROM training_tracks t JOIN clients c ON c.id=t.client_id WHERE t.status='Active' AND t.expiration_date<=DATE_ADD(CURDATE(),INTERVAL ".cms_number('auth_soon_days')." DAY)".$scope);
         foreach($q->fetchAll() as $r)$add('Authorization',$r['name'].' — '.$r['title'],$r['expiration_date'],'amendment_request.php?track='.(int)$r['id'],1);
         $q=db()->query("SELECT p.id,p.created_at,h.title,t.client_id,c.name FROM homework_practice p JOIN homework h ON h.id=p.homework_id JOIN training_tracks t ON t.id=h.track_id JOIN clients c ON c.id=t.client_id WHERE p.difficulty='Need help' AND EXISTS (SELECT 1 FROM tasks k WHERE k.auto_key=CONCAT('practice:',p.id) AND k.status='Open')".$scope);
         // This item stands for the request's own task, which is not listed a second time.

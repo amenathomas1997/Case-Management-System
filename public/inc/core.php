@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.3.0';
+const APP_VERSION = '4.4.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1438,7 +1438,7 @@ function instrument_scale(array $inst): array {
             if (count($p) === 2) $labels[(int)trim($p[0])] = trim($p[1]);
         }
     }
-    if ($min === 0 && $max === 4 && !$labels && defined('SCORE_LABELS_DEFAULT')) return SCORE_LABELS_DEFAULT;
+    if ($min === 0 && $max === 4 && !$labels && function_exists('cms_list')) return cms_list('score_labels');
     $opts = [];
     for ($v = $min; $v <= $max; $v++) $opts[$v] = $labels[$v] ?? (string)$v;
     // Gloss the endpoints when the instrument gave no labels, so screen-reader
@@ -1725,3 +1725,5 @@ require_once __DIR__ . '/agencies.php';
 require_once __DIR__ . '/pricing.php';
 // Public wording set on screen (4.3.0).
 require_once __DIR__ . '/wording.php';
+// Lists and time limits set on screen (4.4.0).
+require_once __DIR__ . '/lists.php';

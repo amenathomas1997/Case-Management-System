@@ -62,7 +62,7 @@ if (strlen($token) === 48) {
     // Unsigned links expire after 60 days; signed ones stay viewable as a receipt.
     try {
         $stmt = db()->prepare('SELECT r.*, c.name AS client_name FROM client_releases r JOIN clients c ON c.id = r.client_id
-            WHERE r.token = ? AND (r.signed_at IS NOT NULL OR r.sent_at > DATE_SUB(NOW(), INTERVAL 60 DAY)) AND c.archived_at IS NULL');
+            WHERE r.token = ? AND (r.signed_at IS NOT NULL OR r.sent_at > DATE_SUB(NOW(), INTERVAL ' . cms_number('sign_link_days') . ' DAY)) AND c.archived_at IS NULL');
         $stmt->execute([$token]);
         $rel = $stmt->fetch() ?: null;
     } catch (PDOException $e) {

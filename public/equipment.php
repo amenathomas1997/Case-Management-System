@@ -556,7 +556,7 @@ if (isset($_GET['scan'])) {
               <option value="<?= (int)$c['id'] ?>"><?= h($c['name']) ?></option><?php endforeach; ?>
             </select></div>
           <div class="field"><label for="sc_due">Return due</label>
-            <input type="date" id="sc_due" name="due_date" value="<?= date('Y-m-d', strtotime('+60 days')) ?>"></div>
+            <input type="date" id="sc_due" name="due_date" value="<?= date('Y-m-d', strtotime('+' . cms_number('loan_due_days') . ' days')) ?>"></div>
           <button type="submit" name="loan_out" value="1" class="btn btn-primary">Loan out</button>
         </form>
       <?php endif; ?>
@@ -725,7 +725,7 @@ page_header('Equipment & loans', $user, 'equipment');
         </select><?= field_error('loan_client_id') ?>
       </div>
       <div class="field"><label for="due_date">Return due</label>
-        <input type="date" id="due_date" name="due_date" value="<?= h($oldLoan('due_date', date('Y-m-d', strtotime('+60 days')))) ?>" <?= field_aria('loan_due_date') ?>><?= field_error('loan_due_date') ?></div>
+        <input type="date" id="due_date" name="due_date" value="<?= h($oldLoan('due_date', date('Y-m-d', strtotime('+' . cms_number('loan_due_days') . ' days')))) ?>" <?= field_aria('loan_due_date') ?>><?= field_error('loan_due_date') ?></div>
       <div class="field"><label for="lo_notes">Loan notes</label>
         <input type="text" id="lo_notes" name="notes" maxlength="255" value="<?= h($oldLoan('notes')) ?>" <?= field_aria('loan_notes') ?>><?= field_error('loan_notes') ?></div>
       <div class="field"><label for="lo_cond">Condition as it goes out</label>

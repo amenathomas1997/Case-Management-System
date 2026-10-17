@@ -156,9 +156,10 @@ function voice_answer_more(string $type, string $clientName, array $user): ?arra
         }
         case 'auths_expiring': {
             $rows = db()->query("SELECT c.name, t.expiration_date FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.status = 'Active' AND t.billing_mode = 'vr'
-                AND t.expiration_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)" . $scopeC . ' ORDER BY t.expiration_date LIMIT 6')->fetchAll();
-            if (!$rows) return ['speak' => 'No authorizations expire in the next 30 days.'];
-            return ['speak' => count($rows) . ' authorization' . (count($rows) === 1 ? '' : 's') . ' expire in the next 30 days: ' . implode('; ', array_map(fn($r) => $r['name'] . ' on ' . date('F j', strtotime($r['expiration_date'])), $rows)) . '.', 'show' => 'compliance.php', 'label' => 'Go to compliance'];
+                AND t.expiration_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL " . cms_number('auth_soon_days') . " DAY)" . $scopeC . ' ORDER BY t.expiration_date LIMIT 6')->fetchAll();
+            $soonDays = cms_number('auth_soon_days');
+            if (!$rows) return ['speak' => 'No authorizations expire in the next ' . $soonDays . ' days.'];
+            return ['speak' => count($rows) . ' authorization' . (count($rows) === 1 ? '' : 's') . ' expire in the next ' . $soonDays . ' days: ' . implode('; ', array_map(fn($r) => $r['name'] . ' on ' . date('F j', strtotime($r['expiration_date'])), $rows)) . '.', 'show' => 'compliance.php', 'label' => 'Go to compliance'];
         }
     }
     return null;

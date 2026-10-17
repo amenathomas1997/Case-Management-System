@@ -1417,13 +1417,13 @@ $relDefaultSigner = !empty($client['guardian_name']) && !empty($client['dob']) &
       <div class="field"><label for="rel_semail">Signer email (required to email it)</label>
         <input type="email" id="rel_semail" name="signer_email" maxlength="190" value="<?= h(old_in('signer_email', $relRole === 'Guardian' ? (string)($client['guardian_email'] ?? '') : (string)($client['email'] ?? ''))) ?>" <?= field_aria('signer_email') ?>><?= field_error('signer_email') ?></div>
       <div class="field"><label for="rel_rtype">Recipient type <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-        <select id="rel_rtype" name="recipient_type" <?= field_aria('recipient_type') ?>><?= select_options(RELEASE_RECIPIENT_TYPES, old_in('recipient_type', 'VR counselor and agency')) ?></select><?= field_error('recipient_type') ?></div>
+        <select id="rel_rtype" name="recipient_type" <?= field_aria('recipient_type') ?>><?= select_options(cms_list_items('release_recipient_types'), old_in('recipient_type', 'VR counselor and agency')) ?></select><?= field_error('recipient_type') ?></div>
       <div class="field"><label for="rel_rname">Recipient name and organisation <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
         <input type="text" id="rel_rname" name="recipient_name" maxlength="190" value="<?= h(old_in('recipient_name', trim(($client['counselor_name'] ?? '') . (!empty($client['counselor_agency']) ? ', ' . $client['counselor_agency'] : ''), ', '))) ?>" <?= field_aria('recipient_name') ?>><?= field_error('recipient_name') ?></div>
       <div class="field"><label for="rel_remail">Recipient email</label>
         <input type="email" id="rel_remail" name="recipient_email" maxlength="190" value="<?= h(old_in('recipient_email', (string)($client['counselor_email'] ?? ''))) ?>" <?= field_aria('recipient_email') ?>><?= field_error('recipient_email') ?></div>
       <fieldset <?= has_field_error('info') ? 'aria-describedby="err-info"' : '' ?>><legend>Information covered <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></legend>
-        <?php foreach (RELEASE_INFO_ITEMS as $ii => $item): $checked = $relInfoKept !== null ? in_array($item, $relInfoKept, true) : $ii < 2; ?>
+        <?php foreach (cms_list_items('release_info_items') as $ii => $item): $checked = $relInfoKept !== null ? in_array($item, $relInfoKept, true) : $ii < 2; ?>
         <label><input type="checkbox" id="rel_info<?= $ii ?>" name="info[]" value="<?= h($item) ?>"<?= $checked ? ' checked' : '' ?>> <?= h($item) ?></label>
         <?php endforeach; ?>
         <?= field_error('info') ?>

@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/lists.php';   // the lists and time limits set on screen (4.4.0)
 
 const DEVICE_FOLLOWUP_DAYS = [30, 60, 90];
 /** Device request categories: the fixed list the procurement page and the app's
@@ -48,7 +49,7 @@ function loan_equipment(int $equipmentId, int $clientId, ?string $due, ?string $
         // quietly go unused (abandonment). Staff can complete or skip each.
         if ($scheduleFollowups) {
             $fu = $db->prepare('INSERT INTO equipment_followups (loan_id, client_id, equipment_id, interval_days, due_date) VALUES (?,?,?,?, DATE_ADD(CURDATE(), INTERVAL ? DAY))');
-            foreach (DEVICE_FOLLOWUP_DAYS as $d) {
+            foreach (cms_days('device_followup_days') as $d) {
                 $fu->execute([$loanId, $clientId, $equipmentId, $d, $d]);
             }
         }

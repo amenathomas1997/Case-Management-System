@@ -131,7 +131,8 @@ function api_datetime(array $src, string $key, string $label): ?string {
 function api_choice(array $src, string $key, array $allowed, string $label, ?string $default): ?string {
     $raw = $src[$key] ?? '';
     if ($raw === '') return $default;
-    if (!is_string($raw) || !in_array($raw, $allowed, true)) fail($label . ' is not a valid choice.', 422);
+    // A list an administrator changed (Lists and time limits) can refuse a choice an older app offers.
+    if (!is_string($raw) || !in_array($raw, $allowed, true)) fail($label . ' is not a valid choice. Your organisation\'s list may have changed: update the app, or make this change on the website.', 422);
     return $raw;
 }
 
@@ -679,14 +680,14 @@ switch ($action) {
             // closing a client leaves its track Active, so it would stay listed for ever.
             $q = db()->prepare("SELECT t.id, t.title, t.expiration_date, c.name AS client, (t.expiration_date < CURDATE()) AS is_expired
                 FROM training_tracks t JOIN clients c ON c.id = t.client_id
-                WHERE t.status = 'Active' AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%' AND t.expiration_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)"
+                WHERE t.status = 'Active' AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%' AND t.expiration_date <= DATE_ADD(CURDATE(), INTERVAL " . cms_number('auth_soon_days') . " DAY)"
                 . $scopeAnd . " ORDER BY (t.expiration_date < CURDATE()),
                     CASE WHEN t.expiration_date >= CURDATE() THEN t.expiration_date END, t.expiration_date DESC LIMIT 10");
             $q->execute($scopeParams); $expiring = $q->fetchAll();
             foreach ($expiring as &$expRow) { $expRow['is_expired'] = (bool)$expRow['is_expired']; } unset($expRow);
             // The list holds at most 10; the app says how many expire in all.
             $q = db()->prepare("SELECT COUNT(*) FROM training_tracks t JOIN clients c ON c.id = t.client_id
-                WHERE t.status = 'Active' AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%' AND t.expiration_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)" . $scopeAnd);
+                WHERE t.status = 'Active' AND c.archived_at IS NULL AND c.status NOT LIKE 'Closed%' AND t.expiration_date <= DATE_ADD(CURDATE(), INTERVAL " . cms_number('auth_soon_days') . " DAY)" . $scopeAnd);
             $q->execute($scopeParams); $expiringTotal = (int)$q->fetchColumn();
             $q = db()->prepare("SELECT n.id, n.subject, n.note_type, n.created_at, n.client_id, c.name AS client_name
                 FROM client_notes n JOIN clients c ON c.id = n.client_id WHERE 1=1" . $scopeAnd . " ORDER BY n.created_at DESC LIMIT 5");
@@ -2282,8 +2283,8 @@ switch ($action) {
             fail('The email could not be sent, so nothing was changed: the counselor\'s current portal link, if they have one, still works. Try again later.', 500);
         }
         // last_used_at is cleared (as counselors.php): it described the link just replaced.
-        db()->prepare('INSERT INTO vrc_tokens (counselor_email, counselor_name, token, expires_at) VALUES (?,?,?, DATE_ADD(NOW(), INTERVAL 180 DAY))
-            ON DUPLICATE KEY UPDATE token = VALUES(token), counselor_name = VALUES(counselor_name), created_at = NOW(), expires_at = DATE_ADD(NOW(), INTERVAL 180 DAY), last_used_at = NULL')
+        db()->prepare('INSERT INTO vrc_tokens (counselor_email, counselor_name, token, expires_at) VALUES (?,?,?, DATE_ADD(NOW(), INTERVAL ' . cms_number('counselor_link_days') . ' DAY))
+            ON DUPLICATE KEY UPDATE token = VALUES(token), counselor_name = VALUES(counselor_name), created_at = NOW(), expires_at = DATE_ADD(NOW(), INTERVAL ' . cms_number('counselor_link_days') . ' DAY), last_used_at = NULL')
             ->execute([$email, $name, $ptoken]);
         audit($userId, 'vrcportal.send', 'counselor', null, $email . ' (mobile)');
         out(['ok' => true]);
@@ -2365,7 +2366,7 @@ switch ($action) {
         // Existing mobile builds display body; include structured details there too.
         if (referral_request_summary($ref) !== '') $ref['body'] = referral_request_summary($ref) . "\n\n" . $ref['body'];
         $ref['reference'] = referral_ref((int)$ref['id']);
-        out(['ok' => true, 'referral' => $ref, 'possible_duplicates' => $dupes, 'duplicate_clients' => $dupClients, 'close_reasons' => array_keys(REFERRAL_CLOSE_REASONS)]);
+        out(['ok' => true, 'referral' => $ref, 'possible_duplicates' => $dupes, 'duplicate_clients' => $dupClients, 'close_reasons' => array_map('strval', array_keys(cms_list('referral_close_reasons')))]);
 
     case 'staff':
         // Needed to schedule, to assign a referral and to assign a client.
@@ -2998,7 +2999,7 @@ switch ($action) {
         // The website's fixed list (DR_CATEGORIES in inc/access.php, which the app's
         // picker matches): a value outside it is refused, a blank one is Other.
         db()->prepare('INSERT INTO device_requests (client_id, requested_by, device_name, category, justification, status) VALUES (?,?,?,?,?,?)')
-            ->execute([$cid, $userId, $name, api_choice($input, 'category', DR_CATEGORIES, 'Category', 'Other'),
+            ->execute([$cid, $userId, $name, api_choice($input, 'category', cms_list_items('device_request_categories'), 'Category', 'Other'),
                 api_text($input, 'justification', API_TEXT_BYTES, 'Justification', true) ?: null, 'Requested']);
         $createdId = (int)db()->lastInsertId();
         audit($userId, 'device.request', 'device_request', $createdId, '(mobile)');
@@ -3363,7 +3364,7 @@ switch ($action) {
         $scoped = caseload_scoped();
         $scopeSql = $scoped ? ' AND c.assigned_to = ?' : '';
         $scopeArg = $scoped ? [$userId] : [];
-        $soon = date('Y-m-d', strtotime('+30 days')); $today = date('Y-m-d');
+        $soon = date('Y-m-d', strtotime('+30 days')); $today = date('Y-m-d');   // equipment due; authorizations use auth_soon_days
         $authRisk = [];
         // As compliance.php: a closed or archived client's track is never closed for them,
         // so without the open-client filter it would stay listed as expired for ever.
@@ -3379,8 +3380,8 @@ switch ($action) {
             // money before 80% of its hours: flagged too, by the same rule in cents.
             $fundsC = (int)round($r['authorized_funds'] * 100);
             $fundsPct = $fundsC > 0 ? intdiv(($fundsC - (int)round($r['funds_remaining'] * 100)) * 100, $fundsC) : 0;
-            $expSoon = $t['expiration_date'] && $t['expiration_date'] <= $soon;
-            if ($pct >= 80 || $fundsPct >= 80 || $expSoon) {
+            $expSoon = $t['expiration_date'] && $t['expiration_date'] <= date('Y-m-d', strtotime('+' . cms_number('auth_soon_days') . ' days'));
+            if ($pct >= cms_number('auth_warn_pct') || $fundsPct >= cms_number('auth_warn_pct') || $expSoon) {
                 $authRisk[] = ['id' => (int)$t['id'], 'title' => $t['title'], 'client' => $t['client'], 'pct' => $pct,
                     'funds_pct' => $fundsC > 0 ? $fundsPct : null, 'funds_remaining' => $fundsC > 0 ? round((float)$r['funds_remaining'], 2) : null,
                     'expiration_date' => $t['expiration_date'], 'expired' => $t['expiration_date'] && $t['expiration_date'] < $today];

@@ -6,6 +6,10 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.4.0' => [
+        'Lists and time limits (Administration) lets you change the choices forms offer: vision statuses, why a case or referral is closed, device request categories, incident and booking types, release of information choices, and the assessment and competency level names. Records keep any value you later remove.',
+        'It also sets the percent of an authorization that triggers a warning (built-in 80), how many days count as expiring soon, when expiry alerts go out, the closure and device follow-up days, how long loans, counselor links, signing links, consents and releases last.',
+    ],
     '4.3.0' => [
         'Everything that names your business is set on screen: the branding and app icon (Settings), who runs the service, your address, the laws you follow and whether the HIPAA section applies (Settings, Privacy notice), and the consent form\'s description of your services and an extra privacy section (Public wording), in English and Spanish.',
         'The system no longer has any one business built in, so other assistive technology businesses can run their own copy. Help has a new Administrator guide section, Making the system your own.',

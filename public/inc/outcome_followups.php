@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/lists.php';   // the lists and time limits set on screen (4.4.0)
 // After a case closes (3.0.47): 30, 60 and 90-day follow-up checks (still employed or
 // independent, still using the technology, needs more service), surveys answered by phone,
 // and the outcome measures the Outcome report adds up.
@@ -14,7 +15,7 @@ function closure_followups_schedule(int $clientId, int $closureId): void {
         $open->execute([$clientId]);
         if ((int)$open->fetchColumn() > 0) return;
         $ins = db()->prepare('INSERT INTO closure_followups (client_id, closure_id, interval_days, due_on) VALUES (?,?,?,?)');
-        foreach (CLOSURE_FOLLOWUP_DAYS as $d) $ins->execute([$clientId, $closureId, $d, date('Y-m-d', strtotime('+' . $d . ' days'))]);
+        foreach (cms_days('closure_followup_days') as $d) $ins->execute([$clientId, $closureId, $d, date('Y-m-d', strtotime('+' . $d . ' days'))]);
     } catch (PDOException $e) {
         error_log('closure_followups_schedule: ' . $e->getCode()); // mig_3.0.47 not run yet
     }

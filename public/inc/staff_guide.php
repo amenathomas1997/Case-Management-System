@@ -359,7 +359,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Find the counselor in the table.</li>
   <li>Choose Send portal link. If they already have one, the button is Resend / reset link or Send a new link.</li>
 </ol>
-<p>The counselor needs the link and a code that is emailed to them each time. A link lasts 180 days. Sending a new link turns off the old one. If a counselor leaves or shares the link, choose Turn off link.</p>
+<p>The counselor needs the link and a code that is emailed to them each time. A link lasts 180 days, or the time set on Lists and time limits. Sending a new link turns off the old one. If a counselor leaves or shares the link, choose Turn off link.</p>
 
 <?= $sgH(3, 'guide-notes') ?>
 <ol>
@@ -603,7 +603,7 @@ $sgTimeout = max(1, (int)cfg('session_timeout_minutes'));
   <li>Enter the guardian's name and email.</li>
   <li>Choose Email consent form, then confirm.</li>
 </ol>
-<p>The guardian signs by typing their full name. The link works for 60 days. A new request turns off any earlier unsigned link. While a request is waiting, the form is called Resend the guardian consent request by email. Authorizations &amp; compliance lists consents that need renewing.</p>
+<p>The guardian signs by typing their full name. The link works for 60 days, or the time set on Lists and time limits. A new request turns off any earlier unsigned link. While a request is waiting, the form is called Resend the guardian consent request by email. Authorizations &amp; compliance lists consents that need renewing.</p>
 
 <?= $sgH(3, 'guide-billing') ?>
 <p>Each funding agency can have its own vendor number, payment terms and billing address (Administration, Funding agencies); its invoices use them. A client in another time zone shows "Client's time" on the schedule, and their record says how far their time is from yours.</p>

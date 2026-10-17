@@ -60,13 +60,13 @@ foreach ($tracks as $t) {
     $label = "{$t['client_name']} — {$t['title']} (Auth {$t['auth_number']})";
 
     if ($days !== null && $days >= 0) {
-        foreach ([7, 14, 30] as $threshold) {
+        foreach (cms_days('auth_expiry_alert_days') as $threshold) {
             $key = 'exp' . $threshold;
             if ($days <= $threshold && empty($already["$id:$key"])) {
                 // Mark every threshold this alert already covers, so a track first
                 // noticed at 5 days doesn't fire the 14- and 30-day alerts too.
                 $marks = [];
-                foreach ([7, 14, 30] as $t2) {
+                foreach (cms_days('auth_expiry_alert_days') as $t2) {
                     if ($days <= $t2) $marks[] = [$id, 'exp' . $t2];
                 }
                 $alerts[] = ['text' => "EXPIRING in {$days} day(s) — {$label}, expires " . fmt_date($t['expiration_date']),
@@ -80,8 +80,13 @@ foreach ($tracks as $t) {
     // expenses spend the authorized funds without adding hours. When both are
     // reached on the same run they go out as one alert and both are marked.
     $r = track_rollup($id);
-    $hoursLow = $r['authorized_hours'] > 0 && $r['pct_used'] >= 80;
-    $fundsLow = $r['authorized_funds'] > 0 && $r['funds_remaining'] <= 0.2 * $r['authorized_funds'];
+    // The percent is set on Lists and time limits (4.4.0; built-in 80).
+    $warnPct = cms_number('auth_warn_pct');
+    // Funds in whole cents, as compliance.php counts them (no floating-point edge at the line).
+    $fundsC = (int)round($r['authorized_funds'] * 100);
+    $usedC = $fundsC - (int)round($r['funds_remaining'] * 100);
+    $hoursLow = $r['authorized_hours'] > 0 && $r['pct_used'] >= $warnPct;
+    $fundsLow = $fundsC > 0 && $usedC * 100 >= $warnPct * $fundsC;
     $parts = [];
     $marks = [];
     if ($hoursLow && empty($already["$id:pct80"])) {
@@ -102,8 +107,8 @@ foreach ($tracks as $t) {
     // falls clearly back below the line (a trashed or corrected log, expense or
     // rate), the mark is cleared so the next real crossing alerts again. The
     // five-point margin keeps a track hovering at the line from re-alerting daily.
-    $hoursClear = $r['authorized_hours'] <= 0 || $r['pct_used'] < 75;
-    $fundsClear = $r['authorized_funds'] <= 0 || $r['funds_remaining'] > 0.25 * $r['authorized_funds'];
+    $hoursClear = $r['authorized_hours'] <= 0 || $r['pct_used'] < $warnPct - 5;
+    $fundsClear = $fundsC <= 0 || $usedC * 100 < ($warnPct - 5) * $fundsC;
     if ($hoursClear && isset($already["$id:pct80"])) $unmark->execute([$id, 'pct80']);
     if ($fundsClear && isset($already["$id:funds80"])) $unmark->execute([$id, 'funds80']);
     // The client's counselor is emailed too, once per crossing (owner decision 2026-10-16;

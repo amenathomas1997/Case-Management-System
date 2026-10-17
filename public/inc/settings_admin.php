@@ -125,7 +125,7 @@ function brand_rgb(string $key = 'color_dark'): array {
 /* ---------- Safe upgrades (3.0.54) ---------- */
 
 /** The database version this code needs: the newest migration it ships. */
-const DB_SCHEMA_VERSION = '4.3.0';
+const DB_SCHEMA_VERSION = '4.4.0';
 
 /** The database version recorded by the migrations, or null for a database from before 3.0.54. */
 function db_schema_version(): ?string {

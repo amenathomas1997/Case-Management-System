@@ -191,7 +191,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // when hours or a rate changed. Other marks (such as the monthly
                 // report job's no-counselor-email notices) are left alone.
                 if ($expChanged) {
-                    db()->prepare("DELETE FROM sent_alerts WHERE track_id = ? AND alert_key IN ('exp7','exp14','exp30')")->execute([(int)$track['id']]);
+                    db()->prepare("DELETE FROM sent_alerts WHERE track_id = ? AND alert_key LIKE 'exp%'")->execute([(int)$track['id']]);
                 }
                 if ($hoursChanged || $rateChanged || $mileageChanged) {
                     db()->prepare("DELETE FROM sent_alerts WHERE track_id = ? AND alert_key IN ('pct80','funds80')")->execute([(int)$track['id']]);

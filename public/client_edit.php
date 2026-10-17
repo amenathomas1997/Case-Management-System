@@ -94,7 +94,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     $planVals = [$gIn('vr_case_number'), $gIn('ipe_goal'), $planDates['ipe_date'], $planDates['ipe_amended_on']];
     // Vision status and age of onset (3.0.47), for the Outcome report's breakdowns.
-    $visionIn = in_array($_POST['vision_status'] ?? '', VISION_STATUSES, true) ? $_POST['vision_status'] : null;
+    // A value since removed from the list stays when it is sent back unchanged (Lists, 4.4.0).
+    $visionIn = in_array($_POST['vision_status'] ?? '', array_merge(cms_list_items('vision_statuses'), $client && $client['vision_status'] !== null ? [(string)$client['vision_status']] : []), true) ? $_POST['vision_status'] : null;
     $onsetRaw = $gIn('vision_onset_age');
     $onsetIn = $onsetRaw !== null && ctype_digit($onsetRaw) && (int)$onsetRaw <= 120 ? (int)$onsetRaw : null;
     if ($onsetRaw !== null && $onsetIn === null) { $errors['vision_onset_age'] = 'Age when vision loss began: enter a whole number of years from 0 to 120, or leave it blank.'; set_form_errors($errors); }
@@ -373,7 +374,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
     <div class="field"><label for="dob">Date of birth</label>
       <input type="date" id="dob" name="dob" max="<?= date('Y-m-d') ?>" value="<?= $v('dob') ?>" <?= field_aria('dob') ?>><?= field_error('dob') ?></div>
     <div class="field"><label for="vision_status">Vision status</label>
-      <select id="vision_status" name="vision_status"><option value="">Not recorded</option><?= select_options(VISION_STATUSES, html_entity_decode($v('vision_status'), ENT_QUOTES) ?: null) ?></select></div>
+      <select id="vision_status" name="vision_status"><option value="">Not recorded</option><?= select_options(array_values(array_unique(array_merge(cms_list_items('vision_statuses'), ($vsNow = html_entity_decode($v('vision_status'), ENT_QUOTES)) !== '' ? [$vsNow] : []))), $vsNow ?: null) ?></select></div>
     <div class="field"><label for="vision_onset_age">Age when vision loss began</label>
       <input type="number" id="vision_onset_age" name="vision_onset_age" min="0" max="120" value="<?= $v('vision_onset_age') ?>" <?= field_aria('vision_onset_age') ?>><?= field_error('vision_onset_age') ?></div>
     <div class="field"><label for="email">Email</label>
@@ -428,7 +429,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       <?php endif; ?>
       <div class="field"><label for="closure_reason">Why is the case closing?</label>
         <select id="closure_reason" name="closure_reason" <?= field_aria('closure_reason') ?>><option value="">Choose a reason</option>
-          <?php foreach (CLOSURE_REASONS as $cr): ?><option value="<?= h($cr) ?>"<?= ($raw('closure_reason') ?? '') === $cr ? ' selected' : '' ?>><?= h($cr) ?></option><?php endforeach; ?>
+          <?php foreach (cms_list_items('closure_reasons') as $cr): ?><option value="<?= h($cr) ?>"<?= ($raw('closure_reason') ?? '') === $cr ? ' selected' : '' ?>><?= h($cr) ?></option><?php endforeach; ?>
         </select><?= field_error('closure_reason') ?></div>
       <div class="field"><label for="closure_note">Note (required for Other)</label>
         <input type="text" id="closure_note" name="closure_note" maxlength="255" value="<?= $cv('closure_note') ?>" <?= field_aria('closure_note') ?>><?= field_error('closure_note') ?></div>

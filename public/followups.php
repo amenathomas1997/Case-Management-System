@@ -135,7 +135,7 @@ function fu_when(array $r): string {
 }
 ?>
 <h1>Device follow-ups</h1>
-<p class="muted">Post-provision checks that loaned assistive technology is still being used<?= $scoped ? ' (your caseload)' : '' ?>. Checks are scheduled automatically at <?= implode(', ', array_map(fn($d) => $d . ' days', DEVICE_FOLLOWUP_DAYS)) ?> after a device goes out.</p>
+<p class="muted">Post-provision checks that loaned assistive technology is still being used<?= $scoped ? ' (your caseload)' : '' ?>. Checks are scheduled automatically at <?= implode(', ', array_map(fn($d) => $d . ' days', cms_days('device_followup_days'))) ?> after a device goes out.</p>
 
 <div class="stat-row">
   <div class="card stat"><span class="stat-num"><?= $dueTotal ?></span><span class="stat-label">Due now</span></div>

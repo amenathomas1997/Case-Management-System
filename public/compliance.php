@@ -17,6 +17,9 @@ $scopeSql = $scoped ? ' AND c.assigned_to = ?' : '';
 $scopeArg = $scoped ? [(int)$user['id']] : [];
 $today = date('Y-m-d');
 $soon = date('Y-m-d', strtotime('+30 days'));
+// The authorization warning and "expiring soon" window (Lists and time limits, 4.4.0).
+$warnPct = cms_number('auth_warn_pct');
+$authSoon = date('Y-m-d', strtotime('+' . cms_number('auth_soon_days') . ' days'));
 
 /* ---- Authorizations at risk ----
    Open clients only, like the reports-due list below and cron/daily_alerts.php: a
@@ -39,9 +42,9 @@ foreach ($rows->fetchAll() as $t) {
     // Same whole-percent-rounded-down rule, in exact cents.
     $fundsC = (int)round($r['authorized_funds'] * 100);
     $fundsPct = $fundsC > 0 ? intdiv(($fundsC - (int)round($r['funds_remaining'] * 100)) * 100, $fundsC) : 0;
-    $expSoon = $t['expiration_date'] && $t['expiration_date'] <= $soon;
+    $expSoon = $t['expiration_date'] && $t['expiration_date'] <= $authSoon;
     $expired = $t['expiration_date'] && $t['expiration_date'] < $today;
-    if ($pct >= 80 || $fundsPct >= 80 || $expSoon) {
+    if ($pct >= $warnPct || $fundsPct >= $warnPct || $expSoon) {
         $t['pct'] = $pct; $t['funds_pct'] = $fundsPct; $t['rollup'] = $r; $t['expired'] = $expired; $t['exp_soon'] = $expSoon;
         $authRisk[] = $t;
     }
@@ -246,7 +249,7 @@ page_header('Compliance', $user, 'compliance');
 
 <section class="card" aria-labelledby="auth-h">
   <h2 id="auth-h">Authorizations at risk (<?= count($authRisk) ?>)</h2>
-  <p class="muted">Open clients' active authorizations at 80%+ of authorized hours, or of authorized funds (hours, mileage and expenses together), or expiring within 30 days.</p>
+  <p class="muted">Open clients' active authorizations at <?= $warnPct ?>%+ of authorized hours, or of authorized funds (hours, mileage and expenses together), or expiring within <?= cms_number('auth_soon_days') ?> days.</p>
   <?php if (!$authRisk): ?><p class="muted">Nothing needs attention right now.</p><?php else: ?>
   <div class="table-scroll" tabindex="0" role="region" aria-label="Authorizations at risk">
   <table>

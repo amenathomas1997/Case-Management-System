@@ -55,8 +55,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_portal'])) {
         redirect('counselors.php');
     }
     try {
-        db()->prepare('INSERT INTO vrc_tokens (counselor_email, counselor_name, token, expires_at) VALUES (?,?,?, DATE_ADD(NOW(), INTERVAL 180 DAY))
-            ON DUPLICATE KEY UPDATE token = VALUES(token), counselor_name = VALUES(counselor_name), created_at = NOW(), expires_at = DATE_ADD(NOW(), INTERVAL 180 DAY), last_used_at = NULL')
+        db()->prepare('INSERT INTO vrc_tokens (counselor_email, counselor_name, token, expires_at) VALUES (?,?,?, DATE_ADD(NOW(), INTERVAL ' . cms_number('counselor_link_days') . ' DAY))
+            ON DUPLICATE KEY UPDATE token = VALUES(token), counselor_name = VALUES(counselor_name), created_at = NOW(), expires_at = DATE_ADD(NOW(), INTERVAL ' . cms_number('counselor_link_days') . ' DAY), last_used_at = NULL')
             ->execute([$email, $name, $token]);
     } catch (Throwable $e) {
         // The email has gone, so this is not "nothing was changed": say exactly what happened.
