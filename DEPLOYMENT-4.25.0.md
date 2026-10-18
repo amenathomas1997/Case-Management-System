@@ -120,3 +120,16 @@ Web 4.25.0, iPhone app 4.25.0 (build 56), Android app 4.25.0 (version code 9). A
 - **The website's signing page** now speaks Spanish around a Spanish document.
 
 ## Published (not deployed)
+
+2026-10-18, after CI passed all three jobs on 108453d, including the first run of the browser accessibility checks on GitHub's runner. The GitHub release v4.25.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 327 files, verified with the key built into the code
+
+**Rehearsed before publishing.** The package was installed with the 4.24.0 updater onto a copy of a 4.24.0 site:
+- the real signature verified, and the plan showed no problems
+- the backup was made first
+- the database changes ran (3 statements; database version 4.25.0, client_signatures.method present)
+- 28 files were replaced, and the new files were added
+- afterwards the sign-in and signing pages served at 4.25.0, and the new reports asked for sign-in
+
+The live site stays as it is until the owner installs it with Software update. The 4.25.0 phone apps are built from this tag for TestFlight and Google Play.
