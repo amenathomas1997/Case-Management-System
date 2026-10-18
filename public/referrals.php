@@ -185,6 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ]);
         $clientId = (int)db()->lastInsertId();
         office_place_new_client($clientId, (int)$user['id']);   // 4.22.0: the accepting person's office
+        custom_copy_referral_to_client($id, $clientId);   // 4.24.0: answers to the organisation's own questions
         if (!empty($ref['sms_ok'])) db()->prepare("UPDATE clients SET sms_consent_at = ?, sms_consent_source = 'Referral form' WHERE id = ?")->execute([$ref['created_at'], $clientId]);
         apply_referral_language($clientId, $ref);
         client_apply_state($clientId, $ref['client_state'] ?? null);   // 4.1.0: their state and its time zone   // Spanish referral form → Spanish client emails
@@ -341,6 +342,9 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
       <?= $view['outcome_emailed_at'] ? 'The referrer was emailed the outcome on ' . fmt_datetime($view['outcome_emailed_at']) . '.' : 'No outcome email was sent.' ?></dd>
     <?php endif; ?>
     <dt>Reason</dt><dd><?= h($view['reason']) ?></dd>
+    <?php foreach (custom_fields_display(null, (int)$view['id']) as [$cfLabel, $cfVal]): // 4.24.0 ?>
+    <dt><?= h($cfLabel) ?></dt><dd><?= nl2br(h($cfVal)) ?></dd>
+    <?php endforeach; ?>
     <?php if (!empty($view['referral_purpose'])): ?>
     <dt>Referral purpose</dt><dd><?= h($view['referral_purpose']) ?></dd>
     <dt>Service requested</dt><dd><?= h(($view['requested_service'] ?? '') ?: 'None selected') ?></dd>

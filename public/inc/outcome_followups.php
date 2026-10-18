@@ -101,7 +101,17 @@ function outcome_measures(string $from, string $to, ?int $instructor = null): ar
             WHERE f.status = 'Completed' AND DATE(f.completed_at) BETWEEN ? AND ?" . $scope, [$from, $to]);
     } catch (PDOException $e) { $fu = ['n' => 0, 'employed' => 0, 'employed_asked' => 0, 'tech' => 0, 'tech_asked' => 0, 'needs' => 0]; }
     $pct = fn($a, $b) => (int)$b > 0 ? (int)round(100 * (int)$a / (int)$b) : null;
+    // At closure (4.24.0): devices recommended and acquired, in use, and employment with its wage.
+    try {
+        $cl = $one("SELECT COUNT(*) AS n, COALESCE(SUM(k.at_recommended), 0) AS rec, COALESCE(SUM(k.at_acquired), 0) AS got,
+                COALESCE(SUM(k.at_in_use = 1), 0) AS in_use, COALESCE(SUM(k.at_in_use IS NOT NULL), 0) AS in_use_asked,
+                COALESCE(SUM(k.employed = 1), 0) AS employed, COALESCE(SUM(k.employed IS NOT NULL), 0) AS employed_asked, AVG(CASE WHEN k.employed = 1 THEN k.hourly_wage END) AS wage
+            FROM client_closures k JOIN clients c ON c.id = k.client_id WHERE DATE(k.closed_at) BETWEEN ? AND ?" . $scope, [$from, $to]);
+    } catch (PDOException $e) { $cl = ['n' => 0, 'rec' => 0, 'got' => 0, 'in_use' => 0, 'in_use_asked' => 0, 'employed' => 0, 'employed_asked' => 0, 'wage' => null]; }
     return [
+        'closures' => (int)$cl['n'], 'at_recommended' => (int)$cl['rec'], 'at_acquired' => (int)$cl['got'], 'at_acquired_pct' => $pct($cl['got'], $cl['rec']),
+        'at_in_use_pct' => $pct($cl['in_use'], $cl['in_use_asked']), 'employed_at_closure_pct' => $pct($cl['employed'], $cl['employed_asked']),
+        'average_wage_at_closure' => $cl['wage'] !== null ? round((float)$cl['wage'], 2) : null,
         'devices_checked' => (int)$dev['n'], 'devices_in_use_pct' => $pct($dev['yes'], $dev['n']),
         'skills_rated_twice' => count($gains), 'skills_improved' => $improved, 'average_skill_gain' => $avgGain,
         'goals_achieved' => (int)$goals['n'],

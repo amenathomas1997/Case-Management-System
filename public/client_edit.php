@@ -113,6 +113,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Required (4.19.0) for a new client, and for one whose state is already known: it sets the time zone
     // reminders and texts follow. An older record with none can still be saved (and closed); Data quality lists it.
     if ($stateIn === null && (!$client || !empty($client['state']))) { $errors['state'] = 'State: choose the state the client lives in. It sets their time zone for reminders and texts.'; set_form_errors($errors); }
+    // Custom fields (4.24.0): those sent are checked here and saved with the record.
+    [$cfVals, $cfErrs] = custom_input($_POST, custom_fields_all(true), false, $client ? custom_values_for((int)$client['id']) : []);
+    if ($cfErrs) { $errors += $cfErrs; set_form_errors($errors); }
     $vals = [
         $name,
         valid_date($dobIn),
@@ -206,6 +209,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->prepare('UPDATE clients SET vision_status=?, vision_onset_age=? WHERE id=?')->execute([...$visionVals, (int)$client['id']]);
                 $pdo->prepare('UPDATE clients SET state=?, time_zone=? WHERE id=?')->execute([...$placeVals, (int)$client['id']]);
                 if ($officeSent) $pdo->prepare('UPDATE clients SET office_id=? WHERE id=?')->execute([$officeIn, (int)$client['id']]);
+                custom_save($cfVals, (int)$client['id']);
                 // A portal link already emailed to the old address stops working when
                 // the address changes: it may belong to someone else now.
                 // Texts (4.17.0): the agreement as recorded here; a new number needs it again.
@@ -347,6 +351,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             db()->prepare('UPDATE clients SET state=?, time_zone=? WHERE id=?')->execute([...$placeVals, $newId]);
             if ($officeSent) db()->prepare('UPDATE clients SET office_id=? WHERE id=?')->execute([$officeIn, $newId]);
             else office_place_new_client($newId, (int)$user['id']);
+            custom_save($cfVals, $newId);
             web_once_set($clientKey, $newId);
             $smsNote = sms_consent_save($newId, !empty($_POST['sms_consent']), (string)($_POST['sms_consent_source'] ?? ''), null, (int)$user['id']);
             record_status_change($newId, null, $status, $user['id'], 'Client created');
@@ -478,6 +483,21 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       </div>
       <div class="field"><label for="closure_independence">Independence outcome (for a goal without a job, such as reading mail or using a phone on their own)</label>
         <input type="text" id="closure_independence" name="closure_independence" maxlength="500" value="<?= $cv('closure_independence') ?>" <?= field_aria('closure_independence') ?>><?= field_error('closure_independence') ?></div>
+      <?php // Assistive technology outcomes (4.24.0), started from the device requests on the record.
+      [$devRec, $devGot] = $client ? client_device_counts((int)$client['id']) : [0, 0];
+      $atv = fn(string $k, int $d) => h($raw($k) ?? ($client && $d > 0 ? (string)$d : '')); ?>
+      <div class="grid grid-2">
+        <div class="field"><label for="closure_at_recommended">Devices recommended</label><input type="text" inputmode="numeric" id="closure_at_recommended" name="closure_at_recommended" maxlength="2" value="<?= $atv('closure_at_recommended', $devRec) ?>" <?= field_aria('closure_at_recommended') ?>><?= field_error('closure_at_recommended') ?></div>
+        <div class="field"><label for="closure_at_acquired">Devices the client got</label><input type="text" inputmode="numeric" id="closure_at_acquired" name="closure_at_acquired" maxlength="2" value="<?= $atv('closure_at_acquired', $devGot) ?>" <?= field_aria('closure_at_acquired') ?>><?= field_error('closure_at_acquired') ?></div>
+      </div>
+      <fieldset><legend>Using their devices at closure?</legend>
+        <?php $ciu = $raw('closure_at_in_use') ?? ''; ?>
+        <label><input type="radio" name="closure_at_in_use" value="yes"<?= $ciu === 'yes' ? ' checked' : '' ?>> Yes</label>
+        <label><input type="radio" name="closure_at_in_use" value="no"<?= $ciu === 'no' ? ' checked' : '' ?>> No</label>
+        <label><input type="radio" name="closure_at_in_use" value=""<?= $ciu === '' ? ' checked' : '' ?>> Not recorded</label>
+      </fieldset>
+      <div class="field"><label for="closure_at_note">Technology note (such as a device still on order, or why one is not used)</label>
+        <input type="text" id="closure_at_note" name="closure_at_note" maxlength="255" value="<?= $cv('closure_at_note') ?>" <?= field_aria('closure_at_note') ?>><?= field_error('closure_at_note') ?></div>
     </fieldset>
     <script>(function(){var s=document.getElementById('status'),f=document.getElementById('closure-fields');if(!s||!f)return;var was=s.getAttribute('data-was')||'';function sync(){f.hidden=!(s.value.indexOf('Closed')===0&&s.value!==was);}s.addEventListener('change',sync);sync();<?= $showClosure ? 'f.hidden=false;' : '' ?>})();</script>
     <div class="field">
@@ -602,6 +622,14 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       <textarea id="a11y_notes" name="a11y_notes" rows="3" <?= field_aria('a11y_notes', 'a11y-notes-hint') ?>><?= $v('a11y_notes') ?></textarea><?= field_error('a11y_notes') ?>
     </div>
   </fieldset>
+  <?php if ($cfFields = custom_fields_all(true)): // 4.24.0: the organisation's own fields
+    $cfShown = $client ? custom_values_for((int)$client['id']) : [];
+    foreach ($cfFields as $cf) if (($r = $raw('cf_' . (int)$cf['id'])) !== null) $cfShown[(int)$cf['id']] = $r; ?>
+  <fieldset>
+    <legend>More details</legend>
+    <?= custom_fields_html($cfFields, $cfShown) ?>
+  </fieldset>
+  <?php endif; ?>
 
   <div class="page-actions">
     <?php // Closing a case as rehabilitated emails the client: confirm that once, on the button

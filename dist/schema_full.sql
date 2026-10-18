@@ -183,6 +183,9 @@ CREATE TABLE `client_documents` (
   `path` varchar(255) NOT NULL,
   `uploaded_by` int(10) unsigned DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `portal_shared` tinyint(1) NOT NULL DEFAULT 0,
+  `counselor_shared` tinyint(1) NOT NULL DEFAULT 0,
+  `uploaded_via` varchar(20) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `client_id` (`client_id`),
   CONSTRAINT `client_documents_ibfk_1` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE
@@ -518,6 +521,44 @@ CREATE TABLE `curriculum_skills` (
   PRIMARY KEY (`id`),
   KEY `curriculum_id` (`curriculum_id`),
   CONSTRAINT `cks_ibfk_1` FOREIGN KEY (`curriculum_id`) REFERENCES `curricula` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `custom_fields`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `custom_fields` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `label` varchar(120) NOT NULL,
+  `label_es` varchar(120) DEFAULT NULL,
+  `hint` varchar(255) DEFAULT NULL,
+  `type` varchar(20) NOT NULL DEFAULT 'text',
+  `options` text DEFAULT NULL,
+  `required` tinyint(1) NOT NULL DEFAULT 0,
+  `on_referral` tinyint(1) NOT NULL DEFAULT 0,
+  `sort_order` int(11) NOT NULL DEFAULT 0,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `custom_values`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `custom_values` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `field_id` int(10) unsigned NOT NULL,
+  `client_id` int(10) unsigned DEFAULT NULL,
+  `referral_id` int(10) unsigned DEFAULT NULL,
+  `value` text NOT NULL,
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `field_client` (`field_id`,`client_id`),
+  UNIQUE KEY `field_referral` (`field_id`,`referral_id`),
+  KEY `client_id` (`client_id`),
+  KEY `referral_id` (`referral_id`),
+  CONSTRAINT `custom_values_field` FOREIGN KEY (`field_id`) REFERENCES `custom_fields` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `custom_values_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `custom_values_referral` FOREIGN KEY (`referral_id`) REFERENCES `referrals` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `device_request_quotes`;
@@ -1013,6 +1054,7 @@ CREATE TABLE `messages` (
   `read_at` datetime DEFAULT NULL,
   `via` varchar(10) NOT NULL DEFAULT 'portal',
   `idem_key` char(36) DEFAULT NULL,
+  `document_id` int(10) unsigned DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_thread` (`client_id`,`channel`,`created_at`),
   KEY `idx_unread` (`channel`,`read_at`),
@@ -8694,6 +8736,10 @@ CREATE TABLE IF NOT EXISTS `client_closures` (
   `independence_outcome` varchar(500) DEFAULT NULL,
   `closed_by` int(10) unsigned DEFAULT NULL,
   `closed_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `at_recommended` smallint(5) unsigned DEFAULT NULL,
+  `at_acquired` smallint(5) unsigned DEFAULT NULL,
+  `at_in_use` tinyint(1) DEFAULT NULL,
+  `at_note` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `client_id` (`client_id`),
   CONSTRAINT `fk_closure_client` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE

@@ -236,6 +236,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!empty($_POST['preets']) || (!$structured && isset($_POST['note_type']) && !in_array($_POST['note_type'], REFERRAL_AT_NOTE_TYPES, true))) {
         $errors['form'] = 'This form accepts assistive technology referrals only. Please review the current service choices and submit again.';
     }
+    // The organisation's own questions (4.24.0, Custom fields), kept with the referral.
+    [$cfVals, $cfErrs] = custom_input($_POST, array_values(array_filter(custom_fields_all(true), fn($f) => (int)$f['on_referral'] === 1)), true);
+    $errors += $cfErrs;
     if (!$errors) {
         // A form opened before this release still posts its original note_type.
         $noteType = $structured ? referral_request_note_type($request['purpose'], $request['service']) : match (true) {
@@ -301,6 +304,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 page_lang() === 'es' ? 'es' : 'en',
             ]);
             $refId = (int)$pdo->lastInsertId();
+            custom_save($cfVals ?? [], null, $refId);
             // Their own agreement to texts (4.17.0), only from someone referring themselves with a phone number.
             if ($role === 'self' && !empty($_POST['sms_ok']) && sms_number((string)$clientPhone) !== null) $pdo->prepare('UPDATE referrals SET sms_ok = 1 WHERE id = ?')->execute([$refId]);
             // The state the person lives in (4.1.0), carried to the client with its time zone.
@@ -655,6 +659,16 @@ if ($errors): ?>
       aria-describedby="body-hint<?= isset($errors['body']) ? ' err-body' : '' ?>" <?= isset($errors['body']) ? 'aria-invalid="true"' : '' ?>><?= $old('body') ?></textarea>
     <?= $err('body') ?>
   </div>
+
+  <?php if ($cfPublic = array_values(array_filter(custom_fields_all(true), fn($f) => (int)$f['on_referral'] === 1))): // 4.24.0
+    set_form_errors($errors); // so the fields below show their own errors
+    $cfPosted = [];
+    foreach ($cfPublic as $cf) if (is_string($_POST['cf_' . (int)$cf['id']] ?? null)) $cfPosted[(int)$cf['id']] = $_POST['cf_' . (int)$cf['id']]; ?>
+  <fieldset>
+    <legend><h2 class="legend-h"><?= t('A few more questions') ?></h2></legend>
+    <?= custom_fields_html($cfPublic, $cfPosted, true) ?>
+  </fieldset>
+  <?php endif; ?>
 
   <fieldset data-role="medical family agency other">
     <legend><h2 class="legend-h"><?= t('Contact and consent') ?></h2></legend>

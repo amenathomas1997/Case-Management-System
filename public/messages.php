@@ -28,7 +28,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reply'])) {
     // Line breaks counted as the browser counts them (one character each).
     $body = str_replace("\r\n", "\n", trim(is_string($_POST['body'] ?? null) ? $_POST['body'] : ''));
     $c = msg_client_or_deny($cid, $user);
-    if ($body === '') { keep_input(); keep_field_errors(['body' => 'Type a message first.']); redirect('messages.php?client=' . $cid . '&channel=' . $channel); }
+    // A file with the reply (4.24.0): a new upload, or one of the client's documents; either is then shared
+    // with whoever the conversation is with.
+    $replyFile = is_array($_FILES['reply_file'] ?? null) && (int)($_FILES['reply_file']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE ? $_FILES['reply_file'] : null;
+    $attachDoc = ctype_digit((string)($_POST['attach_doc'] ?? '')) && (int)$_POST['attach_doc'] > 0 ? client_document((int)$_POST['attach_doc'], $cid) : null;
+    if (ctype_digit((string)($_POST['attach_doc'] ?? '')) && (int)$_POST['attach_doc'] > 0 && !$attachDoc) { keep_input(); keep_field_errors(['attach_doc' => 'That document is no longer on the client\'s record.']); redirect('messages.php?client=' . $cid . '&channel=' . $channel); }
+    if ($replyFile && $attachDoc) { keep_input(); keep_field_errors(['reply_file' => 'Attach one file: upload a new one or choose one of the client\'s documents, not both.']); redirect('messages.php?client=' . $cid . '&channel=' . $channel); }
+    $hasFile = $replyFile !== null || $attachDoc !== null;
+    if ($body === '' && !$hasFile) { keep_input(); keep_field_errors(['body' => 'Type a message first.']); redirect('messages.php?client=' . $cid . '&channel=' . $channel); }
     // Refused, never cut: the thread keeps at most 5,000 characters a message.
     if (mb_strlen($body) > 5000) {
         keep_input();
@@ -47,12 +54,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reply'])) {
         flash('This message was already sent (the form was sent twice), so it was sent once.', 'info');
         redirect('messages.php?client=' . $cid . '&channel=' . $channel);
     }
-    $newMsg = post_message($cid, $channel, 'staff', (int)$user['id'], $body);
+    $docId = $attachDoc ? (int)$attachDoc['id'] : null;
+    if ($replyFile) {
+        $saved = exchange_save_upload($replyFile, $cid, '', 'staff', (int)$user['id'], 'Other');
+        if ($saved['error'] !== null) { keep_input(); keep_field_errors(['reply_file' => $saved['error'] . ' Choose the file again.']); redirect('messages.php?client=' . $cid . '&channel=' . $channel); }
+        $docId = (int)$saved['id'];
+    }
+    $newMsg = post_message($cid, $channel, 'staff', (int)$user['id'], $body !== '' ? $body : 'Sent a file.');
     web_once_set($msgKey, $newMsg);
-    audit($user['id'], 'message.send', 'client', $cid, $channel);
+    if ($docId) {
+        message_attach($newMsg, $docId);
+        document_set_shared($docId, $cid, $channel === 'client' ? 'portal' : 'counselor', true, (int)$user['id']);
+    }
+    audit($user['id'], 'message.send', 'client', $cid, $channel . ($docId ? ', with document #' . $docId : ''));
     // Also as a text (4.17.0), when asked and the client agreed to texts.
     if ($channel === 'client' && !empty($_POST['by_text'])) {
-        $t = sms_to_client($cid, (brand('short') ?: cfg('name')) . ': ' . $body, 'message', null, (int)$user['id']);
+        // A file alone is said as such: the text points to the portal, where the file is.
+        $t = sms_to_client($cid, (brand('short') ?: cfg('name')) . ': ' . ($body !== '' ? $body : (client_lang($cid) === 'es' ? 'Le enviamos un archivo. Ábralo en su portal.' : 'We sent you a file. Open your portal to see it.')), 'message', null, (int)$user['id']);
         if ($t['ok']) db()->prepare("UPDATE messages SET via = 'text' WHERE id = ?")->execute([$newMsg]);
         flash($t['ok'] ? ($t['status'] === 'held' ? 'Text: ' . $t['message'] : 'Also sent as a text message.') : 'Not sent as a text: ' . $t['message'], $t['ok'] ? 'success' : 'error');
     }
@@ -90,7 +108,10 @@ if ($openCid) {
     // Mark inbound (non-staff) messages in this thread as read.
     db()->prepare("UPDATE messages SET read_at = NOW() WHERE client_id = ? AND channel = ? AND sender <> 'staff' AND read_at IS NULL")
         ->execute([$openCid, $openChannel]);
-    $msgs = db()->prepare('SELECT m.*, u.name AS staff_name FROM messages m LEFT JOIN users u ON u.id = m.staff_id WHERE m.client_id = ? AND m.channel = ? ORDER BY m.created_at');
+    $msgs = db()->prepare('SELECT m.*, u.name AS staff_name, d.title AS doc_title FROM messages m LEFT JOIN users u ON u.id = m.staff_id LEFT JOIN client_documents d ON d.id = m.document_id AND d.client_id = m.client_id WHERE m.client_id = ? AND m.channel = ? ORDER BY m.created_at');
+    $docChoices = db()->prepare('SELECT id, title, created_at FROM client_documents WHERE client_id = ? ORDER BY created_at DESC LIMIT 100');
+    $docChoices->execute([$openCid]);
+    $docChoices = $docChoices->fetchAll();
     $msgs->execute([$openCid, $openChannel]);
     $msgs = $msgs->fetchAll();
 
@@ -119,7 +140,7 @@ if ($openCid) {
         <?php foreach ($msgs as $m): $who = $m['sender'] === 'staff' ? ($m['staff_name'] ?? 'Staff') : ucfirst($m['sender']); ?>
           <li class="msg <?= $m['sender'] === 'staff' ? 'out' : 'in' ?>">
             <span class="visually-hidden"><?= h($who) ?>:</span>
-            <div class="msg-body"><?= nl2br(h($m['body'])) ?></div>
+            <div class="msg-body"><?= nl2br(h($m['body'])) ?><?php if (!empty($m['doc_title'])): ?><br>File: <a href="download.php?doc=<?= (int)$m['document_id'] ?>"<?= $m['sender'] === 'staff' ? ' style="color:#fff"' : '' ?>><?= h((string)$m['doc_title']) ?></a><?php endif; ?></div>
             <div class="msg-meta"><span aria-hidden="true"><?= h($who) ?> · </span><?= fmt_datetime($m['created_at']) ?><?= ($m['via'] ?? 'portal') === 'text' ? ', by text' : '' ?></div>
           </li>
         <?php endforeach; ?>
@@ -129,8 +150,8 @@ if ($openCid) {
       <?php endif; ?>
       <?php // The field and button name who the reply goes to. No maxlength: a browser
       // would cut a long paste silently; the server refuses it with the text kept. ?>
-      <form method="post" action="messages.php" class="stacked"><?= csrf_field() ?><?= web_idem_field() ?>
-        <?= form_error_summary(['body' => 'Reply to the ' . $chanWho]) ?>
+      <form method="post" action="messages.php" class="stacked" enctype="multipart/form-data"><?= csrf_field() ?><?= web_idem_field() ?>
+        <?= form_error_summary(['body' => 'Reply to the ' . $chanWho, 'reply_file' => 'Attach a new file', 'attach_doc' => 'Or attach one of their documents']) ?>
         <input type="hidden" name="client_id" value="<?= $openCid ?>"><input type="hidden" name="channel" value="<?= h($openChannel) ?>">
         <?php // Said before the reply is typed: the counselor portal does not show a client
         // whose counselor email is still unconfirmed, so the counselor would not see it. ?>
@@ -138,12 +159,18 @@ if ($openCid) {
         <?php if ($unconfirmed): ?>
         <p class="alert alert-info" id="counselor-unconfirmed"><strong>Not yet visible to the counselor:</strong> <?= h($c['name']) ?>'s counselor email has not been confirmed, so the counselor portal does not show this client. Replies are saved here and appear there once the counselor is confirmed on <a href="client_edit.php?id=<?= $openCid ?>">the client's edit page</a>.</p>
         <?php endif; ?>
-        <label for="body">Reply to the <?= $chanWho ?> <?= required_mark() ?></label>
-        <p class="hint" id="body-hint">Up to 5,000 characters. It appears on the <?= $openChannel === 'client' ? "client's" : "counselor's" ?> portal.</p>
-        <textarea id="body" name="body" rows="3" required <?= field_aria('body', 'body-hint', $unconfirmed ? 'counselor-unconfirmed' : '') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?>
+        <label for="body">Reply to the <?= $chanWho ?></label>
+        <p class="hint" id="body-hint">Up to 5,000 characters, or leave it empty to send just a file. It appears on the <?= $openChannel === 'client' ? "client's" : "counselor's" ?> portal.</p>
+        <textarea id="body" name="body" rows="3" <?= field_aria('body', 'body-hint', $unconfirmed ? 'counselor-unconfirmed' : '') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?>
         <?php if ($openChannel === 'client' && sms_enabled()): $smsWhy = sms_client_blocked(sms_client($openCid)); // 4.17.0 ?>
         <?php if ($smsWhy === null): ?><div class="field"><label><input type="checkbox" name="by_text" value="1"> Also send it as a text message <span class="hint">up to 1,600 characters; sent from 8 a.m. to 8 p.m. their time</span></label></div>
         <?php else: ?><p class="muted">Not by text: <?= h($smsWhy) ?></p><?php endif; ?>
+        <?php endif; ?>
+        <div class="field"><label for="reply_file">Attach a new file (optional; it is shared with the <?= $chanWho ?>)</label>
+          <input type="file" id="reply_file" name="reply_file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.rtf,.csv,.png,.jpg,.jpeg" <?= field_aria('reply_file') ?>><?= field_error('reply_file') ?></div>
+        <?php if ($docChoices): ?>
+        <div class="field"><label for="attach_doc">Or attach one of their documents (it is shared with the <?= $chanWho ?>)</label>
+          <select id="attach_doc" name="attach_doc" <?= field_aria('attach_doc') ?>><option value="">None</option><?php foreach ($docChoices as $dc): ?><option value="<?= (int)$dc['id'] ?>"<?= old_in('attach_doc') === (string)$dc['id'] ? ' selected' : '' ?>><?= h($dc['title'] . ', ' . fmt_date($dc['created_at'])) ?></option><?php endforeach; ?></select><?= field_error('attach_doc') ?></div>
         <?php endif; ?>
         <button type="submit" name="reply" value="1" class="btn btn-primary">Send to the <?= $chanWho ?></button>
       </form>

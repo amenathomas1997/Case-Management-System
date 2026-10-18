@@ -112,6 +112,8 @@ function referral_attach(int $id, int $clientId, int $actor): array {
             ->execute([$clientId, 'Intake', $intake['subject'], $intake['body'], $actor]);
         $pdo->prepare("UPDATE referrals SET status = 'Converted', client_id = ?, assigned_to = COALESCE(assigned_to, ?) WHERE id = ?")
             ->execute([$clientId, $client['assigned_to'], $id]);
+        // Its answers to the organisation's own questions (4.24.0) fill in what the record has not answered.
+        if (function_exists('custom_copy_referral_to_client')) custom_copy_referral_to_client($id, $clientId);
         $pdo->commit();
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -149,23 +151,54 @@ function closure_input(array $src): array {
     };
     $hours = $num('closure_hours', 80, 'hours a week');
     $wage = $num('closure_wage', 999.99, 'hourly wage');
-    foreach (['closure_employer' => 190, 'closure_job_title' => 120, 'closure_independence' => 500] as $k => $max) {
+    // Assistive technology outcomes (4.24.0): devices recommended and acquired, and whether they are in use.
+    $count = function (string $k, string $what) use ($s, &$e): ?int {
+        if ($s($k) === '') return null;
+        if (!preg_match('/^\d{1,2}$/', $s($k))) { $e[$k] = "Enter the number of $what as a whole number from 0 to 99, or leave it blank."; return null; }
+        return (int)$s($k);
+    };
+    $atRec = $count('closure_at_recommended', 'devices recommended');
+    $atAcq = $count('closure_at_acquired', 'devices acquired');
+    $inUse = $s('closure_at_in_use');
+    foreach (['closure_employer' => 190, 'closure_job_title' => 120, 'closure_independence' => 500, 'closure_at_note' => 255] as $k => $max) {
         if (mb_strlen($s($k)) > $max) $e[$k] = "Keep it to $max characters or fewer.";
     }
     return [[
         'reason' => $reason, 'note' => $note !== '' ? $note : null, 'employed' => $employed,
         'employer' => $s('closure_employer') ?: null, 'job_title' => $s('closure_job_title') ?: null, 'job_start' => $startOk,
         'hours_per_week' => $hours, 'hourly_wage' => $wage, 'independence_outcome' => $s('closure_independence') ?: null,
+        'at_recommended' => $atRec, 'at_acquired' => $atAcq, 'at_in_use' => $inUse === 'yes' ? 1 : ($inUse === 'no' ? 0 : null), 'at_note' => $s('closure_at_note') ?: null,
     ], $e];
 }
 
 /** Record a case closure (call it in the status change's transaction). */
 function client_closure_record(int $clientId, string $status, array $d, ?int $actor): void {
-    db()->prepare('INSERT INTO client_closures (client_id, status, reason, note, employed, employer, job_title, job_start, hours_per_week, hourly_wage, independence_outcome, closed_by)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')->execute([$clientId, $status, $d['reason'], $d['note'], $d['employed'], $d['employer'], $d['job_title'],
-        $d['job_start'], $d['hours_per_week'], $d['hourly_wage'], $d['independence_outcome'], $actor]);
+    db()->prepare('INSERT INTO client_closures (client_id, status, reason, note, employed, employer, job_title, job_start, hours_per_week, hourly_wage, independence_outcome, closed_by,
+            at_recommended, at_acquired, at_in_use, at_note)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute([$clientId, $status, $d['reason'], $d['note'], $d['employed'], $d['employer'], $d['job_title'],
+        $d['job_start'], $d['hours_per_week'], $d['hourly_wage'], $d['independence_outcome'], $actor,
+        $d['at_recommended'] ?? null, $d['at_acquired'] ?? null, $d['at_in_use'] ?? null, $d['at_note'] ?? null]);
     // 30, 60 and 90-day follow-up checks after every closure (3.0.47).
     closure_followups_schedule($clientId, (int)db()->lastInsertId());
+}
+
+/** A client's devices as the device requests record them (4.24.0): [recommended, acquired], to start the closure counts. */
+function client_device_counts(int $clientId): array {
+    try {
+        $q = db()->prepare("SELECT COUNT(*) AS n, COALESCE(SUM(delivered_at IS NOT NULL), 0) AS got FROM device_requests WHERE client_id = ? AND status NOT IN ('Cancelled', 'Denied')");
+        $q->execute([$clientId]);
+        $r = $q->fetch();
+        return [(int)$r['n'], (int)$r['got']];
+    } catch (PDOException $e) {
+        return [0, 0];
+    }
+}
+
+/** The closure recorded with a closed status change at $when (the one nearest before it, within a day), or null. */
+function client_closure_at(int $clientId, string $when): ?array {
+    $q = db()->prepare('SELECT * FROM client_closures WHERE client_id = ? AND closed_at <= DATE_ADD(?, INTERVAL 1 MINUTE) AND closed_at >= DATE_SUB(?, INTERVAL 1 DAY) ORDER BY closed_at DESC, id DESC LIMIT 1');
+    $q->execute([$clientId, $when, $when]);
+    return $q->fetch() ?: null;
 }
 
 /** The latest closure recorded for a client, or null. */

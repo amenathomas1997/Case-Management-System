@@ -266,6 +266,10 @@ function report_extra_sections(array $t, array $progressNotes, array $attendance
             if ($cl['employed'] !== null) $o[] = (int)$cl['employed'] === 1 ? 'Employed' . ($cl['employer'] ? ' at ' . $cl['employer'] : '') . ($cl['job_title'] ? ' as ' . $cl['job_title'] : '')
                 . ($cl['hours_per_week'] !== null ? ', ' . (float)$cl['hours_per_week'] . ' hours a week' : '') . ($cl['hourly_wage'] !== null ? ' at ' . fmt_money((float)$cl['hourly_wage']) . ' an hour' : '') . '.' : 'Not employed at closure.';
             if ($cl['independence_outcome']) $o[] = 'Independence outcome: ' . $cl['independence_outcome'] . '.';
+            // Assistive technology at closure (4.24.0).
+            if (($cl['at_recommended'] ?? null) !== null || ($cl['at_acquired'] ?? null) !== null) $o[] = 'Devices: ' . (int)($cl['at_acquired'] ?? 0) . ' acquired of ' . (int)($cl['at_recommended'] ?? 0) . ' recommended'
+                . (($cl['at_in_use'] ?? null) !== null ? ((int)$cl['at_in_use'] === 1 ? ', in use at closure' : ', not in use at closure') : '') . '.';
+            if (!empty($cl['at_note'])) $o[] = 'Technology: ' . $cl['at_note'] . '.';
             // For the AI draft, the employer and the closure note become placeholders (they can
             // identify the client); the wage and hours stay as plain figures.
             $mask = array_filter([(string)$cl['employer'] => '[EMPLOYER]', (string)$cl['note'] => '[CLOSURE NOTE]'], fn($v, $k) => trim((string)$k) !== '', ARRAY_FILTER_USE_BOTH);

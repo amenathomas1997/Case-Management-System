@@ -113,9 +113,13 @@ if (isset($_GET['export'])) {
     // the title and period follow the data.
     write_csv_row($out, ['Client ID', 'Client Name', 'Age', 'Client Type', 'Primary Disability', 'Funding Agency',
         'Authorization #', 'RSA Service Categories', 'Service Hours', 'Service Value', 'First Service', 'Last Service',
-        'Current Status', 'Closed Status (period)', 'Closed Date', 'Employment Outcome']);
+        'Current Status', 'Closed Status (period)', 'Closed Date', 'Employment Outcome',
+        'Closure Reason', 'Employed at Closure', 'Employer', 'Job Title', 'Hours a Week', 'Hourly Wage', 'Devices Recommended', 'Devices Acquired', 'Devices In Use']);
+    $yn = fn($v) => $v === null ? '' : ((int)$v === 1 ? 'Y' : 'N');
     foreach ($rows as $r) {
         $c = $closures[$r['id']] ?? null;
+        // The details recorded when that case was closed in the period (4.24.0), not a later closure.
+        $k = $c ? client_closure_at((int)$r['id'], (string)$c['closed_at']) : null;
         write_csv_row($out, [
             (int)$r['id'], csv_cell($r['name']), $ageOn($r['dob']), csv_cell($r['client_type'] ?? 'VR'),
             csv_cell($r['disability'] ?? ''), csv_cell($r['agencies'] ?? ''), csv_cell($r['auths'] ?? ''),
@@ -125,6 +129,9 @@ if (isset($_GET['export'])) {
             $r['first_service'], $r['last_service'], csv_cell($r['status']),
             $c ? csv_cell($c['new_status']) : '', $c ? date('Y-m-d', strtotime($c['closed_at'])) : '',
             $c && $c['new_status'] === 'Closed - Rehabilitated' ? 'Y' : '',
+            $k ? csv_cell($k['reason']) : '', $k ? $yn($k['employed']) : '', $k ? csv_cell((string)$k['employer']) : '', $k ? csv_cell((string)$k['job_title']) : '',
+            $k && $k['hours_per_week'] !== null ? number_format((float)$k['hours_per_week'], 2, '.', '') : '', $k && $k['hourly_wage'] !== null ? number_format((float)$k['hourly_wage'], 2, '.', '') : '',
+            $k['at_recommended'] ?? '', $k['at_acquired'] ?? '', $k ? $yn($k['at_in_use'] ?? null) : '',
         ]);
     }
     fclose($out);

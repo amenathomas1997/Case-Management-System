@@ -30,6 +30,10 @@ $om = outcome_measures($from, $to, caseload_scoped() ? (int)$user['id'] : null);
 $ob = outcome_breakdowns($from, $to, $rt, $rh);
 $pctTxt = fn(?int $p) => $p === null ? 'n/a' : $p . '%';
 $omRows = [
+    ['Devices recommended at closure', $om['at_recommended'] . ' (' . $om['closures'] . ' closures)'],
+    ['Devices acquired', $om['at_acquired'] . ($om['at_acquired_pct'] !== null ? ' (' . $om['at_acquired_pct'] . '% of those recommended)' : '')],
+    ['Using their devices at closure', $pctTxt($om['at_in_use_pct'])],
+    ['Employed at closure', $pctTxt($om['employed_at_closure_pct']) . ($om['average_wage_at_closure'] !== null ? ', average wage ' . fmt_money($om['average_wage_at_closure']) . ' an hour' : '')],
     ['Devices still in use at follow-up', $pctTxt($om['devices_in_use_pct']) . ' of ' . $om['devices_checked'] . ' checks'],
     ['Skills rated twice or more', $om['skills_rated_twice'] . ' (' . $om['skills_improved'] . ' improved' . ($om['average_skill_gain'] !== null ? ', average gain ' . sprintf('%+.2f', $om['average_skill_gain']) . ' levels' : '') . ')'],
     ['Goals achieved', (string)$om['goals_achieved']],

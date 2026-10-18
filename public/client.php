@@ -572,6 +572,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assessment'])) {
         flash('This assessment was already saved (the form was sent twice), so it was saved once.', 'info');
         redirect("client.php?id=$id&tab=assessments");
     }
+    if ($attName !== null && !upload_content_ok((string)$att['tmp_name'], $attExt, true)) {
+        // The content must be what the name says (4.24.0).
+        keep_input();
+        keep_field_errors(['attachment' => 'That file is not really a .' . $attExt . ' file, so it was not stored. Save it again in that format and choose it again.']);
+        redirect("client.php?id=$id&tab=assessments");
+    }
     if ($attName !== null) {
         $dir = cfg('upload_dir');
         if (!is_dir($dir)) mkdir($dir, 0750, true);
@@ -628,6 +634,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_document'])) {
         $dErrs['document'] = 'That file type is not allowed. Use PDF, Office, text, or image files.';
     } elseif ((int)($docFile['size'] ?? 0) > 25 * 1024 * 1024) {
         $dErrs['document'] = 'File is too large (25 MB maximum).';
+    } elseif (!upload_content_ok((string)($docFile['tmp_name'] ?? ''), $ext, true)) {
+        // The content must be what the name says (4.24.0).
+        $dErrs['document'] = 'That file is not really a .' . $ext . ' file, so it was not stored. Save it again in that format and choose it again.';
     } elseif (mb_strlen($origName) > 190) {
         $dErrs['document'] = 'The file name is too long (190 characters maximum). Rename the file and choose it again.';
     } elseif ($dErrs) {
@@ -650,14 +659,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_document'])) {
     $dir = cfg('upload_dir');
     if (!is_dir($dir)) mkdir($dir, 0750, true);
     $stored = bin2hex(random_bytes(16)) . '.' . $ext;
-    if (!move_uploaded_file($docFile['tmp_name'], $dir . '/' . $stored)) {
+    $movedDoc = is_uploaded_file((string)$docFile['tmp_name']) ? move_uploaded_file($docFile['tmp_name'], $dir . '/' . $stored)
+        : (PHP_SAPI === 'cli' && getenv('CMS_TEST_FILES') !== false && copy((string)$docFile['tmp_name'], $dir . '/' . $stored)); // the test harness's files
+    if (!$movedDoc) {
         keep_input();
         keep_field_errors(['document' => 'The file could not be saved. Choose it again and resend the form.']);
         redirect("client.php?id=$id&tab=documents");
     }
     try {
-        db()->prepare('INSERT INTO client_documents (client_id, category, title, orig_name, path, uploaded_by) VALUES (?,?,?,?,?,?)')
-            ->execute([$id, $category, $docTitle, $origName, $stored, $user['id']]);
+        // Shared with the client's portal or their VR counselor when ticked (4.24.0).
+        db()->prepare('INSERT INTO client_documents (client_id, category, title, orig_name, path, uploaded_by, portal_shared, counselor_shared, uploaded_via) VALUES (?,?,?,?,?,?,?,?,?)')
+            ->execute([$id, $category, $docTitle, $origName, $stored, $user['id'], !empty($_POST['share_portal']) ? 1 : 0, !empty($_POST['share_counselor']) ? 1 : 0, 'staff']);
         // Capture the id before audit() inserts its own row and replaces it.
         web_once_set($docKey, (int)db()->lastInsertId());
     } catch (Throwable $e) {
@@ -671,6 +683,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_document'])) {
     audit($user['id'], 'document.upload', 'client', $id, $docTitle);
     flash('Document uploaded.');
     redirect("client.php?id=$id&tab=documents");
+}
+
+/* ---- POST: share a document with the client's portal or their counselor, or stop (4.24.0) ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['share_doc'])) {
+    [$with, $on] = array_pad(explode(':', (string)$_POST['share_doc'], 2), 2, '');
+    $ok = document_set_shared((int)($_POST['doc_id'] ?? 0), $id, $with, $on === '1', (int)$user['id']);
+    flash($ok ? ($on === '1' ? 'Shared with the ' . ($with === 'portal' ? 'client on their portal.' : 'VR counselor on their portal.') : 'No longer shared with the ' . ($with === 'portal' ? 'client.' : 'VR counselor.')) : 'That document could not be changed.', $ok ? 'success' : 'error');
+    redirect("client.php?id=$id&tab=documents#docs-h");
 }
 
 /* ---- POST: delete client document (goes to the 30-day trash; the stored
@@ -1278,6 +1298,9 @@ if ($hasA11y): ?>
       <?php if ($clientOffice = office_get((int)($client['office_id'] ?? 0))): // 4.22.0 ?>
       <dt>Office</dt><dd><?= h((string)$clientOffice['name']) ?><?= $clientOffice['phone'] ? ', ' . tel_link((string)$clientOffice['phone']) : '' ?></dd>
       <?php endif; ?>
+      <?php foreach (custom_fields_display((int)$client['id']) as [$cfLabel, $cfVal]): // 4.24.0 ?>
+      <dt><?= h($cfLabel) ?></dt><dd><?= nl2br(h($cfVal)) ?></dd>
+      <?php endforeach; ?>
       <?php if (!empty($client['state']) || client_zone($client)): // 4.1.0 ?>
       <dt>State and time zone</dt><dd><?= h(implode('; ', array_filter([US_STATES[$client['state'] ?? ''] ?? '', ($cz = client_zone($client)) ? zone_difference_text($cz) : '']))) ?></dd>
       <?php endif; ?>
@@ -1962,6 +1985,8 @@ $documents = $documents->fetchAll();
     <div class="field"><label for="doc_category">Category</label>
       <select id="doc_category" name="category" aria-describedby="doc-category-hint"><?= select_options(cms_list_items('doc_categories'), old_in('category') ?: null) ?></select>
       <p class="hint" id="doc-category-hint">Documents filed under Resource are shared on the client's portal, where the client can open and download them. Use another category for internal records.</p></div>
+    <div class="field"><label><input type="checkbox" name="share_portal" value="1"<?= old_in('share_portal') !== '' ? ' checked' : '' ?>> Share it on the client's portal</label></div>
+    <div class="field"><label><input type="checkbox" name="share_counselor" value="1"<?= old_in('share_counselor') !== '' ? ' checked' : '' ?>> Share it with their VR counselor on the counselor portal</label></div>
     <div class="field"><label for="document">File <?= required_mark() ?> <span class="hint">PDF, Office, text, or image · 25 MB max</span></label>
       <input type="file" id="document" name="document" required accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.rtf,.csv,.png,.jpg,.jpeg" <?= field_aria('document') ?>><?= field_error('document') ?></div>
     <button type="submit" name="add_document" value="1" class="btn btn-primary">Upload</button>
@@ -1977,11 +2002,16 @@ $documents = $documents->fetchAll();
   <?php foreach ($documents as $doc): ?>
     <tr>
       <th scope="row"><?= h($doc['title']) ?><br><span class="muted"><?= h($doc['orig_name']) ?></span></th>
-      <td><?= h($doc['category'] === 'Client Upload' ? 'Shared by client' : $doc['category']) ?><?= $doc['category'] === 'Resource' ? '<br><span class="muted">Shared on the client portal</span>' : '' ?></td>
+      <?php $onPortal = doc_portal_visible($doc); $withCounselor = (int)($doc['counselor_shared'] ?? 0) === 1; ?>
+      <td><?= h($doc['category'] === 'Client Upload' ? 'Shared by client' : $doc['category']) ?><?php $sharedWith = array_filter([$onPortal && $doc['category'] !== 'Client Upload' ? 'the client portal' : '', $withCounselor ? 'the VR counselor' : '']); ?><?= $sharedWith ? '<br><span class="muted">Shared with ' . h(implode(' and ', $sharedWith)) . '</span>' : '' ?></td>
       <td><?= fmt_datetime($doc['created_at']) ?></td>
       <td><?= h($doc['uploader'] ?? ($doc['category'] === 'Client Upload' ? 'The client, on the portal' : 'System')) ?></td>
       <td>
         <a class="btn btn-secondary btn-sm" href="download.php?doc=<?= (int)$doc['id'] ?>">Download<span class="visually-hidden"> <?= h($doc['title']) ?> — document #<?= (int)$doc['id'] ?></span></a>
+        <form method="post" action="<?= $tabUrl('documents') ?>" class="inline-form"><?= csrf_field() ?><input type="hidden" name="doc_id" value="<?= (int)$doc['id'] ?>">
+          <?php if (!in_array($doc['category'], ['Resource', 'Client Upload'], true)): ?><button type="submit" name="share_doc" value="portal:<?= $onPortal ? '0' : '1' ?>" class="btn btn-secondary btn-sm"><?= $onPortal ? 'Stop sharing with client' : 'Share with client' ?><span class="visually-hidden"> — <?= h($doc['title']) ?></span></button><?php endif; ?>
+          <button type="submit" name="share_doc" value="counselor:<?= $withCounselor ? '0' : '1' ?>" class="btn btn-secondary btn-sm"><?= $withCounselor ? 'Stop sharing with counselor' : 'Share with counselor' ?><span class="visually-hidden"> — <?= h($doc['title']) ?></span></button>
+        </form>
         <?php if (can('admin') || !in_array($doc['category'], KEY_DOCUMENT_CATEGORIES, true)): ?>
         <form method="post" action="<?= $tabUrl('documents') ?>" class="inline-form"><?= csrf_field() ?>
           <input type="hidden" name="doc_id" value="<?= (int)$doc['id'] ?>">

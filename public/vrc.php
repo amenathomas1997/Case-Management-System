@@ -238,6 +238,19 @@ $clients = $clients->fetchAll();
 
 $myClientIds = array_map(fn($c) => (int)$c['id'], $clients);
 
+/* ---- A file shared with the counselor (4.24.0): only their own clients', only what staff shared ---- */
+if (isset($_GET['doc'])) {
+    $dq = db()->prepare('SELECT * FROM client_documents WHERE id = ? AND counselor_shared = 1');
+    $dq->execute([(int)$_GET['doc']]);
+    $doc = $dq->fetch();
+    if ($doc && in_array((int)$doc['client_id'], $myClientIds, true)) {
+        audit(null, 'vrcportal.document', 'client', (int)$doc['client_id'], 'counselor downloaded document #' . (int)$doc['id']);
+        exchange_send_file($doc);
+    }
+    flash('That file is not available here.', 'error');
+    redirect('vrc.php?t=' . $token);
+}
+
 /* ---- POST: confirm receipt of a report here, without the email link (3.0.41) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_report'])) {
     $ack = db()->prepare('UPDATE report_acks SET acked_at = NOW(), ack_ip = ? WHERE id = ? AND sent_to = ? AND acked_at IS NULL');
@@ -284,7 +297,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
     $msgClientId = (int)($_POST['about_client'] ?? 0) ?: null;
     // The message may only reference this counselor's own clients.
     if ($msgClientId !== null && !in_array($msgClientId, array_map(fn($c) => (int)$c['id'], $clients), true)) $msgClientId = null;
-    if ($msg === '') {
+    // A file can go with a message about a client (4.24.0); then the message itself may be left empty.
+    $msgFile = is_array($_FILES['msg_file'] ?? null) && (int)($_FILES['msg_file']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE ? $_FILES['msg_file'] : null;
+    if ($msgFile !== null && $msgClientId === null) {
+        keep_input();
+        keep_field_errors(['about_client' => 'Choose which client the file is about, then choose the file again.']);
+        redirect('vrc.php?t=' . $token . '#msg-h');
+    }
+    if ($msg === '' && $msgFile === null) {
         keep_input();
         keep_field_errors(['message' => 'Type a message first.']);
         redirect('vrc.php?t=' . $token);
@@ -299,7 +319,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
     // The same message posted again within the minute (a double press of Send) was
     // already sent: it is not sent twice, refilled, or reported as an error.
     $sentKey = 'vrc_sent_' . (int)$vrc['id'];
-    $sentPrint = hash('sha256', (int)$msgClientId . "\n" . $msg);
+    $sentPrint = hash('sha256', (int)$msgClientId . "\n" . $msg . "\n" . ($msgFile !== null ? (string)($msgFile['name'] ?? '') . ':' . (int)($msgFile['size'] ?? 0) : ''));
     $lastSent = $_SESSION[$sentKey] ?? null;
     if (is_array($lastSent) && hash_equals((string)($lastSent['fp'] ?? ''), $sentPrint) && time() - (int)($lastSent['at'] ?? 0) < 60) {
         unset($_SESSION[$draftKey]);
@@ -330,13 +350,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
         flash('You have reached today\'s limit of 50 messages through the portal, so this one was not sent. It is still in the box: email ' . brand('short') . ' instead, or send it tomorrow.', 'error');
         redirect('vrc.php?t=' . $token);
     }
+    $savedDoc = null;
+    if ($msgFile !== null) {
+        // At most 10 files an hour per portal link, as on the client portal.
+        $up = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 MINUTE)");
+        $up->execute(['vrc-up-' . (int)$vrc['id']]);
+        if ((int)$up->fetchColumn() >= 10) { keep_input(); flash('Please wait a while before sending more files.', 'error'); redirect('vrc.php?t=' . $token); }
+        $saved = exchange_save_upload($msgFile, $msgClientId, '', 'counselor');
+        if ($saved['error'] !== null) { keep_input(); keep_field_errors(['msg_file' => $saved['error'] . ' Choose the file again.']); redirect('vrc.php?t=' . $token . '#msg-h'); }
+        $savedDoc = (int)$saved['id'];
+        db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'vrc-up-' . (int)$vrc['id']]);
+        if ($msg === '') $msg = 'Sent a file.';
+    }
     db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")
         ->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'vrc-msg-' . (int)$vrc['id']]);
     $clientName = null;
     foreach ($clients as $c) if ((int)$c['id'] === $msgClientId) $clientName = $c['name'];
     // Store in the counselor message thread when it is about a specific client,
     // so staff can reply in context from the message center.
-    if ($msgClientId) post_message($msgClientId, 'counselor', 'counselor', null, $msg);
+    if ($msgClientId) {
+        $mid = post_message($msgClientId, 'counselor', 'counselor', null, $msg);
+        if ($savedDoc) message_attach($mid, $savedDoc);
+    }
     // A general message is tied to no client, and an unassigned task with no client
     // is shown to every staff account, whatever its caseload or permissions. Its
     // free text can still name a client, so it is assigned to an administrator
@@ -415,6 +450,14 @@ page_header('Your caseload');
     <ul><?php foreach ($att as $a): ?><li><?= fmt_datetime($a['start_at']) ?>: <?= h(['Completed' => 'attended', 'No Show' => 'missed', 'Cancelled' => 'cancelled'][$a['status']]) ?></li><?php endforeach; ?></ul>
   </details>
   <?php endif; ?>
+  <?php // Files shared with the counselor (4.24.0): what staff shared and what the counselor sent.
+  $sf = db()->prepare('SELECT id, title, created_at, uploaded_via FROM client_documents WHERE client_id = ? AND counselor_shared = 1 ORDER BY created_at DESC LIMIT 50');
+  $sf->execute([(int)$c['id']]);
+  $sharedFiles = $sf->fetchAll();
+  if ($sharedFiles): ?>
+  <h3>Shared files</h3>
+  <ul><?php foreach ($sharedFiles as $f): ?><li><a href="vrc.php?t=<?= h($token) ?>&amp;doc=<?= (int)$f['id'] ?>"><?= h($f['title']) ?><span class="visually-hidden"> for <?= h($c['name']) ?> (downloads a file)</span></a> <span class="muted">· <?= ($f['uploaded_via'] ?? '') === 'counselor' ? 'sent through the counselor portal' : 'from ' . h(brand('short')) ?>, <?= fmt_date($f['created_at']) ?></span></li><?php endforeach; ?></ul>
+  <?php endif; ?>
 </section>
 <?php endforeach; ?>
 
@@ -444,10 +487,10 @@ if ($cids) {
     $in = implode(',', array_fill(0, count($cids), '?'));
     // Grouped by client, up to the 50 most recent messages each: staff replies are
     // read only here, so one busy client's thread never pushes another's out of view.
-    $cq = db()->prepare("SELECT x.* FROM (SELECT m.id, m.client_id, m.sender, m.body, m.created_at, c.name AS client_name,
+    $cq = db()->prepare("SELECT x.* FROM (SELECT m.id, m.client_id, m.sender, m.body, m.created_at, c.name AS client_name, d.id AS doc_id, d.title AS doc_title,
             ROW_NUMBER() OVER (PARTITION BY m.client_id ORDER BY m.created_at DESC, m.id DESC) AS rn,
             COUNT(*) OVER (PARTITION BY m.client_id) AS total
-        FROM messages m JOIN clients c ON c.id = m.client_id
+        FROM messages m JOIN clients c ON c.id = m.client_id LEFT JOIN client_documents d ON d.id = m.document_id AND d.client_id = m.client_id AND d.counselor_shared = 1
         WHERE m.channel = 'counselor' AND m.client_id IN ($in)) x
         WHERE x.rn <= 50 ORDER BY x.client_name, x.client_id, x.created_at, x.id");
     $cq->execute($cids);
@@ -468,7 +511,7 @@ if ($convo): ?>
     <?php foreach ($thread as $m): $who = $m['sender'] === 'counselor' ? 'Counselor' : brand('short'); ?>
       <li class="msg <?= $m['sender'] === 'counselor' ? 'out' : 'in' ?>">
         <span class="visually-hidden"><?= h($who) ?>:</span>
-        <div class="msg-body"><?= nl2br(h($m['body'])) ?></div>
+        <div class="msg-body"><?= nl2br(h($m['body'])) ?><?php if (!empty($m['doc_id'])): ?><br>File: <a href="vrc.php?t=<?= h($token) ?>&amp;doc=<?= (int)$m['doc_id'] ?>"<?= $m['sender'] === 'counselor' ? ' style="color:#fff"' : '' ?>><?= h((string)$m['doc_title']) ?><span class="visually-hidden"> (downloads a file)</span></a><?php endif; ?></div>
         <div class="msg-meta"><span aria-hidden="true"><?= h($who) ?> · </span><?= h(date('M j, Y, g:i A', strtotime($m['created_at']))) ?></div>
       </li>
     <?php endforeach; ?>
@@ -482,9 +525,9 @@ if ($convo): ?>
 <section class="card" aria-labelledby="msg-h">
   <h2 id="msg-h">Send us a message</h2>
   <p class="muted">Your message goes to the <?= h(brand('short')) ?> team's task list and email, so you do not need to call. We aim to reply within 2 business days.</p>
-  <form method="post" action="vrc.php?t=<?= h($token) ?>" class="stacked" novalidate>
+  <form method="post" action="vrc.php?t=<?= h($token) ?>" class="stacked" enctype="multipart/form-data" novalidate>
     <?= csrf_field() ?>
-    <?= form_error_summary(['message' => 'Your message']) ?>
+    <?= form_error_summary(['message' => 'Your message', 'about_client' => 'About a client', 'msg_file' => 'Attach a file']) ?>
     <?php // A message kept over a timeout comes back with the client it was about
     // (an older kept draft is the message text alone).
     $draft = $_SESSION[$draftKey] ?? null;
@@ -492,15 +535,19 @@ if ($convo): ?>
     $pickAbout = old_in('about_client', is_array($draft) && (int)($draft['about_client'] ?? 0) > 0 ? (string)(int)$draft['about_client'] : ''); ?>
     <?php if ($clients): ?>
     <div class="field"><label for="about_client">About a client <span class="hint">optional</span></label>
-      <select id="about_client" name="about_client"><option value="">— General —</option>
+      <select id="about_client" name="about_client" <?= field_aria('about_client') ?>><option value="">— General —</option>
         <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $pickAbout === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
-      </select></div>
+      </select><?= field_error('about_client') ?></div>
     <?php endif; ?>
     <?php // No maxlength: a browser would cut a long paste silently. The server refuses
     // an over-long message with the whole text left in the box. ?>
-    <div class="field"><label for="message">Your message <span class="hint">required</span></label>
+    <div class="field"><label for="message">Your message <span class="hint">required unless you attach a file</span></label>
       <p class="hint" id="message-hint">Up to 5,000 characters.</p>
-      <textarea id="message" name="message" required rows="4" <?= field_aria('message', 'message-hint') ?>><?= h(old_in('message', $draftMsg)) ?></textarea><?= field_error('message') ?></div>
+      <textarea id="message" name="message" rows="4" <?= field_aria('message', 'message-hint') ?>><?= h(old_in('message', $draftMsg)) ?></textarea><?= field_error('message') ?></div>
+    <?php if ($clients): ?>
+    <div class="field"><label for="msg_file">Attach a file about the client chosen above <span class="hint">optional; PDF, Word, Excel, text or image, up to 15 MB</span></label>
+      <input type="file" id="msg_file" name="msg_file" accept=".pdf,.docx,.xlsx,.txt,.rtf,.png,.jpg,.jpeg" <?= field_aria('msg_file') ?>><?= field_error('msg_file') ?></div>
+    <?php endif; ?>
     <button type="submit" name="send_message" value="1" class="btn btn-primary">Send message</button>
   </form>
 </section>

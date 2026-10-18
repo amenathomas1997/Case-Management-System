@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.24.0' => [
+        'Files with messages: clients can attach a file to a message on their portal, VR counselors to a message about a client on theirs, and you to a reply in Messages (a new file, or one already on the record). On a client\'s Documents tab, Share with client and Share with counselor put any document on their portal; the counselor portal lists the files shared with them. Every upload is now checked to be the kind of file its name says.',
+        'Closing a case now records the devices recommended, the devices the client got, and whether they use them, started from the device requests. The Outcome report counts them with employment and wage at closure, and the RSA-911 download has the closure details.',
+        'Custom fields (Administration, Custom fields): build your intake form with fields of your own on client records (text, number, date, a choice from a list, or yes or no), optionally required, and optionally asked on the public referral form, with a Spanish label. Answers on a referral are carried to the client when it is accepted.',
+    ],
     '4.23.0' => [
         'VR portal (Invoices, VR portal): what is still to do in the VR agencies\' own portals. Authorizations to accept, invoices to enter as payment requests (with a spreadsheet to enter them from), requests the agency rejected, and requests waiting to be paid.',
         'Documents to sign (on each client\'s page): email consent to services, an equipment loan agreement or any document of your own. The client or guardian signs by typing their name, the signed words are kept, and a signed loan agreement records their acceptance of the loan.',

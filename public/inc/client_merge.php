@@ -31,6 +31,14 @@ function move_client_records(PDO $pdo, int $keepId, int $mergeId): void {
     foreach (CLIENT_MERGE_TABLES as $table) {
         $pdo->prepare("UPDATE `$table` SET client_id = ? WHERE client_id = ?")->execute([$keepId, $mergeId]);
     }
+    // Custom fields (4.24.0): one answer per field; the kept record's own answer stays, the duplicate's
+    // fills in only the fields it left empty.
+    try {
+        $pdo->prepare('UPDATE IGNORE custom_values SET client_id = ? WHERE client_id = ?')->execute([$keepId, $mergeId]);
+        $pdo->prepare('DELETE FROM custom_values WHERE client_id = ?')->execute([$mergeId]);
+    } catch (PDOException $e) {
+        if ((string)$e->getCode() !== '42S02') throw $e; // mig_4.24.0 not run yet
+    }
     // A STOP on either record holds for the merged one (4.17.0): texts never resume after it.
     $pdo->prepare('UPDATE clients k JOIN clients m ON m.id = ? SET k.sms_opted_out_at = COALESCE(k.sms_opted_out_at, m.sms_opted_out_at) WHERE k.id = ?')->execute([$mergeId, $keepId]);
     // A privacy incident that lists both records keeps one entry (3.0.38); the duplicate's

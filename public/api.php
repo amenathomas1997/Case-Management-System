@@ -788,6 +788,8 @@ switch ($action) {
         // The office that serves them (4.22.0): office_id and its name, null when none.
         $client['office_id'] = $client['office_id'] !== null ? (int)$client['office_id'] : null;
         $client['office'] = office_get($client['office_id'])['name'] ?? null;
+        // The organisation's own fields (4.24.0), answered ones only, as label and value.
+        $client['custom_fields'] = array_map(fn($p) => ['label' => $p[0], 'value' => $p[1]], custom_fields_display($id));
         $client['a11y_screen_reader'] = (bool)$client['a11y_screen_reader'];
         // counselor_verified: false while a counselor email from the public referral form
         // waits for staff to confirm it (save_client with counselor_verified true).
@@ -1915,6 +1917,8 @@ switch ($action) {
         // its 190 characters; a name that is not valid UTF-8 falls back to a plain one.
         $origName = mb_substr(preg_replace('/[^A-Za-z0-9._ -]/u', '_', $filename) ?? ('file.' . $ext), 0, 190);
         if (file_put_contents($dir . '/' . $stored, $data) === false) fail('The file could not be saved.', 500);
+        // The content must be what the name says (4.24.0).
+        if (!upload_content_ok($dir . '/' . $stored, $ext, true)) { api_discard_upload($stored); fail('That file is not really a .' . $ext . ' file, so it was not stored.'); }
         try {
             db()->prepare('INSERT INTO client_documents (client_id, category, title, orig_name, path, uploaded_by) VALUES (?,?,?,?,?,?)')
                 ->execute([$cid, $category, $title, $origName, $stored, $userId]);
@@ -2599,6 +2603,7 @@ switch ($action) {
         if (!empty($ref['sms_ok'])) db()->prepare("UPDATE clients SET sms_consent_at = ?, sms_consent_source = 'Referral form' WHERE id = LAST_INSERT_ID()")->execute([$ref['created_at']]);
         $clientId = (int)db()->lastInsertId();
         office_place_new_client($clientId, $userId);   // 4.22.0: the accepting person's office
+        custom_copy_referral_to_client($id, $clientId);   // 4.24.0: answers to the organisation's own questions
         // As on the website: the referral's language, and its state with that state's time zone (4.1.0).
         apply_referral_language($clientId, $ref);
         client_apply_state($clientId, $ref['client_state'] ?? null);

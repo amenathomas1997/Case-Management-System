@@ -325,8 +325,15 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         // sent: it is not sent twice, refilled, or reported as an error.
         $dupMsg = db()->prepare("SELECT 1 FROM messages WHERE client_id = ? AND channel = 'client' AND sender = 'client' AND body = ? AND created_at > DATE_SUB(NOW(), INTERVAL 60 SECOND) LIMIT 1");
         $dupMsg->execute([(int)$client['id'], $msg]);
-        if ($msg === '') {
-            keep_field_errors(['message' => 'Please type a message first.']);
+        // A file can go with the message (4.24.0); then the message itself may be left empty.
+        $msgFile = is_array($_FILES['msg_file'] ?? null) && (int)($_FILES['msg_file']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE ? $_FILES['msg_file'] : null;
+        $upRl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 MINUTE)");
+        $upRl->execute(['portal-up-' . (int)$client['id']]);
+        if ($msg === '' && $msgFile === null) {
+            keep_field_errors(['message' => 'Type a message or attach a file.']);
+        } elseif ($msgFile !== null && (int)$upRl->fetchColumn() >= 10) {
+            keep_input();
+            flash_ui('Please wait a moment before uploading more.', 'error');
         } elseif (mb_strlen($msg) > 5000) {
             // Refused, never cut: the whole message comes back to shorten or split.
             keep_input();
@@ -340,10 +347,18 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             keep_input();
             flash_ui($capMsg, 'error');
         } else {
-            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-msg-' . (int)$client['id']]);
-            post_message((int)$client['id'], 'client', 'client', null, $msg);
-            portal_notify_owner($client, 'Message from ' . $client['name'] . ' (portal)', 'messages.php?client=' . (int)$client['id'] . '&channel=client', null, true);
-            flash_ui('Message sent — your instructor will get back to you.');
+            $saved = $msgFile !== null ? exchange_save_upload($msgFile, (int)$client['id'], '', 'portal') : ['id' => null, 'error' => null];
+            if ($saved['error'] !== null) {
+                keep_input(); // the message is refilled; a file always has to be chosen again
+                keep_field_errors(['msg_file' => $saved['error']]);
+            } else {
+                db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-msg-' . (int)$client['id']]);
+                if ($saved['id']) db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-up-' . (int)$client['id']]);
+                $mid = post_message((int)$client['id'], 'client', 'client', null, $msg !== '' ? $msg : 'Sent a file.');
+                if ($saved['id']) message_attach($mid, (int)$saved['id']);
+                portal_notify_owner($client, 'Message from ' . $client['name'] . ' (portal)' . ($saved['id'] ? ', with a file' : ''), 'messages.php?client=' . (int)$client['id'] . '&channel=client', null, true);
+                flash_ui('Message sent — your instructor will get back to you.');
+            }
         }
         redirect('portal.php?t=' . $token . '&lang=' . page_lang());
     }
@@ -483,6 +498,9 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 keep_field_errors(['document' => 'That file type is not allowed. Use PDF, Office, text or image files.']);
             } elseif ($size > 15 * 1024 * 1024) {
                 keep_field_errors(['document' => 'That file is too large (15 MB maximum).']);
+            } elseif (!upload_content_ok((string)$_FILES['document']['tmp_name'], $ext)) {
+                // The content must be what the name says (4.24.0): a renamed program or page is refused.
+                keep_field_errors(['document' => 'That file is not really the type its name says, so it was not accepted. Save it again, or send it as a PDF.']);
             } elseif ($isDupDoc) {
                 unset($_SESSION['old_input']); // already saved: nothing to refill
                 flash_ui('That document was already uploaded, so it was not uploaded again.', 'info');
@@ -681,7 +699,8 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // Resource download (token-scoped, Resource category only) — before any HTML output
 if ($client && !empty($_GET['download'])) {
-    $d = db()->prepare("SELECT * FROM client_documents WHERE id = ? AND client_id = ? AND category IN ('Resource','Client Upload')");
+    // Resources, the client's own uploads, and anything shared with them (4.24.0).
+    $d = db()->prepare("SELECT * FROM client_documents WHERE id = ? AND client_id = ? AND (category IN ('Resource','Client Upload') OR portal_shared = 1)");
     $d->execute([(int)$_GET['download'], (int)$client['id']]);
     if ($doc = $d->fetch()) {
         $path = cfg('upload_dir') . '/' . basename($doc['path']);
@@ -767,7 +786,7 @@ $tracks = db()->prepare("SELECT * FROM training_tracks WHERE client_id = ? AND s
 $tracks->execute([(int)$client['id']]);
 $tracks = $tracks->fetchAll();
 
-$resources = db()->prepare("SELECT * FROM client_documents WHERE client_id = ? AND category = 'Resource' ORDER BY created_at DESC");
+$resources = db()->prepare("SELECT * FROM client_documents WHERE client_id = ? AND (category = 'Resource' OR (portal_shared = 1 AND category <> 'Client Upload' AND COALESCE(uploaded_via, '') <> 'portal')) ORDER BY created_at DESC");
 $resources->execute([(int)$client['id']]);
 $resources = $resources->fetchAll();
 
@@ -1166,7 +1185,9 @@ if ($devLoans || $devRepairs || $devChecks): ?>
 <?php endif; ?>
 
 <?php
-$thread = db()->prepare("SELECT sender, body, created_at FROM messages WHERE client_id = ? AND channel = 'client' ORDER BY created_at DESC LIMIT 20");
+$thread = db()->prepare("SELECT m.sender, m.body, m.created_at, d.id AS doc_id, d.title AS doc_title FROM messages m
+    LEFT JOIN client_documents d ON d.id = m.document_id AND d.client_id = m.client_id AND (d.category IN ('Resource','Client Upload') OR d.portal_shared = 1)
+    WHERE m.client_id = ? AND m.channel = 'client' ORDER BY m.created_at DESC LIMIT 20");
 $thread->execute([(int)$client['id']]);
 $thread = array_reverse($thread->fetchAll());
 if (!$caseClosed || $thread): ?>
@@ -1181,7 +1202,7 @@ if (!$caseClosed || $thread): ?>
     <?php foreach ($thread as $m): $who = $m['sender'] === 'client' ? __('You') : __('Instructor'); ?>
       <li class="msg <?= $m['sender'] === 'client' ? 'out' : 'in' ?>">
         <span class="visually-hidden"><?= h($who) ?>:</span>
-        <div class="msg-body"><?= nl2br(h($m['body'])) ?></div>
+        <div class="msg-body"><?= $m['body'] === 'Sent a file.' ? t('Sent a file.') : nl2br(h($m['body'])) ?><?php if (!empty($m['doc_id'])): ?><br><?= t('File:') ?> <a href="portal.php?t=<?= h($token) ?>&amp;download=<?= (int)$m['doc_id'] ?>"<?= $m['sender'] === 'client' ? ' style="color:#fff"' : '' ?>><?= h((string)$m['doc_title']) ?><span class="visually-hidden"> <?= t('(downloads a file)') ?></span></a><?php endif; ?></div>
         <div class="msg-meta"><span aria-hidden="true"><?= h($who) ?> · </span><?= en(portal_date('M j, g:i A', strtotime($m['created_at']))) ?></div>
       </li>
     <?php endforeach; ?>
@@ -1191,15 +1212,17 @@ if (!$caseClosed || $thread): ?>
   <style>.msg-thread{display:flex;flex-direction:column;gap:.5rem;margin:0 0 .8rem;padding:0;list-style:none}.msg{max-width:85%;padding:.5rem .7rem;border-radius:var(--radius)}.msg-body{max-width:70ch}.msg.in{align-self:flex-start;background:var(--bg);border:1px solid var(--line)}.msg.out{align-self:flex-end;background:#1e3a8a;color:#fff}.msg-meta{font-size:.875rem;color:var(--ink-soft);margin-top:.25rem}.msg.out .msg-meta{color:#e5ecff}</style>
   <?php endif; ?>
   <?php if (!$caseClosed): ?>
-  <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>
+  <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" enctype="multipart/form-data" novalidate>
     <?= csrf_field() ?>
-    <?= form_error_summary(['message' => 'Your message']) ?>
+    <?= form_error_summary(['message' => 'Your message', 'msg_file' => 'Attach a file']) ?>
     <div class="field">
-      <label for="message"><?= t('Your message') ?> <span class="hint"><?= t('(required)') ?></span></label>
+      <label for="message"><?= t('Your message') ?> <span class="hint"><?= t('(required unless you attach a file)') ?></span></label>
       <p class="hint" id="message-hint"><?= t('Up to 5,000 characters.') ?></p>
-      <textarea id="message" name="message" rows="4" required <?= field_aria('message', 'message-hint') ?>><?= h(old_in('send_message') !== '' ? old_in('message') : '') ?></textarea>
+      <textarea id="message" name="message" rows="4" <?= field_aria('message', 'message-hint') ?>><?= h(old_in('send_message') !== '' ? old_in('message') : '') ?></textarea>
       <?= field_error('message') ?>
     </div>
+    <div class="field"><label for="msg_file"><?= t('Attach a file') ?> <span class="hint"><?= t('(optional; PDF, Office, text or image, up to 15 MB)') ?></span></label>
+      <input type="file" id="msg_file" name="msg_file" accept=".pdf,.docx,.xlsx,.txt,.rtf,.png,.jpg,.jpeg" <?= field_aria('msg_file') ?>><?= field_error('msg_file') ?></div>
     <button type="submit" name="send_message" value="1" class="btn btn-primary"><?= t('Send message') ?></button>
   </form>
   <?php endif; ?>
