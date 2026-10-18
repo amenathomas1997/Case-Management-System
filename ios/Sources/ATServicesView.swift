@@ -465,7 +465,7 @@ struct ATEditSheet: View {
         NavigationStack {
             // ErrorFocusForm: Save is in the toolbar and the form is long, so a refused save is
             // scrolled to and given VoiceOver focus rather than left in a banner row off screen.
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 // A caption that stays visible once the title is filled in (a placeholder alone
                 // disappears); the field carries the same name for VoiceOver.
                 VStack(alignment: .leading) {

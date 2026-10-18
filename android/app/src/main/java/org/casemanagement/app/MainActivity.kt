@@ -25,6 +25,6 @@ class MainActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         // Coming back to the app retries anything written without a signal.
-        lifecycleScope.launch { api.flushQueue() }
+        lifecycleScope.launch { api.flushQueue(); api.flushSignatures() }
     }
 }

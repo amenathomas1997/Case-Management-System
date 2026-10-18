@@ -151,7 +151,7 @@ struct AccountView: View {
     private var codeDigits: String { totpCode.filter { $0.isASCII && $0.isNumber } }
 
     var body: some View {
-        ErrorFocusForm(error: error) {
+        ErrorFocusForm(inNavigationStack: true, error: error) {
             if let summary {
                 accountSection(summary)
                 passwordSection(summary)
@@ -695,7 +695,7 @@ private struct ChangePasswordSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 Section {
                     SecureCaptionedField(label: "Current password", text: $current, content: .password)
                     SecureCaptionedField(label: "New password, at least 10 characters", text: $newPassword, content: .newPassword)

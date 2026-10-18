@@ -151,12 +151,24 @@ function signature_name_matches(string $want, string $typed): bool {
  * Sign in person: the typed name, and a drawn signature (PNG bytes) when the device took one. Returns null when
  * signed, else the reason in plain words.
  */
-function signature_sign_in_person(array $r, string $typed, ?string $png, ?int $staff = null): ?string {
+function signature_sign_in_person(array $r, string $typed, ?string $png, ?int $staff = null, ?string $signedAt = null): ?string {
     if (!empty($r['withdrawn_at'])) return 'This document was withdrawn.';
     if (!empty($r['signed_at'])) return 'This document is already signed.';
-    // Only a document started for signing in person, today: one sent by email is signed by its own link.
+    // Only a document started for signing in person: one sent by email is signed by its own link.
     if (($r['method'] ?? '') !== 'In person') return 'This document was sent by email: it is signed from the link in that email.';
-    if (strtotime((string)$r['sent_at']) < time() - 86400) return 'This document was started more than a day ago. Start it again to sign it.';
+    // Signed with no signal (4.26.0): the apps keep the signature and send it later with the time it was signed
+    // on the phone. The document can be signed within two days of being started (prepared in the morning, signed
+    // in a client's home), and the signature must arrive within a week of being signed. A phone clock a little off
+    // is held to the document's start and to now; a time more than a day outside that is not believable.
+    $started = strtotime((string)$r['sent_at']);
+    $when = time();
+    if ($signedAt !== null && $signedAt !== '') {
+        $t = strtotime($signedAt);
+        if ($t === false || $t < $started - 86400 || $t > time() + 86400) return 'The time it was signed on the phone is not believable, so it was not recorded. Sign it again.';
+        $when = max($started, min($t, time()));
+        if (time() - $when > 7 * 86400) return 'This signature reached us more than a week after it was signed, so it was not recorded. Sign it again.';
+    }
+    if ($when > $started + 2 * 86400) return 'This document was started more than two days before it was signed. Start it again to sign it.';
     if (!signature_name_matches((string)$r['signer_name'], $typed)) return 'The name typed does not match the name on the document: ' . $r['signer_name'] . '.';
     $stored = null;
     if ($png !== null && $png !== '') {
@@ -169,7 +181,8 @@ function signature_sign_in_person(array $r, string $typed, ?string $png, ?int $s
     $_SERVER['REMOTE_ADDR'] ??= '';
     $who = null;
     if ($staff) { $u = db()->prepare('SELECT name FROM users WHERE id = ?'); $u->execute([$staff]); $who = (string)($u->fetchColumn() ?: 'staff'); }
-    if (!signature_sign($r, $typed, ' Signed in person' . ($who ? ' on the device of ' . $who : '') . ($stored ? ', with a drawn signature' : '') . '.')) { if ($stored) @unlink(cfg('upload_dir') . '/' . $stored); return 'This document is already signed.'; }
+    $late = $when < time() - 120 ? ' Signed on the phone with no connection at ' . date('F j, Y g:i A', $when) . ' and received ' . date('F j, Y g:i A') . '.' : '';
+    if (!signature_sign($r, $typed, ' Signed in person' . ($who ? ' on the device of ' . $who : '') . ($stored ? ', with a drawn signature' : '') . '.' . $late, date('Y-m-d H:i:s', $when))) { if ($stored) @unlink(cfg('upload_dir') . '/' . $stored); return 'This document is already signed.'; }
     db()->prepare('UPDATE client_signatures SET signature_path = ? WHERE id = ?')->execute([$stored, (int)$r['id']]);
     if ($staff) audit($staff, 'signature.signed_in_person', 'client', (int)$r['client_id'], (string)$r['title'] . ' signed by ' . $typed);
     return null;
@@ -183,17 +196,17 @@ function client_signature(int $id, int $clientId): ?array {
 }
 
 /** Sign a request with the typed name. True when this call signed it. */
-function signature_sign(array $r, string $typed, string $how = ''): bool {
+function signature_sign(array $r, string $typed, string $how = '', ?string $at = null): bool {
     $pdo = db();
     $pdo->beginTransaction();
     try {
-        $s = $pdo->prepare('UPDATE client_signatures SET signed_at = NOW(), signed_name = ?, sign_ip = ? WHERE id = ? AND signed_at IS NULL AND withdrawn_at IS NULL');
-        $s->execute([$typed, $_SERVER['REMOTE_ADDR'] ?? '', (int)$r['id']]);
+        $s = $pdo->prepare('UPDATE client_signatures SET signed_at = COALESCE(?, NOW()), signed_name = ?, sign_ip = ? WHERE id = ? AND signed_at IS NULL AND withdrawn_at IS NULL');
+        $s->execute([$at, $typed, $_SERVER['REMOTE_ADDR'] ?? '', (int)$r['id']]);
         $done = $s->rowCount() === 1;
         if ($done) {
             $pdo->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)')
                 ->execute([(int)$r['client_id'], 'Case Note', 'Signed: ' . mb_substr((string)$r['title'], 0, 150),
-                    $r['title'] . ' electronically signed by ' . $typed . (trim((string)$r['signer_email']) !== '' ? ' (' . $r['signer_email'] . ')' : '') . ' on ' . date('F j, Y g:i A') . '.' . $how]);
+                    $r['title'] . ' electronically signed by ' . $typed . (trim((string)$r['signer_email']) !== '' ? ' (' . $r['signer_email'] . ')' : '') . ' on ' . date('F j, Y g:i A', $at !== null ? (int)strtotime($at) : time()) . '.' . $how]);
             // A loan agreement is also the borrower's acceptance of the loan, unless one was recorded at hand-off.
             if (!empty($r['loan_id'])) $pdo->prepare('UPDATE equipment_loans SET accepted_name = COALESCE(accepted_name, ?), accepted_at = COALESCE(accepted_at, NOW()) WHERE id = ? AND returned_at IS NULL')->execute([$typed, (int)$r['loan_id']]);
         }

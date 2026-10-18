@@ -226,7 +226,7 @@ struct CohortSessionSheet: View {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm): Log is usually
             // pressed with the attendance list and Notes scrolled into view.
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 Picker("Activity", selection: $activity) { ForEach(preetsActivities, id: \.self) { Text($0) } }
                 DatePicker("Date", selection: $date, displayedComponents: .date)
                 // Any whole number of minutes, as the server and website accept (a 50-minute class
@@ -299,7 +299,7 @@ struct CohortNewSheet: View {
         NavigationStack {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 // Visible names that stay once the fields are filled; the required one says so.
                 CaptionedField(label: "Cohort name (required)", text: $name)
                 CaptionedField(label: "School / district", text: $school)

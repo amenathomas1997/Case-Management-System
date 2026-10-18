@@ -64,7 +64,9 @@ function api_425(string $action, array $input, int $userId): ?array {
             if ($inPerson) {
                 $id = signature_start_in_person($client, $v, $loans, $userId);
                 $s = client_signature($id, $cid);
-                return ['ok' => true, 'id' => $id, 'title' => (string)$s['title'], 'body' => (string)$s['body'], 'lang' => $s['lang'], 'signer_name' => (string)$s['signer_name'], 'org' => brand('org')];
+                // sent_at: when the server started it (4.26.0): the two days to sign it count from here.
+                return ['ok' => true, 'id' => $id, 'title' => (string)$s['title'], 'body' => (string)$s['body'], 'lang' => $s['lang'], 'signer_name' => (string)$s['signer_name'], 'org' => brand('org'),
+                    'sent_at' => $s['sent_at'], 'sign_by' => date('Y-m-d H:i:s', strtotime((string)$s['sent_at']) + 2 * 86400)];
             }
             $sent = signature_send($client, $v, $loans, $userId);
             if ($sent['error']) return ['ok' => false, 'error' => $sent['error'], 'status' => 502];
@@ -79,7 +81,10 @@ function api_425(string $action, array $input, int $userId): ?array {
                 $png = base64_decode($input['signature_b64'], true);
                 if ($png === false) return ['ok' => false, 'error' => 'The drawn signature could not be read. Clear it and sign again.', 'status' => 422];
             }
-            $why = signature_sign_in_person($s, $typed, $png, $userId);
+            $signedAt = is_string($input['signed_at'] ?? null) ? $input['signed_at'] : null;   // 4.26.0: signed with no signal
+            // A signature sent again after a lost reply (or twice from the offline queue) is already recorded: not an error.
+            if (!empty($s['signed_at']) && $s['signed_name'] !== null && signature_name_matches((string)$s['signer_name'], $typed)) return ['ok' => true, 'repeat' => true, 'signatures' => api_425_signature_rows($cid)];
+            $why = signature_sign_in_person($s, $typed, $png, $userId, $signedAt);
             if ($why !== null) return ['ok' => false, 'error' => $why, 'status' => 422];
             notify_admin_users('Signed in person: ' . $s['title'] . ' for ' . $client['name'], 'signatures.php?client=' . $cid);
             return ['ok' => true, 'signatures' => api_425_signature_rows($cid)];

@@ -252,7 +252,7 @@ struct AddIncidentSheet: View {
         NavigationStack {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 Section {
                     // A date picker, not typed text: a mistyped date used to be saved as today.
                     // Up to today, as on the website: an incident has already happened.

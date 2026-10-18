@@ -14,6 +14,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.navigation.NavHostController
 import org.casemanagement.app.Api
 import org.casemanagement.app.ApiException
+import org.casemanagement.app.NoteItem
+import org.casemanagement.app.parseClientDetail
+import org.casemanagement.app.parseClientHistory
+import org.casemanagement.app.parseClients
+import org.casemanagement.app.parseTracks
 import kotlinx.coroutines.launch
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
@@ -26,8 +31,8 @@ fun ClientsScreen(api: Api, nav: NavHostController) {
     var search by rememberSaveable { mutableStateOf("") }
     // The whole list is kept on the phone for reading without a signal (a search is not).
     val state = rememberLoaded(search) {
-        if (search.isEmpty()) api.callCached("clients", cacheKey = "clients").let { (r, at) -> r.optJSONArray("clients").objects() to at }
-        else api.call("clients", mapOf("q" to search)).optJSONArray("clients").objects() to null
+        if (search.isEmpty()) api.callCached("clients", cacheKey = "clients").let { (r, at) -> parseClients(r) to at }
+        else parseClients(api.call("clients", mapOf("q" to search))) to null
     }
     Page {
         Field("Search clients", q, { q = it }, hint = "name, phone or email")
@@ -39,7 +44,7 @@ fun ClientsScreen(api: Api, nav: NavHostController) {
             Heading(if (search.isEmpty()) "All clients (${list.size})" else "Clients matching $search (${list.size})")
             if (list.isEmpty()) Text("No clients found.")
             list.forEach { c ->
-                ListRow(listOf(c.optString("name"), c.optString("status"), c.str("phone") ?: ""), onClick = { nav.navigate("client/${c.optInt("id")}") })
+                ListRow(listOf(c.name, c.status, c.phone ?: ""), onClick = { nav.navigate("client/${c.id}") })
             }
         }
     }
@@ -56,15 +61,16 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
     var consentAsk by remember { mutableStateOf(false) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     Show(state, "the client") { (r, savedAt) ->
-        val c = r.optJSONObject("client") ?: return@Show
+        val detail = parseClientDetail(r) ?: return@Show
+        val c = detail.raw
         Page {
-            Heading(c.optString("name"), large = true)
+            Heading(detail.name, large = true)
             OfflineCopyNotice(savedAt)
-            ListRow(listOf("Status: " + c.optString("status")))
-            c.str("phone")?.let { p -> ListRow(listOf("Phone: $p"), action = "call", onClick = {
+            ListRow(listOf("Status: " + detail.status))
+            detail.phone?.let { p -> ListRow(listOf("Phone: $p"), action = "call", onClick = {
                 if (!openLink(context, Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + p.filter { it.isDigit() || it == '+' })))) linkError = "This phone has no app for calls."
             }) }
-            c.str("email")?.let { e -> ListRow(listOf("Email: $e"), action = "write an email", onClick = {
+            detail.email?.let { e -> ListRow(listOf("Email: $e"), action = "write an email", onClick = {
                 if (!openLink(context, Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:" + Uri.encode(e))))) linkError = "This phone has no email app."
             }) }
             NoticeText(notice)
@@ -82,58 +88,57 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
             if (a11y.isNotEmpty()) ListRow(listOf("Accessibility: " + a11y.joinToString(", ")))
             if (c.optBoolean("a11y_screen_reader")) ListRow(listOf("Uses a screen reader"))
             c.str("a11y_notes")?.let { ListRow(listOf("Accessibility notes: $it")) }
-            val custom = c.optJSONArray("custom_fields").objects()
-            if (custom.isNotEmpty()) {
+            if (detail.customFields.isNotEmpty()) {
                 Heading("More details")
-                custom.forEach { f -> ListRow(listOf(f.optString("label") + ": " + f.optString("value"))) }
+                detail.customFields.forEach { (label, value) -> ListRow(listOf("$label: $value")) }
             }
 
             PrimaryButton("Add a case note") { nav.navigate("note/$id") }
             SecondaryButton("Documents and homework") { nav.navigate("docs/$id") }
             SecondaryButton("Edit client details") { nav.navigate("clientEdit/$id") }
             SecondaryButton("Message") { nav.navigate("thread/$id") }
-            val waiting = c.optInt("signatures_waiting")
+            val waiting = detail.signaturesWaiting
             // A server before 4.25.0 has neither (its client detail has no device_counts).
-            if (c.has("device_counts")) {
+            if (detail.has425) {
                 SecondaryButton("Documents to sign" + if (waiting > 0) " ($waiting waiting)" else "") { nav.navigate("signatures/$id") }
                 SecondaryButton("Request a release") { nav.navigate("release/$id") }
             }
-            if (c.str("email") != null) SecondaryButton("Email a new portal link") { portalAsk = true }
+            if (detail.email != null) SecondaryButton("Email a new portal link") { portalAsk = true }
             SecondaryButton("Request guardian consent") { consentAsk = true }
             SecondaryButton("Status history") { nav.navigate("history/$id") }
             if (listOf("recommend", "progress", "intake", "draft").any { api.aiHas(it) }) SecondaryButton("AI help for this client") { nav.navigate("clientAi/$id") }
-            if (api.aiHas("voice") && api.can("clients")) SecondaryButton("Voice assistant") { nav.navigate("voice/$id/" + android.net.Uri.encode(c.optString("name").ifEmpty { "-" })) }
+            if (api.can("clients") && api.aiHas("briefing")) SecondaryButton("AI case briefing") { nav.navigate("briefing/$id") }
+            if (api.aiHas("voice") && api.can("clients")) SecondaryButton("Voice assistant") { nav.navigate("voice/$id/" + android.net.Uri.encode(detail.name.ifEmpty { "-" })) }
             SecondaryButton("Scored assessments") { nav.navigate("scoredList/$id") }
             SecondaryButton("Curriculum competencies") { nav.navigate("competency/$id") }
 
-            val tracks = r.optJSONArray("tracks").objects()
+            val tracks = detail.tracks
             Heading("Training tracks (${tracks.size})")
             if (tracks.isEmpty()) Text("No training tracks.")
             tracks.forEach { t ->
-                val auth = t.optDouble("authorized_hours", 0.0)
-                val worked = t.optDouble("hours_worked", 0.0)
+                val auth = t.authorizedHours
+                val worked = t.hoursWorked
                 ListRow(
-                    listOf(t.optString("title"), t.optString("status") + (t.str("auth_number")?.let { ", authorization $it" } ?: ""),
-                        if (auth > 0) "${hoursText(worked)} of ${hoursText(auth)} hours used" + (t.str("expiration_date")?.let { ", ends " + dayText(it) } ?: "") else "${hoursText(worked)} hours logged"),
+                    listOf(t.title, t.status + (t.authNumber?.let { ", authorization $it" } ?: ""),
+                        if (auth > 0) "${hoursText(worked)} of ${hoursText(auth)} hours used" + (t.expirationDate?.let { ", ends " + dayText(it) } ?: "") else "${hoursText(worked)} hours logged"),
                     action = "open it",
-                    onClick = { nav.navigate("track/$id/${t.optInt("id")}") },
+                    onClick = { nav.navigate("track/$id/${t.id}") },
                 )
             }
             SecondaryButton("Add a training track") { nav.navigate("trackEdit/$id/0") }
 
-            val releases = r.optJSONArray("releases").objects()
+            val releases = detail.releases
             Heading("Releases of information (${releases.size})")
             if (releases.isEmpty()) Text("No releases.")
             releases.forEach { rel ->
-                ListRow(listOf(rel.optString("recipient_name") + (rel.str("recipient_type")?.let { " ($it)" } ?: ""),
-                    listOfNotNull(rel.optString("status"), rel.str("expires_on")?.let { "ends " + dayText(it) }).joinToString(", "), rel.str("info_scope") ?: ""))
+                ListRow(listOf(rel.recipientName + (rel.recipientType?.let { " ($it)" } ?: ""),
+                    listOfNotNull(rel.status, rel.expiresOn?.let { "ends " + dayText(it) }).joinToString(", "), rel.infoScope ?: ""))
             }
 
-            val notes = r.optJSONArray("notes").objects()
-            Heading("Case notes (${r.optInt("notes_total", notes.size)})")
-            notes.forEach { n -> NoteRow(n) }
+            Heading("Case notes (${detail.notesTotal})")
+            detail.notes.forEach { n -> NoteRow(n) }
         }
-        if (portalAsk) Confirm("Email a new portal link?", "A new link to the client portal is emailed to ${c.optString("email")}. Any earlier link stops working.", "Email the link", {
+        if (portalAsk) Confirm("Email a new portal link?", "A new link to the client portal is emailed to ${detail.email ?: ""}. Any earlier link stops working.", "Email the link", {
             notice = null; linkError = null
             scope.launch {
                 try { notice = api.call("send_portal_link", body = org.json.JSONObject().put("client_id", id)).optString("message").ifEmpty { "Portal link emailed." } }
@@ -190,25 +195,25 @@ private fun ConsentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onC
 /** A client's status changes, newest first (client.php's history tab). */
 @Composable
 fun StatusHistoryScreen(api: Api, clientId: Int) {
-    val state = rememberLoaded(clientId) { api.call("client_history", mapOf("client_id" to clientId.toString())).optJSONArray("history").objects() }
+    val state = rememberLoaded(clientId) { parseClientHistory(api.call("client_history", mapOf("client_id" to clientId.toString()))) }
     Show(state, "the status history") { list ->
         Page {
             Heading("Status changes (${list.size})")
             if (list.isEmpty()) Text("No status changes recorded.")
             list.forEach { h ->
-                ListRow(listOf(h.optString("new_status") + (h.str("old_status")?.let { ", from $it" } ?: ""),
-                    whenText(h.str("changed_at")) + ", by " + h.optString("changed_by"), h.str("note") ?: ""))
+                ListRow(listOf(h.newStatus + (h.oldStatus?.let { ", from $it" } ?: ""),
+                    whenText(h.changedAt) + ", by " + h.changedBy, h.note ?: ""))
             }
         }
     }
 }
 
 @Composable
-private fun NoteRow(n: org.json.JSONObject) {
+private fun NoteRow(n: NoteItem) {
     var open by remember { mutableStateOf(false) }
-    val head = listOf(n.optString("subject"), n.optString("note_type") + ", " + whenText(n.str("created_at")) + (n.str("author")?.let { ", by $it" } ?: ""))
+    val head = listOf(n.subject, n.noteType + ", " + whenText(n.createdAt) + (n.author?.let { ", by $it" } ?: ""))
     ListRow(head, action = if (open) "close the note" else "read the note", state = if (open) "expanded" else "collapsed", onClick = { open = !open })
-    if (open) Text(n.optString("body"))
+    if (open) Text(n.body)
 }
 
 val NOTE_LABELS = mapOf(
@@ -223,7 +228,7 @@ val NOTE_LABELS = mapOf(
  * mention; staff review everything before saving. With no signal it is kept and sent later.
  */
 @Composable
-fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int) {
+fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int = 0) {
     val types = api.formList("note_types", listOf("Case Note", "Progress Report", "Monthly Summary", "Intake", "Addendum"))
     var type by rememberSaveable { mutableStateOf(types.first()) }
     var format by rememberSaveable { mutableStateOf("free") }
@@ -314,6 +319,8 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int) {
             scope.launchSave({ busy = it }, { error = it }) {
                 val payload = org.json.JSONObject().put("client_id", clientId).put("note_type", type).put("note_format", format)
                     .put("subject", subject.trim()).put("idem_key", idem)
+                // Written from a training track (4.26.0): the note is filed on that track.
+                if (trackId > 0) payload.put("track_id", trackId)
                 if (structured) {
                     sections.forEachIndexed { i, v -> payload.put("sec${i + 1}", v.trim()) }
                     if (body.isNotBlank()) payload.put("body", body.trim())
@@ -332,7 +339,7 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int) {
 /** Hours on a training track, with mileage; with no signal they are kept and sent later. */
 @Composable
 fun LogHoursScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
-    val tracks = rememberLoaded(trackId) { api.call("tracks").optJSONArray("tracks").objects() }
+    val tracks = rememberLoaded(trackId) { parseTracks(api.call("tracks")) }
     var date by rememberSaveable { mutableStateOf(today()) }
     var hours by rememberSaveable { mutableStateOf("") }
     var miles by rememberSaveable { mutableStateOf("") }
@@ -346,9 +353,9 @@ fun LogHoursScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int
     var error by remember { mutableStateOf<String?>(null) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     Page {
-        val t = tracks.data?.firstOrNull { it.optInt("id") == trackId }
-        Heading(t?.let { it.optString("client") + ": " + it.optString("title") } ?: "Training track")
-        val cats = t?.optJSONArray("visit_categories")?.let { a -> List(a.length()) { a.optString(it) } } ?: emptyList()
+        val t = tracks.data?.firstOrNull { it.id == trackId }
+        Heading(t?.let { it.client + ": " + it.title } ?: "Training track")
+        val cats = t?.visitCategories ?: emptyList()
         if (cats.isNotEmpty()) Choice("Kind of visit", category, listOf("" to "Not chosen") + cats.map { it to it }) { category = it }
         Field("Date", date, { date = it }, hint = "year-month-day, such as ${today()}")
         Field("Hours", hours, { hours = it }, hint = "such as 1.5", keyboard = KeyboardType.Decimal)
@@ -370,7 +377,7 @@ fun LogHoursScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int
                     if (category.isNotEmpty()) payload.put("rsa_category", category)
                     signature.png(density)?.let { payload.put("signature_b64", it) }
                     if (signedName.isNotBlank()) payload.put("signed_name", signedName.trim().take(120))
-                    Flash.pending = saveOrQueue(api, "log_hours", payload, "Hours: ${hoursText(h)} on " + (t?.optString("client") ?: "track $trackId"), "Hours logged.").message
+                    Flash.pending = saveOrQueue(api, "log_hours", payload, "Hours: ${hoursText(h)} on " + (t?.client ?: "track $trackId"), "Hours logged.").message
                     nav.popBackStack()
                 }
             }

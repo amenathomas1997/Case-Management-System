@@ -955,7 +955,7 @@ struct GoalProgressSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 Text(goal.specificGoal).font(.callout)
                 Picker("Status", selection: $status) { ForEach(goalStatuses, id: \.self) { Text($0) } }
                     // The slider follows the status until a percent is entered (Achieved is always
@@ -1090,7 +1090,7 @@ struct AddGoalSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 // Thousands of templates: searched by area and keyword, 50 at a time, each shown
                 // in full — never one long menu.
                 NavigationLink {
@@ -1306,7 +1306,7 @@ struct ExpenseSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 // Just after the error banner (the next thing VoiceOver reaches from it), with the
                 // problem it answers next to it, as the website's expense form offers it.
                 if let authorizationIssue {
@@ -1431,7 +1431,7 @@ struct SendReportSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 Text("Sends the full progress report for \(clientName) — authorization status, goals, and session log — to the VR counselor on file, with a receipt-confirmation link.")
                     .font(.callout)
                 CaptionedField(label: "Personal message (optional)", text: $intro, lines: 2...5)
@@ -1610,7 +1610,7 @@ struct TrackEditSheet: View {
         NavigationStack {
             Group {
                 if let form {
-                    ErrorFocusForm(error: error) { formBody(form) }
+                    ErrorFocusForm(inNavigationStack: true, error: error) { formBody(form) }
                 } else if let loadError {
                     List { ErrorBanner(message: loadError); Button("Try again") { Task { await load() } } }
                 } else {

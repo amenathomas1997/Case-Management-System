@@ -89,3 +89,40 @@ fun zoneWords(id: String?): String? {
 /** What a message's file is called in the conversation. */
 fun messageFileLabel(m: JSONObject): String? =
     if (m.isNull("document_id") || m.optInt("document_id") <= 0) null else "File: " + (m.str("document_title") ?: "a document")
+
+/* ---------- Signing with no signal (4.26.0) ---------- */
+
+/** A typed name reduced as the server compares it: no accents, case, spaces or punctuation. */
+fun typedNameKey(s: String): String {
+    val plain = java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
+    return plain.lowercase(Locale.ROOT).replace("ß", "ss").replace(Regex("[^\\p{L}\\p{N}]+"), "")
+}
+
+/** Whether [typed] is the name on the document, by the server's rule (checked here when there is no signal). */
+fun typedNameMatches(want: String, typed: String): Boolean {
+    val t = typed.trim()
+    if (t.isEmpty() || t.length > 120) return false
+    val key = typedNameKey(want)
+    return if (key.isNotEmpty()) typedNameKey(t) == key else t.lowercase(Locale.ROOT) == want.trim().lowercase(Locale.ROOT)
+}
+
+/** Now, as the server reads a time signed on the phone: ISO 8601 with the offset (2026-10-18T14:05:00-05:00). */
+fun isoTime(millis: Long, zone: TimeZone = TimeZone.getDefault()): String =
+    java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US).apply { timeZone = zone }.format(java.util.Date(millis))
+
+/** The server takes a document signed within two days of being started. */
+const val SIGN_WINDOW_MS = 2L * 24 * 60 * 60 * 1000
+
+/** Whether a document prepared at [preparedAt] can still be signed at [now] (a minute's margin for the clocks). */
+fun stillSignable(preparedAt: Long, now: Long): Boolean = preparedAt > 0 && now - preparedAt < SIGN_WINDOW_MS - 60_000
+
+/** A time the server sent ("2026-10-18 12:01:00", in the server's own time zone [zoneId]), as milliseconds; null when unreadable. */
+fun serverTimeMillis(s: String?, zoneId: String): Long? {
+    if (s.isNullOrBlank()) return null
+    return try {
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).apply { timeZone = TimeZone.getTimeZone(zoneId); isLenient = false }.parse(s.trim())?.time
+    } catch (e: Exception) { null }
+}
+
+/** When a document was started for signing: the server's sent_at, else [fallback] (an older server sends none). */
+fun signingStart(sentAt: String?, zoneId: String, fallback: Long): Long = serverTimeMillis(sentAt, zoneId) ?: fallback

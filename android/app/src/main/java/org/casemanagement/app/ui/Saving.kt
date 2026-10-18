@@ -23,9 +23,13 @@ object Flash {
 class Saved(val message: String, val reply: JSONObject?)
 
 /** Runs a save: busy while it runs, and its refusal shown as the form's error. */
-fun CoroutineScope.launchSave(setBusy: (Boolean) -> Unit, setError: (String?) -> Unit, block: suspend () -> Unit) = launch {
+fun CoroutineScope.launchSave(setBusy: (Boolean) -> Unit, setError: (String?) -> Unit, block: suspend () -> Unit): kotlinx.coroutines.Job {
+    // Busy at once, before the coroutine starts: a second tap in the same moment is turned away
+    // by the caller's busy check rather than sending twice (4.26.0).
     setBusy(true); setError(null)
-    try { block() } catch (e: ApiException) { setError(e.message) } finally { setBusy(false) }
+    return launch {
+        try { block() } catch (e: ApiException) { setError(e.message) } finally { setBusy(false) }
+    }
 }
 
 /**

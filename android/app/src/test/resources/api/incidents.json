@@ -1,0 +1,42 @@
+{
+    "ok": true,
+    "incidents": [
+        {
+            "id": 3,
+            "client_id": 61,
+            "incident_date": "2026-10-18",
+            "location": null,
+            "type": "Other",
+            "severity": "Low",
+            "description": "Synthetic",
+            "action_taken": null,
+            "status": "Open",
+            "created_at": "2026-10-18 12:26:44",
+            "client_name": "Held synthetic client",
+            "reporter": null,
+            "reported_by": null,
+            "can_edit": true
+        }
+    ],
+    "statuses": [
+        "Open",
+        "Under review",
+        "Closed"
+    ],
+    "types": [
+        "Injury",
+        "Near miss",
+        "Equipment failure",
+        "Behavioral",
+        "Property damage",
+        "Medical",
+        "Safety concern",
+        "Other"
+    ],
+    "severities": [
+        "Low",
+        "Medium",
+        "High",
+        "Critical"
+    ]
+}

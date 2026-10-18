@@ -2,10 +2,31 @@ import SwiftUI
 
 // MARK: - Documents to sign (4.25.0)
 
-/// How a document goes to its signer: a private link by email, or signed here on this phone.
+/// How a document goes to its signer: a private link by email, signed here on this phone now,
+/// or (4.26.0) prepared now and kept on this phone to sign later, even with no signal.
 enum SignatureMode: String, Identifiable {
-    case email, inPerson
+    case email, inPerson, prepare
     var id: String { rawValue }
+}
+
+/// A document to sign in person, and whether it was prepared earlier and kept on this phone.
+struct SigningSession: Identifiable {
+    let document: SigningDocument
+    let prepared: Bool
+    /// The last moment it can be signed (two days from the server's start, less a minute); nil
+    /// when the start time is not known.
+    let signBy: Date?
+    var id: Int { document.id }
+
+    init(document: SigningDocument, prepared: Bool, signBy: Date?) {
+        self.document = document; self.prepared = prepared; self.signBy = signBy
+    }
+
+    /// One just started or opened again: the window counts from the server's start time.
+    init(document: SigningDocument, startedAt raw: String?) {
+        self.init(document: document, prepared: false,
+                  signBy: SigningWindow.serverTime(raw ?? document.sentAt).map(SigningWindow.signBy))
+    }
 }
 
 /// A client's documents to sign: consent to services, equipment loan agreements and any other
@@ -23,10 +44,15 @@ struct SignaturesView: View {
     @State private var request: SignatureMode?
     /// Set by the in-person form once the document is ready; the signing screen opens when the form has closed.
     @State private var readyToSign: SigningDocument?
-    @State private var signing: SigningDocument?
+    @State private var signing: SigningSession?
     @State private var sheetResult: String?
     @State private var withdrawing: SignatureRow?
+    @State private var removingPrepared: PreparedSignature?
     @State private var opening = false
+    /// Prepared on this phone to sign with no signal (4.26.0).
+    @State private var prepared: [PreparedSignature] = []
+    /// Signed here with no signal, waiting to be sent (4.26.0).
+    @State private var waitingToSend: [OfflineSignatures.Waiting] = []
 
     var body: some View {
         List {
@@ -34,9 +60,52 @@ struct SignaturesView: View {
             if let confirmation {
                 Text(confirmation).font(.callout.weight(.medium)).foregroundStyle(Color.brandTeal)
             }
+            if !waitingToSend.isEmpty {
+                Section("Signed here, waiting to send") {
+                    ForEach(waitingToSend) { item in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(item.title).font(.body.weight(.semibold))
+                            Text(waitingDetails(item)).font(.callout)
+                            if let why = item.lastError {
+                                Label("Not accepted: \(why)", systemImage: "exclamationmark.triangle.fill")
+                                    .font(.callout).foregroundStyle(Color.alertRed)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+            if !prepared.isEmpty {
+                Section("Ready to sign here, even with no signal") {
+                    ForEach(prepared) { item in
+                        Button { confirmation = nil; signing = SigningSession(document: item.document, prepared: true, signBy: item.expiresAt) } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.title).font(.body.weight(.semibold))
+                                Text(preparedDetails(item)).font(.callout).foregroundStyle(Color.secondaryText)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .foregroundStyle(.primary)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Sign \(item.title). \(preparedDetails(item))")
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityActions {
+                            Button("Remove from this phone", role: .destructive) { removingPrepared = item }
+                        }
+                        .contextMenu {
+                            Button("Remove from this phone", role: .destructive) { removingPrepared = item }
+                        }
+                    }
+                }
+            }
             Section("Send or sign") {
                 Button { confirmation = nil; request = .inPerson } label: {
                     Label("Sign here now", systemImage: "hand.draw")
+                }
+                Button { confirmation = nil; request = .prepare } label: {
+                    Label("Prepare to sign with no signal", systemImage: "arrow.down.doc")
                 }
                 Button { confirmation = nil; request = .email } label: {
                     Label("Send by email", systemImage: "envelope")
@@ -67,10 +136,14 @@ struct SignaturesView: View {
         .navigationTitle("Documents to sign")
         .refreshable { await load() }
         .task { await load() }
+        // An upload of what was signed here with no signal finished (or was refused): the list follows.
+        .onChange(of: api.pendingSync) { _ in Task { await load(flush: false) } }
+        .onChange(of: api.syncError) { _ in refreshKept() }
         .sheet(item: $request, onDismiss: {
+            refreshKept()
             if let doc = readyToSign {
                 readyToSign = nil
-                signing = doc
+                signing = SigningSession(document: doc, startedAt: doc.sentAt)
             } else if let message = sheetResult {
                 announceAfterDismiss(message)
             }
@@ -85,12 +158,28 @@ struct SignaturesView: View {
             }
         }
         .fullScreenCover(item: $signing, onDismiss: {
+            refreshKept()
             Task { await load(); onChanged() }
-        }) { doc in
-            InPersonSigningView(clientId: clientId, document: doc) { rows in
+        }) { session in
+            InPersonSigningView(clientId: clientId, document: session.document, prepared: session.prepared,
+                                signBy: session.signBy) { rows, queued in
                 if let rows, let current = data { data = current.replacing(rows) }
-                confirmation = "Signed: \(doc.title)."
+                confirmation = queued
+                    ? "Signed with no signal: \(session.document.title). It is kept on this phone and sent when the connection returns."
+                    : "Signed: \(session.document.title)."
             }
+        }
+        .confirmationDialog(removingPrepared.map { "Remove \($0.title) from this phone? It can no longer be signed here with no signal." } ?? "",
+                            isPresented: Binding(get: { removingPrepared != nil }, set: { if !$0 { removingPrepared = nil } }),
+                            titleVisibility: .visible) {
+            Button("Remove from this phone", role: .destructive) {
+                if let item = removingPrepared {
+                    PreparedSignatures.remove(id: item.id, owner: api.userId)
+                    refreshKept()
+                    announce("\(item.title) removed from this phone.")
+                }
+            }
+            Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog(withdrawing.map { "Withdraw \($0.title)? It can no longer be signed." } ?? "",
                             isPresented: Binding(get: { withdrawing != nil }, set: { if !$0 { withdrawing = nil } }),
@@ -123,13 +212,48 @@ struct SignaturesView: View {
         return parts.joined(separator: ". ")
     }
 
-    private func load() async {
+    /// A document prepared to sign with no signal: who signs, when it was prepared and by when it can be signed.
+    private func preparedDetails(_ item: PreparedSignature) -> String {
+        "Signer: \(item.signerName). Prepared \(item.preparedAt.formatted(date: .abbreviated, time: .shortened)). "
+            + "Sign by \(item.expiresAt.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    private func waitingDetails(_ item: OfflineSignatures.Waiting) -> String {
+        var parts = ["Signed as \(item.typedName)"]
+        if let at = item.signedAt { parts.append("on this phone \(at.formatted(date: .abbreviated, time: .shortened))") }
+        return parts.joined(separator: " ") + (item.lastError == nil ? ". Sent when the connection returns." : ". Still kept on this phone.")
+    }
+
+    /// What this phone keeps for this client: prepared documents and signatures waiting to send.
+    private func refreshKept() {
+        prepared = PreparedSignatures.forClient(clientId, owner: api.userId)
+        waitingToSend = OfflineSignatures.waiting(clientId: clientId, api: api)
+    }
+
+    /// `flush`: send signatures kept with no signal first, now that the server answers.
+    private func load(flush: Bool = true) async {
+        refreshKept()
         do {
-            data = try await api.call("signatures", query: ["client_id": String(clientId)])
+            let reply: SignaturesResponse = try await api.call("signatures", query: ["client_id": String(clientId)])
+            if flush, !waitingToSend.isEmpty {
+                await api.flushQueue()
+                refreshKept()
+                data = try await api.call("signatures", query: ["client_id": String(clientId)])
+            } else {
+                data = reply
+            }
+            if let rows = data?.signatures {
+                PreparedSignatures.reconcile(clientId: clientId, rows: rows, owner: api.userId)
+                refreshKept()
+            }
             error = nil
         } catch {
             guard !Task.isCancelled else { return }
-            showFormError(error.localizedDescription, in: &self.error)
+            if case APIError.network = error, !prepared.isEmpty {
+                showFormError("No connection. The documents under Ready to sign here can still be signed; nothing else can be changed until the connection returns.", in: &self.error)
+            } else {
+                showFormError(error.localizedDescription, in: &self.error)
+            }
         }
     }
 
@@ -140,7 +264,7 @@ struct SignaturesView: View {
         do {
             error = nil
             let r: SigningDocumentResponse = try await api.call("signature", query: ["client_id": String(clientId), "id": String(row.id)])
-            signing = r.signature
+            signing = SigningSession(document: r.signature, startedAt: row.sentAt)
         } catch {
             showFormError("Could not open \(row.title). \(error.localizedDescription)", in: &self.error)
         }
@@ -179,7 +303,8 @@ struct SignatureRequestSheet: View {
     let client: ClientInfo
     let kinds: [String: String]
     let openLoans: [SignatureLoan]
-    let onEmailed: (String) -> Void
+    /// Emailed, or prepared to sign later: what to confirm.
+    let onDone: (String) -> Void
     let onStarted: (SigningDocument) -> Void
 
     @State private var kind = "services"
@@ -208,12 +333,9 @@ struct SignatureRequestSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 Section {
-                    Text(mode == .email
-                         ? "A private signing link is emailed to the signer."
-                         : "When the document is ready, hand the phone to the signer. They read it and type their name to sign.")
-                        .font(.callout)
+                    Text(intro).font(.callout)
                 }
                 Section("Document") {
                     Picker("Kind of document", selection: $kind) {
@@ -245,14 +367,14 @@ struct SignatureRequestSheet: View {
                         .autocorrectionDisabled()
                 }
             }
-            .navigationTitle(mode == .email ? "Send by email" : "Sign here now")
+            .navigationTitle(screenTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }.disabled(busy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(busy ? (mode == .email ? "Sending…" : "Preparing…") : (mode == .email ? "Send" : "Start")) {
+                    Button(busy ? (mode == .email ? "Sending…" : "Preparing…") : (mode == .email ? "Send" : mode == .prepare ? "Prepare" : "Start")) {
                         Task { await submit() }
                     }
                     .disabled(busy)
@@ -265,6 +387,21 @@ struct SignatureRequestSheet: View {
                 signerName = role == "Guardian" ? (client.guardianName ?? "") : client.name
                 signerEmail = role == "Guardian" ? (client.guardianEmail ?? "") : (client.email ?? "")
             }
+        }
+    }
+
+    private var intro: String {
+        switch mode {
+        case .email: return "A private signing link is emailed to the signer."
+        case .inPerson: return "When the document is ready, hand the phone to the signer. They read it and type their name to sign."
+        case .prepare: return "The document is prepared now and kept on this phone, so it can be signed here within two days, even with no signal. When you are with the signer, open it under Ready to sign here and hand them the phone."
+        }
+    }
+    private var screenTitle: String {
+        switch mode {
+        case .email: return "Send by email"
+        case .inPerson: return "Sign here now"
+        case .prepare: return "Prepare to sign"
         }
     }
 
@@ -290,11 +427,26 @@ struct SignatureRequestSheet: View {
                                    "signer_name": name, "signer_email": email]
         if kind == "loan" { body["loan_id"] = loanId }
         if kind == "document" { body["title"] = title; body["body"] = text }
+        // Nothing is kept on a phone without a passcode, so there is nothing to sign later on it.
+        if mode == .prepare && !API.phoneCanKeepClientData {
+            showFormError("This iPhone has no passcode, so the app keeps nothing on it to sign later. Use Sign here now when you are with the signer and have a signal, or set a passcode in Settings.", in: &error)
+            return
+        }
         busy = true; error = nil
         do {
             if mode == .email {
                 let _: TaskSaveResult = try await api.call("send_signature", body: body)
-                onEmailed("Signing link emailed to \(email).")
+                onDone("Signing link emailed to \(email).")
+            } else if mode == .prepare {
+                let doc: SigningDocument = try await api.call("start_signature", body: body)
+                let item = PreparedSignature(document: doc, clientId: clientId, clientName: client.name)
+                guard PreparedSignatures.add(item, owner: api.userId) else {
+                    // Started on the server but not kept here: it is listed as waiting to be signed here.
+                    busy = false
+                    showFormError("\(doc.title) is started, but it could not be kept on this phone to sign with no signal. Sign it with a signal from the list (Sign here now on its actions), or withdraw it.", in: &error)
+                    return
+                }
+                onDone("Ready to sign here, even with no signal: \(doc.title). Sign it by \(item.expiresAt.formatted(date: .abbreviated, time: .shortened)).")
             } else {
                 let doc: SigningDocument = try await api.call("start_signature", body: body)
                 onStarted(doc)
@@ -318,8 +470,13 @@ struct InPersonSigningView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     let clientId: Int
     let document: SigningDocument
-    /// The list as the server now has it (nil when the reply did not include it).
-    let onSigned: ([SignatureRow]?) -> Void
+    /// Prepared earlier and kept on this phone (4.26.0): stopping leaves it ready to sign later.
+    var prepared = false
+    /// The last moment the server takes the signature (nil: not known; the server decides).
+    var signBy: Date? = nil
+    /// The list as the server now has it (nil when the reply did not include it), and whether
+    /// the signature was kept on this phone to send when the connection returns.
+    let onSigned: ([SignatureRow]?, Bool) -> Void
 
     @State private var typedName = ""
     @State private var strokes: [[CGPoint]] = []
@@ -328,7 +485,10 @@ struct InPersonSigningView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var askingCancel = false
+    /// Signed with no signal (4.26.0): kept on this phone, and the signer is told so before handing the phone back.
+    @State private var keptToSend = false
     @AccessibilityFocusState private var errorFocused: Bool
+    @AccessibilityFocusState private var keptFocused: Bool
 
     private var spanish: Bool { document.lang == "es" }
     /// The words around the document, in the document's language (as the website's signing page).
@@ -362,90 +522,132 @@ struct InPersonSigningView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let error {
-                        ErrorBanner(message: error).accessibilityFocused($errorFocused)
-                    }
-                    marked(document.title).font(.title2.weight(.bold))
-                        .accessibilityAddTraits(.isHeader)
-                    Text(t("In this document, “we” means \(document.org) and “you” means the person who signs.",
-                           "En este documento, “nosotros” significa \(document.org) y “usted” significa la persona que firma."))
-                    Text(t("The name on this document is \(document.signerName).", "El nombre en este documento es \(document.signerName)."))
-                    Text(t("When you sign, you agree to the following:", "Al firmar, usted acepta lo siguiente:"))
-                    ForEach(Array(blocks.enumerated()), id: \.offset) { _, lines in
-                        if lines.count == 1 {
-                            marked(lines[0])
-                        } else {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                        Text("•").accessibilityHidden(true)
-                                        marked(line)
-                                    }
+            if keptToSend { keptView } else { signingView }
+        }
+    }
+
+    /// After signing with no signal: said and shown, then the phone goes back (and the app locks).
+    private var keptView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text(t("Signed", "Firmado")).font(.title2.weight(.bold)).accessibilityAddTraits(.isHeader)
+                Text(keptMessage)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityFocused($keptFocused)
+                Button {
+                    close()
+                } label: {
+                    Text(t("Done, give the phone back", "Listo, devuelva el teléfono"))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .onBrandLabel()
+            }
+            .padding()
+        }
+        .navigationTitle(t("Document to sign", "Documento para firmar"))
+        .navigationBarTitleDisplayMode(.inline)
+        .interactiveDismissDisabled(true)
+        .onAppear {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                keptFocused = true
+            }
+        }
+    }
+
+    private var keptMessage: String {
+        t("\(document.title) is signed. This phone has no connection right now, so the signature is kept on it and sent automatically when the connection returns. Please give the phone back.",
+          "\(document.title) está firmado. Este teléfono no tiene conexión ahora, así que la firma se guarda en él y se envía automáticamente cuando vuelva la conexión. Por favor, devuelva el teléfono.")
+    }
+
+    private var signingView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if let error {
+                    ErrorBanner(message: error).accessibilityFocused($errorFocused)
+                }
+                marked(document.title).font(.title2.weight(.bold))
+                    .accessibilityAddTraits(.isHeader)
+                Text(t("In this document, “we” means \(document.org) and “you” means the person who signs.",
+                       "En este documento, “nosotros” significa \(document.org) y “usted” significa la persona que firma."))
+                Text(t("The name on this document is \(document.signerName).", "El nombre en este documento es \(document.signerName)."))
+                Text(t("When you sign, you agree to the following:", "Al firmar, usted acepta lo siguiente:"))
+                ForEach(Array(blocks.enumerated()), id: \.offset) { _, lines in
+                    if lines.count == 1 {
+                        marked(lines[0])
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text("•").accessibilityHidden(true)
+                                    marked(line)
                                 }
                             }
                         }
                     }
-                    .environment(\.locale, Locale(identifier: spanish ? "es" : "en"))
-                    .fixedSize(horizontal: false, vertical: true)
+                }
+                .environment(\.locale, Locale(identifier: spanish ? "es" : "en"))
+                .fixedSize(horizontal: false, vertical: true)
 
-                    Text(t("Sign", "Firmar")).font(.headline).accessibilityAddTraits(.isHeader).padding(.top, 8)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(t("Type your full name to sign", "Escriba su nombre completo para firmar"))
-                            .font(.callout.weight(.semibold)).accessibilityHidden(true)
-                        TextField(t("Type your full name to sign", "Escriba su nombre completo para firmar"), text: $typedName)
-                            .textFieldStyle(.roundedBorder)
-                            // No AutoFill: it would offer the phone owner's name.
-                            .autocorrectionDisabled()
-                            .submitLabel(.done)
-                            .accessibilityHint(t("Capital letters, accents and punctuation do not need to match.",
-                                                 "No importa si las mayúsculas, los acentos o la puntuación son diferentes."))
-                        Text(t("Capital letters, accents and punctuation do not need to match.",
-                               "No importa si las mayúsculas, los acentos o la puntuación son diferentes."))
-                            .font(.caption).foregroundStyle(Color.secondaryText).accessibilityHidden(true)
-                    }
-                    Text(t("Drawn signature (optional). Typing your name is enough.", "Firma dibujada (opcional). Escribir su nombre es suficiente."))
-                        .font(.callout)
-                    SignaturePad(strokes: $strokes, padSize: $padSize,
-                                 status: strokes.isEmpty ? t("Empty", "Vacío") : t("Signature drawn", "Firma dibujada"),
-                                 onDrawing: { drawing = $0 })
-                        .frame(maxWidth: .infinity)
-                        .frame(height: padHeight)
-                    Button(t("Clear drawing", "Borrar firma dibujada")) {
-                        strokes = []
-                        announce(t("Drawing cleared.", "Firma dibujada borrada."))
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(strokes.isEmpty || busy)
-                    Button {
-                        Task { await sign() }
-                    } label: {
-                        Text(busy ? t("Signing…", "Firmando…") : t("Sign and submit", "Firmar y enviar"))
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .onBrandLabel()
-                    .disabled(busy)
+                Text(t("Sign", "Firmar")).font(.headline).accessibilityAddTraits(.isHeader).padding(.top, 8)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(t("Type your full name to sign", "Escriba su nombre completo para firmar"))
+                        .font(.callout.weight(.semibold)).accessibilityHidden(true)
+                    TextField(t("Type your full name to sign", "Escriba su nombre completo para firmar"), text: $typedName)
+                        .textFieldStyle(.roundedBorder)
+                        // No AutoFill: it would offer the phone owner's name.
+                        .autocorrectionDisabled()
+                        .submitLabel(.done)
+                        .accessibilityHint(t("Capital letters, accents and punctuation do not need to match.",
+                                             "No importa si las mayúsculas, los acentos o la puntuación son diferentes."))
+                    Text(t("Capital letters, accents and punctuation do not need to match.",
+                           "No importa si las mayúsculas, los acentos o la puntuación son diferentes."))
+                        .font(.caption).foregroundStyle(Color.secondaryText).accessibilityHidden(true)
                 }
-                .padding()
-            }
-            .scrollDisabled(drawing)
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(t("Document to sign", "Documento para firmar"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(t("Cancel", "Cancelar")) { askingCancel = true }.disabled(busy)
+                Text(t("Drawn signature (optional). Typing your name is enough.", "Firma dibujada (opcional). Escribir su nombre es suficiente."))
+                    .font(.callout)
+                SignaturePad(strokes: $strokes, padSize: $padSize,
+                             status: strokes.isEmpty ? t("Empty", "Vacío") : t("Signature drawn", "Firma dibujada"),
+                             onDrawing: { drawing = $0 })
+                    .frame(maxWidth: .infinity)
+                    .frame(height: padHeight)
+                Button(t("Clear drawing", "Borrar firma dibujada")) {
+                    strokes = []
+                    announce(t("Drawing cleared.", "Firma dibujada borrada."))
                 }
+                .buttonStyle(.bordered)
+                .disabled(strokes.isEmpty || busy)
+                Button {
+                    Task { await sign() }
+                } label: {
+                    Text(busy ? t("Signing…", "Firmando…") : t("Sign and submit", "Firmar y enviar"))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .onBrandLabel()
+                .disabled(busy)
             }
-            .interactiveDismissDisabled(true)
-            .confirmationDialog(t("Stop without signing? The document is withdrawn and can't be signed.",
-                                  "¿Salir sin firmar? El documento se retira y ya no se puede firmar."),
-                                isPresented: $askingCancel, titleVisibility: .visible) {
-                Button(t("Stop without signing", "Salir sin firmar"), role: .destructive) { stopWithoutSigning() }
-                Button(t("Keep signing", "Seguir firmando"), role: .cancel) {}
+            .padding()
+        }
+        .scrollDisabled(drawing)
+        .scrollDismissesKeyboard(.interactively)
+        .navigationTitle(t("Document to sign", "Documento para firmar"))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button(t("Cancel", "Cancelar")) { askingCancel = true }.disabled(busy)
             }
+        }
+        .interactiveDismissDisabled(true)
+        .confirmationDialog(prepared
+                            ? t("Stop without signing? The document stays ready to sign later.",
+                                "¿Salir sin firmar? El documento queda listo para firmar más tarde.")
+                            : t("Stop without signing? The document is withdrawn and can't be signed.",
+                                "¿Salir sin firmar? El documento se retira y ya no se puede firmar."),
+                            isPresented: $askingCancel, titleVisibility: .visible) {
+            Button(t("Stop without signing", "Salir sin firmar"), role: .destructive) { stopWithoutSigning() }
+            Button(t("Keep signing", "Seguir firmando"), role: .cancel) {}
         }
     }
 
@@ -458,6 +660,8 @@ struct InPersonSigningView: View {
 
     /// Not signed: the request is withdrawn, so it is not left waiting to be signed here.
     private func stopWithoutSigning() {
+        // One prepared to sign with no signal stays on this phone (and on the server) for later.
+        if prepared { close(); return }
         let api = api, clientId = clientId, id = document.id
         Task { let _: SignatureListReply? = try? await api.call("withdraw_signature", body: ["client_id": clientId, "id": id]) }
         close()
@@ -469,19 +673,64 @@ struct InPersonSigningView: View {
             fail(t("Type your full name to sign.", "Escriba su nombre completo para firmar."))
             return
         }
+        // Past the two days from the server's start: not signed, and nothing is kept.
+        guard !windowPassed() else { return }
         busy = true; error = nil
+        // When it was signed: sent with it if it has to wait for a connection.
+        let signedAt = Date()
         var body: [String: Any] = ["client_id": clientId, "id": document.id, "typed_name": name]
         if hasDrawing, let png = renderPNGBase64() { body["signature_b64"] = png }
         do {
             let r: SignatureListReply = try await api.call("sign_in_person", body: body)
+            PreparedSignatures.remove(id: document.id, owner: api.userId)
             announce(t("Signed.", "Firmado."))
-            onSigned(r.signatures)
+            onSigned(r.signatures, false)
             close()
+        } catch APIError.network {
+            keepToSendLater(body, name: name, signedAt: signedAt)
         } catch {
             // The typed name and any drawing stay for another try.
             busy = false
             fail(error.localizedDescription)
         }
+    }
+
+    /// No connection (4.26.0): the signature is kept on this phone, protected like the other
+    /// offline entries, and sent as sign_in_person with the time it was signed when the
+    /// connection returns (API.flushQueue). The kept copy goes only once the server accepts it.
+    private func keepToSendLater(_ sent: [String: Any], name: String, signedAt: Date) {
+        // The window may have closed while the server was being tried.
+        guard !windowPassed(at: signedAt) else { busy = false; return }
+        // The server's own check, done here, so the signer is not told it is signed when it would be refused.
+        guard OfflineSignatures.nameMatches(document.signerName, name) else {
+            busy = false
+            fail(t("The name typed does not match the name on the document: \(document.signerName).",
+                   "El nombre escrito no coincide con el nombre en el documento: \(document.signerName)."))
+            return
+        }
+        var body = sent
+        body["signed_at"] = OfflineSignatures.timestamp(signedAt)
+        do {
+            try api.enqueue("sign_in_person", body: body, label: "Signed in person: \(document.title)")
+        } catch {
+            busy = false
+            fail(t("Not signed: this phone has no connection and can't keep the signature to send later. Please give the phone back.",
+                   "No se firmó: este teléfono no tiene conexión y no puede guardar la firma para enviarla después. Por favor, devuelva el teléfono."))
+            return
+        }
+        PreparedSignatures.remove(id: document.id, owner: api.userId)
+        busy = false
+        onSigned(nil, true)
+        keptToSend = true
+        announce(keptMessage)
+    }
+
+    /// True (and the signer told so) when the time to sign it has passed.
+    private func windowPassed(at moment: Date = Date()) -> Bool {
+        guard let signBy, moment > signBy else { return false }
+        fail(t("This document can't be signed now: it had to be signed within two days of being started. Nothing was signed. Please give the phone back.",
+               "Este documento ya no se puede firmar: había que firmarlo dentro de los dos días después de iniciarlo. No se firmó nada. Por favor, devuelva el teléfono."))
+        return true
     }
 
     private func fail(_ message: String) {
@@ -551,7 +800,7 @@ struct ReleaseRequestSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 if let choices {
                     if let days = choices.validityDays, days > 0 {
                         Section {

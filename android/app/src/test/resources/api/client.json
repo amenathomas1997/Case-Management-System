@@ -1,0 +1,195 @@
+{
+    "ok": true,
+    "client": {
+        "id": 125,
+        "name": "App Synthetic Client",
+        "status": "Active Training",
+        "dob": null,
+        "phone": null,
+        "email": "app-client@example.invalid",
+        "email_verified": true,
+        "address": null,
+        "school": null,
+        "assigned_to": 1,
+        "counselor_name": null,
+        "counselor_email": null,
+        "counselor_phone": null,
+        "counselor_agency": null,
+        "counselor_verified": false,
+        "client_type": "VR",
+        "a11y_screen_reader": false,
+        "a11y_format": null,
+        "a11y_primary_tech": null,
+        "a11y_contact": null,
+        "a11y_notes": null,
+        "guardian_name": null,
+        "guardian_phone": null,
+        "guardian_email": null,
+        "vr_case_number": null,
+        "ipe_goal": null,
+        "ipe_date": null,
+        "ipe_amended_on": null,
+        "state": "IA",
+        "time_zone": null,
+        "office_id": null,
+        "office": null,
+        "custom_fields": [
+            {
+                "label": "Synthetic funding program",
+                "value": "Program A (2027)"
+            },
+            {
+                "label": "Synthetic start of services",
+                "value": "Feb 3, 2026"
+            }
+        ],
+        "custom_fields_edit": [
+            {
+                "id": 1,
+                "label": "Synthetic funding program",
+                "hint": "",
+                "type": "choice",
+                "options": [
+                    "Program A (2027)",
+                    "Program C"
+                ],
+                "required": true,
+                "value": "Program A (2027)"
+            },
+            {
+                "id": 2,
+                "label": "Synthetic start of services",
+                "hint": "",
+                "type": "date",
+                "options": [],
+                "required": false,
+                "value": "2026-02-03"
+            }
+        ],
+        "offices": [
+            {
+                "id": 1,
+                "name": "Synthetic North Office"
+            },
+            {
+                "id": 2,
+                "name": "Synthetic South Office"
+            }
+        ],
+        "device_counts": {
+            "recommended": 0,
+            "acquired": 0
+        },
+        "signatures_waiting": 3
+    },
+    "notes": [
+        {
+            "id": 53,
+            "note_type": "Case Note",
+            "subject": "Signed: Synthetic offline consent",
+            "body": "Synthetic offline consent electronically signed by App Synthetic Client on October 18, 2026 11:57 AM. Signed in person on the device of Test Admin. Signed on the phone with no connection at October 18, 2026 11:57 AM and received October 18, 2026 12:27 PM.",
+            "created_at": "2026-10-18 12:27:18",
+            "updated_at": null,
+            "author_id": null,
+            "note_format": "free",
+            "track_id": null,
+            "addendum_to": null,
+            "author": null,
+            "editor": null,
+            "track_title": null,
+            "locked": false,
+            "can_edit": true,
+            "versions": 0,
+            "sections": []
+        },
+        {
+            "id": 52,
+            "note_type": "Case Note",
+            "subject": "Signed: Consent to services",
+            "body": "Consent to services electronically signed by App Synthetic Client on October 18, 2026 12:27 PM. Signed in person on the device of Test Admin.",
+            "created_at": "2026-10-18 12:27:14",
+            "updated_at": null,
+            "author_id": null,
+            "note_format": "free",
+            "track_id": null,
+            "addendum_to": null,
+            "author": null,
+            "editor": null,
+            "track_title": null,
+            "locked": false,
+            "can_edit": true,
+            "versions": 0,
+            "sections": []
+        },
+        {
+            "id": 51,
+            "note_type": "Case Note",
+            "subject": "Signed: Synthetic photo consent",
+            "body": "Synthetic photo consent electronically signed by App Synthetic Client on October 18, 2026 12:27 PM. Signed in person on the device of Test Admin.",
+            "created_at": "2026-10-18 12:27:13",
+            "updated_at": null,
+            "author_id": null,
+            "note_format": "free",
+            "track_id": null,
+            "addendum_to": null,
+            "author": null,
+            "editor": null,
+            "track_title": null,
+            "locked": false,
+            "can_edit": true,
+            "versions": 0,
+            "sections": []
+        },
+        {
+            "id": 50,
+            "note_type": "Case Note",
+            "subject": "Signed: Consent to services",
+            "body": "Consent to services electronically signed by app synthetic client on October 18, 2026 12:27 PM. Signed in person on the device of Test Admin, with a drawn signature.",
+            "created_at": "2026-10-18 12:27:13",
+            "updated_at": null,
+            "author_id": null,
+            "note_format": "free",
+            "track_id": null,
+            "addendum_to": null,
+            "author": null,
+            "editor": null,
+            "track_title": null,
+            "locked": false,
+            "can_edit": true,
+            "versions": 0,
+            "sections": []
+        }
+    ],
+    "notes_total": 4,
+    "notes_offset": 0,
+    "tracks": [],
+    "releases": [
+        {
+            "id": 4,
+            "recipient_type": "VR counselor and agency",
+            "recipient_name": "Synthetic Recipient",
+            "status": "Awaiting signature",
+            "signed_name": null,
+            "signed_at": null,
+            "expires_on": null,
+            "info_scope": "Progress reports and attendance",
+            "purpose": "To coordinate services",
+            "method": "Email"
+        }
+    ],
+    "texting": {
+        "enabled": false,
+        "agreed": false,
+        "opted_out": false,
+        "source": null,
+        "words": "Has not agreed to texts.",
+        "blocked": "Text messages are not set up (Settings, Text messages).",
+        "sources": [
+            "In person",
+            "By phone",
+            "In writing",
+            "Referral form",
+            "Client portal"
+        ]
+    }
+}

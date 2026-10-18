@@ -301,7 +301,7 @@ struct DeviceActionSheet: View {
         NavigationStack {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 switch action {
                 // Each field keeps a visible name above it: they are filled in from the stored
                 // request, and a placeholder alone disappears once a field holds a value.
@@ -404,7 +404,7 @@ struct DeviceQuoteSheet: View {
         NavigationStack {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 // Visible names that stay once a field is filled; the required ones say so.
                 CaptionedField(label: "Vendor (required)", text: $vendor)
                 KeyboardCaptionedField(label: "Amount (required, digits, like 1250.00)", text: $amount, keyboard: .decimalPad)
@@ -460,7 +460,7 @@ struct DeviceNewSheet: View {
         NavigationStack {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 NewRecordClientPicker(title: "Client (required)", selection: $selectedClient)
                 CaptionedField(label: "Device / technology (required)", text: $deviceName)
                 Picker("Category", selection: $category) { ForEach(deviceCategories, id: \.self) { Text($0) } }

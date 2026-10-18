@@ -851,6 +851,7 @@ try {
     require __DIR__.'/v423_cases.php';
     require __DIR__.'/v424_cases.php';
     require __DIR__.'/v425_cases.php';
+    require __DIR__.'/v426_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 

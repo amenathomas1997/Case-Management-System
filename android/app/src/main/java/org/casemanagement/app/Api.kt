@@ -82,17 +82,160 @@ class Api(context: Context) {
     var inPersonSigning by mutableStateOf(store.string(SIGNING_KEY).let { if (it.isEmpty()) null else try { JSONObject(it) } catch (e: Exception) { null } })
         private set
 
-    fun beginInPerson(clientId: Int, doc: JSONObject) {
+    /** [prepared]: opened from a copy kept on this phone (4.26.0), so leaving it unsigned keeps it rather than withdrawing it. */
+    fun beginInPerson(clientId: Int, doc: JSONObject, prepared: Boolean = false, startedAt: Long? = null) {
         val o = JSONObject(doc.toString()).put("_client_id", clientId)
+        // When the server started it (its sent_at): signing is checked against the two days it allows.
+        o.put("_started", startedAt ?: signingStart(doc.str("sent_at"), serverZone, System.currentTimeMillis()))
+        if (prepared) o.put("_prepared", true)
         store.putNow(SIGNING_KEY, o.toString())
         inPersonSigning = o
     }
 
-    fun markInPersonSigned() {
-        val o = inPersonSigning?.let { JSONObject(it.toString()).put("_signed", true) } ?: return
+    /** [offline]: signed with no signal; the signature is kept on the phone and sent later. */
+    fun markInPersonSigned(offline: Boolean = false) {
+        val o = inPersonSigning?.let { JSONObject(it.toString()).put("_signed", true).put("_offline", offline) } ?: return
         store.putNow(SIGNING_KEY, o.toString())
         inPersonSigning = o
     }
+
+    /* ---------- Signing with no signal (4.26.0) ---------- */
+
+    /**
+     * Documents started for signing in person and kept on this phone (encrypted, as everything in
+     * [store]) so they can be signed in a client's home with no signal: this account's only.
+     */
+    var preparedSignatures by mutableStateOf(ownSigning(PREPARED_KEY))
+        private set
+    /** Signatures taken with no signal, waiting to be sent: this account's only. */
+    var keptSignatures by mutableStateOf(ownSigning(KEPT_KEY))
+        private set
+    /** Why the server refused a kept signature, shown to staff until it is dealt with. */
+    var signingNotice by mutableStateOf<String?>(null)
+
+    private fun loadSigning(key: String): MutableList<JSONObject> {
+        val raw = store.string(key)
+        if (raw.isEmpty()) return mutableListOf()
+        return try { JSONArray(raw).objects().toMutableList() } catch (e: Exception) { mutableListOf() }
+    }
+
+    private fun ownSigning(key: String): List<JSONObject> = if (userId <= 0) emptyList() else loadSigning(key).filter { it.optInt("owner") == userId }
+
+    private fun saveSigning(key: String, list: List<JSONObject>) {
+        if (!store.putNow(key, JSONArray(list).toString())) throw ApiException("Could not save on this phone. Nothing was lost; try again.")
+        preparedSignatures = ownSigning(PREPARED_KEY)
+        keptSignatures = ownSigning(KEPT_KEY)
+    }
+
+    private val signingLock = Mutex()
+
+    /** Keeps a document started for signing in person, to sign later even with no signal. */
+    suspend fun prepareToSign(clientId: Int, clientName: String, doc: SignatureDoc, startedAt: Long = signingStart(doc.sentAt, serverZone, System.currentTimeMillis())) = signingLock.withLock {
+        if (!store.phoneCanKeepClientData) throw ApiException("This phone has no screen lock, so the app keeps nothing on it to sign later. Set a screen lock in Settings, or use Sign here now while you have a signal.")
+        if (userId <= 0) throw ApiException("Could not verify the account. Reconnect, then prepare it again.")
+        val list = loadSigning(PREPARED_KEY)
+        list.removeAll { it.optInt("owner") == userId && it.optInt("id") == doc.id }
+        list.add(doc.toJson().put("owner", userId).put("client_id", clientId).put("client_name", clientName).put("prepared_at", minOf(startedAt, System.currentTimeMillis())))
+        saveSigning(PREPARED_KEY, list)
+    }
+
+    suspend fun removePrepared(id: Int) = signingLock.withLock {
+        val list = loadSigning(PREPARED_KEY)
+        if (list.removeAll { it.optInt("owner") == userId && it.optInt("id") == id }) saveSigning(PREPARED_KEY, list)
+    }
+
+    /** Drops this client's kept copies the server no longer has waiting to be signed here (withdrawn, or signed elsewhere). */
+    suspend fun prunePrepared(clientId: Int, stillWaiting: Set<Int>) = signingLock.withLock {
+        val list = loadSigning(PREPARED_KEY)
+        if (list.removeAll { it.optInt("owner") == userId && it.optInt("client_id") == clientId && it.optInt("id") !in stillWaiting }) saveSigning(PREPARED_KEY, list)
+    }
+
+    /**
+     * Keeps a signature taken with no signal: the typed name, the drawn signature if any, and when
+     * it was signed (ISO 8601 with the offset). Sent by [flushSignatures]; removed only once the
+     * server has it.
+     */
+    suspend fun keepSignature(clientId: Int, docId: Int, title: String, typedName: String, png: String?, signedAt: String) = signingLock.withLock {
+        if (!store.phoneCanKeepClientData) throw ApiException("No signal, and this phone has no screen lock, so the signature cannot be kept on it to send later. Try again when there is a signal.")
+        if (userId <= 0) throw ApiException("Could not verify the account, so the signature was not kept. Try again when there is a signal.")
+        val kept = loadSigning(KEPT_KEY)
+        kept.removeAll { it.optInt("owner") == userId && it.optInt("id") == docId }
+        val item = JSONObject().put("owner", userId).put("client_id", clientId).put("id", docId).put("title", title)
+            .put("typed_name", typedName).put("signed_at", signedAt).put("kept_at", System.currentTimeMillis())
+        if (png != null) item.put("signature_b64", png)
+        kept.add(item)
+        saveSigning(KEPT_KEY, kept)
+        val prepared = loadSigning(PREPARED_KEY)
+        if (prepared.removeAll { it.optInt("owner") == userId && it.optInt("id") == docId }) saveSigning(PREPARED_KEY, prepared)
+    }
+
+    /** Removes a kept signature staff have dealt with (after the server refused it). */
+    suspend fun discardKeptSignature(docId: Int) = signingLock.withLock {
+        val kept = loadSigning(KEPT_KEY)
+        if (kept.removeAll { it.optInt("owner") == userId && it.optInt("id") == docId }) saveSigning(KEPT_KEY, kept)
+        if (keptSignatures.none { it.has("lastError") }) signingNotice = null
+    }
+
+    private val signFlushLock = Mutex()
+
+    /**
+     * Sends the signatures taken with no signal (on start, when the network returns, and from the
+     * screen). Each stays on the phone until the server answers ok (repeat: it already had it); a
+     * refusal is kept with the server's words so staff see it. [retryRefused]: also try again the
+     * ones the server refused before (only when staff ask).
+     */
+    suspend fun flushSignatures(retryRefused: Boolean = false) = signFlushLock.withLock {
+        if (userId <= 0 || token.isEmpty()) return@withLock
+        val owner = userId
+        val sessionToken = token
+        val done = mutableSetOf<Int>()
+        val refused = mutableMapOf<Int, String>()
+        for (item in signingLock.withLock { loadSigning(KEPT_KEY) }) {
+            if (token != sessionToken || userId != owner) break
+            if (item.optInt("owner") != owner) continue
+            if (item.has("lastError") && !retryRefused) continue
+            val body = JSONObject().put("client_id", item.optInt("client_id")).put("id", item.optInt("id"))
+                .put("typed_name", item.optString("typed_name")).put("signed_at", item.optString("signed_at"))
+            item.str("signature_b64")?.let { body.put("signature_b64", it) }
+            val (status, json) = try { raw("sign_in_person", emptyMap(), body, sessionToken) } catch (e: ApiException) { break }
+            when {
+                status == 401 -> { if (json.optBoolean("wipe")) wipeThisPhone() else expireSession(); break }
+                status in 200..299 && json.optBoolean("ok") -> done.add(item.optInt("id"))
+                status >= 500 || status == 429 -> break
+                else -> refused[item.optInt("id")] = json.optString("error").ifEmpty { "The server did not accept it." }
+            }
+        }
+        if (userId != owner || (done.isEmpty() && refused.isEmpty())) return@withLock
+        signingLock.withLock {
+            val kept = loadSigning(KEPT_KEY)
+            kept.removeAll { it.optInt("owner") == owner && it.optInt("id") in done }
+            for (k in kept) if (k.optInt("owner") == owner) refused[k.optInt("id")]?.let { k.put("lastError", it) }
+            saveSigning(KEPT_KEY, kept)
+        }
+        val first = keptSignatures.firstOrNull { it.has("lastError") }
+        signingNotice = first?.let { "The signature on “${it.optString("title")}” was not accepted: ${it.optString("lastError")} It is still kept on this phone, under the client's Documents to sign." }
+    }
+
+    /**
+     * At sign-out (or another account signing in) only the prepared, unsigned documents go:
+     * signatures already taken stay, tied to their account, and are sent when it signs in again,
+     * as the offline queue is ([withKept]: a lost phone or another server, when they go too).
+     */
+    private fun clearSigning(withKept: Boolean) {
+        store.remove(PREPARED_KEY)
+        if (withKept) store.remove(KEPT_KEY)
+        preparedSignatures = emptyList(); keptSignatures = if (withKept) emptyList() else ownSigning(KEPT_KEY); signingNotice = null
+    }
+
+    /** Signatures taken here and not yet sent, for this account: said before anything signs it out. */
+    val unsentSignaturesWarning: String?
+        get() {
+            val n = keptSignatures.size
+            if (n == 0) return null
+            return "$n ${if (n == 1) "signature" else "signatures"} signed here with no signal ${if (n == 1) "has" else "have"} not been sent yet. " +
+                "${if (n == 1) "It stays" else "They stay"} on this phone and ${if (n == 1) "is" else "are"} sent when you sign in again; " +
+                "send ${if (n == 1) "it" else "them"} first from the client's Documents to sign if you can."
+        }
 
     fun endInPerson() {
         inPersonSigning = null
@@ -353,6 +496,7 @@ class Api(context: Context) {
         store.put("lastEmail", email)
         if (newUserId != userId) { store.removePrefix("cache."); clearIdentity(); syncNotice = null }
         userId = newUserId; store.put("userId", newUserId)
+        preparedSignatures = ownSigning(PREPARED_KEY); keptSignatures = ownSigning(KEPT_KEY)
         userName = name; store.put("userName", name)
         sessionNotice = null
         token = newToken; store.put("apiToken", newToken)
@@ -363,15 +507,16 @@ class Api(context: Context) {
         val sessionToken = token
         val me = try { call("me") } catch (e: ApiException) { return }
         if (token != sessionToken || token.isEmpty()) return
-        userName = me.optString("name", userName); store.put("userName", userName)
-        if (me.has("id")) { userId = me.optInt("id", userId); store.put("userId", userId) }
-        perms = me.optJSONArray("perms").strings(); store.put("userPerms", perms.joinToString(","))
-        scoped = me.optBoolean("scoped"); store.put("userScoped", scoped)
-        aiEnabled = me.optBoolean("ai_enabled")
-        aiFeatures = me.optJSONArray("ai_features").strings()
-        accessHold = me.optJSONArray("access_hold").strings()
-        serverVersion = me.optString("server_version").ifEmpty { null }
-        me.optString("timezone").takeIf { it.isNotEmpty() && java.util.TimeZone.getAvailableIDs().contains(it) }?.let { serverZone = it; store.put("serverZone", it); org.casemanagement.app.ui.serverZoneId = it }
+        val m = parseMe(me)
+        userName = m.name.ifEmpty { userName }; store.put("userName", userName)
+        if (m.id > 0) { userId = m.id; store.put("userId", userId) }
+        perms = m.perms; store.put("userPerms", perms.joinToString(","))
+        scoped = m.scoped; store.put("userScoped", scoped)
+        aiEnabled = m.aiEnabled
+        aiFeatures = m.aiFeatures
+        accessHold = m.accessHold
+        serverVersion = m.serverVersion
+        m.timezone?.takeIf { java.util.TimeZone.getAvailableIDs().contains(it) }?.let { serverZone = it; store.put("serverZone", it); org.casemanagement.app.ui.serverZoneId = it }
         permsLoaded = true; store.put("userPermsLoaded", true)
         try {
             val lists = call("form_options").optJSONObject("lists")
@@ -393,7 +538,7 @@ class Api(context: Context) {
     fun formList(name: String, builtIn: List<String>): List<String> {
         val raw = store.string("formOptions")
         if (raw.isEmpty()) return builtIn
-        val list = try { JSONObject(raw).optJSONArray(name).strings() } catch (e: Exception) { emptyList() }
+        val list = try { parseFormLists(JSONObject().put("lists", JSONObject(raw)))[name] ?: emptyList() } catch (e: Exception) { emptyList() }
         return list.ifEmpty { builtIn }
     }
 
@@ -423,6 +568,7 @@ class Api(context: Context) {
     private fun clearIdentity(keepQueue: Boolean = true) {
         docsFolder.deleteRecursively()
         endInPerson()
+        clearSigning(withKept = !keepQueue)
         perms = emptyList(); permsLoaded = false; scoped = false; aiEnabled = false; aiFeatures = emptyList(); accessHold = emptyList(); serverVersion = null
         store.remove("userPerms", "userPermsLoaded", "userScoped", "formOptions")
         if (!keepQueue) store.remove(QUEUE_KEY)
@@ -528,6 +674,8 @@ class Api(context: Context) {
     companion object {
         const val QUEUE_KEY = "offlineQueue"
         const val SIGNING_KEY = "inPersonSigning"
+        const val PREPARED_KEY = "preparedSignatures"
+        const val KEPT_KEY = "keptSignatures"
         const val NO_CONNECTION = "No connection to the server. Check your signal and try again."
         val APP_VERSION = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) Android"
         val deviceName: String get() = listOf(Build.MANUFACTURER.replaceFirstChar { it.uppercase() }, Build.MODEL).distinct().joinToString(" ").take(60)

@@ -38,6 +38,7 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
     val asksForServer = api.builtInServer == null && !reauth
     var server by rememberSaveable { mutableStateOf(api.storedServer) }
     var email by rememberSaveable { mutableStateOf(if (reauth) api.lastEmail else "") }
+    var leaving by remember { mutableStateOf(false) }
     var password by remember { mutableStateOf("") }
     var code by rememberSaveable { mutableStateOf("") }
     var challenge by rememberSaveable { mutableStateOf("") }
@@ -107,6 +108,8 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
         Page {
             Heading(BuildConfig.SIGNIN_TITLE, large = true)
             api.sessionNotice?.let { NoticeText(it) }
+            // Signing back in as someone else leaves this account's unsent signatures waiting: said first.
+            if (reauth) api.unsentSignaturesWarning?.let { NoticeText("$it Sign in as ${api.userName.ifEmpty { "yourself" }} to send them now.") }
             if (!awaitingCode) {
                 if (asksForServer) {
                     Field("Your organisation's web address", server, { server = it }, hint = "for example cms.example.org", keyboard = KeyboardType.Uri)
@@ -116,7 +119,11 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
                 ErrorText(error)
                 PrimaryButton("Continue", busy = busy, enabled = email.isNotBlank() && password.isNotEmpty()) { scope.launch { passwordStep(false) } }
                 if (!asksForServer) Text("Signing in to ${host()}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
-                if (reauth) SecondaryButton("Sign in as someone else instead") { api.abandonReauth() }
+                if (reauth) SecondaryButton("Sign in as someone else instead") {
+                    if (api.unsentSignaturesWarning != null && !leaving) leaving = true else api.abandonReauth()
+                }
+                if (leaving) Confirm("Sign in as someone else?", (api.unsentSignaturesWarning ?: "") + " Documents prepared to sign on this phone are removed.", "Sign in as someone else",
+                    { api.abandonReauth() }, { leaving = false })
             } else {
                 NoticeText(notice)
                 // The instruction was just read in the notice above, so the field's own hint is short.

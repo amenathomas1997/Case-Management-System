@@ -1,0 +1,16 @@
+{
+    "ok": true,
+    "logs": [
+        {
+            "id": 1,
+            "work_date": "2026-01-01",
+            "hours": 1.5,
+            "mileage": 0,
+            "description": "Synthetic hours",
+            "is_billed": true,
+            "goal_id": null,
+            "rsa_category": "Rehabilitation Technology",
+            "author": "Test Admin"
+        }
+    ]
+}

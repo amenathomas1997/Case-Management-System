@@ -1,0 +1,170 @@
+{
+    "ok": true,
+    "lists": {
+        "client_types": [
+            "VR",
+            "Pre-ETS"
+        ],
+        "note_types": [
+            "Case Note",
+            "Phone Call",
+            "Progress Report",
+            "Monthly Summary",
+            "Intake",
+            "Addendum"
+        ],
+        "doc_categories": [
+            "Authorization",
+            "IPE",
+            "Release",
+            "Report",
+            "Resource",
+            "Other"
+        ],
+        "service_types": [
+            "Assistive Technology",
+            "Rehab Teaching",
+            "Counseling",
+            "Pre-ETS",
+            "Other"
+        ],
+        "tech_types": [
+            "Screen Reader",
+            "Magnification",
+            "Braille Display",
+            "Speech-to-Text",
+            "Independent Living Skills",
+            "Braille Literacy",
+            "Low Vision Devices",
+            "Rehabilitation Technology",
+            "Other"
+        ],
+        "vision_statuses": [
+            "Totally blind",
+            "Legally blind",
+            "Low vision",
+            "Other visual impairment",
+            "No visual impairment"
+        ],
+        "closure_reasons": [
+            "Employed",
+            "Goals met",
+            "Declined further services",
+            "Unable to contact",
+            "Moved away",
+            "Health or medical",
+            "Not eligible",
+            "Transferred to another provider",
+            "Other"
+        ],
+        "device_request_categories": [
+            "Braille Display",
+            "Screen Reader",
+            "Magnifier / CCTV",
+            "AAC Device",
+            "Tablet / Phone",
+            "Computer",
+            "Hearing / Amplification",
+            "Switch / Access",
+            "Software License",
+            "Other"
+        ],
+        "incident_types": [
+            "Injury",
+            "Near miss",
+            "Equipment failure",
+            "Behavioral",
+            "Property damage",
+            "Medical",
+            "Safety concern",
+            "Other"
+        ],
+        "booking_types": [
+            "Interpreter",
+            "CART captioning",
+            "Transportation",
+            "Note-taker",
+            "Other"
+        ],
+        "equipment_categories": [
+            "Braille Display",
+            "Screen Reader License",
+            "Magnifier",
+            "Tablet/Phone",
+            "Computer",
+            "Keyboard/Input",
+            "Audio",
+            "Other"
+        ],
+        "equipment_conditions": [
+            "New",
+            "Good",
+            "Fair",
+            "Needs Repair"
+        ],
+        "maintenance_types": [
+            "Maintenance",
+            "Calibration",
+            "Repair",
+            "Inspection",
+            "Cleaning",
+            "Other"
+        ],
+        "competency_levels": [
+            "Not started",
+            "Introduced",
+            "Practicing",
+            "Proficient",
+            "Mastered"
+        ],
+        "score_labels": [
+            "0 — Unable",
+            "1 — Maximal assistance",
+            "2 — Moderate assistance",
+            "3 — Minimal assistance / prompts",
+            "4 — Independent"
+        ],
+        "client_statuses": [
+            "Pending Assessment",
+            "Waitlist",
+            "Active Training",
+            "On Hold",
+            "Closed - Rehabilitated",
+            "Closed - Other"
+        ],
+        "referral_sources": []
+    },
+    "custom_fields": [
+        {
+            "id": 1,
+            "label": "Synthetic funding program",
+            "hint": "",
+            "type": "choice",
+            "options": [
+                "Program A (2027)",
+                "Program C"
+            ],
+            "required": true,
+            "value": ""
+        },
+        {
+            "id": 2,
+            "label": "Synthetic start of services",
+            "hint": "",
+            "type": "date",
+            "options": [],
+            "required": false,
+            "value": ""
+        }
+    ],
+    "offices": [
+        {
+            "id": 1,
+            "name": "Synthetic North Office"
+        },
+        {
+            "id": 2,
+            "name": "Synthetic South Office"
+        }
+    ]
+}

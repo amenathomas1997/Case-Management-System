@@ -22,6 +22,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import kotlinx.coroutines.launch
 import org.casemanagement.app.Api
 import org.casemanagement.app.ApiException
+import org.casemanagement.app.SessionItem
+import org.casemanagement.app.parseSchedule
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
 import org.json.JSONObject
@@ -42,22 +44,22 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
     val context = LocalContext.current
 
     Show(state, "the schedule") { (r, savedAt) ->
-        val sessions = r.optJSONArray("sessions").objects()
+        val sessions = parseSchedule(r)
         Page {
             OfflineCopyNotice(savedAt)
             NoticeText(notice)
             PrimaryButton("Schedule a session") { nav.navigate("newSession") }
             ErrorText(error)
-            val overdue = sessions.filter { it.optBoolean("overdue") }
+            val overdue = sessions.filter { it.overdue }
             if (overdue.isNotEmpty()) {
                 Heading("Ended, waiting for an outcome (${overdue.size})")
-                overdue.forEach { s -> SessionRow(s) { chosen = s } }
+                overdue.forEach { s -> SessionRow(s) { chosen = s.raw } }
             }
-            val upcoming = sessions.filter { !it.optBoolean("overdue") }
+            val upcoming = sessions.filter { !it.overdue }
             if (upcoming.isEmpty() && overdue.isEmpty()) Text("Nothing scheduled.")
-            upcoming.groupBy { it.optString("start_at").take(10) }.forEach { (day, list) ->
+            upcoming.groupBy { (it.startAt ?: "").take(10) }.forEach { (day, list) ->
                 Heading(dayText(day))
-                list.forEach { s -> SessionRow(s) { chosen = s } }
+                list.forEach { s -> SessionRow(s) { chosen = s.raw } }
             }
             SecondaryButton("Refresh") { state.reload() }
         }
@@ -111,15 +113,15 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
 }
 
 @Composable
-private fun SessionRow(s: JSONObject, onClick: () -> Unit) {
+private fun SessionRow(s: SessionItem, onClick: () -> Unit) {
     val lines = listOf(
-        timeText(s.str("start_at")) + " to " + timeText(s.str("end_at")) + ", " + s.optString("client"),
+        timeText(s.startAt) + " to " + timeText(s.endAt) + ", " + s.client,
         listOfNotNull(
-            s.optString("status").takeIf { it != "Scheduled" },
-            if (s.optBoolean("is_remote")) "Remote" else s.str("location"),
-            s.str("instructor")?.let { "with $it" },
-            s.str("checked_in_at")?.let { "checked in at " + timeText(it) },
-            s.optInt("group_size").takeIf { it > 1 }?.let { "group of $it" },
+            s.status.takeIf { it != "Scheduled" },
+            if (s.isRemote) "Remote" else s.location,
+            s.instructor?.let { "with $it" },
+            s.checkedInAt?.let { "checked in at " + timeText(it) },
+            s.groupSize.takeIf { it > 1 }?.let { "group of $it" },
         ).joinToString(", "),
     )
     ListRow(lines, action = "see what you can do", onClick = onClick)

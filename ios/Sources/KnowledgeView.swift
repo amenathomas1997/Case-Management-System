@@ -227,7 +227,7 @@ struct KBEditSheet: View {
         NavigationStack {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 // Visible names that stay once the fields are filled (as they are when editing).
                 CaptionedField(label: "Title (required)", text: $title)
                 CaptionedField(label: "Category", text: $category)

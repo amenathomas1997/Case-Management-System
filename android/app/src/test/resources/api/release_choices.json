@@ -1,0 +1,19 @@
+{
+    "ok": true,
+    "recipient_types": [
+        "VR counselor and agency",
+        "Employer",
+        "Doctor or clinic",
+        "School",
+        "Family member",
+        "Other"
+    ],
+    "info_items": [
+        "Progress reports and attendance",
+        "Assessments and recommendations",
+        "Equipment and device information",
+        "Vision and health information",
+        "Employment information"
+    ],
+    "validity_days": 365
+}

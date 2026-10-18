@@ -1,0 +1,21 @@
+{
+    "ok": true,
+    "history": [
+        {
+            "id": 37,
+            "changed_at": "2026-10-18 12:27:12",
+            "old_status": "Active Training",
+            "new_status": "Closed - Rehabilitated",
+            "changed_by": "Test Admin",
+            "note": "Closed: Employed (mobile)"
+        },
+        {
+            "id": 38,
+            "changed_at": "2026-10-18 12:27:12",
+            "old_status": "Closed - Rehabilitated",
+            "new_status": "Active Training",
+            "changed_by": "Test Admin",
+            "note": "Updated from mobile"
+        }
+    ]
+}

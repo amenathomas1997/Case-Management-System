@@ -22,6 +22,13 @@ struct CaseManagementApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                // The secondary level of text (a LabeledContent's value, and anything else in
+                // .secondary) in Color.secondaryText, 7:1, instead of the system's grey, about 4:1
+                // (4.26.0 accessibility audit). A colour only: controls keep their own layout.
+                .foregroundStyle(.primary, Color.secondaryText)
+                // Section headings in the primary colour: the system's grey ones were under
+                // 4.5:1 on the grouped background (4.26.0 accessibility audit).
+                .headerProminence(.increased)
                 .environmentObject(api)
                 .environmentObject(lock)
                 .environmentObject(navigation)
@@ -697,6 +704,11 @@ struct MainTabs: View {
         .onChange(of: scenePhase) { phase in
             // Coming back to the foreground retries anything written offline.
             if phase == .active { Task { await api.flushQueue() } }
+        }
+        // The connection coming back (4.26.0) sends what was kept with no signal, such as a
+        // document signed in a client's home, without waiting for the app to be reopened.
+        .onReceive(ConnectionWatcher.shared.$reconnects.dropFirst()) { _ in
+            if scenePhase == .active { Task { await api.flushQueue() } }
         }
         // A tapped reminder or a voice "open …" while the app is unlocked; while locked it
         // waits for the unlock below.

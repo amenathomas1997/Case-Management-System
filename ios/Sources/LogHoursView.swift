@@ -55,7 +55,7 @@ struct LogHoursView: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 if let confirmation {
                     Text(confirmation)
                         .font(.callout.weight(.medium))

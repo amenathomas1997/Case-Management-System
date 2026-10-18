@@ -22,6 +22,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import org.casemanagement.app.Api
+import org.casemanagement.app.parseOffices
 import org.casemanagement.app.CustomField
 import org.casemanagement.app.customBody
 import org.casemanagement.app.customFieldsProblem
@@ -174,7 +175,7 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
     var vrCase by rememberSaveable { mutableStateOf(c.str("vr_case_number") ?: "") }
     var ipeGoal by rememberSaveable { mutableStateOf(c.str("ipe_goal") ?: "") }
     // Offices (4.22.0): only when the organisation uses them (the server sends none otherwise).
-    val offices = c.optJSONArray("offices").objects()
+    val offices = parseOffices(c)
     var office by rememberSaveable { mutableStateOf(if (c.isNull("office_id") || !c.has("office_id")) "" else c.optInt("office_id").toString()) }
     // The organisation's own fields (4.25.0), edited by type; only changed answers are sent.
     val customFields = remember(c) { parseCustomFields(c.optJSONArray("custom_fields_edit")) }
@@ -245,7 +246,7 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         Field("Address", address, { address = it }, singleLine = false)
         // Required (4.19.0): it sets the client's time zone for reminders and texts.
         Choice(if (stateRequired) "State (required)" else "State, not recorded yet", usState, listOf("" to "Choose a state") + US_STATES) { usState = it }
-        if (offices.isNotEmpty()) Choice("Office", office, listOf("" to if (id == 0) "Your own office" else "No office") + offices.map { it.optInt("id").toString() to it.optString("name") }) { office = it }
+        if (offices.isNotEmpty()) Choice("Office", office, listOf("" to if (id == 0) "Your own office" else "No office") + offices.map { it.id.toString() to it.name }) { office = it }
         if (api.scoped) Text("Assigned instructor: you. Your account works only its own caseload, so clients you add or edit stay assigned to you.")
         else Choice("Assigned instructor", assigned.toString(), listOf("0" to "Unassigned") + staff.map { it.optInt("id").toString() to it.optString("name") }) { assigned = it.toInt() }
         Heading("Guardian")

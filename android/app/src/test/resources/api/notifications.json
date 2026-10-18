@@ -1,0 +1,426 @@
+{
+    "ok": true,
+    "notifications": [
+        {
+            "id": 70,
+            "message": "Signed in person: Synthetic offline consent for App Synthetic Client",
+            "link": "signatures.php?client=125",
+            "created_at": "2026-10-18 12:27:18",
+            "unread": true
+        },
+        {
+            "id": 69,
+            "message": "Signed in person: Consent to services for App Synthetic Client",
+            "link": "signatures.php?client=125",
+            "created_at": "2026-10-18 12:27:14",
+            "unread": true
+        },
+        {
+            "id": 66,
+            "message": "Signed in person: Consent to services for App Synthetic Client",
+            "link": "signatures.php?client=125",
+            "created_at": "2026-10-18 12:27:13",
+            "unread": true
+        },
+        {
+            "id": 67,
+            "message": "An upload was refused because the virus scanner found something in it.",
+            "link": "system_health.php",
+            "created_at": "2026-10-18 12:27:13",
+            "unread": true
+        },
+        {
+            "id": 68,
+            "message": "An upload was refused because the virus scanner found something in it.",
+            "link": "system_health.php",
+            "created_at": "2026-10-18 12:27:13",
+            "unread": true
+        },
+        {
+            "id": 65,
+            "message": "New COUNSELOR referral: Custom Synthetic Referral",
+            "link": "referrals.php?view=35",
+            "created_at": "2026-10-18 12:27:12",
+            "unread": true
+        },
+        {
+            "id": 64,
+            "message": "Message from counselor Exchange Counselor re Exchange Synthetic Client",
+            "link": "messages.php?client=123&channel=counselor",
+            "created_at": "2026-10-18 12:27:11",
+            "unread": true
+        },
+        {
+            "id": 62,
+            "message": "Signed: Consent to services for Deadline Synthetic Referral",
+            "link": "signatures.php?client=121",
+            "created_at": "2026-10-18 12:27:10",
+            "unread": true
+        },
+        {
+            "id": 63,
+            "message": "Message from Exchange Synthetic Client (portal), with a file",
+            "link": "messages.php?client=123&channel=client",
+            "created_at": "2026-10-18 12:27:10",
+            "unread": true
+        },
+        {
+            "id": 61,
+            "message": "New COUNSELOR referral: Deadline Synthetic Referral",
+            "link": "referrals.php?view=34",
+            "created_at": "2026-10-18 12:27:09",
+            "unread": true
+        },
+        {
+            "id": 54,
+            "message": "New SELF referral: Synthetic Stated Self Referrer",
+            "link": "referrals.php?view=33",
+            "created_at": "2026-10-18 12:27:06",
+            "unread": true
+        },
+        {
+            "id": 43,
+            "message": "Texty confirmed the session on Mon, Oct 19 8:27 AM by text.",
+            "link": "schedule.php#s-61",
+            "created_at": "2026-10-18 12:27:05",
+            "unread": true
+        },
+        {
+            "id": 44,
+            "message": "Texty asked by text to cancel the session on Mon, Oct 19 8:27 AM.",
+            "link": "portal_requests.php",
+            "created_at": "2026-10-18 12:27:05",
+            "unread": true
+        },
+        {
+            "id": 45,
+            "message": "Texty asked by text to reschedule the session on Mon, Oct 19 8:27 AM.",
+            "link": "portal_requests.php",
+            "created_at": "2026-10-18 12:27:05",
+            "unread": true
+        },
+        {
+            "id": 46,
+            "message": "New text message from Texty.",
+            "link": "messages.php?client=107",
+            "created_at": "2026-10-18 12:27:05",
+            "unread": true
+        },
+        {
+            "id": 47,
+            "message": "Texty asked by text to cancel the session on Mon, Oct 19 8:27 AM.",
+            "link": "portal_requests.php",
+            "created_at": "2026-10-18 12:27:05",
+            "unread": true
+        },
+        {
+            "id": 48,
+            "message": "A text came from a phone number several clients share, so it was not filed under one of them. Read it under Administration, Text messages.",
+            "link": "sms.php",
+            "created_at": "2026-10-18 12:27:05",
+            "unread": true
+        },
+        {
+            "id": 49,
+            "message": "A text came from a number that is not on any client record. Read it under Administration, Text messages.",
+            "link": "sms.php",
+            "created_at": "2026-10-18 12:27:05",
+            "unread": true
+        },
+        {
+            "id": 50,
+            "message": "Texty confirmed the session on Mon, Oct 19 8:27 AM by text.",
+            "link": "schedule.php#s-61",
+            "created_at": "2026-10-18 12:27:05",
+            "unread": true
+        },
+        {
+            "id": 51,
+            "message": "Texty Synthetic Client asked for help",
+            "link": "x.php",
+            "created_at": "2026-10-18 12:27:05",
+            "unread": true
+        },
+        {
+            "id": 52,
+            "message": "Second urgent",
+            "link": "x.php",
+            "created_at": "2026-10-18 12:27:05",
+            "unread": true
+        },
+        {
+            "id": 53,
+            "message": "Not urgent",
+            "link": "x.php",
+            "created_at": "2026-10-18 12:27:05",
+            "unread": true
+        },
+        {
+            "id": 41,
+            "message": "New Faith community referral: Synthetic Referred Person",
+            "link": "referrals.php?view=31",
+            "created_at": "2026-10-18 12:27:01",
+            "unread": true
+        },
+        {
+            "id": 39,
+            "message": "New SELF referral: Pricing Synthetic Person",
+            "link": "referrals.php?view=27",
+            "created_at": "2026-10-18 12:26:55",
+            "unread": true
+        },
+        {
+            "id": 40,
+            "message": "New SELF referral: Pricing Synthetic Person",
+            "link": "referrals.php?view=28",
+            "created_at": "2026-10-18 12:26:55",
+            "unread": true
+        },
+        {
+            "id": 38,
+            "message": "Synthetic voice alert",
+            "link": null,
+            "created_at": "2026-10-18 12:26:54",
+            "unread": true
+        },
+        {
+            "id": 37,
+            "message": "The Microsoft Graph email secret expires in 14 days. Create a new secret in Microsoft Entra, then enter it and its new expiry date on System health.",
+            "link": "system_health.php#email-h",
+            "created_at": "2026-10-18 12:26:53",
+            "unread": true
+        },
+        {
+            "id": 33,
+            "message": "A client chose an offered time: Sun, Nov 1 8:00 AM",
+            "link": "schedule.php#s-38",
+            "created_at": "2026-10-18 12:26:52",
+            "unread": true
+        },
+        {
+            "id": 34,
+            "message": "Session moved: Offer, Mon, Nov 2 12:00 PM",
+            "link": "schedule.php#s-38",
+            "created_at": "2026-10-18 12:26:52",
+            "unread": true
+        },
+        {
+            "id": 35,
+            "message": "A client chose an offered time: Mon, Nov 2 12:00 PM",
+            "link": "schedule.php#s-38",
+            "created_at": "2026-10-18 12:26:52",
+            "unread": true
+        },
+        {
+            "id": 36,
+            "message": "A client chose an offered time: Thu, Nov 5 8:00 AM",
+            "link": "schedule.php#s-39",
+            "created_at": "2026-10-18 12:26:52",
+            "unread": true
+        },
+        {
+            "id": 32,
+            "message": "Devices synthetic client answered a device check-in",
+            "link": "followups.php",
+            "created_at": "2026-10-18 12:26:47",
+            "unread": true
+        },
+        {
+            "id": 30,
+            "message": "Privacy incident reported: Misdirected email or report",
+            "link": "privacy_incidents.php?id=1",
+            "created_at": "2026-10-18 12:26:44",
+            "unread": true
+        },
+        {
+            "id": 31,
+            "message": "Incident synthetic client sent a request for a copy of their records (due November 17)",
+            "link": "portal_requests.php?client=62",
+            "created_at": "2026-10-18 12:26:44",
+            "unread": true
+        },
+        {
+            "id": 29,
+            "message": "Release of information signed for Records synthetic client",
+            "link": "client.php?id=56#releases-h",
+            "created_at": "2026-10-18 12:26:42",
+            "unread": true
+        },
+        {
+            "id": 28,
+            "message": "AT appeal deadline 2026-10-18: Workflow appeal",
+            "link": "at_services.php?id=31",
+            "created_at": "2026-10-18 12:26:32",
+            "unread": true
+        },
+        {
+            "id": 25,
+            "message": "Workflow asked for help with homework: Workflow homework",
+            "link": "workflows.php?view=homework&client_id=41",
+            "created_at": "2026-10-18 12:26:31",
+            "unread": true
+        },
+        {
+            "id": 24,
+            "message": "Message from counselor Synthetic Counselor",
+            "link": "tasks.php",
+            "created_at": "2026-10-18 12:26:28",
+            "unread": true
+        },
+        {
+            "id": 21,
+            "message": "Message from Portaltest Synthetic (portal)",
+            "link": "messages.php?client=35&channel=client",
+            "created_at": "2026-10-18 12:26:27",
+            "unread": true
+        },
+        {
+            "id": 22,
+            "message": "Portaltest Synthetic sent a appointment request",
+            "link": "portal_requests.php?client=35",
+            "created_at": "2026-10-18 12:26:27",
+            "unread": true
+        },
+        {
+            "id": 23,
+            "message": "Portaltest Synthetic sent a device help request",
+            "link": "portal_requests.php?client=35",
+            "created_at": "2026-10-18 12:26:27",
+            "unread": true
+        },
+        {
+            "id": 20,
+            "message": "Guardian consent signed for Follow-up synthetic client",
+            "link": "client.php?id=33",
+            "created_at": "2026-10-18 12:26:26",
+            "unread": true
+        },
+        {
+            "id": 19,
+            "message": "The database needs an upgrade for the files installed. Open Database upgrade.",
+            "link": "upgrade.php",
+            "created_at": "2026-10-18 12:26:24",
+            "unread": true
+        },
+        {
+            "id": 16,
+            "message": "Merge synthetic alert",
+            "link": "client.php?id=22",
+            "created_at": "2026-10-18 12:25:54",
+            "unread": true
+        },
+        {
+            "id": 17,
+            "message": "Merge synthetic alert",
+            "link": "client.php?id=22#notes",
+            "created_at": "2026-10-18 12:25:54",
+            "unread": true
+        },
+        {
+            "id": 18,
+            "message": "Merge synthetic alert",
+            "link": "client.php?id=230",
+            "created_at": "2026-10-18 12:25:54",
+            "unread": true
+        },
+        {
+            "id": 14,
+            "message": "New COUNSELOR referral: Structured Referral Test",
+            "link": "referrals.php?view=8",
+            "created_at": "2026-10-18 12:25:53",
+            "unread": true
+        },
+        {
+            "id": 15,
+            "message": "New COUNSELOR referral: Structured Referral Test",
+            "link": "referrals.php?view=11",
+            "created_at": "2026-10-18 12:25:53",
+            "unread": true
+        },
+        {
+            "id": 9,
+            "message": "New COUNSELOR referral: Structured Referral Test",
+            "link": "referrals.php?view=3",
+            "created_at": "2026-10-18 12:25:52",
+            "unread": true
+        },
+        {
+            "id": 10,
+            "message": "New SCHOOL referral: Structured Referral Test",
+            "link": "referrals.php?view=4",
+            "created_at": "2026-10-18 12:25:52",
+            "unread": true
+        },
+        {
+            "id": 11,
+            "message": "New COUNSELOR referral: Structured Referral Test",
+            "link": "referrals.php?view=5",
+            "created_at": "2026-10-18 12:25:52",
+            "unread": true
+        },
+        {
+            "id": 12,
+            "message": "New COUNSELOR referral: Structured Referral Test",
+            "link": "referrals.php?view=6",
+            "created_at": "2026-10-18 12:25:52",
+            "unread": true
+        },
+        {
+            "id": 13,
+            "message": "New SELF referral: Synthetic Referrer",
+            "link": "referrals.php?view=7",
+            "created_at": "2026-10-18 12:25:52",
+            "unread": true
+        },
+        {
+            "id": 8,
+            "message": "New COUNSELOR referral: Structured Referral Test",
+            "link": "referrals.php?view=2",
+            "created_at": "2026-10-18 12:25:51",
+            "unread": true
+        },
+        {
+            "id": 7,
+            "message": "New referral (voice): Voice referral synthetic person",
+            "link": "referrals.php?view=1",
+            "created_at": "2026-10-18 12:25:49",
+            "unread": true
+        },
+        {
+            "id": 2,
+            "message": "Report receipt confirmed for Kept synthetic client (Synthetic track) by test@example.invalid",
+            "link": "client.php?id=1&tab=notes",
+            "created_at": "2026-10-18 12:25:48",
+            "unread": true
+        },
+        {
+            "id": 3,
+            "message": "Guardian consent signed for Kept synthetic client",
+            "link": "client.php?id=1",
+            "created_at": "2026-10-18 12:25:48",
+            "unread": true
+        },
+        {
+            "id": 4,
+            "message": "Release of information signed for Kept synthetic client",
+            "link": "client.php?id=1#releases-h",
+            "created_at": "2026-10-18 12:25:48",
+            "unread": true
+        },
+        {
+            "id": 5,
+            "message": "Outcome survey completed: Kept synthetic client rated 8/10",
+            "link": "client.php?id=1&tab=notes",
+            "created_at": "2026-10-18 12:25:48",
+            "unread": true
+        },
+        {
+            "id": 1,
+            "message": "AT due 2026-10-18: 30-day check: Synthetic setup",
+            "link": "at_services.php?id=5",
+            "created_at": "2026-10-18 12:25:41",
+            "unread": true
+        }
+    ],
+    "unread": 60
+}

@@ -241,7 +241,7 @@ struct BookingEditSheet: View {
         NavigationStack {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 NewRecordClientPicker(title: "Client (required)", selection: $selectedClient)
                 Picker("Service", selection: $serviceType) { ForEach(bookingTypes, id: \.self) { Text($0) } }
                 DatePicker("When", selection: $neededAt)

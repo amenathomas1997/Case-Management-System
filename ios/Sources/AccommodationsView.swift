@@ -141,7 +141,7 @@ struct WorksiteDetailView: View {
     var body: some View {
         // ErrorFocusForm: Save is in the toolbar and the form is long, so a refused save is
         // scrolled to and given VoiceOver focus rather than left in a banner row off screen.
-        ErrorFocusForm(error: error) {
+        ErrorFocusForm(inNavigationStack: true, error: error) {
             // The form appears only once the stored assessment has loaded: a blank form saved
             // after a failed load would overwrite the record with empty fields.
             if let w {

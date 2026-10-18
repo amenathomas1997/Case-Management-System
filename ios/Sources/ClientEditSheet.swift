@@ -243,7 +243,7 @@ struct ClientEditSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 // Each name stays visible above its field (a filled-in edit form showed bare values).
                 Section("Client") {
                     CaptionedField(label: "Full name (required)", text: $name, prompt: "Full name")
@@ -736,7 +736,7 @@ struct AddAssessmentSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 DatePicker("Assessment date", selection: $date, displayedComponents: .date)
                 CaptionedField(label: "Primary disability / needs", text: $disability)
                 Picker("Primary tech recommended", selection: $tech) {
@@ -806,9 +806,13 @@ struct CaptionedField: View {
             if let lines {
                 TextField(label, text: $text, prompt: Text(prompt ?? label), axis: .vertical).lineLimit(lines)
                     .keyboardType(keyboard)
+                    .accessibilityLabel(label)
             } else {
                 TextField(label, text: $text, prompt: Text(prompt ?? label))
                     .keyboardType(keyboard)
+                    // The field's name for VoiceOver and Voice Control, filled or empty (the
+                    // 4.26.0 audit found these fields with no label of their own).
+                    .accessibilityLabel(label)
             }
         }
     }
@@ -821,6 +825,11 @@ private enum FormErrorRow: Hashable { case banner }
 /// went quiet). When an error arrives this scrolls the banner into view, where ErrorBanner
 /// announces itself, and moves VoiceOver onto it.
 struct ErrorFocusForm<Content: View>: View {
+    /// Whether the form is shown inside a NavigationStack (a sheet's own, or the screen it is
+    /// pushed on): its pickers may then open their choices on a screen of their own at the
+    /// accessibility text sizes (ReadablePickers). Every form says, so a new one cannot get a
+    /// picker that opens nothing.
+    let inNavigationStack: Bool
     let error: String?
     @ViewBuilder let content: Content
     @AccessibilityFocusState private var bannerFocused: Bool
@@ -835,6 +844,7 @@ struct ErrorFocusForm<Content: View>: View {
                 }
                 content
             }
+            .modifier(ReadablePickers(inNavigationStack: inNavigationStack))
             .onChange(of: error) { message in
                 guard message != nil else { return }
                 // After this update's layout, so the banner row exists to scroll to.

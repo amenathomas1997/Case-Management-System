@@ -1,0 +1,59 @@
+{
+    "ok": true,
+    "threads": [
+        {
+            "client_id": 125,
+            "client_name": "App Synthetic Client",
+            "total": 1,
+            "unread": 0,
+            "unread_client": 0,
+            "unread_counselor": 0,
+            "last_at": "2026-10-18 12:27:12"
+        },
+        {
+            "client_id": 123,
+            "client_name": "Exchange Synthetic Client",
+            "total": 3,
+            "unread": 1,
+            "unread_client": 0,
+            "unread_counselor": 1,
+            "last_at": "2026-10-18 12:27:11"
+        },
+        {
+            "client_id": 107,
+            "client_name": "Texty Synthetic Client",
+            "total": 4,
+            "unread": 1,
+            "unread_client": 1,
+            "unread_counselor": 0,
+            "last_at": "2026-10-18 12:27:05"
+        },
+        {
+            "client_id": 64,
+            "client_name": "Notice synthetic client",
+            "total": 2,
+            "unread": 0,
+            "unread_client": 0,
+            "unread_counselor": 0,
+            "last_at": "2026-10-18 12:26:46"
+        },
+        {
+            "client_id": 35,
+            "client_name": "Portaltest Synthetic",
+            "total": 1,
+            "unread": 1,
+            "unread_client": 1,
+            "unread_counselor": 0,
+            "last_at": "2026-10-18 12:26:27"
+        },
+        {
+            "client_id": 1,
+            "client_name": "Kept synthetic client",
+            "total": 1,
+            "unread": 0,
+            "unread_client": 0,
+            "unread_counselor": 0,
+            "last_at": "2026-10-18 12:25:23"
+        }
+    ]
+}

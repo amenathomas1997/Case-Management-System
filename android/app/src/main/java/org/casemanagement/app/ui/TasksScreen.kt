@@ -22,7 +22,15 @@ import org.casemanagement.app.Api
 import org.casemanagement.app.ApiException
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
-import org.casemanagement.app.messageFileLabel
+import org.casemanagement.app.TaskItem
+import org.casemanagement.app.dueWords
+import org.casemanagement.app.openClientChoices
+import org.casemanagement.app.parseDocuments
+import org.casemanagement.app.parseMessageThread
+import org.casemanagement.app.parseMessageThreads
+import org.casemanagement.app.parseNotifications
+import org.casemanagement.app.parseReferrals
+import org.casemanagement.app.parseTasks
 import org.json.JSONObject
 import java.util.UUID
 
@@ -31,7 +39,7 @@ import java.util.UUID
 fun TasksScreen(api: Api, nav: NavHostController) {
     var show by rememberSaveable { mutableStateOf("open") }
     val state = rememberLoaded(show) { api.call("tasks", mapOf("show" to show)) }
-    var chosen by remember { mutableStateOf<JSONObject?>(null) }
+    var chosen by remember { mutableStateOf<TaskItem?>(null) }
     var adding by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -44,7 +52,7 @@ fun TasksScreen(api: Api, nav: NavHostController) {
     val scope = rememberCoroutineScope()
 
     Show(state, "tasks") { r ->
-        val tasks = r.optJSONArray("tasks").objects()
+        val tasks = parseTasks(r)
         Page {
             NoticeText(notice)
             ErrorText(error)
@@ -53,46 +61,37 @@ fun TasksScreen(api: Api, nav: NavHostController) {
             Heading("${if (show == "open") "Open tasks" else "All tasks"} (${tasks.size})")
             if (tasks.isEmpty()) Text("No tasks.")
             tasks.forEach { t ->
-                val id = t.optInt("id")
-                val due = t.optInt("days_left", Int.MIN_VALUE).let { d ->
-                    when {
-                        t.isNull("days_left") || d == Int.MIN_VALUE -> "no due date"
-                        d < 0 -> "overdue by ${-d} ${if (d == -1) "day" else "days"}"
-                        d == 0 -> "due today"
-                        d == 1 -> "due tomorrow"
-                        else -> "due in $d days"
-                    }
-                }
-                val status = queued[id]?.let { reopen -> if (reopen) "Reopened, waiting to send" else "Done, waiting to send" } ?: t.optString("status")
-                ListRow(listOf(t.optString("title"), listOfNotNull(status, due, t.str("client_name"), t.str("assigned_name")?.let { "for $it" }).joinToString(", ")),
+                val id = t.id
+                val status = queued[id]?.let { reopen -> if (reopen) "Reopened, waiting to send" else "Done, waiting to send" } ?: t.status
+                ListRow(listOf(t.title, listOfNotNull(status, dueWords(t.daysLeft), t.clientName, t.assignedName?.let { "for $it" }).joinToString(", ")),
                     action = "see what you can do", onClick = if (id in queued) null else ({ chosen = t }))
             }
         }
     }
 
     chosen?.let { t ->
-        val open = t.optString("status") == "Open"
+        val open = t.open
         AlertDialog(
             onDismissRequest = { chosen = null },
-            title = { Text(t.optString("title"), modifier = Modifier.semantics { heading() }) },
+            title = { Text(t.title, modifier = Modifier.semantics { heading() }) },
             text = {
                 Column {
-                    t.str("details")?.let { Text(it) }
+                    t.details?.let { Text(it) }
                     TextButton(onClick = {
                         chosen = null; error = null
                         scope.launch {
                             try {
-                                val body = JSONObject().put("id", t.optInt("id")).put("idem_key", UUID.randomUUID().toString())
+                                val body = JSONObject().put("id", t.id).put("idem_key", UUID.randomUUID().toString())
                                 if (!open) body.put("reopen", true)
-                                val s = saveOrQueue(api, "complete_task", body, (if (open) "Task done: " else "Reopen task: ") + t.optString("title").take(40),
+                                val s = saveOrQueue(api, "complete_task", body, (if (open) "Task done: " else "Reopen task: ") + t.title.take(40),
                                     if (open) "Task completed." else "Task reopened.")
                                 notice = s.message
                                 if (s.reply != null) state.reload()
                             } catch (e: ApiException) { error = e.message }
                         }
                     }) { Text(if (open) "Mark as done" else "Reopen") }
-                    if (t.optBoolean("can_open_client") && !t.isNull("client_id")) {
-                        TextButton(onClick = { chosen = null; nav.navigate("client/${t.optInt("client_id")}") }) { Text("Open " + t.optString("client_name")) }
+                    if (t.canOpenClient && t.clientId != null) {
+                        TextButton(onClick = { chosen = null; nav.navigate("client/${t.clientId}") }) { Text("Open " + (t.clientName ?: "the client")) }
                     }
                 }
             },
@@ -138,16 +137,16 @@ private fun AddTaskDialog(api: Api, onDone: (String) -> Unit, onCancel: () -> Un
 /** Alerts, newest first; reading them marks them read. */
 @Composable
 fun AlertsScreen(api: Api) {
-    val state = rememberLoaded(api.userId) { api.call("notifications") }
+    val state = rememberLoaded(api.userId) { parseNotifications(api.call("notifications")) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     Show(state, "alerts") { r ->
-        val list = r.optJSONArray("notifications").objects()
+        val list = r.items
         Page {
             NoticeText(notice)
             ErrorText(error)
-            val unread = r.optInt("unread")
+            val unread = r.unread
             if (unread > 0) PrimaryButton("Mark all $unread as read") {
                 scope.launch {
                     try { notice = api.call("mark_notifications_read", body = JSONObject().put("all", true)).optString("message").ifEmpty { "All marked as read." }; state.reload() }
@@ -156,7 +155,7 @@ fun AlertsScreen(api: Api) {
             }
             Heading("Alerts (${list.size})")
             if (list.isEmpty()) Text("No alerts.")
-            list.forEach { n -> ListRow(listOf((if (n.optBoolean("unread")) "Unread: " else "") + n.optString("message"), whenText(n.str("created_at")))) }
+            list.forEach { n -> ListRow(listOf((if (n.unread) "Unread: " else "") + n.message, whenText(n.createdAt))) }
         }
     }
 }
@@ -165,16 +164,16 @@ fun AlertsScreen(api: Api) {
 @Composable
 fun ReferralsScreen(api: Api, nav: NavHostController) {
     var status by rememberSaveable { mutableStateOf("open") }
-    val state = rememberLoaded(status) { api.call("referrals", mapOf("status" to status)).optJSONArray("referrals").objects() }
+    val state = rememberLoaded(status) { parseReferrals(api.call("referrals", mapOf("status" to status))) }
     Page {
         Choice("Show", status, listOf("open" to "Open referrals", "converted" to "Converted to clients", "closed" to "Closed", "all" to "All")) { status = it }
         Show(state, "referrals") { list ->
             Heading("Referrals (${list.size})")
             if (list.isEmpty()) Text("No referrals.")
             list.forEach { r ->
-                ListRow(listOf(r.optString("client_name"), r.optString("status") + ", " + whenText(r.str("created_at")),
-                    listOfNotNull(r.str("reason"), r.str("counselor_agency"), r.str("assigned_name")?.let { "assigned to $it" } ?: "unassigned").joinToString(", ")),
-                    onClick = { nav.navigate("referral/${r.optInt("id")}") })
+                ListRow(listOf(r.clientName, r.status + ", " + whenText(r.createdAt),
+                    listOfNotNull(r.reason, r.counselorAgency, r.assignedName?.let { "assigned to $it" } ?: "unassigned").joinToString(", ")),
+                    onClick = { nav.navigate("referral/${r.id}") })
             }
         }
     }
@@ -183,23 +182,21 @@ fun ReferralsScreen(api: Api, nav: NavHostController) {
 /** Conversations with clients (and their counselors) through the client portal. */
 @Composable
 fun MessagesScreen(api: Api, nav: NavHostController) {
-    val state = rememberLoaded(api.userId) { api.call("message_threads").optJSONArray("threads").objects() }
-    val clients = rememberLoaded(api.userId) {
-        api.call("client_choices").optJSONArray("clients").objects().filter { !it.optString("status").startsWith("Closed") }
-    }
+    val state = rememberLoaded(api.userId) { parseMessageThreads(api.call("message_threads")) }
+    val clients = rememberLoaded(api.userId) { openClientChoices(api.call("client_choices")) }
     Show(state, "messages") { list ->
         Page {
             // A new conversation: any client's thread opens from here.
             val choices = clients.data ?: emptyList()
-            if (choices.isNotEmpty()) Choice("Start a conversation with", "", listOf("" to "Choose a client") + choices.map { it.optInt("id").toString() to it.optString("name") }) { id ->
+            if (choices.isNotEmpty()) Choice("Start a conversation with", "", listOf("" to "Choose a client") + choices.map { it.id.toString() to it.name }) { id ->
                 if (id.isNotEmpty()) nav.navigate("thread/$id")
             }
             Heading("Conversations (${list.size})")
             if (list.isEmpty()) Text("No messages.")
             list.forEach { t ->
-                val unread = t.optInt("unread")
-                ListRow(listOf(t.optString("client_name"), (if (unread > 0) "$unread unread, " else "") + "last " + whenText(t.str("last_at"))),
-                    onClick = { nav.navigate("thread/${t.optInt("client_id")}") })
+                val unread = t.unread
+                ListRow(listOf(t.clientName, (if (unread > 0) "$unread unread, " else "") + "last " + whenText(t.lastAt)),
+                    onClick = { nav.navigate("thread/${t.clientId}") })
             }
         }
     }
@@ -235,20 +232,20 @@ fun ThreadScreen(api: Api, clientId: Int) {
             else { attach = Attachment.NewFile(uri, name); error = null; notice = "$name attached." }
         }
     }
-    Show(state, "the conversation") { r ->
+    Show(state, "the conversation") { raw ->
+        val r = parseMessageThread(raw)
         Page {
-            Heading(r.optString("client_name"), large = true)
-            Choice("With", channel, listOfNotNull("client" to "The client", r.str("counselor_name")?.let { "counselor" to "The counselor, $it" })) { channel = it }
-            r.optJSONArray("messages").objects().forEach { m ->
-                val who = m.str("staff_name") ?: when (m.optString("sender")) { "client" -> r.optString("client_name"); "counselor" -> r.str("counselor_name") ?: "The counselor"; else -> "Staff" }
-                val file = messageFileLabel(m)
-                ListRow(listOfNotNull(who + ", " + whenText(m.str("created_at")) + (if (m.str("via") == "text") ", by text" else ""), m.optString("body"), file),
+            Heading(r.clientName, large = true)
+            Choice("With", channel, listOfNotNull("client" to "The client", r.counselorName?.let { "counselor" to "The counselor, $it" })) { channel = it }
+            r.messages.forEach { m ->
+                val file = m.fileLabel
+                ListRow(listOfNotNull(m.who + ", " + whenText(m.createdAt) + (if (m.byText) ", by text" else ""), m.body, file),
                     action = if (file != null) "open the file" else null,
                     onClick = if (file == null) null else ({
                         if (!opening) {
                             opening = true; error = null
                             scope.launch {
-                                try { openDocument(api, context, m.optInt("document_id"))?.let { error = it } } catch (e: ApiException) { error = e.message } finally { opening = false }
+                                try { openDocument(api, context, m.documentId ?: 0)?.let { error = it } } catch (e: ApiException) { error = e.message } finally { opening = false }
                             }
                         }
                     }))
@@ -265,14 +262,14 @@ fun ThreadScreen(api: Api, clientId: Int) {
                 SecondaryButton("Remove the attachment") { attach = null; notice = "Attachment removed." }
             }
             // Texts (4.17.0): offered when the client agreed to them; otherwise why not.
-            val textable = channel == "client" && r.optBoolean("text_enabled")
-            if (textable && r.str("text_blocked") == null) Tick("Also send it as a text message", byText) { byText = it }
-            else if (textable) Text("Not by text: " + r.optString("text_blocked"))
+            val textable = channel == "client" && r.textEnabled
+            if (textable && r.textBlocked == null) Tick("Also send it as a text message", byText) { byText = it }
+            else if (textable) Text("Not by text: " + r.textBlocked)
             ErrorText(error)
             PrimaryButton("Send", busy = busy, enabled = text.isNotBlank() || attach != null) {
                 scope.launchSave({ busy = it }, { error = it }) {
                     val body = JSONObject().put("client_id", clientId).put("channel", channel).put("body", text.trim())
-                        .put("by_text", byText && channel == "client" && r.str("text_blocked") == null).put("idem_key", sendKey)
+                        .put("by_text", byText && channel == "client" && r.textBlocked == null).put("idem_key", sendKey)
                     val res = when (val at = attach) {
                         null -> api.call("post_message", body = body)
                         is Attachment.Doc -> api.call("post_message", body = body.put("document_id", at.id))
@@ -301,7 +298,7 @@ fun ThreadScreen(api: Api, clientId: Int) {
         }
     }
     if (choosingDoc) {
-        val docs = rememberLoaded(clientId) { api.call("documents", mapOf("client_id" to clientId.toString())).optJSONArray("documents").objects() }
+        val docs = rememberLoaded(clientId) { parseDocuments(api.call("documents", mapOf("client_id" to clientId.toString()))) }
         AlertDialog(
             onDismissRequest = { choosingDoc = false },
             title = { Text("Choose one of their documents", modifier = Modifier.semantics { heading() }) },
@@ -312,9 +309,9 @@ fun ThreadScreen(api: Api, clientId: Int) {
                     val list = docs.data ?: emptyList()
                     if (!docs.loading && list.isEmpty() && docs.error == null) Text("This client has no documents yet. Use Add a new file instead.")
                     list.forEach { d ->
-                        val name = d.optString("title").ifEmpty { d.optString("orig_name") }
-                        ListRow(listOf(name, d.optString("category") + ", " + whenText(d.str("created_at"))), action = "attach it", onClick = {
-                            attach = Attachment.Doc(d.optInt("id"), name); choosingDoc = false; error = null; notice = "$name attached."
+                        val name = d.title
+                        ListRow(listOf(name, d.category + ", " + whenText(d.createdAt)), action = "attach it", onClick = {
+                            attach = Attachment.Doc(d.id, name); choosingDoc = false; error = null; notice = "$name attached."
                         })
                     }
                 }

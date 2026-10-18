@@ -1,0 +1,160 @@
+{
+    "ok": true,
+    "active_clients": 70,
+    "pending_clients": 36,
+    "new_referrals": 17,
+    "unbilled_hours": 491,
+    "unbilled_amount": 105961.75,
+    "expiring": [
+        {
+            "id": 110,
+            "title": "Closed client track",
+            "expiration_date": "2026-10-22",
+            "client": "Alert check client",
+            "is_expired": false
+        },
+        {
+            "id": 108,
+            "title": "Alert check track",
+            "expiration_date": "2026-10-23",
+            "client": "Alert check client",
+            "is_expired": false
+        },
+        {
+            "id": 140,
+            "title": "Future end",
+            "expiration_date": "2026-10-23",
+            "client": "Attendance synthetic client",
+            "is_expired": false
+        },
+        {
+            "id": 109,
+            "title": "Alert retry track",
+            "expiration_date": "2026-10-24",
+            "client": "Alert check client",
+            "is_expired": false
+        },
+        {
+            "id": 118,
+            "title": "Workflow track",
+            "expiration_date": "2026-10-25",
+            "client": "Workflow own client",
+            "is_expired": false
+        },
+        {
+            "id": 119,
+            "title": "Workflow outside track",
+            "expiration_date": "2026-10-28",
+            "client": "Workflow outside client",
+            "is_expired": false
+        },
+        {
+            "id": 159,
+            "title": "Short track",
+            "expiration_date": "2026-10-28",
+            "client": "Plan Warning Client",
+            "is_expired": false
+        },
+        {
+            "id": 133,
+            "title": "Amend track",
+            "expiration_date": "2026-11-07",
+            "client": "Amend synthetic client",
+            "is_expired": false
+        },
+        {
+            "id": 146,
+            "title": "Scope track",
+            "expiration_date": "2026-11-07",
+            "client": "Otherscope Person",
+            "is_expired": false
+        },
+        {
+            "id": 153,
+            "title": "App Missouri",
+            "expiration_date": "2026-11-17",
+            "client": "App Rate Synthetic Client",
+            "is_expired": false
+        }
+    ],
+    "expiring_total": 18,
+    "recent_referrals": [
+        {
+            "id": 36,
+            "client_name": "Closed Synthetic Referral",
+            "reason": "x",
+            "status": "Closed",
+            "created_at": "2026-10-18 12:27:14"
+        },
+        {
+            "id": 35,
+            "client_name": "Custom Synthetic Referral",
+            "reason": "Vocational Rehabilitation (VR) counselor referral",
+            "status": "Converted",
+            "created_at": "2026-10-18 12:27:12"
+        },
+        {
+            "id": 34,
+            "client_name": "Deadline Synthetic Referral",
+            "reason": "Vocational Rehabilitation (VR) counselor referral",
+            "status": "Converted",
+            "created_at": "2026-10-18 12:27:09"
+        },
+        {
+            "id": 33,
+            "client_name": "Synthetic Stated Self Referrer",
+            "reason": "I am referring myself referral",
+            "status": "New",
+            "created_at": "2026-10-18 12:27:06"
+        },
+        {
+            "id": 32,
+            "client_name": "Referral Text Synthetic",
+            "reason": "Self",
+            "status": "Converted",
+            "created_at": "2026-10-18 12:27:05"
+        }
+    ],
+    "recent_notes": [
+        {
+            "id": 53,
+            "subject": "Signed: Synthetic offline consent",
+            "note_type": "Case Note",
+            "created_at": "2026-10-18 12:27:18",
+            "client_id": 125,
+            "client_name": "App Synthetic Client"
+        },
+        {
+            "id": 52,
+            "subject": "Signed: Consent to services",
+            "note_type": "Case Note",
+            "created_at": "2026-10-18 12:27:14",
+            "client_id": 125,
+            "client_name": "App Synthetic Client"
+        },
+        {
+            "id": 50,
+            "subject": "Signed: Consent to services",
+            "note_type": "Case Note",
+            "created_at": "2026-10-18 12:27:13",
+            "client_id": 125,
+            "client_name": "App Synthetic Client"
+        },
+        {
+            "id": 51,
+            "subject": "Signed: Synthetic photo consent",
+            "note_type": "Case Note",
+            "created_at": "2026-10-18 12:27:13",
+            "client_id": 125,
+            "client_name": "App Synthetic Client"
+        },
+        {
+            "id": 49,
+            "subject": "[Referral] Counselor referral: Custom Synthetic Referral",
+            "note_type": "Intake",
+            "created_at": "2026-10-18 12:27:12",
+            "client_id": 123,
+            "client_name": "Exchange Synthetic Client"
+        }
+    ]
+}

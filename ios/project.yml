@@ -19,6 +19,32 @@ settings:
     CMS_SPOKEN_NAME: Case Management System
     CMS_SIGNIN_TITLE: Case Management System
     CMS_DEFAULT_SERVER: cms.example.org
+# Shared schemes: CaseManagement builds the app (and its widget) only, as CI and testflight.sh use it;
+# CaseManagementUITests runs the accessibility audits (UITests/), for local runs against a local test
+# server only (how to run them: the notes at the top of UITests/AccessibilityAuditTests.swift).
+# Nothing in the CaseManagement scheme builds or needs them.
+schemes:
+  CaseManagement:
+    build:
+      targets:
+        CaseManagement: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  CaseManagementWidget:
+    build:
+      targets:
+        CaseManagementWidget: all
+  CaseManagementUITests:
+    build:
+      targets:
+        CaseManagement: [test]
+        CaseManagementUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - CaseManagementUITests
 targets:
   CaseManagement:
     type: application
@@ -35,8 +61,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(CMS_BUNDLE_ID)
-        MARKETING_VERSION: "4.25.0"
-        CURRENT_PROJECT_VERSION: "56"
+        MARKETING_VERSION: "4.26.0"
+        CURRENT_PROJECT_VERSION: "57"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: $(CMS_TEAM)
@@ -84,8 +110,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(CMS_BUNDLE_ID).widget
-        MARKETING_VERSION: "4.25.0"
-        CURRENT_PROJECT_VERSION: "56"
+        MARKETING_VERSION: "4.26.0"
+        CURRENT_PROJECT_VERSION: "57"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: $(CMS_TEAM)
@@ -98,3 +124,21 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  # Accessibility audits of the app's screens (XCUITest performAccessibilityAudit, iOS 17+), with
+  # default and the largest accessibility text size. Local runs only: they sign in to a local test
+  # server with a test account given through the environment (never stored in the repository).
+  CaseManagementUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: CaseManagement
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(CMS_BUNDLE_ID).uitests
+        TEST_TARGET_NAME: CaseManagement
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: $(CMS_TEAM)

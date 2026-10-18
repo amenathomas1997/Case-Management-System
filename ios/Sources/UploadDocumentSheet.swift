@@ -36,7 +36,7 @@ struct UploadDocumentSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 Picker("Category", selection: $category) {
                     ForEach(docCategories, id: \.self) { Text($0) }
                 }

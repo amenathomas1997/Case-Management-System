@@ -319,7 +319,7 @@ struct TaskEditSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 Section("What needs doing? (required)") {
                     TextField("Task title", text: $title, axis: .vertical).lineLimit(1...3)
                         .accessibilityLabel("What needs doing, required")

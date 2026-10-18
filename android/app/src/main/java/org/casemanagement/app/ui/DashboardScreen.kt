@@ -4,8 +4,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import org.casemanagement.app.Api
-import org.casemanagement.app.objects
-import org.casemanagement.app.str
+import org.casemanagement.app.parseDashboard
+import org.casemanagement.app.parseReferralDeadlines
 import java.util.Locale
 
 /** The website's dashboard: counts, authorizations ending soon, the newest referrals and notes. */
@@ -13,11 +13,11 @@ import java.util.Locale
 fun DashboardScreen(api: Api, nav: NavHostController) {
     val state = rememberLoaded(api.userId) {
         val toDo = (try { api.call("agreements").optInt("needed") } catch (e: Exception) { 0 }) to (try { api.call("training").optInt("needed") } catch (e: Exception) { 0 })
-        Triple(api.call("dashboard"), try { api.call("notifications", mapOf("count_only" to "1")).optInt("unread") } catch (e: Exception) { 0 }, toDo)
+        Triple(parseDashboard(api.call("dashboard")), try { api.call("notifications", mapOf("count_only" to "1")).optInt("unread") } catch (e: Exception) { 0 }, toDo)
     }
     // Referral deadlines (4.25.0), for those who work referrals; left out when it cannot be read.
     val deadlines = rememberLoaded(api.userId, api.can("referrals")) {
-        if (api.can("referrals")) try { api.call("referral_deadlines") } catch (e: Exception) { null } else null
+        if (api.can("referrals")) try { parseReferralDeadlines(api.call("referral_deadlines")) } catch (e: Exception) { null } else null
     }
     Show(state, "the dashboard") { (d, unread, toSign) ->
         Page {
@@ -31,35 +31,31 @@ fun DashboardScreen(api: Api, nav: NavHostController) {
             if (unread > 0) ListRow(listOf("$unread unread ${if (unread == 1) "alert" else "alerts"}"), onClick = { nav.navigate("alerts") })
 
             Heading("At a glance")
-            ListRow(listOf("Active clients: ${d.optInt("active_clients")}"))
-            ListRow(listOf("Waiting for assessment: ${d.optInt("pending_clients")}"))
-            if (api.can("referrals")) ListRow(listOf("New referrals: ${d.optInt("new_referrals")}"), onClick = { nav.navigate("referrals") })
-            if (api.can("billing")) ListRow(listOf("Unbilled: ${hoursText(d.optDouble("unbilled_hours", 0.0))} hours, $" + String.format(Locale.US, "%,.2f", d.optDouble("unbilled_amount", 0.0))))
+            ListRow(listOf("Active clients: ${d.activeClients}"))
+            ListRow(listOf("Waiting for assessment: ${d.pendingClients}"))
+            if (api.can("referrals")) ListRow(listOf("New referrals: ${d.newReferrals}"), onClick = { nav.navigate("referrals") })
+            if (api.can("billing")) ListRow(listOf("Unbilled: ${hoursText(d.unbilledHours)} hours, $" + String.format(Locale.US, "%,.2f", d.unbilledAmount)))
 
-            deadlines.data?.takeIf { it.optInt("referrals") > 0 || it.optInt("overdue_now") > 0 }?.let { rd ->
+            deadlines.data?.takeIf { it.worthShowing }?.let { rd ->
                 Heading("Referral deadlines, last 90 days")
-                ListRow(listOf("${rd.optInt("referrals")} referral${if (rd.optInt("referrals") == 1) "" else "s"}. Contacted on time: ${rd.optInt("contacted_on_time")}, late: ${rd.optInt("contacted_late")}."))
-                ListRow(listOf("Waiting for contact: ${rd.optInt("waiting")}, overdue now: ${rd.optInt("overdue_now")}."), onClick = { nav.navigate("referrals") })
-                ListRow(listOf("Assessed on time: ${rd.optInt("assessed_on_time")}, late: ${rd.optInt("assessed_late")}."))
+                ListRow(listOf("${rd.referrals} referral${if (rd.referrals == 1) "" else "s"}. Contacted on time: ${rd.contactedOnTime}, late: ${rd.contactedLate}."))
+                ListRow(listOf("Waiting for contact: ${rd.waiting}, overdue now: ${rd.overdueNow}."), onClick = { nav.navigate("referrals") })
+                ListRow(listOf("Assessed on time: ${rd.assessedOnTime}, late: ${rd.assessedLate}."))
             }
 
-            val expiring = d.optJSONArray("expiring").objects()
-            if (expiring.isNotEmpty()) {
-                Heading("Authorizations ending soon (${d.optInt("expiring_total", expiring.size)})")
-                expiring.forEach { t ->
-                    ListRow(listOf(t.optString("client"), t.optString("title"),
-                        (if (t.optBoolean("is_expired")) "Ended " else "Ends ") + dayText(t.str("expiration_date"))))
+            if (d.expiring.isNotEmpty()) {
+                Heading("Authorizations ending soon (${d.expiringTotal})")
+                d.expiring.forEach { t ->
+                    ListRow(listOf(t.client, t.title, (if (t.expired) "Ended " else "Ends ") + dayText(t.expirationDate)))
                 }
             }
-            val refs = d.optJSONArray("recent_referrals").objects()
-            if (refs.isNotEmpty() && api.can("referrals")) {
+            if (d.recentReferrals.isNotEmpty() && api.can("referrals")) {
                 Heading("Newest referrals")
-                refs.forEach { r -> ListRow(listOf(r.optString("client_name"), r.optString("reason"), r.optString("status") + ", " + whenText(r.str("created_at"))), onClick = { nav.navigate("referral/${r.optInt("id")}") }) }
+                d.recentReferrals.forEach { r -> ListRow(listOf(r.clientName, r.reason, r.status + ", " + whenText(r.createdAt)), onClick = { nav.navigate("referral/${r.id}") }) }
             }
-            val notes = d.optJSONArray("recent_notes").objects()
-            if (notes.isNotEmpty()) {
+            if (d.recentNotes.isNotEmpty()) {
                 Heading("Newest case notes")
-                notes.forEach { n -> ListRow(listOf(n.optString("subject"), n.optString("client_name") + ", " + n.optString("note_type"), whenText(n.str("created_at"))), onClick = { nav.navigate("client/${n.optInt("client_id")}") }) }
+                d.recentNotes.forEach { n -> ListRow(listOf(n.subject, n.clientName + ", " + n.noteType, whenText(n.createdAt)), onClick = { nav.navigate("client/${n.clientId}") }) }
             }
             SecondaryButton("Refresh") { state.reload() }
             Text("")

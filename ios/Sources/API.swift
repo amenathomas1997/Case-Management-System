@@ -562,7 +562,10 @@ struct SigningDocument: Decodable, Identifiable {
     let signerName: String
     let signerRole: String?
     let org: String
-    private enum CodingKeys: String, CodingKey { case id, title, body, lang, signerName, signerRole, org }
+    /// When the server started it ("Y-m-d H:i:s", the server's time zone): start_signature's
+    /// reply carries it (4.26.0); nil from an older server or the `signature` reply.
+    let sentAt: String?
+    private enum CodingKeys: String, CodingKey { case id, title, body, lang, signerName, signerRole, org, sentAt }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id)
@@ -572,6 +575,7 @@ struct SigningDocument: Decodable, Identifiable {
         signerName = (try? c.decode(String.self, forKey: .signerName)) ?? ""
         signerRole = try? c.decodeIfPresent(String.self, forKey: .signerRole)
         org = (try? c.decode(String.self, forKey: .org)) ?? ""
+        sentAt = try? c.decodeIfPresent(String.self, forKey: .sentAt)
     }
 }
 
@@ -1424,6 +1428,7 @@ final class API: ObservableObject {
             case "log_hours": return "Hours"
             case "save_followup": return "Device follow-up"
             case "check_in_session": return "Session check-in"
+            case "sign_in_person": return "Signed in person with no signal"
             default: return "Entry"
             }
         }
@@ -1466,6 +1471,16 @@ final class API: ObservableObject {
                 if let v = value("satisfaction") { lines.append("Satisfaction: \(v) of 5") }
                 if let v = value("barriers") { lines.append("Barriers: \(v)") }
                 if let v = value("notes") { lines.append("Notes: \(v)") }
+            case "sign_in_person":
+                // 4.26.0: signed in person with no signal. The drawn signature is not text: it is
+                // only said whether one was drawn.
+                lines.append(label)
+                if let v = value("typed_name") { lines.append("Signed by typing the name: \(v)") }
+                if let v = value("signed_at") {
+                    let when = ISO8601DateFormatter().date(from: v)
+                    lines.append("Signed on this phone: " + (when?.formatted(date: .abbreviated, time: .shortened) ?? v))
+                }
+                lines.append(value("signature_b64") == nil ? "No drawn signature" : "With a drawn signature")
             default:
                 for key in obj.keys.sorted() where key != "idem_key" {
                     if let v = value(key) { lines.append("\(key): \(v)") }

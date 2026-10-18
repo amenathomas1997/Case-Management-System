@@ -28,17 +28,21 @@ import java.util.Date
 
 @Composable
 fun MoreScreen(api: Api, nav: NavHostController) {
+    val context = LocalContext.current
+    var linkError by remember { mutableStateOf<String?>(null) }
     // Grouped under headings, so a screen reader can jump from group to group.
     Page {
         Heading("Everyday")
         if (api.can("clients")) ListRow(listOf("Search"), onClick = { nav.navigate("search") })
+        ListRow(listOf("Action center", if (api.can("clients") && api.aiHas("briefing")) "Priorities and AI case briefings" else "Priorities"), onClick = { nav.navigate("actions") })
         ListRow(listOf("Alerts"), onClick = { nav.navigate("alerts") })
         if (api.can("referrals")) ListRow(listOf("Referrals"), onClick = { nav.navigate("referrals") })
         if (api.can("clients")) ListRow(listOf("Messages"), onClick = { nav.navigate("messages") })
         if (api.can("clients")) ListRow(listOf("Client portal requests"), onClick = { nav.navigate("portalRequests") })
         if (api.aiHas("voice") && api.can("clients")) ListRow(listOf("Voice assistant"), onClick = { nav.navigate("voice/0/-") })
         if (api.aiEnabled) ListRow(listOf("AI tools"), onClick = { nav.navigate("aiTools") })
-        ListRow(listOf("Offline entries" + if (api.pendingSync > 0) " (${api.pendingSync} waiting)" else ""), onClick = { nav.navigate("offline") })
+        val waiting = api.pendingSync + api.keptSignatures.size
+        ListRow(listOf("Offline entries" + if (waiting > 0) " ($waiting waiting)" else ""), onClick = { nav.navigate("offline") })
 
         Heading("Services")
         if (api.can("clients")) ListRow(listOf("AT services"), onClick = { nav.navigate("at") })
@@ -66,6 +70,16 @@ fun MoreScreen(api: Api, nav: NavHostController) {
         ListRow(listOf("My training"), onClick = { nav.navigate("training") })
         ListRow(listOf("My credentials"), onClick = { nav.navigate("credentials") })
         ListRow(listOf("My account"), onClick = { nav.navigate("account") })
+
+        Heading("Help and privacy")
+        ListRow(listOf("Help and glossary", "What the terms mean, and the website's help"), onClick = { nav.navigate("help") })
+        ListRow(listOf("User guide", "The staff guide on the website"), action = "open it in the browser", onClick = {
+            linkError = if (openSitePage(api, context, "help.php#staff-guide")) null else "No browser on this phone can open the website."
+        })
+        ListRow(listOf("Privacy policy"), action = "open it in the browser", onClick = {
+            linkError = if (openSitePage(api, context, "privacy.php")) null else "No browser on this phone can open the website."
+        })
+        ErrorText(linkError)
         Text("Everything else is on the website, ${ServerAddress.host(api.base)}.")
     }
 }
@@ -94,7 +108,12 @@ fun AccountScreen(api: Api, nav: NavHostController) {
         }
         PrimaryButton("Sign out") { confirm = true }
     }
-    if (confirm) Confirm("Sign out?", "You will need your password and a code to sign in again.", "Sign out", { api.signOut() }, { confirm = false })
+    // Documents prepared to sign go at sign-out; signatures already taken stay and send at the next sign-in (4.26.0).
+    val ready = api.preparedSignatures.size
+    if (confirm) Confirm("Sign out?", listOfNotNull(
+        api.unsentSignaturesWarning,
+        if (ready > 0) "$ready ${if (ready == 1) "document" else "documents"} ready to sign on this phone will be removed from it." else null,
+        "You will need your password and a code to sign in again.").joinToString(" "), "Sign out", { api.signOut() }, { confirm = false })
 }
 
 /**
@@ -102,7 +121,7 @@ fun AccountScreen(api: Api, nav: NavHostController) {
  * did. Each can be sent now, copied to enter on the website, or discarded.
  */
 @Composable
-fun OfflineScreen(api: Api) {
+fun OfflineScreen(api: Api, nav: NavHostController) {
     var version by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var discard by remember { mutableStateOf<JSONObject?>(null) }
@@ -111,15 +130,33 @@ fun OfflineScreen(api: Api) {
     val context = LocalContext.current
     val items = remember(version, api.pendingSync, api.syncNotice) { api.ownQueued() }
     Page {
-        Heading("Waiting to send (${items.size})", large = true)
+        Heading("Waiting to send (${items.size + api.keptSignatures.size})", large = true)
         NoticeText(notice)
-        if (items.isEmpty()) Text("Nothing is waiting to send.")
-        else PrimaryButton("Send now", busy = busy) {
+        if (items.isEmpty() && api.keptSignatures.isEmpty()) Text("Nothing is waiting to send.")
+        if (items.isNotEmpty()) PrimaryButton("Send now", busy = busy) {
             scope.launch {
                 busy = true
                 api.flushQueue()
                 busy = false; version++
                 notice = if (api.pendingSync == 0) "Everything was sent." else api.syncNotice ?: "Some entries are still waiting; there may be no signal."
+            }
+        }
+        val signatures = api.keptSignatures
+        if (signatures.isNotEmpty()) {
+            Heading("Signatures waiting to send (${signatures.size})")
+            signatures.forEach { k ->
+                ListRow(listOfNotNull(k.optString("title"), "Signed by " + k.optString("typed_name"),
+                    k.str("lastError")?.let { "Not accepted: $it" } ?: "Sent automatically when there is a connection"),
+                    action = "open the client's documents to sign", onClick = { nav.navigate("signatures/${k.optInt("client_id")}") })
+            }
+            SecondaryButton("Send the signatures now") {
+                if (busy) return@SecondaryButton
+                busy = true
+                scope.launch {
+                    api.flushSignatures(retryRefused = true)
+                    busy = false
+                    notice = if (api.keptSignatures.isEmpty()) "Every signature was sent." else api.signingNotice ?: "Some signatures are still waiting; there may be no signal."
+                }
             }
         }
         items.forEach { item ->
@@ -195,6 +232,8 @@ private fun AccountSecurity(api: Api, a: JSONObject, reload: () -> Unit) {
         "cal" to "My calendar address", "everywhere" to "Sign out of the app on every device").let { l -> if (a.optBoolean("can_schedule")) l else l.filter { it.first != "cal" } }) { open = it; error = null; notice = null }
     when (open) {
         "password" -> {
+            // Changing the password signs this phone out: said first when signatures are waiting to send.
+            api.unsentSignaturesWarning?.let { NoticeText(it) }
             Field("Current password", current, { current = it }, password = true)
             Field("New password", new1, { new1 = it }, hint = "at least 10 characters", password = true)
             Field("New password again", new2, { new2 = it }, password = true)
@@ -245,11 +284,12 @@ private fun AccountSecurity(api: Api, a: JSONObject, reload: () -> Unit) {
             }
         }
         "everywhere" -> {
+            api.unsentSignaturesWarning?.let { NoticeText(it) }
             Field("Your password", password, { password = it }, password = true)
             PrimaryButton("Sign out everywhere", busy = busy) { confirmEverywhere = true }
         }
     }
-    if (confirmEverywhere) Confirm("Sign out of the app on every device?", "Every phone signed in to the app, this one too, has to sign in again. Website sessions are not affected.", "Sign out everywhere", {
+    if (confirmEverywhere) Confirm("Sign out of the app on every device?", listOfNotNull(api.unsentSignaturesWarning, "Every phone signed in to the app, this one too, has to sign in again. Website sessions are not affected.").joinToString(" "), "Sign out everywhere", {
         act { val r = api.call("logout_all", body = JSONObject().put("password", password)); api.signOut(); api.sessionNotice = r.optString("message"); "" }
     }, { confirmEverywhere = false })
 }

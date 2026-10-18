@@ -1,0 +1,79 @@
+{
+    "ok": true,
+    "referrals": 35,
+    "contacted_on_time": 5,
+    "contacted_late": 1,
+    "waiting": 12,
+    "overdue_now": 0,
+    "assessed_on_time": 0,
+    "assessed_late": 0,
+    "assess_overdue": 0,
+    "by_agency": [
+        {
+            "agency": "Synthetic agency",
+            "referrals": 10,
+            "contact_on_time_pct": 100,
+            "assess_on_time_pct": null
+        },
+        {
+            "agency": "Test agency",
+            "referrals": 7,
+            "contact_on_time_pct": 100,
+            "assess_on_time_pct": null
+        },
+        {
+            "agency": "Agency",
+            "referrals": 4,
+            "contact_on_time_pct": null,
+            "assess_on_time_pct": null
+        },
+        {
+            "agency": "Self-referral",
+            "referrals": 4,
+            "contact_on_time_pct": null,
+            "assess_on_time_pct": null
+        },
+        {
+            "agency": "No agency",
+            "referrals": 3,
+            "contact_on_time_pct": null,
+            "assess_on_time_pct": null
+        },
+        {
+            "agency": "Synthetic Deadline Agency",
+            "referrals": 2,
+            "contact_on_time_pct": 0,
+            "assess_on_time_pct": null
+        },
+        {
+            "agency": "Family",
+            "referrals": 1,
+            "contact_on_time_pct": null,
+            "assess_on_time_pct": null
+        },
+        {
+            "agency": "Self",
+            "referrals": 1,
+            "contact_on_time_pct": null,
+            "assess_on_time_pct": null
+        },
+        {
+            "agency": "Staff (voice)",
+            "referrals": 1,
+            "contact_on_time_pct": null,
+            "assess_on_time_pct": null
+        },
+        {
+            "agency": "Synthetic Agency",
+            "referrals": 1,
+            "contact_on_time_pct": 100,
+            "assess_on_time_pct": null
+        },
+        {
+            "agency": "Synthetic congregation",
+            "referrals": 1,
+            "contact_on_time_pct": null,
+            "assess_on_time_pct": null
+        }
+    ]
+}

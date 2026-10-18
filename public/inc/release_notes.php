@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.26.0' => [
+        'Sign with no signal: in the iPhone and Android apps, prepare a document to sign while you have a connection, then have the client sign it in their home even with no signal. The signature is kept safely on the phone and sent, with the time it was signed, as soon as the phone is back online.',
+        'The Android app now has everything the iPhone app has: work logs (with corrections), goals and goal progress, progress reports, equipment details, service and reservations, the AI case briefing, and help and privacy.',
+        'Both apps were checked with automated accessibility audits on every new screen, including the largest text sizes, and the Android app is now tested against the server\'s real replies on every release.',
+    ],
     '4.25.0' => [
         'Sign in person: on a client\'s Documents to sign, choose Sign here now and hand over your phone, tablet or computer. The client reads the document and signs by typing their name (and, in the apps, can also draw a signature). Nothing is emailed.',
         'The iPhone and Android apps catch up with the website: offices, custom fields, the closure details and technology outcomes, files with messages, sharing documents with the client or counselor, documents to sign, release of information requests and loan purposes. The Android app also gains guardian consent, portal links, status history and the guardian, school and plan fields.',

@@ -910,7 +910,7 @@ struct AddNoteSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 if existing != nil {
                     Text("Edits are recorded on the note and in the audit log.")
                         .font(.caption).foregroundStyle(Color.secondaryText)
@@ -1299,7 +1299,7 @@ struct AICaseSummarySheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 if busy {
                     HStack { ProgressView(); Text("Drafting summary…").foregroundStyle(Color.secondaryText) }
                 } else {
@@ -1495,7 +1495,7 @@ struct ConsentRequestSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 Section {
                     Text(status.consent.summary)
                     Text("Sending a new request turns off any earlier consent link that has not been signed.").font(.callout)

@@ -1,0 +1,53 @@
+{
+    "ok": true,
+    "staff": [
+        {
+            "id": 81,
+            "name": "Calendar Synthetic Instructor",
+            "can_referrals": true,
+            "can_clients": true
+        },
+        {
+            "id": 6,
+            "name": "Invited Person",
+            "can_referrals": true,
+            "can_clients": true
+        },
+        {
+            "id": 41,
+            "name": "Meeting Synthetic Instructor",
+            "can_referrals": true,
+            "can_clients": true
+        },
+        {
+            "id": 5,
+            "name": "Other Instructor",
+            "can_referrals": true,
+            "can_clients": true
+        },
+        {
+            "id": 82,
+            "name": "Other Synthetic Instructor",
+            "can_referrals": true,
+            "can_clients": true
+        },
+        {
+            "id": 2,
+            "name": "Synthetic instructor",
+            "can_referrals": true,
+            "can_clients": true
+        },
+        {
+            "id": 1,
+            "name": "Test Admin",
+            "can_referrals": true,
+            "can_clients": true
+        },
+        {
+            "id": 4,
+            "name": "Token Flow User",
+            "can_referrals": true,
+            "can_clients": true
+        }
+    ]
+}

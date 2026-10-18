@@ -1,0 +1,27 @@
+{
+    "ok": true,
+    "reservations": [
+        {
+            "id": 3,
+            "status": "Reserved",
+            "needed_from": null,
+            "needed_until": null,
+            "notes": null,
+            "item_name": "Waitlist synthetic device",
+            "item_status": "Available",
+            "client_name": "Waitlist second synthetic",
+            "client_id": 48
+        },
+        {
+            "id": 1,
+            "status": "Waitlist",
+            "needed_from": null,
+            "needed_until": null,
+            "notes": null,
+            "item_name": "Voice synthetic device",
+            "item_status": "On Loan",
+            "client_name": "Voice hold synthetic client",
+            "client_id": 7
+        }
+    ]
+}

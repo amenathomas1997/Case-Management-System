@@ -1,0 +1,102 @@
+{
+    "ok": true,
+    "signatures": [
+        {
+            "id": 8,
+            "kind": "document",
+            "title": "Synthetic kiosk",
+            "status": "Waiting to be signed here",
+            "method": "In person",
+            "signer_name": "App Synthetic Client",
+            "signer_email": "",
+            "sent_at": "2026-10-18 12:27:14",
+            "signed_at": null,
+            "signed_name": null,
+            "has_drawn_signature": false
+        },
+        {
+            "id": 7,
+            "kind": "services",
+            "title": "Consent to services",
+            "status": "Signed",
+            "method": "In person",
+            "signer_name": "App Synthetic Client",
+            "signer_email": "",
+            "sent_at": "2026-10-18 12:27:14",
+            "signed_at": "2026-10-18 12:27:14",
+            "signed_name": "App Synthetic Client",
+            "has_drawn_signature": false
+        },
+        {
+            "id": 6,
+            "kind": "services",
+            "title": "Consent to services",
+            "status": "Awaiting signature",
+            "method": "Email",
+            "signer_name": "App Synthetic Client",
+            "signer_email": "app-client@example.invalid",
+            "sent_at": "2026-10-18 12:27:14",
+            "signed_at": null,
+            "signed_name": null,
+            "has_drawn_signature": false
+        },
+        {
+            "id": 5,
+            "kind": "document",
+            "title": "Synthetic photo consent",
+            "status": "Signed",
+            "method": "In person",
+            "signer_name": "App Synthetic Client",
+            "signer_email": "",
+            "sent_at": "2026-10-18 12:27:13",
+            "signed_at": "2026-10-18 12:27:13",
+            "signed_name": "App Synthetic Client",
+            "has_drawn_signature": false
+        },
+        {
+            "id": 4,
+            "kind": "services",
+            "title": "Consent to services",
+            "status": "Signed",
+            "method": "In person",
+            "signer_name": "App Synthetic Client",
+            "signer_email": "",
+            "sent_at": "2026-10-18 12:27:13",
+            "signed_at": "2026-10-18 12:27:13",
+            "signed_name": "app synthetic client",
+            "has_drawn_signature": true
+        },
+        {
+            "id": 9,
+            "kind": "document",
+            "title": "Synthetic offline consent",
+            "status": "Signed",
+            "method": "In person",
+            "signer_name": "App Synthetic Client",
+            "signer_email": "",
+            "sent_at": "2026-10-18 10:27:18",
+            "signed_at": "2026-10-18 11:57:18",
+            "signed_name": "App Synthetic Client",
+            "has_drawn_signature": false
+        },
+        {
+            "id": 10,
+            "kind": "document",
+            "title": "Synthetic stale consent",
+            "status": "Waiting to be signed here",
+            "method": "In person",
+            "signer_name": "App Synthetic Client",
+            "signer_email": "",
+            "sent_at": "2026-10-15 12:27:18",
+            "signed_at": null,
+            "signed_name": null,
+            "has_drawn_signature": false
+        }
+    ],
+    "kinds": {
+        "services": "Consent to services",
+        "loan": "Equipment loan agreement",
+        "document": "Another document"
+    },
+    "open_loans": []
+}

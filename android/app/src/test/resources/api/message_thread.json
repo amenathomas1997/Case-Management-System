@@ -1,0 +1,21 @@
+{
+    "ok": true,
+    "client_name": "App Synthetic Client",
+    "counselor_name": null,
+    "channel": "client",
+    "messages": [
+        {
+            "id": 12,
+            "channel": "client",
+            "sender": "staff",
+            "body": "Sent a file.",
+            "created_at": "2026-10-18 12:27:12",
+            "via": "portal",
+            "staff_name": "Test Admin",
+            "document_id": 14,
+            "document_title": "plan.pdf"
+        }
+    ],
+    "text_enabled": false,
+    "text_blocked": "Text messages are not set up (Settings, Text messages)."
+}

@@ -1,0 +1,768 @@
+{
+    "ok": true,
+    "clients": [
+        {
+            "id": 26,
+            "name": "Alert check client",
+            "status": "Active Training",
+            "phone": null,
+            "email": "alertclient@example.invalid"
+        },
+        {
+            "id": 98,
+            "name": "Alert Days Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 68,
+            "name": "Amend synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 55,
+            "name": "App closure synthetic client",
+            "status": "Closed - Other",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 96,
+            "name": "App Rate Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 113,
+            "name": "App Synthetic Client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 125,
+            "name": "App Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": "app-client@example.invalid"
+        },
+        {
+            "id": 3,
+            "name": "AT synthetic client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 75,
+            "name": "Attendance synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 52,
+            "name": "Billing synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": "billing-client@example.invalid"
+        },
+        {
+            "id": 115,
+            "name": "Calvin Synthetic-Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 118,
+            "name": "Closed Office Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 54,
+            "name": "Closure synthetic client",
+            "status": "Closed - Rehabilitated",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 51,
+            "name": "Consent race synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 124,
+            "name": "Custom Synthetic Referral",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 121,
+            "name": "Deadline Synthetic Referral",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": "signer@example.invalid"
+        },
+        {
+            "id": 66,
+            "name": "Devices synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": "dev-client@example.invalid"
+        },
+        {
+            "id": 83,
+            "name": "Dr. Jane Titled",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 99,
+            "name": "Enum Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 123,
+            "name": "Exchange Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 43,
+            "name": "Expired authorization synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 94,
+            "name": "Expired VR Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 81,
+            "name": "Filter Student",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 33,
+            "name": "Follow-up synthetic client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 72,
+            "name": "Followup synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 59,
+            "name": "Followup synthetic minor",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 50,
+            "name": "Group record synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 58,
+            "name": "Guardian covered synthetic",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 86,
+            "name": "Held Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 80,
+            "name": "Hidden Caseload Person",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 15,
+            "name": "Historical student",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 16,
+            "name": "Historical student",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 87,
+            "name": "Import Person One",
+            "status": "Active Training",
+            "phone": null,
+            "email": "one@example.test"
+        },
+        {
+            "id": 62,
+            "name": "Incident synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": "incident-client@example.invalid"
+        },
+        {
+            "id": 1,
+            "name": "Kept synthetic client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 112,
+            "name": "Legacy Stateless Synthetic",
+            "status": "Active Training",
+            "phone": "515-555-0177",
+            "email": null
+        },
+        {
+            "id": 97,
+            "name": "Lists Synthetic Client",
+            "status": "Active Training",
+            "phone": "555-0101",
+            "email": null
+        },
+        {
+            "id": 116,
+            "name": "Loan Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 85,
+            "name": "Mail Type Person",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 105,
+            "name": "Meeting Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 20,
+            "name": "Merge instructor kept synthetic",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 17,
+            "name": "Merge kept synthetic",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 22,
+            "name": "Merge portal kept synthetic",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 100,
+            "name": "Mileage Default Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 95,
+            "name": "Missouri Rate Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 67,
+            "name": "Move synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 108,
+            "name": "No Number Synthetic",
+            "status": "Active Training",
+            "phone": "555-01",
+            "email": null
+        },
+        {
+            "id": 64,
+            "name": "Notice synthetic client",
+            "status": "Active Training",
+            "phone": "555-0142",
+            "email": "notice-client@example.invalid"
+        },
+        {
+            "id": 84,
+            "name": "Offer Person",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 126,
+            "name": "Office App Synthetic Client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 117,
+            "name": "Office Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 102,
+            "name": "Offline Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 90,
+            "name": "Ohio Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 114,
+            "name": "Old App Synthetic Client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 93,
+            "name": "Open VR Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 57,
+            "name": "Other records client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 89,
+            "name": "Otherscope Person",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 5,
+            "name": "Outside report client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 120,
+            "name": "Placed Synthetic Client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 69,
+            "name": "Plan synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 103,
+            "name": "Plan Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 70,
+            "name": "Plan synthetic second",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 104,
+            "name": "Plan Warning Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 82,
+            "name": "Portal History Person",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 36,
+            "name": "Portalother Synthetic",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 35,
+            "name": "Portaltest Synthetic",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 76,
+            "name": "Quality Duplicate",
+            "status": "Active Training",
+            "phone": null,
+            "email": "dup@example.test"
+        },
+        {
+            "id": 77,
+            "name": "Quality Duplicate",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 78,
+            "name": "Quality Duplicate",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 79,
+            "name": "Quality Duplicate",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 56,
+            "name": "Records synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": "records-client@example.invalid"
+        },
+        {
+            "id": 44,
+            "name": "Referral email synthetic client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": "referral-client@example.invalid"
+        },
+        {
+            "id": 92,
+            "name": "Referral State Client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 110,
+            "name": "Referral Text Synthetic",
+            "status": "Pending Assessment",
+            "phone": "515-555-0166",
+            "email": null
+        },
+        {
+            "id": 29,
+            "name": "Report closed client",
+            "status": "Closed - Rehabilitated",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 28,
+            "name": "Report no email client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 101,
+            "name": "Report Other Caseload",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 27,
+            "name": "Report sent client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 30,
+            "name": "Report unconfirmed client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 25,
+            "name": "Restored synthetic client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 53,
+            "name": "Returning Zzyzxwell",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 11,
+            "name": "Scope check outside client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 65,
+            "name": "Session notice synthetic",
+            "status": "Active Training",
+            "phone": null,
+            "email": "sn-client@example.invalid"
+        },
+        {
+            "id": 49,
+            "name": "Session record synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 119,
+            "name": "Southern Synthetic Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 111,
+            "name": "Stated Synthetic Client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 106,
+            "name": "Status Synthetic Client",
+            "status": "In Follow-up",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 12,
+            "name": "Structured Referral Test",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 13,
+            "name": "Structured Referral Test",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 31,
+            "name": "Synthetic long referral",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 32,
+            "name": "Synthetic long referral",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 107,
+            "name": "Texty Synthetic Client",
+            "status": "Active Training",
+            "phone": "515-555-0142",
+            "email": null
+        },
+        {
+            "id": 60,
+            "name": "Turning adult synthetic",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 9,
+            "name": "Voice created synthetic client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 7,
+            "name": "Voice hold synthetic client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 6,
+            "name": "Voice synthetic client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 88,
+            "name": "Voicey Contactperson",
+            "status": "Active Training",
+            "phone": "555-0142",
+            "email": null
+        },
+        {
+            "id": 39,
+            "name": "Vrcforeign Synthetic",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 38,
+            "name": "Vrcown Synthetic",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 46,
+            "name": "Waitlist borrower synthetic",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 47,
+            "name": "Waitlist first synthetic",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 48,
+            "name": "Waitlist second synthetic",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 45,
+            "name": "Web referral synthetic client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": "web-referral@example.invalid"
+        },
+        {
+            "id": 42,
+            "name": "Workflow outside client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 41,
+            "name": "Workflow own client",
+            "status": "Pending Assessment",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 71,
+            "name": "Worklog synthetic client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 73,
+            "name": "Zebulon Testerly",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 74,
+            "name": "Zebulon Testerly",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        },
+        {
+            "id": 91,
+            "name": "Zone Edit Client",
+            "status": "Active Training",
+            "phone": null,
+            "email": null
+        }
+    ]
+}

@@ -60,7 +60,7 @@ private data class Tab(val route: String, val label: String, val icon: ImageVect
 @Composable
 private fun MainScreen(api: Api) {
     val nav = rememberNavController()
-    LaunchedEffect(api.token.isNotEmpty()) { if (api.isSignedIn) { api.refreshMe(); api.flushQueue() } }
+    LaunchedEffect(api.token.isNotEmpty()) { if (api.isSignedIn) { api.refreshMe(); api.flushQueue(); api.flushSignatures() } }
     val tabs = buildList {
         add(Tab("home", "Home", Icons.Filled.Home))
         if (api.can("clients")) add(Tab("clients", "Clients", Icons.Filled.Person))
@@ -110,6 +110,9 @@ private fun MainScreen(api: Api) {
             api.syncNotice?.let { n ->
                 Box(Modifier.padding(horizontal = 16.dp)) { ErrorText(n) }
             }
+            api.signingNotice?.let { n ->
+                Box(Modifier.padding(horizontal = 16.dp)) { ErrorText(n) }
+            }
             Flash.message?.let { m ->
                 Box(Modifier.padding(horizontal = 16.dp)) { NoticeText(m) }
             }
@@ -131,6 +134,8 @@ private val titles = mapOf(
     "procurement" to "Device procurement", "deviceRequest" to "Device request", "accommodations" to "Worksite accommodations", "worksite" to "Worksite assessment",
     "training" to "My training", "trainingTake" to "Training", "credentials" to "My credentials", "agreements" to "My agreements", "agreement" to "Agreement", "agreementCopy" to "Signed copy", "kb" to "Knowledge base", "kbEdit" to "Article", "counselors" to "Counselor portal", "portalRequests" to "Client requests", "utilization" to "Utilization", "docReview" to "Documentation review",
     "signatures" to "Documents to sign", "release" to "Release of information", "history" to "Status history",
+    "trackNote" to "Add a case note", "goal" to "Progress history", "equipmentItem" to "Equipment item", "reservations" to "Reservations",
+    "actions" to "Action center", "briefing" to "AI case briefing", "help" to "Help and glossary",
 )
 
 @Composable
@@ -153,7 +158,16 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("track/{clientId}/{trackId}") { TrackScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0) }
         composable("trackEdit/{clientId}/{trackId}") { TrackEditScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0) }
         composable("newSession") { NewSessionScreen(api, nav) }
-        composable("equipment") { EquipmentScreen(api) }
+        composable("equipment") { EquipmentScreen(api, nav) }
+        composable("equipmentItem/{id}") { EquipmentDetailScreen(api, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
+        composable("reservations") { ReservationsScreen(api) }
+        composable("trackNote/{clientId}/{trackId}") {
+            AddNoteScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0)
+        }
+        composable("goal/{id}/{text}") { GoalHistoryScreen(api, it.arguments?.getString("id")?.toIntOrNull() ?: 0, it.arguments?.getString("text") ?: "") }
+        composable("actions") { ActionCenterScreen(api, nav) }
+        composable("briefing/{clientId}") { BriefingScreen(api, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0) }
+        composable("help") { HelpScreen(api) }
         composable("followups") { FollowupsScreen(api) }
         composable("docs/{clientId}") { DocumentsScreen(api, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0) }
         composable("search") { SearchScreen(api, nav) }
@@ -202,6 +216,6 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("release/{clientId}") { ReleaseRequestScreen(api, nav, n(it, "clientId")) }
         composable("history/{clientId}") { StatusHistoryScreen(api, n(it, "clientId")) }
         composable("account") { AccountScreen(api, nav) }
-        composable("offline") { OfflineScreen(api) }
+        composable("offline") { OfflineScreen(api, nav) }
     }
 }

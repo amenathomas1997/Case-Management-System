@@ -23,12 +23,14 @@
 		45795D7978888167B6D3C8C6 /* NotificationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597ABD1562B745DF87A9F42A /* NotificationsView.swift */; };
 		4713CDF7C5C5CBA2BAF24919 /* OfflineCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4E8BA3A634FE9758910CB0 /* OfflineCache.swift */; };
 		4E82CF31C62EED4AB880648A /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3700BEC94013DAD600C8D30B /* SearchView.swift */; };
+		51BA3101A0DB2A4784EDD4D8 /* AccessibilityAuditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06162B06FC30562B0B577203 /* AccessibilityAuditTests.swift */; };
 		56C38842F3C4307644B8B2A1 /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBB32C5C81EDD8CC5067041B /* WidgetShared.swift */; };
 		5AD03B848A2225905E40A07E /* IncidentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00D936D0F5E76C837C52FA1F /* IncidentsView.swift */; };
 		5AE70EB638E476E3FA96C461 /* TrainingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C698B61AB291ED3019D358F /* TrainingView.swift */; };
 		6F11D87D67FDF1C146CBB8CE /* AIToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB35AEA838959C5BED3A33E6 /* AIToolsView.swift */; };
 		707E53F33B6350EABE6ACBA4 /* PipelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6826FC15B6066A74FA0F98E4 /* PipelineView.swift */; };
 		7209274E1632F38209110D41 /* FollowupsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B69D2377DCDD583F59162C6 /* FollowupsView.swift */; };
+		7B6951195605DAB9996ACD8C /* OfflineSigning.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8598AC1D530CEBB16607020 /* OfflineSigning.swift */; };
 		7BB80E8BA46799128D203DBB /* ScheduleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AE17F209C5C6222096ADDA9 /* ScheduleView.swift */; };
 		80C6FE18F33E1DF09A87F1DB /* TasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 142F29431CA223E90C3A342F /* TasksView.swift */; };
 		8459C3093B578C5F46FE4156 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FECB3C40972D5FDFE3DAF3C3 /* LoginView.swift */; };
@@ -72,6 +74,13 @@
 			remoteGlobalIDString = 28E5479A4D4E8AA21DE97A25;
 			remoteInfo = CaseManagementWidget;
 		};
+		9F16E2EA7A32CABE77D43833 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 34B89AE649A0C3A1B2EFEE3C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FE6A89BC4D40D9769DC13D35;
+			remoteInfo = CaseManagement;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -92,6 +101,8 @@
 		00A5A9D8EE5CBAC58A3DAB1E /* SignatureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignatureView.swift; sourceTree = "<group>"; };
 		00D936D0F5E76C837C52FA1F /* IncidentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncidentsView.swift; sourceTree = "<group>"; };
 		0483D06FBD5ECD101421CF97 /* LogHoursView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogHoursView.swift; sourceTree = "<group>"; };
+		057F5FD189EE51639D896EA8 /* CaseManagementUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CaseManagementUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		06162B06FC30562B0B577203 /* AccessibilityAuditTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityAuditTests.swift; sourceTree = "<group>"; };
 		098DE9637E1D017320032250 /* BookingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookingsView.swift; sourceTree = "<group>"; };
 		1373090149217960863FE0EF /* ComplianceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComplianceView.swift; sourceTree = "<group>"; };
 		142F29431CA223E90C3A342F /* TasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasksView.swift; sourceTree = "<group>"; };
@@ -134,6 +145,7 @@
 		AA1B9EFFA38A78038BB77E74 /* ClientsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientsView.swift; sourceTree = "<group>"; };
 		AFF872EC8C10701EBC03261F /* CompetencyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompetencyView.swift; sourceTree = "<group>"; };
 		B0EA7B70530855DDC7989821 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		B8598AC1D530CEBB16607020 /* OfflineSigning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineSigning.swift; sourceTree = "<group>"; };
 		BB35AEA838959C5BED3A33E6 /* AIToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIToolsView.swift; sourceTree = "<group>"; };
 		BE55F4B084B791474211097F /* VoiceAssistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAssistant.swift; sourceTree = "<group>"; };
 		BF2E213D530538ADFF38C897 /* PortalRequestsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortalRequestsView.swift; sourceTree = "<group>"; };
@@ -185,6 +197,7 @@
 				4B2F054FC7DAD47AB6106246 /* MessagesView.swift */,
 				597ABD1562B745DF87A9F42A /* NotificationsView.swift */,
 				1D4E8BA3A634FE9758910CB0 /* OfflineCache.swift */,
+				B8598AC1D530CEBB16607020 /* OfflineSigning.swift */,
 				6826FC15B6066A74FA0F98E4 /* PipelineView.swift */,
 				BF2E213D530538ADFF38C897 /* PortalRequestsView.swift */,
 				6EF0D2B71508A87B548B7827 /* PrivacyInfo.xcprivacy */,
@@ -211,6 +224,7 @@
 			isa = PBXGroup;
 			children = (
 				86B6703BE951CD983631880B /* CaseManagement.app */,
+				057F5FD189EE51639D896EA8 /* CaseManagementUITests.xctest */,
 				1C23C30895CD6A842BF82CBE /* CaseManagementWidget.appex */,
 			);
 			name = Products;
@@ -227,10 +241,19 @@
 			path = Widget;
 			sourceTree = "<group>";
 		};
+		9B8D59A16B4C1B20B54CB27A /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				06162B06FC30562B0B577203 /* AccessibilityAuditTests.swift */,
+			);
+			path = UITests;
+			sourceTree = "<group>";
+		};
 		EC26E13B396ADDFA1F97837B = {
 			isa = PBXGroup;
 			children = (
 				017F2DCC74DFC7A94FB857F3 /* Sources */,
+				9B8D59A16B4C1B20B54CB27A /* UITests */,
 				917513062576ADB03F65D294 /* Widget */,
 				3557E8FE27564E66B0F0DFD0 /* Products */,
 			);
@@ -256,6 +279,24 @@
 			productName = CaseManagementWidget;
 			productReference = 1C23C30895CD6A842BF82CBE /* CaseManagementWidget.appex */;
 			productType = "com.apple.product-type.app-extension";
+		};
+		93675028FFEF76C1510A2025 /* CaseManagementUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C2E50722832E0E9FA2F2B2DB /* Build configuration list for PBXNativeTarget "CaseManagementUITests" */;
+			buildPhases = (
+				8F2F0755D56A1F28CE97C636 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				6E8092F488BF70804E41AB1B /* PBXTargetDependency */,
+			);
+			name = CaseManagementUITests;
+			packageProductDependencies = (
+			);
+			productName = CaseManagementUITests;
+			productReference = 057F5FD189EE51639D896EA8 /* CaseManagementUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 		FE6A89BC4D40D9769DC13D35 /* CaseManagement */ = {
 			isa = PBXNativeTarget;
@@ -290,6 +331,11 @@
 						DevelopmentTeam = "$(CMS_TEAM)";
 						ProvisioningStyle = Automatic;
 					};
+					93675028FFEF76C1510A2025 = {
+						DevelopmentTeam = "$(CMS_TEAM)";
+						ProvisioningStyle = Automatic;
+						TestTargetID = FE6A89BC4D40D9769DC13D35;
+					};
 					FE6A89BC4D40D9769DC13D35 = {
 						DevelopmentTeam = "$(CMS_TEAM)";
 						ProvisioningStyle = Automatic;
@@ -311,6 +357,7 @@
 			projectRoot = "";
 			targets = (
 				FE6A89BC4D40D9769DC13D35 /* CaseManagement */,
+				93675028FFEF76C1510A2025 /* CaseManagementUITests */,
 				28E5479A4D4E8AA21DE97A25 /* CaseManagementWidget */,
 			);
 		};
@@ -373,6 +420,7 @@
 				E88B950198D1148D28ABDBF7 /* MessagesView.swift in Sources */,
 				45795D7978888167B6D3C8C6 /* NotificationsView.swift in Sources */,
 				4713CDF7C5C5CBA2BAF24919 /* OfflineCache.swift in Sources */,
+				7B6951195605DAB9996ACD8C /* OfflineSigning.swift in Sources */,
 				707E53F33B6350EABE6ACBA4 /* PipelineView.swift in Sources */,
 				21CE0B27DAEC79AE21A521F0 /* PortalRequestsView.swift in Sources */,
 				EEFAACD717EF05B5F3E609D3 /* ProcurementView.swift in Sources */,
@@ -393,6 +441,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		8F2F0755D56A1F28CE97C636 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				51BA3101A0DB2A4784EDD4D8 /* AccessibilityAuditTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C29CC1CBB13082F0D1FB706E /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -405,6 +461,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		6E8092F488BF70804E41AB1B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FE6A89BC4D40D9769DC13D35 /* CaseManagement */;
+			targetProxy = 9F16E2EA7A32CABE77D43833 /* PBXContainerItemProxy */;
+		};
 		BFB16855B966E61A09BD77BD /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 28E5479A4D4E8AA21DE97A25 /* CaseManagementWidget */;
@@ -413,6 +474,26 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		0602E325849E0C6335215E8D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = CaseManagement;
+			};
+			name = Release;
+		};
 		07E0C11CF39E3E38F8035285 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -421,14 +502,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 56;
+				CURRENT_PROJECT_VERSION = 57;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.25.0;
+				MARKETING_VERSION = 4.26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -512,14 +593,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 56;
+				CURRENT_PROJECT_VERSION = 57;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.25.0;
+				MARKETING_VERSION = 4.26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -531,7 +612,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 56;
+				CURRENT_PROJECT_VERSION = 57;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -539,11 +620,31 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.25.0;
+				MARKETING_VERSION = 4.26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		A7A035C1E139D44565BF86F3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = CaseManagement;
 			};
 			name = Debug;
 		};
@@ -552,7 +653,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 56;
+				CURRENT_PROJECT_VERSION = 57;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -560,7 +661,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.25.0;
+				MARKETING_VERSION = 4.26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -638,6 +739,15 @@
 			buildConfigurations = (
 				07E0C11CF39E3E38F8035285 /* Debug */,
 				2E548A02AFC428133BB7B48A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C2E50722832E0E9FA2F2B2DB /* Build configuration list for PBXNativeTarget "CaseManagementUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A7A035C1E139D44565BF86F3 /* Debug */,
+				0602E325849E0C6335215E8D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

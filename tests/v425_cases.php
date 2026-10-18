@@ -37,7 +37,7 @@ $png="\x89PNG\r\n\x1a\n".str_repeat("\0",32);
 $done=$call('sign_in_person',['client_id'=>$ac,'id'=>$st['id'],'typed_name'=>'app synthetic client','signature_b64'=>base64_encode($png)]);
 $row=$db->query('SELECT * FROM client_signatures WHERE id='.(int)$st['id'])->fetch();
 check($row['signed_at']!==null && $row['method']==='In person' && is_file($tmp.'/'.$row['signature_path']) && $done['signatures'][0]['status']==='Signed' && $done['signatures'][0]['has_drawn_signature']===true,'The client signs in person with a typed name and a drawn signature');
-$call('sign_in_person',['client_id'=>$ac,'id'=>$st['id'],'typed_name'=>'App Synthetic Client'],[],false,'already signed');
+check(!empty($call('sign_in_person',['client_id'=>$ac,'id'=>$st['id'],'typed_name'=>'App Synthetic Client'])['repeat']),'Signing it again (a retry) is recorded once');
 $call('send_signature',['client_id'=>$ac,'kind'=>'services','signer_role'=>'Client','signer_name'=>'App Synthetic Client','signer_email'=>''],[],false,'email');
 // On the website too.
 [$code,,$err]=$renderPage('signatures',['client'=>(string)$ac],['sign_here'=>'1','kind'=>'document','signer_role'=>'Client','signer_name'=>'App Synthetic Client','signer_email'=>'','title'=>'Synthetic photo consent','body'=>'You may take photos of me using my devices.']);

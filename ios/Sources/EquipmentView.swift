@@ -467,7 +467,7 @@ struct LoanSheet: View {
         NavigationStack {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 LabeledContent("Item", value: item.name)
                 if item.held {
                     // As on the website's scan page; the reserved client is not named here.
@@ -707,7 +707,7 @@ struct LogServiceSheet: View {
         NavigationStack {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 Picker("Type", selection: $type) { ForEach(maintenanceTypes, id: \.self) { Text($0) } }
                 // A service cannot be logged in the future: a later date would push "last
                 // serviced" ahead and hide the item from the service-due list.
@@ -897,7 +897,7 @@ struct ReservationSheet: View {
         NavigationStack {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 if fixedItemId == nil {
                     Picker("Item", selection: $selectedItem) {
                         Text("Choose…").tag(nil as Int?)
@@ -993,7 +993,7 @@ struct AddEquipmentSheet: View {
         NavigationStack {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 // Visible names that stay once a field holds text.
                 CaptionedField(label: "Item name (required)", text: $name)
                 Picker("Category", selection: $category) { ForEach(equipmentCategoriesApp, id: \.self) { Text($0) } }

@@ -297,7 +297,7 @@ struct RemediateView: View {
     var body: some View {
         // ErrorFocusForm: Transform sits below a long text box, so a failure is scrolled to and
         // given VoiceOver focus rather than left in a banner row that is off screen.
-        ErrorFocusForm(error: error) {
+        ErrorFocusForm(inNavigationStack: true, error: error) {
             // Inputs are locked while a request runs, and a result is cleared when they change,
             // so the result on screen always matches the choice and text shown above it.
             Picker("What to do", selection: $mode) { ForEach(modes, id: \.0) { Text($0.1).tag($0.0) } }
@@ -352,7 +352,7 @@ struct TranslateView: View {
     var body: some View {
         // ErrorFocusForm: Translate sits below a long text box, so a failure is scrolled to and
         // given VoiceOver focus rather than left in a banner row that is off screen.
-        ErrorFocusForm(error: error) {
+        ErrorFocusForm(inNavigationStack: true, error: error) {
             // Locked while translating, and a change clears the result, so a translation is
             // never shown under a language it was not made in.
             Picker("Into", selection: $lang) { ForEach(langs, id: \.name) { Text($0.name).tag($0.name) } }
@@ -619,7 +619,7 @@ struct AIIntakeView: View {
         // ErrorFocusForm: Save assessment is at the bottom of a long draft, so a refused save
         // (an AI-drafted field over its length limit, say) is scrolled to and given VoiceOver
         // focus rather than left in a banner row that is off screen and never heard.
-        ErrorFocusForm(error: error) {
+        ErrorFocusForm(inNavigationStack: true, error: error) {
             if !generated {
                 Section("Intake") {
                     AILabeledField(label: "What does the client want to accomplish?", text: $goals, lines: 1...3)

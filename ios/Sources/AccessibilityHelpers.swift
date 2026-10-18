@@ -44,3 +44,28 @@ func hoursSpoken(_ hours: Double) -> String {
 func announceRowActions() {
     UIAccessibility.post(notification: .announcement, argument: "Swipe up or down to choose an action.")
 }
+
+/// At the accessibility text sizes a menu picker's choice is cut short in the middle
+/// ("Activ…aining", found in the 4.26.0 Dynamic Type check): there the pickers in a form open
+/// their choices on a screen of their own instead, with the label and the whole choice shown.
+/// Only in a form inside a NavigationStack (that style needs one to push its screen): ErrorFocusForm
+/// says so with `inNavigationStack`; elsewhere pickers keep the menu style. The choice is made
+/// once, when the form first appears, so changing the text size with a form open does not
+/// rebuild it (its scroll position and focus stay).
+struct ReadablePickers: ViewModifier {
+    let inNavigationStack: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var decided: Bool?
+
+    func body(content: Content) -> some View {
+        let push = decided ?? (inNavigationStack && typeSize.isAccessibilitySize)
+        Group {
+            if push {
+                content.pickerStyle(.navigationLink)
+            } else {
+                content
+            }
+        }
+        .onAppear { if decided == nil { decided = push } }
+    }
+}

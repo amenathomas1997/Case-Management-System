@@ -189,7 +189,7 @@ struct WaitlistUpdateSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 if restoredDraft {
                     Text("Your unsaved changes from earlier were restored. Cancel, then Discard, removes them.")
                         .font(.callout)

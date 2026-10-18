@@ -22,7 +22,12 @@ import androidx.core.content.FileProvider
 import kotlinx.coroutines.launch
 import org.casemanagement.app.Api
 import org.casemanagement.app.ApiException
-import org.casemanagement.app.objects
+import org.casemanagement.app.DocumentItem
+import org.casemanagement.app.HomeworkItem
+import org.casemanagement.app.parseDocuments
+import org.casemanagement.app.parseHomework
+import org.casemanagement.app.parseTracks
+import org.casemanagement.app.sharedWords
 import org.casemanagement.app.str
 import org.json.JSONObject
 
@@ -32,24 +37,24 @@ fun DocumentsScreen(api: Api, clientId: Int) {
     val context = LocalContext.current
     val state = rememberLoaded(clientId) {
         api.learn425(clientId)
-        val docs = api.call("documents", mapOf("client_id" to clientId.toString())).optJSONArray("documents").objects()
-        val hw = api.call("homework", mapOf("client_id" to clientId.toString())).optJSONArray("homework").objects()
+        val docs = parseDocuments(api.call("documents", mapOf("client_id" to clientId.toString())))
+        val hw = parseHomework(api.call("homework", mapOf("client_id" to clientId.toString())))
         docs to hw
     }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
-    var completing by remember { mutableStateOf<JSONObject?>(null) }
+    var completing by remember { mutableStateOf<HomeworkItem?>(null) }
     var assigning by remember { mutableStateOf(false) }
     var uploading by remember { mutableStateOf(false) }
-    var chosen by remember { mutableStateOf<JSONObject?>(null) }
+    var chosen by remember { mutableStateOf<DocumentItem?>(null) }
     val scope = rememberCoroutineScope()
-    fun share(d: JSONObject, with: String, on: Boolean) {
+    fun share(d: DocumentItem, with: String, on: Boolean) {
         chosen = null; error = null; notice = null
         scope.launch {
             try {
-                api.call("share_document", body = JSONObject().put("client_id", clientId).put("document_id", d.optInt("id")).put("with", with).put("on", on))
-                val title = d.optString("title").ifEmpty { d.optString("orig_name") }
+                api.call("share_document", body = JSONObject().put("client_id", clientId).put("document_id", d.id).put("with", with).put("on", on))
+                val title = d.title
                 notice = when {
                     with == "portal" && on -> "$title is shared with the client. It shows in their portal."
                     with == "portal" -> "$title is no longer shared with the client."
@@ -68,13 +73,13 @@ fun DocumentsScreen(api: Api, clientId: Int) {
             if (api.can("clients")) SecondaryButton("Upload a document") { uploading = true }
             if (docs.isEmpty()) Text("No documents.")
             docs.forEach { d ->
-                ListRow(listOf(d.optString("title").ifEmpty { d.optString("orig_name") }, d.optString("category") + ", " + whenText(d.str("created_at")), sharedWords(d)),
+                ListRow(listOf(d.title, d.category + ", " + whenText(d.createdAt), sharedWords(d)),
                     action = if (api.server425 == true) "open it or share it" else "open it", onClick = {
                         // Sharing needs a 4.25.0 server; on an older one the row opens the document as before.
                         if (api.server425 == true) chosen = d
                         else if (!busy) {
                             error = null; busy = true
-                            scope.launch { try { openDocument(api, context, d.optInt("id"))?.let { error = it } } catch (e: ApiException) { error = e.message } finally { busy = false } }
+                            scope.launch { try { openDocument(api, context, d.id)?.let { error = it } } catch (e: ApiException) { error = e.message } finally { busy = false } }
                         }
                     })
             }
@@ -82,30 +87,30 @@ fun DocumentsScreen(api: Api, clientId: Int) {
             Heading("Homework (${hw.size})")
             if (hw.isEmpty()) Text("No homework.")
             hw.forEach { h ->
-                val waiting = h.optInt("id") in queued
-                val status = if (waiting) "Completed, waiting to send" else h.optString("status")
-                ListRow(listOf(h.optString("title"), listOfNotNull(status, h.str("due_date")?.let { "due " + dayText(it) }, h.str("track_title")).joinToString(", "), h.str("instructions") ?: ""),
-                    action = "mark it completed", onClick = if (h.optString("status") == "Assigned" && !waiting) ({ completing = h }) else null)
+                val waiting = h.id in queued
+                val status = if (waiting) "Completed, waiting to send" else h.status
+                ListRow(listOf(h.title, listOfNotNull(status, h.dueDate?.let { "due " + dayText(it) }, h.trackTitle).joinToString(", "), h.instructions ?: ""),
+                    action = "mark it completed", onClick = if (h.status == "Assigned" && !waiting) ({ completing = h }) else null)
             }
             if (api.can("clients")) SecondaryButton("Assign homework") { assigning = true }
         }
     }
     completing?.let { h ->
-        Confirm("Mark “${h.optString("title")}” completed?", "It disappears from the client portal.", "Mark completed", {
+        Confirm("Mark “${h.title}” completed?", "It disappears from the client portal.", "Mark completed", {
             scope.launch {
-                try { notice = saveOrQueue(api, "complete_homework", JSONObject().put("id", h.optInt("id")), "Homework done: " + h.optString("title").take(40), "Homework marked completed.").message; state.reload() }
+                try { notice = saveOrQueue(api, "complete_homework", JSONObject().put("id", h.id), "Homework done: " + h.title.take(40), "Homework marked completed.").message; state.reload() }
                 catch (e: ApiException) { error = e.message }
             }
         }, { completing = null })
     }
     chosen?.let { d ->
-        val portal = d.optBoolean("portal_shared")
-        val counselor = d.optBoolean("counselor_shared")
+        val portal = d.portalShared
+        val counselor = d.counselorShared
         // A Resource, or a file the client sent, is always in their portal.
-        val portalFixed = d.optString("category") in setOf("Resource", "Shared by client") || d.str("uploaded_via") == "portal"
+        val portalFixed = d.portalFixed
         AlertDialog(
             onDismissRequest = { chosen = null },
-            title = { Text(d.optString("title").ifEmpty { d.optString("orig_name") }, modifier = Modifier.semantics { heading() }) },
+            title = { Text(d.title, modifier = Modifier.semantics { heading() }) },
             text = {
                 Column {
                     Text(sharedWords(d) + ".")
@@ -114,7 +119,7 @@ fun DocumentsScreen(api: Api, clientId: Int) {
                         if (busy) return@TextButton
                         error = null; busy = true
                         scope.launch {
-                            try { openDocument(api, context, d.optInt("id"))?.let { error = it } } catch (e: ApiException) { error = e.message } finally { busy = false }
+                            try { openDocument(api, context, d.id)?.let { error = it } } catch (e: ApiException) { error = e.message } finally { busy = false }
                         }
                     }) { Text("Open it") }
                     if (api.can("clients")) {
@@ -128,12 +133,6 @@ fun DocumentsScreen(api: Api, clientId: Int) {
     }
     if (uploading) UploadDocumentDialog(api, clientId, onDone = { m -> uploading = false; notice = m; state.reload() }, onCancel = { uploading = false })
     if (assigning) AssignHomeworkDialog(api, clientId, onDone = { m -> assigning = false; notice = m; state.reload() }, onCancel = { assigning = false })
-}
-
-/** Who can see a document besides staff, in words. */
-fun sharedWords(d: JSONObject): String {
-    val with = listOfNotNull(if (d.optBoolean("portal_shared")) "the client" else null, if (d.optBoolean("counselor_shared")) "the counselor" else null)
-    return if (with.isEmpty()) "Not shared" else "Shared with " + with.joinToString(" and ")
 }
 
 /**
@@ -150,7 +149,7 @@ suspend fun openDocument(api: Api, context: android.content.Context, id: Int): S
 
 @Composable
 private fun AssignHomeworkDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCancel: () -> Unit) {
-    val tracks = rememberLoaded(clientId) { api.call("tracks").optJSONArray("tracks").objects().filter { it.optInt("client_id") == clientId } }
+    val tracks = rememberLoaded(clientId) { parseTracks(api.call("tracks")).filter { it.clientId == clientId } }
     var track by remember { mutableStateOf("") }
     var title by remember { mutableStateOf("") }
     var instructions by remember { mutableStateOf("") }
@@ -165,7 +164,7 @@ private fun AssignHomeworkDialog(api: Api, clientId: Int, onDone: (String) -> Un
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 val list = tracks.data ?: emptyList()
                 if (!tracks.loading && list.isEmpty()) Text("This client has no active training track, so homework cannot be assigned yet.")
-                if (list.isNotEmpty()) Choice("Training track", track, listOf("" to "Choose a track") + list.map { it.optInt("id").toString() to it.optString("title") }) { track = it }
+                if (list.isNotEmpty()) Choice("Training track", track, listOf("" to "Choose a track") + list.map { it.id.toString() to it.title }) { track = it }
                 Field("Title", title, { title = it })
                 Field("Instructions", instructions, { instructions = it }, hint = "optional", singleLine = false, minLines = 3)
                 Field("Due date", due, { due = it }, hint = "year-month-day, optional")

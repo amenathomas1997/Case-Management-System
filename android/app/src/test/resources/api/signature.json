@@ -1,0 +1,16 @@
+{
+    "ok": true,
+    "signature": {
+        "id": 9,
+        "title": "Synthetic offline consent",
+        "body": "Signed in a client's home.",
+        "lang": null,
+        "status": "Signed",
+        "method": "In person",
+        "signer_role": "Client",
+        "signer_name": "App Synthetic Client",
+        "signed_at": "2026-10-18 11:57:18",
+        "signed_name": "App Synthetic Client",
+        "org": "Assistive Technology Services"
+    }
+}

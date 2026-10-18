@@ -327,7 +327,13 @@ struct HomeworkSection: View {
                     // visible words are a spoken name too (Voice Control). "With AI" only when the
                     // edit form offers AI drafting.
                     let editText = api.aiHas("draft") ? "Edit or revise with AI" : "Edit"
-                    Button(editText) { editing = item }.font(.callout)
+                    // At least 44 points to touch (4.26.0 audit: the bare text was 28 by 19).
+                    Button { editing = item } label: {
+                        Text(editText).font(.callout)
+                            .frame(minWidth: 44, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
                         .accessibilityLabel("\(editText): \(item.title)")
                         .accessibilityInputLabels([editText, "Edit", "Edit \(item.title)"])
                     if queuedHomework.contains(item.id) {
@@ -479,7 +485,7 @@ struct AssignHomeworkSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 // After the "This assignment changed" refusal, the current version can be loaded
                 // here instead of only by leaving the client screen. Only then: it replaces what
                 // was typed, so it is not offered after other errors, where it looked like a retry.

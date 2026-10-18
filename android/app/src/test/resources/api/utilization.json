@@ -1,0 +1,94 @@
+{
+    "ok": true,
+    "from": "2026-09-20",
+    "to": "2026-10-18",
+    "org_util": 24,
+    "caseload_scoped": false,
+    "total_delivered": 500.5,
+    "total_value": 106304.25,
+    "former_staff_delivered": 308.5,
+    "former_staff_value": 23525,
+    "no_target_delivered": 0,
+    "rows": [
+        {
+            "name": "Test Admin",
+            "weekly": 25,
+            "delivered": 115,
+            "value": 5856.25,
+            "clients": 15,
+            "expected": 103.6,
+            "util": 111,
+            "no_target": false
+        },
+        {
+            "name": "Synthetic instructor",
+            "weekly": 25,
+            "delivered": 77,
+            "value": 76923,
+            "clients": 1,
+            "expected": 103.6,
+            "util": 74,
+            "no_target": false
+        },
+        {
+            "name": "Calendar Synthetic Instructor",
+            "weekly": 25,
+            "delivered": 0,
+            "value": 0,
+            "clients": 0,
+            "expected": 103.6,
+            "util": 0,
+            "no_target": false
+        },
+        {
+            "name": "Invited Person",
+            "weekly": 20,
+            "delivered": 0,
+            "value": 0,
+            "clients": 0,
+            "expected": 82.9,
+            "util": 0,
+            "no_target": false
+        },
+        {
+            "name": "Meeting Synthetic Instructor",
+            "weekly": 25,
+            "delivered": 0,
+            "value": 0,
+            "clients": 0,
+            "expected": 103.6,
+            "util": 0,
+            "no_target": false
+        },
+        {
+            "name": "Other Instructor",
+            "weekly": 25,
+            "delivered": 0,
+            "value": 0,
+            "clients": 0,
+            "expected": 103.6,
+            "util": 0,
+            "no_target": false
+        },
+        {
+            "name": "Other Synthetic Instructor",
+            "weekly": 25,
+            "delivered": 0,
+            "value": 0,
+            "clients": 0,
+            "expected": 103.6,
+            "util": 0,
+            "no_target": false
+        },
+        {
+            "name": "Token Flow User",
+            "weekly": 25,
+            "delivered": 0,
+            "value": 0,
+            "clients": 0,
+            "expected": 103.6,
+            "util": 0,
+            "no_target": false
+        }
+    ]
+}

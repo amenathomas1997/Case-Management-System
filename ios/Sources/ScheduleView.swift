@@ -791,7 +791,7 @@ struct NewSessionSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 if let tracksError {
                     ErrorBanner(message: tracksError)
                     Button { Task { await loadTracks() } } label: {
@@ -1075,7 +1075,7 @@ struct CompleteSessionSheet: View {
 
     var body: some View {
         NavigationStack {
-            ErrorFocusForm(error: error) {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 CaptionedField(label: "Hours worked", text: $hoursText, keyboard: .decimalPad)
                 CaptionedField(label: "Miles driven (optional)", text: $milesText, keyboard: .decimalPad)
                 CaptionedField(label: "Session note (optional)", text: $note,

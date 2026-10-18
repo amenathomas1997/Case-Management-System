@@ -1,0 +1,115 @@
+{
+    "ok": true,
+    "counselors": [
+        {
+            "email": "closed-counselor@example.invalid",
+            "name": "",
+            "agency": null,
+            "clients": 1,
+            "portal_active": false,
+            "portal_expired": false,
+            "portal_expires_at": null,
+            "expires_at": null,
+            "last_used_at": null
+        },
+        {
+            "email": "counselor@example.invalid",
+            "name": "",
+            "agency": null,
+            "clients": 1,
+            "portal_active": false,
+            "portal_expired": false,
+            "portal_expires_at": null,
+            "expires_at": null,
+            "last_used_at": null
+        },
+        {
+            "email": "other-counselor@example.invalid",
+            "name": "",
+            "agency": null,
+            "clients": 1,
+            "portal_active": false,
+            "portal_expired": false,
+            "portal_expires_at": null,
+            "expires_at": null,
+            "last_used_at": null
+        },
+        {
+            "email": "vrc-synthetic@example.invalid",
+            "name": "",
+            "agency": null,
+            "clients": 1,
+            "portal_active": true,
+            "portal_expired": false,
+            "portal_expires_at": "2026-11-17 12:26:27",
+            "expires_at": "2026-11-17 12:26:27",
+            "last_used_at": null
+        },
+        {
+            "email": "new-vrc@example.invalid",
+            "name": "New Counselor",
+            "agency": "Synthetic VR",
+            "clients": 2,
+            "portal_active": false,
+            "portal_expired": false,
+            "portal_expires_at": null,
+            "expires_at": null,
+            "last_used_at": null
+        },
+        {
+            "email": "notice-counselor@example.invalid",
+            "name": "Notice counselor",
+            "agency": null,
+            "clients": 1,
+            "portal_active": false,
+            "portal_expired": false,
+            "portal_expires_at": null,
+            "expires_at": null,
+            "last_used_at": null
+        },
+        {
+            "email": "pat.counselor@blind.state.ia.us",
+            "name": "Pat Counselor",
+            "agency": null,
+            "clients": 1,
+            "portal_active": false,
+            "portal_expired": false,
+            "portal_expires_at": null,
+            "expires_at": null,
+            "last_used_at": null
+        },
+        {
+            "email": "sn-counselor@example.invalid",
+            "name": "SN Counselor",
+            "agency": null,
+            "clients": 1,
+            "portal_active": true,
+            "portal_expired": false,
+            "portal_expires_at": "2026-11-17 12:26:46",
+            "expires_at": "2026-11-17 12:26:46",
+            "last_used_at": null
+        },
+        {
+            "email": "vrc-followup@example.invalid",
+            "name": "Synthetic counselor",
+            "agency": null,
+            "clients": 0,
+            "portal_active": true,
+            "portal_expired": false,
+            "portal_expires_at": null,
+            "expires_at": null,
+            "last_used_at": null
+        },
+        {
+            "email": "exchange-vrc@example.invalid",
+            "name": "Exchange Counselor",
+            "agency": null,
+            "clients": 0,
+            "portal_active": true,
+            "portal_expired": false,
+            "portal_expires_at": "2026-11-17 12:27:11",
+            "expires_at": "2026-11-17 12:27:11",
+            "last_used_at": null
+        }
+    ]
+}
