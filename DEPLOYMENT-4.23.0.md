@@ -65,3 +65,16 @@ Web 4.23.0. The apps are unchanged. Apply dist/migrations/mig_4.23.0.sql, or use
 - **The public statement** spoke in the organisation's name. It now describes the software, which suits every installation.
 
 ## Published (not deployed)
+
+2026-10-17, after CI passed all three jobs on 40dd588. The GitHub release v4.23.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 317 files, verified with the key built into the code
+
+The live site stays as it is until the owner installs this with Administration, Software update. 4.22.0 was published the same day; the live site was then still on 4.21.0. Installing 4.23.0 applies both migrations in order.
+
+**Rehearsed before publishing.** The package was installed with the 4.22.0 updater onto a copy of a 4.22.0 site, with its own private and cron folders and a database in the 4.22.0 shape:
+- the real signature verified, and the plan showed no problems
+- the backup was made first
+- the database changes ran (15 statements; database version 4.23.0, vr_portal_since set, client_signatures present)
+- 26 files were replaced, and the new pages were added
+- afterwards the sign-in, accessibility and signing pages served at 4.23.0 with no PHP errors
