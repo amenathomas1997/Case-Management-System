@@ -11,9 +11,19 @@ const PUBLIC_WORDING = [
         'teaches people to use devices and software that help with vision loss. We also teach everyday living skills, offer counseling, and help students get ready for jobs.', false],
     'consent_points' => ['What the guardian agrees to (consent form, one point per line, after the services)',
         "We may talk with the student's school.\nIf needed, we may also talk with the state agency that helps people with disabilities find work.\nWe share records only to plan services and to send reports the law requires.\nWe may contact you about scheduling and progress.", true],
+    'sign_services' => ['What a client agrees to when signing consent to services (one point per line)',
+        "We may provide the training and services planned with you and your funding agency.\nWe keep records of your services and share them only to plan services, to bill the agency paying for them, and to send reports the law requires.\nWe may contact you about scheduling and progress.\nYou can stop services at any time by telling us.", true],
+    'sign_loan' => ['What a borrower agrees to when signing an equipment loan agreement (one point per line)',
+        "The device stays the property of the lender and is lent for the purpose agreed.\nI will take reasonable care of it and tell you at once if it is lost, stolen or damaged.\nI will return it, with what came with it, by the due date or when you ask.\nI will not sell, lend or give it to anyone else.", true],
     'privacy_extra_heading' => ['Heading of an extra privacy notice section (empty for none)', '', false],
     'privacy_extra_body' => ['Text of that section (a blank line starts a new paragraph)', '', true],
 ];
+
+/** Plain text for a key, as kept with a signature: the language's own, else the English, else the built-in text. */
+function wording_text(string $key, string $lang): string {
+    if ($lang === 'es' && ($es = wording_stored($key, 'es')) !== '') return $es;
+    return wording_stored($key, 'en') ?: (string)(PUBLIC_WORDING[$key][1] ?? '');
+}
 
 /** The stored text for a key and language ('' when none). */
 function wording_stored(string $key, string $lang): string {

@@ -48,6 +48,19 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_agency
     if (mb_strlen($billTo) > 500) $errs['bill_to' . $sfx] = 'Keep the billing address to 500 characters or fewer.';
     $notes = $str('notes');
     if (mb_strlen($notes) > 500) $errs['notes' . $sfx] = 'Keep the notes to 500 characters or fewer.';
+    // Its referral deadlines (4.23.0), in business days; blank uses the built-in ones.
+    $days = function (string $k, int $max, string $what) use ($str, &$errs, $sfx): ?int {
+        if ($str($k) === '') return null;
+        if (!preg_match('/^\d{1,3}$/', $str($k)) || (int)$str($k) < 1 || (int)$str($k) > $max) { $errs[$k . $sfx] = $what . ': enter business days as a whole number from 1 to ' . $max . ', or leave it blank.'; return null; }
+        return (int)$str($k);
+    };
+    $contactDays = $days('contact_days', 30, 'Days to contact a new referral');
+    $assessDays = $days('assess_days', 90, 'Days to hold the first assessment');
+    // Its online vendor portal (4.23.0): where authorizations are accepted and payment requests entered.
+    $portalName = $str('portal_name');
+    if (mb_strlen($portalName) > 60) $errs['portal_name' . $sfx] = 'Keep the portal name to 60 characters or fewer.';
+    $portalUrl = $str('portal_url');
+    if ($portalUrl !== '' && (mb_strlen($portalUrl) > 255 || !preg_match('#^https://[^\s<>"]+$#i', $portalUrl) || filter_var($portalUrl, FILTER_VALIDATE_URL) === false)) $errs['portal_url' . $sfx] = 'Enter the portal\'s web address starting with https://, or leave it blank.';
     $active = !empty($_POST['is_active']) ? 1 : 0;
     $old = null;
     if ($aid > 0) {
@@ -66,12 +79,12 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_agency
         keep_field_errors($errs);
         redirect($back);
     }
-    $vals = [$name, $state, $zone, $domains ? implode(', ', $domains) : null, $vendor !== '' ? $vendor : null, $terms, $hourly, $mileage, $billTo !== '' ? $billTo : null, $notes !== '' ? $notes : null, $active];
+    $vals = [$name, $state, $zone, $domains ? implode(', ', $domains) : null, $vendor !== '' ? $vendor : null, $terms, $hourly, $mileage, $billTo !== '' ? $billTo : null, $notes !== '' ? $notes : null, $active, $contactDays, $assessDays, $portalName !== '' ? $portalName : null, $portalUrl !== '' ? $portalUrl : null];
     $pdo = db();
     $pdo->beginTransaction();
     try {
         if ($old) {
-            $pdo->prepare('UPDATE funding_agencies SET name = ?, state = ?, time_zone = ?, email_domains = ?, vendor_number = ?, terms_days = ?, hourly_rate = ?, mileage_rate = ?, bill_to = ?, notes = ?, is_active = ? WHERE id = ?')
+            $pdo->prepare('UPDATE funding_agencies SET name = ?, state = ?, time_zone = ?, email_domains = ?, vendor_number = ?, terms_days = ?, hourly_rate = ?, mileage_rate = ?, bill_to = ?, notes = ?, is_active = ?, contact_days = ?, assess_days = ?, portal_name = ?, portal_url = ? WHERE id = ?')
                 ->execute([...$vals, $aid]);
             // A new name follows on its tracks and draft invoices; sent invoices keep the name they were sent with.
             if ($old['name'] !== $name) {
@@ -79,7 +92,7 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_agency
                 $pdo->prepare("UPDATE invoices SET funding_agency = ? WHERE funding_agency = ? AND status = 'Draft'")->execute([$name, $old['name']]);
             }
         } else {
-            $pdo->prepare('INSERT INTO funding_agencies (name, state, time_zone, email_domains, vendor_number, terms_days, hourly_rate, mileage_rate, bill_to, notes, is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
+            $pdo->prepare('INSERT INTO funding_agencies (name, state, time_zone, email_domains, vendor_number, terms_days, hourly_rate, mileage_rate, bill_to, notes, is_active, contact_days, assess_days, portal_name, portal_url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
             $aid = (int)$pdo->lastInsertId();
             // Tracks typed with a different capitalisation take the listed spelling.
             $pdo->prepare('UPDATE training_tracks SET funding_agency = ? WHERE funding_agency = ? AND BINARY funding_agency <> BINARY ?')->execute([$name, $name, $name]);
@@ -125,6 +138,14 @@ function agency_fields(array $a, string $sfx, bool $mine): string {
       <input type="text" inputmode="decimal" id="<?= $id('mileage_rate') ?>" name="mileage_rate" maxlength="8" value="<?= h($val('mileage_rate')) ?>" <?= field_aria('mileage_rate' . $sfx) ?>><?= field_error('mileage_rate' . $sfx) ?></div>
     <div class="field"><label for="<?= $id('bill_to') ?>">Billing address for invoices</label>
       <textarea id="<?= $id('bill_to') ?>" name="bill_to" rows="3" maxlength="500" <?= field_aria('bill_to' . $sfx) ?>><?= h($val('bill_to')) ?></textarea><?= field_error('bill_to' . $sfx) ?></div>
+    <div class="field"><label for="<?= $id('contact_days') ?>">Business days to contact a new referral (blank for 3)</label>
+      <input type="number" id="<?= $id('contact_days') ?>" name="contact_days" min="1" max="30" step="1" value="<?= h($val('contact_days')) ?>" <?= field_aria('contact_days' . $sfx) ?>><?= field_error('contact_days' . $sfx) ?></div>
+    <div class="field"><label for="<?= $id('assess_days') ?>">Business days to hold the first assessment once a referral is accepted (blank for 10)</label>
+      <input type="number" id="<?= $id('assess_days') ?>" name="assess_days" min="1" max="90" step="1" value="<?= h($val('assess_days')) ?>" <?= field_aria('assess_days' . $sfx) ?>><?= field_error('assess_days' . $sfx) ?></div>
+    <div class="field"><label for="<?= $id('portal_name') ?>">Name of its vendor portal, such as AWARE</label>
+      <input type="text" id="<?= $id('portal_name') ?>" name="portal_name" maxlength="60" value="<?= h($val('portal_name')) ?>" <?= field_aria('portal_name' . $sfx) ?>><?= field_error('portal_name' . $sfx) ?></div>
+    <div class="field"><label for="<?= $id('portal_url') ?>">Vendor portal web address</label>
+      <input type="url" id="<?= $id('portal_url') ?>" name="portal_url" maxlength="255" value="<?= h($val('portal_url')) ?>" <?= field_aria('portal_url' . $sfx) ?>><?= field_error('portal_url' . $sfx) ?></div>
     <div class="field"><label for="<?= $id('notes') ?>">Notes</label>
       <input type="text" id="<?= $id('notes') ?>" name="notes" maxlength="500" value="<?= h($val('notes')) ?>" <?= field_aria('notes' . $sfx) ?>><?= field_error('notes' . $sfx) ?></div>
     <div class="field"><label><input type="checkbox" name="is_active" value="1"<?= ($mine ? old_in('is_active') !== '' : (int)($a['is_active'] ?? 1) === 1) ? ' checked' : '' ?>> Still working with this agency (its authorization emails are matched to it)</label></div>
@@ -155,6 +176,8 @@ page_header('Funding agencies', $user, 'admin', [['admin.php', 'Administration']
       $a['vendor_number'] ? 'Vendor number ' . $a['vendor_number'] : 'Vendor number from Billing details',
       $a['terms_days'] !== null ? 'Pays in ' . (int)$a['terms_days'] . ' days' : '',
       $a['hourly_rate'] !== null ? fmt_money((float)$a['hourly_rate']) . ' an hour' : 'Rate from each authorization',
+      'Referrals contacted within ' . agency_contact_days($a['name']) . ' business days, assessed within ' . agency_assess_days($a['name']) . ' business days',
+      trim((string)($a['portal_name'] ?? '')) !== '' ? 'Portal: ' . $a['portal_name'] : '',
   ]))) ?>.</p>
   <details<?= $mine ? ' open' : '' ?>><summary>Edit <?= h($a['name']) ?></summary>
   <form method="post" action="funding_agencies.php" class="stacked" novalidate><?= csrf_field() ?>

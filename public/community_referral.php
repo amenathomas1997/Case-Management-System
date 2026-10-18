@@ -308,9 +308,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (($refState = us_state(is_string($_POST['client_state'] ?? null) ? $_POST['client_state'] : null)) !== null) {
                 $pdo->prepare('UPDATE referrals SET client_state = ? WHERE id = ?')->execute([$refState, $refId]);
             }
+            // Within the referring agency's own time to contact (4.23.0), else 3 business days.
+            $rq = $pdo->prepare('SELECT counselor_agency, counselor_email FROM referrals WHERE id = ?');
+            $rq->execute([$refId]);
+            $refAgency = referral_agency($rq->fetch() ?: []);
+            $contactDays = agency_contact_days($refAgency);
             if (!add_task('Contact new referral: ' . $clientName,
-                'Reach out to the referral within 3 business days of receipt.',
-                null, $refId, business_days_from(3), null, null, 'ref-contact-' . $refId)) {
+                'Reach out to the referral within ' . $contactDays . ' business day' . ($contactDays === 1 ? '' : 's') . ' of receipt' . (agency_sets_deadline($refAgency, 'contact_days') ? ' (' . $refAgency . '\'s deadline)' : '') . '.',
+                null, $refId, business_days_from($contactDays), null, null, 'ref-contact-' . $refId)) {
                 throw new RuntimeException('The contact task for a new referral could not be created.');
             }
             $pdo->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?, 'referral-portal', 1)")->execute([$ip]);

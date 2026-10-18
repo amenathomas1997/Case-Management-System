@@ -1384,6 +1384,7 @@ $relDefaultSigner = !empty($client['guardian_name']) && !empty($client['dob']) &
 ?>
 <section class="card" aria-labelledby="releases-h">
   <h2 id="releases-h">Releases of information</h2>
+  <p><a href="signatures.php?client=<?= (int)$client['id'] ?>">Documents to sign: consent to services, equipment loan agreements and others (<?= count(client_signatures((int)$client['id'])) ?>)</a></p>
   <?php if (!$releases): ?><p class="muted">No release of information on file. A release lets you share this client's information with one named recipient for 1 year.</p>
   <?php else: ?>
   <ul>

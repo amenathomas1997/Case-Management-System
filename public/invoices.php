@@ -388,6 +388,7 @@ $unbilled = unbilled_totals($scoped ? $uid : null)['total'];
 page_header('Invoices', $user, 'invoices');
 ?>
 <h1>Invoices</h1>
+<p><a href="vr_portal.php">VR portal: authorizations to accept and payment requests to enter in the agencies' portals</a></p>
 
 <?php
 // A refused batch limit names its field; the limits stay open to show it.

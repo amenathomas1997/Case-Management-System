@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.22.0';
+const APP_VERSION = '4.23.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -331,6 +331,9 @@ const EMAIL_TEMPLATES = [
     'release_request' => ['Release of information request', 'A release form to sign — {org_short}',
         "Hello {name},\n\n{org} would like your permission to share some of your training information. Please read the release form at this private link. It names who receives the information, what is shared and why, and you can sign it there:\n\n{link}\n\nYou do not have to sign it, and you can withdraw it later. If you have questions, reply to this email.\n",
         '{name} {link} {org_short} {org}'],
+    'sign_request' => ['Document to sign (consent to services, loan agreement, other)', 'A document to sign — {org_short}',
+        "Hello {name},\n\n{org} has sent you a document to read and sign: {document}.\n\nPlease read it at this private link. You sign it there by typing your name:\n\n{link}\n\nIf you have questions, reply to this email.\n",
+        '{name} {document} {link} {org_short} {org}'],
     'message_notice' => ['New message notice (client or counselor)', 'You have a new message from {org_short}',
         "Hello {name},\n\nYou have a new message from {org}. To read it, open your portal:\n\n{link}\n\nFor your privacy, the message itself is not in this email.\n",
         '{name} {link} {org_short} {org}'],
@@ -406,6 +409,9 @@ const EMAIL_TEMPLATES = [
     'release_request_es' => ['Release of information request (Spanish)', 'Un formulario de autorización para firmar — {org_short}',
         "Hola, {name}:\n\n{org} quisiera su permiso para compartir parte de la información de su capacitación. Lea el formulario de autorización en este enlace privado. Dice quién recibe la información, qué se comparte y por qué, y puede firmarlo allí:\n\n{link}\n\nNo tiene que firmarlo, y puede retirarlo más adelante. Si tiene preguntas, responda a este correo.\n",
         '{name} {link} {org_short} {org}'],
+    'sign_request_es' => ['Document to sign (Spanish)', 'Un documento para firmar — {org_short}',
+        "Hola, {name}:\n\n{org} le envió un documento para leer y firmar: {document}.\n\nLéalo en este enlace privado. Lo firma allí escribiendo su nombre:\n\n{link}\n\nSi tiene preguntas, responda a este correo.\n",
+        '{name} {document} {link} {org_short} {org}'],
     'message_notice_es' => ['New message notice (client, Spanish)', 'Tiene un mensaje nuevo de {org_short}',
         "Hola, {name}:\n\nTiene un mensaje nuevo de {org}. Para leerlo, abra su portal:\n\n{link}\n\nPor su privacidad, el mensaje no viene en este correo.\n",
         '{name} {link} {org_short} {org}'],
@@ -431,7 +437,7 @@ const EMAIL_TEMPLATE_REQUIRED = [
     'otp' => '{code}', 'vrc_code' => '{code}',
     'portal_link' => '{link}', 'consent_request' => '{link}', 'survey_invite' => '{link}',
     'portal_link_es' => '{link}', 'consent_request_es' => '{link}', 'survey_invite_es' => '{link}',
-    'release_request' => '{link}', 'release_request_es' => '{link}',
+    'release_request' => '{link}', 'release_request_es' => '{link}', 'sign_request' => '{link}', 'sign_request_es' => '{link}',
     'message_notice' => '{link}', 'message_notice_es' => '{link}', 'request_closed' => '{link}', 'request_closed_es' => '{link}',
     'portal_expiring' => '{link}', 'portal_expiring_es' => '{link}', 'counselor_noshow' => '{link}', 'counselor_auth_low' => '{link}',
     'loan_due_client' => '{item}', 'loan_due_client_es' => '{item}', 'loan_overdue_client' => '{item}', 'loan_overdue_client_es' => '{item}',
@@ -1748,6 +1754,8 @@ require_once __DIR__ . '/self_booking.php';
 require_once __DIR__ . '/at_act.php';
 require_once __DIR__ . '/qbo.php';
 require_once __DIR__ . '/offices.php';
+require_once __DIR__ . '/vr_portal.php';
+require_once __DIR__ . '/signatures.php';
 // Agreements staff read and sign themselves (4.15.0).
 require_once __DIR__ . '/staff_agreements.php';
 // Staff training with a quiz, and holding back client records until it is done (4.16.0).

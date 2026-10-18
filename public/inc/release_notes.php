@@ -6,6 +6,12 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.23.0' => [
+        'VR portal (Invoices, VR portal): what is still to do in the VR agencies\' own portals. Authorizations to accept, invoices to enter as payment requests (with a spreadsheet to enter them from), requests the agency rejected, and requests waiting to be paid.',
+        'Documents to sign (on each client\'s page): email consent to services, an equipment loan agreement or any document of your own. The client or guardian signs by typing their name, the signed words are kept, and a signed loan agreement records their acceptance of the loan.',
+        'Referral deadlines per agency (Funding agencies): how many business days each agency gives you to contact a new referral and to hold the first assessment. Tasks are due by them, and the referral list says when each one must be contacted by.',
+        'An accessibility statement (linked from the privacy notice), and a full accessibility conformance report in the VPAT format, published with the software.',
+    ],
     '4.22.0' => [
         'Offices (Administration, Offices): add your locations, each with its address, phone and time zone. Put staff in an office on their user page and clients on their edit page; a new client starts in your own office. The client list and the Schedule\'s upcoming sessions can show one office, and the client download has an Office column. A client with no state on record gets reminders and texts in their office\'s time zone.',
     ],

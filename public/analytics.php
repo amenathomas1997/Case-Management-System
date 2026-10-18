@@ -83,6 +83,7 @@ $reports = array_filter([
     ['capacity.php', 'Capacity planning', 'Committed session hours against available hours per instructor, plus authorized hours not yet scheduled on active tracks.', can('schedule')],
     ['custom_reports.php', 'Custom reports', 'Build your own report from clients, tracks, hours, invoices, sessions or referrals: choose the columns, filters and grouping, download it, and save it to run again.', can('analytics')],
     ['attendance.php', 'Attendance and no-shows', 'Completed, missed and cancelled sessions for a period by client, instructor, service type or setting, and clients with repeated no-shows; CSV.', can('analytics')],
+    ['vr_portal.php', 'VR portal', 'Authorizations still to accept and invoices still to enter as payment requests in the VR agencies\' own portals, rejected requests, and requests waiting to be paid; the invoices to enter download as a spreadsheet.', can('billing')],
     ['unused_authorizations.php', 'Unused authorizations', 'Authorizations that ended in a period, with hours and dollars authorized, delivered, invoiced and left unused, by agency, service and instructor; CSV.', can('analytics')],
     ['survey_responses.php', 'Survey responses', 'Every outcome survey answer for a period, by email or phone, with the averages; CSV.', can('analytics')],
     ['exports.php', 'Spreadsheet downloads', 'The everyday lists as CSV files: clients, referrals, tasks, sessions, authorizations, equipment and loans, follow-ups, incidents, portal requests and contracts.', true],

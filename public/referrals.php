@@ -206,9 +206,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // leave the task where no active instructor sees it.
         // A converter who cannot open client records never holds the task either:
         // it then stays unassigned, where staff with client access pick it up.
+        // Held within the referring agency's own time (4.23.0), else 10 business days.
+        $assessDays = agency_assess_days(referral_agency($ref));
         add_task('Schedule initial assessment: ' . $ref['client_name'],
-            'The referral was converted — get the first assessment on the calendar.',
-            $clientId, null, date('Y-m-d', strtotime('+14 days')),
+            'The referral was converted — hold the first assessment within ' . $assessDays . ' business day' . ($assessDays === 1 ? '' : 's') . (agency_sets_deadline(referral_agency($ref), 'assess_days') ? ' (' . referral_agency($ref) . '\'s deadline)' : '') . '.',
+            $clientId, null, business_days_from($assessDays),
             $clientAssignee ?? (can('clients') ? (int)$user['id'] : null), (int)$user['id'], 'assess-' . $clientId);
         audit($user['id'], 'referral.convert', 'client', $clientId, 'from referral #' . $id
             . ($counselorConfirmed ? '; counselor email confirmed by converter' : ($counselorEmailHeld ? '; counselor email kept unconfirmed' : ''))
@@ -279,7 +281,8 @@ $who = $_GET['who'] ?? '';
 // Open (New or Reviewed) referrals by default, so finished work cannot push
 // waiting referrals off the list.
 $statusShow = in_array($_GET['status'] ?? '', ['open', 'converted', 'closed', 'all'], true) ? $_GET['status'] : 'open';
-$sql = 'SELECT r.*, u.name AS assigned_name FROM referrals r LEFT JOIN users u ON u.id = r.assigned_to WHERE 1=1';
+// The open contact task's due date (4.23.0): the agency's deadline to reach the person.
+$sql = "SELECT r.*, u.name AS assigned_name, (SELECT MIN(tk.due_date) FROM tasks tk WHERE tk.auto_key = CONCAT('ref-contact-', r.id) AND tk.status = 'Open') AS contact_due FROM referrals r LEFT JOIN users u ON u.id = r.assigned_to WHERE 1=1";
 $params = [];
 if ($statusShow === 'open') $sql .= " AND r.status IN ('New','Reviewed')";
 elseif ($statusShow === 'converted') $sql .= " AND r.status = 'Converted'";
@@ -499,7 +502,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
             <?= h($r['counselor_name']) ?><br><span class="muted"><?= h($r['counselor_agency']) ?></span>
           <?php endif; ?></td>
       <td><?= h($r['assigned_name'] ?? '—') ?></td>
-      <td><?= status_badge($r['status']) ?></td>
+      <td><?= status_badge($r['status']) ?><?php if (!empty($r['contact_due'])): ?><br><span class="<?= $r['contact_due'] < date('Y-m-d') ? 'field-error' : 'muted' ?>"><?= $r['contact_due'] < date('Y-m-d') ? 'Contact overdue since ' : 'Contact by ' ?><?= h(fmt_date($r['contact_due'])) ?></span><?php endif; ?></td>
       <td><a class="btn btn-secondary btn-sm" href="referrals.php?view=<?= (int)$r['id'] ?>">View<span class="visually-hidden"> referral from <?= h($r['counselor_name']) ?> for <?= h($r['client_name']) ?>, received <?= h(substr((string)$r['created_at'], 0, 10)) ?>, referral #<?= (int)$r['id'] ?></span></a></td>
     </tr>
   <?php endforeach; ?>

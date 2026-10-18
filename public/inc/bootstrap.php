@@ -495,7 +495,7 @@ function csrf_check(): void {
 /** Public pages reached by a private link, whose visitors have no staff account. */
 function csrf_public_page(): bool {
     return in_array(basename((string)($_SERVER['SCRIPT_NAME'] ?? '')),
-        ['portal.php', 'consent.php', 'release.php', 'survey.php', 'ack.php', 'vrc.php', 'community_referral.php'], true);
+        ['portal.php', 'consent.php', 'release.php', 'sign.php', 'survey.php', 'ack.php', 'vrc.php', 'community_referral.php'], true);
 }
 
 /** The page the stale form was on (its same-site referrer), else the page posted to. */

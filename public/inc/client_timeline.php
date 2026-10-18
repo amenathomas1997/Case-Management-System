@@ -35,6 +35,7 @@ function client_timeline(int $cid): array {
     $add('SELECT sent_at at FROM consent_forms WHERE client_id = ?', fn($r) => ['what' => 'Guardian consent form sent', 'link' => null]);
     $add('SELECT signed_at at FROM consent_forms WHERE client_id = ?', fn($r) => ['what' => 'Guardian consent signed', 'link' => null]);
     $add('SELECT COALESCE(signed_at, sent_at) at, recipient_name, signed_at FROM client_releases WHERE client_id = ?', fn($r) => ['what' => 'Release of information ' . ($r['signed_at'] ? 'signed' : 'sent') . ' for ' . $r['recipient_name'], 'link' => $client . '#releases-h']);
+    $add('SELECT COALESCE(signed_at, sent_at) at, title, signed_at FROM client_signatures WHERE client_id = ?', fn($r) => ['what' => $r['title'] . ($r['signed_at'] ? ' signed' : ' sent to sign'), 'link' => 'signatures.php?client=' . $cid]);
     // Incidents as the incidents page shows them: to an administrator, the person who reported
     // it, or the client's instructor.
     $add('SELECT i.incident_date at, i.type, i.severity FROM incidents i JOIN clients c ON c.id = i.client_id WHERE i.client_id = ?'

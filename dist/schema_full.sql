@@ -252,6 +252,34 @@ CREATE TABLE `client_scored_assessments` (
   CONSTRAINT `csa_ibfk_2` FOREIGN KEY (`instrument_id`) REFERENCES `assessment_instruments` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `client_signatures`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `client_signatures` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `client_id` int(10) unsigned NOT NULL,
+  `kind` varchar(20) NOT NULL,
+  `title` varchar(190) NOT NULL,
+  `body` text NOT NULL,
+  `loan_id` int(10) unsigned DEFAULT NULL,
+  `signer_role` varchar(20) NOT NULL DEFAULT 'Client',
+  `signer_name` varchar(120) NOT NULL,
+  `signer_email` varchar(190) NOT NULL,
+  `token` char(48) NOT NULL,
+  `created_by` int(10) unsigned DEFAULT NULL,
+  `sent_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `signed_at` datetime DEFAULT NULL,
+  `signed_name` varchar(120) DEFAULT NULL,
+  `sign_ip` varchar(45) DEFAULT NULL,
+  `withdrawn_at` datetime DEFAULT NULL,
+  `withdrawn_by` int(10) unsigned DEFAULT NULL,
+  `lang` char(2) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `token` (`token`),
+  KEY `client_id` (`client_id`),
+  CONSTRAINT `client_signatures_ibfk_1` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `client_status_history`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -671,6 +699,10 @@ CREATE TABLE `funding_agencies` (
   `notes` varchar(500) DEFAULT NULL,
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `contact_days` smallint(5) unsigned DEFAULT NULL,
+  `assess_days` smallint(5) unsigned DEFAULT NULL,
+  `portal_name` varchar(60) DEFAULT NULL,
+  `portal_url` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -798,6 +830,10 @@ CREATE TABLE `invoices` (
   `qbo_synced_at` datetime DEFAULT NULL,
   `qbo_error` varchar(255) DEFAULT NULL,
   `qbo_status` varchar(20) DEFAULT NULL,
+  `portal_status` varchar(20) DEFAULT NULL,
+  `portal_ref` varchar(80) DEFAULT NULL,
+  `portal_at` date DEFAULT NULL,
+  `portal_note` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `invoice_number` (`invoice_number`),
   KEY `track_id` (`track_id`),
@@ -1460,6 +1496,10 @@ CREATE TABLE `training_tracks` (
   `last_report_at` date DEFAULT NULL,
   `billing_mode` enum('vr','private','none') NOT NULL DEFAULT 'vr',
   `completed_at` datetime DEFAULT NULL,
+  `portal_status` varchar(20) DEFAULT NULL,
+  `portal_at` date DEFAULT NULL,
+  `portal_note` varchar(255) DEFAULT NULL,
+  `portal_auth` varchar(80) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `client_id` (`client_id`),
   CONSTRAINT `training_tracks_ibfk_1` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE

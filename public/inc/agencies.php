@@ -125,6 +125,32 @@ function agency_terms_days(?string $agency): int {
     return $a && $a['terms_days'] !== null ? (int)$a['terms_days'] : billing_settings()['terms_days'];
 }
 
+/** Business days to contact a new referral from this agency (4.23.0): its own, else 3. */
+function agency_contact_days(?string $agency): int {
+    $a = agency_find($agency);
+    return $a && ($a['contact_days'] ?? null) !== null ? (int)$a['contact_days'] : 3;
+}
+
+/** Business days from accepting a referral to its first assessment (4.23.0): the agency's own, else 10. */
+function agency_assess_days(?string $agency): int {
+    $a = agency_find($agency);
+    return $a && ($a['assess_days'] ?? null) !== null ? (int)$a['assess_days'] : 10;
+}
+
+/** Whether this agency set its own referral deadline ('contact_days' or 'assess_days'). */
+function agency_sets_deadline(?string $agency, string $field): bool {
+    $a = agency_find($agency);
+    return $a !== null && ($a[$field] ?? null) !== null;
+}
+
+/** The funding agency a referral came from: the counselor's agency as listed, else the one their email domain belongs to. */
+function referral_agency(array $ref): ?string {
+    $a = agency_find((string)($ref['counselor_agency'] ?? ''));
+    if ($a) return (string)$a['name'];
+    $email = (string)($ref['counselor_email'] ?? '');
+    return str_contains($email, '@') ? agency_for_domain(substr($email, strrpos($email, '@') + 1)) : null;
+}
+
 /** The vendor number this agency gave you, else the one in Billing details. */
 function agency_vendor_number(?string $agency): string {
     $a = agency_find($agency);

@@ -183,4 +183,5 @@ if (page_lang() === 'es') {
 <?= $extraHtml ?><section aria-labelledby="contact"><h2 id="contact">Questions and requests</h2>
 <p>To ask a question, request a copy or correction of your information, or make a complaint, email <?= $mail ?><?= $operator !== '' ? ', or write to ' . h($operator) . ($address !== '' ? ' at ' . h($address) : '') : '' ?>.<?= $operator !== '' ? ' ' . h($operator) . ' handles privacy requests.' : '' ?> We will answer as soon as we can. If we change this notice, we will update the date at the top.</p>
 </section>
+<p lang="en"><a href="accessibility.php">Accessibility statement</a></p>
 <?php page_footer();

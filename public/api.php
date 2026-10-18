@@ -2612,9 +2612,11 @@ switch ($action) {
         db()->prepare("UPDATE referrals SET status = 'Converted', client_id = ?, assigned_to = ? WHERE id = ?")->execute([$clientId, $clientAssignee, $id]);
         db()->commit();
         complete_task_by_key('ref-contact-' . $id, $userId);
+        // Held within the referring agency's own time (4.23.0), else 10 business days.
+        $assessDays = agency_assess_days(referral_agency($ref));
         add_task('Schedule initial assessment: ' . $ref['client_name'],
-            'The referral was converted — get the first assessment on the calendar.',
-            $clientId, null, date('Y-m-d', strtotime('+14 days')),
+            'The referral was converted — hold the first assessment within ' . $assessDays . ' business day' . ($assessDays === 1 ? '' : 's') . (agency_sets_deadline(referral_agency($ref), 'assess_days') ? ' (' . referral_agency($ref) . '\'s deadline)' : '') . '.',
+            $clientId, null, business_days_from($assessDays),
             $clientAssignee ?? (can('clients') ? $userId : null), $userId, 'assess-' . $clientId);
         audit($userId, 'referral.convert', 'client', $clientId, 'from referral #' . $id . ' (mobile)'
             . ($counselorConfirmed ? '; counselor email confirmed by converter' : ($counselorEmailHeld ? '; counselor email kept unconfirmed' : ''))
