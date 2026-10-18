@@ -80,3 +80,13 @@ Web 4.26.0, iPhone app 4.26.0 (build 57), Android app 4.26.0 (version code 10). 
   - the audits were rerun at both sizes and pass
 
 ## Published (not deployed)
+
+2026-10-18, after CI passed all three jobs on 1715c09. The GitHub release v4.26.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 327 files, verified
+
+**Rehearsed:** installed with the 4.25.0 updater onto a copy of a 4.25.0 site.
+- The signature verified, the backup was made, and 6 files were replaced (no database change).
+- The sign-in, signing and accessibility pages then served at 4.26.0.
+
+The live site stays as it is until the owner installs it with Software update. The 4.26.0 phone apps are built from this tag.
