@@ -59,3 +59,16 @@ Web 4.24.0. The apps are unchanged; the API adds a client's answered custom fiel
 **Accepted:** files shared with "the VR counselor" are shared with whoever is the client's confirmed counselor. A new counselor sees what was shared before.
 
 ## Published (not deployed)
+
+2026-10-17, after CI passed all three jobs on 6b7cfba. The GitHub release v4.24.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 321 files, verified with the key built into the code
+
+The live site stays as it is until the owner installs it with Administration, Software update. Installing from 4.21.0 applies the 4.22.0, 4.23.0 and 4.24.0 migrations in order.
+
+**Rehearsed before publishing.** The package was installed with the 4.23.0 updater onto a copy of a 4.23.0 site, with its own private and cron folders and a database in the 4.23.0 shape:
+- the real signature verified, and the plan showed no problems
+- the backup was made first
+- the database changes ran (11 statements; database version 4.24.0, custom_fields and custom_values present)
+- 25 files were replaced, and the new files were added
+- afterwards the sign-in, referral and accessibility pages served at 4.24.0 with no PHP errors
