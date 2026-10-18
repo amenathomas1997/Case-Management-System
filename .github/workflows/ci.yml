@@ -78,7 +78,18 @@ jobs:
 
       - name: tests/full_schema.php
         if: ${{ !cancelled() }}
-        run: bash .github/ci/fresh-db.sh cms_audit_test && php tests/full_schema.php
+        # Keeps each rendered page (synthetic records only) for the browser accessibility checks below.
+        run: mkdir -p "$RUNNER_TEMP/pages" && bash .github/ci/fresh-db.sh cms_audit_test && CMS_TEST_HTML_DIR="$RUNNER_TEMP/pages" php tests/full_schema.php
+
+      # Accessibility in a real browser (4.25.0): every rendered page is checked for unlabelled controls,
+      # duplicate ids and broken ARIA references, and for reflow at 320 and 1280 pixels with 100% and 200%
+      # text, plus keyboard checks. Chrome is on the runner; Playwright drives it and blocks every network
+      # request except the synthetic pages and the app's own assets.
+      - name: tests/accessibility_browser.js (Playwright + Chrome)
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw" && (cd "$RUNNER_TEMP/pw" && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund playwright@1.48.2)
+          CMS_TEST_HTML_DIR="$RUNNER_TEMP/pages" NODE_PATH="$RUNNER_TEMP/pw/node_modules" node tests/accessibility_browser.js
 
       - name: tests/audit_regression.php
         if: ${{ !cancelled() }}

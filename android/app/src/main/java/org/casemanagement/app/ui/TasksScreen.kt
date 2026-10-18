@@ -22,6 +22,7 @@ import org.casemanagement.app.Api
 import org.casemanagement.app.ApiException
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
+import org.casemanagement.app.messageFileLabel
 import org.json.JSONObject
 import java.util.UUID
 
@@ -183,8 +184,16 @@ fun ReferralsScreen(api: Api, nav: NavHostController) {
 @Composable
 fun MessagesScreen(api: Api, nav: NavHostController) {
     val state = rememberLoaded(api.userId) { api.call("message_threads").optJSONArray("threads").objects() }
+    val clients = rememberLoaded(api.userId) {
+        api.call("client_choices").optJSONArray("clients").objects().filter { !it.optString("status").startsWith("Closed") }
+    }
     Show(state, "messages") { list ->
         Page {
+            // A new conversation: any client's thread opens from here.
+            val choices = clients.data ?: emptyList()
+            if (choices.isNotEmpty()) Choice("Start a conversation with", "", listOf("" to "Choose a client") + choices.map { it.optInt("id").toString() to it.optString("name") }) { id ->
+                if (id.isNotEmpty()) nav.navigate("thread/$id")
+            }
             Heading("Conversations (${list.size})")
             if (list.isEmpty()) Text("No messages.")
             list.forEach { t ->
@@ -196,44 +205,121 @@ fun MessagesScreen(api: Api, nav: NavHostController) {
     }
 }
 
+/** A file going with a reply: one of the client's documents, or a new one from the phone. */
+private sealed class Attachment {
+    abstract val name: String
+    data class Doc(val id: Int, override val name: String) : Attachment()
+    data class NewFile(val uri: android.net.Uri, override val name: String) : Attachment()
+}
+
 @Composable
 fun ThreadScreen(api: Api, clientId: Int) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var channel by rememberSaveable { mutableStateOf("client") }
-    val state = rememberLoaded(clientId, channel) { api.call("message_thread", mapOf("client_id" to clientId.toString(), "channel" to channel)) }
+    val state = rememberLoaded(clientId, channel) { api.learn425(clientId); api.call("message_thread", mapOf("client_id" to clientId.toString(), "channel" to channel)) }
     var text by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var opening by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var byText by rememberSaveable { mutableStateOf(false) }
+    var attach by remember { mutableStateOf<Attachment?>(null) }
+    var choosingDoc by remember { mutableStateOf(false) }
     // One key per message typed, so a send retried after a lost reply is posted (and texted) once.
     var sendKey by rememberSaveable { mutableStateOf(java.util.UUID.randomUUID().toString()) }
     val scope = rememberCoroutineScope()
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val name = pickedName(context, uri)
+            if (name.substringAfterLast('.', "").lowercase() !in UPLOAD_TYPES) error = "That file type is not allowed. Choose a PDF, Word, Excel, PowerPoint, text, CSV or picture file."
+            else { attach = Attachment.NewFile(uri, name); error = null; notice = "$name attached." }
+        }
+    }
     Show(state, "the conversation") { r ->
         Page {
             Heading(r.optString("client_name"), large = true)
             Choice("With", channel, listOfNotNull("client" to "The client", r.str("counselor_name")?.let { "counselor" to "The counselor, $it" })) { channel = it }
             r.optJSONArray("messages").objects().forEach { m ->
                 val who = m.str("staff_name") ?: when (m.optString("sender")) { "client" -> r.optString("client_name"); "counselor" -> r.str("counselor_name") ?: "The counselor"; else -> "Staff" }
-                ListRow(listOf(who + ", " + whenText(m.str("created_at")) + (if (m.str("via") == "text") ", by text" else ""), m.optString("body")))
+                val file = messageFileLabel(m)
+                ListRow(listOfNotNull(who + ", " + whenText(m.str("created_at")) + (if (m.str("via") == "text") ", by text" else ""), m.optString("body"), file),
+                    action = if (file != null) "open the file" else null,
+                    onClick = if (file == null) null else ({
+                        if (!opening) {
+                            opening = true; error = null
+                            scope.launch {
+                                try { openDocument(api, context, m.optInt("document_id"))?.let { error = it } } catch (e: ApiException) { error = e.message } finally { opening = false }
+                            }
+                        }
+                    }))
             }
             NoticeText(notice)
-            Field("Your message", text, { text = it }, singleLine = false, minLines = 3)
+            Field("Your message", text, { text = it }, hint = if (attach != null) "optional with a file" else null, singleLine = false, minLines = 3)
+            val a = attach
+            // Files with messages need a 4.25.0 server (an older one would drop the file unsaid).
+            if (a == null && api.server425 == true) {
+                SecondaryButton("Choose one of their documents") { choosingDoc = true }
+                SecondaryButton("Add a new file") { pick.launch(arrayOf("*/*")) }
+            } else if (a != null) {
+                Text("Attached: ${a.name}. It is shared with " + (if (channel == "client") "the client" else "the counselor") + " when you send.")
+                SecondaryButton("Remove the attachment") { attach = null; notice = "Attachment removed." }
+            }
             // Texts (4.17.0): offered when the client agreed to them; otherwise why not.
             val textable = channel == "client" && r.optBoolean("text_enabled")
             if (textable && r.str("text_blocked") == null) Tick("Also send it as a text message", byText) { byText = it }
             else if (textable) Text("Not by text: " + r.optString("text_blocked"))
             ErrorText(error)
-            PrimaryButton("Send", busy = busy, enabled = text.isNotBlank()) {
+            PrimaryButton("Send", busy = busy, enabled = text.isNotBlank() || attach != null) {
                 scope.launchSave({ busy = it }, { error = it }) {
-                    val res = api.call("post_message", body = JSONObject().put("client_id", clientId).put("channel", channel).put("body", text.trim())
-                        .put("by_text", byText && channel == "client" && r.str("text_blocked") == null).put("idem_key", sendKey))
+                    val body = JSONObject().put("client_id", clientId).put("channel", channel).put("body", text.trim())
+                        .put("by_text", byText && channel == "client" && r.str("text_blocked") == null).put("idem_key", sendKey)
+                    val res = when (val at = attach) {
+                        null -> api.call("post_message", body = body)
+                        is Attachment.Doc -> api.call("post_message", body = body.put("document_id", at.id))
+                        is Attachment.NewFile -> {
+                            val tmp = java.io.File(context.cacheDir, "message.tmp")
+                            try {
+                                checkCopied(copyPicked(context, at.uri, tmp))
+                                val short = shortName(at.name)
+                                try {
+                                    api.postWithFile("post_message", body.put("filename", short), "file_b64", tmp, "The message was not sent.")
+                                } catch (e: ApiException) {
+                                    if (e.network) throw ApiException("The connection dropped before the server answered, so it isn't known whether the message was sent. Check the conversation for “$short” before sending it again.")
+                                    throw e
+                                }
+                            } finally { tmp.delete() }
+                        }
+                    }
                     text = ""
                     byText = false
+                    attach = null
                     sendKey = java.util.UUID.randomUUID().toString()
                     notice = res.str("warning") ?: "Message sent."
                     state.reload()
                 }
             }
         }
+    }
+    if (choosingDoc) {
+        val docs = rememberLoaded(clientId) { api.call("documents", mapOf("client_id" to clientId.toString())).optJSONArray("documents").objects() }
+        AlertDialog(
+            onDismissRequest = { choosingDoc = false },
+            title = { Text("Choose one of their documents", modifier = Modifier.semantics { heading() }) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    if (docs.loading) Text("Loading documents…")
+                    ErrorText(docs.error)
+                    val list = docs.data ?: emptyList()
+                    if (!docs.loading && list.isEmpty() && docs.error == null) Text("This client has no documents yet. Use Add a new file instead.")
+                    list.forEach { d ->
+                        val name = d.optString("title").ifEmpty { d.optString("orig_name") }
+                        ListRow(listOf(name, d.optString("category") + ", " + whenText(d.str("created_at"))), action = "attach it", onClick = {
+                            attach = Attachment.Doc(d.optInt("id"), name); choosingDoc = false; error = null; notice = "$name attached."
+                        })
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { choosingDoc = false }) { Text("Cancel") } },
+        )
     }
 }

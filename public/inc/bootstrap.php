@@ -586,7 +586,26 @@ function current_user(): ?array {
     return ['id' => (int)$row['id'], 'name' => $row['name'], 'email' => $row['email'], 'role' => $row['role']];
 }
 
+/**
+ * A device handed over for signing in person (4.25.0, signatures.php): while it is, only that signing page
+ * may be opened. Anything else (another page, the back button, a typed address) ends the staff session, so
+ * the signer can never reach records; the staff member signs in again to carry on.
+ */
+function kiosk_guard(): void {
+    $k = $_SESSION['kiosk_sign'] ?? null;
+    if (!is_array($k)) return;
+    $onPage = basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) === 'signatures.php' && (int)($_GET['client'] ?? 0) === (int)$k['client']
+        && ((int)($_GET['sign'] ?? 0) === (int)$k['id'] || (int)($_POST['sign_now'] ?? 0) === (int)$k['id'] || isset($_GET['signed']));
+    if ($onPage) return;
+    session_unset();
+    session_destroy();
+    session_start();
+    flash('For privacy, you were signed out after the device was handed over for signing. Sign in again to carry on.', 'info');
+    redirect('login.php');
+}
+
 function require_login(): array {
+    kiosk_guard();
     $timeout = ((int) cfg('session_timeout_minutes')) * 60;
     // Whose page this is, captured before the session can be cleared below: the
     // signed-in account, or once signed out, the account whose ended session

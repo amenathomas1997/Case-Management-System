@@ -422,9 +422,28 @@ struct LoanSheet: View {
     /// The hand-off (4.0.0): the condition as it goes out, and the client's typed name accepting the loan agreement.
     @State private var conditionOut = ""
     @State private var acceptedName = ""
+    /// Why the item is lent and who borrows it (4.25.0, for the AT Act report); "" = not recorded.
+    @State private var purpose = ""
+    @State private var borrowerType = ""
     @State private var busy = false
     @State private var error: String?
     @State private var askingDiscard = false
+
+    static let purposes: [(key: String, label: String)] = [
+        ("decision", "To help decide which device to get"),
+        ("loaner", "As a loaner while a device is repaired or funding is awaited"),
+        ("accommodation", "As a short-term accommodation"),
+        ("training", "For training, self-education or professional development"),
+    ]
+    static let borrowerTypes: [(key: String, label: String)] = [
+        ("individual", "A person with a disability"),
+        ("family", "A family member or guardian"),
+        ("education", "Someone from education"),
+        ("employment", "Someone from employment"),
+        ("health", "Someone from health or rehabilitation"),
+        ("community", "Someone from community living"),
+        ("technology", "A technology professional"),
+    ]
 
     /// The return date the sheet starts with.
     private static var defaultDue: Date { Calendar.current.date(byAdding: .day, value: 60, to: Date()) ?? Date() }
@@ -441,6 +460,7 @@ struct LoanSheet: View {
     private var hasChanges: Bool {
         selectedClient != nil || !Calendar.current.isDate(dueDate, inSameDayAs: Self.defaultDue)
             || !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !purpose.isEmpty || !borrowerType.isEmpty
     }
 
     var body: some View {
@@ -463,6 +483,14 @@ struct LoanSheet: View {
                     ForEach(loanConditions, id: \.self) { Text($0).tag($0) }
                 }
                 CaptionedField(label: "Client's name, typed by the client, accepting the loan agreement", text: $acceptedName)
+                Picker("Purpose", selection: $purpose) {
+                    Text("Not recorded").tag("")
+                    ForEach(Self.purposes, id: \.key) { Text($0.label).tag($0.key) }
+                }
+                Picker("Who is borrowing", selection: $borrowerType) {
+                    Text("Not recorded").tag("")
+                    ForEach(Self.borrowerTypes, id: \.key) { Text($0.label).tag($0.key) }
+                }
             }
             .navigationTitle("Loan out")
             .navigationBarTitleDisplayMode(.inline)
@@ -487,11 +515,14 @@ struct LoanSheet: View {
         guard let clientId = selectedClient else { return }
         busy = true; error = nil
         do {
-            let _: OKResponse = try await api.call("loan_equipment", body: [
+            var body: [String: Any] = [
                 "equipment_id": item.id, "client_id": clientId,
                 "due_date": APIDate.day(dueDate), "notes": notes,
                 "condition_out": conditionOut, "accepted_name": acceptedName,
-            ])
+            ]
+            if !purpose.isEmpty { body["purpose"] = purpose }
+            if !borrowerType.isEmpty { body["borrower_type"] = borrowerType }
+            let _: OKResponse = try await api.call("loan_equipment", body: body)
             onDone("\(item.name) loaned out.")
             dismiss()
         } catch {

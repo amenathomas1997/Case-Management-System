@@ -404,6 +404,7 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
         <?php foreach (BILLING_MODES as $mk => $ml): ?><option value="<?= h($mk) ?>"<?= $curMode === $mk ? ' selected' : '' ?>><?= h($ml) ?></option><?php endforeach; ?>
       </select>
       <span class="hint" id="billing_mode-hint">VR or agency: needs the authorization below, and work over its dates, hours or dollars is refused until it is amended. Private pay: invoiced to the client. No charge: hours are logged at $0 and never invoiced.</span>
+      <?= field_error('billing_mode') ?>
     </div>
     <div class="field">
       <label for="auth_number">Authorization number (required for VR or agency)</label>

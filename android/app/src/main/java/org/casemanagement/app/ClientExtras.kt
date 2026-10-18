@@ -1,0 +1,91 @@
+package org.casemanagement.app
+
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.Locale
+import java.util.TimeZone
+
+/*
+ * The plain logic behind the 4.25.0 screens (custom fields, documents to sign, time zones), kept
+ * apart from Compose so it can be tested on its own.
+ */
+
+/** One of the organisation's own client fields, as client.custom_fields_edit sends it ("" = not answered). */
+data class CustomField(
+    val id: Int, val label: String, val hint: String, val type: String,
+    val options: List<String>, val required: Boolean, val value: String,
+)
+
+val CUSTOM_TYPES = setOf("text", "textarea", "number", "date", "choice", "yesno")
+
+fun parseCustomFields(a: JSONArray?): List<CustomField> = a.objects().mapNotNull { o ->
+    val id = o.optInt("id")
+    if (id <= 0) return@mapNotNull null
+    val type = o.optString("type").takeIf { it in CUSTOM_TYPES } ?: "text"
+    CustomField(id, o.optString("label"), if (o.isNull("hint")) "" else o.optString("hint"), type,
+        o.optJSONArray("options").strings().ifEmpty { if (type == "yesno") listOf("Yes", "No") else emptyList() },
+        o.optBoolean("required"), if (o.isNull("value")) "" else o.optString("value"))
+}
+
+/**
+ * Checks what can be checked on the phone (dates and numbers); the server checks the rest (a
+ * required field, a choice still on the list). Null when nothing is wrong.
+ */
+fun customFieldsProblem(fields: List<CustomField>, values: Map<Int, String>): String? {
+    for (f in fields) {
+        val v = (values[f.id] ?: f.value).trim()
+        if (v.isEmpty()) continue
+        when (f.type) {
+            "date" -> if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(v)) return "${f.label}: enter the date as year-month-day, such as 2026-03-14, or leave it empty."
+            "number" -> if (v.replace(",", "").toDoubleOrNull()?.isFinite() != true) return "${f.label}: enter a number, or leave it empty."
+        }
+    }
+    return null
+}
+
+/** The first required field left unanswered (a new client's form), then the date and number checks. */
+fun customRequiredProblem(fields: List<CustomField>, values: Map<Int, String>): String? =
+    fields.firstOrNull { it.required && (values[it.id] ?: it.value).isBlank() }?.let { "${it.label} is required. Answer it under More details." }
+        ?: customFieldsProblem(fields, values)
+
+/** The save_client "custom" map: only the answers changed here, so an untouched field is never re-checked. Null when none changed. */
+fun customBody(fields: List<CustomField>, values: Map<Int, String>): JSONObject? {
+    val out = JSONObject()
+    for (f in fields) {
+        val v = values[f.id]?.trim() ?: continue
+        if (v != f.value.trim()) out.put(f.id.toString(), v)
+    }
+    return if (out.length() > 0) out else null
+}
+
+/** A closure's device count starts from what the record shows (none: left empty, as on the website). */
+fun prefillCount(n: Int): String = if (n > 0) n.toString() else ""
+
+/** A part of a document to sign: a paragraph, or a bulleted list (several lines in one paragraph). */
+sealed class BodyBlock {
+    data class Paragraph(val text: String) : BodyBlock()
+    data class Bullets(val items: List<String>) : BodyBlock()
+}
+
+/** A document's plain text as the signer reads it: a blank line separates paragraphs; several lines in one are a list. */
+fun signatureBlocks(body: String): List<BodyBlock> =
+    body.replace("\r\n", "\n").replace('\r', '\n').split(Regex("\n\\s*\n")).mapNotNull { p ->
+        val lines = p.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+        when {
+            lines.isEmpty() -> null
+            lines.size == 1 -> BodyBlock.Paragraph(lines[0])
+            else -> BodyBlock.Bullets(lines.map { it.removePrefix("•").removePrefix("- ").trim() })
+        }
+    }
+
+/** A time zone as people say it: America/Chicago is "Central Time". Unknown ids are shown as sent. */
+fun zoneWords(id: String?): String? {
+    if (id.isNullOrBlank()) return null
+    val tz = TimeZone.getTimeZone(id)
+    if (tz.id != id) return id
+    return tz.getDisplayName(false, TimeZone.LONG, Locale.US).replace(" Standard Time", " Time")
+}
+
+/** What a message's file is called in the conversation. */
+fun messageFileLabel(m: JSONObject): String? =
+    if (m.isNull("document_id") || m.optInt("document_id") <= 0) null else "File: " + (m.str("document_title") ?: "a document")

@@ -20,6 +20,8 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
     // Public/help/error screens may omit the actor, but signed-in staff still
     // need their permission-filtered navigation on those screens.
     if ($user === null && function_exists('current_user')) $user = current_user();
+    // A page handed to someone signing in person (4.25.0) shows no staff menu, links or shortcuts.
+    if (!empty($GLOBALS['CMS_KIOSK'])) $user = null;
     $GLOBALS['CMS_PAGE_SIGNED_IN'] = $user !== null; // page_footer shows staff shortcuts to the same audience
     $hideVision = $user && function_exists('setting') && setting('user_low_vision_hidden_' . (int)$user['id']) === '1';
     $app = cfg('name');

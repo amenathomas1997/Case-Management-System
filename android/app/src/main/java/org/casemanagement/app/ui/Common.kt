@@ -113,7 +113,9 @@ fun Page(content: @Composable ColumnScope.() -> Unit) {
  */
 @Composable
 fun ListRow(lines: List<String>, spoken: String? = null, action: String? = null, state: String? = null, onClick: (() -> Unit)? = null) {
-    val text = spoken ?: lines.filter { it.isNotBlank() }.joinToString(". ")
+    // Read as sentences: a line that already ends a sentence ("Sent a file.") gets no second full stop.
+    val shown = lines.filter { it.isNotBlank() }
+    val text = spoken ?: shown.mapIndexed { i, l -> if (i < shown.size - 1 && l.trimEnd().lastOrNull() !in listOf('.', '!', '?', ':')) "$l." else l }.joinToString(" ")
     Column(
         Modifier.fillMaxWidth().heightIn(min = 48.dp)
             // TalkBack says "double tap to <action>" itself; the label never repeats it.

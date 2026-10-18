@@ -34,6 +34,10 @@ Ubuntu, PHP 8.1 (the production version), Node 20 and Python 3.12. Steps:
    each against a freshly emptied `cms_audit_test` database. They run even when
    an earlier step failed, so one run shows every failing suite.
    `full_schema.php` is the slowest (several minutes).
+4. **tests/accessibility_browser.js** (4.25.0): the pages `full_schema.php` rendered, opened in Chrome with
+   Playwright: no unlabelled controls, duplicate ids or broken ARIA references, no page wider than the
+   screen at 320 and 1280 pixels with 100% and 200% text, and the keyboard checks. A failure lists each
+   page (its file name names the page) and the problem.
 
 ### Job 2: iOS simulator build (optional)
 

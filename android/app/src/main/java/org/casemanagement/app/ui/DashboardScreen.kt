@@ -15,6 +15,10 @@ fun DashboardScreen(api: Api, nav: NavHostController) {
         val toDo = (try { api.call("agreements").optInt("needed") } catch (e: Exception) { 0 }) to (try { api.call("training").optInt("needed") } catch (e: Exception) { 0 })
         Triple(api.call("dashboard"), try { api.call("notifications", mapOf("count_only" to "1")).optInt("unread") } catch (e: Exception) { 0 }, toDo)
     }
+    // Referral deadlines (4.25.0), for those who work referrals; left out when it cannot be read.
+    val deadlines = rememberLoaded(api.userId, api.can("referrals")) {
+        if (api.can("referrals")) try { api.call("referral_deadlines") } catch (e: Exception) { null } else null
+    }
     Show(state, "the dashboard") { (d, unread, toSign) ->
         Page {
             Heading("Hello, ${api.userName.substringBefore(' ')}", large = true)
@@ -31,6 +35,13 @@ fun DashboardScreen(api: Api, nav: NavHostController) {
             ListRow(listOf("Waiting for assessment: ${d.optInt("pending_clients")}"))
             if (api.can("referrals")) ListRow(listOf("New referrals: ${d.optInt("new_referrals")}"), onClick = { nav.navigate("referrals") })
             if (api.can("billing")) ListRow(listOf("Unbilled: ${hoursText(d.optDouble("unbilled_hours", 0.0))} hours, $" + String.format(Locale.US, "%,.2f", d.optDouble("unbilled_amount", 0.0))))
+
+            deadlines.data?.takeIf { it.optInt("referrals") > 0 || it.optInt("overdue_now") > 0 }?.let { rd ->
+                Heading("Referral deadlines, last 90 days")
+                ListRow(listOf("${rd.optInt("referrals")} referral${if (rd.optInt("referrals") == 1) "" else "s"}. Contacted on time: ${rd.optInt("contacted_on_time")}, late: ${rd.optInt("contacted_late")}."))
+                ListRow(listOf("Waiting for contact: ${rd.optInt("waiting")}, overdue now: ${rd.optInt("overdue_now")}."), onClick = { nav.navigate("referrals") })
+                ListRow(listOf("Assessed on time: ${rd.optInt("assessed_on_time")}, late: ${rd.optInt("assessed_late")}."))
+            }
 
             val expiring = d.optJSONArray("expiring").objects()
             if (expiring.isNotEmpty()) {

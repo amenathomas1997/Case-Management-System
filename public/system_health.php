@@ -263,7 +263,9 @@ page_header('System health', $user, 'admin', [['admin.php', 'Administration']]);
   <dl class="props">
     <dt>Failed sign-ins in the last 24 hours</dt><dd><?= $failed24 ?><?= $failed24 ? ", from $failedIps address" . ($failedIps === 1 ? '' : 'es') : '' ?></dd>
     <dt>Active staff accounts</dt><dd><?= $staff ?>; <?= $withTotp ?> use an authenticator app (the rest get emailed sign-in codes)</dd>
-    <dt>Staff signed in to the iPhone app</dt><dd><?= $appSessions ?></dd>
+    <dt>Staff signed in to the phone apps</dt><dd><?= $appSessions ?></dd>
+    <?php [$vsOk, $vsWords] = virus_scan_health(); // 4.25.0 ?>
+    <dt>Virus scanning of uploads</dt><dd><?= $vsOk ? '' : '<strong>' ?><?= h($vsWords) ?><?= $vsOk ? '' : '</strong>' ?></dd>
   </dl>
   <p><a href="audit.php">Audit log</a></p>
 </section>

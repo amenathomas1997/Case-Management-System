@@ -4,8 +4,8 @@
 
 | | |
 |---|---|
-| **Product** | Case Management System (web application), version 4.23.0 |
-| **Report date** | October 17, 2026 |
+| **Product** | Case Management System (web application), version 4.25.0 |
+| **Report date** | October 18, 2026 |
 | **Contact** | The organisation running your installation (its support email is in every page footer). For the software itself: https://github.com/amenathomas1997/Case-Management-System/issues |
 | **Standard** | WCAG 2.2, Levels A and AA. Text contrast is held to the AAA level (7:1). |
 
@@ -29,15 +29,16 @@ Not covered:
 - The integration tests render over 100 pages with synthetic records, and check that each opens without errors and shows its expected heading.
 - The keyboard and focus behaviour of the shared parts is checked: the timeout dialog, the voice assistant, form recovery and the AI draft controls (tests/*.test.cjs).
 
-**Browser checks, run at audits, not on every release** (tests/accessibility_browser.js, with Playwright and Chrome):
-- the rendered page snapshots are checked for control names, unique ids and valid ARIA references
+**Browser checks on every change, in CI** (tests/accessibility_browser.js, with Playwright and Chrome, since 4.25.0):
+- about 240 rendered pages and states are checked for control names, unique ids and valid ARIA references
 - reflow is checked at 320 and 1280 CSS pixels, at 100% and 200% text size
+- the skip link, and keyboard scrolling of wide tables, are checked in the browser
 
 **Manual audit.** An engineering accessibility audit against WCAG 2.2 was carried out on version 3.0.13 (ACCESSIBILITY-AUDIT-2026-10-10.md). Its findings, on reflow and labels, were fixed. Later versions have had code review for accessibility, but no repeat of that audit.
 
 **Known gaps in the evaluation:**
 - No independent auditor has tested it.
-- The browser checks are not part of every release, and do not cover every page or state.
+- The browser checks cover the pages and states the integration tests render, not every combination of records and permissions.
 - The extra colour palettes (low-vision settings) are not measured for every colour pair. The light theme's focus ring and control borders have no automated 3:1 check.
 - Native browser zoom, braille displays, Dragon and switch access have not been tested systematically.
 - The synthetic test pages do not cover every combination of records and permissions.
@@ -96,7 +97,7 @@ Not covered:
 | 1.4.3 Contrast (Minimum) | Supports | Text is held to 7:1 in the light and dark themes, measured on every release. The extra low-vision palettes are designed for high contrast but not measured pair by pair. |
 | 1.4.4 Resize Text | Supports | It works at 200% text size, checked by the browser tests. There is also an in-app low-vision text size setting. |
 | 1.4.5 Images of Text | Supports | No images of text apart from the organisation's own logo. |
-| 1.4.10 Reflow | Supports | No horizontal page scrolling at 320 CSS pixels on the pages checked at the last browser audit. Wide data tables scroll within their own labelled, keyboard-reachable region, as the criterion allows for tables. |
+| 1.4.10 Reflow | Supports | No horizontal page scrolling at 320 CSS pixels, with 100% and 200% text, on every page the tests render, checked on every change. Wide data tables scroll within their own labelled, keyboard-reachable region, as the criterion allows for tables. |
 | 1.4.11 Non-text Contrast | Partially Supports | The dark theme's focus ring is measured at 3:1 or more. The light theme's focus ring and control borders are designed for it but have no automated check. |
 | 1.4.12 Text Spacing | Partially Supports | The layout uses relative sizes and no fixed-height text boxes. User text-spacing overrides have not been tested on every page. |
 | 1.4.13 Content on Hover or Focus | Supports | No hover-only content. Hints are part of the label. |

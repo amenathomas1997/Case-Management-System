@@ -49,6 +49,8 @@ const CONFIG_OVERRIDES = [
     'qbo.client_secret' => ['QuickBooks app Client secret', 'secret', 'quickbooks'],
     'qbo.sandbox' => ['Use QuickBooks\' sandbox company (for trying it out)', 'yesno', 'quickbooks'],
     'qbo.private_names' => ['Private-pay invoices name the client in QuickBooks (no: "Private pay client" and a number; Intuit does not sign health-privacy agreements)', 'yesno', 'quickbooks'],
+    // Virus scanning of uploads (4.25.0, inc/virus_scan.php).
+    'app.virus_scan' => ['Virus scanning of uploaded files with ClamAV: off, clamd (the ClamAV service on this server), a socket path, host:port, or the path of clamscan. Once on, a file that cannot be checked is refused.', 'text', 'security'],
     'meet.calendar_first_name' => ['Outlook calendar events name the client\'s first name (no: "Client session" only)', 'yesno', 'meetings'],
 ];
 
@@ -145,7 +147,7 @@ function brand_rgb(string $key = 'color_dark'): array {
 /* ---------- Safe upgrades (3.0.54) ---------- */
 
 /** The database version this code needs: the newest migration it ships. */
-const DB_SCHEMA_VERSION = '4.24.0';
+const DB_SCHEMA_VERSION = '4.25.0';
 
 /** The database version recorded by the migrations, or null for a database from before 3.0.54. */
 function db_schema_version(): ?string {

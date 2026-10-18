@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.24.0';
+const APP_VERSION = '4.25.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1735,6 +1735,7 @@ require_once __DIR__ . '/staff_accounts.php';
 require_once __DIR__ . '/voice_more.php';
 // The iPhone app's 4.0.0 actions (api.php only uses them).
 require_once __DIR__ . '/api_more.php';
+require_once __DIR__ . '/api_425.php';
 // Funding agencies in other states, client time zones (4.1.0).
 require_once __DIR__ . '/agencies.php';
 // Pricing rules set on screen (4.2.0).
@@ -1756,8 +1757,10 @@ require_once __DIR__ . '/qbo.php';
 require_once __DIR__ . '/offices.php';
 require_once __DIR__ . '/vr_portal.php';
 require_once __DIR__ . '/signatures.php';
+require_once __DIR__ . '/virus_scan.php';
 require_once __DIR__ . '/file_exchange.php';
 require_once __DIR__ . '/custom_fields.php';
+require_once __DIR__ . '/referral_deadlines.php';
 // Agreements staff read and sign themselves (4.15.0).
 require_once __DIR__ . '/staff_agreements.php';
 // Staff training with a quiz, and holding back client records until it is done (4.16.0).

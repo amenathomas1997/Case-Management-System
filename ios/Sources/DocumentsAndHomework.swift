@@ -9,6 +9,43 @@ struct ClientDocument: Decodable, Identifiable {
     let title: String
     let origName: String
     let createdAt: String
+    /// Shown on the client's portal, and on their VR counselor's (4.25.0; false from an older server).
+    var portalShared = false
+    var counselorShared = false
+    /// "portal", "counselor" or "staff"; nil when not known.
+    var uploadedVia: String?
+    private enum CodingKeys: String, CodingKey { case id, category, title, origName, createdAt, portalShared, counselorShared, uploadedVia }
+    init(id: Int, category: String = "", title: String, origName: String = "", createdAt: String = "") {
+        self.id = id; self.category = category; self.title = title; self.origName = origName; self.createdAt = createdAt
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        category = (try? c.decode(String.self, forKey: .category)) ?? ""
+        title = (try? c.decode(String.self, forKey: .title)) ?? ""
+        origName = (try? c.decode(String.self, forKey: .origName)) ?? ""
+        createdAt = (try? c.decode(String.self, forKey: .createdAt)) ?? ""
+        portalShared = (try? c.decode(Bool.self, forKey: .portalShared)) ?? ((try? c.decode(Int.self, forKey: .portalShared)) ?? 0 != 0)
+        counselorShared = (try? c.decode(Bool.self, forKey: .counselorShared)) ?? ((try? c.decode(Int.self, forKey: .counselorShared)) ?? 0 != 0)
+        uploadedVia = try? c.decodeIfPresent(String.self, forKey: .uploadedVia)
+    }
+    /// A Resource or a file the client shared is always on their portal (turning it off is not offered).
+    var alwaysOnPortal: Bool { category == "Resource" || category == "Shared by client" }
+    /// Who can see it outside the agency, in words.
+    var sharingText: String {
+        switch (portalShared, counselorShared) {
+        case (true, true): return "Shared with the client and the counselor"
+        case (true, false): return "Shared with the client"
+        case (false, true): return "Shared with the counselor"
+        default: return "Not shared"
+        }
+    }
+}
+
+/// The reply to share_document: where the document is shown now.
+struct ShareDocumentResult: Decodable {
+    let portalShared: Bool?
+    let counselorShared: Bool?
 }
 
 struct DocumentsResponse: Decodable { let documents: [ClientDocument] }
@@ -84,7 +121,9 @@ final class DocumentDownloader: ObservableObject {
             let dir = PreviewStore.directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             previewDirectory = dir
-            let filename = (document.origName as NSString).lastPathComponent
+            // A message's file is known by its title only: the server's file name is used then.
+            let named = document.origName.isEmpty ? (response.suggestedFilename ?? "") : document.origName
+            let filename = (named as NSString).lastPathComponent
             let fileURL = dir.appendingPathComponent(filename.isEmpty || filename == "." || filename == ".." ? "document" : filename)
             try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
             previewURL = fileURL
@@ -106,6 +145,8 @@ struct DocumentsSection: View {
     /// Changed by the client screen when it refreshes (after an upload, pull-to-refresh), so
     /// this section reloads with it.
     var reloadToken = 0
+    /// The server can share documents (4.25.0); an older one shows no sharing at all.
+    var sharing = false
     @State private var documents: [ClientDocument] = []
     @State private var loaded = false
     @StateObject private var downloader = DocumentDownloader()
@@ -127,12 +168,17 @@ struct DocumentsSection: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(document.title).font(.body.weight(.medium)).foregroundStyle(.primary)
-                        // Resource documents are listed on the client's portal (as client.php says).
-                        Text("\(document.category) · \(formatDateTime(document.createdAt))"
-                             + (document.category == "Resource" ? " · Shared on the client portal" : ""))
+                        Text("\(document.category) · \(formatDateTime(document.createdAt))")
                             .font(.caption).foregroundStyle(Color.secondaryText)
+                        // Who can see it, in words (4.25.0).
+                        if sharing {
+                            Text(document.sharingText).font(.caption).foregroundStyle(Color.secondaryText)
+                        }
                     }
                 }
+                // Sharing is on the Actions rotor and the long-press menu; double-tap still opens it.
+                .contextMenu { shareButtons(document) }
+                .accessibilityActions { shareButtons(document) }
             }
         }
         .task(id: reloadToken) { await load() }
@@ -148,6 +194,43 @@ struct DocumentsSection: View {
             if downloader.previewURL == nil { downloader.removePreview() }
         }
         .overlay { if downloader.downloading { ProgressView().accessibilityLabel("Downloading document") } }
+    }
+
+    @ViewBuilder
+    private func shareButtons(_ document: ClientDocument) -> some View {
+        if sharing {
+            shareChoices(document)
+        }
+    }
+
+    @ViewBuilder
+    private func shareChoices(_ document: ClientDocument) -> some View {
+        if !document.alwaysOnPortal {
+            Button(document.portalShared ? "Stop sharing with client" : "Share with client") {
+                Task { await share(document, with: "portal", on: !document.portalShared) }
+            }
+        }
+        Button(document.counselorShared ? "Stop sharing with counselor" : "Share with counselor") {
+            Task { await share(document, with: "counselor", on: !document.counselorShared) }
+        }
+    }
+
+    /// Shows the document on (or takes it off) the client's portal or their counselor's.
+    private func share(_ document: ClientDocument, with: String, on: Bool) async {
+        do {
+            error = nil
+            let r: ShareDocumentResult = try await api.call("share_document", body: [
+                "client_id": clientId, "document_id": document.id, "with": with, "on": on,
+            ])
+            if let i = documents.firstIndex(where: { $0.id == document.id }) {
+                documents[i].portalShared = r.portalShared ?? (with == "portal" ? on : documents[i].portalShared)
+                documents[i].counselorShared = r.counselorShared ?? (with == "counselor" ? on : documents[i].counselorShared)
+            }
+            let who = with == "portal" ? "the client" : "the counselor"
+            announce(on ? "\(document.title) shared with \(who)." : "\(document.title) is no longer shared with \(who).")
+        } catch {
+            showFormError("Could not change sharing for \(document.title). \(error.localizedDescription)", in: &self.error)
+        }
     }
 
     private func load() async {

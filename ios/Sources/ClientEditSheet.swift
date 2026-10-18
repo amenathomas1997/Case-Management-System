@@ -85,6 +85,27 @@ struct ClientEditSheet: View {
     @State private var closureReason = ""
     @State private var closureEmployed = ""
     @State private var closureEmployer = ""
+    @State private var closureJobTitle = ""
+    /// The job start date, when one is recorded.
+    @State private var closureJobStartSet = false
+    @State private var closureJobStart = Date()
+    @State private var closureHours = ""
+    @State private var closureWage = ""
+    @State private var closureIndependence = ""
+    /// Assistive technology at closure (4.25.0): device counts start from the device requests.
+    @State private var closureAtRecommended = ""
+    @State private var closureAtAcquired = ""
+    @State private var closureAtInUse = ""
+    @State private var closureAtNote = ""
+    /// Office, custom fields and device counts from the record (4.25.0); nil for a new client.
+    private let extras: ClientExtras?
+    /// The office chosen (0 = no office; for a new client, -1 = the creator's own office, left unsent).
+    @State private var officeId = 0
+    /// For a new client: the fields and offices from form_options (empty from an older server).
+    @State private var newClientFields: [CustomFieldEdit] = []
+    @State private var newClientOffices: [OfficeChoice] = []
+    /// Custom field answers by field id, as edited.
+    @State private var customValues: [Int: String] = [:]
     @State private var counselorName = ""
     @State private var counselorAgency = ""
     @State private var counselorEmail = ""
@@ -117,13 +138,22 @@ struct ClientEditSheet: View {
     /// The form is filled from the record before it is first drawn, so it is never shown blank
     /// (and can't be saved with defaults) while the staff list is still loading.
     /// `emailVerified`: the record's email_verified (nil from a server that does not report it).
-    init(existing: ClientInfo?, emailVerified: Bool? = nil, texting: ClientTexting? = nil,
+    init(existing: ClientInfo?, emailVerified: Bool? = nil, texting: ClientTexting? = nil, extras: ClientExtras? = nil,
          onSaved: @escaping (_ clientId: Int, _ message: String) -> Void) {
         self.existing = existing
         self.onSaved = onSaved
         self.texting = texting
+        self.extras = existing == nil ? nil : extras
+        if existing != nil, let extras {
+            _officeId = State(initialValue: extras.officeId ?? 0)
+            _customValues = State(initialValue: Dictionary(extras.customFieldsEdit.map { ($0.id, $0.value) }, uniquingKeysWith: { a, _ in a }))
+            // A new closure starts from the devices the requests record, as on the website.
+            if extras.deviceCounts.recommended > 0 { _closureAtRecommended = State(initialValue: String(extras.deviceCounts.recommended)) }
+            if extras.deviceCounts.acquired > 0 { _closureAtAcquired = State(initialValue: String(extras.deviceCounts.acquired)) }
+        }
         _smsConsent = State(initialValue: texting?.agreed ?? false)
         _smsSource = State(initialValue: texting?.source ?? "In person")
+        if existing == nil { _officeId = State(initialValue: -1) }
         emailUnconfirmed = emailVerified == false
             && !(existing?.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         guard let existing else { return }
@@ -190,7 +220,25 @@ struct ClientEditSheet: View {
          c?.a11yFormat ?? "", c?.a11yPrimaryTech ?? "", c?.a11yContact ?? "", c?.a11yNotes ?? "", "0",
          c?.guardianName ?? "", c?.guardianPhone ?? "", c?.guardianEmail ?? "", c?.vrCaseNumber ?? "", c?.ipeGoal ?? "", c?.state ?? ""]
     }
-    private var hasChanges: Bool { values != Self.values(of: existing) || smsConsent != (texting?.agreed ?? false) }
+    private var originalCustom: [Int: String] {
+        Dictionary(customFields.map { ($0.id, $0.value) }, uniquingKeysWith: { a, _ in a })
+    }
+    /// Custom answers changed in this form: only these are sent.
+    private var changedCustom: [Int: String] {
+        let original = originalCustom
+        return customValues.filter { original[$0.key] != $0.value }
+    }
+    private var closureTyped: Bool {
+        ![closureJobTitle, closureHours, closureWage, closureIndependence, closureAtInUse, closureAtNote].allSatisfy(\.isEmpty) || closureJobStartSet
+    }
+    private var hasChanges: Bool {
+        values != Self.values(of: existing) || smsConsent != (texting?.agreed ?? false)
+            || officeId != originalOffice || !changedCustom.isEmpty || closureTyped
+    }
+    private var offices: [OfficeChoice] { existing == nil ? newClientOffices : (extras?.offices ?? []) }
+    private var customFields: [CustomFieldEdit] { existing == nil ? newClientFields : (extras?.customFieldsEdit ?? []) }
+    private var originalOffice: Int { existing == nil ? -1 : (extras?.officeId ?? 0) }
+
     @State private var askingDiscard = false
 
     var body: some View {
@@ -262,8 +310,41 @@ struct ClientEditSheet: View {
                                 Text("Yes").tag("yes")
                                 Text("No").tag("no")
                             }
-                            if closureEmployed == "yes" { CaptionedField(label: "Employer", text: $closureEmployer) }
-                            Text("The job title, hours, wage or an independence outcome can be added on the website.").font(.caption).foregroundStyle(Color.secondaryText)
+                            if closureEmployed == "yes" {
+                                CaptionedField(label: "Employer", text: $closureEmployer)
+                                CaptionedField(label: "Job title", text: $closureJobTitle)
+                                Picker("Job start date", selection: $closureJobStartSet) {
+                                    Text("Not recorded").tag(false)
+                                    Text("Choose a date").tag(true)
+                                }
+                                if closureJobStartSet {
+                                    DatePicker("Job start date", selection: $closureJobStart, displayedComponents: .date)
+                                }
+                                CaptionedField(label: "Hours a week", text: $closureHours, keyboard: .decimalPad)
+                                CaptionedField(label: "Hourly wage (dollars)", text: $closureWage, keyboard: .decimalPad)
+                            }
+                            CaptionedField(label: "Independence outcome (for a goal without a job, such as reading mail or using a phone on their own)",
+                                           text: $closureIndependence, lines: 1...4)
+                            CaptionedField(label: "Devices recommended", text: $closureAtRecommended, keyboard: .numberPad)
+                            CaptionedField(label: "Devices the client got", text: $closureAtAcquired, keyboard: .numberPad)
+                            Picker("Using their devices at closure?", selection: $closureAtInUse) {
+                                Text("Not recorded").tag("")
+                                Text("Yes").tag("yes")
+                                Text("No").tag("no")
+                            }
+                            CaptionedField(label: "Technology note (such as a device still on order, or why one is not used)", text: $closureAtNote)
+                        }
+                    }
+                    // Offices (4.22.0): shown only when the organisation uses them.
+                    if !offices.isEmpty {
+                        Picker("Office", selection: $officeId) {
+                            if existing == nil { Text("Your own office").tag(-1) }
+                            Text("No office").tag(0)
+                            // A closed office the record still has stays choosable.
+                            if officeId > 0 && !offices.contains(where: { $0.id == officeId }) {
+                                Text(extras?.office ?? "Current office").tag(officeId)
+                            }
+                            ForEach(offices) { Text($0.name).tag($0.id) }
                         }
                     }
                     if api.scoped {
@@ -305,6 +386,16 @@ struct ClientEditSheet: View {
                     CaptionedField(label: "Guardian phone", text: $guardianPhone, keyboard: .phonePad)
                     CaptionedField(label: "Guardian email", text: $guardianEmail, keyboard: .emailAddress).textInputAutocapitalization(.never)
                 }
+                if !customFields.isEmpty {
+                    let fields = customFields
+                    Section("More details") {
+                        ForEach(fields) { field in
+                            CustomFieldEditor(field: field, value: Binding(
+                                get: { customValues[field.id] ?? "" },
+                                set: { customValues[field.id] = $0 }))
+                        }
+                    }
+                }
                 Section("Case type") {
                     Picker("Client type", selection: $clientType) { ForEach(clientTypes, id: \.self) { Text($0) } }
                 }
@@ -343,7 +434,16 @@ struct ClientEditSheet: View {
                                  question: existing == nil ? "Discard this new client?" : "Discard your changes to this client?",
                                  asking: $askingDiscard) { dismiss() }
             .task { await loadStaff() }
+            .task { await loadNewClientOptions() }
         }
+    }
+
+    /// The custom fields and offices a new client can have (form_options, 4.25.0); an older
+    /// server, or a failure, leaves both out and the server keeps its defaults.
+    private func loadNewClientOptions() async {
+        guard existing == nil, let r: NewClientOptions = try? await api.call("form_options") else { return }
+        newClientFields = r.customFields
+        newClientOffices = r.offices
     }
 
     private func loadStaff() async {
@@ -387,9 +487,23 @@ struct ClientEditSheet: View {
                 showFormError("Choose the state the client lives in. It sets their time zone for reminders and texts.", in: &error)
                 return
             }
+            // A new client's required fields are checked here, by name (an existing record sends only what changed).
+            if existing == nil, let missing = customFields.first(where: { $0.required && (customValues[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+                showFormError("\(missing.label): this is required.", in: &error)
+                return
+            }
             if status.hasPrefix("Closed") && (existing?.status ?? "") != status && closureReason.isEmpty {
                 showFormError("Choose why the case is closing.", in: &error)
                 return
+            }
+            if status.hasPrefix("Closed") && (existing?.status ?? "") != status {
+                for (value, what) in [(closureAtRecommended, "Devices recommended"), (closureAtAcquired, "Devices the client got")] {
+                    let t = value.trimmingCharacters(in: .whitespaces)
+                    if !t.isEmpty && (t.count > 2 || !t.allSatisfy(\.isASCII) || Int(t) == nil) {
+                        showFormError("\(what): enter a whole number from 0 to 99, or leave it blank.", in: &error)
+                        return
+                    }
+                }
             }
             var body: [String: Any] = [
                 "id": existing?.id ?? 0,
@@ -408,6 +522,26 @@ struct ClientEditSheet: View {
                 body["closure_note"] = statusNote
                 body["closure_employed"] = closureEmployed
                 body["closure_employer"] = closureEmployer
+                if closureEmployed == "yes" {
+                    body["closure_job_title"] = closureJobTitle
+                    body["closure_job_start"] = closureJobStartSet ? APIDate.day(closureJobStart) : ""
+                    body["closure_hours"] = closureHours.trimmingCharacters(in: .whitespaces)
+                    body["closure_wage"] = closureWage.trimmingCharacters(in: .whitespaces)
+                }
+                body["closure_independence"] = closureIndependence
+                body["closure_at_recommended"] = closureAtRecommended.trimmingCharacters(in: .whitespaces)
+                body["closure_at_acquired"] = closureAtAcquired.trimmingCharacters(in: .whitespaces)
+                body["closure_at_in_use"] = closureAtInUse
+                body["closure_at_note"] = closureAtNote
+            }
+            // Sent only when changed: an unchanged office (even a closed one) stays as stored.
+            // A new client's "Your own office" (-1) is left unsent: the server gives the creator's office.
+            if !offices.isEmpty && officeId != originalOffice && officeId >= 0 {
+                body["office_id"] = officeId == 0 ? NSNull() : officeId as Any
+            }
+            let customSent = changedCustom
+            if !customSent.isEmpty {
+                body["custom"] = Dictionary(uniqueKeysWithValues: customSent.map { (String($0.key), $0.value) })
             }
             // Sent only when staff turned the confirmation on; otherwise the server keeps the
             // stored state (and confirms an address staff typed themselves).
@@ -733,5 +867,58 @@ extension View {
                 Button("Discard", role: .destructive, action: discard)
                 Button("Keep editing", role: .cancel) {}
             }
+    }
+}
+
+/// One of the organisation's own fields (4.25.0), drawn by its type. "" is not answered.
+struct CustomFieldEditor: View {
+    let field: CustomFieldEdit
+    @Binding var value: String
+
+    private var label: String { field.required ? "\(field.label) (required)" : field.label }
+    private var hint: String? { field.hint.isEmpty ? nil : field.hint }
+
+    var body: some View {
+        switch field.type {
+        case "textarea":
+            captioned { TextField(label, text: $value, prompt: Text(field.label), axis: .vertical).lineLimit(2...6) }
+        case "number":
+            captioned { TextField(label, text: $value, prompt: Text(field.label)).keyboardType(.decimalPad) }
+        case "date":
+            Picker(label, selection: Binding(
+                get: { !value.isEmpty },
+                set: { value = $0 ? (value.isEmpty ? APIDate.day(Date()) : value) : "" })) {
+                Text("Not answered").tag(false)
+                Text("Choose a date").tag(true)
+            }
+            .accessibilityHint(hint ?? "")
+            if !value.isEmpty {
+                DatePicker(field.label, selection: Binding(
+                    get: { APIDate.parseDay(value) ?? Date() },
+                    set: { value = APIDate.day($0) }), displayedComponents: .date)
+            }
+        case "choice", "yesno":
+            Picker(label, selection: $value) {
+                Text("Not answered").tag("")
+                // A stored answer since removed from the list stays choosable.
+                ForEach(field.options.contains(value) || value.isEmpty ? field.options : field.options + [value], id: \.self) { Text($0).tag($0) }
+            }
+            .accessibilityHint(hint ?? "")
+        default:
+            captioned { TextField(label, text: $value, prompt: Text(field.label)) }
+        }
+    }
+
+    /// The name stays visible above the field (as CaptionedField); the hint is read with the
+    /// field, not as a stop of its own.
+    private func captioned<F: View>(@ViewBuilder _ field: () -> F) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.caption.weight(.semibold)).foregroundStyle(Color.secondaryText)
+                .accessibilityHidden(true)
+            field().accessibilityHint(hint ?? "")
+            if let hint {
+                Text(hint).font(.caption).foregroundStyle(Color.secondaryText).accessibilityHidden(true)
+            }
+        }
     }
 }

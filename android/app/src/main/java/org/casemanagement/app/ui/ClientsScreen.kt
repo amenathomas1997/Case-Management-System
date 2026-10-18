@@ -17,6 +17,7 @@ import org.casemanagement.app.ApiException
 import kotlinx.coroutines.launch
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
+import org.casemanagement.app.zoneWords
 
 /** The client list, searched on the server as on the website. */
 @Composable
@@ -48,8 +49,12 @@ fun ClientsScreen(api: Api, nav: NavHostController) {
 @Composable
 fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
     val context = LocalContext.current
-    val state = rememberLoaded(id) { api.callCached("client", mapOf("id" to id.toString()), "client.$id") }
+    val state = rememberLoaded(id) { api.callCached("client", mapOf("id" to id.toString()), "client.$id").also { (r, at) -> if (at == null) api.noteClientDetail(r) } }
     var linkError by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    var portalAsk by remember { mutableStateOf(false) }
+    var consentAsk by remember { mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     Show(state, "the client") { (r, savedAt) ->
         val c = r.optJSONObject("client") ?: return@Show
         Page {
@@ -62,15 +67,40 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
             c.str("email")?.let { e -> ListRow(listOf("Email: $e"), action = "write an email", onClick = {
                 if (!openLink(context, Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:" + Uri.encode(e))))) linkError = "This phone has no email app."
             }) }
+            NoticeText(notice)
             ErrorText(linkError)
             c.str("address")?.let { ListRow(listOf("Address: $it")) }
+            c.str("state")?.let { code -> ListRow(listOf("State: " + (US_STATES.firstOrNull { it.first == code }?.second ?: code))) }
+            zoneWords(c.str("time_zone"))?.let { ListRow(listOf("Time zone: $it")) }
+            c.str("office")?.let { ListRow(listOf("Office: $it")) }
+            c.str("school")?.let { ListRow(listOf("School: $it")) }
+            c.str("vr_case_number")?.let { ListRow(listOf("VR case number: $it")) }
+            c.str("ipe_goal")?.let { ListRow(listOf("IPE goal: $it")) }
+            c.str("guardian_name")?.let { g -> ListRow(listOf("Guardian: $g", c.str("guardian_phone") ?: "", c.str("guardian_email") ?: "")) }
             c.str("counselor_name")?.let { n -> ListRow(listOf("Counselor: $n", c.str("counselor_agency") ?: "", c.str("counselor_email") ?: "", c.str("counselor_phone") ?: "")) }
             val a11y = listOfNotNull(c.str("a11y_format")?.let { "Prefers $it" }, c.str("a11y_primary_tech"), c.str("a11y_contact")?.let { "Contact by $it" })
             if (a11y.isNotEmpty()) ListRow(listOf("Accessibility: " + a11y.joinToString(", ")))
+            if (c.optBoolean("a11y_screen_reader")) ListRow(listOf("Uses a screen reader"))
+            c.str("a11y_notes")?.let { ListRow(listOf("Accessibility notes: $it")) }
+            val custom = c.optJSONArray("custom_fields").objects()
+            if (custom.isNotEmpty()) {
+                Heading("More details")
+                custom.forEach { f -> ListRow(listOf(f.optString("label") + ": " + f.optString("value"))) }
+            }
 
             PrimaryButton("Add a case note") { nav.navigate("note/$id") }
             SecondaryButton("Documents and homework") { nav.navigate("docs/$id") }
             SecondaryButton("Edit client details") { nav.navigate("clientEdit/$id") }
+            SecondaryButton("Message") { nav.navigate("thread/$id") }
+            val waiting = c.optInt("signatures_waiting")
+            // A server before 4.25.0 has neither (its client detail has no device_counts).
+            if (c.has("device_counts")) {
+                SecondaryButton("Documents to sign" + if (waiting > 0) " ($waiting waiting)" else "") { nav.navigate("signatures/$id") }
+                SecondaryButton("Request a release") { nav.navigate("release/$id") }
+            }
+            if (c.str("email") != null) SecondaryButton("Email a new portal link") { portalAsk = true }
+            SecondaryButton("Request guardian consent") { consentAsk = true }
+            SecondaryButton("Status history") { nav.navigate("history/$id") }
             if (listOf("recommend", "progress", "intake", "draft").any { api.aiHas(it) }) SecondaryButton("AI help for this client") { nav.navigate("clientAi/$id") }
             if (api.aiHas("voice") && api.can("clients")) SecondaryButton("Voice assistant") { nav.navigate("voice/$id/" + android.net.Uri.encode(c.optString("name").ifEmpty { "-" })) }
             SecondaryButton("Scored assessments") { nav.navigate("scoredList/$id") }
@@ -91,9 +121,84 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
             }
             SecondaryButton("Add a training track") { nav.navigate("trackEdit/$id/0") }
 
+            val releases = r.optJSONArray("releases").objects()
+            Heading("Releases of information (${releases.size})")
+            if (releases.isEmpty()) Text("No releases.")
+            releases.forEach { rel ->
+                ListRow(listOf(rel.optString("recipient_name") + (rel.str("recipient_type")?.let { " ($it)" } ?: ""),
+                    listOfNotNull(rel.optString("status"), rel.str("expires_on")?.let { "ends " + dayText(it) }).joinToString(", "), rel.str("info_scope") ?: ""))
+            }
+
             val notes = r.optJSONArray("notes").objects()
             Heading("Case notes (${r.optInt("notes_total", notes.size)})")
             notes.forEach { n -> NoteRow(n) }
+        }
+        if (portalAsk) Confirm("Email a new portal link?", "A new link to the client portal is emailed to ${c.optString("email")}. Any earlier link stops working.", "Email the link", {
+            notice = null; linkError = null
+            scope.launch {
+                try { notice = api.call("send_portal_link", body = org.json.JSONObject().put("client_id", id)).optString("message").ifEmpty { "Portal link emailed." } }
+                catch (e: ApiException) { linkError = e.message }
+            }
+        }, { portalAsk = false })
+        if (consentAsk) ConsentDialog(api, id, onDone = { m -> consentAsk = false; notice = m; state.reload() }, onCancel = { consentAsk = false })
+    }
+}
+
+/** Guardian consent (client.php's request form): its state now, and a request emailed to the guardian. */
+@Composable
+private fun ConsentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCancel: () -> Unit) {
+    val loaded = rememberLoaded(clientId) { api.call("request_consent", mapOf("client_id" to clientId.toString())) }
+    var name by remember { mutableStateOf<String?>(null) }
+    var email by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val r = loaded.data
+    val consent = r?.optJSONObject("consent")
+    val canRequest = consent?.optBoolean("can_request", true) ?: false
+    androidx.compose.runtime.LaunchedEffect(r) {
+        if (r != null) { if (name == null) name = r.optString("guardian_name"); if (email == null) email = r.optString("guardian_email") }
+    }
+    FormDialog("Guardian consent", consent?.str("request_label")?.let { if (it.contains("Resend")) "Resend" else "Send" } ?: "Send", busy,
+        enabled = r != null && canRequest && !name.isNullOrBlank() && !email.isNullOrBlank(), onSave = {
+            scope.launchSave({ busy = it }, { error = it }) {
+                val res = api.call("request_consent", body = org.json.JSONObject().put("client_id", clientId).put("guardian_name", name!!.trim()).put("guardian_email", email!!.trim()))
+                onDone(res.optString("message").ifEmpty { "Consent form emailed." })
+            }
+        }, onCancel = onCancel) {
+        if (loaded.loading && r == null) Text("Loading the consent…")
+        ErrorText(loaded.error)
+        if (r != null) {
+            val st = consent?.optString("state") ?: "None"
+            Text(when (st) {
+                "Signed" -> "Consent signed" + (consent?.str("signed_name")?.let { " by $it" } ?: "") + (consent?.str("expires")?.let { ", current until " + dayText(it) } ?: "") + "."
+                "Requested" -> "Consent requested " + whenText(consent?.str("pending_sent_at")) + ", not signed yet."
+                "Expired" -> "The signed consent has expired."
+                "Withdrawn" -> "The consent was withdrawn."
+                else -> "No consent on record."
+            })
+            if (!canRequest) Text("A new request is offered 30 days before the consent ends.")
+            else {
+                Field("Guardian name", name ?: "", { name = it })
+                Field("Guardian email", email ?: "", { email = it }, keyboard = KeyboardType.Email)
+            }
+        }
+        ErrorText(error)
+    }
+}
+
+/** A client's status changes, newest first (client.php's history tab). */
+@Composable
+fun StatusHistoryScreen(api: Api, clientId: Int) {
+    val state = rememberLoaded(clientId) { api.call("client_history", mapOf("client_id" to clientId.toString())).optJSONArray("history").objects() }
+    Show(state, "the status history") { list ->
+        Page {
+            Heading("Status changes (${list.size})")
+            if (list.isEmpty()) Text("No status changes recorded.")
+            list.forEach { h ->
+                ListRow(listOf(h.optString("new_status") + (h.str("old_status")?.let { ", from $it" } ?: ""),
+                    whenText(h.str("changed_at")) + ", by " + h.optString("changed_by"), h.str("note") ?: ""))
+            }
         }
     }
 }

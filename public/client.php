@@ -68,6 +68,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['purge_client'])) {
         $fq = $pdo->prepare('SELECT w.signature_path FROM work_logs w JOIN training_tracks t ON t.id = w.track_id WHERE t.client_id = ? AND w.signature_path IS NOT NULL FOR UPDATE');
         $fq->execute([$id]);
         $purgeFiles = array_merge($purgeFiles, $fq->fetchAll(PDO::FETCH_COLUMN));
+        // Signatures drawn when signing in person (4.25.0).
+        $fq = $pdo->prepare('SELECT signature_path FROM client_signatures WHERE client_id = ? AND signature_path IS NOT NULL FOR UPDATE');
+        $fq->execute([$id]);
+        $purgeFiles = array_merge($purgeFiles, $fq->fetchAll(PDO::FETCH_COLUMN));
         // Invoices still awaiting payment, or paid short, are open receivables:
         // they go with the record (the confirmation said so), and the audit entry
         // below keeps their numbers and the amount outstanding.
@@ -572,6 +576,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assessment'])) {
         flash('This assessment was already saved (the form was sent twice), so it was saved once.', 'info');
         redirect("client.php?id=$id&tab=assessments");
     }
+    if ($attName !== null && ($attVirus = upload_virus_check((string)$att['tmp_name'])) !== null) {
+        keep_input();
+        keep_field_errors(['attachment' => $attVirus]);
+        redirect("client.php?id=$id&tab=assessments");
+    }
     if ($attName !== null && !upload_content_ok((string)$att['tmp_name'], $attExt, true)) {
         // The content must be what the name says (4.24.0).
         keep_input();
@@ -637,6 +646,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_document'])) {
     } elseif (!upload_content_ok((string)($docFile['tmp_name'] ?? ''), $ext, true)) {
         // The content must be what the name says (4.24.0).
         $dErrs['document'] = 'That file is not really a .' . $ext . ' file, so it was not stored. Save it again in that format and choose it again.';
+    } elseif (($virus = upload_virus_check((string)($docFile['tmp_name'] ?? ''))) !== null) {
+        $dErrs['document'] = $virus;
     } elseif (mb_strlen($origName) > 190) {
         $dErrs['document'] = 'The file name is too long (190 characters maximum). Rename the file and choose it again.';
     } elseif ($dErrs) {

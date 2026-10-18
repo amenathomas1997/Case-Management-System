@@ -21,7 +21,11 @@ function api_more(string $action, array $input, int $userId): ?array {
                 'competency_levels', 'score_labels', 'client_statuses', 'referral_sources'];
             $lists = [];
             foreach ($keys as $k) $lists[$k] = array_values(array_map('strval', cms_list_items($k)));
-            return ['ok' => true, 'lists' => $lists];
+            // For a new client's form (4.25.0): the custom fields in use and the offices (empty when none).
+            $cf = array_map(fn($f) => ['id' => (int)$f['id'], 'label' => (string)$f['label'], 'hint' => (string)($f['hint'] ?? ''), 'type' => (string)$f['type'],
+                'options' => $f['type'] === 'yesno' ? ['Yes', 'No'] : custom_field_options($f), 'required' => (int)$f['required'] === 1, 'value' => ''], custom_fields_all(true));
+            $offices = offices_on() ? array_map(fn($o) => ['id' => (int)$o['id'], 'name' => (string)$o['name']], offices_all(true)) : [];
+            return ['ok' => true, 'lists' => $lists, 'custom_fields' => $cf, 'offices' => $offices];
         }
         // Staff agreements (4.15.0): this person's own, to read and sign by typing their name.
         case 'agreements': {

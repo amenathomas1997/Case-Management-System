@@ -229,7 +229,7 @@ if ($postMax > 0 && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $postMax) {
 // Every value is read as a single string or number unless its key is one the
 // code reads as a list/object. Anything else is refused up front, so a stray
 // array can never be cast to "Array" or to 1 and written to a record.
-const API_ARRAY_INPUT_KEYS = ['scores', 'levels', 'present', 'homework', 'values', 'history', 'params', 'sections', 'answers'];
+const API_ARRAY_INPUT_KEYS = ['scores', 'levels', 'present', 'homework', 'values', 'history', 'params', 'sections', 'answers', 'custom', 'info'];   // custom and info: 4.25.0 (custom fields, release requests)
 // A decoded JSON body takes many times its own size in memory, so a body larger than
 // this is decoded only once the caller's token has been checked (below): only the
 // app's own uploads (documents, signatures) need more, and an anonymous caller can
@@ -790,6 +790,15 @@ switch ($action) {
         $client['office'] = office_get($client['office_id'])['name'] ?? null;
         // The organisation's own fields (4.24.0), answered ones only, as label and value.
         $client['custom_fields'] = array_map(fn($p) => ['label' => $p[0], 'value' => $p[1]], custom_fields_display($id));
+        // For editing in the apps (4.25.0): the fields in use with their answers, the offices to choose from,
+        // and the device counts a closure starts from.
+        $cfVals = custom_values_for($id);
+        $client['custom_fields_edit'] = array_map(fn($f) => ['id' => (int)$f['id'], 'label' => (string)$f['label'], 'hint' => (string)($f['hint'] ?? ''), 'type' => (string)$f['type'],
+            'options' => $f['type'] === 'yesno' ? ['Yes', 'No'] : custom_field_options($f), 'required' => (int)$f['required'] === 1, 'value' => $cfVals[(int)$f['id']] ?? ''], custom_fields_all(true));
+        $client['offices'] = offices_on() ? array_map(fn($o) => ['id' => (int)$o['id'], 'name' => (string)$o['name']], offices_all(true)) : [];
+        [$devRec, $devGot] = client_device_counts($id);
+        $client['device_counts'] = ['recommended' => $devRec, 'acquired' => $devGot];
+        $client['signatures_waiting'] = count(array_filter(client_signatures($id), fn($s) => in_array(signature_status($s), ['Awaiting signature', 'Waiting to be signed here'], true)));
         $client['a11y_screen_reader'] = (bool)$client['a11y_screen_reader'];
         // counselor_verified: false while a counselor email from the public referral form
         // waits for staff to confirm it (save_client with counselor_verified true).
@@ -1379,6 +1388,14 @@ switch ($action) {
         if ($placeSent && $stateApi === null) fail('Choose the state the client lives in: it sets their time zone for reminders and texts.', 422);
         // The office (4.22.0): sent as an open office's id, or null for none; not sent keeps what is stored
         // (a new client gets the creating user's office, as on the website).
+        // Custom fields (4.25.0): custom = {field id: value}; only the fields sent change.
+        $cfApiVals = [];
+        if (is_array($input['custom'] ?? null)) {
+            $cfPost = [];
+            foreach ($input['custom'] as $fid => $val) if (ctype_digit((string)$fid) && (is_string($val) || is_int($val) || is_float($val))) $cfPost['cf_' . (int)$fid] = (string)$val;
+            [$cfApiVals, $cfApiErrs] = custom_input($cfPost, custom_fields_all(true), false, $old ? custom_values_for((int)$old['id']) : []);
+            if ($cfApiErrs) fail(implode(' ', $cfApiErrs), 422);
+        }
         $officeSentApi = array_key_exists('office_id', $input);
         $officeApi = $officeSentApi ? office_input($input['office_id'], isset($old['office_id']) ? (int)$old['office_id'] : null) : null;
         if ($officeSentApi && !in_array($input['office_id'], [null, '', 0, '0'], true) && $officeApi === null) fail('Choose an open office, or none.', 422);
@@ -1579,6 +1596,7 @@ switch ($action) {
             if ($placeSent) db()->prepare('UPDATE clients SET state = ?, time_zone = ? WHERE id = ?')->execute([$stateApi, $zoneApi, $cid]);
             if ($officeSentApi) db()->prepare('UPDATE clients SET office_id = ? WHERE id = ?')->execute([$officeApi, $cid]);
             elseif (!$isUpdate) office_place_new_client($cid, $userId);
+            if ($cfApiVals) custom_save($cfApiVals, $cid);
             db()->commit();
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
@@ -1919,6 +1937,7 @@ switch ($action) {
         if (file_put_contents($dir . '/' . $stored, $data) === false) fail('The file could not be saved.', 500);
         // The content must be what the name says (4.24.0).
         if (!upload_content_ok($dir . '/' . $stored, $ext, true)) { api_discard_upload($stored); fail('That file is not really a .' . $ext . ' file, so it was not stored.'); }
+        if (($virus = upload_virus_check($dir . '/' . $stored)) !== null) { api_discard_upload($stored); fail($virus, 422); }
         try {
             db()->prepare('INSERT INTO client_documents (client_id, category, title, orig_name, path, uploaded_by) VALUES (?,?,?,?,?,?)')
                 ->execute([$cid, $category, $title, $origName, $stored, $userId]);
@@ -2035,10 +2054,12 @@ switch ($action) {
         $cid = (int)($_GET['client_id'] ?? 0);
         api_require_client($cid, $userId);
         // A file the client shared on the portal is labelled as the website labels it.
-        $s = db()->prepare("SELECT id, CASE WHEN category = 'Client Upload' THEN 'Shared by client' ELSE category END AS category, title, orig_name, created_at
+        $s = db()->prepare("SELECT id, CASE WHEN category = 'Client Upload' THEN 'Shared by client' ELSE category END AS category, title, orig_name, created_at,
+                (category IN ('Resource', 'Client Upload') OR portal_shared = 1) AS portal_shared, counselor_shared, uploaded_via
             FROM client_documents WHERE client_id = ? ORDER BY created_at DESC");
         $s->execute([$cid]);
-        out(['ok' => true, 'documents' => $s->fetchAll()]);
+        // portal_shared / counselor_shared (4.25.0): whether the client's portal or their counselor's shows it.
+        out(['ok' => true, 'documents' => array_map(fn($d) => ['portal_shared' => (bool)$d['portal_shared'], 'counselor_shared' => (bool)$d['counselor_shared'], 'id' => (int)$d['id']] + $d, $s->fetchAll())]);
 
     case 'download_document':
         $id = (int)($_GET['id'] ?? 0);
@@ -3947,8 +3968,10 @@ switch ($action) {
         api_require_client($cid, $userId);
         db()->prepare("UPDATE messages SET read_at = NOW() WHERE client_id = ? AND channel = ? AND sender <> 'staff' AND read_at IS NULL")
             ->execute([$cid, $channel]);
-        $m = db()->prepare('SELECT m.id, m.channel, m.sender, m.body, m.created_at, m.via, u.name AS staff_name
-            FROM messages m LEFT JOIN users u ON u.id = m.staff_id WHERE m.client_id = ? AND m.channel = ? ORDER BY m.created_at');
+        // A message's file (4.25.0): document_id and its title, opened with download_document.
+        $m = db()->prepare('SELECT m.id, m.channel, m.sender, m.body, m.created_at, m.via, u.name AS staff_name, d.id AS document_id, d.title AS document_title
+            FROM messages m LEFT JOIN users u ON u.id = m.staff_id LEFT JOIN client_documents d ON d.id = m.document_id AND d.client_id = m.client_id
+            WHERE m.client_id = ? AND m.channel = ? ORDER BY m.created_at');
         $m->execute([$cid, $channel]);
         $c = db()->prepare('SELECT name, counselor_name FROM clients WHERE id = ?'); $c->execute([$cid]); $cRow = $c->fetch();
         out(['ok' => true, 'client_name' => (string)($cRow['name'] ?? ''), 'counselor_name' => $cRow['counselor_name'] ?? null,
@@ -3959,8 +3982,13 @@ switch ($action) {
         $channel = api_choice($input, 'channel', ['client', 'counselor'], 'Channel', 'client');
         // post_message() stores at most 5000 characters; refuse a longer message rather than send part of it.
         $body = api_text($input, 'body', 5000, 'The message');
-        if ($cid <= 0 || $body === '') fail('Client and message are required.');
+        // A file with the message (4.25.0): document_id (one already on the record) or file_b64 with filename.
+        $attachId = (int)($input['document_id'] ?? 0);
+        $fileB64 = is_string($input['file_b64'] ?? null) && $input['file_b64'] !== '' ? $input['file_b64'] : null;
+        if ($cid <= 0 || ($body === '' && $attachId <= 0 && $fileB64 === null)) fail('Client and message are required.');
         api_require_client($cid, $userId);
+        if ($attachId > 0 && $fileB64 !== null) fail('Attach one file: a new one or one of the client\'s documents, not both.', 422);
+        if ($attachId > 0 && !client_document($attachId, $cid)) fail('That document is no longer on the client\'s record.', 404);
         // Neither portal shows a retention-archived client, so the message could
         // never be read: refused, as on the website (messages.php).
         $arch = db()->prepare('SELECT name FROM clients WHERE id = ? AND archived_at IS NOT NULL');
@@ -3976,14 +4004,27 @@ switch ($action) {
             $seen->execute([$userId, $idem, $cid]);
             if ($seenId = $seen->fetchColumn()) out(['ok' => true, 'id' => (int)$seenId, 'delivered' => true, 'warning' => null, 'texted' => null, 'repeat' => true]);
         }
-        $id = post_message($cid, $channel, 'staff', $userId, $body);
+        if ($fileB64 !== null) {
+            if (strlen($fileB64) > (int)ceil(25 * 1024 * 1024 / 3) * 4 + 4) fail('File is too large (25 MB maximum).', 413);
+            $bytes = base64_decode($fileB64, true);
+            if ($bytes === false || $bytes === '') fail('The file could not be read. Choose it again.', 422);
+            $saved = exchange_save_bytes($bytes, api_text($input, 'filename', 190, 'The file name') ?: 'file', $cid, '', 'staff', $userId, 'Other');
+            unset($bytes);
+            if ($saved['error'] !== null) fail($saved['error'], 422);
+            $attachId = (int)$saved['id'];
+        }
+        $id = post_message($cid, $channel, 'staff', $userId, $body !== '' ? $body : 'Sent a file.');
         if ($idem !== null) db()->prepare('UPDATE messages SET idem_key = ? WHERE id = ?')->execute([$idem, $id]);
+        if ($attachId > 0) {
+            message_attach($id, $attachId);
+            document_set_shared($attachId, $cid, $channel === 'client' ? 'portal' : 'counselor', true, $userId);
+        }
         // The website's code (messages.php), so a search of the audit log finds both channels.
         audit($userId, 'message.send', 'client', $cid, $channel . ' (mobile)');
         // Also as a text (4.17.0), when asked.
         $textResult = null;
         if ($channel === 'client' && !empty($input['by_text'])) {
-            $textResult = sms_to_client($cid, (brand('short') ?: cfg('name')) . ': ' . $body, 'message', null, $userId);
+            $textResult = sms_to_client($cid, (brand('short') ?: cfg('name')) . ': ' . ($body !== '' ? $body : (client_lang($cid) === 'es' ? 'Le enviamos un archivo. Ábralo en su portal.' : 'We sent you a file. Open your portal to see it.')), 'message', null, $userId);
             if ($textResult['ok']) db()->prepare("UPDATE messages SET via = 'text' WHERE id = ?")->execute([$id]);
         }
         message_notice($cid, $channel); // 3.0.40: a short "new message" email, at most once a day
@@ -4273,7 +4314,7 @@ switch ($action) {
 
     default:
         // The 4.0.0 actions (inc/api_more.php): alerts, client requests, invoices and tasks.
-        $more = api_more($action, $input, $userId);
+        $more = api_more($action, $input, $userId) ?? api_425($action, $input, $userId);   // and the 4.25.0 ones (inc/api_425.php)
         if ($more === null) fail('Unknown action.', 404);
         if (empty($more['ok'])) fail((string)$more['error'], (int)($more['status'] ?? 400));
         out($more);

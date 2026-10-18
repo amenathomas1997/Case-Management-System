@@ -85,6 +85,23 @@ fun EquipmentScreen(api: Api) {
     lending?.let { e -> LendDialog(api, e, onDone = { m -> lending = null; notice = m; state.reload() }, onCancel = { lending = null }) }
 }
 
+/** Why equipment is lent and to whom (4.21.0), as the website's loan form names them. */
+val LOAN_PURPOSES = listOf(
+    "decision" to "To help decide which device to get",
+    "loaner" to "As a loaner while a device is repaired or funding is awaited",
+    "accommodation" to "As a short-term accommodation",
+    "training" to "For training, self-education or professional development",
+)
+val BORROWER_TYPES = listOf(
+    "individual" to "A person with a disability",
+    "family" to "A family member or guardian",
+    "education" to "Someone from education",
+    "employment" to "Someone from employment",
+    "health" to "Someone from health or rehabilitation",
+    "community" to "Someone from community living",
+    "technology" to "A technology professional",
+)
+
 @Composable
 private fun LendDialog(api: Api, e: JSONObject, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val clients = rememberLoaded(e.optInt("id")) {
@@ -94,6 +111,9 @@ private fun LendDialog(api: Api, e: JSONObject, onDone: (String) -> Unit, onCanc
     var due by remember { mutableStateOf("") }
     var condition by remember { mutableStateOf(e.optString("item_condition")) }
     var signedBy by remember { mutableStateOf("") }
+    var purpose by remember { mutableStateOf("") }
+    var borrower by remember { mutableStateOf("") }
+    var notes by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -110,6 +130,9 @@ private fun LendDialog(api: Api, e: JSONObject, onDone: (String) -> Unit, onCanc
                 Field("Due back", due, { due = it }, hint = "year-month-day; empty for the usual period")
                 Choice("Condition going out", condition, conditions.map { it to it }) { condition = it }
                 Field("Received by", signedBy, { signedBy = it }, hint = "the name of who took it, optional")
+                Choice("Purpose", purpose, listOf("" to "Not recorded") + LOAN_PURPOSES) { purpose = it }
+                Choice("Who is borrowing", borrower, listOf("" to "Not recorded") + BORROWER_TYPES) { borrower = it }
+                Field("Notes", notes, { notes = it }, hint = "optional")
                 ErrorText(error)
             }
         },
@@ -118,6 +141,9 @@ private fun LendDialog(api: Api, e: JSONObject, onDone: (String) -> Unit, onCanc
                 scope.launchSave({ busy = it }, { error = it }) {
                     val b = JSONObject().put("equipment_id", e.optInt("id")).put("client_id", client.toInt()).put("condition_out", condition).put("accepted_name", signedBy.trim())
                     if (due.isNotBlank()) b.put("due_date", due.trim())
+                    if (notes.isNotBlank()) b.put("notes", notes.trim().take(255))
+                    if (purpose.isNotEmpty()) b.put("purpose", purpose)
+                    if (borrower.isNotEmpty()) b.put("borrower_type", borrower)
                     api.call("loan_equipment", body = b)
                     onDone(e.optString("name") + " lent.")
                 }

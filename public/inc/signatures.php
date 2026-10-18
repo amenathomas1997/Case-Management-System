@@ -29,6 +29,7 @@ function signature_wording(string $key, string $lang): array {
 function signature_status(array $s): string {
     if (!empty($s['withdrawn_at'])) return 'Withdrawn';
     if (!empty($s['signed_at'])) return 'Signed';
+    if (($s['method'] ?? 'Email') === 'In person') return 'Waiting to be signed here';
     return strtotime((string)$s['sent_at']) > time() - 86400 * cms_number('sign_link_days') ? 'Awaiting signature' : 'Link expired';
 }
 
@@ -55,14 +56,16 @@ function signature_open_loans(int $clientId): array {
 /**
  * Check a request from posted fields. Returns [errors, values]. $loans are the client's open loans.
  */
-function signature_input(array $in, array $loans): array {
+function signature_input(array $in, array $loans, bool $inPerson = false): array {
     $s = fn(string $k): string => is_string($in[$k] ?? null) ? trim(str_replace("\r", '', $in[$k])) : '';
     $e = [];
     $v = ['kind' => $s('kind'), 'signer_role' => $s('signer_role') === 'Guardian' ? 'Guardian' : 'Client', 'signer_name' => $s('signer_name'),
         'signer_email' => $s('signer_email'), 'title' => $s('title'), 'body' => $s('body'), 'loan_id' => null];
     if (!isset(SIGN_KINDS[$v['kind']])) $e['kind'] = 'Choose what to send.';
     if ($v['signer_name'] === '' || mb_strlen($v['signer_name']) > 120) $e['signer_name'] = 'Who signs: enter their full name (120 characters or fewer).';
-    if (!filter_var($v['signer_email'], FILTER_VALIDATE_EMAIL) || mb_strlen($v['signer_email']) > 190) $e['signer_email'] = 'Their email: enter one valid address.';
+    // Signing in person (4.25.0) needs no email; one given is kept, and must be valid.
+    if ($inPerson ? ($v['signer_email'] !== '' && (!filter_var($v['signer_email'], FILTER_VALIDATE_EMAIL) || mb_strlen($v['signer_email']) > 190))
+        : (!filter_var($v['signer_email'], FILTER_VALIDATE_EMAIL) || mb_strlen($v['signer_email']) > 190)) $e['signer_email'] = 'Their email: enter one valid address.';
     if ($v['kind'] === 'loan') {
         $lid = ctype_digit($s('loan_id')) ? (int)$s('loan_id') : 0;
         if (!isset($loans[$lid])) $e['loan_id'] = 'Choose the device on loan.';
@@ -101,6 +104,10 @@ function signature_document(array $v, array $client, array $loans): array {
 /** Email a request to sign. Returns ['error' => ?string, 'id' => int]; nothing is kept when the email cannot be sent. */
 function signature_send(array $client, array $v, array $loans, int $actor): array {
     [$title, $body, $lang] = signature_document($v, $client, $loans);
+    // The same request again within two minutes (a retry after a lost reply) is not emailed twice.
+    $again = db()->prepare("SELECT id FROM client_signatures WHERE client_id = ? AND method = 'Email' AND kind = ? AND title = ? AND signer_email = ? AND created_by = ? AND withdrawn_at IS NULL AND sent_at > DATE_SUB(NOW(), INTERVAL 2 MINUTE) LIMIT 1");
+    $again->execute([(int)$client['id'], $v['kind'], mb_substr($title, 0, 190), $v['signer_email'], $actor]);
+    if ($id = (int)$again->fetchColumn()) return ['error' => null, 'id' => $id];
     $token = bin2hex(random_bytes(24));
     db()->prepare('INSERT INTO client_signatures (client_id, kind, title, body, lang, loan_id, signer_role, signer_name, signer_email, token, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
         ->execute([(int)$client['id'], $v['kind'], mb_substr($title, 0, 190), $body, $lang, $v['loan_id'], $v['signer_role'], $v['signer_name'], $v['signer_email'], $token, $actor]);
@@ -115,8 +122,68 @@ function signature_send(array $client, array $v, array $loans, int $actor): arra
     return ['error' => null, 'id' => $id];
 }
 
+/**
+ * Start a document to sign in person (4.25.0): nothing is emailed; the staff member hands over their device
+ * and the signer reads it there. Returns the new request's id.
+ */
+function signature_start_in_person(array $client, array $v, array $loans, int $actor): int {
+    [$title, $body, $lang] = signature_document($v, $client, $loans);
+    // The same document started again today (a second press, or Start after a cancelled hand-over) is reused.
+    $same = db()->prepare("SELECT id FROM client_signatures WHERE client_id = ? AND method = 'In person' AND signed_at IS NULL AND withdrawn_at IS NULL
+        AND kind = ? AND title = ? AND signer_name = ? AND body = ? AND sent_at > DATE_SUB(NOW(), INTERVAL 1 DAY) ORDER BY id DESC LIMIT 1");
+    $same->execute([(int)$client['id'], $v['kind'], mb_substr($title, 0, 190), $v['signer_name'], $body]);
+    if ($id = (int)$same->fetchColumn()) return $id;
+    db()->prepare("INSERT INTO client_signatures (client_id, kind, title, body, lang, loan_id, signer_role, signer_name, signer_email, token, created_by, method) VALUES (?,?,?,?,?,?,?,?,?,?,?,'In person')")
+        ->execute([(int)$client['id'], $v['kind'], mb_substr($title, 0, 190), $body, $lang, $v['loan_id'], $v['signer_role'], $v['signer_name'], $v['signer_email'], bin2hex(random_bytes(24)), $actor]);
+    $id = (int)db()->lastInsertId();
+    audit($actor, 'signature.in_person', 'client', (int)$client['id'], $title);
+    return $id;
+}
+
+/** Whether a typed name matches the signer's name (capitals, accents and punctuation aside). */
+function signature_name_matches(string $want, string $typed): bool {
+    if ($typed === '' || !mb_check_encoding($typed, 'UTF-8') || mb_strlen($typed) > 120) return false;
+    $key = typed_name_key($want);
+    return $key !== '' ? typed_name_key($typed) === $key : mb_convert_case($typed, MB_CASE_FOLD, 'UTF-8') === mb_convert_case(trim($want), MB_CASE_FOLD, 'UTF-8');
+}
+
+/**
+ * Sign in person: the typed name, and a drawn signature (PNG bytes) when the device took one. Returns null when
+ * signed, else the reason in plain words.
+ */
+function signature_sign_in_person(array $r, string $typed, ?string $png, ?int $staff = null): ?string {
+    if (!empty($r['withdrawn_at'])) return 'This document was withdrawn.';
+    if (!empty($r['signed_at'])) return 'This document is already signed.';
+    // Only a document started for signing in person, today: one sent by email is signed by its own link.
+    if (($r['method'] ?? '') !== 'In person') return 'This document was sent by email: it is signed from the link in that email.';
+    if (strtotime((string)$r['sent_at']) < time() - 86400) return 'This document was started more than a day ago. Start it again to sign it.';
+    if (!signature_name_matches((string)$r['signer_name'], $typed)) return 'The name typed does not match the name on the document: ' . $r['signer_name'] . '.';
+    $stored = null;
+    if ($png !== null && $png !== '') {
+        if (strlen($png) > 2 * 1024 * 1024 || !str_starts_with($png, "\x89PNG\r\n\x1a\n")) return 'The drawn signature could not be read. Clear it and sign again, or sign by typed name only.';
+        $dir = cfg('upload_dir');
+        if (!is_dir($dir)) @mkdir($dir, 0750, true);
+        $stored = 'sig-' . bin2hex(random_bytes(16)) . '.png';
+        if (file_put_contents($dir . '/' . $stored, $png) === false) return 'The signature could not be saved. Please try again.';
+    }
+    $_SERVER['REMOTE_ADDR'] ??= '';
+    $who = null;
+    if ($staff) { $u = db()->prepare('SELECT name FROM users WHERE id = ?'); $u->execute([$staff]); $who = (string)($u->fetchColumn() ?: 'staff'); }
+    if (!signature_sign($r, $typed, ' Signed in person' . ($who ? ' on the device of ' . $who : '') . ($stored ? ', with a drawn signature' : '') . '.')) { if ($stored) @unlink(cfg('upload_dir') . '/' . $stored); return 'This document is already signed.'; }
+    db()->prepare('UPDATE client_signatures SET signature_path = ? WHERE id = ?')->execute([$stored, (int)$r['id']]);
+    if ($staff) audit($staff, 'signature.signed_in_person', 'client', (int)$r['client_id'], (string)$r['title'] . ' signed by ' . $typed);
+    return null;
+}
+
+/** One of a client's documents to sign, or null. */
+function client_signature(int $id, int $clientId): ?array {
+    $q = db()->prepare('SELECT * FROM client_signatures WHERE id = ? AND client_id = ?');
+    $q->execute([$id, $clientId]);
+    return $q->fetch() ?: null;
+}
+
 /** Sign a request with the typed name. True when this call signed it. */
-function signature_sign(array $r, string $typed): bool {
+function signature_sign(array $r, string $typed, string $how = ''): bool {
     $pdo = db();
     $pdo->beginTransaction();
     try {
@@ -126,7 +193,7 @@ function signature_sign(array $r, string $typed): bool {
         if ($done) {
             $pdo->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)')
                 ->execute([(int)$r['client_id'], 'Case Note', 'Signed: ' . mb_substr((string)$r['title'], 0, 150),
-                    $r['title'] . ' electronically signed by ' . $typed . ' (' . $r['signer_email'] . ') on ' . date('F j, Y g:i A') . '.']);
+                    $r['title'] . ' electronically signed by ' . $typed . (trim((string)$r['signer_email']) !== '' ? ' (' . $r['signer_email'] . ')' : '') . ' on ' . date('F j, Y g:i A') . '.' . $how]);
             // A loan agreement is also the borrower's acceptance of the loan, unless one was recorded at hand-off.
             if (!empty($r['loan_id'])) $pdo->prepare('UPDATE equipment_loans SET accepted_name = COALESCE(accepted_name, ?), accepted_at = COALESCE(accepted_at, NOW()) WHERE id = ? AND returned_at IS NULL')->execute([$typed, (int)$r['loan_id']]);
         }

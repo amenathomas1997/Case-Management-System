@@ -58,15 +58,15 @@ $outstanding = count(array_filter($rows, fn($r) => in_array($r[4], ['Not signed'
 <section class="card" aria-labelledby="p-<?= (int)$p['id'] ?>">
   <h2 id="p-<?= (int)$p['id'] ?>"><?= h($p['name']) ?><?= (int)$p['is_active'] ? '' : ' (switched off)' ?></h2>
   <?php if (!$mine): ?><p>Nothing is asked of them yet.</p><?php else: ?>
-  <table class="table">
-    <caption class="visually-hidden"><?= h($p['name']) ?>: agreements, training and credentials</caption>
+  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="sr-cap-<?= (int)$p['id'] ?>"><table class="table">
+    <caption class="visually-hidden" id="sr-cap-<?= (int)$p['id'] ?>"><?= h($p['name']) ?>: agreements, training and credentials</caption>
     <thead><tr><th scope="col">Item</th><th scope="col">Status</th><th scope="col">Date</th><th scope="col">Detail</th></tr></thead>
     <tbody>
     <?php foreach ($mine as $r): ?>
       <tr><th scope="row"><?= h($r[2] . ': ' . $r[3]) ?></th><td><?= in_array($r[4], ['Not signed', 'Not passed', 'Expired'], true) ? '<strong>' . h($r[4]) . '</strong>' : h($r[4]) ?></td><td><?= $r[5] !== '' ? fmt_date($r[5]) : '—' ?></td><td><?= h($r[6]) ?></td></tr>
     <?php endforeach; ?>
     </tbody>
-  </table>
+  </table></div>
   <?php endif; ?>
 </section>
 <?php endforeach; ?>

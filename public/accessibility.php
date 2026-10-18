@@ -13,7 +13,7 @@ page_header('Accessibility', $viewer ?: null);
 <ul>
   <li>It is developed with blind people who use it every day with screen readers (JAWS and VoiceOver).</li>
   <li>Every release is tested automatically, including text contrast and keyboard and focus behaviour.</li>
-  <li>It has had an accessibility review against WCAG 2.2, and browser checks of control names and of layout at small screen widths and large text.</li>
+  <li>Every change is also checked in a real browser: names on every control, page structure, and layout at small screen widths and large text. It has had an accessibility review against WCAG 2.2.</li>
 </ul>
 <h2>What we know is not yet complete</h2>
 <ul>

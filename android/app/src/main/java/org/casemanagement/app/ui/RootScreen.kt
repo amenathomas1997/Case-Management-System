@@ -44,6 +44,8 @@ fun RootScreen(api: Api) {
     }
     // Another account starts from fresh screens; the same account signing back in keeps them.
     androidx.compose.runtime.key(api.userId) { MainScreen(api) }
+    // Signing in person: above every screen until staff unlock the phone.
+    InPersonSigningHost(api)
     if (api.reauthRequired) {
         // Above the open screens, which stay as they were (a half-written note is kept).
         androidx.compose.ui.window.Dialog(onDismissRequest = {}, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false)) {
@@ -128,6 +130,7 @@ private val titles = mapOf(
     "programs" to "Pre-ETS programs", "cohort" to "Cohort", "contracts" to "Grants and contracts", "contract" to "Contract", "bookings" to "Bookings",
     "procurement" to "Device procurement", "deviceRequest" to "Device request", "accommodations" to "Worksite accommodations", "worksite" to "Worksite assessment",
     "training" to "My training", "trainingTake" to "Training", "credentials" to "My credentials", "agreements" to "My agreements", "agreement" to "Agreement", "agreementCopy" to "Signed copy", "kb" to "Knowledge base", "kbEdit" to "Article", "counselors" to "Counselor portal", "portalRequests" to "Client requests", "utilization" to "Utilization", "docReview" to "Documentation review",
+    "signatures" to "Documents to sign", "release" to "Release of information", "history" to "Status history",
 )
 
 @Composable
@@ -195,6 +198,9 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("agreementCopy/{id}") { AgreementCopyScreen(api, n(it, "id")) }
         composable("messages") { MessagesScreen(api, nav) }
         composable("thread/{clientId}") { ThreadScreen(api, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0) }
+        composable("signatures/{clientId}") { SignaturesScreen(api, n(it, "clientId")) }
+        composable("release/{clientId}") { ReleaseRequestScreen(api, nav, n(it, "clientId")) }
+        composable("history/{clientId}") { StatusHistoryScreen(api, n(it, "clientId")) }
         composable("account") { AccountScreen(api, nav) }
         composable("offline") { OfflineScreen(api) }
     }

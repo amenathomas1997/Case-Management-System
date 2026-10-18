@@ -501,6 +501,8 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif (!upload_content_ok((string)$_FILES['document']['tmp_name'], $ext)) {
                 // The content must be what the name says (4.24.0): a renamed program or page is refused.
                 keep_field_errors(['document' => 'That file is not really the type its name says, so it was not accepted. Save it again, or send it as a PDF.']);
+            } elseif (($virus = upload_virus_check((string)$_FILES['document']['tmp_name'])) !== null) {
+                keep_field_errors(['document' => $virus]);
             } elseif ($isDupDoc) {
                 unset($_SESSION['old_input']); // already saved: nothing to refill
                 flash_ui('That document was already uploaded, so it was not uploaded again.', 'info');

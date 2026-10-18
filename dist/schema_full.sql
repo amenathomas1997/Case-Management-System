@@ -277,6 +277,8 @@ CREATE TABLE `client_signatures` (
   `withdrawn_at` datetime DEFAULT NULL,
   `withdrawn_by` int(10) unsigned DEFAULT NULL,
   `lang` char(2) DEFAULT NULL,
+  `method` varchar(20) NOT NULL DEFAULT 'Email',
+  `signature_path` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `token` (`token`),
   KEY `client_id` (`client_id`),

@@ -42,6 +42,22 @@ models.append(r'''
             guard ok(value) else { fatalError("Decoded values are wrong: " + label) }
             print("PASS: iOS decodes " + label)
         }
+        // The 4.25.0 screens, from tests/v425_cases.php (a run of its own): the decoded values must be right.
+        if fixtures["client425"] != nil {
+            try values(ClientDetail.self, "client425", "a client with custom fields to edit, offices and device counts") {
+                !$0.extras.customFieldsEdit.isEmpty && $0.extras.customFieldsEdit.contains { $0.type == "choice" && !$0.options.isEmpty }
+            }
+            try values(ThreadResponse.self, "message_thread425", "a message carrying a file") { $0.messages.contains { $0.documentId != nil && $0.documentTitle != nil } }
+            try values(DocumentsResponse.self, "documents425", "documents shared with the client and the counselor") { $0.documents.contains { $0.portalShared && $0.counselorShared } }
+            try values(SignaturesResponse.self, "signatures425", "documents to sign, one signed in person with a drawn signature") {
+                $0.signatures.contains { $0.status == "Signed" && $0.method == "In person" && $0.hasDrawnSignature } && $0.kinds["services"] != nil
+            }
+            try values(SigningDocumentResponse.self, "signature425", "a document to sign with its words") { !$0.signature.body.isEmpty && !$0.signature.title.isEmpty }
+            try verify(ReleaseChoices.self, "release_choices425")
+            try verify(ReferralDeadlines.self, "referral_deadlines425")
+            try values(NewClientOptions.self, "form_options425", "the new-client form's custom fields") { !$0.customFields.isEmpty }
+            return
+        }
         try literal(PostMessageResponse.self, #"{"ok":true,"id":12,"delivered":false,"warning":"Message saved, but this client has no active portal link, so they cannot read it yet."}"#,
                     "a message reply with a delivery warning") { $0.delivered == false && $0.warning != nil }
         try literal(PostMessageResponse.self, #"{"ok":true,"id":13,"delivered":1,"warning":null}"#,

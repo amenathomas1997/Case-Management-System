@@ -31,6 +31,7 @@ import org.json.JSONObject
 fun DocumentsScreen(api: Api, clientId: Int) {
     val context = LocalContext.current
     val state = rememberLoaded(clientId) {
+        api.learn425(clientId)
         val docs = api.call("documents", mapOf("client_id" to clientId.toString())).optJSONArray("documents").objects()
         val hw = api.call("homework", mapOf("client_id" to clientId.toString())).optJSONArray("homework").objects()
         docs to hw
@@ -41,7 +42,24 @@ fun DocumentsScreen(api: Api, clientId: Int) {
     var completing by remember { mutableStateOf<JSONObject?>(null) }
     var assigning by remember { mutableStateOf(false) }
     var uploading by remember { mutableStateOf(false) }
+    var chosen by remember { mutableStateOf<JSONObject?>(null) }
     val scope = rememberCoroutineScope()
+    fun share(d: JSONObject, with: String, on: Boolean) {
+        chosen = null; error = null; notice = null
+        scope.launch {
+            try {
+                api.call("share_document", body = JSONObject().put("client_id", clientId).put("document_id", d.optInt("id")).put("with", with).put("on", on))
+                val title = d.optString("title").ifEmpty { d.optString("orig_name") }
+                notice = when {
+                    with == "portal" && on -> "$title is shared with the client. It shows in their portal."
+                    with == "portal" -> "$title is no longer shared with the client."
+                    on -> "$title is shared with the counselor. It shows in the counselor portal."
+                    else -> "$title is no longer shared with the counselor."
+                }
+                state.reload()
+            } catch (e: ApiException) { error = e.message }
+        }
+    }
     Show(state, "documents and homework") { (docs, hw) ->
         Page {
             NoticeText(notice)
@@ -50,18 +68,13 @@ fun DocumentsScreen(api: Api, clientId: Int) {
             if (api.can("clients")) SecondaryButton("Upload a document") { uploading = true }
             if (docs.isEmpty()) Text("No documents.")
             docs.forEach { d ->
-                ListRow(listOf(d.optString("title").ifEmpty { d.optString("orig_name") }, d.optString("category") + ", " + whenText(d.str("created_at"))),
-                    action = "open it", onClick = {
-                        if (busy) return@ListRow
-                        error = null; busy = true
-                        scope.launch {
-                            try {
-                                val f = api.download(d.optInt("id"), api.docsFolder)
-                                val uri = FileProvider.getUriForFile(context, context.packageName + ".files", f)
-                                val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "application/octet-stream"
-                                val i = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                if (!openLink(context, Intent.createChooser(i, "Open with"))) error = "No app on this phone can open this kind of file."
-                            } catch (e: ApiException) { error = e.message } finally { busy = false }
+                ListRow(listOf(d.optString("title").ifEmpty { d.optString("orig_name") }, d.optString("category") + ", " + whenText(d.str("created_at")), sharedWords(d)),
+                    action = if (api.server425 == true) "open it or share it" else "open it", onClick = {
+                        // Sharing needs a 4.25.0 server; on an older one the row opens the document as before.
+                        if (api.server425 == true) chosen = d
+                        else if (!busy) {
+                            error = null; busy = true
+                            scope.launch { try { openDocument(api, context, d.optInt("id"))?.let { error = it } } catch (e: ApiException) { error = e.message } finally { busy = false } }
                         }
                     })
             }
@@ -85,8 +98,54 @@ fun DocumentsScreen(api: Api, clientId: Int) {
             }
         }, { completing = null })
     }
+    chosen?.let { d ->
+        val portal = d.optBoolean("portal_shared")
+        val counselor = d.optBoolean("counselor_shared")
+        // A Resource, or a file the client sent, is always in their portal.
+        val portalFixed = d.optString("category") in setOf("Resource", "Shared by client") || d.str("uploaded_via") == "portal"
+        AlertDialog(
+            onDismissRequest = { chosen = null },
+            title = { Text(d.optString("title").ifEmpty { d.optString("orig_name") }, modifier = Modifier.semantics { heading() }) },
+            text = {
+                Column {
+                    Text(sharedWords(d) + ".")
+                    TextButton(onClick = {
+                        chosen = null
+                        if (busy) return@TextButton
+                        error = null; busy = true
+                        scope.launch {
+                            try { openDocument(api, context, d.optInt("id"))?.let { error = it } } catch (e: ApiException) { error = e.message } finally { busy = false }
+                        }
+                    }) { Text("Open it") }
+                    if (api.can("clients")) {
+                        if (!portalFixed) TextButton(onClick = { share(d, "portal", !portal) }) { Text(if (portal) "Stop sharing with the client" else "Share with the client") }
+                        TextButton(onClick = { share(d, "counselor", !counselor) }) { Text(if (counselor) "Stop sharing with the counselor" else "Share with the counselor") }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { chosen = null }) { Text("Close") } },
+        )
+    }
     if (uploading) UploadDocumentDialog(api, clientId, onDone = { m -> uploading = false; notice = m; state.reload() }, onCancel = { uploading = false })
     if (assigning) AssignHomeworkDialog(api, clientId, onDone = { m -> assigning = false; notice = m; state.reload() }, onCancel = { assigning = false })
+}
+
+/** Who can see a document besides staff, in words. */
+fun sharedWords(d: JSONObject): String {
+    val with = listOfNotNull(if (d.optBoolean("portal_shared")) "the client" else null, if (d.optBoolean("counselor_shared")) "the counselor" else null)
+    return if (with.isEmpty()) "Not shared" else "Shared with " + with.joinToString(" and ")
+}
+
+/**
+ * Downloads a client's document and opens it in another app (through the app's FileProvider).
+ * Returns why it could not be opened, or null.
+ */
+suspend fun openDocument(api: Api, context: android.content.Context, id: Int): String? {
+    val f = api.download(id, api.docsFolder)
+    val uri = FileProvider.getUriForFile(context, context.packageName + ".files", f)
+    val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "application/octet-stream"
+    val i = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    return if (!openLink(context, Intent.createChooser(i, "Open with"))) "No app on this phone can open this kind of file." else null
 }
 
 @Composable

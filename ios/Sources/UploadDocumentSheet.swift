@@ -27,12 +27,12 @@ struct UploadDocumentSheet: View {
 
     /// The file types the server accepts (api.php upload_document), checked before anything is
     /// sent so a refused type is never uploaded in full first.
-    private static let allowedExtensions = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "png", "jpg", "jpeg", "heic"]
-    private static let importTypes: [UTType] = allowedExtensions.compactMap { UTType(filenameExtension: $0) }
+    static let allowedExtensions = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "png", "jpg", "jpeg", "heic"]
+    static let importTypes: [UTType] = allowedExtensions.compactMap { UTType(filenameExtension: $0) }
     /// The server's limit (api.php upload_document, as on the website). The file goes up
     /// base64-encoded inside JSON (a third larger, about 33.3 MB), which the server's request
     /// body limit (post_max_size 36M in public/.user.ini) still fits.
-    private static let maxBytes = 25 * 1024 * 1024
+    static let maxBytes = 25 * 1024 * 1024
 
     var body: some View {
         NavigationStack {
@@ -166,7 +166,7 @@ struct UploadDocumentSheet: View {
     /// file has been sent. A longer name is shortened here instead, keeping its extension and
     /// never splitting a character.
     private static let maxNameLength = 190
-    private static func uploadName(_ name: String) -> String {
+    static func uploadName(_ name: String) -> String {
         guard name.unicodeScalars.count > maxNameLength else { return name }
         let ext = (name as NSString).pathExtension
         let suffix = ext.isEmpty ? "" : "." + ext

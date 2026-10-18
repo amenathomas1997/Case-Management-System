@@ -74,6 +74,51 @@ class Api(context: Context) {
         private set
     var syncNotice by mutableStateOf<String?>(null)
 
+    /**
+     * A document being signed in person on this phone (4.25.0), with "_client_id" and, once signed,
+     * "_signed". Kept on the phone until staff unlock it, so closing or restarting the app never
+     * lets the signer reach client records.
+     */
+    var inPersonSigning by mutableStateOf(store.string(SIGNING_KEY).let { if (it.isEmpty()) null else try { JSONObject(it) } catch (e: Exception) { null } })
+        private set
+
+    fun beginInPerson(clientId: Int, doc: JSONObject) {
+        val o = JSONObject(doc.toString()).put("_client_id", clientId)
+        store.putNow(SIGNING_KEY, o.toString())
+        inPersonSigning = o
+    }
+
+    fun markInPersonSigned() {
+        val o = inPersonSigning?.let { JSONObject(it.toString()).put("_signed", true) } ?: return
+        store.putNow(SIGNING_KEY, o.toString())
+        inPersonSigning = o
+    }
+
+    fun endInPerson() {
+        inPersonSigning = null
+        store.remove(SIGNING_KEY)
+    }
+
+    /**
+     * Whether the server has the 4.25.0 actions (files with messages, sharing, documents to sign,
+     * releases): its client detail then has "device_counts". Null until a client has been read.
+     */
+    var server425 by mutableStateOf(store.string("server425").let { if (it.isEmpty()) null else it == "1" })
+        private set
+
+    /** Notes what a client detail reply says about the server. */
+    fun noteClientDetail(r: JSONObject) {
+        val c = r.optJSONObject("client") ?: return
+        val has = c.has("device_counts")
+        if (server425 != has) { server425 = has; store.put("server425", if (has) "1" else "0") }
+    }
+
+    /** Reads one client's detail only to learn [server425], when it is not known yet. */
+    suspend fun learn425(clientId: Int) {
+        if (server425 != null || clientId <= 0) return
+        try { noteClientDetail(call("client", mapOf("id" to clientId.toString()))) } catch (e: ApiException) { }
+    }
+
     val isSignedIn: Boolean get() = token.isNotEmpty()
 
     /** Until the first answer, everything shows (the server enforces access either way). */
@@ -102,6 +147,7 @@ class Api(context: Context) {
         userId = 0; userName = ""; store.remove("userId", "userName", "lastEmail")
         store.removePrefix("cache.")
         clearIdentity(keepQueue = false)
+        server425 = null; store.remove("server425")
         store.put(SecureStore.SERVER_KEY, address.trim())
     }
 
@@ -243,14 +289,24 @@ class Api(context: Context) {
      * Uploads a document without holding it in memory: the file (already copied to [file], at most
      * 25 MB) is sent as base64 straight from disk inside the JSON body, with an exact length.
      */
-    suspend fun uploadDocument(clientId: Int, category: String, title: String, filename: String, file: java.io.File) = withContext(Dispatchers.IO) {
+    suspend fun uploadDocument(clientId: Int, category: String, title: String, filename: String, file: java.io.File) {
+        postWithFile("upload_document", JSONObject().put("client_id", clientId).put("category", category).put("title", title).put("filename", filename),
+            "data_b64", file, "The document was not uploaded.")
+    }
+
+    /**
+     * Sends [fields] with [file] as base64 under [fileKey], streamed from disk as uploadDocument
+     * does (a message with a new file, 4.25.0). Returns the server's answer.
+     */
+    suspend fun postWithFile(action: String, fields: JSONObject, fileKey: String, file: java.io.File, failed: String): JSONObject = withContext(Dispatchers.IO) {
         val sessionToken = token
-        val prefix = "{\"client_id\":$clientId,\"category\":${JSONObject.quote(category)},\"title\":${JSONObject.quote(title)},\"filename\":${JSONObject.quote(filename)},\"data_b64\":\""
+        val head = fields.toString().removeSuffix("}")
+        val prefix = head + (if (fields.length() > 0) "," else "") + JSONObject.quote(fileKey) + ":\""
         val suffix = "\"}"
         val n = file.length()
         val b64Len = 4 * ((n + 2) / 3)
         val pre = prefix.toByteArray(Charsets.UTF_8); val suf = suffix.toByteArray(Charsets.UTF_8)
-        val conn = (URL(url("upload_document", emptyMap())).openConnection() as HttpURLConnection)
+        val conn = (URL(url(action, emptyMap())).openConnection() as HttpURLConnection)
         try {
             conn.connectTimeout = 20_000; conn.readTimeout = 120_000
             conn.requestMethod = "POST"; conn.doOutput = true
@@ -280,7 +336,8 @@ class Api(context: Context) {
             val text = (if (status >= 400) conn.errorStream else conn.inputStream)?.bufferedReader()?.use { it.readText() } ?: ""
             val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
             if (status == 401) withContext(Dispatchers.Main) { if (json.optBoolean("wipe")) wipeThisPhone() else expireSession() }
-            if (status !in 200..299 || !json.optBoolean("ok")) throw ApiException(json.optString("error").ifEmpty { "The document was not uploaded." }, status)
+            if (status !in 200..299 || !json.optBoolean("ok")) throw ApiException(json.optString("error").ifEmpty { failed }, status, reply = json)
+            json
         } catch (e: IOException) {
             throw ApiException(NO_CONNECTION, 0, network = true)
         } finally { conn.disconnect() }
@@ -365,6 +422,7 @@ class Api(context: Context) {
 
     private fun clearIdentity(keepQueue: Boolean = true) {
         docsFolder.deleteRecursively()
+        endInPerson()
         perms = emptyList(); permsLoaded = false; scoped = false; aiEnabled = false; aiFeatures = emptyList(); accessHold = emptyList(); serverVersion = null
         store.remove("userPerms", "userPermsLoaded", "userScoped", "formOptions")
         if (!keepQueue) store.remove(QUEUE_KEY)
@@ -469,6 +527,7 @@ class Api(context: Context) {
 
     companion object {
         const val QUEUE_KEY = "offlineQueue"
+        const val SIGNING_KEY = "inPersonSigning"
         const val NO_CONNECTION = "No connection to the server. Check your signal and try again."
         val APP_VERSION = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) Android"
         val deviceName: String get() = listOf(Build.MANUFACTURER.replaceFirstChar { it.uppercase() }, Build.MODEL).distinct().joinToString(" ").take(60)

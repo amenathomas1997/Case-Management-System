@@ -155,6 +155,7 @@ struct ClientDetailView: View {
     @State private var expandedNotes: Set<Int> = []
     @State private var showingAddTrack = false
     @State private var showingConsent = false
+    @State private var showingReleaseRequest = false
     /// Asking before a new portal link is emailed (3.0.40).
     @State private var confirmingPortalLink = false
     @State private var sendingPortalLink = false
@@ -199,6 +200,20 @@ struct ClientDetailView: View {
             }
     }
 
+    /// Where the client lives and their office (4.25.0), as the website's client page shows them.
+    @ViewBuilder
+    private func placeAndOffice(_ detail: ClientDetail) -> some View {
+        if let code = detail.client.state, !code.isEmpty {
+            LabeledContent("State", value: usStates.first { $0.code == code }?.name ?? code)
+        }
+        if let zone = detail.client.timeZone, !zone.isEmpty {
+            LabeledContent("Time zone", value: timeZoneName(zone))
+        }
+        if let office = detail.extras.office, !office.isEmpty {
+            LabeledContent("Office", value: office)
+        }
+    }
+
     var body: some View {
         List {
             if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
@@ -209,6 +224,7 @@ struct ClientDetailView: View {
             if let detail {
                 Section("Contact") {
                     LabeledContent("Status", value: detail.client.status)
+                    placeAndOffice(detail)
                     if let phone = detail.client.phone, !phone.isEmpty {
                         // A stored number that can't be dialled is still shown, as plain text.
                         if let url = telURL(phone) {
@@ -242,6 +258,10 @@ struct ClientDetailView: View {
                         } else {
                             LabeledContent("Guardian phone", value: gPhone)
                         }
+                    }
+                    // The organisation's own fields (4.25.0), answered ones only.
+                    ForEach(Array(detail.extras.customFields.enumerated()), id: \.offset) { _, field in
+                        LabeledContent(field.label, value: field.value)
                     }
                 }
 
@@ -282,10 +302,28 @@ struct ClientDetailView: View {
 
                 Section("Releases of information") {
                     if detail.releases.isEmpty {
-                        Text("No release of information on file. Request one on the website's client page.").font(.callout)
+                        Text("No release of information on file.").font(.callout)
                     } else {
                         ForEach(detail.releases) { r in Text(r.summary).font(.callout) }
                     }
+                    // Only on a server that has it (4.25.0).
+                    if detail.extras.supports425 {
+                        Button { confirmation = nil; showingReleaseRequest = true } label: {
+                            Label("Request a release", systemImage: "envelope")
+                        }
+                    }
+                }
+
+                if detail.extras.supports425 {
+                Section("Documents to sign") {
+                    NavigationLink {
+                        SignaturesView(clientId: clientId, client: detail.client) { Task { await reload() } }
+                    } label: {
+                        let waiting = detail.extras.signaturesWaiting
+                        Label(waiting > 0 ? "Documents to sign, \(waiting) waiting for a signature" : "Documents to sign",
+                              systemImage: "signature")
+                    }
+                }
                 }
 
                 Section("Progress tools") {
@@ -328,7 +366,7 @@ struct ClientDetailView: View {
                 AssessmentsSection(clientId: clientId, reloadToken: sectionReload)
 
                 HomeworkSection(clientId: clientId, tracks: detail.tracks, reloadToken: sectionReload)
-                DocumentsSection(clientId: clientId, reloadToken: sectionReload)
+                DocumentsSection(clientId: clientId, reloadToken: sectionReload, sharing: detail.extras.supports425)
 
                 Section(notesHeader) {
                     ForEach(shownNotes) { note in
@@ -490,6 +528,14 @@ struct ClientDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingReleaseRequest, onDismiss: announceSheetResult) {
+            if let client = detail?.client {
+                ReleaseRequestSheet(clientId: clientId, client: client) { message in
+                    confirmation = message; sheetResult = message
+                    Task { await reload() }
+                }
+            }
+        }
         .sheet(isPresented: $showingAISummary, onDismiss: announceSheetResult) {
             AICaseSummarySheet(clientId: clientId) { message in
                 confirmation = message; sheetResult = message
@@ -498,7 +544,7 @@ struct ClientDetailView: View {
         }
         .sheet(isPresented: $showingEditClient, onDismiss: announceSheetResult) {
             if let client = detail?.client {
-                ClientEditSheet(existing: client, emailVerified: emailVerified, texting: detail?.texting) { _, message in
+                ClientEditSheet(existing: client, emailVerified: emailVerified, texting: detail?.texting, extras: detail?.extras) { _, message in
                     confirmation = message; sheetResult = message
                     Task { await reload() }
                 }
@@ -1154,6 +1200,11 @@ func telURL(_ phone: String) -> URL? {
     // An extension after a second number belongs to that number, not to this one.
     if main[run.upperBound...].contains(where: { "0123456789".contains($0) }) { ext = "" }
     return URL(string: "tel:" + number + (ext.isEmpty ? "" : "," + ext))
+}
+
+/// A time zone in words ("Central Time"), or its identifier when the phone has no name for it.
+func timeZoneName(_ identifier: String) -> String {
+    TimeZone(identifier: identifier)?.localizedName(for: .generic, locale: .current) ?? identifier
 }
 
 func hasAccessNeeds(_ c: ClientInfo) -> Bool {

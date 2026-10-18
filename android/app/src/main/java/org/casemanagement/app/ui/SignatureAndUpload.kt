@@ -73,8 +73,8 @@ class SignatureState {
 }
 
 @Composable
-fun SignaturePad(state: SignatureState) {
-    Text("Client signature: hand the phone to the client to sign below with a finger.")
+fun SignaturePad(state: SignatureState, caption: String = "Client signature: hand the phone to the client to sign below with a finger.") {
+    Text(caption)
     Canvas(
         Modifier.fillMaxWidth().height(180.dp).background(Color.White).border(2.dp, MaterialTheme.colorScheme.outline)
             .onSizeChanged { state.padSize = it }
@@ -93,7 +93,45 @@ fun SignaturePad(state: SignatureState) {
     if (state.strokes.value.isNotEmpty()) SecondaryButton("Clear the signature") { state.clear() }
 }
 
-private val UPLOAD_TYPES = setOf("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "png", "jpg", "jpeg", "heic")
+val UPLOAD_TYPES = setOf("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "png", "jpg", "jpeg", "heic")
+
+/** The name of a file chosen with the phone's file picker. */
+fun pickedName(context: android.content.Context, uri: Uri): String =
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: "document"
+
+/** A file name the server keeps whole (190 characters at most), its extension kept. */
+fun shortName(name: String): String {
+    val ext = name.substringAfterLast('.', "")
+    return if (name.length > 190) name.take(185 - ext.length) + "." + ext else name
+}
+
+/**
+ * Copies a chosen file to [tmp] in the app's temporary folder, never more than 25 MB: the bytes
+ * copied, -1 when it is larger, -2 when it could not be read.
+ */
+suspend fun copyPicked(context: android.content.Context, uri: Uri, tmp: java.io.File): Long {
+    val limit = 25L * 1024 * 1024
+    val size = context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else -1L } ?: -1L
+    if (size > limit) return -1L
+    return withContext(Dispatchers.IO) {
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                tmp.outputStream().use { out ->
+                    val buf = ByteArray(64 * 1024); var total = 0L
+                    while (true) { val r = input.read(buf); if (r < 0) break; total += r; if (total > limit) return@withContext -1L; out.write(buf, 0, r) }
+                    total
+                }
+            } ?: -2L
+        } catch (e: java.io.IOException) { -2L } catch (e: SecurityException) { -2L }
+    }
+}
+
+/** Says why a copied file cannot be sent. */
+fun checkCopied(copied: Long) {
+    if (copied == -2L) throw ApiException("The file could not be read.")
+    if (copied < 0) throw ApiException("That file is larger than 25 MB.")
+    if (copied == 0L) throw ApiException("That file is empty.")
+}
 
 /** Upload a document to a client's record: chosen with the phone's file picker, up to 25 MB. */
 @Composable
@@ -108,8 +146,7 @@ fun UploadDocumentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCa
     val scope = rememberCoroutineScope()
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            val name = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: "document"
-            file = uri to name
+            file = uri to pickedName(context, uri)
         }
     }
     FormDialog("Upload a document", "Upload", busy, file != null, onSave = {
@@ -117,25 +154,11 @@ fun UploadDocumentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCa
         val ext = name.substringAfterLast('.', "").lowercase()
         if (ext !in UPLOAD_TYPES) { error = "That file type is not allowed. Choose a PDF, Word, Excel, PowerPoint, text, CSV or picture file."; return@FormDialog }
         scope.launchSave({ busy = it }, { error = it }) {
-            val limit = 25L * 1024 * 1024
-            val size = context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else -1L } ?: -1L
-            if (size > limit) throw ApiException("That file is larger than 25 MB.")
-            // Copied to the app's temporary folder, never more than 25 MB, then sent from there.
             val tmp = java.io.File(context.cacheDir, "upload.tmp")
-            val copied = withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    tmp.outputStream().use { out ->
-                        val buf = ByteArray(64 * 1024); var total = 0L
-                        while (true) { val r = input.read(buf); if (r < 0) break; total += r; if (total > limit) return@withContext -1L; out.write(buf, 0, r) }
-                        total
-                    }
-                } ?: -2L
-            }
+            val copied = copyPicked(context, uri, tmp)
             try {
-                if (copied == -2L) throw ApiException("The file could not be read.")
-                if (copied < 0) throw ApiException("That file is larger than 25 MB.")
-                if (copied == 0L) throw ApiException("That file is empty.")
-                val short = if (name.length > 190) name.take(185 - ext.length) + "." + ext else name
+                checkCopied(copied)
+                val short = shortName(name)
                 try {
                     api.uploadDocument(clientId, category, title.trim(), short, tmp)
                 } catch (e: ApiException) {

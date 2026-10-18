@@ -344,6 +344,9 @@ struct ClientDetail: Decodable {
     var releases: [ClientRelease] = []
     /// Whether the client agreed to texts (4.17.0; nil from an older server).
     var texting: ClientTexting?
+    /// Office, custom fields, device counts and documents waiting to be signed (4.25.0), read
+    /// from the same client object; empty from an older server.
+    var extras = ClientExtras()
     private enum CodingKeys: String, CodingKey { case client, notes, tracks, notesTotal, releases, texting }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -353,6 +356,261 @@ struct ClientDetail: Decodable {
         notesTotal = try? c.decodeIfPresent(Int.self, forKey: .notesTotal)
         releases = (try? c.decodeIfPresent([ClientRelease].self, forKey: .releases)) ?? []
         texting = try? c.decodeIfPresent(ClientTexting.self, forKey: .texting)
+        extras = (try? c.decode(ClientExtras.self, forKey: .client)) ?? ClientExtras()
+    }
+}
+
+/// The 4.25.0 additions to the client object. Every field is optional on the wire, so a
+/// missing or odd one never fails the client record.
+struct ClientExtras: Decodable {
+    var officeId: Int?
+    var office: String?
+    var customFields: [CustomFieldValue] = []
+    var customFieldsEdit: [CustomFieldEdit] = []
+    /// Empty: the organisation uses no offices, so nothing about offices is shown.
+    var offices: [OfficeChoice] = []
+    var deviceCounts = DeviceCounts()
+    var signaturesWaiting = 0
+    /// The server has the 4.25.0 features (message files, document sharing, documents to sign,
+    /// release requests): its client record carries device_counts. An older server would ignore them.
+    var supports425 = false
+    private enum CodingKeys: String, CodingKey { case officeId, office, customFields, customFieldsEdit, offices, deviceCounts, signaturesWaiting }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        officeId = try? c.decodeIfPresent(Int.self, forKey: .officeId)
+        office = try? c.decodeIfPresent(String.self, forKey: .office)
+        customFields = LenientList.decode(CustomFieldValue.self, from: c, forKey: .customFields)
+        customFieldsEdit = LenientList.decode(CustomFieldEdit.self, from: c, forKey: .customFieldsEdit)
+        offices = LenientList.decode(OfficeChoice.self, from: c, forKey: .offices)
+        deviceCounts = (try? c.decodeIfPresent(DeviceCounts.self, forKey: .deviceCounts)) ?? DeviceCounts()
+        signaturesWaiting = (try? c.decodeIfPresent(Int.self, forKey: .signaturesWaiting)) ?? 0
+        supports425 = c.contains(.deviceCounts)
+    }
+}
+
+/// Whether the server has the 4.25.0 features, read from a client record alone (the message
+/// thread asks before offering attachments).
+struct ClientFeatureProbe: Decodable {
+    let supports425: Bool
+    private enum CodingKeys: String, CodingKey { case client }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        supports425 = (try? c.decode(ClientExtras.self, forKey: .client))?.supports425 ?? false
+    }
+}
+
+/// A list whose unreadable elements are dropped instead of failing the whole list. A plain
+/// Decodable struct (not generic itself), so tests/ios_models.py picks it up with the models.
+struct LenientList: Decodable {
+    init(from d: Decoder) throws {}
+    struct Element<T: Decodable>: Decodable {
+        let value: T?
+        init(from d: Decoder) throws { value = try? T(from: d) }
+    }
+    static func decode<T: Decodable, K: CodingKey>(_ type: T.Type, from c: KeyedDecodingContainer<K>, forKey key: K) -> [T] {
+        ((try? c.decodeIfPresent([Element<T>].self, forKey: key)) ?? []).compactMap(\.value)
+    }
+}
+
+/// An answered custom field, for display.
+struct CustomFieldValue: Decodable {
+    let label: String
+    let value: String
+    private enum CodingKeys: String, CodingKey { case label, value }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        label = (try? c.decode(String.self, forKey: .label)) ?? ""
+        value = (try? c.decode(String.self, forKey: .value)) ?? (try? c.decode(Double.self, forKey: .value)).map { String(format: "%g", $0) } ?? ""
+    }
+}
+
+/// A custom field in use, with the client's answer ("" = not answered; a date is YYYY-MM-DD).
+struct CustomFieldEdit: Decodable, Identifiable {
+    let id: Int
+    let label: String
+    let hint: String
+    /// "text", "textarea", "number", "date", "choice" or "yesno".
+    let type: String
+    let options: [String]
+    let required: Bool
+    let value: String
+    private enum CodingKeys: String, CodingKey { case id, label, hint, type, options, required, value }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        label = (try? c.decode(String.self, forKey: .label)) ?? ""
+        hint = (try? c.decode(String.self, forKey: .hint)) ?? ""
+        type = (try? c.decode(String.self, forKey: .type)) ?? "text"
+        options = (try? c.decode([String].self, forKey: .options)) ?? []
+        required = (try? c.decode(Bool.self, forKey: .required)) ?? ((try? c.decode(Int.self, forKey: .required)) ?? 0 != 0)
+        value = (try? c.decode(String.self, forKey: .value)) ?? (try? c.decode(Double.self, forKey: .value)).map { String(format: "%g", $0) } ?? ""
+    }
+}
+
+struct OfficeChoice: Decodable, Identifiable {
+    let id: Int
+    let name: String
+    private enum CodingKeys: String, CodingKey { case id, name }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        name = (try? c.decode(String.self, forKey: .name)) ?? "Office \(id)"
+    }
+}
+
+/// What the new client form offers (form_options, 4.25.0): the custom fields (values "") and the
+/// offices (empty when none). Both empty from an older server.
+struct NewClientOptions: Decodable {
+    let customFields: [CustomFieldEdit]
+    let offices: [OfficeChoice]
+    private enum CodingKeys: String, CodingKey { case customFields, offices }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        customFields = LenientList.decode(CustomFieldEdit.self, from: c, forKey: .customFields)
+        offices = LenientList.decode(OfficeChoice.self, from: c, forKey: .offices)
+    }
+}
+
+/// The client's devices as the device requests record them, to start a closure's counts.
+struct DeviceCounts: Decodable {
+    var recommended = 0
+    var acquired = 0
+    private enum CodingKeys: String, CodingKey { case recommended, acquired }
+    init() {}
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        recommended = (try? c.decode(Int.self, forKey: .recommended)) ?? 0
+        acquired = (try? c.decode(Int.self, forKey: .acquired)) ?? 0
+    }
+}
+
+// MARK: - Documents to sign and releases (4.25.0)
+
+/// A document sent to sign, or waiting to be signed here.
+struct SignatureRow: Decodable, Identifiable {
+    let id: Int
+    let kind: String
+    let title: String
+    /// "Awaiting signature", "Waiting to be signed here", "Signed", "Withdrawn" or "Link expired".
+    let status: String
+    /// "Email" or "In person".
+    let method: String
+    let signerName: String
+    let signerEmail: String
+    let sentAt: String?
+    let signedAt: String?
+    let signedName: String?
+    let hasDrawnSignature: Bool
+    private enum CodingKeys: String, CodingKey { case id, kind, title, status, method, signerName, signerEmail, sentAt, signedAt, signedName, hasDrawnSignature }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        kind = (try? c.decode(String.self, forKey: .kind)) ?? ""
+        title = (try? c.decode(String.self, forKey: .title)) ?? ""
+        status = (try? c.decode(String.self, forKey: .status)) ?? ""
+        method = (try? c.decode(String.self, forKey: .method)) ?? "Email"
+        signerName = (try? c.decode(String.self, forKey: .signerName)) ?? ""
+        signerEmail = (try? c.decode(String.self, forKey: .signerEmail)) ?? ""
+        sentAt = try? c.decodeIfPresent(String.self, forKey: .sentAt)
+        signedAt = try? c.decodeIfPresent(String.self, forKey: .signedAt)
+        signedName = try? c.decodeIfPresent(String.self, forKey: .signedName)
+        hasDrawnSignature = (try? c.decode(Bool.self, forKey: .hasDrawnSignature)) ?? ((try? c.decode(Int.self, forKey: .hasDrawnSignature)) ?? 0 != 0)
+    }
+    /// Still waiting for a signature, so it can be withdrawn.
+    var isOpen: Bool { status == "Awaiting signature" || status == "Waiting to be signed here" }
+}
+
+/// An open equipment loan a loan agreement can be for.
+struct SignatureLoan: Decodable, Identifiable {
+    let id: Int
+    let name: String
+    let serial: String?
+    let loanedAt: String?
+    private enum CodingKeys: String, CodingKey { case id, name, serial, loanedAt }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        name = (try? c.decode(String.self, forKey: .name)) ?? "Item \(id)"
+        serial = try? c.decodeIfPresent(String.self, forKey: .serial)
+        loanedAt = try? c.decodeIfPresent(String.self, forKey: .loanedAt)
+    }
+}
+
+struct SignaturesResponse: Decodable {
+    var signatures: [SignatureRow]
+    /// Kind key ("services", "loan", "document") to its name.
+    let kinds: [String: String]
+    let openLoans: [SignatureLoan]
+    private enum CodingKeys: String, CodingKey { case signatures, kinds, openLoans }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        signatures = LenientList.decode(SignatureRow.self, from: c, forKey: .signatures)
+        kinds = (try? c.decodeIfPresent([String: String].self, forKey: .kinds)) ?? [:]
+        openLoans = LenientList.decode(SignatureLoan.self, from: c, forKey: .openLoans)
+    }
+}
+
+/// A document to sign here, in person: what the signer reads (start_signature, or signature for one already started).
+struct SigningDocument: Decodable, Identifiable {
+    let id: Int
+    let title: String
+    /// Plain text: a blank line separates paragraphs; several lines in a paragraph are a list.
+    let body: String
+    /// "en" or "es" (nil when not known).
+    let lang: String?
+    let signerName: String
+    let signerRole: String?
+    let org: String
+    private enum CodingKeys: String, CodingKey { case id, title, body, lang, signerName, signerRole, org }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        title = (try? c.decode(String.self, forKey: .title)) ?? ""
+        body = (try? c.decode(String.self, forKey: .body)) ?? ""
+        lang = try? c.decodeIfPresent(String.self, forKey: .lang)
+        signerName = (try? c.decode(String.self, forKey: .signerName)) ?? ""
+        signerRole = try? c.decodeIfPresent(String.self, forKey: .signerRole)
+        org = (try? c.decode(String.self, forKey: .org)) ?? ""
+    }
+}
+
+/// The reply to `signature`: the document under `signature`.
+struct SigningDocumentResponse: Decodable { let signature: SigningDocument }
+
+/// The reply to sign_in_person and withdraw_signature: the list as it now stands.
+struct SignatureListReply: Decodable {
+    let signatures: [SignatureRow]?
+    private enum CodingKeys: String, CodingKey { case signatures }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        signatures = c.contains(.signatures) ? LenientList.decode(SignatureRow.self, from: c, forKey: .signatures) : nil
+    }
+}
+
+/// What a release of information can name: recipient types and kinds of information.
+struct ReleaseChoices: Decodable {
+    let recipientTypes: [String]
+    let infoItems: [String]
+    let validityDays: Int?
+    private enum CodingKeys: String, CodingKey { case recipientTypes, infoItems, validityDays }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        recipientTypes = (try? c.decode([String].self, forKey: .recipientTypes)) ?? []
+        infoItems = (try? c.decode([String].self, forKey: .infoItems)) ?? []
+        validityDays = try? c.decodeIfPresent(Int.self, forKey: .validityDays)
+    }
+}
+
+/// Referral deadlines over the last 90 days (the dashboard's figure).
+struct ReferralDeadlines: Decodable {
+    let referrals: Int
+    let contactedOnTime: Int
+    private enum CodingKeys: String, CodingKey { case referrals, contactedOnTime }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        referrals = (try? c.decode(Int.self, forKey: .referrals)) ?? 0
+        contactedOnTime = (try? c.decode(Int.self, forKey: .contactedOnTime)) ?? 0
     }
 }
 
@@ -540,6 +798,22 @@ struct ThreadMessage: Decodable, Identifiable {
     let staffName: String?
     /// "text" when it went (or came) by text message (4.17.0).
     let via: String?
+    /// The file sent with it (4.25.0), opened with download_document; nil when none.
+    let documentId: Int?
+    let documentTitle: String?
+    private enum CodingKeys: String, CodingKey { case id, channel, sender, body, createdAt, staffName, via, documentId, documentTitle }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        channel = (try? c.decode(String.self, forKey: .channel)) ?? "client"
+        sender = (try? c.decode(String.self, forKey: .sender)) ?? ""
+        body = (try? c.decode(String.self, forKey: .body)) ?? ""
+        createdAt = (try? c.decode(String.self, forKey: .createdAt)) ?? ""
+        staffName = try? c.decodeIfPresent(String.self, forKey: .staffName)
+        via = try? c.decodeIfPresent(String.self, forKey: .via)
+        documentId = try? c.decodeIfPresent(Int.self, forKey: .documentId)
+        documentTitle = try? c.decodeIfPresent(String.self, forKey: .documentTitle)
+    }
 }
 struct ThreadResponse: Decodable {
     let clientName: String

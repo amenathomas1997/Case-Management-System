@@ -15,6 +15,8 @@ struct DashboardView: View {
     /// Unread alerts (the website's Alerts count); nil until known.
     @State private var unreadAlerts: Int?
     @State private var webPage: WebPage?
+    /// Referral deadlines over 90 days (4.25.0); nil when not allowed or not available.
+    @State private var referralDeadlines: ReferralDeadlines?
 
     private func openQuickAction() {
         guard let action = navigation.quickAction else { return }
@@ -58,6 +60,10 @@ struct DashboardView: View {
                                          label: String(format: "Unbilled hours %@ ($%.2f with mileage and expenses)",
                                                        api.scoped ? "on your caseload" : "across all tracks", data.unbilledAmount))
                             }
+                        }
+                        if api.can("referrals"), let deadlines = referralDeadlines {
+                            Text("Referrals contacted on time (90 days): \(deadlines.contactedOnTime) of \(deadlines.referrals)")
+                                .font(.callout.weight(.medium))
                         }
 
                         if api.can("clients") {
@@ -267,6 +273,10 @@ struct DashboardView: View {
             data = try await api.call("dashboard")
         } catch {
             self.error = error.localizedDescription
+        }
+        // Optional: an older server, or no access, leaves it out without a word.
+        if api.can("referrals") {
+            referralDeadlines = try? await api.call("referral_deadlines")
         }
         await loadAlertCount()
     }

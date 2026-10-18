@@ -6,6 +6,12 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.25.0' => [
+        'Sign in person: on a client\'s Documents to sign, choose Sign here now and hand over your phone, tablet or computer. The client reads the document and signs by typing their name (and, in the apps, can also draw a signature). Nothing is emailed.',
+        'The iPhone and Android apps catch up with the website: offices, custom fields, the closure details and technology outcomes, files with messages, sharing documents with the client or counselor, documents to sign, release of information requests and loan purposes. The Android app also gains guardian consent, portal links, status history and the guardian, school and plan fields.',
+        'Two new reports (Reports): Referral deadlines, how referrals met each agency\'s deadlines to contact and assess, with each one late or overdue; and the Agency scorecard, one agency on one page for contract renewals: referrals, services, authorizations, billing and outcomes.',
+        'Virus scanning of uploaded files with ClamAV, when your server has it (Settings, Security). Accessibility is now checked in a real browser on every change.',
+    ],
     '4.24.0' => [
         'Files with messages: clients can attach a file to a message on their portal, VR counselors to a message about a client on theirs, and you to a reply in Messages (a new file, or one already on the record). On a client\'s Documents tab, Share with client and Share with counselor put any document on their portal; the counselor portal lists the files shared with them. Every upload is now checked to be the kind of file its name says.',
         'Closing a case now records the devices recommended, the devices the client got, and whether they use them, started from the device requests. The Outcome report counts them with employment and wage at closure, and the RSA-911 download has the closure details.',

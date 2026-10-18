@@ -632,4 +632,6 @@ return [
     '(required unless you attach a file)' => '(obligatorio, salvo que adjunte un archivo)',
     'Sent a file.' => 'Archivo enviado.',
     '(no longer on the list)' => '(ya no está en la lista)',
+    'That file was refused: the virus scanner found something harmful in it.' => 'Ese archivo se rechazó: el antivirus encontró algo dañino en él.',
+    'That file could not be checked for viruses just now, so it was not accepted. Please try again later.' => 'No se pudo revisar ese archivo en busca de virus en este momento, así que no se aceptó. Inténtelo más tarde.',
 ];

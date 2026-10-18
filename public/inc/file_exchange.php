@@ -8,7 +8,7 @@ declare(strict_types=1);
 /** The file types people outside the agency may send (no macros: no .doc or .xls). */
 const EXCHANGE_TYPES = ['pdf', 'docx', 'xlsx', 'txt', 'rtf', 'png', 'jpg', 'jpeg'];
 /** The file types staff may upload. */
-const STAFF_UPLOAD_TYPES = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'csv', 'png', 'jpg', 'jpeg'];
+const STAFF_UPLOAD_TYPES = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'csv', 'png', 'jpg', 'jpeg', 'heic'];
 
 /**
  * Whether a stored upload's first bytes match its extension (a renamed program or page is refused). $staff
@@ -80,13 +80,17 @@ function exchange_save_upload(array $file, int $clientId, string $title, string 
         if ($day + $size > 100 * 1024 * 1024) return ['id' => null, 'error' => 'A lot of files were shared today. Please try again tomorrow.'];
         if ($all + $size > 500 * 1024 * 1024) return ['id' => null, 'error' => 'The storage limit for shared files has been reached. Please contact us.'];
     }
+    // Scanned last, after every cheaper check and the caps: a scan is the slow part.
+    if (($virus = upload_virus_check($tmp)) !== null) return ['id' => null, 'error' => $virus];
     $safe = (string)preg_replace('/[^A-Za-z0-9._ -]/', '_', $orig);
     if (strlen($safe) > 190) $safe = substr($safe, 0, 189 - strlen($ext)) . '.' . $ext;
     $dir = cfg('upload_dir');
     if (!is_dir($dir)) @mkdir($dir, 0750, true);
     $stored = bin2hex(random_bytes(16)) . '.' . $ext;
-    // The test harness (command line only) posts files that were not uploaded by a browser: they are copied.
-    $moved = is_uploaded_file($tmp) ? move_uploaded_file($tmp, $dir . '/' . $stored) : (PHP_SAPI === 'cli' && getenv('CMS_TEST_FILES') !== false && copy($tmp, $dir . '/' . $stored));
+    // A file the apps sent (exchange_save_bytes) is this code's own temporary file, moved into place. The test
+    // harness (command line only) posts files that were not uploaded by a browser: they are copied.
+    $moved = !empty($file['own_temp']) ? rename($tmp, $dir . '/' . $stored)
+        : (is_uploaded_file($tmp) ? move_uploaded_file($tmp, $dir . '/' . $stored) : (PHP_SAPI === 'cli' && getenv('CMS_TEST_FILES') !== false && copy($tmp, $dir . '/' . $stored)));
     if (!$moved) return ['id' => null, 'error' => 'The file could not be saved. Please try again.'];
     $category ??= $via === 'portal' ? 'Client Upload' : ($via === 'counselor' ? 'From VR counselor' : 'Other');
     try {
@@ -99,6 +103,17 @@ function exchange_save_upload(array $file, int $clientId, string $title, string 
         error_log('Shared file not recorded: ' . get_class($e) . ' (code ' . $e->getCode() . ')');
         return ['id' => null, 'error' => 'The file could not be saved. Please try again.'];
     }
+}
+
+/** Store a file the apps sent as bytes (4.25.0), with the same checks as an upload. */
+function exchange_save_bytes(string $data, string $filename, int $clientId, string $title, string $via, ?int $staffId = null, ?string $category = null): array {
+    $dir = cfg('upload_dir');
+    if (!is_dir($dir)) @mkdir($dir, 0750, true);
+    $tmp = tempnam($dir, 'in-');
+    if ($tmp === false || file_put_contents($tmp, $data) === false) return ['id' => null, 'error' => 'The file could not be saved. Please try again.'];
+    $r = exchange_save_upload(['name' => $filename, 'tmp_name' => $tmp, 'size' => strlen($data), 'error' => UPLOAD_ERR_OK, 'own_temp' => true], $clientId, $title, $via, $staffId, $category);
+    if (is_file($tmp)) @unlink($tmp); // refused: the temporary file is not kept
+    return $r;
 }
 
 /** Whether the client's portal shows this document: resources, the client's own, and anything shared with them. */

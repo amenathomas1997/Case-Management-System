@@ -70,8 +70,8 @@ page_header('Text messages', $user, 'admin', [['admin.php', 'Administration']]);
 <section class="card" aria-labelledby="log-h">
   <h2 id="log-h">Recent texts (<?= count($log) ?>)</h2>
   <?php if (!$log): ?><p>No texts yet.</p><?php else: ?>
-  <table class="table">
-    <caption class="visually-hidden">Recent texts, newest first</caption>
+  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="sms-recent-cap"><table class="table">
+    <caption class="visually-hidden" id="sms-recent-cap">Recent texts, newest first</caption>
     <thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">What</th><th scope="col">Status</th></tr></thead>
     <tbody>
     <?php foreach ($log as $l): ?>
@@ -81,7 +81,7 @@ page_header('Text messages', $user, 'admin', [['admin.php', 'Administration']]);
         <td><?= h(['held' => 'Waiting for 8 a.m.', 'queued' => 'Queued', 'sending' => 'Sending', 'sent' => 'Sent', 'delivered' => 'Delivered', 'undelivered' => 'Not delivered', 'failed' => 'Failed', 'blocked' => 'Not sent', 'received' => 'Received'][$l['status']] ?? $l['status']) ?><?= $l['error'] ? ': ' . h((string)$l['error']) : '' ?><?= $l['status'] === 'held' && $l['send_after'] ? ' (' . fmt_datetime($l['send_after']) . ')' : '' ?></td></tr>
     <?php endforeach; ?>
     </tbody>
-  </table>
+  </table></div>
   <?php endif; ?>
 </section>
 <?php page_footer();

@@ -2,15 +2,16 @@ package org.casemanagement.app
 
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import org.casemanagement.app.ui.CmsTheme
 import org.casemanagement.app.ui.RootScreen
 
-class MainActivity : ComponentActivity() {
+// A FragmentActivity, so the phone's own lock (BiometricPrompt) can be asked for.
+class MainActivity : FragmentActivity() {
     private val api get() = (application as CmsApp).api
 
     override fun onCreate(savedInstanceState: Bundle?) {

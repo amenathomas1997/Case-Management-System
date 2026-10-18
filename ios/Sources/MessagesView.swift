@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 /// A message_threads row with its per-channel unread counts (absent on older servers), so a
 /// thread can open on the conversation that holds the unread messages.
@@ -188,6 +189,16 @@ struct MessageThreadView: View {
     @State private var textEnabled = false
     @State private var textBlocked: String?
     @State private var byText = false
+    /// A file sent with the reply (4.25.0): one of the client's documents, or a new file.
+    @State private var attachment: MessageAttachment?
+    @State private var choosingDocument = false
+    @State private var showingCamera = false
+    @State private var showingPhotos = false
+    @State private var showingFiles = false
+    @State private var photoItem: PhotosPickerItem?
+    @StateObject private var downloader = DocumentDownloader()
+    /// Files can be sent only to a server that keeps them (4.25.0); an older one would drop the file.
+    @State private var canAttach = false
 
     /// `startChannel` is the conversation shown first ("client" or "counselor").
     init(clientId: Int, clientName: String, startChannel: String = "client", drafts: Binding<[String: String]>? = nil) {
@@ -244,10 +255,16 @@ struct MessageThreadView: View {
             .onChange(of: channel) { _ in
                 // Never leave the other channel's messages under the new selection.
                 messages = []; loaded = false; notice = nil
+                // A file goes to whoever the conversation is with, so it does not follow the switch.
+                if attachment != nil {
+                    attachment = nil
+                    announce("Attachment removed, because the conversation changed.")
+                }
                 Task { await load(focusNewest: true) }
             }
 
             if let error { ErrorBanner(message: error).padding(.horizontal) }
+            if let downloadError = downloader.error { ErrorBanner(message: downloadError).padding(.horizontal) }
             if let notice {
                 Label(notice, systemImage: "exclamationmark.triangle")
                     .font(.callout.weight(.medium))
@@ -281,7 +298,22 @@ struct MessageThreadView: View {
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal)
                 }
             }
+            if let attachment {
+                HStack {
+                    Label("Attached: \(attachment.name)", systemImage: "paperclip").font(.callout)
+                    Spacer()
+                    Button {
+                        self.attachment = nil
+                        announce("Attachment removed.")
+                    } label: {
+                        Image(systemName: "xmark.circle").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Remove attachment: \(attachment.name)")
+                }
+                .padding(.horizontal)
+            }
             HStack(spacing: 8) {
+                if canAttach { attachMenu }
                 // Both the field and the button name who the message goes to.
                 TextField(channel == "counselor" ? "Message to counselor…" : "Message to client…", text: draft, axis: .vertical).lineLimit(1...4)
                     .textFieldStyle(.roundedBorder)
@@ -293,14 +325,56 @@ struct MessageThreadView: View {
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Send message to \(recipient)")
-                .disabled(sending || draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(sending || (attachment == nil && draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
             }.padding()
         }
         .navigationTitle(clientName)
         .navigationBarTitleDisplayMode(.inline)
+        .quickLookPreview($downloader.previewURL)
+        .onChange(of: downloader.previewURL) { url in
+            if url == nil { downloader.removePreview() }
+        }
+        .sheet(isPresented: $choosingDocument) {
+            MessageDocumentPicker(clientId: clientId) { document in
+                attachment = .document(id: document.id, title: document.title)
+                announceAfterDismiss("\(document.title) attached. It is shared with \(recipient) when you send.")
+            }
+        }
+        .fullScreenCover(isPresented: $showingCamera) {
+            CameraCapture { image in
+                if let jpeg = image.jpegData(compressionQuality: 0.7) {
+                    attachFile(jpeg, as: "photo_\(Int(Date().timeIntervalSince1970)).jpg")
+                } else {
+                    attachError("Could not use that photo. Try taking it again.")
+                }
+            }
+            .ignoresSafeArea()
+        }
+        .photosPicker(isPresented: $showingPhotos, selection: $photoItem, matching: .images)
+        .onChange(of: photoItem) { item in
+            guard let item else { return }
+            photoItem = nil
+            Task {
+                guard let data = try? await item.loadTransferable(type: Data.self) else {
+                    attachError("Could not read that photo. Choose another, or take a new one.")
+                    return
+                }
+                let jpeg = await Task.detached(priority: .userInitiated) { UIImage(data: data)?.jpegData(compressionQuality: 0.7) }.value
+                guard let jpeg else { attachError("Could not read that photo. Choose another, or take a new one."); return }
+                attachFile(jpeg, as: "photo_\(Int(Date().timeIntervalSince1970)).jpg")
+            }
+        }
+        .fileImporter(isPresented: $showingFiles, allowedContentTypes: UploadDocumentSheet.importTypes) { result in
+            switch result {
+            case .success(let url): Task { await importFile(url) }
+            case .failure: attachError("Could not open that file.")
+            }
+        }
         .task {
             let restored = restoreStoredDrafts()
+            async let probe: ClientFeatureProbe? = try? api.call("client", query: ["id": String(clientId)])
             await load(focusNewest: true)
+            canAttach = await probe?.supports425 ?? false
             // Said once VoiceOver has moved to the newest message, which would cut it off.
             if let restored { announce(restored) }
         }
@@ -308,26 +382,102 @@ struct MessageThreadView: View {
 
     private func bubble(_ m: ThreadMessage) -> some View {
         let mine = m.sender == "staff"
-        return HStack {
-            if mine { Spacer(minLength: 40) }
-            VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
-                Text(m.body).font(.callout)
-                    .foregroundStyle(mine ? .white : .primary)
-                    .padding(10)
-                    .background(mine ? Color.brandFill : Color(.secondarySystemBackground),
-                                in: RoundedRectangle(cornerRadius: 12))
-                // Caption size in the 7:1 secondary-text colour (caption2 in system secondary was about 3.4:1).
-                Text("\(senderLabel(m))\(m.via == "text" ? ", by text" : "") · \(formatDateTime(m.createdAt))")
-                    .font(.caption).foregroundStyle(Color.secondaryText)
+        return VStack(alignment: mine ? .trailing : .leading, spacing: 4) {
+            HStack {
+                if mine { Spacer(minLength: 40) }
+                VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
+                    Text(m.body).font(.callout)
+                        .foregroundStyle(mine ? .white : .primary)
+                        .padding(10)
+                        .background(mine ? Color.brandFill : Color(.secondarySystemBackground),
+                                    in: RoundedRectangle(cornerRadius: 12))
+                    // Caption size in the 7:1 secondary-text colour (caption2 in system secondary was about 3.4:1).
+                    Text("\(senderLabel(m))\(m.via == "text" ? ", by text" : "") · \(formatDateTime(m.createdAt))")
+                        .font(.caption).foregroundStyle(Color.secondaryText)
+                }
+                if !mine { Spacer(minLength: 40) }
             }
-            if !mine { Spacer(minLength: 40) }
+            // One element per message, spoken sender first.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(senderLabel(m))\(m.via == "text" ? ", by text" : ""): \(m.body)")
+            .accessibilityValue(formatDateTime(m.createdAt))
+            .accessibilityFocused($focusedMessage, equals: m.id)
+            // The message's file (4.25.0), opened as the client's documents are.
+            if let documentId = m.documentId {
+                let title = (m.documentTitle ?? "").isEmpty ? "Attached file" : m.documentTitle!
+                Button {
+                    downloader.open(ClientDocument(id: documentId, title: title), api: api)
+                } label: {
+                    Label("File: \(title)", systemImage: "doc").font(.callout)
+                        .frame(minHeight: 44).contentShape(Rectangle())
+                }
+                .disabled(downloader.downloading)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         .id(m.id)
-        // One element per message, spoken sender first.
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(senderLabel(m))\(m.via == "text" ? ", by text" : ""): \(m.body)")
-        .accessibilityValue(formatDateTime(m.createdAt))
-        .accessibilityFocused($focusedMessage, equals: m.id)
+    }
+
+    /// Attach a file: one of the client's documents, or a new one (camera, photos or Files).
+    private var attachMenu: some View {
+        Menu {
+            Button { choosingDocument = true } label: { Label("Choose one of their documents", systemImage: "doc.on.doc") }
+            Section("Add a new file") {
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    Button { showingCamera = true } label: { Label("Take a photo", systemImage: "camera") }
+                }
+                Button { showingPhotos = true } label: { Label("Choose from photo library", systemImage: "photo.on.rectangle") }
+                Button { showingFiles = true } label: { Label("Choose a file (PDF, Word…)", systemImage: "folder") }
+            }
+        } label: {
+            Image(systemName: "paperclip").font(.title3)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Attach a file")
+        .disabled(sending)
+    }
+
+    /// Checks the type and size before reading, as the upload form does.
+    private func importFile(_ url: URL) async {
+        guard UploadDocumentSheet.allowedExtensions.contains(url.pathExtension.lowercased()) else {
+            attachError("That type of file can't be sent. Choose a PDF, Word, Excel, PowerPoint, text, RTF or CSV file, or a PNG, JPEG or HEIC image.")
+            return
+        }
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > UploadDocumentSheet.maxBytes {
+            attachError("That file is larger than 25 MB, the most that can be sent.")
+            return
+        }
+        let data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: url) }.value
+        guard let data, !data.isEmpty, data.count <= UploadDocumentSheet.maxBytes else {
+            attachError("Could not read that file (25 MB maximum).")
+            return
+        }
+        attachFile(data, as: UploadDocumentSheet.uploadName(url.lastPathComponent))
+    }
+
+    /// Said a beat later: the camera, photo picker or file browser is still closing.
+    private func attachFile(_ data: Data, as filename: String) {
+        guard data.count <= UploadDocumentSheet.maxBytes else {
+            attachError("That file is larger than 25 MB, the most that can be sent.")
+            return
+        }
+        attachment = .file(data: data, filename: filename)
+        error = nil
+        let who = recipient
+        Task {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            announce("\(filename) attached. It is saved to the client's documents and shared with \(who) when you send.")
+        }
+    }
+
+    private func attachError(_ message: String) {
+        Task {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            showFormError(message, in: &error)
+        }
     }
     private func senderLabel(_ m: ThreadMessage) -> String {
         switch m.sender {
@@ -369,15 +519,27 @@ struct MessageThreadView: View {
         sending = true; error = nil; notice = nil
         let target = channel
         let text = draftText(target)
-        let key = unconfirmed[target].flatMap { $0.text == text ? $0.key : nil } ?? UUID().uuidString
-        unconfirmed[target] = (text: text, key: key)
+        let sentAttachment = attachment
+        // The same text and file again reuse the key; anything changed is a new message.
+        let sameness = text + "|" + (sentAttachment?.name ?? "")
+        let key = unconfirmed[target].flatMap { $0.text == sameness ? $0.key : nil } ?? UUID().uuidString
+        unconfirmed[target] = (text: sameness, key: key)
+        var body: [String: Any] = ["client_id": clientId, "channel": target, "body": text, "idem_key": key,
+                                   "by_text": target == "client" && byText && textEnabled && textBlocked == nil]
+        switch sentAttachment {
+        case .document(let id, _): body["document_id"] = id
+        case .file(let data, let filename):
+            body["file_b64"] = data.base64EncodedString()
+            body["filename"] = filename
+        case nil: break
+        }
+        if sentAttachment != nil { announce("Sending.") }
         do {
-            let r: PostMessageResponse = try await api.call("post_message",
-                body: ["client_id": clientId, "channel": target, "body": text, "idem_key": key,
-                       "by_text": target == "client" && byText && textEnabled && textBlocked == nil])
+            let r: PostMessageResponse = try await api.call("post_message", body: body)
             byText = false
             unconfirmed[target] = nil
             if draftText(target) == text { setDraft(target, "") }
+            if attachment == sentAttachment { attachment = nil }
             await load()
             if r.delivered == false {
                 // Saved, but nobody on that side can read it yet: say so rather than "sent".
@@ -416,5 +578,69 @@ struct PostMessageResponse: Decodable {
             ?? (try? c.decodeIfPresent(Int.self, forKey: .delivered)).map { $0 != 0 }
         let text = try? c.decodeIfPresent(String.self, forKey: .warning)
         warning = (text ?? "").isEmpty ? nil : text
+    }
+}
+
+/// A file sent with a message: one already on the client's record, or a new one.
+enum MessageAttachment: Equatable {
+    case document(id: Int, title: String)
+    case file(data: Data, filename: String)
+    var name: String {
+        switch self {
+        case .document(_, let title): return title
+        case .file(_, let filename): return filename
+        }
+    }
+}
+
+/// The client's documents, to send one with a message.
+struct MessageDocumentPicker: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let clientId: Int
+    let onPick: (ClientDocument) -> Void
+    @State private var documents: [ClientDocument] = []
+    @State private var loaded = false
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let error { ErrorBanner(message: error) }
+                if !loaded && error == nil {
+                    ProgressView("Loading documents…")
+                } else if loaded && documents.isEmpty {
+                    Text("No documents on file.").foregroundStyle(Color.secondaryText)
+                }
+                ForEach(documents) { document in
+                    Button {
+                        onPick(document)
+                        dismiss()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(document.title).font(.body.weight(.medium)).foregroundStyle(.primary)
+                            Text("\(document.category) · \(formatDateTime(document.createdAt)) · \(document.sharingText)")
+                                .font(.caption).foregroundStyle(Color.secondaryText)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Choose a document")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .task { await load() }
+        }
+    }
+
+    private func load() async {
+        do {
+            let response: DocumentsResponse = try await api.call("documents", query: ["client_id": String(clientId)])
+            documents = response.documents
+            loaded = true
+            error = nil
+        } catch {
+            guard !Task.isCancelled else { return }
+            showFormError(error.localizedDescription, in: &self.error)
+        }
     }
 }
