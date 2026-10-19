@@ -398,6 +398,15 @@ function form_error_summary(array $labels = [], array $anchors = []): string {
     // No role="alert": the summary is announced once, by the focus move below.
     // Its title is not a heading: the summary sits inside sections at every
     // level, and a fixed h2 would re-file the headings after it (1.3.1).
+    // The first summary on a page keeps the usual id and takes focus; a second one on the same
+    // page (two forms refused at once) gets its own id, so no id is repeated (4.29.0).
+    static $shown = 0;
+    $shown++;
+    if ($shown > 1) {
+        return '<div class="alert alert-error" tabindex="-1" id="form-error-summary-' . $shown . '">'
+            . '<p class="legend-h">' . t('Please fix the following:') . '</p>'
+            . '<ul>' . $items . '</ul></div>';
+    }
     return '<div class="alert alert-error" tabindex="-1" id="form-error-summary">'
         . '<p class="legend-h">' . t('Please fix the following:') . '</p>'
         . '<ul>' . $items . '</ul></div>'
