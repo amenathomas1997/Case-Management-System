@@ -74,11 +74,16 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     static var count = 0
     static var json: String?            // a reply body other than the default ones
     static var urls: [String] = []      // every request's address, in order
+    static var offline = false          // fail every request as with no signal
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         Self.count += 1
         Self.urls.append(request.url?.absoluteString ?? "")
+        if Self.offline {
+            client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+            return
+        }
         let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         let json = Self.json ?? (Self.status == 200 ? #"{"ok":true}"# : #"{"ok":false,"error":"Rejected for test"}"#)
@@ -126,6 +131,9 @@ suffix = r'''
         check(addr("cms.example.org") == "https://cms.example.org/api.php" && addr("example.org/cms") == "https://example.org/cms/api.php"
               && addr("HTTPS://Example.ORG/cms/login.php") == "https://example.org/cms/api.php" && addr("example.org/cms/API.PHP") == "https://example.org/cms/api.php"
               && addr("example.org:8443") == "https://example.org:8443/api.php", "An organisation's address becomes its https API address")
+        // 4.28.0: https's own port written out is the same server as no port.
+        check(addr("cms.example.org:443") == "https://cms.example.org/api.php" && addr("https://CMS.example.org:443/cms/") == "https://cms.example.org/cms/api.php",
+              "\":443\" typed with the address gives the same server address as without it")
         for bad in ["http://cms.example.org", "ftp://x.org", "https:/x.org", "http//x.org", "good.org@evil.com", "x.org\\@evil.com", "", "cms example org", "localhostish"] {
             check(addr(bad) == nil, "\"\(bad)\" is refused as an organisation's address")
         }
@@ -263,6 +271,25 @@ suffix = r'''
         check(leftAfterExpiry.isEmpty && StubProtocol.urls.filter { $0.contains("action=add_note") }.count == 1
               && api.syncError?.contains("Old note") == true && api.syncError?.contains("30 days") == true,
               "An offline entry over 30 days old that is still not accepted is removed after the try, and the notice says so")
+
+        // 4.28.0: with no signal, a server fault (5xx), a 429 or a refused redirect the server was
+        // never reached, so an old entry is kept, not expired.
+        for (label, status, offline) in [("no signal", 200, true), ("a 503", 503, false), ("a 429", 429, false), ("a refused redirect", 302, false)] {
+            let oldUnsent = API.PendingCall(action: "add_note", body: try JSONSerialization.data(withJSONObject: body), label: "Old unsent note",
+                                            owner: 3, savedAt: fortyDays)
+            try JSONEncoder().encode([oldUnsent]).write(to: testQueueURL)
+            StubProtocol.status = status
+            StubProtocol.offline = offline
+            StubProtocol.urls = []
+            api.syncNoticeDismissed = true
+            await api.flushQueue()
+            StubProtocol.offline = false
+            let kept = try api.ownQueuedEntries()
+            check(kept.map(\.label) == ["Old unsent note"] && StubProtocol.urls.filter { $0.contains("action=add_note") }.count == 1
+                  && api.syncError?.contains("30 days") != true,
+                  "An offline entry over 30 days old is kept after an upload that got \(label) (the server was not reached)")
+        }
+        try FileManager.default.removeItem(at: testQueueURL)
         StubProtocol.status = 200
 
         // 4.27.0: a redirect is followed only to the same https host and port (none written is 443),

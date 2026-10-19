@@ -8,7 +8,9 @@ require_once __DIR__ . '/inc/ai.php';
 // so the notice stays true when an administrator changes them.
 $viewer = optional_login();
 // In English and Spanish (3.0.39): the Spanish text is inc/privacy_es.php, with the same facts.
-enable_public_translation();
+// A signed-in staff member gets it in English with their English menu, as on help.php (4.28.0):
+// the shared session language a client's portal set must not switch the staff page to Spanish.
+if (!$viewer) enable_public_translation();
 $org = brand('org');
 $contact = (string)(cfg('support_email') ?: cfg('mail_from'));
 $mail = $contact !== '' ? '<a href="mailto:' . h($contact) . '">' . h($contact) . '</a>' : 'us';
@@ -29,7 +31,7 @@ $extraHtml = $extraHeading === '' ? '' : '<section aria-labelledby="extra"><h2 i
     . implode('', array_map(fn($para) => '<p>' . $para . '</p>', wording_paragraphs_html('privacy_extra_body'))) . "</section>\n";
 const PRIVACY_UPDATED = '2026-10-16';
 page_header('Privacy notice', $viewer);
-echo lang_toggle();
+if (!$viewer) echo lang_toggle();
 if (page_lang() === 'es') {
     require __DIR__ . '/inc/privacy_es.php';
     page_footer();

@@ -49,7 +49,8 @@ $sql = "SELECT t.id AS track_id, c.name AS client_name, t.title, {$authExpr} AS 
 $params = [$from, $to];
 // Caseload-scoped billing users see only their own clients' billing (mirrors report.php / capacity.php).
 if (caseload_scoped()) { $sql .= ' AND c.assigned_to = ?'; $params[] = (int)$user['id']; }
-if ($agency !== '') { $sql .= " AND {$agencyExpr} = ?"; $params[] = $agency; }
+// 4.28.0: every spelling of the agency, including a name it had before a rename (agency_spellings()).
+if ($agency !== '') { [$agencyCond, $agencyArgs] = agency_match_sql($agencyExpr, $agency); $sql .= ' AND ' . $agencyCond; array_push($params, ...$agencyArgs); }
 $sql .= " GROUP BY t.id, {$agencyExpr}, {$authExpr}, COALESCE(w.rsa_category, t.rsa_category), COALESCE(w.service_type, t.service_type) ORDER BY {$agencyExpr}, c.name, t.id";
 $stmt = db()->prepare($sql);
 $stmt->execute($params);
@@ -71,7 +72,7 @@ $esql = "SELECT t.id AS track_id, c.name AS client_name, t.title, {$authExpr} AS
     WHERE e.expense_date BETWEEN ? AND ?";
 $eparams = [$from, $to];
 if (caseload_scoped()) { $esql .= ' AND c.assigned_to = ?'; $eparams[] = (int)$user['id']; }
-if ($agency !== '') { $esql .= " AND {$agencyExpr} = ?"; $eparams[] = $agency; }
+if ($agency !== '') { $esql .= ' AND ' . $agencyCond; array_push($eparams, ...$agencyArgs); }
 $esql .= " GROUP BY t.id, {$agencyExpr}, {$authExpr}";
 $estmt = db()->prepare($esql);
 $estmt->execute($eparams);

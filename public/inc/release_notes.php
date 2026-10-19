@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.28.0' => [
+        'A second full code review was done and every finding fixed. Two people editing the same client, track or worksite assessment can no longer overwrite each other: the second save is refused, names what the other person changed, and keeps your own typing. The phone apps do the same.',
+        'Saving or sending again after a lost connection in the phone apps no longer makes a second client, session, report or record. Spanish signing in the apps now speaks every button and message in Spanish, and an open form in the Android app survives turning the phone.',
+        'Help text on forms is now part of each field\'s label, so screen readers read it with the field instead of as a separate line. QuickBooks can no longer count a payment twice, and a client who picks an offered new time now gets the instructor and place that were offered.',
+    ],
     '4.27.0' => [
         'A full code review was done and every finding fixed. If you use an authenticator app, sign-in now always asks for its code (or a passkey): emailed codes no longer work for your account. A first Microsoft sign-in is matched to your account by email only for members of your own organization; anyone else connects Microsoft once from My Account.',
         'Safer records: merging clients keeps a legal hold and more details (VR case number, plan, vision, language and time zone); two people saving the same client at once can no longer overwrite each other; a closed referral cannot be converted; and nothing on hold can be deleted from the trash.',

@@ -183,12 +183,27 @@ function calendar_sync_user(int $userId, ?int $deadline = null): array {
     if ($next !== null) return $setError('The Outlook calendar has more events than can be read at once; it is tried again in ten minutes.');
     $ours = array_flip(array_map(fn($l) => (string)$l['event_id'], $links));
     // 1. Changes made in Outlook to our events: told once, never applied by themselves.
+    // 4.28.0: the link and the session are read again before telling anyone. A move or cancellation
+    // made on the website while this run read Outlook (calendar_push_session changed the event and its
+    // link) is not a change made in Outlook, so the person is not told they made it there.
+    $freshLink = db()->prepare('SELECT * FROM calendar_links WHERE id = ?');
+    $freshSession = db()->prepare('SELECT status, user_id, start_at FROM scheduled_sessions WHERE id = ?');
+    $stillOurs = function (array $l, int $sid) use ($freshLink, $freshSession, $userId): ?array {
+        $freshLink->execute([(int)$l['id']]);
+        $now = $freshLink->fetch();
+        if (!$now || (string)$now['event_id'] !== (string)$l['event_id'] || $now['outlook_change'] !== null) return null;
+        $freshSession->execute([$sid]);
+        $row = $freshSession->fetch();
+        if (!$row || $row['status'] !== 'Scheduled' || (int)$row['user_id'] !== $userId) return null;
+        return $now + ['session_start' => (string)$row['start_at']];
+    };
     foreach ($links as $sid => $l) {
         if (!isset($sessions[$sid]) || $l['outlook_change'] !== null) continue;
         $s = $sessions[$sid];
         if (strtotime((string)$s['start_at']) < time()) continue; // a session under way or done is left alone
         $first = explode(' ', trim((string)$s['client_name']))[0] ?: 'a client';
         if (!isset($events[$l['event_id']]) || !empty($events[$l['event_id']]['isCancelled'])) {
+            if ($stillOurs($l, (int)$sid) === null) continue; // cancelled, moved to someone else, or re-made here meanwhile
             db()->prepare("UPDATE calendar_links SET outlook_change = 'deleted' WHERE id = ?")->execute([(int)$l['id']]);
             notify_user($userId, "You removed the session with $first on " . date('D, M j g:i A', strtotime((string)$s['start_at'])) . ' from Outlook, but it is still booked. Cancel it on the Schedule if it is not happening.', 'schedule.php#s-' . $sid);
             $out['noticed']++;
@@ -196,6 +211,10 @@ function calendar_sync_user(int $userId, ?int $deadline = null): array {
         }
         $es = calendar_ts($events[$l['event_id']]['start'] ?? null);
         if ($es !== null && abs($es - strtotime((string)$l['event_start'])) >= 60) {
+            $now = $stillOurs($l, (int)$sid);
+            // The event is where the website last put it, or where the session now is: nothing was moved in Outlook.
+            if ($now === null || abs($es - strtotime((string)$now['event_start'])) < 60 || abs($es - strtotime($now['session_start'])) < 60) continue;
+            $s['start_at'] = $now['session_start'];
             db()->prepare("UPDATE calendar_links SET outlook_change = 'moved' WHERE id = ?")->execute([(int)$l['id']]);
             notify_user($userId, "You moved the session with $first to " . date('D, M j g:i A', $es) . ' in Outlook. It is still ' . date('D, M j g:i A', strtotime((string)$s['start_at'])) . ' here: move it on the Schedule if the new time is right.', 'schedule.php#s-' . $sid);
             $out['noticed']++;

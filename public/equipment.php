@@ -92,6 +92,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_item'])) {
 
 /* Loan out */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['loan_out'])) {
+    // The same form sent twice (4.28.0) lends the item once and says so, instead of
+    // reporting the item as no longer available.
+    $loanKey = web_idem_key($_POST);
+    if (web_once_get($loanKey) !== null) { flash('Item loaned out. (The form was sent twice, so it was lent once.)', 'info'); redirect('equipment.php'); }
     $eid = (int)($_POST['equipment_id'] ?? 0);
     $cid = (int)($_POST['client_id'] ?? 0);
     $e = db()->prepare("SELECT * FROM equipment WHERE id = ? AND status = 'Available'");
@@ -123,6 +127,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['loan_out'])) {
     } catch (DomainException $e) {
         keep_input(); keep_field_errors(['loan_equipment_id' => 'Item: ' . lcfirst($e->getMessage())]); redirect('equipment.php');
     }
+    web_once_set($loanKey, (int)$newLoan);
     audit($user['id'], 'equipment.loan', 'equipment', $eid, 'to client #' . $cid);
     flash('Item loaned out.');
     redirect('equipment.php');
@@ -130,6 +135,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['loan_out'])) {
 
 /* Reserve / waitlist an item for a client */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_reservation'])) {
+    $resKey = web_idem_key($_POST);
+    if (web_once_get($resKey) !== null) { flash('The reservation was already added (the form was sent twice), so it was added once.', 'info'); redirect('equipment.php'); }
     $eid = (int)($_POST['equipment_id'] ?? 0);
     $cid = (int)($_POST['client_id'] ?? 0);
     $e = db()->prepare('SELECT status FROM equipment WHERE id = ?');
@@ -207,6 +214,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_reservation'])) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         throw $e;
     }
+    web_once_set($resKey, $eid);
     audit($user['id'], 'equipment.reserve', 'equipment', $eid, 'client #' . $cid . ' (' . $rstatus . ')');
     flash($rstatus === 'Reserved' ? 'Item reserved.' : 'Added to the end of the waitlist.'
         . ($promoted !== null ? ' The item is available, so it is now held for the client who has waited longest.' : ''));
@@ -555,7 +563,7 @@ if (isset($_GET['scan'])) {
         </form>
       <?php elseif ($it['status'] === 'Available'): ?>
         <?php if ($scanHeld): ?><p>This item is held by a reservation. Lending it to that client fulfils the hold; lending it to anyone else moves the hold to the waitlist and notifies that client's instructor and the staff member who made it.</p><?php endif; ?>
-        <form method="post" action="equipment.php" class="stacked"><?= csrf_field() ?>
+        <form method="post" action="equipment.php" class="stacked"><?= csrf_field() ?><?= web_idem_field() ?>
           <input type="hidden" name="equipment_id" value="<?= (int)$it['id'] ?>">
           <div class="field"><label for="sc_client">Loan to client</label>
             <select id="sc_client" name="client_id" required>
@@ -713,17 +721,17 @@ page_header('Equipment & loans', $user, 'equipment');
 <h2 class="visually-hidden">Loan an item out</h2>
 <details class="card" id="loan"<?= $loanFailed ? ' open' : '' ?>>
   <summary accesskey="n" id="loan-h">Loan an item out</summary>
-  <p class="muted" id="loan-hold-hint">Items marked “held by a reservation” are reserved for a client. Lending one to someone else moves that hold to the waitlist and notifies that client's instructor and the staff member who made it.</p>
+  <p class="muted">Items marked “held by a reservation” are reserved for a client. Lending one to someone else moves that hold to the waitlist and notifies that client's instructor and the staff member who made it.</p>
   <?php // After a refused loan the form comes back as it was filled in, with each error on its field.
   $oldLoan = fn(string $k, string $default = ''): string => old_in('loan_out') !== '' ? old_in($k, $default) : $default; ?>
   <form method="post" action="equipment.php" class="stacked" novalidate>
-    <?= csrf_field() ?>
+    <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['loan_equipment_id' => '', 'loan_client_id' => '', 'loan_due_date' => '', 'loan_notes' => ''], ['loan_equipment_id' => 'equipment_id', 'loan_client_id' => 'lo_client', 'loan_due_date' => 'due_date', 'loan_notes' => 'lo_notes']) ?>
     <?= $requiredNote ?>
     <div class="grid grid-4">
       <div class="field">
         <label for="equipment_id">Loan: item <?= required_mark() ?></label>
-        <select id="equipment_id" name="equipment_id" required <?= field_aria('loan_equipment_id', 'loan-hold-hint') ?>>
+        <select id="equipment_id" name="equipment_id" required <?= field_aria('loan_equipment_id') ?>>
           <option value="">— Available items —</option>
           <?php foreach ($items as $i): if ($i['status'] !== 'Available') continue; ?>
           <option value="<?= (int)$i['id'] ?>" <?= $oldLoan('equipment_id') === (string)$i['id'] ? 'selected' : '' ?>><?= h($i['name'] . ($i['serial'] ? ' (serial number ' . $i['serial'] . ')' : '') . (isset($heldIds[(int)$i['id']]) ? ' — held by a reservation' : '')) ?></option>
@@ -774,17 +782,14 @@ page_header('Equipment & loans', $user, 'equipment');
         <input type="text" id="serial" name="serial" maxlength="120" value="<?= h($oldItem('serial')) ?>" <?= field_aria('serial') ?>><?= field_error('serial') ?></div>
       <div class="field"><label for="item_condition">Condition</label>
         <select id="item_condition" name="item_condition"><?= select_options(cms_list_items('equipment_conditions'), $oldItem('item_condition', 'Good')) ?></select></div>
-      <div class="field"><label for="value">Value (USD)</label>
-        <span class="hint" id="value-hint">Purchase or acquisition cost in dollars, for example 2995.00</span>
-        <input type="text" inputmode="decimal" id="value" name="value" value="<?= h($oldItem('value')) ?>" <?= field_aria('value', 'value-hint') ?>><?= field_error('value') ?></div>
+      <div class="field"><label for="value">Value (USD) <span class="hint">Purchase or acquisition cost in dollars, for example 2995.00</span></label>
+        <input type="text" inputmode="decimal" id="value" name="value" value="<?= h($oldItem('value')) ?>" <?= field_aria('value') ?>><?= field_error('value') ?></div>
       <div class="field"><label for="purchase_date">Purchase date</label>
         <input type="date" id="purchase_date" name="purchase_date" max="<?= date('Y-m-d') ?>" value="<?= h($oldItem('purchase_date')) ?>" <?= field_aria('purchase_date') ?>><?= field_error('purchase_date') ?></div>
-      <div class="field"><label for="useful_life_months">Useful life (months)</label>
-        <span class="hint" id="life-hint">Whole months, 1 to 600, used to work out current value; default 36</span>
-        <input type="text" inputmode="numeric" id="useful_life_months" name="useful_life_months" value="<?= h($oldItem('useful_life_months', '36')) ?>" <?= field_aria('useful_life_months', 'life-hint') ?>><?= field_error('useful_life_months') ?></div>
-      <div class="field"><label for="maint_interval">Service interval</label>
-        <span class="hint" id="interval-hint">Whole days between maintenance or calibration, 0 to 3650; blank = none</span>
-        <input type="text" inputmode="numeric" id="maint_interval" name="maintenance_interval_days" value="<?= h($oldItem('maintenance_interval_days')) ?>" <?= field_aria('maintenance_interval_days', 'interval-hint') ?>><?= field_error('maintenance_interval_days') ?></div>
+      <div class="field"><label for="useful_life_months">Useful life (months) <span class="hint">Whole months, 1 to 600, used to work out current value; default 36</span></label>
+        <input type="text" inputmode="numeric" id="useful_life_months" name="useful_life_months" value="<?= h($oldItem('useful_life_months', '36')) ?>" <?= field_aria('useful_life_months') ?>><?= field_error('useful_life_months') ?></div>
+      <div class="field"><label for="maint_interval">Service interval <span class="hint">Whole days between maintenance or calibration, 0 to 3650; blank = none</span></label>
+        <input type="text" inputmode="numeric" id="maint_interval" name="maintenance_interval_days" value="<?= h($oldItem('maintenance_interval_days')) ?>" <?= field_aria('maintenance_interval_days') ?>><?= field_error('maintenance_interval_days') ?></div>
       <div class="field"><label for="notes">Item notes</label>
         <input type="text" id="notes" name="notes" maxlength="255" value="<?= h($oldItem('notes')) ?>" <?= field_aria('notes') ?>><?= field_error('notes') ?></div>
     </div>
@@ -853,18 +858,16 @@ page_header('Equipment & loans', $user, 'equipment');
             <input type="date" id="md-<?= $iid ?>" name="service_date" max="<?= date('Y-m-d') ?>" value="<?= h($oldSvc('service_date', date('Y-m-d'))) ?>" <?= field_aria($svcKey) ?>><?= field_error($svcKey) ?>
             <label for="mn-<?= $iid ?>">Service notes</label>
             <input type="text" id="mn-<?= $iid ?>" name="service_notes" maxlength="500" value="<?= h($oldSvc('service_notes')) ?>" <?= field_aria($snKey) ?>><?= field_error($snKey) ?>
-            <label for="mc-<?= $iid ?>">Cost</label>
-            <span class="hint" id="mc-hint-<?= $iid ?>">In dollars, for example 125.00; blank if none</span>
-            <input type="text" inputmode="decimal" id="mc-<?= $iid ?>" name="service_cost" value="<?= h($oldSvc('service_cost')) ?>" <?= field_aria($scostKey, 'mc-hint-' . $iid) ?>><?= field_error($scostKey) ?>
+            <label for="mc-<?= $iid ?>">Cost <span class="hint">In dollars, for example 125.00; blank if none</span></label>
+            <input type="text" inputmode="decimal" id="mc-<?= $iid ?>" name="service_cost" value="<?= h($oldSvc('service_cost')) ?>" <?= field_aria($scostKey) ?>><?= field_error($scostKey) ?>
             <button type="submit" name="log_service" value="1" class="btn btn-secondary btn-sm">Log service<span class="visually-hidden"> — <?= h($i['name']) ?></span></button>
           </form>
           <?php if (can('admin')): ?>
           <form method="post" action="equipment.php" class="stacked" style="margin-top:.4rem" novalidate><?= csrf_field() ?>
             <input type="hidden" name="equipment_id" value="<?= $iid ?>">
             <?= form_error_summary([$cdKey => '', $crKey => ''], [$cdKey => 'cd-' . $iid, $crKey => 'cr-' . $iid]) ?>
-            <label for="cd-<?= $iid ?>">Corrected last service date<span class="visually-hidden"> — <?= h($i['name']) ?></span></label>
-            <span class="hint" id="cd-hint-<?= $iid ?>">Administrators: set the date when the stored one is wrong (logging a service never moves it back). Blank = no service on record.</span>
-            <input type="date" id="cd-<?= $iid ?>" name="corrected_date" max="<?= date('Y-m-d') ?>" value="<?= h($oldCor('corrected_date', (string)($i['last_service_date'] ?? ''))) ?>" <?= field_aria($cdKey, 'cd-hint-' . $iid) ?>><?= field_error($cdKey) ?>
+            <label for="cd-<?= $iid ?>">Corrected last service date<span class="visually-hidden"> — <?= h($i['name']) ?></span> <span class="hint">Administrators: set the date when the stored one is wrong (logging a service never moves it back). Blank = no service on record.</span></label>
+            <input type="date" id="cd-<?= $iid ?>" name="corrected_date" max="<?= date('Y-m-d') ?>" value="<?= h($oldCor('corrected_date', (string)($i['last_service_date'] ?? ''))) ?>" <?= field_aria($cdKey) ?>><?= field_error($cdKey) ?>
             <label for="cr-<?= $iid ?>">Reason for the correction<span class="visually-hidden"> — <?= h($i['name']) ?></span></label>
             <input type="text" id="cr-<?= $iid ?>" name="correction_reason" maxlength="300" value="<?= h($oldCor('correction_reason')) ?>" <?= field_aria($crKey) ?>><?= field_error($crKey) ?>
             <button type="submit" name="correct_service" value="1" class="btn btn-secondary btn-sm">Correct last service date<span class="visually-hidden"> — <?= h($i['name']) ?></span></button>
@@ -953,7 +956,7 @@ page_header('Equipment & loans', $user, 'equipment');
   <?php else: ?><p class="muted">No active reservations.</p><?php endif; ?>
   <?php // After a rejected date the form comes back filled in, with the error on its field.
   $oldRes = fn(string $k): string => old_in('add_reservation') !== '' ? old_in($k) : ''; ?>
-  <form method="post" action="equipment.php" class="stacked" style="margin-top:1rem" id="res-form"><?= csrf_field() ?>
+  <form method="post" action="equipment.php" class="stacked" style="margin-top:1rem" id="res-form"><?= csrf_field() ?><?= web_idem_field() ?>
     <h3>Reserve or waitlist an item</h3>
     <?= form_error_summary(['res_equipment_id' => '', 'res_client_id' => '', 'needed_from' => '', 'needed_until' => '', 'res_notes' => ''], ['res_equipment_id' => 'res_item', 'res_client_id' => 'res_client', 'needed_from' => 'res_from', 'needed_until' => 'res_until', 'res_notes' => 'res_notes']) ?>
     <?= $requiredNote ?>

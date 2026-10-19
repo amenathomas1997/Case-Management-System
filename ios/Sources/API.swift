@@ -177,6 +177,9 @@ struct ClientInfo: Decodable {
     /// Where they live (4.19.0): a two-letter state code, and a time zone only when one was picked.
     var state: String?
     var timeZone: String?
+    /// When the record was last changed (4.28.0), sent back as loaded_at when it is saved, so a
+    /// change someone else made since is not undone; nil from an older server.
+    var updatedAt: String?
 }
 
 /// The choices the website's Lists and time limits page sets (4.5.0), kept on the phone from
@@ -351,10 +354,13 @@ struct ClientDetail: Decodable {
     /// Office, custom fields, device counts and documents waiting to be signed (4.25.0), read
     /// from the same client object; empty from an older server.
     var extras = ClientExtras()
-    private enum CodingKeys: String, CodingKey { case client, notes, tracks, notesTotal, releases, texting }
+    private enum CodingKeys: String, CodingKey { case client, notes, tracks, notesTotal, releases, texting, updatedAt }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
-        client = try c.decode(ClientInfo.self, forKey: .client)
+        var info = try c.decode(ClientInfo.self, forKey: .client)
+        // updated_at in the client object, or beside it (4.28.0).
+        if info.updatedAt == nil, let at = try? c.decodeIfPresent(String.self, forKey: .updatedAt) { info.updatedAt = at }
+        client = info
         notes = try c.decode([Note].self, forKey: .notes)
         tracks = try c.decode([Track].self, forKey: .tracks)
         notesTotal = try? c.decodeIfPresent(Int.self, forKey: .notesTotal)
@@ -683,7 +689,9 @@ struct Session: Decodable, Identifiable {
 }
 
 /// move_session's reply (3.0.43): moved, or the warnings to confirm first.
-struct MoveSessionResult: Decodable { let moved: Bool?; let warnings: [String]?; let message: String? }
+/// `warningsHash` (4.28.0): sent back as confirm_hash with Move anyway, so it approves exactly
+/// the warnings shown for this time.
+struct MoveSessionResult: Decodable { let moved: Bool?; let warnings: [String]?; let message: String?; var warningsHash: String? }
 
 struct ScheduleResponse: Decodable { let sessions: [Session] }
 
@@ -755,7 +763,10 @@ struct Followup: Decodable, Identifiable {
     let clientName: String
     let equipmentName: String
     let assetTag: String?
-    private enum CodingKeys: String, CodingKey { case id, clientId, equipmentId, intervalDays, dueDate, status, inUse, satisfaction, barriers, notes, completedAt, clientName, equipmentName, assetTag }
+    /// The client's counselor (4.28.0; nil from a server that does not send it): the 8:00
+    /// reminder counts only the signed-in person's own follow-ups.
+    let assignedTo: Int?
+    private enum CodingKeys: String, CodingKey { case id, clientId, equipmentId, intervalDays, dueDate, status, inUse, satisfaction, barriers, notes, completedAt, clientName, equipmentName, assetTag, assignedTo }
     // Tolerant decode so one malformed follow-up can't blank the whole list.
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -773,6 +784,7 @@ struct Followup: Decodable, Identifiable {
         clientName = (try? c.decode(String.self, forKey: .clientName)) ?? ""
         equipmentName = (try? c.decode(String.self, forKey: .equipmentName)) ?? ""
         assetTag = try? c.decodeIfPresent(String.self, forKey: .assetTag)
+        assignedTo = (try? c.decodeIfPresent(Int.self, forKey: .assignedTo)) ?? nil
     }
 }
 
@@ -1013,12 +1025,15 @@ enum DraftStore {
 
     /// How many drafts this phone keeps, of every account (4.27.0: said before a server change
     /// removes them).
+    /// The file TrackCache keeps here: a copy of the server's track list, not a draft.
+    static let notDraftFile = "track-cache.json"
     static func countAllAccounts() -> Int {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Drafts", isDirectory: true)
         guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return 0 }
         var count = 0
-        for case let url as URL in files where url.pathExtension == "json" { count += 1 }
+        // The kept track list (TrackCache, 4.28.0) is not typed work, so it is not a draft.
+        for case let url as URL in files where url.pathExtension == "json" && url.lastPathComponent != notDraftFile { count += 1 }
         return count
     }
 
@@ -1110,6 +1125,9 @@ final class API: ObservableObject {
         }
         guard var c = URLComponents(string: s), c.scheme == "https", let host = c.host?.lowercased(), !host.isEmpty, host.contains(".") || host == "localhost" else { return nil }
         c.host = host
+        // 4.28.0: https's own port written out (":443") is the same server as no port, so the
+        // two spellings give one address (a sign-in never takes them for different servers).
+        if c.port == 443 { c.port = nil }
         var path = c.path
         if path.lowercased().hasSuffix("/api.php") { path = String(path.dropLast(8)) + "/api.php" }
         if !path.hasSuffix("/api.php") {
@@ -1146,6 +1164,12 @@ final class API: ObservableObject {
     /// Where the offline entries, drafts and kept lists on this phone were saved for (4.27.0):
     /// the API address of the server last signed in to. Signing in to a different one removes them.
     nonisolated static let dataServerKey = "dataServer"
+    /// That address as apiURL writes it today (4.28.0: one kept by 4.27.0 with ":443" written
+    /// out is the same server as without it), or the current server when none is kept.
+    nonisolated static var dataServer: String {
+        guard let kept = UserDefaults.standard.string(forKey: dataServerKey) else { return base.absoluteString }
+        return apiURL(fromAddress: kept)?.absoluteString ?? kept
+    }
 
     /// Said when the server's reply was a redirect the app refused (RedirectGuard), instead of
     /// "Unexpected response from the server."
@@ -1382,7 +1406,7 @@ final class API: ObservableObject {
         // only now, once the sign-in worked, does that go (the person was asked first when
         // entries were waiting; see LoginView). The same server, however typed, keeps it all.
         let here = API.base.absoluteString
-        if let previous = UserDefaults.standard.string(forKey: API.dataServerKey), previous != here {
+        if UserDefaults.standard.string(forKey: API.dataServerKey) != nil, API.dataServer != here {
             removeEveryAccountsData()
         }
         UserDefaults.standard.set(here, forKey: API.dataServerKey)
@@ -1664,6 +1688,10 @@ final class API: ObservableObject {
         let owner = userId
         let sessionToken = token
         var transient: String?
+        // 4.28.0: whether every try got a real answer from the server. A network error, a 5xx or
+        // 429, a refused redirect or a refused session stops the upload without reaching it, and
+        // then nothing is expired: an old entry is never dropped because the phone had no signal.
+        var reachedServer = true
         let notice: String?
         do {
             let q = try loadQueue()
@@ -1673,6 +1701,9 @@ final class API: ObservableObject {
             for item in q {
                 guard token == sessionToken, userId == owner else { break }
                 guard item.owner == owner else { continue }
+                // 4.28.0: an entry discarded on Offline entries while this upload was running is
+                // not sent from the copy loaded at the start (re-read just before each send).
+                guard (try? loadQueue())?.contains(where: { $0.id == item.id && $0.owner == owner }) == true else { continue }
                 var components = URLComponents(url: API.base, resolvingAgainstBaseURL: false)!
                 components.queryItems = [URLQueryItem(name: "action", value: item.action)]
                 var request = URLRequest(url: components.url!)
@@ -1683,8 +1714,9 @@ final class API: ObservableObject {
                 request.httpBody = item.body
                 do {
                     let (data, response) = try await API.session.data(for: request)
-                    guard let http = response as? HTTPURLResponse else { break }
+                    guard let http = response as? HTTPURLResponse else { reachedServer = false; break }
                     if http.statusCode == 401 {
+                        reachedServer = false
                         // A phone reported lost (4.27.0: here too): everything goes, nothing more is sent.
                         if wipeIfReportedLost(response, data: data, sessionToken: sessionToken) != nil { return }
                         // Sign-in is asked for above the open screens; the entries upload after it.
@@ -1701,11 +1733,13 @@ final class API: ObservableObject {
                     } else if API.isRedirect(response) {
                         // Refused redirect: nothing reached the server; kept, and said why.
                         transient = "“\(item.label)” could not sync yet and is still saved on this phone. " + API.redirectRefused
+                        reachedServer = false
                         break
                     } else if http.statusCode >= 500 || http.statusCode == 429 {
                         // Transient server/rate-limit error: keep the entry and stop; it retries later.
                         transient = "“\(item.label)” could not sync yet and is still saved on this phone. "
                             + ((try? decoder.decode(APIErrorResponse.self, from: data))?.error ?? "It will retry automatically when you reconnect.")
+                        reachedServer = false
                         break
                     } else {
                         // A rejected upload is not a confirmed save. Keep the original work available —
@@ -1714,7 +1748,7 @@ final class API: ObservableObject {
                         refused[item.id] = (try? decoder.decode(APIErrorResponse.self, from: data))?.error
                             ?? "The server did not accept it."
                     }
-                } catch { break }
+                } catch { reachedServer = false; break }
             }
             // Reload so entries added during an upload survive. Only confirmed uploads
             // are removable; unknown-owner legacy records remain for recovery.
@@ -1729,9 +1763,10 @@ final class API: ObservableObject {
                 }
             }
             if changed { try saveQueue(current) } else { pendingSync = ownPending(current) }
-            // Only what is still here after sending is expired (4.27.0): an old entry that could
-            // be sent just now was sent, not dropped.
-            if token == sessionToken, userId == owner, expireQueue(owner: owner) { current = try loadQueue() }
+            // Only what is still here after sending is expired (4.27.0), and only after the server
+            // was actually reached (4.28.0): an old entry that could be sent just now was sent,
+            // not dropped, and one that could not be tried (no signal, server fault) is kept.
+            if reachedServer, token == sessionToken, userId == owner, expireQueue(owner: owner) { current = try loadQueue() }
             notice = syncNotice(current, transient: transient)
         } catch {
             notice = "Could not read or update offline entries. They have not been discarded."
@@ -1801,8 +1836,7 @@ final class API: ObservableObject {
     /// How many offline entries would be removed by signing in to the server at `next` (4.27.0):
     /// none when it is the server they were saved for, however its address was typed.
     func entriesLostBySigningIn(to next: URL) -> Int {
-        let dataServer = UserDefaults.standard.string(forKey: API.dataServerKey) ?? API.base.absoluteString
-        guard next.absoluteString != dataServer else { return 0 }
+        guard next.absoluteString != API.dataServer else { return 0 }
         return (try? loadQueue().count) ?? 0
     }
 

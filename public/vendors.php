@@ -16,6 +16,9 @@ try { db()->query('SELECT 1 FROM vendor_agreements LIMIT 1'); } catch (PDOExcept
 if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['save_vendor']) || isset($_POST['add_vendor']))) {
     $str = fn(string $k): string => is_string($_POST[$k] ?? null) ? trim($_POST[$k]) : '';
     $vid = (int)($_POST['vendor_id'] ?? 0);
+    // Add vendor sent twice (4.28.0): added once, with no false "already listed" error.
+    $vendorKey = $vid === 0 ? web_idem_key($_POST) : null;
+    if (web_once_get($vendorKey) !== null) { flash('Added ' . $str('vendor') . '. (The form was sent twice, so it was added once.)', 'info'); redirect('vendors.php'); }
     $suffix = $vid > 0 ? '_' . $vid : '';
     $errs = [];
     $status = $str('agreement_status');
@@ -55,6 +58,7 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['save_vendo
         keep_field_errors(['vendor' => 'A vendor with that name is already listed.']);
         redirect('vendors.php#add-h');
     }
+    web_once_set($vendorKey, (int)db()->lastInsertId());
     audit($user['id'], 'vendor.add', 'settings', null, $str('vendor') . ': ' . $status);
     flash('Added ' . $str('vendor') . '.');
     redirect('vendors.php');
@@ -77,9 +81,11 @@ page_header('Vendor agreements', $user, 'admin', [['admin.php', 'Administration'
   <p><?= h($v['service']) ?>.<?= $v['client_info'] !== '' ? ' Client information: ' . h($v['client_info']) . '.' : '' ?></p>
   <?php if ($v['updated_at']): ?><p class="muted">Last updated <?= fmt_datetime($v['updated_at']) ?><?= $v['updated_by_name'] ? ' by ' . h($v['updated_by_name']) : '' ?>.</p><?php endif; ?>
   <form method="post" action="vendors.php" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['agreement_status' . $sfx => 'Agreement status', 'signed_on' . $sfx => 'Date signed', 'renews_on' . $sfx => 'Renewal date', 'notes' . $sfx => 'Notes'],
+        ['agreement_status' . $sfx => 'st' . $sfx, 'signed_on' . $sfx => 'so' . $sfx, 'renews_on' . $sfx => 'ro' . $sfx, 'notes' . $sfx => 'no' . $sfx]) ?>
     <input type="hidden" name="vendor_id" value="<?= $vid ?>">
     <div class="field"><label for="st<?= $sfx ?>">Agreement status<span class="visually-hidden">: <?= h($v['vendor']) ?></span></label>
-      <select id="st<?= $sfx ?>" name="agreement_status"><?= select_options(VENDOR_AGREEMENT_STATUSES, $mine ? old_in('agreement_status') : $v['agreement_status']) ?></select><?= field_error('agreement_status' . $sfx) ?></div>
+      <select id="st<?= $sfx ?>" name="agreement_status" <?= field_aria('agreement_status' . $sfx) ?>><?= select_options(VENDOR_AGREEMENT_STATUSES, $mine ? old_in('agreement_status') : $v['agreement_status']) ?></select><?= field_error('agreement_status' . $sfx) ?></div>
     <div class="field"><label for="so<?= $sfx ?>">Date signed</label>
       <input type="date" id="so<?= $sfx ?>" name="signed_on" value="<?= h($mine ? old_in('signed_on') : (string)$v['signed_on']) ?>" <?= field_aria('signed_on' . $sfx) ?>><?= field_error('signed_on' . $sfx) ?></div>
     <div class="field"><label for="ro<?= $sfx ?>">Renewal or review date</label>
@@ -92,7 +98,7 @@ page_header('Vendor agreements', $user, 'admin', [['admin.php', 'Administration'
 <?php endforeach; ?>
 <section class="card" aria-labelledby="add-h">
   <h2 id="add-h">Add a vendor</h2>
-  <form method="post" action="vendors.php" class="stacked" novalidate><?= csrf_field() ?>
+  <form method="post" action="vendors.php" class="stacked" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['vendor' => 'Vendor', 'service' => 'What they do', 'client_info' => 'Client information', 'agreement_status' => 'Agreement status',
         'signed_on' => 'Date signed', 'renews_on' => 'Renewal date', 'notes' => 'Notes'], ['vendor' => 'nv_vendor', 'service' => 'nv_service', 'client_info' => 'nv_info',
         'agreement_status' => 'nv_status', 'signed_on' => 'nv_signed', 'renews_on' => 'nv_renews', 'notes' => 'nv_notes']) ?>
@@ -105,7 +111,7 @@ page_header('Vendor agreements', $user, 'admin', [['admin.php', 'Administration'
     <div class="field"><label for="nv_info">Client information they handle</label>
       <input type="text" id="nv_info" name="client_info" maxlength="255" value="<?= h($o('client_info')) ?>" <?= field_aria('client_info') ?>><?= field_error('client_info') ?></div>
     <div class="field"><label for="nv_status">Agreement status</label>
-      <select id="nv_status" name="agreement_status"><?= select_options(VENDOR_AGREEMENT_STATUSES, $o('agreement_status') ?: 'Not signed') ?></select><?= field_error('agreement_status') ?></div>
+      <select id="nv_status" name="agreement_status" <?= field_aria('agreement_status') ?>><?= select_options(VENDOR_AGREEMENT_STATUSES, $o('agreement_status') ?: 'Not signed') ?></select><?= field_error('agreement_status') ?></div>
     <div class="field"><label for="nv_signed">Date signed</label><input type="date" id="nv_signed" name="signed_on" value="<?= h($o('signed_on')) ?>" <?= field_aria('signed_on') ?>><?= field_error('signed_on') ?></div>
     <div class="field"><label for="nv_renews">Renewal or review date</label><input type="date" id="nv_renews" name="renews_on" value="<?= h($o('renews_on')) ?>" <?= field_aria('renews_on') ?>><?= field_error('renews_on') ?></div>
     <div class="field"><label for="nv_notes">Notes</label><input type="text" id="nv_notes" name="notes" maxlength="500" value="<?= h($o('notes')) ?>" <?= field_aria('notes') ?>><?= field_error('notes') ?></div>

@@ -89,6 +89,8 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
             awaitingCode = true
             notice = if (resend && !totpOnly) "A new code was sent. Codes sent earlier no longer work." else "Password accepted. $codeHelp"
         } catch (e: ApiException) {
+            // 4.28.0: an address that did not sign in is not kept in use.
+            api.clearTrialServer()
             error = (if (asksForServer && !resend) "Signing in to ${host()} did not work. Check the address if it is new. " else "") + e.message
         } finally {
             busy = false
@@ -107,6 +109,8 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
             if (asksForServer) api.commitServer(server)
             api.finishSignIn(r.optString("token"), r.optInt("user_id"), r.optString("name"), email.trim())
         } catch (e: ApiException) {
+            // Set again by the next try (4.28.0).
+            if (asksForServer) api.clearTrialServer()
             error = e.message
         } finally {
             busy = false
@@ -155,7 +159,7 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
                 ErrorText(error)
                 PrimaryButton("Sign in", busy = busy, enabled = code.length >= 6) { scope.launch { verify() } }
                 if (!totpOnly) SecondaryButton("Send a new code") { scope.launch { passwordStep(true) } }
-                SecondaryButton("Start again") { awaitingCode = false; code = ""; password = ""; error = null; notice = null }
+                SecondaryButton("Start again") { api.clearTrialServer(); awaitingCode = false; code = ""; password = ""; error = null; notice = null }
             }
         }
     }

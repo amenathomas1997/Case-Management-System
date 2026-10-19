@@ -596,6 +596,8 @@ struct AIIntakeResponse: Decodable { let fields: AIIntakeFields; let instruments
 
 struct AIIntakeView: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     let clientId: Int
     let onSaved: () -> Void
     @State private var goals = ""; @State private var limitations = ""; @State private var tried = ""; @State private var context = ""
@@ -699,16 +701,22 @@ struct AIIntakeView: View {
     private func save() async {
         busy = true; error = nil
         do {
-            let _: OKResponse = try await api.call("add_assessment", body: [
+            var body: [String: Any] = [
                 "client_id": clientId, "assessment_date": APIDate.day(date), "primary_disability": disability,
                 "primary_tech": tech, "hardware_details": hardware, "software_version": software, "summary": summary,
-            ])
+            ]
+            body["idem_key"] = idem.key(for: body)
+            let _: OKResponse = try await api.call("add_assessment", body: body)
+            idem.answered()
             saved = true
             busy = false
             // The Save button VoiceOver was on is replaced by the saved notice: move onto it,
             // which speaks it (an announcement here would be cut off by the focus change).
             moveFocus(to: .saved)
             onSaved()
-        } catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
+        } catch {
+            idem.failed(error)
+            showFormError(IdemKey.message(for: error, what: "the assessment"), in: &self.error); busy = false
+        }
     }
 }

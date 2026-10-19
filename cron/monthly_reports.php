@@ -123,7 +123,11 @@ foreach ($tracks as $t) {
         $ackUrl = create_report_ack((int)$t['cid'], (int)$t['id'], $to, $report['text']);
         [, $ackLine] = email_template('report_cover', ['ack' => $ackUrl]);
         $body = $report['text'] . "\n\n---\n" . $ackLine;
-        if (!send_app_mail($to, $report['subject'], $body)) {
+        // An unknown outcome (4.28.0: Graph timed out or answered 5xx after it went out) may have
+        // arrived: recorded as sent, never sent twice, and listed once for checking by hand.
+        $outcome = send_app_mail_outcome($to, $report['subject'], $body);
+        if ($outcome === 'unknown') $skipped[] = "{$t['client_name']} — {$t['title']}: the mail service did not confirm the report to {$to}; it is recorded as sent and not sent again, so check with the counselor that it arrived";
+        if ($outcome === 'refused') {
             // Nothing was sent, so no receipt is waiting: drop the unacknowledged ack
             // row (as report.php does) instead of listing it on the counselor portal.
             db()->prepare('DELETE FROM report_acks WHERE token = ? AND acked_at IS NULL')

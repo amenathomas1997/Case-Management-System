@@ -333,8 +333,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_group'])) {
     $gHoursRaw = is_string($_POST['g_hours'] ?? null) ? trim(str_replace(',', '.', $_POST['g_hours'])) : '';
     $gHours = $gHoursRaw === '' ? null : (is_numeric($gHoursRaw) ? round((float)$gHoursRaw, 2) : -1.0);
     if ($gHours !== null && ($gHours < 0 || $gHours > 24)) {
-        flash('Nothing was completed: enter the hours for each client who attended as a number from 0 to 24, such as 1.5.', 'error');
-        redirect('schedule.php');
+        // Said on the field, with what was ticked and typed kept (4.28.0).
+        keep_input();
+        keep_field_errors(['gh_' . $uid => 'Nothing was completed: enter the hours for each client who attended as a number from 0 to 24, such as 1.5.']);
+        redirect('schedule.php#gh-' . $uid);
     }
     if ($gHours !== null && $gHours < 0.01) $gHours = 0.0;
     $listed = $postedIds('listed');
@@ -652,14 +654,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['move_session']) || i
         redirect('schedule.php#s-' . $sid);
     }
     $start = strtotime($date . ' ' . $time . ':00');
-    $r = session_move($sid, $start, $start + (int)round((float)$dur * 3600), (int)$user['id'], !empty($_POST['move_confirm']));
-    if ($r['error'] !== null) { keep_input(); keep_field_errors([$key => $r['error']]); redirect('schedule.php#s-' . $sid); }
+    // "Move anyway" approves only the warnings it was shown beside, for that time (4.28.0).
+    $moveOk = !empty($_POST['move_confirm']) && is_string($_POST['move_hash'] ?? null) ? $_POST['move_hash'] : false;
+    $r = session_move($sid, $start, $start + (int)round((float)$dur * 3600), (int)$user['id'], $moveOk);
+    if ($r['error'] !== null) { keep_input(); unset($_SESSION['old_input']['move_confirm'], $_SESSION['old_input']['move_hash']); keep_field_errors([$key => $r['error']]); redirect('schedule.php#s-' . $sid); }
     if (!$r['moved']) {
         keep_input();
-        keep_field_errors([$key => 'Not moved yet: ' . implode(' ', $r['warnings']) . ' Tick "Move anyway" and choose Move again if this time is right.']);
+        unset($_SESSION['old_input']['move_confirm']);
+        $_SESSION['old_input']['move_hash'] = $r['hash'];
+        keep_field_errors([$key => 'Not moved yet: ' . ($moveOk !== false ? 'the warnings for this time are not the ones you approved. ' : '')
+            . implode(' ', $r['warnings']) . ' Tick "Move anyway" and choose Move again if this time is right.']);
         redirect('schedule.php#s-' . $sid);
     }
-    flash('Moved the session with ' . $sess['client_name'] . ' to ' . date('l, F j \a\t g:i A', $start) . '. The client\'s calendar invite was updated if they have a confirmed email.');
+    flash('Moved the session with ' . $sess['client_name'] . ' to ' . date('l, F j \a\t g:i A', $start) . '. The client\'s calendar invite was updated if they have a confirmed email.'
+        . (!empty($r['left_group']) ? ' It is no longer part of its group session.' : ''));
     redirect('schedule.php#s-' . (int)$sid);
 }
 
@@ -994,6 +1002,7 @@ function session_row(array $s, string $csrf): void {
           <summary>Move or cancel more<span class="visually-hidden"> for the <?= $which ?></span></summary>
           <form method="post" action="schedule.php" class="stacked" novalidate>
             <?= csrf_field() ?><input type="hidden" name="session_id" value="<?= $sidM ?>">
+            <?= form_error_summary([$mKey => ''], [$mKey => 'md-' . $sidM]) ?>
             <?= field_error($mKey) ?>
             <div class="field"><label for="md-<?= $sidM ?>">New date<span class="visually-hidden"> for the <?= $which ?></span></label>
               <input type="date" id="md-<?= $sidM ?>" name="move_date" value="<?= h($mMine ? old_in('move_date') : date('Y-m-d', strtotime($s['start_at']))) ?>" <?= field_aria($mKey) ?>></div>
@@ -1002,7 +1011,8 @@ function session_row(array $s, string $csrf): void {
             <div class="field"><label for="ml-<?= $sidM ?>">Length in hours</label>
               <input type="text" inputmode="decimal" id="ml-<?= $sidM ?>" name="move_duration" value="<?= h($mMine ? old_in('move_duration') : rtrim(rtrim(number_format((strtotime($s['end_at']) - strtotime($s['start_at'])) / 3600, 2, '.', ''), '0'), '.')) ?>" <?= field_aria($mKey) ?>></div>
             <?php if (has_field_error($mKey) && str_starts_with(form_errors()[$mKey] ?? '', 'Not moved yet')): ?>
-            <div class="field"><label><input type="checkbox" name="move_confirm" value="1"> Move anyway</label></div>
+            <input type="hidden" name="move_hash" value="<?= h($mMine ? old_in('move_hash') : '') ?>">
+            <div class="field"><label><input type="checkbox" name="move_confirm" value="1"> Move anyway <span class="hint">approves only the warnings above, for this date and time</span></label></div>
             <?php endif; ?>
             <button type="submit" name="move_session" value="1" class="btn btn-secondary btn-sm">Move<span class="visually-hidden"> the <?= $which ?></span></button>
           </form>
@@ -1199,15 +1209,16 @@ foreach ($groupsPending as $uid => $members): if (count($members) < 2) continue;
     $gWhen = fmt_datetime($members[0]['start_at']); ?>
   <?php // Attendance is recorded with the outcome: a client not ticked is recorded as No
   // Show with no hours logged, so an absent client is never billed for the sitting. ?>
+  <?php $ghKey = 'gh_' . $uid; $ghMine = has_field_error($ghKey) && old_in('group_uid') === $uid; ?>
   <form method="post" action="schedule.php" class="stacked"><?= csrf_field() ?>
+    <?= form_error_summary([$ghKey => ''], [$ghKey => 'gh-' . $uid]) ?>
     <input type="hidden" name="group_uid" value="<?= h($uid) ?>">
     <input type="hidden" name="attendance_form" value="1">
-    <fieldset aria-describedby="gatt-hint-<?= h($uid) ?>">
-      <legend>Who attended?</legend>
-      <p class="hint" id="gatt-hint-<?= h($uid) ?>">Untick anyone who did not come: they are recorded as No Show, and no hours are logged for them.</p>
+    <fieldset>
+      <legend>Who attended? <span class="hint">Untick anyone who did not come: they are recorded as No Show, and no hours are logged for them.</span></legend>
       <?php foreach ($members as $m): $mh = $m['track_id'] ? schedule_hours($m) : 0.0; ?>
       <input type="hidden" name="listed[]" value="<?= (int)$m['id'] ?>">
-      <div class="field"><label><input type="checkbox" class="att-box" name="attended[]" value="<?= (int)$m['id'] ?>" data-bill="<?= $m['track_id'] ? '1' : '0' ?>" checked> <?= h($m['client_name']) ?> attended<span class="visually-hidden"> the group session of <?= $gWhen ?></span></label>
+      <div class="field"><label><input type="checkbox" class="att-box" name="attended[]" value="<?= (int)$m['id'] ?>" data-bill="<?= $m['track_id'] ? '1' : '0' ?>"<?= !$ghMine || in_array((string)(int)$m['id'], old_in_list('attended'), true) ? ' checked' : '' ?>> <?= h($m['client_name']) ?> attended<span class="visually-hidden"> the group session of <?= $gWhen ?></span></label>
         <span class="muted">(<?= $m['track_id'] ? 'hours logged to ' . ($m['track_title'] ? h($m['track_title']) : 'their training track') : 'no training track, so no hours are logged' ?>)</span></div>
       <?php endforeach; ?>
     </fieldset>
@@ -1216,7 +1227,7 @@ foreach ($groupsPending as $uid => $members): if (count($members) < 2) continue;
     $gFirst = current(array_filter($members, fn($m) => !empty($m['track_id'])));
     $gDefault = $gFirst ? rtrim(rtrim(number_format(schedule_hours($gFirst), 2, '.', ''), '0'), '.') : ''; ?>
     <div class="field"><label for="gh-<?= h($uid) ?>">Hours for each client who attended<span class="visually-hidden"> the group session of <?= $gWhen ?></span></label>
-      <input type="text" inputmode="decimal" autocomplete="off" id="gh-<?= h($uid) ?>" name="g_hours" value="<?= h($gDefault) ?>"></div>
+      <input type="text" inputmode="decimal" autocomplete="off" id="gh-<?= h($uid) ?>" name="g_hours" value="<?= h($ghMine ? old_in('g_hours') : $gDefault) ?>" <?= field_aria($ghKey) ?>><?= field_error($ghKey) ?></div>
     <button type="submit" name="complete_group" value="1" class="btn btn-secondary btn-sm"
       onclick="var b=this.form.querySelectorAll('.att-box'),a=0,p=0,g=this.form.querySelector('[name=g_hours]'),hv=g&&g.value.trim()!==''?g.value.trim():'',none=hv!==''&&!(Number(hv.replace(',','.'))>0);b.forEach(function(x){if(x.checked){a++;if(x.getAttribute('data-bill')==='1')p++;}});return confirm('Record attendance for this group session? '+a+' of '+b.length+' clients attended and will be marked Completed'+(none?', with no hours logged. ':', and '+p+' of them will have '+(hv!==''?hv+' hours':'hours')+' logged to their training track and billed. ')+(b.length-a)+' will be recorded as No Show, with no hours logged.');">Record attendance and complete<span class="visually-hidden"> — group session of <?= $gWhen ?>, <?= count($members) ?> clients</span></button>
   </form>
@@ -1297,5 +1308,5 @@ foreach ($groupsPending as $uid => $members): if (count($members) < 2) continue;
 <?php // Arriving at a session row (#s-<id>, from the action center or a portal request)
 // lands on that row's first button, so a screen-reader user starts at the action
 // rather than the top of the page; a closed row has no button and keeps its heading. ?>
-<script>(function(){if(!/^#s-\d+$/.test(location.hash))return;var h=document.getElementById(location.hash.slice(1)),r=h&&h.closest('tr'),b=r&&r.querySelector('button');if(b)b.focus();})();</script>
+<script>(function(){if(!/^#s-\d+$/.test(location.hash)||document.getElementById('form-error-summary'))return;var h=document.getElementById(location.hash.slice(1)),r=h&&h.closest('tr'),b=r&&r.querySelector('button');if(b)b.focus();})();</script>
 <?php page_footer();

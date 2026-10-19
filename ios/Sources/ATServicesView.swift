@@ -448,6 +448,8 @@ struct ATChildDraft: Identifiable {
 
 struct ATEditSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let kind: String
     let fields: [ATField]
@@ -568,7 +570,11 @@ struct ATEditSheet: View {
         }
         busy = true; error = nil; defer { busy = false }
         do {
-            let _: ATSaveResponse = try await api.call("at_save", body: ["kind": kind, "id": record?.id ?? 0, "version": record?.version ?? 0, "title": title, "status": status, "values": sent])
+            var body: [String: Any] = ["kind": kind, "id": record?.id ?? 0, "version": record?.version ?? 0, "title": title, "status": status, "values": sent]
+            // A new record (4.28.0): a retry after a lost reply is recognised and not stored twice.
+            if record == nil { body["idem_key"] = idem.key(for: body) }
+            let _: ATSaveResponse = try await api.call("at_save", body: body)
+            idem.answered()
             // Spoken by the presenter once the sheet has gone: closing it moves VoiceOver focus,
             // which would cut off an announcement made here.
             let noun = atRecordNoun(kind)
@@ -578,7 +584,7 @@ struct ATEditSheet: View {
             // no duplicate check for one, so a second Save could store it twice. (An edit is safe
             // to retry: the version check refuses a repeat.)
             showFormError("The connection dropped before the server answered, so this \(atRecordNoun(kind)) may have been saved. Choose Cancel, then check the list (it reloads when this form closes) before saving it again.", in: &self.error)
-        } catch { showFormError(error.localizedDescription, in: &self.error) }
+        } catch { idem.failed(error); showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 

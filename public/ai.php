@@ -125,34 +125,29 @@ page_header('AI assistant', $user, 'admin', [['admin.php', 'Administration']]);
     <?= csrf_field() ?>
     <?= form_error_summary(['ai_base_url' => 'API base URL', 'ai_api_key' => 'API key']) ?>
     <div class="field">
-      <label><input type="checkbox" name="ai_enabled" value="1" aria-describedby="enable-hint" <?= $enabled ? 'checked' : '' ?>>
-        Enable the AI drafting assistant</label>
-      <p class="hint" id="enable-hint">Turning this off hides all “Draft with AI” buttons immediately.</p>
+      <label><input type="checkbox" name="ai_enabled" value="1" <?= $enabled ? 'checked' : '' ?>>
+        Enable the AI drafting assistant <span class="hint">Turning this off hides all “Draft with AI” buttons immediately.</span></label>
     </div>
     <div class="field">
-      <label for="ai_provider">AI provider</label>
-      <select id="ai_provider" name="ai_provider" aria-describedby="prov-hint">
+      <label for="ai_provider">AI provider <span class="hint">Pick the company whose API you have a key for. “Custom” lets you point at any OpenAI-compatible endpoint.</span></label>
+      <select id="ai_provider" name="ai_provider">
         <?php foreach ($providers as $pid => $p): ?>
         <option value="<?= h($pid) ?>" data-default-model="<?= h($p['default_model']) ?>" <?= $provider === $pid ? 'selected' : '' ?>><?= h($p['label']) ?></option>
         <?php endforeach; ?>
       </select>
-      <p class="hint" id="prov-hint">Pick the company whose API you have a key for. “Custom” lets you point at any OpenAI-compatible endpoint.</p>
     </div>
     <div class="field">
-      <label for="ai_model">Model <span class="hint">leave blank to use the provider's default</span></label>
-      <input type="text" id="ai_model" name="ai_model" value="<?= h($model) ?>" autocomplete="off" aria-describedby="model-hint" placeholder="<?= h($providers[$provider]['default_model'] ?: 'model id') ?>">
-      <p class="hint" id="model-hint">Model id for the chosen provider (e.g. <code>claude-sonnet-5</code>, <code>gpt-4o</code>, <code>gemini-1.5-pro</code>, <code>grok-2-latest</code>, <code>mistral-large-latest</code>).</p>
+      <label for="ai_model">Model <span class="hint">leave blank to use the provider's default. The model id for the chosen provider (e.g. <code>claude-sonnet-5</code>, <code>gpt-4o</code>, <code>gemini-1.5-pro</code>, <code>grok-2-latest</code>, <code>mistral-large-latest</code>).</span></label>
+      <input type="text" id="ai_model" name="ai_model" value="<?= h($model) ?>" autocomplete="off" placeholder="<?= h($providers[$provider]['default_model'] ?: 'model id') ?>">
     </div>
     <div class="field" id="baseurl-field">
-      <label for="ai_base_url">API base URL <span class="hint">required for “Custom”, optional override for others</span></label>
-      <input type="url" id="ai_base_url" name="ai_base_url" value="<?= h($baseUrl) ?>" autocomplete="off" <?= field_aria('ai_base_url', 'baseurl-hint') ?> placeholder="https://your-endpoint/v1/chat/completions">
-      <p class="hint" id="baseurl-hint">For “Custom”, give the full chat-completions URL (OpenAI-compatible). Leave blank to use the provider's standard endpoint. Changing the provider or this address requires entering the API key again.</p>
+      <label for="ai_base_url">API base URL <span class="hint">required for “Custom”, optional override for others. For “Custom”, give the full chat-completions URL (OpenAI-compatible). Leave blank to use the provider's standard endpoint. Changing the provider or this address requires entering the API key again.</span></label>
+      <input type="url" id="ai_base_url" name="ai_base_url" value="<?= h($baseUrl) ?>" autocomplete="off" <?= field_aria('ai_base_url') ?> placeholder="https://your-endpoint/v1/chat/completions">
       <?= field_error('ai_base_url') ?>
     </div>
     <div class="field">
-      <label for="ai_api_key">API key <span class="hint"><?= $hasKey ? 'A key is saved — leave blank to keep it' : 'From your provider\'s console' ?></span></label>
-      <input type="password" id="ai_api_key" name="ai_api_key" autocomplete="off" <?= field_aria('ai_api_key', 'key-hint') ?> <?= $hasKey ? '' : 'placeholder="paste your API key"' ?>>
-      <p class="hint" id="key-hint">Stored in the private settings table and never shown again or exported by the app. Nightly database backups leave it out, so after restoring a backup enter it again here.</p>
+      <label for="ai_api_key">API key <span class="hint"><?= $hasKey ? 'A key is saved — leave blank to keep it' : 'From your provider\'s console' ?>. Stored in the private settings table and never shown again or exported by the app. Nightly database backups leave it out, so after restoring a backup enter it again here.</span></label>
+      <input type="password" id="ai_api_key" name="ai_api_key" autocomplete="off" <?= field_aria('ai_api_key') ?> <?= $hasKey ? '' : 'placeholder="paste your API key"' ?>>
       <?= field_error('ai_api_key') ?>
     </div>
     <?php if ($hasKey): ?>
@@ -160,14 +155,12 @@ page_header('AI assistant', $user, 'admin', [['admin.php', 'Administration']]);
     <?php endif; ?>
 
     <fieldset>
-      <legend>AI features</legend>
-      <p class="hint">Turn individual AI features on or off. All are on by default when the assistant is enabled.</p>
+      <legend>AI features <span class="hint">Turn individual AI features on or off. All are on by default when the assistant is enabled.</span></legend>
       <?php foreach (ai_features() as $fk => $label): $on = $featOn($fk); ?>
       <?php if ($fk === 'readaloud'): $speech = ai_speech_endpoint(); ?>
-      <div class="field"><label><input type="checkbox" name="feat[<?= h($fk) ?>]" value="1" aria-describedby="readaloud-hint" <?= $on ? 'checked' : '' ?>> <?= h($label) ?></label>
-        <p class="hint" id="readaloud-hint"><?= $speech !== null
+      <div class="field"><label><input type="checkbox" name="feat[<?= h($fk) ?>]" value="1" <?= $on ? 'checked' : '' ?>> <?= h($label) ?> <span class="hint"><?= $speech !== null
             ? 'Spoken replies are sent to ' . h($host($speech)) . ' (the /audio/speech address beside the configured chat address).'
-            : 'Not available with the saved settings: it needs the OpenAI provider with a chat-completions address. Staff hear the browser\'s own voice instead.' ?></p></div>
+            : 'Not available with the saved settings: it needs the OpenAI provider with a chat-completions address. Staff hear the browser\'s own voice instead.' ?></span></label></div>
       <?php else: ?>
       <div class="field"><label><input type="checkbox" name="feat[<?= h($fk) ?>]" value="1" <?= $on ? 'checked' : '' ?>> <?= h($label) ?></label></div>
       <?php endif; ?>
@@ -177,12 +170,10 @@ page_header('AI assistant', $user, 'admin', [['admin.php', 'Administration']]);
     <fieldset>
       <legend>Privacy &amp; governance</legend>
       <div class="field">
-        <label><input type="checkbox" name="ai_redact" value="1" aria-describedby="redact-hint" <?= $redactOn ? 'checked' : '' ?>> Redact direct identifiers before sending to the provider</label>
-        <p class="hint" id="redact-hint">Removes names, emails, phone numbers, addresses, dates of birth and SSNs from the context, keeping the functional description. Strongly recommended. Voice assistant requests are sent as spoken, except that client names said in full are replaced and emails, phone numbers and SSNs are removed; a first name said alone and dictated note text are sent as said.</p>
+        <label><input type="checkbox" name="ai_redact" value="1" <?= $redactOn ? 'checked' : '' ?>> Redact direct identifiers before sending to the provider <span class="hint">Removes names, emails, phone numbers, addresses, dates of birth and SSNs from the context, keeping the functional description. Strongly recommended. Voice assistant requests are sent as spoken, except that client names said in full are replaced and emails, phone numbers and SSNs are removed; a first name said alone and dictated note text are sent as said.</span></label>
       </div>
       <div class="field">
-        <label><input type="checkbox" name="ai_baa_confirmed" value="1" <?= $baaOn ? 'checked' : '' ?>> I have a data-handling agreement with this provider (for example a business associate agreement, BAA), or I send it no protected health information (PHI)</label>
-        <p class="hint">A reminder for your own records — this box does not change what is sent.</p>
+        <label><input type="checkbox" name="ai_baa_confirmed" value="1" <?= $baaOn ? 'checked' : '' ?>> I have a data-handling agreement with this provider (for example a business associate agreement, BAA), or I send it no protected health information (PHI) <span class="hint">A reminder for your own records — this box does not change what is sent.</span></label>
       </div>
     </fieldset>
 

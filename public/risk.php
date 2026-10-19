@@ -111,10 +111,10 @@ page_header('Risk flags', $user, 'ai_tools');
 <?php if ($period['notes']): ?><p><?= h(implode(' ', $period['notes'])) ?></p><?php endif; ?>
 <p>Sessions in the period are counted from <?= h(fmt_date($period['from'])) ?> to <?= h(fmt_date($period['to'])) ?>; the other signals are as of today.</p>
 <?php if ($capped): ?>
-<p id="cap-note">Only <?= count($rows) ?> of the <?= $totalActive ?> clients in active training fit one assessment: those with no session yet or the longest time since their last session are included and listed below.</p>
+<p>Only <?= count($rows) ?> of the <?= $totalActive ?> clients in active training fit one assessment: those with no session yet or the longest time since their last session are included and listed below.</p>
 <?php endif; ?>
 <form method="post" action="risk.php"><?= csrf_field() ?>
-  <button type="submit" name="generate" value="1" class="btn btn-primary"<?= $capped ? ' aria-describedby="cap-note"' : '' ?>>Assess <?= count($rows) ?><?= $capped ? ' of ' . $totalActive : '' ?> active client<?= ($capped ? $totalActive : count($rows)) === 1 ? '' : 's' ?></button>
+  <button type="submit" name="generate" value="1" class="btn btn-primary">Assess <?= count($rows) ?><?= $capped ? ' of ' . $totalActive : '' ?> active client<?= ($capped ? $totalActive : count($rows)) === 1 ? '' : 's' ?></button>
 </form>
 
 <?php if ($flags !== null): ?>

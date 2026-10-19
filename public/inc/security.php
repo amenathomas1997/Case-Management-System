@@ -145,14 +145,120 @@ function client_ip(): string {
     return $last; // every hop is a proxy of ours: the left-most one
 }
 
-/** Escape text cells that spreadsheets could interpret as formulas. */
+/**
+ * Escape text cells that spreadsheets could interpret as formulas. Applying it
+ * twice changes nothing (an escaped cell starts with an apostrophe). A plain
+ * number, also written with thousands commas, a currency sign or a percent
+ * (number_format(), fmt_money(): "-1,250.00", "-$40.00", "-5%"), is left as it
+ * is: a spreadsheet reads it as a number and it can never run as a formula.
+ */
 function csv_cell($v): string {
     $v = (string)$v;
     if (is_numeric($v)) return $v;
-    return preg_match('/^(?:[\\x00-\\x20]*[=+\\-@]|[\\t\\r\\n])/', $v) ? "'" . $v : $v;
+    if (preg_match('/^[-+]?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?$/', $v)) return $v;
+    return preg_match('/^(?:[\x00-\x20]*[=+\-@]|[\t\r\n])/', $v) ? "'" . $v : $v;
 }
 
-/** Explicit RFC-style escaping also avoids PHP 8.4 CSV deprecation output. */
+/**
+ * One CSV row, with RFC-style escaping (which also avoids PHP 8.4 CSV
+ * deprecation output). Every text cell goes through csv_cell() here (4.28.0,
+ * N8), so no download can forget the formula guard; numbers and empty cells
+ * (null) pass unchanged, and a cell the caller already escaped is not changed again.
+ */
 function write_csv_row($stream, array $fields): int|false {
+    foreach ($fields as $k => $v) if (is_string($v)) $fields[$k] = csv_cell($v);
     return fputcsv($stream, $fields, ',', '"', '');
+}
+
+/* ---------- Authenticator (TOTP) seeds, encrypted at rest (4.28.0) ----------
+   users.totp_secret holds "v1:" + base64(iv 12 bytes, GCM tag 12 bytes, the
+   20-byte seed encrypted with AES-256-GCM) under the private key file that
+   meeting and QuickBooks tokens use (meeting_key(), private/meeting_tokens.key).
+   That is 63 characters, so it fits the existing varchar(64) column: no
+   database change is needed. A backup of the database alone no longer holds
+   anyone's second factor. A seed stored before 4.28.0 (plain base32) is still
+   read, and is stored again encrypted the next time it signs someone in. */
+const TOTP_SEAL_PREFIX = 'v1:';
+
+/** Base32 (RFC 4648, no padding) for the seed, kept here so security.php does not
+ *  depend on inc/totp.php, which some pages load with a plain require. */
+function totp_seed_b32(string $bytes, bool $decode = false): string {
+    $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    $bits = '';
+    if ($decode) {
+        foreach (str_split(strtoupper($bytes)) as $c) { $v = strpos($alphabet, $c); if ($v !== false) $bits .= str_pad(decbin($v), 5, '0', STR_PAD_LEFT); }
+        $out = '';
+        foreach (str_split($bits, 8) as $chunk) if (strlen($chunk) === 8) $out .= chr(bindec($chunk));
+        return $out;
+    }
+    foreach (str_split($bytes) as $c) $bits .= str_pad(decbin(ord($c)), 8, '0', STR_PAD_LEFT);
+    $out = '';
+    foreach (str_split($bits, 5) as $chunk) $out .= $alphabet[bindec(str_pad($chunk, 5, '0'))];
+    return $out;
+}
+
+/** The base32 seed to check codes with, or null (none stored, or it cannot be read with this server's key). */
+function totp_secret_plain(?string $stored): ?string {
+    $stored = trim((string)$stored);
+    if ($stored === '') return null;
+    if (!str_starts_with($stored, TOTP_SEAL_PREFIX)) return $stored; // stored before 4.28.0
+    $raw = base64_decode(substr($stored, strlen(TOTP_SEAL_PREFIX)), true);
+    if ($raw === false || strlen($raw) <= 24) return null;
+    try { $key = meeting_key(); } catch (Throwable $e) { error_log('totp_secret_plain: ' . $e->getMessage()); return null; }
+    $seed = openssl_decrypt(substr($raw, 24), 'aes-256-gcm', $key, OPENSSL_RAW_DATA, substr($raw, 0, 12), substr($raw, 12, 12), 'totp');
+    return ($seed === false || $seed === '') ? null : totp_seed_b32($seed);
+}
+
+/** What to store in users.totp_secret for a base32 seed. Falls back to the plain
+ *  seed (as before 4.28.0) only when the key file cannot be used or the seed is not a
+ *  standard 20-byte one; the next successful sign-in tries again. */
+function totp_secret_store(string $plain): string {
+    if (str_starts_with(trim($plain), TOTP_SEAL_PREFIX)) return trim($plain); // already stored form
+    $plain = strtoupper(trim($plain));
+    if ($plain === '' || !preg_match('/^[A-Z2-7]+$/', $plain)) return $plain;
+    $seed = totp_seed_b32($plain, true);
+    if (strlen($seed) !== 20 || totp_seed_b32($seed) !== $plain) return $plain;
+    try {
+        $iv = random_bytes(12);
+        $ct = openssl_encrypt($seed, 'aes-256-gcm', meeting_key(), OPENSSL_RAW_DATA, $iv, $tag, 'totp', 12);
+        if ($ct === false || strlen((string)$tag) !== 12) throw new RuntimeException('Encryption failed.');
+    } catch (Throwable $e) {
+        error_log('totp_secret_store: the authenticator seed was stored unencrypted: ' . $e->getMessage());
+        return $plain;
+    }
+    return TOTP_SEAL_PREFIX . base64_encode($iv . $tag . $ct);
+}
+
+/** The message for an account whose authenticator seed is stored but cannot be read here. */
+const TOTP_UNREADABLE_MSG = "Your authenticator app can't be checked on this server. Ask an administrator to reset two-step verification (or run reset_2fa.php in the cron folder).";
+
+/** True when the account has the authenticator app turned on with a stored seed. This alone
+ *  decides that it signs in with the app only, never whether the seed can be read: a lost
+ *  key file must never turn an account back to emailed codes. */
+function totp_seed_present(array $user): bool {
+    return !empty($user['totp_enabled']) && trim((string)($user['totp_secret'] ?? '')) !== '';
+}
+
+/** 'none' (no authenticator app), 'ok' (its seed reads), or 'unreadable' (a seed is stored
+ *  but this server cannot read it: the key file is missing, replaced or damaged). */
+function totp_seed_state(array $user): string {
+    if (!totp_seed_present($user)) return 'none';
+    return totp_secret_plain((string)$user['totp_secret']) !== null ? 'ok' : 'unreadable';
+}
+
+/** True when a stored seed is still in the pre-4.28.0 plain form. */
+function totp_secret_is_legacy(?string $stored): bool {
+    $stored = trim((string)$stored);
+    return $stored !== '' && !str_starts_with($stored, TOTP_SEAL_PREFIX);
+}
+
+/** After a code from $plain signed someone in: store a plain (legacy) seed encrypted.
+ *  Only when the row still holds the same value, so a reset at the same moment is never undone. */
+function totp_secret_upgrade(int $userId, ?string $stored, string $plain): void {
+    if (!totp_secret_is_legacy($stored)) return;
+    $new = totp_secret_store($plain);
+    if (!str_starts_with($new, TOTP_SEAL_PREFIX)) return;
+    try {
+        db()->prepare('UPDATE users SET totp_secret = ? WHERE id = ? AND totp_secret = ?')->execute([$new, $userId, $stored]);
+    } catch (Throwable $e) { error_log('totp_secret_upgrade: ' . $e->getMessage()); }
 }

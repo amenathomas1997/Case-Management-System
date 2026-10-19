@@ -28,25 +28,36 @@ class SecureStore(context: Context) {
     private val cache: SharedPreferences
 
     init {
-        val opened = try {
-            openAll()
-        } catch (e: Exception) {
-            // The key was lost (a restored phone, some system updates): what was kept cannot be read,
-            // so it is removed and the person signs in again, rather than the app failing every launch.
-            FILES.forEach { app.deleteSharedPreferences(it) }
-            try { java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS) } catch (x: Exception) { }
-            openAll()
-        }
+        val opened = openEach()
         main = opened[0]; queue = opened[1]; signing = opened[2]; cache = opened[3]
         migrate()
     }
 
-    private fun openAll(): List<SharedPreferences> {
-        val key = MasterKey.Builder(app).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-        return FILES.map {
-            EncryptedSharedPreferences.create(app, it, key,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)
+    private fun masterKey(): MasterKey = MasterKey.Builder(app).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+
+    private fun open(name: String, key: MasterKey): SharedPreferences =
+        EncryptedSharedPreferences.create(app, name, key,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)
+
+    /**
+     * Opens each file on its own (4.28.0). One that cannot be read (a damaged file) is started
+     * again alone, so the unsent entries and kept signatures in the others stay. Only when none can
+     * be read was the key lost (a restored phone, some system updates): then everything is removed
+     * with the key and the person signs in again, rather than the app failing every launch.
+     */
+    private fun openEach(): List<SharedPreferences> {
+        val key = try { masterKey() } catch (e: Exception) { null }
+        val tried = FILES.map { name -> key?.let { k -> try { open(name, k) } catch (e: Exception) { null } } }
+        val (all, reset) = filesToReset(tried.map { it != null })
+        if (all) {
+            FILES.forEach { app.deleteSharedPreferences(it) }
+            try { java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS) } catch (x: Exception) { }
+            val fresh = masterKey()
+            return FILES.map { open(it, fresh) }
+        }
+        return FILES.mapIndexed { i, name ->
+            if (i in reset) { app.deleteSharedPreferences(name); open(name, key!!) } else tried[i]!!
         }
     }
 
@@ -98,7 +109,12 @@ class SecureStore(context: Context) {
     fun put(key: String, value: String) = fileFor(key).edit { putString(key, value) }
     fun put(key: String, value: Int) = fileFor(key).edit { putInt(key, value) }
     fun put(key: String, value: Boolean) = fileFor(key).edit { putBoolean(key, value) }
-    fun remove(vararg keys: String) = keys.groupBy { fileFor(it) }.forEach { (file, ks) -> file.edit { ks.forEach { remove(it) } } }
+    /**
+     * Removed from its own file and, while a move from the main file is unfinished, from both (4.28.0):
+     * otherwise the stale copy in its own file would come back once the main copy is gone.
+     */
+    fun remove(vararg keys: String) = keys.flatMap { k -> listOfNotNull(homeFor(k) to k, if (main.contains(k)) main to k else null) }.distinct()
+        .groupBy({ it.first }, { it.second }).forEach { (file, ks) -> file.edit { ks.forEach { remove(it) } } }
 
     /**
      * Kept lists belong to one session (4.27.0): signing out, another account and a wipe move this on,

@@ -51,15 +51,17 @@ $old = fn(string $k) => h(is_string($_POST[$k] ?? null) ? $_POST[$k] : '');
 // A translation spelled the same as the English is still Spanish, so the dictionary
 // entry decides, not a comparison of the two strings.
 $whole = fn(string $x): string => isset(translations()[$x]) ? h(__($x)) : en($x);
-// A hint written as several lines (the built-in referral purpose hint, or an
-// administrator's) is read as a list, one item a line, rather than one long
-// sentence (WCAG 3.1.5). Translated whole, like $whole, or kept in English and marked so.
-$hintBlock = function (string $x, string $id) use ($whole): string {
-    if (!str_contains($x, "\n")) return '<p class="hint" id="' . $id . '">' . $whole($x) . '</p>';
+// A hint goes inside its label or legend (4.28.0: never a separate line joined by
+// aria-describedby). A hint written as several lines (the built-in referral purpose hint, or
+// an administrator's) is read as one run of text, its lines joined. Translated whole, like
+// $whole, or kept in English and marked so.
+$hintInline = function (string $x): string {
     $translated = isset(translations()[$x]);
-    $items = '';
-    foreach (explode("\n", $translated ? __($x) : $x) as $line) if (trim($line) !== '') $items .= '<li>' . h(trim($line)) . '</li>';
-    return '<ul class="hint" id="' . $id . '"' . (!$translated && page_lang() !== 'en' ? ' lang="en"' : '') . '>' . $items . '</ul>';
+    $lines = array_values(array_filter(array_map('trim', explode("\n", $translated ? __($x) : $x)), fn($l) => $l !== ''));
+    if (!$lines) return '';
+    $text = '';
+    foreach ($lines as $i => $line) $text .= ($i ? (preg_match('/[.;:!?]$/u', $lines[$i - 1]) ? ' ' : '; ') : '') . $line;
+    return ' <span class="hint"' . (!$translated && page_lang() !== 'en' ? ' lang="en"' : '') . '>' . h($text) . '</span>';
 };
 // By-reference captures: $errors is filled AFTER these helpers are defined.
 $err = function (string $k) use (&$errors): string {
@@ -513,9 +515,8 @@ if ($errors): ?>
     </div>
     <?php // A phone or an email: one is enough (not everyone has an email). The
     // group says so, and the "give one" message sits on the group, naming both fields. ?>
-    <fieldset class="field" id="referrer-contact-group" aria-describedby="contact-hint<?= isset($errors['referrer_contact']) ? ' err-referrer_contact' : '' ?>">
-      <legend><?= t('How can we reach you?') ?> <span aria-hidden="true">*</span><span class="visually-hidden"> (<?= t('required') ?>)</span></legend>
-      <p class="hint" id="contact-hint"><?= t('Your phone or your email (at least one).') ?></p>
+    <fieldset class="field" id="referrer-contact-group"<?= isset($errors['referrer_contact']) ? ' aria-describedby="err-referrer_contact"' : '' ?>>
+      <legend><?= t('How can we reach you?') ?> <span aria-hidden="true">*</span><span class="visually-hidden"> (<?= t('required') ?>)</span> <span class="hint"><?= t('Your phone or your email (at least one).') ?></span></legend>
       <?= $err('referrer_contact') ?>
       <div class="field">
         <label for="referrer_phone"><?= t('Your phone') ?></label>
@@ -531,10 +532,9 @@ if ($errors): ?>
       </div>
     </fieldset>
     <div class="field" data-role="counselor school medical agency other">
-      <label for="organization"><?= t('Agency / school / practice / organization') ?> <span data-role-req="counselor school medical agency" hidden aria-hidden="true">*</span></label>
+      <label for="organization"><?= t('Agency / school / practice / organization') ?> <span data-role-req="counselor school medical agency" hidden aria-hidden="true">*</span> <span class="hint"><?= t('Required for counselor, school, medical, and agency referrals.') ?></span></label>
       <input type="text" id="organization" name="organization" maxlength="190" autocomplete="organization" value="<?= $old('organization') ?>"
-             data-req-roles="counselor school medical agency" <?= $aria('organization', 'org-hint') ?>>
-      <p class="hint" id="org-hint"><?= t('Required for counselor, school, medical, and agency referrals.') ?></p>
+             data-req-roles="counselor school medical agency" <?= $aria('organization') ?>>
       <?= $err('organization') ?>
     </div>
     <div class="field" data-role="family">
@@ -550,14 +550,12 @@ if ($errors): ?>
     <?php // Asked only of counselors and agencies; for anyone else the page script
     // hides and disables it, and the referral is sent as a new referral. ?>
     <div class="field" data-role="counselor agency">
-      <label for="referral_purpose"><?= t('Referral purpose') ?> <span aria-hidden="true">*</span><span class="visually-hidden"> (<?= t('required') ?>)</span></label>
-      <select id="referral_purpose" name="referral_purpose" required <?= $aria('referral_purpose', 'purpose-hint') ?>><?= select_options(referral_options('purposes'), is_string($request['purpose']) ? $request['purpose'] : null) ?></select>
-      <?= $hintBlock(referral_form_config()['hints']['purpose']['en'], 'purpose-hint') ?>
+      <label for="referral_purpose"><?= t('Referral purpose') ?> <span aria-hidden="true">*</span><span class="visually-hidden"> (<?= t('required') ?>)</span><?= $hintInline(referral_form_config()['hints']['purpose']['en']) ?></label>
+      <select id="referral_purpose" name="referral_purpose" required <?= $aria('referral_purpose') ?>><?= select_options(referral_options('purposes'), is_string($request['purpose']) ? $request['purpose'] : null) ?></select>
       <?= $err('referral_purpose') ?>
     </div>
-    <fieldset class="field" id="requested-services-group" aria-describedby="services-hint<?= isset($errors['requested_services']) ? ' err-requested_services' : '' ?>">
-      <legend><?= t('Assistive technology services requested') ?><?= referral_form_config()['min_services'] > 0 ? ' <span aria-hidden="true">*</span><span class="visually-hidden"> (' . t('required: choose at least one') . ')</span>' : '' ?></legend>
-      <?= $hintBlock(referral_form_config()['hints']['services']['en'], 'services-hint') ?>
+    <fieldset class="field" id="requested-services-group"<?= isset($errors['requested_services']) ? ' aria-describedby="err-requested_services"' : '' ?>>
+      <legend><?= t('Assistive technology services requested') ?><?= referral_form_config()['min_services'] > 0 ? ' <span aria-hidden="true">*</span><span class="visually-hidden"> (' . t('required: choose at least one') . ')</span>' : '' ?><?= $hintInline(referral_form_config()['hints']['services']['en']) ?></legend>
       <?php $pickedServices = $request['service'] !== '' ? explode('; ', $request['service']) : []; ?>
       <?php foreach (referral_options('services') as $svcNum => $svc): $svcHint = referral_service_hint($svc); ?>
       <label class="check"><input type="checkbox" name="requested_services[]" id="svc-<?= (int)$svcNum ?>" value="<?= h($svc) ?>" <?= in_array($svc, $pickedServices, true) ? 'checked' : '' ?>> <?= $whole($svc) ?>
@@ -566,9 +564,8 @@ if ($errors): ?>
       <?= $err('requested_services') ?>
     </fieldset>
     <?php if (referral_options('needs')): ?>
-    <fieldset aria-describedby="needs-hint<?= isset($errors['specific_needs']) ? ' err-specific_needs' : '' ?>">
-      <legend><?= t('Specific needs (optional)') ?></legend>
-      <?= $hintBlock(referral_form_config()['hints']['needs']['en'], 'needs-hint') ?>
+    <fieldset<?= isset($errors['specific_needs']) ? ' aria-describedby="err-specific_needs"' : '' ?>>
+      <legend><?= t('Specific needs (optional)') ?><?= $hintInline(referral_form_config()['hints']['needs']['en']) ?></legend>
       <?php foreach (referral_options('needs') as $needNum => $need): ?>
       <label class="check"><input type="checkbox" name="specific_needs[]" id="need-<?= (int)$needNum ?>" value="<?= h($need) ?>" <?= in_array($need, $request['needs'], true) ? 'checked' : '' ?>> <?= $whole($need) ?></label>
       <?php endforeach; ?>
@@ -592,10 +589,9 @@ if ($errors): ?>
   <?php endif; ?>
   <?php if ($pr['sliding_on']): ?>
   <fieldset data-role="<?= h($askRoles) ?>" id="income-group" <?= isset($errors['income']) ? 'aria-describedby="err-income"' : '' ?>>
-    <legend><h2 class="legend-h"><?= t('Monthly income') ?> <span aria-hidden="true">*</span></h2></legend>
-    <p class="hint"><?= fee_copy(t($asksOthers
+    <legend><h2 class="legend-h"><?= t('Monthly income') ?> <span aria-hidden="true">*</span></h2> <span class="hint"><?= fee_copy(t($asksOthers
         ? ($pr['youth_age'] > 0 ? 'The person\'s monthly income, including benefits, or their parents\' income if they are under {age}. This only decides whether training is free. We will confirm with you; nothing is charged now.' : 'The person\'s monthly income, including benefits. This only decides whether training is free. We will confirm with you; nothing is charged now.')
-        : ($pr['youth_age'] > 0 ? 'Your monthly income, including benefits. If you are under {age}, give your parents\' income instead. This only decides whether training is free. We will confirm with you; nothing is charged now.' : 'Your monthly income, including benefits. This only decides whether training is free. We will confirm with you; nothing is charged now.'))) ?></p>
+        : ($pr['youth_age'] > 0 ? 'Your monthly income, including benefits. If you are under {age}, give your parents\' income instead. This only decides whether training is free. We will confirm with you; nothing is charged now.' : 'Your monthly income, including benefits. This only decides whether training is free. We will confirm with you; nothing is charged now.'))) ?></span></legend>
     <?php $incomeNum = 0; foreach (INCOME_BRACKETS as $value => $label): ?>
     <div class="field">
       <label><input type="radio" name="income" id="income-<?= $incomeNum++ ?>" value="<?= h($value) ?>" <?= ($_POST['income'] ?? '') === $value ? 'checked' : '' ?> data-req-roles="<?= h($askRoles) ?>">
@@ -658,10 +654,8 @@ if ($errors): ?>
   // page script shows the wording for the chosen role, and a hidden wording is
   // left out of the label and the description. ?>
   <div class="field" id="need-section">
-    <h2 class="legend-h"><label for="body"><span data-other-text<?= $role === 'self' ? ' hidden' : '' ?>><?= t('What does this person need help with?') ?></span><span data-self-text<?= $role === 'self' ? '' : ' hidden' ?>><?= t('What do you need help with?') ?></span> <span aria-hidden="true">*</span></label></h2>
-    <p class="hint" id="body-hint"><span data-other-text<?= $role === 'self' ? ' hidden' : '' ?>><?= t('Tell us which tasks they want technology to help with, the devices or software they use, and any accessibility barriers.') ?></span><span data-self-text<?= $role === 'self' ? '' : ' hidden' ?>><?= t('Tell us which tasks you want technology to help with, the devices or software you use, and any accessibility barriers.') ?></span></p>
-    <textarea id="body" name="body" required
-      aria-describedby="body-hint<?= isset($errors['body']) ? ' err-body' : '' ?>" <?= isset($errors['body']) ? 'aria-invalid="true"' : '' ?>><?= $old('body') ?></textarea>
+    <h2 class="legend-h"><label for="body"><span data-other-text<?= $role === 'self' ? ' hidden' : '' ?>><?= t('What does this person need help with?') ?></span><span data-self-text<?= $role === 'self' ? '' : ' hidden' ?>><?= t('What do you need help with?') ?></span> <span aria-hidden="true">*</span> <span class="hint"><span data-other-text<?= $role === 'self' ? ' hidden' : '' ?>><?= t('Tell us which tasks they want technology to help with, the devices or software they use, and any accessibility barriers.') ?></span><span data-self-text<?= $role === 'self' ? '' : ' hidden' ?>><?= t('Tell us which tasks you want technology to help with, the devices or software you use, and any accessibility barriers.') ?></span></span></label></h2>
+    <textarea id="body" name="body" required <?= $aria('body') ?>><?= $old('body') ?></textarea>
     <?= $err('body') ?>
   </div>
 

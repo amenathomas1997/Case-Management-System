@@ -199,7 +199,11 @@ struct FollowupsView: View {
             data = response
             offlineSince = savedAt
             // The 8:00 summary follows the count as last loaded from the server.
-            if savedAt == nil { LocalNotifications.shared.scheduleFollowups(dueCount: response.due.count) }
+            // Only the signed-in person's own (4.28.0): never the whole organisation's.
+            if savedAt == nil {
+                let own = response.due.filter { $0.assignedTo == nil || $0.assignedTo == api.userId }
+                LocalNotifications.shared.scheduleFollowups(dueCount: own.count)
+            }
         } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }

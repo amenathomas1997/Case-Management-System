@@ -152,44 +152,48 @@ function funder_agencies(string $rt = 'training_tracks', string $ri = 'invoices'
 
 /** Metrics for one funding agency over the period. $rt: the training_tracks source. */
 function funder_metrics(string $agency, string $from, string $to, string $rt = 'training_tracks'): array {
-    $clientsOfAgency = "client_id IN (SELECT DISTINCT client_id FROM {$rt} training_tracks WHERE funding_agency = ?)";
+    // 4.28.0: every spelling of the agency on file, including a name it had before a rename, so
+    // invoices sent under the old name still count here (agency_spellings()).
+    $sp = agency_spellings($agency);
+    $inA = '(' . implode(',', array_fill(0, count($sp), '?')) . ')';
+    $clientsOfAgency = "client_id IN (SELECT DISTINCT client_id FROM {$rt} training_tracks WHERE funding_agency IN {$inA})";
     // Billed lines count under the agency snapshotted on their invoice (as agency_report.php
     // and analytics.php attribute them), so editing a track's agency later does not move
     // work already invoiced; unbilled lines, and older invoices, use the track's.
     $agencyExpr = 'COALESCE(i.funding_agency, t.funding_agency)';
     $logs = "work_logs w JOIN {$rt} t ON t.id = w.track_id LEFT JOIN invoices i ON i.id = w.invoice_id";
 
-    $served = db()->prepare("SELECT COUNT(DISTINCT t.client_id) n FROM {$logs} WHERE {$agencyExpr} = ? AND w.work_date BETWEEN ? AND ?");
-    $served->execute([$agency, $from, $to]); $servedTotal = (int)$served->fetchColumn();
+    $served = db()->prepare("SELECT COUNT(DISTINCT t.client_id) n FROM {$logs} WHERE {$agencyExpr} IN {$inA} AND w.work_date BETWEEN ? AND ?");
+    $served->execute([...$sp, $from, $to]); $servedTotal = (int)$served->fetchColumn();
 
     $tot = db()->prepare("SELECT COALESCE(SUM(w.hours),0) hrs, COALESCE(SUM(w.mileage),0) mi,
             COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate,t.hourly_rate),2) + ROUND(w.mileage * COALESCE(w.mileage_rate,t.mileage_rate),2)),0) val
-        FROM {$logs} WHERE {$agencyExpr} = ? AND w.work_date BETWEEN ? AND ?");
-    $tot->execute([$agency, $from, $to]); $totals = $tot->fetch();
+        FROM {$logs} WHERE {$agencyExpr} IN {$inA} AND w.work_date BETWEEN ? AND ?");
+    $tot->execute([...$sp, $from, $to]); $totals = $tot->fetch();
 
     // Track expenses are billed on the same invoices as the hours and mileage
     // (generate_invoice), so they are reported beside them — by expense date, under the
     // agency snapshotted on their invoice — and the total matches the agency billing
     // summary for the same agency and dates.
     $exp = db()->prepare("SELECT COALESCE(SUM(e.amount),0) FROM track_expenses e JOIN {$rt} t ON t.id = e.track_id
-        LEFT JOIN invoices i ON i.id = e.invoice_id WHERE {$agencyExpr} = ? AND e.expense_date BETWEEN ? AND ?");
-    $exp->execute([$agency, $from, $to]); $expenses = (float)$exp->fetchColumn();
+        LEFT JOIN invoices i ON i.id = e.invoice_id WHERE {$agencyExpr} IN {$inA} AND e.expense_date BETWEEN ? AND ?");
+    $exp->execute([...$sp, $from, $to]); $expenses = (float)$exp->fetchColumn();
 
     // Same value expression as the headline total (hours + mileage, each line rounded
     // to the cent as the invoices round it), so the category values add up to it.
     $byCat = db()->prepare("SELECT COALESCE(w.rsa_category, t.rsa_category, 'Uncategorized') cat, COUNT(DISTINCT t.client_id) clients,
             COALESCE(SUM(w.hours),0) hrs, COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate,t.hourly_rate),2) + ROUND(w.mileage * COALESCE(w.mileage_rate,t.mileage_rate),2)),0) val
-        FROM {$logs} WHERE {$agencyExpr} = ? AND w.work_date BETWEEN ? AND ? GROUP BY cat ORDER BY hrs DESC");
-    $byCat->execute([$agency, $from, $to]); $byCat = $byCat->fetchAll();
+        FROM {$logs} WHERE {$agencyExpr} IN {$inA} AND w.work_date BETWEEN ? AND ? GROUP BY cat ORDER BY hrs DESC");
+    $byCat->execute([...$sp, $from, $to]); $byCat = $byCat->fetchAll();
 
     $goals = db()->prepare("SELECT COUNT(*) total, SUM(g.status = 'Achieved') achieved, AVG(g.progress_pct) avgpct
         FROM smart_goals g JOIN {$rt} t ON t.id = g.track_id
-        WHERE t.funding_agency = ? AND g.created_at BETWEEN ? AND ?");
-    $goals->execute([$agency, $from, $to . ' 23:59:59']); $goals = $goals->fetch();
+        WHERE t.funding_agency IN {$inA} AND g.created_at BETWEEN ? AND ?");
+    $goals->execute([...$sp, $from, $to . ' 23:59:59']); $goals = $goals->fetch();
 
     $ret = db()->prepare("SELECT COUNT(*) done, SUM(f.in_use = 1) in_use FROM equipment_followups f
         WHERE f.status = 'Completed' AND f.in_use IS NOT NULL AND f.completed_at BETWEEN ? AND ? AND f.$clientsOfAgency");
-    $ret->execute([$from, $to . ' 23:59:59', $agency]); $ret = $ret->fetch();
+    $ret->execute([$from, $to . ' 23:59:59', ...$sp]); $ret = $ret->fetch();
 
     // Average score gain (percentage points) within the period for clients with
     // >=2 administrations of the same instrument. The sign is flipped for any
@@ -202,7 +206,7 @@ function funder_metrics(string $agency, string $from, string $to, string $rt = '
         FROM client_scored_assessments sa JOIN assessment_instruments i ON i.id = sa.instrument_id
         WHERE sa.assessed_on BETWEEN ? AND ? AND sa.$clientsOfAgency
         GROUP BY sa.client_id, sa.instrument_id, i.higher_is_better HAVING c >= 2) z");
-    $gain->execute([$from, $to, $from, $to, $from, $to, $agency]); $avgGain = $gain->fetchColumn();
+    $gain->execute([$from, $to, $from, $to, $from, $to, ...$sp]); $avgGain = $gain->fetchColumn();
     $avgGain = $avgGain === null ? null : (float)$avgGain;
 
     // Each client counts once, by their LAST status change in the period, and only
@@ -223,7 +227,7 @@ function funder_metrics(string $agency, string $from, string $to, string $rt = '
               AND (h3.note IS NULL OR h3.note NOT LIKE '[merged] %')
               AND h3.new_status LIKE 'Closed%' AND (h3.old_status IS NULL OR h3.old_status NOT LIKE 'Closed%'))
         GROUP BY h.new_status");
-    $closures->execute([$from, $to, $agency, $from, $to, $from, $to]); $closures = $closures->fetchAll();
+    $closures->execute([$from, $to, ...$sp, $from, $to, $from, $to]); $closures = $closures->fetchAll();
     $closedTotal = (int)array_sum(array_column($closures, 'n'));
     $rehab = 0; foreach ($closures as $c) if ($c['new_status'] === 'Closed - Rehabilitated') $rehab = (int)$c['n'];
 
@@ -232,7 +236,7 @@ function funder_metrics(string $agency, string $from, string $to, string $rt = '
         $cfu = db()->prepare("SELECT COUNT(*) n, COALESCE(SUM(f.still_employed = 1),0) emp, COALESCE(SUM(f.still_employed IS NOT NULL),0) emp_asked,
                 COALESCE(SUM(f.still_using_tech = 1),0) tech, COALESCE(SUM(f.still_using_tech IS NOT NULL),0) tech_asked
             FROM closure_followups f WHERE f.status = 'Completed' AND f.completed_at BETWEEN ? AND ? AND f.$clientsOfAgency");
-        $cfu->execute([$from, $to . ' 23:59:59', $agency]); $closeFu = $cfu->fetch();
+        $cfu->execute([$from, $to . ' 23:59:59', ...$sp]); $closeFu = $cfu->fetch();
     } catch (PDOException $e) { $closeFu = ['n' => 0, 'emp' => 0, 'emp_asked' => 0, 'tech' => 0, 'tech_asked' => 0]; }
 
     return compact('servedTotal', 'totals', 'expenses', 'byCat', 'goals', 'ret', 'avgGain', 'closures', 'closedTotal', 'rehab', 'closeFu');

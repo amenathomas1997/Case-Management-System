@@ -412,6 +412,8 @@ struct EquipmentView: View {
 
 struct LoanSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let item: EquipmentItem
     let onDone: (String) -> Void
@@ -522,12 +524,15 @@ struct LoanSheet: View {
             ]
             if !purpose.isEmpty { body["purpose"] = purpose }
             if !borrowerType.isEmpty { body["borrower_type"] = borrowerType }
+            body["idem_key"] = idem.key(for: body)
             let _: OKResponse = try await api.call("loan_equipment", body: body)
+            idem.answered()
             onDone("\(item.name) loaned out.")
             dismiss()
         } catch {
+            idem.failed(error)
             busy = false
-            showFormError(error.localizedDescription, in: &self.error)
+            showFormError(IdemKey.message(for: error, what: "the loan"), in: &self.error)
         }
     }
 }
@@ -694,6 +699,8 @@ struct EquipmentDetailView: View {
 
 struct LogServiceSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let itemId: Int; let onDone: (String) -> Void
     @State private var type = "Maintenance"; @State private var date = Date(); @State private var notes = ""; @State private var cost = ""
@@ -732,14 +739,16 @@ struct LogServiceSheet: View {
     private func submit() async {
         guard let costText = checkedAmount(cost) else { showFormError(amountFormatMessage("Cost"), in: &error); return }
         busy = true; error = nil
-        do { let _: OKResponse = try await api.call("equipment_service", body: ["equipment_id": itemId, "service_type": type, "service_date": APIDate.day(date), "notes": notes, "cost": costText]); onDone("Service logged."); dismiss() }
+        var body: [String: Any] = ["equipment_id": itemId, "service_type": type, "service_date": APIDate.day(date), "notes": notes, "cost": costText]
+        body["idem_key"] = idem.key(for: body)
+        do { let _: OKResponse = try await api.call("equipment_service", body: body); idem.answered(); onDone("Service logged."); dismiss() }
         catch APIError.network {
             // The request may have arrived: it isn't known whether the service was logged, and
             // saving it again would log it twice.
             busy = false
             showFormError("The connection dropped before the server answered, so it isn't known whether this service was logged. Check the item's service history for \(type) on \(date.formatted(date: .abbreviated, time: .omitted)) before saving it again.", in: &self.error)
         }
-        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        catch { idem.answered(); busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 
@@ -876,6 +885,8 @@ struct ReservationsView: View {
 
 struct ReservationSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let fixedItemId: Int?
     /// Called with the message for the parent to announce once the sheet has gone.
@@ -953,15 +964,17 @@ struct ReservationSheet: View {
         busy = true; error = nil
         var b: [String: Any] = ["equipment_id": eid, "client_id": cid, "notes": notes]
         if hasFrom { b["needed_from"] = APIDate.day(from) }
+        b["idem_key"] = idem.key(for: b)
         do {
             let r: ReservationResult = try await api.call("add_reservation", body: b)
+            idem.answered()
             // The server puts the request on the waitlist when the item is out or already held.
             onDone(r.status == "Waitlist"
                 ? "Added to the waitlist. The item is not available now."
                 : (r.status == "Reserved" ? "Item reserved." : "Reservation saved."))
             dismiss()
         }
-        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error, what: "the reservation"), in: &self.error) }
     }
 }
 
@@ -979,6 +992,8 @@ struct ReservationResult: Decodable {
 
 struct AddEquipmentSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let onDone: () -> Void
     @State private var name = ""; @State private var category = "Other"; @State private var serial = ""
@@ -1031,7 +1046,9 @@ struct AddEquipmentSheet: View {
         else if let days = parsedIntervalDays(interval) { intervalDays = days }
         else { showFormError(intervalFormatMessage, in: &error); return }
         busy = true; error = nil
-        do { let _: OKResponse = try await api.call("add_equipment", body: ["name": name, "category": category, "serial": serial, "condition": condition, "value": valueText, "maintenance_interval_days": intervalDays, "notes": notes]); onDone(); dismiss() }
+        var body: [String: Any] = ["name": name, "category": category, "serial": serial, "condition": condition, "value": valueText, "maintenance_interval_days": intervalDays, "notes": notes]
+        body["idem_key"] = idem.key(for: body)
+        do { let _: OKResponse = try await api.call("add_equipment", body: body); idem.answered(); onDone(); dismiss() }
         // (confirmation + VoiceOver announce, after the sheet has gone, handled by the parent's AddEquipmentSheet closure)
         catch APIError.network {
             // The request may have arrived: it isn't known whether the item was added, and
@@ -1039,6 +1056,6 @@ struct AddEquipmentSheet: View {
             busy = false
             showFormError("The connection dropped before the server answered, so it isn't known whether this item was added. Check the equipment list for “\(name.trimmingCharacters(in: .whitespacesAndNewlines))” before adding it again.", in: &self.error)
         }
-        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        catch { idem.answered(); busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

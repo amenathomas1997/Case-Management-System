@@ -41,6 +41,11 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -64,25 +69,38 @@ fun Heading(text: String, modifier: Modifier = Modifier, large: Boolean = false)
     )
 }
 
-/** An error, read out once when it appears (a polite live region does not cut off speech). */
+/**
+ * [text] marked as written in [lang] (a language code such as "es"), so TalkBack reads it with that
+ * language's voice (WCAG 3.1.2); plain text when [lang] is empty.
+ */
+fun inLanguage(text: String, lang: String?): AnnotatedString =
+    if (lang.isNullOrBlank()) AnnotatedString(text)
+    else AnnotatedString(text, listOf(AnnotatedString.Range(SpanStyle(localeList = LocaleList(lang)), 0, text.length)))
+
+/** An error, read out once when it appears (a polite live region does not cut off speech). [lang]: see [inLanguage]. */
 @Composable
-fun ErrorText(message: String?) {
+fun ErrorText(message: String?, lang: String? = null) {
     if (message.isNullOrBlank()) return
     Surface(color = MaterialTheme.colorScheme.error.copy(alpha = 0.08f), modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Text(
+        if (lang.isNullOrBlank()) Text(
             message,
             color = MaterialTheme.colorScheme.error,
             modifier = Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite; contentDescription = "Error: $message" },
+        ) else Text(
+            inLanguage(message, lang),
+            color = MaterialTheme.colorScheme.error,
+            // Read as text (a description would lose the language); "Error" is the same word in Spanish.
+            modifier = Modifier.padding(12.dp).clearAndSetSemantics { liveRegion = LiveRegionMode.Polite; text = inLanguage("Error: $message", lang) },
         )
     }
 }
 
-/** A confirmation, read out once when it appears. */
+/** A confirmation, read out once when it appears. [lang]: see [inLanguage]. */
 @Composable
-fun NoticeText(message: String?) {
+fun NoticeText(message: String?, lang: String? = null) {
     if (message.isNullOrBlank()) return
     Surface(color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Text(message, color = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite })
+        Text(inLanguage(message, lang), color = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite })
     }
 }
 
@@ -137,14 +155,14 @@ fun ListRow(lines: List<String>, spoken: String? = null, action: String? = null,
 fun Field(
     label: String, value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier,
     hint: String? = null, error: String? = null, singleLine: Boolean = true, minLines: Int = 1,
-    keyboard: KeyboardType = KeyboardType.Text, password: Boolean = false,
+    keyboard: KeyboardType = KeyboardType.Text, password: Boolean = false, lang: String? = null,
 ) {
     OutlinedTextField(
         value = value, onValueChange = onChange,
-        label = { Text(if (hint != null) "$label ($hint)" else label) },
+        label = { Text(inLanguage(if (hint != null) "$label ($hint)" else label, lang)) },
         singleLine = singleLine, minLines = minLines,
         isError = error != null,
-        supportingText = error?.let { { Text(it) } },
+        supportingText = error?.let { { Text(inLanguage(it, lang)) } },
         keyboardOptions = KeyboardOptions(keyboardType = if (password) KeyboardType.Password else keyboard),
         visualTransformation = if (password) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         modifier = modifier.fillMaxWidth().padding(vertical = 4.dp).let { m -> if (error != null) m.semantics { error(error) } else m },
@@ -156,13 +174,16 @@ fun Field(
  * plainly named options (no announcement on each move, as the website's quiet combo boxes).
  */
 @Composable
-fun Choice(label: String, value: String, options: List<Pair<String, String>>, onChange: (String) -> Unit) {
+fun Choice(label: String, value: String, options: List<Pair<String, String>>, error: String? = null, onChange: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val shown = options.firstOrNull { it.first == value }?.second ?: value.ifEmpty { "None" }
     OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-        .semantics { contentDescription = "$label: $shown" }) {
+        // 4.28.0: an error belongs to the choice itself (read with it), not to a line of its own.
+        .semantics { contentDescription = "$label: $shown"; if (error != null) error(error) }) {
         Text("$label: $shown", modifier = Modifier.fillMaxWidth())
     }
+    if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(start = 16.dp, bottom = 4.dp).clearAndSetSemantics { })
     if (open) {
         AlertDialog(
             onDismissRequest = { open = false },
@@ -185,15 +206,15 @@ fun Choice(label: String, value: String, options: List<Pair<String, String>>, on
 }
 
 @Composable
-fun PrimaryButton(text: String, busy: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+fun PrimaryButton(text: String, busy: Boolean = false, enabled: Boolean = true, lang: String? = null, busyText: String = "Please wait…", onClick: () -> Unit) {
     Button(onClick = onClick, enabled = enabled && !busy, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).heightIn(min = 48.dp)) {
-        Text(if (busy) "Please wait…" else text)
+        Text(inLanguage(if (busy) busyText else text, lang))
     }
 }
 
 @Composable
-fun SecondaryButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, modifier = modifier.padding(vertical = 4.dp).heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 16.dp)) { Text(text) }
+fun SecondaryButton(text: String, modifier: Modifier = Modifier, lang: String? = null, onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick, modifier = modifier.padding(vertical = 4.dp).heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 16.dp)) { Text(inLanguage(text, lang)) }
 }
 
 /** Asks before something that cannot be undone. */

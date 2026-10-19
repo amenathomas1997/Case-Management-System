@@ -112,6 +112,8 @@ struct ClientsView: View {
 
 struct ClientDetailView: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     let clientId: Int
     /// A note to put VoiceOver on once the record has loaded (opened from Documentation review).
     var focusNoteId: Int? = nil
@@ -606,10 +608,16 @@ struct ClientDetailView: View {
         defer { sendingPortalLink = false }
         error = nil
         do {
-            let result: TaskSaveResult = try await api.call("send_portal_link", body: ["client_id": clientId])
+            var body: [String: Any] = ["client_id": clientId]
+            body["idem_key"] = idem.key(for: body)
+            let result: TaskSaveResult = try await api.call("send_portal_link", body: body)
+            idem.answered()
             confirmation = result.message ?? "Portal link emailed."
             announce(confirmation ?? "")
-        } catch { showFormError(error.localizedDescription, in: &self.error) }
+        } catch {
+            idem.failed(error)
+            showFormError(IdemKey.message(for: error, what: "the portal link"), in: &self.error)
+        }
     }
 
     /// The consent state for the Guardian consent section and the Send consent request action.
@@ -1476,6 +1484,8 @@ extension ConsentState {
 /// until it is sent.
 struct ConsentRequestSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let clientId: Int
     let clientName: String
@@ -1559,11 +1569,17 @@ struct ConsentRequestSheet: View {
     private func send() async {
         busy = true; error = nil
         do {
-            let r: TaskSaveResult = try await api.call("request_consent", body: ["client_id": clientId, "guardian_name": name, "guardian_email": email])
+            var body: [String: Any] = ["client_id": clientId, "guardian_name": name, "guardian_email": email]
+            body["idem_key"] = idem.key(for: body)
+            let r: TaskSaveResult = try await api.call("request_consent", body: body)
+            idem.answered()
             DraftStore.clear(key: draftKey, owner: api.userId)
             onSent(r.message ?? "Consent form emailed.")
             dismiss()
-        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        } catch {
+            idem.failed(error)
+            busy = false; showFormError(IdemKey.message(for: error, what: "the consent request"), in: &self.error)
+        }
     }
 }
 

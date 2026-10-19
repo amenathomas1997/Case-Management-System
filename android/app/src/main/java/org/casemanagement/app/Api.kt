@@ -174,7 +174,9 @@ class Api(context: Context) {
             call("withdraw_signature", body = JSONObject().put("client_id", clientId).put("id", docId))
             "$title was not signed, so the request was withdrawn."
         } catch (e: ApiException) {
-            if (e.status == 409) "$title was not signed; it had already been withdrawn."
+            // 4.28.0: the server says when it was signed elsewhere meanwhile; only otherwise was it withdrawn earlier.
+            if (e.status == 409 && e.reply?.optBoolean("signed") == true) "$title was signed, so it was not withdrawn."
+            else if (e.status == 409) "$title was not signed; it had already been withdrawn."
             else "$title was not signed and could not be withdrawn, so it is still waiting to be signed here. " +
                 "Withdraw it from the client's Documents to sign if it is not needed."
         }
@@ -371,6 +373,9 @@ class Api(context: Context) {
         scope.launch(Dispatchers.IO) {
             try { store.pruneCache(System.currentTimeMillis()) } catch (e: Exception) { }
             docsFolder.listFiles { f -> f.name.endsWith(".tmp") }?.forEach { it.delete() }
+            // 4.28.0: opened documents are kept at most two weeks, as the kept lists are.
+            val now = System.currentTimeMillis()
+            docsFolder.listFiles { f -> f.isFile && docExpired(f.lastModified(), now) }?.forEach { it.delete() }
             // Where 4.26.0 and earlier made them.
             listOf("upload.tmp", "message.tmp").forEach { java.io.File(docsFolder.parentFile, it).delete() }
         }
@@ -404,6 +409,9 @@ class Api(context: Context) {
 
     /** Signs in to [address] without keeping it yet (see [commitServer]). */
     fun tryServer(address: String) { trialServer = address.trim() }
+
+    /** Forgets an address that did not sign in (a failed sign-in, or Start again), so nothing more goes there (4.28.0). */
+    fun clearTrialServer() { trialServer = null }
 
     /**
      * Keeps the address signed in to. Another organisation's server: nothing of the last one's (its
@@ -442,6 +450,8 @@ class Api(context: Context) {
     private suspend fun raw(action: String, query: Map<String, String>, body: JSONObject?, sessionToken: String): Pair<Int, JSONObject> =
         withContext(Dispatchers.IO) {
             val conn = (URL(url(action, query)).openConnection() as HttpURLConnection)
+            // 4.28.0: a redirect is never followed (it would drop the session and the body); see [MOVED].
+            conn.instanceFollowRedirects = false
             try {
                 val ai = waitsOnAI(action, body)
                 conn.connectTimeout = 20_000
@@ -458,6 +468,7 @@ class Api(context: Context) {
                     conn.requestMethod = "GET"
                 }
                 val status = conn.responseCode
+                if (status in 300..399) throw ApiException(MOVED, status, network = true)
                 val stream = if (status >= 400) conn.errorStream else conn.inputStream
                 val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
                 val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
@@ -533,11 +544,14 @@ class Api(context: Context) {
         if (!store.phoneCanKeepClientData) throw ApiException("This phone has no screen lock, so documents are not saved on it to open. Open it on the website, or set a screen lock in Settings.")
         val sessionToken = token
         val conn = (URL(url("download_document", mapOf("id" to documentId.toString()))).openConnection() as HttpURLConnection)
+        conn.instanceFollowRedirects = false
+        var partial: java.io.File? = null
         try {
             conn.connectTimeout = 20_000; conn.readTimeout = 60_000
             conn.setRequestProperty("X-App-Version", APP_VERSION)
             conn.setRequestProperty("Authorization", "Bearer $sessionToken")
             val status = conn.responseCode
+            if (status in 300..399) throw ApiException(MOVED, status, network = true)
             if (status != 200) {
                 val json = try { JSONObject(conn.errorStream?.bufferedReader()?.readText() ?: "") } catch (e: Exception) { JSONObject() }
                 if (status == 401) withContext(Dispatchers.Main) { if (json.optBoolean("wipe")) wipeThisPhone() else expireSession() }
@@ -549,11 +563,15 @@ class Api(context: Context) {
             val name = "$documentId-" + (original?.ifEmpty { null } ?: "document")
             folder.mkdirs()
             val file = java.io.File(folder, name)
+            partial = file
             conn.inputStream.use { input -> file.outputStream().use { input.copyTo(it) } }
             // Signed out (or another account) while it downloaded: nothing of it stays on the phone.
             if (token != sessionToken) { file.delete(); throw ApiException("Your account changed, so the document was not kept.") }
+            partial = null
             file
         } catch (e: IOException) {
+            // 4.28.0: a download that stopped part-way leaves nothing behind.
+            partial?.delete()
             throw ApiException(NO_CONNECTION, 0, network = true)
         } finally { conn.disconnect() }
     }
@@ -562,9 +580,11 @@ class Api(context: Context) {
      * Uploads a document without holding it in memory: the file (already copied to [file], at most
      * 25 MB) is sent as base64 straight from disk inside the JSON body, with an exact length.
      */
-    suspend fun uploadDocument(clientId: Int, category: String, title: String, filename: String, file: java.io.File) {
-        postWithFile("upload_document", JSONObject().put("client_id", clientId).put("category", category).put("title", title).put("filename", filename),
-            "data_b64", file, "The document was not uploaded.")
+    suspend fun uploadDocument(clientId: Int, category: String, title: String, filename: String, file: java.io.File, idem: String? = null) {
+        val fields = JSONObject().put("client_id", clientId).put("category", category).put("title", title).put("filename", filename)
+        // 4.28.0: a retry after a lost reply carries the same key, so the document is not added twice.
+        if (idem != null) fields.put("idem_key", idem)
+        postWithFile("upload_document", fields, "data_b64", file, "The document was not uploaded.")
     }
 
     /**
@@ -580,6 +600,7 @@ class Api(context: Context) {
         val b64Len = 4 * ((n + 2) / 3)
         val pre = prefix.toByteArray(Charsets.UTF_8); val suf = suffix.toByteArray(Charsets.UTF_8)
         val conn = (URL(url(action, emptyMap())).openConnection() as HttpURLConnection)
+        conn.instanceFollowRedirects = false
         try {
             conn.connectTimeout = 20_000; conn.readTimeout = 120_000
             conn.requestMethod = "POST"; conn.doOutput = true
@@ -606,6 +627,7 @@ class Api(context: Context) {
                 out.write(suf)
             }
             val status = conn.responseCode
+            if (status in 300..399) throw ApiException(MOVED, status, network = true)
             val text = (if (status >= 400) conn.errorStream else conn.inputStream)?.bufferedReader()?.use { it.readText() } ?: ""
             val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
             if (status == 401) withContext(Dispatchers.Main) { if (json.optBoolean("wipe")) wipeThisPhone() else expireSession() }
@@ -630,7 +652,7 @@ class Api(context: Context) {
         userName = name; store.put("userName", name)
         sessionNotice = null
         token = newToken; store.put("apiToken", newToken)
-        store.remove(REFUSED_TOKEN_KEY, REFUSED_AT_KEY)
+        store.remove(REFUSED_TOKEN_KEY, REFUSED_AT_KEY, REFUSED_SERVER_KEY)
     }
 
     /** Name, permissions and the organisation's lists; after sign-in and on each start. */
@@ -679,6 +701,8 @@ class Api(context: Context) {
         if (userId > 0) reauthRequired = true
         // Kept (4.27.0), so a phone reported lost after its session ended still learns it and wipes.
         store.put(REFUSED_TOKEN_KEY, token); store.put(REFUSED_AT_KEY, System.currentTimeMillis().toString())
+        // 4.28.0: and the server that refused it, the only one it is ever sent to again.
+        store.put(REFUSED_SERVER_KEY, base)
         token = ""; store.remove("apiToken")
     }
 
@@ -692,7 +716,10 @@ class Api(context: Context) {
         val old = store.string(REFUSED_TOKEN_KEY)
         if (old.isEmpty()) return@withLock
         val at = store.string(REFUSED_AT_KEY).toLongOrNull() ?: 0L
-        if (System.currentTimeMillis() - at > REFUSED_KEEP_MS) { store.remove(REFUSED_TOKEN_KEY, REFUSED_AT_KEY); return@withLock }
+        if (System.currentTimeMillis() - at > REFUSED_KEEP_MS) { store.remove(REFUSED_TOKEN_KEY, REFUSED_AT_KEY, REFUSED_SERVER_KEY); return@withLock }
+        // 4.28.0: never to an address typed on Sign in (another server must not receive this session, nor wipe the phone).
+        val kept = (builtInServer ?: storedServer.ifEmpty { null })?.let { ServerAddress.apiUrl(it, BuildConfig.DEBUG) }
+        if (!refusedCheckAllowed(store.string(REFUSED_SERVER_KEY), kept, base)) return@withLock
         val (status, json) = try { raw("me", emptyMap(), null, old) } catch (e: Exception) { return@withLock }
         if (status == 401 && json.optBoolean("wipe") && store.string(REFUSED_TOKEN_KEY) == old) wipeThisPhone(old)
     }
@@ -802,7 +829,10 @@ class Api(context: Context) {
                 raw(item.optString("action"), emptyMap(), JSONObject(item.optString("body")), sessionToken)
             } catch (e: org.json.JSONException) {
                 refused[item.optString("id")] = "It could not be read on this phone."; continue
-            } catch (e: ApiException) { break }
+            } catch (e: ApiException) {
+                if (e.status in 300..399) transient = e.message
+                break
+            }
             when {
                 status == 401 -> { if (json.optBoolean("wipe")) wipeThisPhone() else expireSession(); break }
                 status in 200..299 && json.optBoolean("ok") -> done.add(item.optString("id"))
@@ -839,6 +869,10 @@ class Api(context: Context) {
         const val NO_CONNECTION = "No connection to the server. Check your signal and try again."
         const val REFUSED_TOKEN_KEY = "refusedToken"
         const val REFUSED_AT_KEY = "refusedAt"
+        const val REFUSED_SERVER_KEY = "refusedServer"
+        /** A redirect, never followed (4.28.0): nothing was sent there, and anything waiting is kept. */
+        const val MOVED = "The server answered from another address, so nothing was sent. The server address may have changed: " +
+            "check it with your administrator. Anything waiting to send is kept on this phone."
         const val REFUSED_KEEP_MS = 30L * 24 * 60 * 60 * 1000
         const val SOMETHING_WRONG = "Something went wrong in the app. Your work is kept on this phone; it is tried again when you return to the app."
         const val SAVE_FAILED = "Could not save on this phone. Nothing was lost; try again."

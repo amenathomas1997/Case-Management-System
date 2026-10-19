@@ -35,6 +35,35 @@ function meeting_app(string $provider): ?array {
 
 /* ---------- Encryption of stored tokens ---------- */
 
+/**
+ * How many stored values need the key file (4.28.0): authenticator seeds stored encrypted
+ * ("v1:"), connected meeting accounts and the QuickBooks connection. A table or column
+ * not there yet counts as none.
+ */
+function meeting_key_dependents(): int {
+    $n = 0;
+    foreach (["SELECT COUNT(*) FROM users WHERE totp_secret LIKE 'v1:%'",
+              "SELECT COUNT(*) FROM meeting_accounts WHERE access_token <> '' OR refresh_token <> ''",
+              "SELECT COUNT(*) FROM qbo_connection WHERE access_token <> '' OR refresh_token <> ''"] as $sql) {
+        try { $n += (int)db()->query($sql)->fetchColumn(); } catch (Throwable $e) {}
+    }
+    return $n;
+}
+
+/** 'ok', 'none' (no key file and nothing needs one: it is made on first use), 'missing'
+ *  (no key file, but stored values need it), 'unreadable' (damaged, unreadable or readable by
+ *  others), or 'unknown' (the private directory is not known). Never creates the key. */
+function meeting_key_status(): string {
+    $dir = (string)($GLOBALS['CMS_PRIVATE_DIR'] ?? '');
+    if ($dir === '' || !is_dir($dir)) return 'unknown';
+    $file = $dir . '/meeting_tokens.key';
+    clearstatcache(true, $file);
+    if (!is_file($file)) return meeting_key_dependents() > 0 ? 'missing' : 'none';
+    if (!is_readable($file) || (fileperms($file) & 0077) !== 0) return 'unreadable';
+    $k = base64_decode(trim((string)@file_get_contents($file)), true);
+    return ($k === false || strlen($k) !== 32) ? 'unreadable' : 'ok';
+}
+
 /** The 32-byte key, made once in the private directory (beside config.php), readable only by its owner. */
 function meeting_key(): string {
     static $key = null;
@@ -42,6 +71,13 @@ function meeting_key(): string {
     $dir = (string)($GLOBALS['CMS_PRIVATE_DIR'] ?? '');
     if ($dir === '' || !is_dir($dir)) throw new RuntimeException('The private directory is not known, so meeting accounts cannot be stored.');
     $file = $dir . '/meeting_tokens.key';
+    if (!is_file($file) && meeting_key_dependents() > 0) {
+        // 4.28.0: never a new key while stored values need the old one (after a restore or a
+        // move without the key file): a new key would make them unreadable for good, and
+        // System health could no longer tell. Restore the old key file instead.
+        error_log('meeting_key: ' . $file . ' is missing, but stored authenticator seeds or connection tokens need it; no new key was made. Copy the old meeting_tokens.key back (chmod 600).');
+        throw new RuntimeException('The key file meeting_tokens.key is missing from the private directory, but stored values need it. Copy the old key file back.');
+    }
     if (!is_file($file)) {
         // Written to a temporary file and linked into place, so two requests at once can never
         // both make a key, nor read a half-written one: the second link fails and it reads the first.
@@ -72,7 +108,9 @@ function meeting_seal(string $plain): string {
 function meeting_open(string $sealed): ?string {
     $raw = base64_decode($sealed, true);
     if ($raw === false || strlen($raw) < 29) return null;
-    $out = openssl_decrypt(substr($raw, 28), 'aes-256-gcm', meeting_key(), OPENSSL_RAW_DATA, substr($raw, 0, 12), substr($raw, 12, 16));
+    // A missing or damaged key file reads as "cannot be read" (4.28.0), as a wrong key always has.
+    try { $key = meeting_key(); } catch (Throwable $e) { error_log('meeting_open: ' . $e->getMessage()); return null; }
+    $out = openssl_decrypt(substr($raw, 28), 'aes-256-gcm', $key, OPENSSL_RAW_DATA, substr($raw, 0, 12), substr($raw, 12, 16));
     return $out === false ? null : $out;
 }
 

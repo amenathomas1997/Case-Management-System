@@ -17,11 +17,18 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_hold']
     if (!ctype_digit($days) || (int)$days > 90 || ($mode === 'all' && (int)$days < 1)) { keep_input(); keep_field_errors(['access_hold_days' => 'Enter a number of days from 1 to 90 (new staff are held at once either way).']); redirect('staff_training.php#hold-h'); }
     // Who this would take client records from right now: said, and confirmed, before it happens.
     if ($mode !== 'off' && empty($_POST['confirm_hold'])) {
-        $before = [setting('access_hold'), setting('access_hold_days')];
-        set_setting('access_hold', $mode); set_setting('access_hold_days', (string)(int)$days);
+        // 4.28.0: the proposed setting is written inside a transaction that is always rolled
+        // back, so only this count sees it. Other requests keep reading the saved setting the
+        // whole time (no one is held, or let through, before the administrator confirms), and
+        // a request that dies part-way leaves nothing changed, nor a setting that was never set.
         $wouldHold = [];
-        foreach (db()->query('SELECT * FROM users WHERE is_active = 1 ORDER BY name')->fetchAll() as $u) if (access_hold_reasons($u, true)) $wouldHold[] = $u['name'];
-        set_setting('access_hold', (string)($before[0] ?? '')); set_setting('access_hold_days', (string)($before[1] ?? ''));
+        db()->beginTransaction();
+        try {
+            set_setting('access_hold', $mode); set_setting('access_hold_days', (string)(int)$days);
+            foreach (db()->query('SELECT * FROM users WHERE is_active = 1 ORDER BY name')->fetchAll() as $u) if (access_hold_reasons($u, true)) $wouldHold[] = $u['name'];
+        } finally {
+            if (db()->inTransaction()) db()->rollBack();
+        }
         if ($wouldHold) {
             keep_input();
             $_SESSION['hold_preview'] = $wouldHold;

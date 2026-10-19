@@ -437,8 +437,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
       <?php // Anyone can send the public form as a "counselor": the address is kept
       // unconfirmed, and used for reports only once someone has checked it. ?>
       <div class="field">
-        <label><input type="checkbox" name="confirm_counselor_email" value="1" aria-describedby="confirm-ce-hint"> I have confirmed that <?= h($view['counselor_email']) ?> belongs to this person's VR counselor</label>
-        <p class="hint" id="confirm-ce-hint">This email was typed into the public referral form and has not been verified. Once confirmed, it receives monthly progress reports and can be invited to the counselor portal. Check it against the authorization paperwork or the agency first; leave this unticked to keep it on the client record marked not yet confirmed, and confirm it later on the client's edit page.</p>
+        <label><input type="checkbox" name="confirm_counselor_email" value="1"> I have confirmed that <?= h($view['counselor_email']) ?> belongs to this person's VR counselor <span class="hint">This email was typed into the public referral form and has not been verified. Once confirmed, it receives monthly progress reports and can be invited to the counselor portal. Check it against the authorization paperwork or the agency first; leave this unticked to keep it on the client record marked not yet confirmed, and confirm it later on the client's edit page.</span></label>
       </div>
       <?php endif; ?>
       <button type="submit" name="convert" value="1" class="btn btn-primary"

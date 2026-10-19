@@ -47,10 +47,10 @@ $truncated = false;
 $mode = in_array($_POST['mode'] ?? '', array_keys(REMEDIATE_MODES), true) ? $_POST['mode'] : 'plain';
 $content = is_string($_POST['content'] ?? null) ? $_POST['content'] : '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['go'])) {
-    if (trim($content) === '') { set_form_errors(['content' => 'Paste some content first.']); flash('Paste some content first.', 'error'); }
+    // 4.28.0: the error is shown once, on the field and in the summary above the form (no flash too).
+    if (trim($content) === '') { set_form_errors(['content' => 'Paste some content first.']); }
     elseif (($cLen = mb_strlen($content)) > REMEDIATE_MAX_CHARS) {
         set_form_errors(['content' => 'Shorten the content to 20,000 characters or fewer (it has ' . number_format($cLen) . '), or split it into smaller parts.']);
-        flash('That is too much text to send at once (20,000 characters maximum). Split it into smaller parts.', 'error');
     }
     else {
         $prompts = [
@@ -90,11 +90,11 @@ page_header('Remediation', $user, 'ai_tools');
 <p class="muted">Transform content for accessibility. <strong>The text you paste is sent to the AI provider as-is</strong> — don't paste anything you wouldn't send them.
    <?= $targetFormat !== '' ? 'Targeting the client\'s preferred format: <strong>' . h($targetFormat) . '</strong>.' : '' ?></p>
 
+<?= form_error_summary(['content' => 'Content']) ?>
 <form method="post" action="remediate.php<?= $targetClientId > 0 ? '?client=' . $targetClientId : '' ?>" class="stacked"><?= csrf_field() ?>
   <div class="field"><label for="mode">What to do</label><select id="mode" name="mode"><?php foreach (REMEDIATE_MODES as $k => $lab): ?><option value="<?= h($k) ?>" <?= $mode === $k ? 'selected' : '' ?>><?= h($lab) ?></option><?php endforeach; ?></select></div>
-  <div class="field"><label for="content">Content</label>
-    <span class="hint" id="content-hint">Up to 20,000 characters. For alt text, describe the image.</span>
-    <textarea id="content" name="content" rows="10" <?= field_aria('content', 'content-hint') ?>><?= h($content) ?></textarea><?= field_error('content') ?></div>
+  <div class="field"><label for="content">Content <span class="hint">Up to 20,000 characters. For alt text, describe the image.</span></label>
+    <textarea id="content" name="content" rows="10" <?= field_aria('content') ?>><?= h($content) ?></textarea><?= field_error('content') ?></div>
   <button type="submit" name="go" value="1" class="btn btn-primary">Transform</button>
 </form>
 

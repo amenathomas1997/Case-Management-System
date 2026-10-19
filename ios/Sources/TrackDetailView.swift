@@ -1060,6 +1060,8 @@ struct GoalHistoryView: View {
 
 struct AddGoalSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let trackId: Int
     let onSaved: () -> Void
@@ -1130,10 +1132,13 @@ struct AddGoalSheet: View {
         }
         busy = true; error = nil
         do {
-            let _: OKResponse = try await api.call("add_goal", body: [
+            var body: [String: Any] = [
                 "track_id": trackId, "specific_goal": specific, "measurable_metric": metric,
                 "focus_area": focus, "target_date": hasTarget ? APIDate.day(targetDate) : "",
-            ])
+            ]
+            body["idem_key"] = idem.key(for: body)
+            let _: OKResponse = try await api.call("add_goal", body: body)
+            idem.answered()
             // "Goal added." is said by the track screen once this sheet has closed.
             onSaved()
             dismiss()
@@ -1143,6 +1148,7 @@ struct AddGoalSheet: View {
             showFormError("The connection dropped before the server answered, so it isn't known whether this goal was added. Check the track's goals for “\(specific.trimmingCharacters(in: .whitespacesAndNewlines))” before adding it again.", in: &self.error)
             busy = false
         } catch {
+            idem.answered()
             showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
@@ -1413,6 +1419,8 @@ struct SendReportSheet: View {
     @State private var busy = false
     @State private var error: String?
     @State private var askingDiscard = false
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not email the report twice.
+    @State private var idem = IdemKey()
 
     private var hasChanges: Bool { !intro.isEmpty || !signature.isEmpty }
 
@@ -1465,18 +1473,21 @@ struct SendReportSheet: View {
                     sentTo = (try? c.decode(String.self, forKey: .sentTo)) ?? ""
                 }
             }
-            let result: SendResult = try await api.call("send_report", body: [
-                "track_id": trackId, "intro": intro, "signature": signature,
-            ])
+            var body: [String: Any] = ["track_id": trackId, "intro": intro, "signature": signature]
+            body["idem_key"] = idem.key(for: body)
+            let result: SendResult = try await api.call("send_report", body: body)
+            idem.answered()
             // Said by the track screen once this sheet has closed: heard there, it is not sent twice.
             onDone(result.sentTo.isEmpty ? "Report signed and emailed." : "Report signed and emailed to \(result.sentTo).")
             dismiss()
         } catch APIError.network {
             // The request may have arrived and the email gone (the server sends it before it
             // answers): sending again could email the counselor twice.
+            // The key is kept (4.28.0): sending again unchanged is recognised and not emailed twice.
             showFormError("The connection dropped before the server answered, so it isn't known whether the report was sent. Check the client's notes for “Training report emailed to VRC” before sending it again.", in: &self.error)
             busy = false
         } catch {
+            idem.answered()
             showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
@@ -1555,6 +1566,8 @@ private func trackNumberString(_ value: Double, decimals: Int) -> String {
 /// until it is saved.
 struct TrackEditSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     /// The track to edit, or nil for a new track for `clientId`.
     let trackId: Int?
@@ -1730,12 +1743,19 @@ struct TrackEditSheet: View {
                                    "authorized_hours": hoursText, "hourly_rate": rateText, "mileage_rate": mileageText,
                                    "start_date": startDate, "expiration_date": expirationDate, "rsa_category": rsaCategory]
         if let trackId { body["id"] = trackId; body["amendment_reason"] = reason } else if let clientId { body["client_id"] = clientId }
+        // A new track (4.28.0): a retry after a lost reply is recognised and not created twice.
+        if trackId == nil { body["idem_key"] = idem.key(for: body) }
         do {
             let r: TrackSaveResult = try await api.call("save_track", body: body)
+            idem.answered()
             DraftStore.clear(key: draftKey, owner: api.userId)
             onSaved(r.message ?? (trackId == nil ? "Training track created." : "Training track updated."), r.track)
             dismiss()
-        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        } catch {
+            idem.failed(error)
+            busy = false
+            showFormError(trackId == nil ? IdemKey.message(for: error, what: "the track") : error.localizedDescription, in: &self.error)
+        }
     }
 }
 

@@ -32,7 +32,8 @@ function account_totp_confirm(array $user, string $secret, $password, $code, cal
     if (!totp_verify($secret, is_string($code) ? $code : '')) {
         return ['ok' => false, 'errors' => ['code' => 'That code did not match or has expired. Codes change every 30 seconds: enter the code the app shows right now, then choose "Confirm and enable".']];
     }
-    db()->prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1 WHERE id = ?')->execute([$secret, $user['id']]);
+    // Stored encrypted with the private key file (4.28.0): a database backup alone holds no seed.
+    db()->prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1 WHERE id = ?')->execute([totp_secret_store($secret), $user['id']]);
     audit((int)$user['id'], 'totp.enable', 'user', (int)$user['id']);
     send_app_mail($user['email'], 'An authenticator app was added to your account',
         "Hello {$user['name']},\n\nAn authenticator app was just set up for your " . cfg('name') . " account. From now on, signing in asks for a code from that app (or a passkey); sign-in codes are no longer emailed.\n\n"

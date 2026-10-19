@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 
 struct UploadDocumentSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let clientId: Int
     /// The result to tell the person, said by the client screen once the sheet has gone
@@ -236,11 +238,15 @@ struct UploadDocumentSheet: View {
         busy = true; error = nil
         announce("Uploading document.")
         do {
+            // The key follows the request without the file's bytes (the same file has the same size).
+            let key = idem.key(for: ["client_id": clientId, "category": category, "title": title,
+                                     "filename": filename, "size": data.count])
             let _: OKResponse = try await api.call("upload_document", body: [
                 "client_id": clientId, "category": category,
                 "title": title, "filename": filename,
-                "data_b64": data.base64EncodedString(),
+                "data_b64": data.base64EncodedString(), "idem_key": key,
             ])
+            idem.answered()
             onSaved("Document uploaded.")
             dismiss()
         } catch APIError.network {
@@ -249,6 +255,7 @@ struct UploadDocumentSheet: View {
             showFormError("The connection dropped before the server answered, so it isn't known whether the document was uploaded. Check the client's documents for “\(filename)” before uploading it again.", in: &self.error)
             busy = false
         } catch {
+            idem.answered()
             showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }

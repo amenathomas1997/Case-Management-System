@@ -56,7 +56,7 @@ fun AtRecordScreen(api: Api, nav: NavHostController, id: Int) {
     val state = rememberLoaded(id) { api.call("at_detail", mapOf("id" to id.toString())) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var issuing by remember { mutableStateOf(false) }
+    var issuing by rememberSaveable { mutableStateOf(false) }
     var returning by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     Show(state, "the record") { r ->
@@ -108,16 +108,18 @@ fun AtRecordScreen(api: Api, nav: NavHostController, id: Int) {
 @Composable
 private fun AtIssueDialog(api: Api, id: Int, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val choices = rememberLoaded(id) { api.call("at_issue_choices", mapOf("id" to id.toString())) }
-    var client by remember { mutableStateOf("") }
-    var item by remember { mutableStateOf("") }
-    var due by remember { mutableStateOf("") }
+    var client by rememberSaveable { mutableStateOf("") }
+    var item by rememberSaveable { mutableStateOf("") }
+    var due by rememberSaveable { mutableStateOf("") }
+    var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val c = choices.data
     FormDialog("Lend equipment", "Lend", busy, client.isNotEmpty() && item.isNotEmpty(), onSave = {
         scope.launchSave({ busy = it }, { error = it }) {
-            api.call("at_issue", body = JSONObject().put("id", id).put("client_id", client.toInt()).put("equipment_id", item.toInt()).put("due_date", due.trim()))
+            // 4.28.0: a retry after a lost reply lends it once (see sendOnce).
+            api.callOnce("at_issue", JSONObject().put("id", id).put("client_id", client.toInt()).put("equipment_id", item.toInt()).put("due_date", due.trim()), idem, { idem = it }, "the loan")
             onDone("Equipment lent.")
         }
     }, onCancel = onCancel) {

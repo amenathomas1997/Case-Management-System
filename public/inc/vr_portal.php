@@ -22,8 +22,10 @@ function vr_portal_since(): string {
 /** The tracker's lists, each a list of rows, limited to one agency when $agency is given and to one caseload when $scopeUser is. */
 function vr_portal_lists(?string $agency = null, ?int $scopeUser = null): array {
     $since = vr_portal_since();
-    $ag = ($agency !== null ? ' AND x.funding_agency = ?' : '') . ($scopeUser !== null ? ' AND c.assigned_to = ?' : '');
-    $p = fn(array $base) => [...$base, ...($agency !== null ? [$agency] : []), ...($scopeUser !== null ? [$scopeUser] : [])];
+    // 4.28.0: an agency matches every spelling of it on file, including a name it had before a rename.
+    [$agCond, $agArgs] = $agency !== null ? agency_match_sql('x.funding_agency', $agency) : ['', []];
+    $ag = ($agency !== null ? ' AND ' . $agCond : '') . ($scopeUser !== null ? ' AND c.assigned_to = ?' : '');
+    $p = fn(array $base) => [...$base, ...$agArgs, ...($scopeUser !== null ? [$scopeUser] : [])];
     $q = function (string $sql, array $params): array { $s = db()->prepare($sql); $s->execute($params); return $s->fetchAll(); };
     $tracks = "SELECT x.id, x.title, x.auth_number, x.funding_agency, x.start_date, x.expiration_date, x.portal_status, x.portal_at, x.portal_note, x.portal_auth, c.id AS client_id, c.name AS client_name, c.vr_case_number
         FROM training_tracks x JOIN clients c ON c.id = x.client_id WHERE x.status = 'Active' AND COALESCE(x.billing_mode, 'vr') = 'vr' AND TRIM(x.auth_number) <> '' AND c.archived_at IS NULL";

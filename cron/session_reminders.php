@@ -59,7 +59,15 @@ $sessions = db()->query("SELECT s.*, c.name AS client_name, c.email AS client_em
     WHERE s.status = 'Scheduled' AND s.reminder_sent = 0
       AND s.start_at > NOW() AND s.start_at < DATE_ADD(CURDATE(), INTERVAL " . (cms_number('session_reminder_days') + 1) . " DAY)")->fetchAll();
 
-$sent = 0; $failed = []; $unconfirmed = [];
+$sent = 0; $failed = []; $unconfirmed = []; $uncertain = [];
+// 4.28.0: an email whose outcome is unknown (Graph timed out or answered 5xx after it went out) may
+// well have arrived, so it counts as sent: sending it again on the next run would remind the person
+// twice. It is reported once below, so someone can check with that person by hand.
+$mailOnce = function (string $to, string $subject, string $body, string $who) use (&$uncertain, &$s): bool {
+    $o = send_app_mail_outcome($to, $subject, $body);
+    if ($o === 'unknown') { $uncertain[] = [(int)$s['client_id'], $who . ' about ' . $s['client_name'] . "'s session on " . date('l, F j \\a\\t g:i A', strtotime((string)$s['start_at']))]; return true; }
+    return $o === 'sent';
+};
 // Each recipient is recorded on its own (4.27.0, client_reminded_at and staff_reminded_at): a
 // failure for one is retried for that one only, so the other is not emailed again every run,
 // and a client address that cannot be emailed is reported once. Until the columns exist the
@@ -162,7 +170,7 @@ foreach ($sessions as $s) {
                 $later = fn(string $text): string => (string)preg_replace_callback('/\btomorrow\b/i', fn(array $m): string => ctype_upper($m[0][0]) ? ucfirst($clientDay) : $clientDay, $text);
                 $subj = $later($subj); $body = $later($body);
             }
-            $clientSent = send_app_mail($s['client_email'], $subj, $body);
+            $clientSent = $mailOnce($s['client_email'], $subj, $body, 'the client');
         }
     }
     $staffBody = "Session reminder.\n\nClient: {$s['client_name']}\nWhen: {$when}" . ($cz !== null ? "\nThe client's time: " . zone_date($cz, 'g:i A T', $startTs) : '') . "{$where}\n"
@@ -176,7 +184,7 @@ foreach ($sessions as $s) {
         $anyAddress = true;
     } elseif ($s['staff_email'] && $staffSees) {
         $anyAddress = true;
-        $staffSent = send_app_mail($s['staff_email'], $staffSubject, $staffBody);
+        $staffSent = $mailOnce($s['staff_email'], $staffSubject, $staffBody, 'the instructor');
     } elseif ($s['active_staff_id'] && !$staffSees) {
         // Still booked with a staff member who no longer has this client on their
         // caseload (the client was reassigned): they are not sent client details.
@@ -184,7 +192,7 @@ foreach ($sessions as $s) {
         $stranded = "This session is still booked with {$s['staff_name']}, who no longer has this client on their caseload. "
             . "Cancel it on the Schedule page and book it again with the right instructor if it should go ahead: " . cfg('base_url') . "/schedule.php\n";
         $staffSent = ($s['assignee_email']
-            ? send_app_mail($s['assignee_email'], $staffSubject, $staffBody . "\n" . $stranded)
+            ? $mailOnce($s['assignee_email'], $staffSubject, $staffBody . "\n" . $stranded, 'the case worker')
             : notify_admins(ucfirst($dayNoun) . "'s session is booked with staff who no longer have this client",
                 $staffBody . "\n" . $stranded));
     } elseif ($s['user_id'] && !$s['active_staff_id']) {
@@ -228,11 +236,17 @@ foreach ($unconfirmed as [$clientId, $label]) {
     notify_admin_users('Session reminder not emailed to ' . $label . ': the client\'s email address came from the public referral form and is not confirmed yet. '
         . 'Confirm it on the client\'s edit page.', 'client.php?id=' . $clientId);
 }
+// Reported once: the session is marked, so a later run does not email it (or report it) again.
+foreach ($uncertain as [$clientId, $who]) {
+    notify_admin_users('A session reminder to ' . $who . ' may not have arrived (the mail service did not confirm it; it is not sent again, so it cannot arrive twice). '
+        . 'Check with them if the session matters.', 'client.php?id=' . $clientId);
+}
+if ($uncertain) echo count($uncertain) . " reminder email(s) went out unconfirmed; they are not sent again (the administrators were told).\n";
 if ($unconfirmed) echo count($unconfirmed) . " client(s) were not emailed: their email address has not been confirmed (the administrators were told).\n";
 // Text messages (4.17.0), to clients who agreed: the same reminders (answerable with C, R or X),
 // one text for homework assigned since the last run, and texts held overnight that may go now.
 if (sms_enabled()) {
-    $texted = 0;
+    $texted = 0; $textUnknown = [];
     try {
         $rows = db()->query("SELECT s.* FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
             WHERE s.status = 'Scheduled' AND s.sms_reminder_sent = 0 AND s.start_at > NOW()
@@ -243,8 +257,10 @@ if (sms_enabled()) {
             $c = sms_client((int)$s['client_id']);
             if (!$c || sms_client_blocked($c)) continue;
             $r = sms_to_client((int)$c['id'], sms_session_text($c, $s, 'reminder'), 'reminder', (int)$s['id']);
-            // Marked once logged (sent, or held for the morning), so it is never texted twice.
-            if (in_array($r['status'], ['sent', 'held'], true)) { $markText->execute([(int)$s['id']]); $texted++; }
+            // Marked once logged (sent, or held for the morning), so it is never texted twice. A text
+            // the service did not confirm in time (4.28.0) may still arrive: marked too, and reported once.
+            if (in_array($r['status'], ['sent', 'held', 'unknown'], true)) { $markText->execute([(int)$s['id']]); $texted++; }
+            if ($r['status'] === 'unknown') $textUnknown[] = (int)$s['client_id'];
         }
         // New homework: one text per client, however many were assigned.
         $hw = db()->query("SELECT t.client_id, COUNT(*) n, GROUP_CONCAT(h.id) ids FROM homework h JOIN training_tracks t ON t.id = h.track_id JOIN clients c ON c.id = t.client_id
@@ -258,7 +274,7 @@ if (sms_enabled()) {
             $body = $es ? 'Hola ' . sms_first_name((string)$c['name']) . ', tiene ' . ($n === 1 ? 'una tarea nueva' : "$n tareas nuevas") . ' en su portal de ' . (brand('short') ?: cfg('name')) . '. Responda STOP para no recibir mensajes.'
                 : 'Hi ' . sms_first_name((string)$c['name']) . ', you have ' . ($n === 1 ? 'new homework' : "$n new homework assignments") . ' in your ' . (brand('short') ?: cfg('name')) . ' portal. Reply STOP to stop texts.';
             $r = sms_to_client((int)$c['id'], $body, 'homework');
-            if (in_array($r['status'], ['sent', 'held'], true)) db()->exec('UPDATE homework SET sms_notified = 1 WHERE id IN (' . implode(',', array_map('intval', explode(',', (string)$h['ids']))) . ')');
+            if (in_array($r['status'], ['sent', 'held', 'unknown'], true)) db()->exec('UPDATE homework SET sms_notified = 1 WHERE id IN (' . implode(',', array_map('intval', explode(',', (string)$h['ids']))) . ')');
         }
         // Homework for clients who do not take texts, and homework older than two days, is marked too,
         // so a later agreement (or texting set up later) never texts old homework.
@@ -266,6 +282,9 @@ if (sms_enabled()) {
             WHERE h.sms_notified = 0 AND (c.sms_consent_at IS NULL OR c.sms_opted_out_at IS NOT NULL OR h.assigned_at < DATE_SUB(CURDATE(), INTERVAL 2 DAY))");
     } catch (Throwable $e) {
         error_log('session_reminders: texts skipped (' . get_class($e) . ')');
+    }
+    foreach ($textUnknown as $clientId) {
+        notify_admin_users('A session reminder text may not have arrived (the texting service did not confirm it; it is not sent again, so it cannot arrive twice). See Text messages for the details.', 'client.php?id=' . $clientId);
     }
     $flushed = sms_flush_held();
     echo "Texts: {$texted} reminder(s), {$flushed} held text(s) sent.\n";

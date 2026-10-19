@@ -47,6 +47,21 @@ const PRIVATE_HTACCESS = "# Written by the CMS installer: nothing in this direct
     . "<IfModule !mod_authz_core.c>\n  Order allow,deny\n  Deny from all\n</IfModule>\n";
 
 /** Absolute path with the part that already exists resolved through symlinks. */
+/** 4.28.0: an error about one field, named by the label the person hears; listed in the summary as a link to the field. */
+function field_fail(string $field, string $msg): void {
+    $GLOBALS['errors'][] = $msg;
+    $GLOBALS['errorFor'][$field] ??= $msg;
+}
+/** aria-invalid and the inline error's id for a field with an error ('' when it has none). */
+function field_err_attr(string $field): string {
+    return isset($GLOBALS['errorFor'][$field]) ? ' aria-invalid="true" aria-describedby="err-' . $field . '"' : '';
+}
+/** The inline error under a field ('' when it has none). */
+function field_err_msg(string $field): string {
+    $m = $GLOBALS['errorFor'][$field] ?? null;
+    return $m === null ? '' : '<p class="field-error" id="err-' . $field . '">' . htmlspecialchars($m) . '</p>';
+}
+
 function resolve_path(string $path): string {
     $cur = rtrim(str_replace('\\', '/', $path), '/');
     $tail = '';
@@ -108,6 +123,7 @@ function default_private_dir(): string {
 }
 
 $errors = [];
+$errorFor = []; // field id => its first error (4.28.0)
 $done = false;
 $report = [];
 $notices = [];        // things the administrator must act on, shown prominently on the success page
@@ -154,60 +170,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // anything is changed so a missing one is not found only once the site runs.
     $missingExt = array_values(array_filter(['pdo_mysql', 'mbstring', 'iconv', 'curl', 'zip', 'openssl'], fn(string $x): bool => !extension_loaded($x)));
     if ($missingExt) $errors[] = 'This server\'s PHP is missing the ' . implode(', ', $missingExt) . ' extension' . (count($missingExt) > 1 ? 's' : '') . ', which the app needs. Turn ' . (count($missingExt) > 1 ? 'them' : 'it') . ' on in your hosting panel\'s PHP settings (on cPanel: Select PHP Version, or EasyApache) and run the installer again. Nothing was changed.';
-    if (!preg_match('#^https://#', $baseUrl)) $errors[] = 'Base URL must start with https://';
-    foreach (['db_name' => $dbName, 'db_user' => $dbUser, 'brand_name' => $brandName, 'brand_short' => $brandShort, 'brand_org' => $brandOrg, 'admin_name' => $adminName] as $k => $v) {
-        if ($v === '') $errors[] = "Field '{$k}' is required.";
+    if (!preg_match('#^https://#', $baseUrl)) field_fail('base_url', 'Base URL must start with https://');
+    // Named by the labels on the form (what a screen reader reads), never the internal field keys.
+    foreach (['brand_name' => [$brandName, 'Business / app name'], 'brand_short' => [$brandShort, 'Short brand'], 'brand_org' => [$brandOrg, 'Full organization name'],
+              'db_name' => [$dbName, 'Database name'], 'db_user' => [$dbUser, 'Database user'], 'admin_name' => [$adminName, "Administrator's name"]] as $k => [$v, $label]) {
+        if ($v === '') field_fail($k, "{$label} is required.");
     }
     // The users table holds a name of up to 120 characters and an email of up to
     // 190, but sign-in refuses an address over 183 characters (login.php), so the
     // installer stops at 183; checked here, before the database is loaded.
     $adminNameLength = function_exists('mb_strlen') ? mb_strlen($adminName, 'UTF-8') : strlen($adminName);
-    if ($adminNameLength > 120) $errors[] = "Administrator's name is {$adminNameLength} characters long; the most it can be is 120.";
-    if (!filter_var($adminEmail, FILTER_VALIDATE_EMAIL)) $errors[] = 'Admin email is invalid.';
-    elseif (strlen($adminEmail) > 183) $errors[] = "Administrator's email is " . strlen($adminEmail) . ' characters long; the most it can be is 183.';
-    if (!filter_var($mailFrom, FILTER_VALIDATE_EMAIL)) $errors[] = 'Mail-from address is invalid.';
-    if ($supportEmail !== '' && !filter_var($supportEmail, FILTER_VALIDATE_EMAIL)) $errors[] = 'Public contact email is invalid.';
-    if (strlen($adminPass) < 10) $errors[] = 'Admin password must be at least 10 characters.';
+    if ($adminNameLength > 120) field_fail('admin_name', "Administrator's name is {$adminNameLength} characters long; the most it can be is 120.");
+    if (!filter_var($adminEmail, FILTER_VALIDATE_EMAIL)) field_fail('admin_email', "Administrator's email is not a valid email address.");
+    elseif (strlen($adminEmail) > 183) field_fail('admin_email', "Administrator's email is " . strlen($adminEmail) . ' characters long; the most it can be is 183.');
+    if (!filter_var($mailFrom, FILTER_VALIDATE_EMAIL)) field_fail('mail_from', 'Mail-from address is not a valid email address.');
+    if ($supportEmail !== '' && !filter_var($supportEmail, FILTER_VALIDATE_EMAIL)) field_fail('support_email', 'Public contact email is not a valid email address.');
+    if (strlen($adminPass) < 10) field_fail('admin_pass', "Administrator's password must be at least 10 characters.");
     // The optional contact and privacy-notice fields: free text, only kept short and free of line breaks.
-    foreach (['Operator name' => [$privacyOperator, 190], 'Operator address' => [$privacyAddress, 255],
-              'Governing law' => [$privacyLaw, 120], 'Hosting provider' => [$privacyHosting, 190]] as $label => [$v, $max]) {
+    foreach (['privacy_operator' => ['Operator', $privacyOperator, 190], 'privacy_address' => ["Operator's postal address", $privacyAddress, 255],
+              'privacy_law' => ['Governing law', $privacyLaw, 120], 'privacy_hosting' => ['Hosting provider', $privacyHosting, 190]] as $k => [$label, $v, $max]) {
         $len = function_exists('mb_strlen') ? mb_strlen($v, 'UTF-8') : strlen($v);
-        if ($len > $max) $errors[] = "{$label} is {$len} characters long; the most it can be is {$max}.";
-        if (preg_match('/[\r\n]/', $v)) $errors[] = "{$label} must be on one line.";
+        if ($len > $max) field_fail($k, "{$label} is {$len} characters long; the most it can be is {$max}.");
+        if (preg_match('/[\r\n]/', $v)) field_fail($k, "{$label} must be on one line.");
     }
     // The same rule as admin.php's Support phone number field, which can change it later.
     if ($supportPhone !== '' && (mb_strlen($supportPhone) > 30 || !preg_match('/^[0-9+() \-]*$/', $supportPhone))) {
-        $errors[] = 'Support phone: use only digits, spaces, plus, hyphens and parentheses (30 characters at most), like +1 555 010 2000, or leave it blank.';
+        field_fail('support_phone', 'Support phone: use only digits, spaces, plus, hyphens and parentheses (30 characters at most), like +1 555 010 2000, or leave it blank.');
     }
-    foreach ([$brandColor, $brandDark, $brandAccent] as $c) {
-        if (!preg_match('/^#[0-9a-fA-F]{6}$/', $c)) $errors[] = "Color '{$c}' must be a 6-digit hex value like #1e40af.";
+    foreach (['brand_color' => ['Primary color', $brandColor], 'brand_color_dark' => ['Dark color', $brandDark], 'brand_accent' => ['Accent color', $brandAccent]] as $k => [$label, $c]) {
+        if (!preg_match('/^#[0-9a-fA-F]{6}$/', $c)) field_fail($k, "{$label} '{$c}' must be a 6-digit hex value like #1e40af.");
     }
-    if (!in_array($tz, timezone_identifiers_list(), true)) $errors[] = 'Unknown timezone.';
+    if (!in_array($tz, timezone_identifiers_list(), true)) field_fail('timezone', 'Time zone: ' . ($tz === '' ? 'enter one' : "'{$tz}' is not a time zone name") . ', like America/Chicago.');
     // The private directory holds the config, uploaded client documents and the
     // nightly database dumps, so it must sit outside everything the web server
     // publishes. Checked before the database is touched.
     if ($privateDir === '') {
-        $errors[] = "Field 'private_dir' is required.";
+        field_fail('private_dir', 'Private directory is required.');
     } elseif (!preg_match('#^(/|[A-Za-z]:[\\\\/])#', $privateDir) || preg_match('#(^|[\\\\/])\.\.?([\\\\/]|$)#', $privateDir)) {
-        $errors[] = 'Private directory must be an absolute path with no "." or ".." parts.';
+        field_fail('private_dir', 'Private directory must be an absolute path with no "." or ".." parts.');
     } else {
         $privateReal = resolve_path($privateDir);
         $blocked = false;
         foreach (docroots() as $root) {
             if (path_inside($privateReal, $root)) {
-                $errors[] = "Private directory {$privateDir} is inside the web docroot ({$root}). The config, uploads and database backups kept there could be downloaded — choose a directory outside the docroot.";
+                field_fail('private_dir', "Private directory {$privateDir} is inside the web docroot ({$root}). The config, uploads and database backups kept there could be downloaded — choose a directory outside the docroot.");
                 $blocked = true;
                 break;
             }
             if (path_inside($root, $privateReal)) {
-                $errors[] = "Private directory {$privateDir} contains the web docroot ({$root}). The installer denies all web access to the private directory, which would take the site offline — choose a separate directory.";
+                field_fail('private_dir', "Private directory {$privateDir} contains the web docroot ({$root}). The installer denies all web access to the private directory, which would take the site offline — choose a separate directory.");
                 $blocked = true;
                 break;
             }
         }
         $webDir = web_dir_component($privateReal);
         if (!$blocked && $webDir !== null && empty($_POST['private_dir_confirm'])) {
-            $errors[] = "Private directory {$privateDir} is under a folder named \"{$webDir}\", which web servers normally publish. Choose a directory outside it, or tick the confirmation box under the Private directory field to continue anyway.";
+            field_fail('private_dir', "Private directory {$privateDir} is under a folder named \"{$webDir}\", which web servers normally publish. Choose a directory outside it, or tick the confirmation box under the Private directory field to continue anyway.");
         }
     }
     // Accessibility guard, the same rule as public/inc/accessibility.php
@@ -227,17 +245,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $shown = fn(float $ratio): string => number_format(floor($ratio * 100) / 100, 2);
     if (!$errors) {
         $surfaces = ['#ffffff', '#eef1f6', '#ecfdf5', '#fef2f2', '#f4f6fb'];
-        foreach (['Primary' => [$brandColor, 7.0], 'Dark' => [$brandDark, 7.0], 'Accent' => [$brandAccent, 4.5]] as $label => [$c, $min]) {
+        foreach (['brand_color' => ['Primary', $brandColor, 7.0], 'brand_color_dark' => ['Dark', $brandDark, 7.0], 'brand_accent' => ['Accent', $brandAccent, 4.5]] as $k => [$label, $c, $min]) {
             foreach ($surfaces as $surface) {
                 $ratio = $contrast($c, $surface);
-                if ($ratio < $min) { $errors[] = "{$label} color {$c} is too light ({$shown($ratio)}:1 against {$surface}; {$min}:1 is needed). Pick a darker shade."; break; }
+                if ($ratio < $min) { field_fail($k, "{$label} color {$c} is too light ({$shown($ratio)}:1 against {$surface}; {$min}:1 is needed). Pick a darker shade."); break; }
             }
         }
         if (!$errors) {
             [$r, $g, $b] = sscanf($brandDark, '#%02x%02x%02x');
             $header = sprintf('#%02x%02x%02x', (int)round($r * .88 + 255 * .12), (int)round($g * .88 + 255 * .12), (int)round($b * .88 + 255 * .12));
             $ratio = $contrast($header, '#ffffff');
-            if ($ratio < 7.0) $errors[] = "Dark color {$brandDark} is too light for the page header ({$shown($ratio)}:1 against white once lightened; 7:1 is needed). Pick a darker shade.";
+            if ($ratio < 7.0) field_fail('brand_color_dark', "Dark color {$brandDark} is too light for the page header ({$shown($ratio)}:1 against white once lightened; 7:1 is needed). Pick a darker shade.");
         }
     }
 
@@ -564,6 +582,7 @@ button{background:#1e40af;color:#fff;border:0;border-radius:8px;padding:.7rem 1.
 .err{background:#fef2f2;border:2px solid #dc2626;color:#991b1b;padding:.7rem 1rem;border-radius:8px;margin-bottom:1rem}
 .ok{background:#ecfdf5;border:2px solid #059669;color:#065f46;padding:.7rem 1rem;border-radius:8px;margin-bottom:1rem}
 .warn{background:#fffbeb;border:2px solid #b45309;color:#78350f;padding:.7rem 1rem;border-radius:8px;margin:.6rem 0}
+.field-error{color:#991b1b;font-weight:600;margin:.2rem 0 .4rem} .err a{color:#991b1b}
 .hint{font-weight:400;color:#556;font-size:.9rem} code{background:#eef;padding:.1rem .3rem;border-radius:4px}
 pre{background:#eef;padding:.6rem .8rem;border-radius:6px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
 </style></head><body>
@@ -614,63 +633,63 @@ host=<?= htmlspecialchars($dbHost) ?>
 <?php else: ?>
   <?php if ($errors): ?>
   <div class="err" role="alert"><h2>The installation could not continue</h2>
-    <ul><?php foreach ($errors as $e) echo '<li>' . htmlspecialchars($e) . '</li>'; ?></ul></div>
+    <ul><?php foreach ($errors as $e) { $f = array_search($e, $errorFor, true); echo '<li>' . ($f !== false ? '<a href="#' . $f . '">' . htmlspecialchars($e) . '</a>' : htmlspecialchars($e)) . '</li>'; } ?></ul></div>
   <?php endif; ?>
   <p>Requires PHP 8.1+ and <strong>MariaDB 10.4 or newer</strong> (MySQL is not supported).</p>
   <form method="post">
     <fieldset><legend>Branding</legend>
       <label for="brand_name">Business / app name <span class="hint">(titles, emails — e.g., “Riverbend Vision Services CMS”)</span></label>
-      <input id="brand_name" name="brand_name" required autocomplete="organization" value="<?= htmlspecialchars(field('brand_name')) ?>">
+      <input id="brand_name" name="brand_name" required autocomplete="organization" value="<?= htmlspecialchars(field('brand_name')) ?>"<?= field_err_attr('brand_name') ?>><?= field_err_msg('brand_name') ?>
       <label for="brand_short">Short brand <span class="hint">(header — e.g., “Riverbend Vision”)</span></label>
-      <input id="brand_short" name="brand_short" required autocomplete="off" value="<?= htmlspecialchars(field('brand_short')) ?>">
+      <input id="brand_short" name="brand_short" required autocomplete="off" value="<?= htmlspecialchars(field('brand_short')) ?>"<?= field_err_attr('brand_short') ?>><?= field_err_msg('brand_short') ?>
       <label for="brand_org">Full organization name <span class="hint">(report letterheads)</span></label>
-      <input id="brand_org" name="brand_org" required autocomplete="organization" value="<?= htmlspecialchars(field('brand_org')) ?>">
+      <input id="brand_org" name="brand_org" required autocomplete="organization" value="<?= htmlspecialchars(field('brand_org')) ?>"<?= field_err_attr('brand_org') ?>><?= field_err_msg('brand_org') ?>
       <label for="brand_tagline">Tagline <span class="hint">(invoice letterhead subtitle)</span></label>
       <input id="brand_tagline" name="brand_tagline" autocomplete="off" value="<?= htmlspecialchars(field('brand_tagline')) ?>">
-      <label for="brand_color">Primary color <span class="hint">(6-digit hex, e.g. #1e40af)</span></label><input id="brand_color" name="brand_color" autocomplete="off" value="<?= htmlspecialchars(field('brand_color', '#1e40af')) ?>">
-      <label for="brand_color_dark">Dark color <span class="hint">(header and PDFs, 6-digit hex)</span></label><input id="brand_color_dark" name="brand_color_dark" autocomplete="off" value="<?= htmlspecialchars(field('brand_color_dark', '#1e3a8a')) ?>">
-      <label for="brand_accent">Accent color <span class="hint">(6-digit hex)</span></label><input id="brand_accent" name="brand_accent" autocomplete="off" value="<?= htmlspecialchars(field('brand_accent', '#0f766e')) ?>">
+      <label for="brand_color">Primary color <span class="hint">(6-digit hex, e.g. #1e40af)</span></label><input id="brand_color" name="brand_color" autocomplete="off" value="<?= htmlspecialchars(field('brand_color', '#1e40af')) ?>"<?= field_err_attr('brand_color') ?>><?= field_err_msg('brand_color') ?>
+      <label for="brand_color_dark">Dark color <span class="hint">(header and PDFs, 6-digit hex)</span></label><input id="brand_color_dark" name="brand_color_dark" autocomplete="off" value="<?= htmlspecialchars(field('brand_color_dark', '#1e3a8a')) ?>"<?= field_err_attr('brand_color_dark') ?>><?= field_err_msg('brand_color_dark') ?>
+      <label for="brand_accent">Accent color <span class="hint">(6-digit hex)</span></label><input id="brand_accent" name="brand_accent" autocomplete="off" value="<?= htmlspecialchars(field('brand_accent', '#0f766e')) ?>"<?= field_err_attr('brand_accent') ?>><?= field_err_msg('brand_accent') ?>
     </fieldset>
     <fieldset><legend>Site</legend>
       <label for="base_url">Base URL <span class="hint">(https://cms.example.com — no trailing slash)</span></label>
-      <input id="base_url" name="base_url" required autocomplete="url" value="<?= htmlspecialchars(field('base_url')) ?>">
+      <input id="base_url" name="base_url" required autocomplete="url" value="<?= htmlspecialchars(field('base_url')) ?>"<?= field_err_attr('base_url') ?>><?= field_err_msg('base_url') ?>
       <label for="private_dir">Private directory <span class="hint">(config, uploads and backups — must be outside the docroot; created if missing)</span></label>
-      <input id="private_dir" name="private_dir" autocomplete="off" value="<?= htmlspecialchars($privateDirValue) ?>">
+      <input id="private_dir" name="private_dir" autocomplete="off" value="<?= htmlspecialchars($privateDirValue) ?>"<?= field_err_attr('private_dir') ?>><?= field_err_msg('private_dir') ?>
       <?php if ($privateDirWebDir !== null): ?>
       <div class="warn" role="alert"><strong>Warning:</strong> this path is under a folder named “<?= htmlspecialchars($privateDirWebDir) ?>”, which web servers normally publish. The config, uploaded client documents and nightly database backups kept there could become downloadable. Use a directory outside “<?= htmlspecialchars($privateDirWebDir) ?>” if your hosting account has one. If it does not, tick the box below to continue: the installer writes a deny-all <code>.htaccess</code> into the directory, which protects it on Apache-compatible servers only.</div>
       <label for="private_dir_confirm"><input type="checkbox" id="private_dir_confirm" name="private_dir_confirm" value="1"<?= !empty($_POST['private_dir_confirm']) ? ' checked' : '' ?>>I understand the risk and want to use this directory anyway</label>
       <?php endif; ?>
       <label for="mail_from">Mail-from address <span class="hint">(the mailbox the app sends email from)</span></label>
-      <input id="mail_from" name="mail_from" required autocomplete="off" value="<?= htmlspecialchars(field('mail_from')) ?>">
+      <input id="mail_from" name="mail_from" required autocomplete="off" value="<?= htmlspecialchars(field('mail_from')) ?>"<?= field_err_attr('mail_from') ?>><?= field_err_msg('mail_from') ?>
       <label for="support_email">Public contact email <span class="hint">(optional — shown in the page footer for help requests; leave blank to show the mail-from address, but fill it in if that mailbox is not monitored)</span></label>
-      <input id="support_email" name="support_email" type="email" maxlength="190" autocomplete="off" value="<?= htmlspecialchars(field('support_email')) ?>">
+      <input id="support_email" name="support_email" type="email" maxlength="190" autocomplete="off" value="<?= htmlspecialchars(field('support_email')) ?>"<?= field_err_attr('support_email') ?>><?= field_err_msg('support_email') ?>
       <label for="support_phone">Support phone <span class="hint">(optional — shown with the contact email in the page footer and the privacy notice, e.g. +1 555 010 2000; can be changed later in Administration)</span></label>
-      <input id="support_phone" name="support_phone" type="tel" maxlength="30" autocomplete="off" value="<?= htmlspecialchars(field('support_phone')) ?>">
+      <input id="support_phone" name="support_phone" type="tel" maxlength="30" autocomplete="off" value="<?= htmlspecialchars(field('support_phone')) ?>"<?= field_err_attr('support_phone') ?>><?= field_err_msg('support_phone') ?>
       <label for="timezone">Time zone <span class="hint">(your organisation's local time zone, e.g. America/Chicago — every date and time in the app uses it)</span></label>
-      <input id="timezone" name="timezone" autocomplete="off" value="<?= htmlspecialchars(field('timezone', 'America/Chicago')) ?>">
+      <input id="timezone" name="timezone" autocomplete="off" value="<?= htmlspecialchars(field('timezone', 'America/Chicago')) ?>"<?= field_err_attr('timezone') ?>><?= field_err_msg('timezone') ?>
     </fieldset>
     <fieldset><legend>Privacy notice <span class="hint">(all optional — fills in the privacy page's "who runs this service" lines; leave blank to omit them, or edit them later in config.php)</span></legend>
       <label for="privacy_operator">Operator <span class="hint">(the person or organisation legally responsible for the data, e.g. “Riverbend Vision Services, Inc.”)</span></label>
-      <input id="privacy_operator" name="privacy_operator" maxlength="190" autocomplete="organization" value="<?= htmlspecialchars(field('privacy_operator')) ?>">
+      <input id="privacy_operator" name="privacy_operator" maxlength="190" autocomplete="organization" value="<?= htmlspecialchars(field('privacy_operator')) ?>"<?= field_err_attr('privacy_operator') ?>><?= field_err_msg('privacy_operator') ?>
       <label for="privacy_address">Operator's postal address <span class="hint">(one line, e.g. “12 Main St, Suite 4, Springfield, Illinois 62701”)</span></label>
-      <input id="privacy_address" name="privacy_address" maxlength="255" autocomplete="street-address" value="<?= htmlspecialchars(field('privacy_address')) ?>">
+      <input id="privacy_address" name="privacy_address" maxlength="255" autocomplete="street-address" value="<?= htmlspecialchars(field('privacy_address')) ?>"<?= field_err_attr('privacy_address') ?>><?= field_err_msg('privacy_address') ?>
       <label for="privacy_law">Governing law <span class="hint">(the state or country whose law applies, e.g. “Illinois”)</span></label>
-      <input id="privacy_law" name="privacy_law" maxlength="120" autocomplete="off" value="<?= htmlspecialchars(field('privacy_law')) ?>">
+      <input id="privacy_law" name="privacy_law" maxlength="120" autocomplete="off" value="<?= htmlspecialchars(field('privacy_law')) ?>"<?= field_err_attr('privacy_law') ?>><?= field_err_msg('privacy_law') ?>
       <label for="privacy_hosting">Hosting provider <span class="hint">(where the server runs, e.g. “Linode” or “our own data centre in Chicago”)</span></label>
-      <input id="privacy_hosting" name="privacy_hosting" maxlength="190" autocomplete="off" value="<?= htmlspecialchars(field('privacy_hosting')) ?>">
+      <input id="privacy_hosting" name="privacy_hosting" maxlength="190" autocomplete="off" value="<?= htmlspecialchars(field('privacy_hosting')) ?>"<?= field_err_attr('privacy_hosting') ?>><?= field_err_msg('privacy_hosting') ?>
       <label for="hipaa">Does HIPAA apply to you?</label>
       <select id="hipaa" name="hipaa"><option value="no"<?= field('hipaa') !== 'yes' ? ' selected' : '' ?>>No</option><option value="yes"<?= field('hipaa') === 'yes' ? ' selected' : '' ?>>Yes</option></select>
     </fieldset>
     <fieldset><legend>Database (empty MariaDB 10.4+ database)</legend>
       <label for="db_host">Database host</label><input id="db_host" name="db_host" autocomplete="off" value="<?= htmlspecialchars(field('db_host', 'localhost')) ?>">
-      <label for="db_name">Database name</label><input id="db_name" name="db_name" required autocomplete="off" value="<?= htmlspecialchars(field('db_name')) ?>">
-      <label for="db_user">Database user</label><input id="db_user" name="db_user" required autocomplete="off" value="<?= htmlspecialchars(field('db_user')) ?>">
+      <label for="db_name">Database name</label><input id="db_name" name="db_name" required autocomplete="off" value="<?= htmlspecialchars(field('db_name')) ?>"<?= field_err_attr('db_name') ?>><?= field_err_msg('db_name') ?>
+      <label for="db_user">Database user</label><input id="db_user" name="db_user" required autocomplete="off" value="<?= htmlspecialchars(field('db_user')) ?>"<?= field_err_attr('db_user') ?>><?= field_err_msg('db_user') ?>
       <label for="db_pass">Database password</label><input id="db_pass" name="db_pass" type="password" autocomplete="off">
     </fieldset>
     <fieldset><legend>Admin account</legend>
-      <label for="admin_name">Administrator's name</label><input id="admin_name" name="admin_name" required maxlength="120" autocomplete="name" value="<?= htmlspecialchars(field('admin_name')) ?>">
-      <label for="admin_email">Administrator's email <span class="hint">(used to sign in)</span></label><input id="admin_email" name="admin_email" type="email" required maxlength="183" autocomplete="email" value="<?= htmlspecialchars(field('admin_email')) ?>">
-      <label for="admin_pass">Administrator's password <span class="hint">(10+ characters)</span></label><input id="admin_pass" name="admin_pass" type="password" required minlength="10" autocomplete="new-password">
+      <label for="admin_name">Administrator's name</label><input id="admin_name" name="admin_name" required maxlength="120" autocomplete="name" value="<?= htmlspecialchars(field('admin_name')) ?>"<?= field_err_attr('admin_name') ?>><?= field_err_msg('admin_name') ?>
+      <label for="admin_email">Administrator's email <span class="hint">(used to sign in)</span></label><input id="admin_email" name="admin_email" type="email" required maxlength="183" autocomplete="email" value="<?= htmlspecialchars(field('admin_email')) ?>"<?= field_err_attr('admin_email') ?>><?= field_err_msg('admin_email') ?>
+      <label for="admin_pass">Administrator's password <span class="hint">(10+ characters)</span></label><input id="admin_pass" name="admin_pass" type="password" required minlength="10" autocomplete="new-password"<?= field_err_attr('admin_pass') ?>><?= field_err_msg('admin_pass') ?>
     </fieldset>
     <p id="install-progress" role="status"></p>
     <button type="submit">Install</button>

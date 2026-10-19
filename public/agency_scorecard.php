@@ -20,7 +20,8 @@ $card = null;
 if ($agencyIn !== '') {
     // Every spelling on file that names this agency (an alias, an old name, other spacing or case), 4.27.0:
     // each count matches all of them, not only the exact name.
-    $isAgency = fn(string $v): bool => agency_key(agency_canonical($v)) === agency_key($agencyIn);
+    // 4.28.0: a name the agency had before a rename on Funding agencies counts too (agency_resolve()).
+    $isAgency = fn(string $v): bool => agency_key(agency_resolve($v)) === agency_key(agency_resolve($agencyIn));
     $spell = [];
     foreach (db()->query("SELECT DISTINCT funding_agency FROM training_tracks WHERE funding_agency IS NOT NULL AND funding_agency <> ''
         UNION SELECT DISTINCT funding_agency FROM invoices WHERE funding_agency IS NOT NULL AND funding_agency <> ''")->fetchAll(PDO::FETCH_COLUMN) as $v) {

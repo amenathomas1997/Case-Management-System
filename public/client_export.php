@@ -169,20 +169,37 @@ $docs = $docs->fetchAll();
 $attachRows = db()->prepare('SELECT id, attachment_path, attachment_name FROM tech_assessments WHERE client_id = ? AND attachment_path IS NOT NULL');
 $attachRows->execute([$id]);
 $attachRows = $attachRows->fetchAll();
+// Drawn signatures (4.28.0): in-person consents and loan agreements, and session sign-offs.
+// They are purged with the client, so the complete file carries a copy.
+$sigRows = [];
+try {
+    $sq = db()->prepare('SELECT id, title, signed_at, signature_path FROM client_signatures WHERE client_id = ? AND signature_path IS NOT NULL ORDER BY id');
+    $sq->execute([$id]);
+    foreach ($sq->fetchAll() as $r) $sigRows[] = ['entry' => 'documents/signatures/consent_' . (int)$r['id'] . '_' . basename(str_replace('\\', '/', (string)$r['signature_path'])),
+        'path' => (string)$r['signature_path'], 'label' => 'Drawn signature — ' . $r['title'] . ($r['signed_at'] ? ', signed ' . fmt_date($r['signed_at']) : '')];
+} catch (PDOException $e) {
+    if ((string)$e->getCode() !== '42S22') throw $e; // signature_path not migrated yet
+}
+$wq = db()->prepare('SELECT w.id, w.work_date, w.signature_path FROM work_logs w JOIN training_tracks t ON t.id = w.track_id WHERE t.client_id = ? AND w.signature_path IS NOT NULL ORDER BY w.work_date, w.id');
+$wq->execute([$id]);
+foreach ($wq->fetchAll() as $r) $sigRows[] = ['entry' => 'documents/signatures/session_' . (int)$r['id'] . '_' . basename(str_replace('\\', '/', (string)$r['signature_path'])),
+    'path' => (string)$r['signature_path'], 'label' => 'Session signature — ' . fmt_date($r['work_date'])];
 
 // Which stored files are actually on the server, worked out before the summary
 // is written, so the summary never lists a missing file as included.
 $docOnDisk = $attachOnDisk = [];
 foreach ($docs as $d) $docOnDisk[(int)$d['id']] = is_file(cfg('upload_dir') . '/' . basename($d['path']));
 foreach ($attachRows as $ar) $attachOnDisk[(int)$ar['id']] = is_file(cfg('upload_dir') . '/' . basename($ar['attachment_path']));
-$missingCount = count(array_filter($docOnDisk, fn($x) => !$x)) + count(array_filter($attachOnDisk, fn($x) => !$x));
+foreach ($sigRows as $k => $sr) $sigRows[$k]['on_disk'] = is_file(cfg('upload_dir') . '/' . basename($sr['path']));
+$missingCount = count(array_filter($docOnDisk, fn($x) => !$x)) + count(array_filter($attachOnDisk, fn($x) => !$x)) + count(array_filter($sigRows, fn($x) => !$x['on_disk']));
 $notIncluded = ' — FILE NOT FOUND ON THE SERVER, NOT INCLUDED';
 
 $h1('Documents included in this export');
-if (!$docs && !$attachRows) $p('None on file.');
+if (!$docs && !$attachRows && !$sigRows) $p('None on file.');
 if ($missingCount) $p('Missing files: ' . $missingCount . ' stored file(s) listed below could not be found on the server and are not in this export. Their records are listed in client_record.json under missing_attachments.', 10, 'B');
 foreach ($docs as $d) $p(($d['category'] === 'Client Upload' ? 'Shared by client' : $d['category']) . ' — ' . $d['title'] . ' (' . $d['orig_name'] . ', uploaded ' . fmt_date($d['created_at']) . ')' . ($docOnDisk[(int)$d['id']] ? '' : $notIncluded));
 foreach ($attachRows as $ar) $p('Assessment attachment — ' . $ar['attachment_name'] . ($attachOnDisk[(int)$ar['id']] ? '' : $notIncluded));
+foreach ($sigRows as $sr) $p($sr['label'] . ' (' . $sr['entry'] . ')' . ($sr['on_disk'] ? '' : $notIncluded));
 
 $pdf->Ln(3);
 $p('An accessible HTML equivalent of this summary and a complete structured case record (JSON) are included in the export ZIP.');
@@ -222,6 +239,11 @@ try {
         $entry = 'documents/assessment_' . (int)$ar['id'] . '_' . basename(str_replace('\\', '/', $ar['attachment_name']));
         if (!is_file($path)) { $missing[] = $entry; continue; }
         if (!$zip->addFile($path, $entry)) throw new RuntimeException('Could not include an assessment attachment.');
+    }
+    foreach ($sigRows as $sr) {
+        $path = cfg('upload_dir') . '/' . basename($sr['path']);
+        if (!is_file($path)) { $missing[] = $sr['entry']; continue; }
+        if (!$zip->addFile($path, $sr['entry'])) throw new RuntimeException('Could not include a drawn signature.');
     }
     $records['missing_attachments'] = $missing;
     if (!$zip->addFromString('client_record.json', json_encode($records, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR))) throw new RuntimeException('Could not include the case data.');

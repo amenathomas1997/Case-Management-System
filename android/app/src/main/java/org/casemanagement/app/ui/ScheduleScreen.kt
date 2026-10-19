@@ -13,6 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -36,7 +37,9 @@ import org.json.JSONObject
 fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
     val state = rememberLoaded(api.userId) { api.callCached("schedule", cacheKey = "schedule") }
     var chosen by remember { mutableStateOf<JSONObject?>(null) }
-    var completing by remember { mutableStateOf<JSONObject?>(null) }
+    // The session being completed, kept as text so rotation and process death keep the dialog open (4.28.0).
+    var completingJson by rememberSaveable { mutableStateOf<String?>(null) }
+    val completing = remember(completingJson) { completingJson?.let { try { JSONObject(it) } catch (e: Exception) { null } } }
     var moving by remember { mutableStateOf<JSONObject?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -88,7 +91,7 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
                                 "Checked in.") { it.put("checked_in_at", pressedAt) }.message
                         }
                     }) { Text("Check in now") }
-                    if (scheduled) TextButton(onClick = { chosen = null; completing = s }) { Text("Complete the session") }
+                    if (scheduled) TextButton(onClick = { chosen = null; completingJson = s.toString() }) { Text("Complete the session") }
                     if (scheduled && !s.optBoolean("overdue")) TextButton(onClick = { chosen = null; moving = s }) { Text("Move to another time") }
                     if (scheduled) TextButton(onClick = {
                         act { api.call("set_session_status", body = JSONObject().put("session_id", id).put("to", "No Show")); "Recorded as a no-show." }
@@ -111,7 +114,7 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
     moving?.let { s -> MoveDialog(api, s, onDone = { m -> moving = null; notice = m; state.reload() }, onCancel = { moving = null }) }
 
     completing?.let { s ->
-        CompleteDialog(api, s, onDone = { msg -> completing = null; notice = msg; state.reload() }, onCancel = { completing = null })
+        CompleteDialog(api, s, onDone = { msg -> completingJson = null; notice = msg; state.reload() }, onCancel = { completingJson = null })
     }
 }
 
@@ -136,13 +139,17 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, on
     val start = parseServer(s.str("start_at"))?.time ?: 0L
     val end = parseServer(s.str("end_at"))?.time ?: 0L
     val length = if (end > start) Math.round((end - start) / 900_000.0) / 4.0 else 1.0
-    var hours by remember { mutableStateOf(hoursText(length)) }
-    var miles by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
+    // Kept across rotation, a text-size change and process death, with the client's drawn signature (4.28.0).
+    val id = s.optInt("id")
+    var hours by rememberSaveable(id) { mutableStateOf(hoursText(length)) }
+    var miles by rememberSaveable(id) { mutableStateOf("") }
+    var note by rememberSaveable(id) { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var hoursError by remember { mutableStateOf<String?>(null) }
+    var milesError by remember { mutableStateOf<String?>(null) }
     var logged by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
-    val signature = remember { SignatureState() }
-    var signedName by remember { mutableStateOf("") }
+    val signature = rememberSignatureState(id)
+    var signedName by rememberSaveable(id) { mutableStateOf("") }
     val density = androidx.compose.ui.platform.LocalDensity.current.density
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -150,10 +157,14 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, on
     fun send(outcome: String, workLogId: Int? = null) {
         val h = number(hours)
         val m = number(miles.ifBlank { "0" })
-        if (h == null || h < 0 || h > 24) { error = "Enter the hours as a number from 0 to 24."; return }
-        if (m == null || m < 0 || m > 1000) { error = "Enter the miles as a number from 0 to 1000."; return }
-        scope.launch {
-            busy = true; error = null
+        if (busy) return
+        // Each error on its field as well as in the summary (4.28.0).
+        hoursError = if (h == null || h < 0 || h > 24) "Enter the hours as a number from 0 to 24." else null
+        milesError = if (m == null || m < 0 || m > 1000) "Enter the miles as a number from 0 to 1000." else null
+        if (hoursError != null || milesError != null) { error = listOfNotNull(hoursError, milesError).joinToString(" "); return }
+        if (h == null || m == null) return
+        // Busy at once (launchSave), so a second tap in the same moment does not send twice (4.28.0).
+        scope.launchSave({ busy = it }, { }) {
             try {
                 val body = JSONObject().put("session_id", s.optInt("id")).put("outcome", outcome).put("hours", h)
                 if (m > 0) body.put("mileage", m)
@@ -167,7 +178,7 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, on
                 // Hours are already logged for that day: say which, and ask whether they are these.
                 logged = e.reply?.optJSONArray("logged_hours").objects()
                 error = e.message
-            } finally { busy = false }
+            }
         }
     }
 
@@ -177,8 +188,8 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, on
         title = { Text("Complete: " + s.optString("client"), modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal)
-                Field("Miles driven", miles, { miles = it }, hint = "0 if none", keyboard = KeyboardType.Decimal)
+                Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal, error = hoursError)
+                Field("Miles driven", miles, { miles = it }, hint = "0 if none", keyboard = KeyboardType.Decimal, error = milesError)
                 Field("Session note", note, { note = it }, hint = "optional", singleLine = false, minLines = 3)
                 SignaturePad(signature)
                 Field("Client's typed name", signedName, { signedName = it }, hint = "optional; counts as their acknowledgement")

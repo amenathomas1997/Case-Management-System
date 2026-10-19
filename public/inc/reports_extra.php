@@ -236,7 +236,7 @@ function data_quality_checks(?int $scopeUser): array {
     $checks = [];
     // Likely duplicates: pairs on the same full name, the same email, or the same date of birth and last name.
     $dups = $rows("SELECT a.id client_id, a.name, b.id other_id, b.name other_name,
-            CASE WHEN LOWER(TRIM(a.name)) = LOWER(TRIM(b.name)) THEN 'same name' WHEN a.email IS NOT NULL AND LOWER(a.email) = LOWER(b.email) THEN 'same email'
+            CASE WHEN LOWER(TRIM(a.name)) = LOWER(TRIM(b.name)) THEN 'same name' WHEN a.email IS NOT NULL AND a.email <> '' AND LOWER(a.email) = LOWER(b.email) THEN 'same email'
                  ELSE 'same date of birth and last name' END AS detail
         FROM clients a JOIN clients b ON b.id > a.id
         WHERE a.archived_at IS NULL AND b.archived_at IS NULL" . ($scopeUser ? ' AND (a.assigned_to = ' . (int)$scopeUser . ' AND b.assigned_to = ' . (int)$scopeUser . ')' : '') . "

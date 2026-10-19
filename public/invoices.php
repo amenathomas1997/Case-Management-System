@@ -35,7 +35,8 @@ function invoice_list_filters(array $src, string $prefix = ''): array {
 function invoice_filter_sql(array $f, array &$params): string {
     $sql = '';
     if ($f['status'] !== '') { $sql .= ' AND i.status = ?'; $params[] = $f['status']; }
-    if ($f['agency'] !== '') { $sql .= ' AND COALESCE(i.funding_agency, t.funding_agency) = ?'; $params[] = $f['agency']; }
+    // 4.28.0: every spelling of the agency, including a name it had before a rename (agency_spellings()).
+    if ($f['agency'] !== '') { [$agCond, $agArgs] = agency_match_sql('COALESCE(i.funding_agency, t.funding_agency)', $f['agency']); $sql .= ' AND ' . $agCond; array_push($params, ...$agArgs); }
     if ($f['month'] !== '') { $sql .= ' AND i.created_at >= ? AND i.created_at < ?'; $params[] = $f['month'] . '-01'; $params[] = date('Y-m-01', strtotime($f['month'] . '-01 +1 month')); }
     if ($f['q'] !== '') { $sql .= ' AND (i.invoice_number LIKE ? OR c.name LIKE ?)'; $like = '%' . addcslashes($f['q'], '%_\\') . '%'; $params[] = $like; $params[] = $like; }
     return $sql;
@@ -400,9 +401,8 @@ if ($batchErr) echo form_error_summary(['batch_until' => 'Work up to and includi
   <form method="post" action="invoices.php" class="stacked" novalidate><?= csrf_field() ?>
     <details<?= $batchErr || old_in('batch_until') !== '' || old_in('batch_agency') !== '' ? ' open' : '' ?>>
       <summary>Limit which unbilled work is invoiced (optional)</summary>
-      <label for="batch-until">Work up to and including</label>
-      <span class="hint" id="batch-until-hint">Only work logs and expenses dated on or before this date are invoiced, as YYYY-MM-DD. Leave blank for all unbilled work dated up to today.</span>
-      <input type="date" id="batch-until" name="batch_until" value="<?= h(old_in('batch_until')) ?>" <?= field_aria('batch_until', 'batch-until-hint') ?>><?= field_error('batch_until') ?>
+      <label for="batch-until">Work up to and including <span class="hint">Only work logs and expenses dated on or before this date are invoiced, as YYYY-MM-DD. Leave blank for all unbilled work dated up to today.</span></label>
+      <input type="date" id="batch-until" name="batch_until" value="<?= h(old_in('batch_until')) ?>" <?= field_aria('batch_until') ?>><?= field_error('batch_until') ?>
       <label for="batch-agency">Only this funding agency</label>
       <select id="batch-agency" name="batch_agency" <?= field_aria('batch_agency') ?>>
         <option value="">All agencies</option>
@@ -451,9 +451,8 @@ if ($batchErr) echo form_error_summary(['batch_until' => 'Work up to and includi
     <?php foreach ($invoiceAgencies as $a): ?><option value="<?= h($a) ?>"<?= $filters['agency'] === $a ? ' selected' : '' ?>><?= h($a) ?></option><?php endforeach; ?>
     <?php if ($filters['agency'] !== '' && !in_array($filters['agency'], $invoiceAgencies, true)): ?><option value="<?= h($filters['agency']) ?>" selected><?= h($filters['agency']) ?> (no invoices)</option><?php endif; ?>
   </select>
-  <label for="month">Invoice month</label>
-  <input type="month" id="month" name="month" value="<?= h($filters['month']) ?>" aria-describedby="month-hint">
-  <span class="hint" id="month-hint">Year and month the invoice was created, as YYYY-MM.</span>
+  <label for="month">Invoice month <span class="hint">Year and month the invoice was created, as YYYY-MM.</span></label>
+  <input type="month" id="month" name="month" value="<?= h($filters['month']) ?>">
   <label for="q">Invoice number or client</label>
   <input type="search" id="q" name="q" value="<?= h($filters['q']) ?>" size="16" maxlength="120">
   <button type="submit" class="btn btn-secondary btn-sm">Apply filters</button>

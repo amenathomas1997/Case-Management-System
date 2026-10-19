@@ -68,12 +68,13 @@ page_header($title, $user, 'account', [['account.php', 'My Account']]);
 <section class="card" aria-labelledby="add-h">
   <h2 id="add-h" tabindex="-1">Add hours</h2>
   <form method="post" action="availability.php" class="stacked" novalidate><?= csrf_field() ?><input type="hidden" name="user" value="<?= $who ?>">
+    <?= form_error_summary(['weekday' => 'Day', 'from' => 'From', 'to' => 'To', 'mode' => 'How', 'location' => 'Where']) ?>
     <div class="field"><label for="weekday">Day</label>
       <select id="weekday" name="weekday" <?= field_aria('weekday') ?>><?php foreach (SELF_BOOKING_DAYS as $dk => $dn): ?><option value="<?= $dk ?>"<?= old_in('weekday', '1') === (string)$dk ? ' selected' : '' ?>><?= $dn ?></option><?php endforeach; ?></select><?= field_error('weekday') ?></div>
     <div class="field"><label for="from">From</label><input type="time" id="from" name="from" value="<?= h(old_in('from', '09:00')) ?>" <?= field_aria('from') ?>><?= field_error('from') ?></div>
     <div class="field"><label for="to">To</label><input type="time" id="to" name="to" value="<?= h(old_in('to', '12:00')) ?>" <?= field_aria('to') ?>><?= field_error('to') ?></div>
     <div class="field"><label for="mode">How</label>
-      <select id="mode" name="mode"><option value="online"<?= old_in('mode') !== 'in_person' ? ' selected' : '' ?>>Online</option><option value="in_person"<?= old_in('mode') === 'in_person' ? ' selected' : '' ?>>In person</option></select></div>
+      <select id="mode" name="mode" <?= field_aria('mode') ?>><option value="online"<?= old_in('mode') !== 'in_person' ? ' selected' : '' ?>>Online</option><option value="in_person"<?= old_in('mode') === 'in_person' ? ' selected' : '' ?>>In person</option></select><?= field_error('mode') ?></div>
     <div class="field"><label for="location">Where, for in person</label><input type="text" id="location" name="location" maxlength="190" value="<?= h(old_in('location')) ?>" <?= field_aria('location') ?>><?= field_error('location') ?></div>
     <button type="submit" name="add_hours" value="1" class="btn btn-primary">Add these hours</button>
   </form>
@@ -83,6 +84,7 @@ page_header($title, $user, 'account', [['account.php', 'My Account']]);
 <section class="card" aria-labelledby="rules-h">
   <h2 id="rules-h" tabindex="-1">Client self-booking (administrators)</h2>
   <form method="post" action="availability.php" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['minutes' => 'Session length', 'notice' => 'Hours ahead', 'days' => 'Days ahead', 'max' => 'Sessions booked ahead']) ?>
     <div class="field"><label><input type="checkbox" name="self_booking_on" value="1" <?= $cfg['on'] ? 'checked' : '' ?>> Clients can book open times with their own instructor in the portal</label></div>
     <div class="field"><label for="minutes">Session length, minutes</label><input type="number" id="minutes" name="minutes" min="15" max="240" value="<?= h(old_in('minutes', (string)$cfg['minutes'])) ?>" <?= field_aria('minutes') ?>><?= field_error('minutes') ?></div>
     <div class="field"><label for="notice">At least this many hours ahead</label><input type="number" id="notice" name="notice" min="1" max="336" value="<?= h(old_in('notice', (string)$cfg['notice_hours'])) ?>" <?= field_aria('notice') ?>><?= field_error('notice') ?></div>

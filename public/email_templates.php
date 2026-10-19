@@ -85,9 +85,8 @@ page_header('Email templates', $user, 'admin', [['admin.php', 'Administration']]
       <div class="field"><label for="tpl_subject">Subject <span class="hint">blank = default: “<?= h($def[1]) ?>”</span></label>
         <input type="text" id="tpl_subject" name="subject" maxlength="190" value="<?= h(old_in('subject', $curSubject)) ?>"></div>
       <?php else: ?><input type="hidden" name="subject" value=""><?php endif; ?>
-      <div class="field"><label for="tpl_body">Body <span class="hint">blank = the default shown below</span></label>
-        <?php if (isset(TPL_REQUIRED[$key])): ?><span class="hint" id="tpl_body-req">Must include <?= h(implode(' and ', array_keys(TPL_REQUIRED[$key]))) ?>.</span><?php endif; ?>
-        <textarea id="tpl_body" name="body" rows="9" <?= field_aria('body', isset(TPL_REQUIRED[$key]) ? 'tpl_body-req' : '') ?>><?= h(old_in('body', $curBody)) ?></textarea><?= field_error('body') ?></div>
+      <div class="field"><label for="tpl_body">Body <span class="hint">blank = the default shown below<?php if (isset(TPL_REQUIRED[$key])): ?>; must include <?= h(implode(' and ', array_keys(TPL_REQUIRED[$key]))) ?><?php endif; ?></span></label>
+        <textarea id="tpl_body" name="body" rows="9" <?= field_aria('body') ?>><?= h(old_in('body', $curBody)) ?></textarea><?= field_error('body') ?></div>
       <button type="submit" name="save_tpl" value="1" class="btn btn-primary">Save template</button>
     </form>
     <h3>Built-in default</h3>

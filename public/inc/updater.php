@@ -201,8 +201,22 @@ function updater_inspect(string $zipPath): array {
     }
     $z->close();
     if (version_compare($out['version'], APP_VERSION, '<=')) $out['problems'][] = 'The package is version ' . $out['version'] . ', not newer than this site (' . APP_VERSION . ').';
+    if (($behind = updater_db_behind()) !== null) $out['problems'][] = $behind;
     $out['problems'] = array_slice(array_values(array_unique($out['problems'])), 0, 20);
     return $out;
+}
+
+/**
+ * 4.28.0: why an update cannot be installed while the database is behind the files already on the
+ * site (files uploaded by hand or with the bundle, Database upgrade not yet run), or null when it is
+ * not. An update runs only its own changed migrations, so it would record a version past the older
+ * ones still waiting and Database upgrade would then call the site up to date with them never run.
+ */
+function updater_db_behind(): ?string {
+    $have = db_schema_version();
+    if ($have !== null && version_compare($have, DB_SCHEMA_VERSION, '>=')) return null;
+    return 'The database is ' . ($have !== null ? "version $have" : 'from before version 3.0.54') . ' but the files on this site need version ' . DB_SCHEMA_VERSION
+        . '. Run Database upgrade first (Administration, Database upgrade), then install this update.';
 }
 
 /** Remove what an install left behind: temporary copies beside the files. */
@@ -216,6 +230,8 @@ function updater_clean_temps(array $targets): void {
  */
 function updater_apply(string $zipPath, array $plan, int $userId): array {
     if ($plan['problems']) throw new RuntimeException('The update was not started: ' . implode(' ', $plan['problems']));
+    // Checked again here, not only in the plan: Database upgrade may have been undone (a restored database) since.
+    if (($behind = updater_db_behind()) !== null) throw new RuntimeException('The update was not started: ' . $behind);
     if (is_file(updater_marker())) throw new RuntimeException('An earlier update did not finish. Put its files back on Software update first.');
     // One install at a time; and once started it runs to the end even if the browser goes away.
     $lock = fopen(updater_dir() . '/lock', 'c');

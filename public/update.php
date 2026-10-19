@@ -99,6 +99,7 @@ page_header('Software update', $user, 'admin', [['admin.php', 'Administration']]
   <?php if ($plan['problems']): ?>
   <p><strong>It cannot be installed yet:</strong></p>
   <ul><?php foreach ($plan['problems'] as $p): ?><li><?= h($p) ?></li><?php endforeach; ?></ul>
+  <?php if (updater_db_behind() !== null): ?><p><a href="upgrade.php">Open Database upgrade</a>, then come back here to install the update.</p><?php endif; ?>
   <p>Fix these (usually by letting the web server write its own files, in your hosting control panel), or update by hand from the release's install bundle.</p>
   <?php else: ?>
   <p>The newest database backup on the server was made <?= $newest ? h(date('F j, Y \a\t g:i a', $newest)) : 'never' ?>.<?= !$newest || $newest < time() - 86400 ? ' <strong>Make a fresh copy first (download the database from your hosting control panel).</strong>' : '' ?></p>

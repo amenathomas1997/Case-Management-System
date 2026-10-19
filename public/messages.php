@@ -157,11 +157,10 @@ if ($openCid) {
         // whose counselor email is still unconfirmed, so the counselor would not see it. ?>
         <?php $unconfirmed = $openChannel === 'counselor' && trim((string)$c['counselor_email']) !== '' && (int)$c['counselor_verified'] === 0; ?>
         <?php if ($unconfirmed): ?>
-        <p class="alert alert-info" id="counselor-unconfirmed"><strong>Not yet visible to the counselor:</strong> <?= h($c['name']) ?>'s counselor email has not been confirmed, so the counselor portal does not show this client. Replies are saved here and appear there once the counselor is confirmed on <a href="client_edit.php?id=<?= $openCid ?>">the client's edit page</a>.</p>
+        <p class="alert alert-info"><strong>Not yet visible to the counselor:</strong> <?= h($c['name']) ?>'s counselor email has not been confirmed, so the counselor portal does not show this client. Replies are saved here and appear there once the counselor is confirmed on <a href="client_edit.php?id=<?= $openCid ?>">the client's edit page</a>.</p>
         <?php endif; ?>
-        <label for="body">Reply to the <?= $chanWho ?></label>
-        <p class="hint" id="body-hint">Up to 5,000 characters, or leave it empty to send just a file. It appears on the <?= $openChannel === 'client' ? "client's" : "counselor's" ?> portal.</p>
-        <textarea id="body" name="body" rows="3" <?= field_aria('body', 'body-hint', $unconfirmed ? 'counselor-unconfirmed' : '') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?>
+        <label for="body">Reply to the <?= $chanWho ?> <span class="hint">Up to 5,000 characters, or leave it empty to send just a file. It appears on the <?= $openChannel === 'client' ? "client's" : "counselor's" ?> portal.</span></label>
+        <textarea id="body" name="body" rows="3" <?= field_aria('body') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?>
         <?php if ($openChannel === 'client' && sms_enabled()): $smsWhy = sms_client_blocked(sms_client($openCid)); // 4.17.0 ?>
         <?php if ($smsWhy === null): ?><div class="field"><label><input type="checkbox" name="by_text" value="1"> Also send it as a text message <span class="hint">up to 1,600 characters; sent from 8 a.m. to 8 p.m. their time</span></label></div>
         <?php else: ?><p class="muted">Not by text: <?= h($smsWhy) ?></p><?php endif; ?>

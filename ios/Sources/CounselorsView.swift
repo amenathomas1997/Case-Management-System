@@ -34,6 +34,8 @@ struct CounselorsResponse: Decodable { let counselors: [CounselorRow] }
 
 struct CounselorsView: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @State private var counselors: [CounselorRow] = []
     /// Set once the list has loaded, so "No counselors on file yet." is never claimed before then.
     @State private var loaded = false
@@ -210,14 +212,16 @@ struct CounselorsView: View {
         do {
             // Only the latest outcome is shown: an earlier success must not sit above this error.
             error = nil; confirmation = nil
-            let _: OKResponse = try await api.call("send_vrc_portal", body: [
-                "email": counselor.email, "name": counselor.name,
-            ])
+            var body: [String: Any] = ["email": counselor.email, "name": counselor.name]
+            body["idem_key"] = idem.key(for: body)
+            let _: OKResponse = try await api.call("send_vrc_portal", body: body)
+            idem.answered()
             confirmation = "Portal link emailed to \(counselor.displayName)."
             announce(confirmation!)
             await load()
         } catch {
-            showFormError(error.localizedDescription, in: &self.error)
+            idem.failed(error)
+            showFormError(IdemKey.message(for: error, what: "the portal link"), in: &self.error)
         }
         pendingSend = nil
     }

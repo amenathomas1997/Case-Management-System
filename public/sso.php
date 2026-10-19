@@ -87,7 +87,13 @@ curl_setopt_array($ch, [
     ]),
     CURLOPT_TIMEOUT => 20,
 ]);
-$resp = curl_exec($ch);
+// Tests (command line only) give Microsoft's token reply in CMS_TEST_SSO_TOKENS, as
+// meeting_http() does for meetings; a web request never reads it.
+if (PHP_SAPI === 'cli' && ($fakeTokens = getenv('CMS_TEST_SSO_TOKENS')) !== false && $fakeTokens !== '') {
+    $resp = $fakeTokens;
+} else {
+    $resp = curl_exec($ch);
+}
 curl_close($ch);
 $tokens = is_string($resp) ? json_decode($resp, true) : null;
 if (empty($tokens['id_token'])) {
@@ -182,6 +188,15 @@ if (!$user && $email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL)) {
 }
 
 if (!$user && !$linkId && !empty($entra['auto_provision_group']) && $email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL)) {
+    /* 4.28.0 (N1): an account is created only for a member of the organisation's own
+       tenant, by the same rule as matching by email (acct claim 0, no other
+       organisation's idp). A guest (B2B) invited into the tenant passes every
+       ID-token check above but is not staff, so no account is made for them. */
+    if (!sso_email_match_allowed($claims, "https://login.microsoftonline.com/{$tenant}/v2.0")) {
+        audit(null, 'login.sso_fail', 'user', null, 'not shown to be a member of this tenant (acct claim), so no account was created: ' . $email);
+        flash('Your Microsoft account (' . $email . ') is not a member of this organisation, so no account was created for it. Ask an administrator to add you.', 'error');
+        redirect('login.php');
+    }
     $g = db()->prepare('SELECT id FROM `groups` WHERE name = ?');
     $g->execute([$entra['auto_provision_group']]);
     if ($gid = $g->fetchColumn()) {

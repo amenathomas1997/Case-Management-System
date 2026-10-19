@@ -253,7 +253,8 @@ struct LoginView: View {
                 Button("Sign out", role: .destructive) { api.signOut() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Anything you have not saved is discarded. Entries already saved offline stay on this phone.")
+                Text("Anything you have not saved is discarded. Entries already saved offline stay on this phone."
+                     + signOutRemoves(prepared: PreparedSignatures.all(owner: api.userId).count))
             }
             .alert("Offline entries are waiting", isPresented: Binding(get: { serverChange != nil },
                                                                      set: { if !$0 { serverChange = nil } }),
@@ -322,7 +323,7 @@ struct LoginView: View {
             // only after the person agreed (4.27.0).
             // Drafts and documents prepared to sign go too (finishSignIn), so they are counted.
             let waiting = api.entriesLostBySigningIn(to: next)
-            let differs = next.absoluteString != (UserDefaults.standard.string(forKey: API.dataServerKey) ?? API.base.absoluteString)
+            let differs = next.absoluteString != API.dataServer
             let change = ServerChange(entries: waiting, drafts: differs ? DraftStore.countAllAccounts() : 0,
                                       prepared: differs ? PreparedSignatures.countAllAccounts() : 0,
                                       from: URL(string: UserDefaults.standard.string(forKey: API.dataServerKey) ?? "")?.host ?? API.base.host ?? "the previous server",

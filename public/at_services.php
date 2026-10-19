@@ -40,7 +40,13 @@ try{
                 $q=db()->prepare('SELECT name,status FROM equipment WHERE id=?');$q->execute([$issueIn['equipment']]);$issueItem=$q->fetch();
                 if(!$issueItem)$issueErrors['loan_equipment_id']='Equipment: that item no longer exists; choose another.';
                 elseif($issueItem['status']!=='Available')$issueErrors['loan_equipment_id']='Equipment: '.$issueItem['name'].' is not available (status: '.$issueItem['status'].'); choose another.';
-                else $issueReview=['client_name'=>$issueClient['name'],'equipment_name'=>$issueItem['name']]+$issueIn;
+                else{
+                    // A reservation holding the device for someone else (4.28.0): issuing it returns that
+                    // client to the waitlist, so the review says so before anything is created.
+                    $hq=db()->prepare("SELECT COUNT(*) FROM equipment_reservations er WHERE er.equipment_id=? AND er.client_id<>? AND er.status='Reserved' AND ".equipment_hold_live_sql('er'));
+                    $hq->execute([$issueIn['equipment'],$issueIn['client']]);
+                    $issueReview=['client_name'=>$issueClient['name'],'equipment_name'=>$issueItem['name'],'held_other'=>(int)$hq->fetchColumn()>0]+$issueIn;
+                }
             }
         }
         if(isset($_POST['return'])){at_return($id,$actor);flash('Equipment returned.');redirect('at_services.php?id='.$id);}
@@ -195,6 +201,7 @@ $retQ=db()->prepare('SELECT name FROM clients WHERE id=?');$retQ->execute([(int)
 <?php if($issueReview):// The choices are read back, and focus moves to them once, before the loan is created.?>
 <div id="issue-review" tabindex="-1"><h4>Check before issuing</h4>
 <p>Issue <strong><?=h($issueReview['equipment_name'])?></strong> to <strong><?=h($issueReview['client_name'])?></strong>, <?=$issueReview['due']!==''?'to be returned by '.h(fmt_date($issueReview['due'])):'with no return date'?>.</p>
+<?php if(!empty($issueReview['held_other'])):?><p><strong>This device is held by a reservation for another client.</strong> Issuing it moves that client back to the waitlist, and their instructor and the staff member who made the reservation are told.</p><?php endif;?>
 <p><?=$kind==='reuse'?'This creates the loan, schedules the device follow-ups and marks this reuse record Redeployed; a redeployed record can no longer be edited.':'This creates a temporary loan. Return the loaner before closing the repair.'?></p>
 <form method="post" class="page-actions"><?=csrf_field()?><input type="hidden" name="loan_client_id" value="<?=(int)$issueReview['client']?>"><input type="hidden" name="loan_equipment_id" value="<?=(int)$issueReview['equipment']?>"><input type="hidden" name="loan_due" value="<?=h($issueReview['due'])?>"><input type="hidden" name="confirm_issue" value="1">
 <button class="btn btn-primary" name="issue" value="1">Confirm: issue <?=h($issueReview['equipment_name'])?> to <?=h($issueReview['client_name'])?></button>
@@ -208,11 +215,12 @@ $retQ=db()->prepare('SELECT name FROM clients WHERE id=?');$retQ->execute([(int)
 // items available now.
 $pickClient=$issueIn['client']??0;
 $pickEquipment=$issueIn['equipment']??0;
+$issueHeld=array_flip(array_map('intval',db()->query("SELECT DISTINCT er.equipment_id FROM equipment_reservations er WHERE er.status='Reserved' AND ".equipment_hold_live_sql('er'))->fetchAll(PDO::FETCH_COLUMN)));
 $issueAvailable=$kind==='repair'?array_flip(array_map('intval',db()->query("SELECT id FROM equipment WHERE status='Available'")->fetchAll(PDO::FETCH_COLUMN))):null;
 if($issueErrors){set_form_errors($issueErrors);echo form_error_summary(['loan_client_id'=>'','loan_equipment_id'=>'','loan_due'=>''],['loan_client_id'=>'loan-client','loan_equipment_id'=>'loan-equipment','loan_due'=>'loan-due']);}?>
 <form method="post" class="stacked"><?=csrf_field()?>
 <label for="loan-client">Client</label><select id="loan-client" name="loan_client_id" required <?=field_aria('loan_client_id')?>><option value="">Choose a client…</option><?php foreach(at_issue_clients($record,$actor) as $o):?><option value="<?=h($o['value'])?>" <?=(int)$o['value']===$pickClient?'selected':''?>><?=h($o['label'])?></option><?php endforeach;?></select><?=field_error('loan_client_id')?>
-<label for="loan-equipment">Equipment</label><select id="loan-equipment" name="loan_equipment_id" required <?=field_aria('loan_equipment_id')?>><option value="">Choose equipment…</option><?php foreach(at_choices('equipment',$actor) as $o):if($kind==='reuse'&&(int)$o['value']!==(int)$record['equipment_id'])continue;if($kind==='repair'&&((int)$o['value']===(int)$record['equipment_id']||!isset($issueAvailable[(int)$o['value']])))continue;?><option value="<?=h($o['value'])?>" <?=(int)$o['value']===$pickEquipment?'selected':''?>><?=h($o['label'])?></option><?php endforeach;?></select><?=field_error('loan_equipment_id')?>
+<label for="loan-equipment">Equipment</label><select id="loan-equipment" name="loan_equipment_id" required <?=field_aria('loan_equipment_id')?>><option value="">Choose equipment…</option><?php foreach(at_choices('equipment',$actor) as $o):if($kind==='reuse'&&(int)$o['value']!==(int)$record['equipment_id'])continue;if($kind==='repair'&&((int)$o['value']===(int)$record['equipment_id']||!isset($issueAvailable[(int)$o['value']])))continue;?><option value="<?=h($o['value'])?>" <?=(int)$o['value']===$pickEquipment?'selected':''?>><?=h($o['label'].(isset($issueHeld[(int)$o['value']])?' — held by a reservation':''))?></option><?php endforeach;?></select><?=field_error('loan_equipment_id')?>
 <label for="loan-due">Return date (optional)</label><input type="date" id="loan-due" name="loan_due" value="<?=h($issueIn['due']??'')?>" <?=field_aria('loan_due')?>><?=field_error('loan_due')?><button name="issue" value="1">Review and issue equipment</button></form><?php endif;endif;?></section>
 <?php endif;?>
 <?php endif;?>
@@ -224,8 +232,8 @@ if($issueErrors){set_form_errors($issueErrors);echo form_error_summary(['loan_cl
 <?php foreach($fields as $f):$v=(string)($values[$f['key']]??'');$key=$f['key'];
 // What the record was created with and the server refuses to change (its client, its
 // parent record, a repair or reuse record's device) is shown read-only, not offered as a choice.
-$fixed=$record&&($key==='client_id'||$key==='parent_id'||($key==='equipment_id'&&in_array($kind,['repair','reuse'],true)));?><label for="at-<?=h($key)?>"><?=h($f['label'])?><?=$f['required']&&!$fixed?' (required)':''?></label>
-<?php if($fixed):$shown=$v===''?'None':'Current selection (not in your list)';foreach($f['options'] as $o)if($o['value']===$v){$shown=$o['label'];break;}?><span class="hint" id="at-<?=h($key)?>-fixed">Cannot be changed after the record is created.</span><input type="text" id="at-<?=h($key)?>" value="<?=h($shown)?>" readonly <?=field_aria($key,'at-'.$key.'-fixed')?>><input type="hidden" name="<?=h($key)?>" value="<?=h($v)?>">
+$fixed=$record&&($key==='client_id'||$key==='parent_id'||($key==='equipment_id'&&in_array($kind,['repair','reuse'],true)));?><label for="at-<?=h($key)?>"><?=h($f['label'])?><?=$f['required']&&!$fixed?' (required)':''?><?php if($fixed):?> <span class="hint">Cannot be changed after the record is created.</span><?php endif;?></label>
+<?php if($fixed):$shown=$v===''?'None':'Current selection (not in your list)';foreach($f['options'] as $o)if($o['value']===$v){$shown=$o['label'];break;}?><input type="text" id="at-<?=h($key)?>" value="<?=h($shown)?>" readonly <?=field_aria($key)?>><input type="hidden" name="<?=h($key)?>" value="<?=h($v)?>">
 <?php elseif(in_array($f['type'],['reference','select'],true)):?><select id="at-<?=h($key)?>" name="<?=h($key)?>" <?=$f['required']?'required':''?> <?=field_aria($key)?>><option value="">Choose…</option><?php $found=false;foreach($f['options'] as $o):if($o['value']===$v)$found=true;?><option value="<?=h($o['value'])?>" <?=$o['value']===$v?'selected':''?>><?=h($o['label'])?></option><?php endforeach;if($v!==''&&!$found):?><option value="<?=h($v)?>" selected><?=$record&&$f['type']==='reference'?'Current selection (not in your list; kept if unchanged)':'Not available to choose — pick another option'?></option><?php endif;?></select>
 <?php elseif($f['type']==='textarea'):?><textarea id="at-<?=h($key)?>" name="<?=h($key)?>" rows="4" maxlength="10000" <?=$f['required']?'required':''?> <?=field_aria($key)?>><?=h($v)?></textarea>
 <?php else:$type=match($f['type']){'date'=>'date','money','integer','score'=>'number','url'=>'url',default=>'text'};?><input id="at-<?=h($key)?>" name="<?=h($key)?>" type="<?=$type?>" value="<?=h($v)?>" <?=$type==='number'?'min="'.($f['type']==='money'?'0':'1').'" step="'.($f['type']==='money'?'0.01':'1').'"':''?> <?=$f['type']==='score'?'max="5"':''?> <?=$f['required']?'required':''?> <?=field_aria($key)?>><?php endif;?>

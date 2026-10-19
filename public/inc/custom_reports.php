@@ -130,7 +130,8 @@ function custom_report_run(array $d, int $actor, int $limit = 500): array {
     if ($d['to'] !== '') { $where[] = "$dateCol < DATE_ADD(?, INTERVAL 1 DAY)"; $args[] = $d['to']; }
     if ($d['status'] !== '' && $statusCol) { $where[] = "$statusCol = ?"; $args[] = $d['status']; }
     if ($d['staff'] > 0 && isset($fields['staff'])) { $where[] = 'u.id = ?'; $args[] = $d['staff']; }
-    if ($d['agency'] !== '' && isset($fields['funding_agency'])) { $where[] = $fields['funding_agency'][1] . ' = ?'; $args[] = $d['agency']; }
+    // 4.28.0: every spelling of the agency, including a name it had before a rename (agency_spellings()).
+    if ($d['agency'] !== '' && isset($fields['funding_agency'])) { [$agCond, $agArgs] = agency_match_sql($fields['funding_agency'][1], $d['agency']); $where[] = $agCond; array_push($args, ...$agArgs); }
     $sql = ' FROM ' . $from . ' WHERE ' . implode(' AND ', $where);
     $cnt = db()->prepare('SELECT COUNT(*)' . $sql);
     $cnt->execute($args);

@@ -89,9 +89,8 @@ if (isset($_GET['edit']) && can('templates')) {
         <div class="field"><label for="title">Title <?= required_mark() ?></label><input type="text" id="title" name="title" required maxlength="255" value="<?= h($a['title']) ?>" <?= field_aria('title') ?>><?= field_error('title') ?></div>
         <div class="field"><label for="category">Category</label><input type="text" id="category" name="category" maxlength="80" value="<?= h($a['category'] ?? '') ?>" placeholder="e.g. JAWS, Device care, Policy" <?= field_aria('category') ?>><?= field_error('category') ?></div>
       </div>
-      <div class="field"><label for="body">Content</label>
-        <span class="hint" id="body-hint">Plain text; blank lines separate paragraphs. Start a line with “## ” for a section heading, “- ” for a bullet point, or “1. ” for a numbered step. Up to 60,000 characters.</span>
-        <textarea id="body" name="body" rows="14" <?= field_aria('body', 'body-hint') ?>><?= h($a['body'] ?? '') ?></textarea><?= field_error('body') ?></div>
+      <div class="field"><label for="body">Content <span class="hint">Plain text; blank lines separate paragraphs. Start a line with “## ” for a section heading, “- ” for a bullet point, or “1. ” for a numbered step. Up to 60,000 characters.</span></label>
+        <textarea id="body" name="body" rows="14" <?= field_aria('body') ?>><?= h($a['body'] ?? '') ?></textarea><?= field_error('body') ?></div>
       <div class="field"><label><input type="checkbox" name="is_public" value="1" <?= !empty($a['is_public']) ? 'checked' : '' ?>> Publish to client portals (visible to clients)</label></div>
       <button type="submit" name="save_article" value="1" class="btn btn-primary">Save article</button>
       <?php if ($a['id']): ?>

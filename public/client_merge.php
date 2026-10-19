@@ -312,9 +312,8 @@ page_header('Merge clients', $user, 'clients');
   $fr->execute([$mergeId]); $dupeRow = $fr->fetch() ?: [];
   $fillable = merge_fillable($keepRow, $dupeRow); ?>
   <?php if ($fillable): ?>
-  <fieldset aria-describedby="fill-hint">
-    <legend>Blank fields on <?= h($keep['name']) ?> (#<?= $keepId ?>) to fill from the duplicate</legend>
-    <p class="hint" id="fill-hint">Untick any value that should not be copied; an unticked value is removed with the duplicate. The client, guardian and counselor email addresses start unticked and are copied only when you tick them, because session reminders, portal links, progress reports and messages are then sent there — check they are genuine first.<?= isset($fillable['counselor_email']) || isset($fillable['email']) ? ' An email marked not yet confirmed stays unconfirmed after the merge.' : '' ?></p>
+  <fieldset>
+    <legend>Blank fields on <?= h($keep['name']) ?> (#<?= $keepId ?>) to fill from the duplicate <span class="hint">Untick any value that should not be copied; an unticked value is removed with the duplicate. The client, guardian and counselor email addresses start unticked and are copied only when you tick them, because session reminders, portal links, progress reports and messages are then sent there — check they are genuine first.<?= isset($fillable['counselor_email']) || isset($fillable['email']) ? ' An email marked not yet confirmed stays unconfirmed after the merge.' : '' ?></span></legend>
     <?php foreach ($fillable as $f => $val):
       if ($f === 'dob') $shown = fmt_date($val);
       elseif ($f === 'assigned_to') {

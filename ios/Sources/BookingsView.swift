@@ -207,6 +207,8 @@ struct BookingsView: View {
 
 struct BookingEditSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let onDone: () -> Void
 
@@ -279,10 +281,13 @@ struct BookingEditSheet: View {
         // Written in the server's timezone (America/Chicago) so the booking time isn't
         // skewed when the device is in another zone (read side renders in Central).
         do {
-            let _: OKResponse = try await api.call("add_booking", body: [
+            var body: [String: Any] = [
                 "client_id": cid, "service_type": serviceType, "needed_at": APIDate.dateTimeCentral(neededAt),
                 "duration_min": duration, "provider": provider, "location": location, "cost": costText, "notes": notes,
-            ])
+            ]
+            body["idem_key"] = idem.key(for: body)
+            let _: OKResponse = try await api.call("add_booking", body: body)
+            idem.answered()
             // The presenter confirms once the sheet has gone: closing it moves VoiceOver focus,
             // which would cut off an announcement made here.
             onDone(); dismiss()
@@ -291,7 +296,7 @@ struct BookingEditSheet: View {
             // creating it again would book it twice.
             busy = false
             showFormError("The connection dropped before the server answered, so it isn't known whether this booking was created. Check the bookings list for \(serviceType) on \(neededAt.formatted(date: .abbreviated, time: .shortened)) before creating it again.", in: &self.error)
-        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        } catch { idem.answered(); busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }
 

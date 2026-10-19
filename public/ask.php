@@ -109,9 +109,8 @@ page_header('Ask your caseload', $user, 'ai_tools');
 
 <form method="post" action="ask.php" class="stacked"><?= csrf_field() ?>
   <div class="field">
-    <label for="question">Your question</label>
-    <span class="hint" id="question-hint">Up to 2,000 characters.</span>
-    <textarea id="question" name="question" rows="3" placeholder="e.g. Which clients have goals under 25% with no note in the last month?" <?= field_aria('question', 'question-hint') ?>><?= h($question) ?></textarea><?= field_error('question') ?>
+    <label for="question">Your question <span class="hint">Up to 2,000 characters.</span></label>
+    <textarea id="question" name="question" rows="3" placeholder="e.g. Which clients have goals under 25% with no note in the last month?" <?= field_aria('question') ?>><?= h($question) ?></textarea><?= field_error('question') ?>
   </div>
   <button type="submit" name="ask" value="1" class="btn btn-primary">Ask</button>
 </form>

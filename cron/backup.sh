@@ -50,10 +50,16 @@ trap 'rm -f "$DUMP_TMP"; if [ -n "$UPLOAD_TMP" ]; then rm -f "$UPLOAD_TMP"; fi' 
 #   cfg.meet.zoom_client_secret Zoom meetings (Settings, Online meetings)
 #   cfg.meet.ms_client_secret   Microsoft meetings (Settings, Online meetings)
 #   cfg.qbo.client_secret       QuickBooks Online (Settings, QuickBooks)
-# A restored database therefore needs each one entered again on those pages.
+#   totp_pending_<user id>      an authenticator being set up, not yet confirmed (4.28.0)
+# A restored database therefore needs each one entered again on those pages; a person
+# who was part way through setting up an authenticator starts that again.
+# Authenticator seeds (users.totp_secret, 4.28.0) and the QuickBooks and meeting tokens are
+# in the dump only encrypted, with <private>/meeting_tokens.key, which is never dumped or
+# emailed. Restoring onto a new server: copy that key file across by hand, or each person
+# with an authenticator app is let back in with cron/reset_2fa.php and sets it up again.
 # If either dump fails, nothing is kept.
 SECRET_SETTINGS="'ai_api_key','entra_client_secret','cfg.graph.client_secret','cfg.sms.auth_token','cfg.meet.zoom_client_secret','cfg.meet.ms_client_secret','cfg.qbo.client_secret'"
-SETTINGS_WHERE="name NOT IN ($SECRET_SETTINGS) AND name NOT LIKE '%secret%' AND name NOT LIKE '%api_key%' AND name NOT LIKE '%token%'"
+SETTINGS_WHERE="name NOT IN ($SECRET_SETTINGS) AND name NOT LIKE '%secret%' AND name NOT LIKE '%api_key%' AND name NOT LIKE '%token%' AND name NOT LIKE 'totp_pending%'"
 { mysqldump --defaults-extra-file="$DB_CNF" \
     --single-transaction --routines --ignore-table="$DB_NAME.settings" "$DB_NAME" \
   && mysqldump --defaults-extra-file="$DB_CNF" \

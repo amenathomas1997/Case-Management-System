@@ -274,6 +274,8 @@ struct ContractSpendSheet: View {
 
 struct ContractNewSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let onDone: () -> Void
     @State private var name = ""; @State private var funder = ""; @State private var number = ""; @State private var amount = ""
@@ -315,8 +317,9 @@ struct ContractNewSheet: View {
         var b: [String: Any] = ["name": name, "funder": funder, "contract_number": number, "amount": amountText]
         if hasStart { b["start_date"] = APIDate.day(start) }
         if hasEnd { b["end_date"] = APIDate.day(end) }
-        do { let _: OKResponse = try await api.call("add_contract", body: b); onDone(); dismiss() }
-        catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
+        b["idem_key"] = idem.key(for: b)
+        do { let _: OKResponse = try await api.call("add_contract", body: b); idem.answered(); onDone(); dismiss() }
+        catch { idem.failed(error); showFormError(IdemKey.message(for: error, what: "the contract"), in: &self.error); busy = false }
     }
 }
 

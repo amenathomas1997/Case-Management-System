@@ -390,6 +390,8 @@ struct KeyboardCaptionedField: View {
 
 struct DeviceQuoteSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let requestId: Int; let onDone: () -> Void
     @State private var vendor = ""; @State private var amount = ""; @State private var ref = ""; @State private var notes = ""
@@ -437,13 +439,17 @@ struct DeviceQuoteSheet: View {
         guard let amountText = checkedAmount(amount) else { showFormError(amountFormatMessage("Amount"), in: &error); return }
         busy = true; error = nil
         // The presenter announces the result once the sheet has gone.
-        do { let _: OKResponse = try await api.call("device_request_update", body: ["id": requestId, "op": "add_quote", "vendor": vendor, "amount": amountText, "quote_ref": ref, "notes": notes]); onDone(); dismiss() }
-        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        var body: [String: Any] = ["id": requestId, "op": "add_quote", "vendor": vendor, "amount": amountText, "quote_ref": ref, "notes": notes]
+        body["idem_key"] = idem.key(for: body)
+        do { let _: OKResponse = try await api.call("device_request_update", body: body); idem.answered(); onDone(); dismiss() }
+        catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error, what: "the quote"), in: &self.error) }
     }
 }
 
 struct DeviceNewSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let onDone: () -> Void
     @State private var selectedClient: Int?
@@ -488,8 +494,10 @@ struct DeviceNewSheet: View {
         }
         busy = true; error = nil
         // The presenter announces the result once the sheet has gone.
-        do { let _: OKResponse = try await api.call("add_device_request", body: ["client_id": cid, "device_name": deviceName, "category": category, "justification": justification]); onDone(); dismiss() }
-        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        var body: [String: Any] = ["client_id": cid, "device_name": deviceName, "category": category, "justification": justification]
+        body["idem_key"] = idem.key(for: body)
+        do { let _: OKResponse = try await api.call("add_device_request", body: body); idem.answered(); onDone(); dismiss() }
+        catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error, what: "the device request"), in: &self.error) }
     }
 }
 

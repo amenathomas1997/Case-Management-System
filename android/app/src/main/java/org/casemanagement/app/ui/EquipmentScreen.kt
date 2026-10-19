@@ -42,9 +42,11 @@ fun EquipmentScreen(api: Api, nav: NavHostController) {
     var q by rememberSaveable { mutableStateOf("") }
     val state = rememberLoaded(api.userId) { parseEquipment(api.call("equipment")) }
     var chosen by remember { mutableStateOf<EquipmentItem?>(null) }
-    var lending by remember { mutableStateOf<EquipmentItem?>(null) }
+    // The item being lent, by its number, so rotation and process death keep the form open (4.28.0).
+    var lendingId by rememberSaveable { mutableStateOf<Int?>(null) }
+    val lending = lendingId?.let { id -> state.data?.firstOrNull { it.id == id } }
     var returning by remember { mutableStateOf<EquipmentItem?>(null) }
-    var adding by remember { mutableStateOf(false) }
+    var adding by rememberSaveable { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -84,7 +86,7 @@ fun EquipmentScreen(api: Api, nav: NavHostController) {
             text = {
                 Column {
                     Text(when (e.status) { "On Loan" -> e.borrower?.let { "On loan to $it." } ?: "On loan."; else -> e.status + "." })
-                    if (e.status == "Available") TextButton(onClick = { chosen = null; lending = e }) { Text("Lend it") }
+                    if (e.status == "Available") TextButton(onClick = { chosen = null; lendingId = e.id }) { Text("Lend it") }
                     if (e.status == "On Loan") {
                         if (e.canReturn) TextButton(onClick = { chosen = null; returning = e }) { Text("Mark it returned") }
                         else Text("This loan is not on your caseload.")
@@ -116,7 +118,7 @@ fun EquipmentScreen(api: Api, nav: NavHostController) {
             confirmButton = { TextButton(onClick = { returning = null }) { Text("Keep on loan") } },
         )
     }
-    lending?.let { e -> LendDialog(api, e, onDone = { m -> lending = null; notice = m; state.reload() }, onCancel = { lending = null }) }
+    lending?.let { e -> LendDialog(api, e, onDone = { m -> lendingId = null; notice = m; state.reload() }, onCancel = { lendingId = null }) }
     if (adding) AddEquipmentDialog(api, onDone = { m -> adding = false; notice = m; state.reload() }, onCancel = { adding = false })
 }
 
@@ -130,8 +132,8 @@ fun EquipmentDetailScreen(api: Api, id: Int) {
     var intervalNote by remember { mutableStateOf<String?>(null) }
     var intervalError by remember { mutableStateOf<String?>(null) }
     var savingInterval by remember { mutableStateOf(false) }
-    var logging by remember { mutableStateOf(false) }
-    var reserving by remember { mutableStateOf(false) }
+    var logging by rememberSaveable { mutableStateOf(false) }
+    var reserving by rememberSaveable { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     Show(state, "the item") { d ->
@@ -181,12 +183,13 @@ fun EquipmentDetailScreen(api: Api, id: Int) {
 @Composable
 private fun LogServiceDialog(api: Api, id: Int, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val types = api.formList("maintenance_types", listOf("Maintenance", "Calibration", "Repair", "Inspection", "Cleaning", "Other"))
-    var type by remember { mutableStateOf(types.first()) }
-    var date by remember { mutableStateOf(today()) }
-    var notes by remember { mutableStateOf("") }
-    var cost by remember { mutableStateOf("") }
+    var type by rememberSaveable { mutableStateOf(types.first()) }
+    var date by rememberSaveable { mutableStateOf(today()) }
+    var notes by rememberSaveable { mutableStateOf("") }
+    var cost by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var idem by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     FormDialog("Log a service", "Save", busy, onSave = {
         if (busy) return@FormDialog
@@ -196,12 +199,9 @@ private fun LogServiceDialog(api: Api, id: Int, onDone: (String) -> Unit, onCanc
             date.trim() > today() -> error = "The service date cannot be in the future."
             c == null -> error = "Cost: enter digits, like 12.50, or leave it empty."
             else -> scope.launchSave({ busy = it }, { error = it }) {
-                try {
-                    api.call("equipment_service", body = JSONObject().put("equipment_id", id).put("service_type", type).put("service_date", date.trim()).put("notes", notes.trim()).put("cost", c))
-                } catch (e: ApiException) {
-                    if (e.network) throw ApiException("The connection dropped before the server answered, so it isn't known whether this service was logged. Check the item's service history for $type on ${dayText(date.trim())} before saving it again.")
-                    throw e
-                }
+                // 4.28.0: a retry after a lost reply logs it once (see sendOnce).
+                api.callOnce("equipment_service", JSONObject().put("equipment_id", id).put("service_type", type).put("service_date", date.trim()).put("notes", notes.trim()).put("cost", c),
+                    idem, { idem = it }, "this service")
                 onDone("Service logged.")
             }
         }
@@ -218,15 +218,16 @@ private fun LogServiceDialog(api: Api, id: Int, onDone: (String) -> Unit, onCanc
 private fun AddEquipmentDialog(api: Api, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val categories = api.formList("equipment_categories", listOf("Braille Display", "Screen Reader License", "Magnifier", "Tablet/Phone", "Computer", "Keyboard/Input", "Audio", "Other"))
     val conditions = api.formList("equipment_conditions", listOf("New", "Good", "Fair", "Needs Repair"))
-    var name by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf(if ("Other" in categories) "Other" else categories.first()) }
-    var serial by remember { mutableStateOf("") }
-    var condition by remember { mutableStateOf(if ("Good" in conditions) "Good" else conditions.first()) }
-    var value by remember { mutableStateOf("") }
-    var interval by remember { mutableStateOf("") }
-    var notes by remember { mutableStateOf("") }
+    var name by rememberSaveable { mutableStateOf("") }
+    var category by rememberSaveable { mutableStateOf(if ("Other" in categories) "Other" else categories.first()) }
+    var serial by rememberSaveable { mutableStateOf("") }
+    var condition by rememberSaveable { mutableStateOf(if ("Good" in conditions) "Good" else conditions.first()) }
+    var value by rememberSaveable { mutableStateOf("") }
+    var interval by rememberSaveable { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var idem by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     FormDialog("Add equipment", "Add", busy, onSave = {
         if (busy) return@FormDialog
@@ -237,13 +238,9 @@ private fun AddEquipmentDialog(api: Api, onDone: (String) -> Unit, onCancel: () 
             v == null -> error = "Value: enter digits, like 12.50, or leave it empty."
             days == null -> error = INTERVAL_MESSAGE
             else -> scope.launchSave({ busy = it }, { error = it }) {
-                try {
-                    api.call("add_equipment", body = JSONObject().put("name", name.trim()).put("category", category).put("serial", serial.trim())
-                        .put("condition", condition).put("value", v).put("maintenance_interval_days", days).put("notes", notes.trim()))
-                } catch (e: ApiException) {
-                    if (e.network) throw ApiException("The connection dropped before the server answered, so it isn't known whether this item was added. Check the equipment list for “${name.trim()}” before adding it again.")
-                    throw e
-                }
+                api.callOnce("add_equipment", JSONObject().put("name", name.trim()).put("category", category).put("serial", serial.trim())
+                    .put("condition", condition).put("value", v).put("maintenance_interval_days", days).put("notes", notes.trim()),
+                    idem, { idem = it }, "“${name.trim()}”")
                 onDone(name.trim() + " added.")
             }
         }
@@ -263,7 +260,7 @@ private fun AddEquipmentDialog(api: Api, onDone: (String) -> Unit, onCancel: () 
 @Composable
 fun ReservationsScreen(api: Api) {
     val state = rememberLoaded(api.userId) { parseReservations(api.call("reservations")) }
-    var adding by remember { mutableStateOf(false) }
+    var adding by rememberSaveable { mutableStateOf(false) }
     var cancelling by remember { mutableStateOf<org.casemanagement.app.Reservation?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -301,13 +298,14 @@ private fun ReservationDialog(api: Api, fixedItem: Int, onDone: (String) -> Unit
         val items = if (fixedItem > 0) emptyList() else distinctItems(parseEquipment(api.call("equipment"))).filter { it.status != "Retired" }
         items to openClientChoices(api.call("client_choices"))
     }
-    var item by remember { mutableStateOf(if (fixedItem > 0) fixedItem.toString() else "") }
-    var client by remember { mutableStateOf("") }
-    var from by remember { mutableStateOf("") }
-    var until by remember { mutableStateOf("") }
-    var notes by remember { mutableStateOf("") }
+    var item by rememberSaveable { mutableStateOf(if (fixedItem > 0) fixedItem.toString() else "") }
+    var client by rememberSaveable { mutableStateOf("") }
+    var from by rememberSaveable { mutableStateOf("") }
+    var until by rememberSaveable { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var idem by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val day = Regex("^\\d{4}-\\d{2}-\\d{2}$")
     FormDialog("Reserve an item", "Reserve", busy, enabled = item.isNotEmpty() && client.isNotEmpty(), onSave = {
@@ -319,7 +317,7 @@ private fun ReservationDialog(api: Api, fixedItem: Int, onDone: (String) -> Unit
                 val b = JSONObject().put("equipment_id", item.toInt()).put("client_id", client.toInt()).put("notes", notes.trim())
                 if (from.isNotBlank()) b.put("needed_from", from.trim())
                 if (until.isNotBlank()) b.put("needed_until", until.trim())
-                onDone(reservationWords(api.call("add_reservation", body = b)))
+                onDone(reservationWords(api.callOnce("add_reservation", b, idem, { idem = it }, "the reservation")))
             }
         }
     }, onCancel = onCancel) {
@@ -356,15 +354,16 @@ val BORROWER_TYPES = listOf(
 @Composable
 private fun LendDialog(api: Api, e: EquipmentItem, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val clients = rememberLoaded(e.id) { openClientChoices(api.call("client_choices")) }
-    var client by remember { mutableStateOf("") }
-    var due by remember { mutableStateOf("") }
-    var condition by remember { mutableStateOf(e.condition ?: "Good") }
-    var signedBy by remember { mutableStateOf("") }
-    var purpose by remember { mutableStateOf("") }
-    var borrower by remember { mutableStateOf("") }
-    var notes by remember { mutableStateOf("") }
+    var client by rememberSaveable { mutableStateOf("") }
+    var due by rememberSaveable { mutableStateOf("") }
+    var condition by rememberSaveable { mutableStateOf(e.condition ?: "Good") }
+    var signedBy by rememberSaveable { mutableStateOf("") }
+    var purpose by rememberSaveable { mutableStateOf("") }
+    var borrower by rememberSaveable { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var idem by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val conditions = api.formList("equipment_conditions", listOf("New", "Good", "Fair", "Needs Repair"))
     AlertDialog(
@@ -393,7 +392,7 @@ private fun LendDialog(api: Api, e: EquipmentItem, onDone: (String) -> Unit, onC
                     if (notes.isNotBlank()) b.put("notes", notes.trim().take(255))
                     if (purpose.isNotEmpty()) b.put("purpose", purpose)
                     if (borrower.isNotEmpty()) b.put("borrower_type", borrower)
-                    api.call("loan_equipment", body = b)
+                    api.callOnce("loan_equipment", b, idem, { idem = it }, "the loan")
                     onDone(e.name + " lent.")
                 }
             }) { Text(if (busy) "Saving…" else "Lend") }
@@ -409,7 +408,9 @@ private fun LendDialog(api: Api, e: EquipmentItem, onDone: (String) -> Unit, onC
 @Composable
 fun FollowupsScreen(api: Api) {
     val state = rememberLoaded(api.userId) { api.callCached("followups", cacheKey = "followups") }
-    var chosen by remember { mutableStateOf<JSONObject?>(null) }
+    // Kept as text, so rotation and process death keep the follow-up open (4.28.0).
+    var chosenJson by rememberSaveable { mutableStateOf<String?>(null) }
+    val chosen = remember(chosenJson) { chosenJson?.let { try { JSONObject(it) } catch (e: Exception) { null } } }
     var notice by remember { mutableStateOf<String?>(null) }
     Show(state, "device follow-ups") { (r, savedAt) ->
         Page {
@@ -423,20 +424,20 @@ fun FollowupsScreen(api: Api) {
                     val waiting = f.optInt("id") in queued
                     ListRow(listOf(f.optString("client_name") + ": " + f.optString("equipment_name"),
                         (if (waiting) "Recorded, waiting to send. " else "") + "${f.optInt("interval_days")}-day check, due " + dayText(f.str("due_date"))),
-                        action = "record it", onClick = if (waiting) null else ({ chosen = f }))
+                        action = "record it", onClick = if (waiting) null else ({ chosenJson = f.toString() }))
                 }
             }
         }
     }
-    chosen?.let { f -> FollowupDialog(api, f, onDone = { m -> chosen = null; notice = m; state.reload() }, onCancel = { chosen = null }) }
+    chosen?.let { f -> FollowupDialog(api, f, onDone = { m -> chosenJson = null; notice = m; state.reload() }, onCancel = { chosenJson = null }) }
 }
 
 @Composable
 private fun FollowupDialog(api: Api, f: JSONObject, onDone: (String) -> Unit, onCancel: () -> Unit) {
-    var inUse by remember { mutableStateOf("") }
-    var satisfaction by remember { mutableStateOf("") }
-    var barriers by remember { mutableStateOf("") }
-    var notes by remember { mutableStateOf("") }
+    var inUse by rememberSaveable { mutableStateOf("") }
+    var satisfaction by rememberSaveable { mutableStateOf("") }
+    var barriers by rememberSaveable { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()

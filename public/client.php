@@ -456,10 +456,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
         $n = db()->prepare('SELECT * FROM client_notes WHERE id = ? AND client_id = ?');
         $n->execute([$noteId, $id]);
         $note = $n->fetch();
+        $editKey = web_idem_key($_POST);
+        if ($note && web_once_get($editKey) === $noteId) {
+            // The same edit sent twice (4.28.0): saved once, its homework added once.
+            flash('This change was already saved (the form was sent twice), so it was saved once.', 'info');
+            redirect("client.php?id=$id&tab=notes#note-$noteId");
+        }
         if ($note && note_locked($note)) {
-            flash(note_locked_message(), 'error');
+            // What was typed comes back in the addendum form, never thrown away (4.28.0).
+            keep_input();
+            unset($_SESSION['old_input']['note_id']);
+            if ($hwRows = posted_note_homework($_POST)) $_SESSION['client_note_homework'] = ['client' => $id, 'rows' => $hwRows];
+            flash(note_locked_message() . ' Your changes are in the addendum form below.', 'error');
             redirect("client.php?id=$id&tab=notes&addendum_to=$noteId#addnote-h");
-        } elseif (!$note || !can_edit_note($note, $user)) {
+        } elseif (!$note) {
+            // Moved to the trash while it was being edited (4.28.0): the text is kept as a new note.
+            keep_input();
+            unset($_SESSION['old_input']['note_id'], $_SESSION['old_input']['idem_key']);
+            if ($hwRows = posted_note_homework($_POST)) $_SESSION['client_note_homework'] = ['client' => $id, 'rows' => $hwRows];
+            flash('That note was deleted while you were editing it, so your changes were not saved. Your text is in the new-note form below; save it as a new note if it is still needed.', 'error');
+            redirect("client.php?id=$id&tab=notes#addnote-h");
+        } elseif (!can_edit_note($note, $user)) {
             flash('Only the note author or an admin can edit a note.', 'error');
         } else {
             // The note and the homework it creates are saved together, or not at all.
@@ -470,6 +487,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
                 $kept = note_keep_version($pdo, $noteId, (int)$user['id']);
                 if (is_string($kept)) {
                     $pdo->rollBack();
+                    keep_input();
+                    unset($_SESSION['old_input']['note_id']);
+                    if ($hwRows = posted_note_homework($_POST)) $_SESSION['client_note_homework'] = ['client' => $id, 'rows' => $hwRows];
                     flash($kept, 'error');
                     redirect("client.php?id=$id&tab=notes&addendum_to=$noteId#addnote-h");
                 }
@@ -485,6 +505,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
                 if ($pdo->inTransaction()) $pdo->rollBack();
                 $noteSaveFailed($e, $noteId);
             }
+            web_once_set($editKey, $noteId);
             audit($user['id'], 'note.edit', 'client', $id, $subject);
             flash('Note updated.' . ($added ? ' ' . $added . ' homework item' . ($added === 1 ? '' : 's') . ' added to the client portal.' : ''));
         }
@@ -1253,10 +1274,10 @@ page_header($tabLabels[$tab] . ' — ' . $client['name'], $user, 'clients', $tab
   <?php $pt = db()->prepare('SELECT expires_at FROM portal_tokens WHERE client_id = ?'); $pt->execute([$id]);
   if (($portalExpires = $pt->fetchColumn()) !== false): ?>
   <form method="post" action="client.php?id=<?= $id ?>" class="inline-form"><?= csrf_field() ?>
+    <span class="hint"><?= $client['archived_at'] !== null ? 'The record is archived, so the portal link does not open.' : ($portalExpires && $portalExpires < date('Y-m-d H:i:s') ? 'The portal link expired on ' . fmt_date($portalExpires) . '.' : 'A portal link is active' . ($portalExpires ? ' until ' . fmt_date($portalExpires) : '') . '.') ?></span>
     <button type="submit" name="revoke_portal" value="1" class="btn btn-secondary"
       onclick="return confirm(<?= h(json_encode('Turn off ' . $client['name'] . "'s portal link? Every link already sent stops working.", JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">
       Turn off portal link</button>
-    <span class="hint"><?= $client['archived_at'] !== null ? 'The record is archived, so the portal link does not open.' : ($portalExpires && $portalExpires < date('Y-m-d H:i:s') ? 'The portal link expired on ' . fmt_date($portalExpires) . '.' : 'A portal link is active' . ($portalExpires ? ' until ' . fmt_date($portalExpires) : '') . '.') ?></span>
   </form>
   <?php endif; ?>
   <a class="btn btn-secondary" href="messages.php?client=<?= $id ?>&amp;channel=client">Messages with client</a>
@@ -1297,8 +1318,8 @@ if ($hasA11y): ?>
   <?php if (ai_feature_enabled('draft')): ?>
   <form method="post" action="<?= $tabUrl('overview') ?>" class="inline-form">
     <?= csrf_field() ?>
-    <button type="submit" name="ai_do" value="case" class="btn btn-secondary btn-sm">Draft case summary with AI</button>
     <span class="hint">Summarizes tracks, goals, progress, assessments, and recent notes.</span>
+    <button type="submit" name="ai_do" value="case" class="btn btn-secondary btn-sm">Draft case summary with AI</button>
   </form>
   <?php endif; ?>
   <?php if (ai_feature_enabled('progress')): ?><a class="btn btn-secondary btn-sm" href="progress_review.php?client=<?= $id ?>">AI progress review</a><?php endif; ?>
@@ -1532,10 +1553,10 @@ $relDefaultSigner = !empty($client['guardian_name']) && !empty($client['dob']) &
   </form>
   <?php else: ?>
   <form method="post" action="client.php?id=<?= $id ?>" class="inline-form" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['hold_reason' => 'Hold reason']) ?>
     <label for="hold_reason">Hold reason</label>
-    <input type="text" id="hold_reason" name="hold_reason" maxlength="255" value="<?= h(old_in('hold_reason')) ?>" <?= field_aria('hold_reason') ?>>
+    <input type="text" id="hold_reason" name="hold_reason" maxlength="255" value="<?= h(old_in('hold_reason')) ?>" <?= field_aria('hold_reason') ?>><?= field_error('hold_reason') ?>
     <button type="submit" name="place_hold" value="1" class="btn btn-secondary btn-sm">Place hold</button>
-    <?= field_error('hold_reason') ?>
   </form>
   <?php endif; ?>
   <?php endif; ?>
@@ -1562,8 +1583,9 @@ if (str_starts_with((string)$client['status'], 'Closed') || $closeFus || $survey
   <form method="post" action="client.php?id=<?= $id ?>" class="inline-form"><?= csrf_field() ?>
     <button type="submit" name="send_survey" value="1" class="btn btn-secondary btn-sm">Email the survey</button>
   </form>
-  <details id="phone-survey"<?= isset($_GET['phone_survey']) ? ' open' : '' ?>><summary>Enter survey answers taken by phone</summary>
+  <details id="phone-survey"<?= isset($_GET['phone_survey']) || has_field_error('satisfaction') || has_field_error('goals_met') ? ' open' : '' ?>><summary>Enter survey answers taken by phone</summary>
     <form method="post" action="client.php?id=<?= $id ?>"><?= csrf_field() ?><?= web_idem_field() ?>
+      <?= form_error_summary(['satisfaction' => 'Satisfaction', 'goals_met' => 'Goals met'], ['satisfaction' => 'ps_sat', 'goals_met' => 'ps_goals']) ?>
       <div class="field"><label for="ps_sat">Satisfaction, 1 to 10 <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
         <input type="number" id="ps_sat" name="satisfaction" min="1" max="10" required value="<?= h(old_in('satisfaction')) ?>" <?= field_aria('satisfaction') ?>><?= field_error('satisfaction') ?></div>
       <div class="field"><label for="ps_goals">Goals met, 1 to 10 <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
@@ -1652,9 +1674,8 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     echo form_error_summary($noteSumLabels, $noteSumAnchors); ?>
     <p class="hint">Fields marked * are required.</p>
     <?php if ($editNote): ?><input type="hidden" name="note_id" value="<?= (int)$editNote['id'] ?>">
-    <?php else: if ($addendumParent): ?><input type="hidden" name="addendum_to" value="<?= (int)$addendumParent['id'] ?>"><?php endif; // The same key while this note is being written (a refused save, an AI button), a new one after it is saved. ?>
+    <?php elseif ($addendumParent): ?><input type="hidden" name="addendum_to" value="<?= (int)$addendumParent['id'] ?>"><?php endif; // The same key while this note is being written (a refused save, an AI button), a new one after it is saved; an edit carries one too (4.28.0), so sending it twice adds its homework once. ?>
     <input type="hidden" name="idem_key" value="<?= h(preg_match('/^[0-9a-fA-F-]{36}$/D', $noteIn('idem_key')) ? $noteIn('idem_key') : new_note_key()) ?>">
-    <?php endif; ?>
     <div class="field">
       <label for="note_type">Note type</label>
       <select id="note_type" name="note_type"><?= select_options(cms_choices('note_types', $editNote['note_type'] ?? null), $noteSrc !== null ? ($noteIn('note_type') ?: null) : ($editNote['note_type'] ?? ($addendumParent ? 'Addendum' : null))) ?></select>
@@ -1723,9 +1744,8 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
       <?php endif; ?>
     </fieldset>
     <div class="field">
-      <label for="body">Narrative note / paste messy session notes here</label>
-      <span class="hint" id="body-hint">Type a free-text note, or paste your rough session notes and use "Generate structured note". When the structured sections are filled in, text left in this box is saved too, after them under "Narrative" — clear it if the sections already cover it.</span>
-      <textarea id="body" name="body" rows="<?= $aiNoteDraft ? 8 : 4 ?>" <?= field_aria('note_content', 'body-hint') ?>><?= h($bodyVal) ?></textarea>
+      <label for="body">Narrative note / paste messy session notes here <span class="hint">Type a free-text note, or paste your rough session notes and use "Generate structured note". When the structured sections are filled in, text left in this box is saved too, after them under "Narrative" — clear it if the sections already cover it.</span></label>
+      <textarea id="body" name="body" rows="<?= $aiNoteDraft ? 8 : 4 ?>" <?= field_aria('note_content') ?>><?= h($bodyVal) ?></textarea>
       <?= field_error('note_content') ?>
     </div>
     <?php if ($aiNoteDraft !== null && trim($noteIn('body')) !== ''): ?>
@@ -1768,10 +1788,10 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     <?php endif; ?>
     <button type="submit" name="add_note" value="1" class="btn btn-primary"><?= $editNote ? 'Save changes' : ($addendumParent ? 'Save addendum' : 'Save note') ?></button>
     <?php if (ai_feature_enabled('draft')): ?>
+    <span class="hint">Pick a format, paste your messy session notes in the box, then "Generate structured note" — it drafts the sections, flags anything missing, and pulls out homework for you to review before saving.</span>
     <button type="submit" name="ai_do" value="generate" class="btn btn-secondary" formnovalidate>Generate structured note</button>
     <button type="submit" name="ai_do" value="format" class="btn btn-secondary" formnovalidate>Format with AI</button>
     <button type="submit" name="ai_do" value="note" class="btn btn-secondary" formnovalidate>Clean up with AI</button>
-    <span class="hint">Pick a format, paste your messy session notes in the box, then "Generate structured note" — it drafts the sections, flags anything missing, and pulls out homework for you to review before saving.</span>
     <?php endif; ?>
   </form>
   <script>
@@ -2023,9 +2043,8 @@ $documents = $documents->fetchAll();
     <p class="hint">Fields marked * are required.</p>
     <div class="field"><label for="doc_title">Title <span class="hint">Defaults to the file name</span></label>
       <input type="text" id="doc_title" name="title" maxlength="190" value="<?= h(old_in('title')) ?>" <?= field_aria('title') ?>><?= field_error('title') ?></div>
-    <div class="field"><label for="doc_category">Category</label>
-      <select id="doc_category" name="category" aria-describedby="doc-category-hint"><?= select_options(cms_list_items('doc_categories'), old_in('category') ?: null) ?></select>
-      <p class="hint" id="doc-category-hint">Documents filed under Resource are shared on the client's portal, where the client can open and download them. Use another category for internal records.</p></div>
+    <div class="field"><label for="doc_category">Category <span class="hint">Documents filed under Resource are shared on the client's portal, where the client can open and download them. Use another category for internal records.</span></label>
+      <select id="doc_category" name="category"><?= select_options(cms_list_items('doc_categories'), old_in('category') ?: null) ?></select></div>
     <div class="field"><label><input type="checkbox" name="share_portal" value="1"<?= old_in('share_portal') !== '' ? ' checked' : '' ?>> Share it on the client's portal</label></div>
     <div class="field"><label><input type="checkbox" name="share_counselor" value="1"<?= old_in('share_counselor') !== '' ? ' checked' : '' ?>> Share it with their VR counselor on the counselor portal</label></div>
     <div class="field"><label for="document">File <?= required_mark() ?> <span class="hint">PDF, Office, text, or image · 25 MB max</span></label>

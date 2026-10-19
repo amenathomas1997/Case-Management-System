@@ -303,8 +303,8 @@ if (isset($_GET['manage']) && can('templates')) {
       <form method="post" action="curriculum.php" class="stacked" aria-labelledby="add-sk-h" novalidate><?= csrf_field() ?>
         <input type="hidden" name="curriculum_id" value="<?= $curId ?>">
         <?= form_error_summary(['skills' => 'Skills']) ?>
-        <div class="field"><label for="skills">Skills to add <span class="hint" id="skills-hint">one per line, up to 300 characters each</span></label>
-          <textarea id="skills" name="skills" rows="5" <?= field_aria('skills', 'skills-hint') ?>><?= h(old_in('skills')) ?></textarea><?= field_error('skills') ?></div>
+        <div class="field"><label for="skills">Skills to add <span class="hint">one per line, up to 300 characters each</span></label>
+          <textarea id="skills" name="skills" rows="5" <?= field_aria('skills') ?>><?= h(old_in('skills')) ?></textarea><?= field_error('skills') ?></div>
         <button type="submit" name="add_skill" value="1" class="btn btn-primary">Add skills</button>
       </form>
     </section>

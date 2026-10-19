@@ -13,7 +13,76 @@ declare(strict_types=1);
  * and logic that lives inline in a page is repeated here line for line, with the
  * page named, so permissions, caseload scope, validation, audit entries and email
  * stay the same. Every branch ends with out() or fail().
+ *
+ * 4.28.0: api.php includes this file for every action, for the retry guard below
+ * (api_idem_begin / api_idem_end); the parity actions themselves run only for
+ * API_PARITY_ACTIONS.
  */
+
+/*
+ * Sent again after a lost reply (4.28.0). A create or send action that carries the app's
+ * idem_key (8 to 64 letters, digits and hyphens) is done once: the first successful
+ * reply is kept for 24 hours as a marker row in login_attempts (as api_throttle_record
+ * keeps its events), keyed on the action, the user and the key, and the same key from
+ * the same user answers that reply again, marked repeat, with nothing created, booked or
+ * emailed a second time. A named lock holds a second copy arriving at the same moment
+ * until the first has answered (the lock ends with the request), as api_425's markers do.
+ * Only the reply's short values are kept (the marker has 190 characters): ok, ids,
+ * counts, flags and short words; the app reloads anything longer.
+ */
+if (!function_exists('api_idem_begin')) {
+    /** The marker prefix for this action, user and key; null when the key is missing or malformed. */
+    function api_idem_marker(string $action, int $uid, ?string $key): ?string {
+        $k = is_string($key) ? trim($key) : '';
+        if (!preg_match('/^[A-Za-z0-9-]{8,64}$/', $k)) return null;
+        return 'idem:' . substr(hash('sha256', $action . '|' . $uid . '|' . strtoupper($k)), 0, 40);
+    }
+
+    /** The earlier reply to send again (with repeat true), or null to go ahead. */
+    function api_idem_begin(string $action, int $uid, ?string $key): ?array {
+        $m = api_idem_marker($action, $uid, $key);
+        if ($m === null) return null;
+        // A copy arriving while the first is still working (a slow upload or email) waits for it.
+        // Not got (timed out, or an error): the first copy is still working, so this one stops.
+        try { $lk = db()->prepare('SELECT GET_LOCK(?, 30)'); $lk->execute([$m]); $got = (string)$lk->fetchColumn() === '1'; } catch (Throwable $e) { $got = false; }
+        if (!$got) out(['ok' => false, 'error' => 'This is still being processed. Try again in a moment.'], 409);
+        $q = db()->prepare('SELECT email FROM login_attempts WHERE email LIKE ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 1 DAY) ORDER BY id DESC LIMIT 1');
+        $q->execute([$m . ':%']);
+        $e = $q->fetchColumn();
+        if ($e === false) return null;
+        $raw = base64_decode(strtr(substr((string)$e, strlen($m) + 1), '-_', '+/'), true);
+        $reply = $raw === false ? null : json_decode($raw, true);
+        if (!is_array($reply)) $reply = ['ok' => true];
+        return ['ok' => true] + $reply + ['repeat' => true];
+    }
+
+    /** Keep a successful reply for 24 hours, so a copy sent again gets it instead of doing the action twice. */
+    function api_idem_end(string $action, int $uid, ?string $key, array $reply): void {
+        $m = api_idem_marker($action, $uid, $key);
+        if ($m === null || ($reply['ok'] ?? null) !== true) return;
+        $room = 190 - strlen($m) - 1;
+        $enc = fn(array $r): string => rtrim(strtr(base64_encode((string)json_encode($r)), '+/', '-_'), '=');
+        // Short values only, ids first, so the most useful part of the reply always fits.
+        $short = [];
+        foreach ($reply as $k => $v) {
+            if ($k === 'ok' || $k === 'repeat' || !(is_int($v) || is_float($v) || is_bool($v) || $v === null || (is_string($v) && strlen($v) <= 60))) continue;
+            $short[$k] = $v;
+        }
+        uksort($short, fn($a, $b) => [!preg_match('/(^id$|_id$|_ids?$)/', (string)$a), (string)$a] <=> [!preg_match('/(^id$|_id$|_ids?$)/', (string)$b), (string)$b]);
+        $kept = ['ok' => true];
+        foreach ($short as $k => $v) {
+            $try = $kept + [$k => $v];
+            if (strlen($enc($try)) <= $room) $kept = $try;
+        }
+        try {
+            db()->prepare('INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)')->execute([client_ip(), $m . ':' . $enc($kept)]);
+        } catch (Throwable $e) {
+            error_log('api_idem_end: marker not kept: ' . get_class($e));
+        }
+    }
+}
+
+if (!in_array($action ?? '', API_PARITY_ACTIONS, true)) return;
 
 require_once __DIR__ . '/task_filters.php';
 

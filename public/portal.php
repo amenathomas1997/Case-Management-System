@@ -379,13 +379,10 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
     // The client books an open time with their instructor (4.20.0).
     if (isset($_POST['self_book'])) {
         $slotStart = ctype_digit((string)($_POST['slot'] ?? '')) ? (int)$_POST['slot'] : 0;
-        $res = ['error' => 'none chosen'];
-        if ($slotStart <= 0) flash_ui('Choose a time first.', 'error');
-        else {
-            $res = self_booking_book($client, $slotStart);
-            if ($res['error'] === null) flash_ui('Your session is booked. It is listed under Upcoming sessions.');
-            else flash_ui($res['error'], 'error');
-        }
+        // A problem is tied to the time field, with the form's summary (4.28.0), not a flash.
+        $res = $slotStart <= 0 ? ['error' => 'Choose a time first.'] : self_booking_book($client, $slotStart);
+        if ($res['error'] === null) flash_ui('Your session is booked. It is listed under Upcoming sessions.');
+        else keep_field_errors(['book_slot' => $res['error']]);
         redirect('portal.php?t=' . $token . '&lang=' . page_lang() . ($res['error'] !== null ? '#book-h' : '#sess-h'));
     }
     // The client confirms one of the times offered on their request (3.0.52).
@@ -885,14 +882,15 @@ document.addEventListener('submit', function (e) {
   <?php elseif (!$bookSlots): ?>
   <p><?= t('There are no open times in the next few weeks. Send your instructor a request below.') ?></p>
   <?php else: ?>
-  <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked"><?= csrf_field() ?>
+  <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['book_slot' => 'Time with your instructor'], ['book_slot' => 'slot']) ?>
     <div class="field"><label for="slot"><?= t('Time with your instructor') ?></label>
-      <select id="slot" name="slot">
+      <select id="slot" name="slot" <?= field_aria('book_slot') ?>>
         <option value=""><?= t('Choose a time') ?></option>
       <?php foreach ($bookSlots as $bs): ?>
         <option value="<?= (int)$bs['start'] ?>"><?= page_lang() === 'es' ? h(portal_when_es($bs['start'])) : en(portal_date('l, F j \a\t g:i A' . (portal_tz() ? ' T' : ''), $bs['start'])) ?>, <?= (int)round(($bs['end'] - $bs['start']) / 60) ?> <?= t('minutes') ?>, <?= $bs['remote'] ? h(__('online')) : h(__('in person at')) . ' ' . en((string)$bs['location']) ?></option>
       <?php endforeach; ?>
-      </select></div>
+      </select><?= field_error('book_slot') ?></div>
     <button type="submit" name="self_book" value="1" class="btn btn-primary btn-sm" onclick="return confirm(<?= h(json_encode(__('Book this time?'))) ?>);"><?= t('Book this time') ?></button>
   </form>
   <?php endif; ?>
@@ -1051,10 +1049,9 @@ $homework = $hwStmt->fetchAll();
     <?= csrf_field() ?>
     <?= form_error_summary(['practice' => 'What did you practice?', 'minutes' => 'How long (minutes)']) ?>
     <div class="grid grid-2">
-      <div class="field"><label for="practice"><?= t('What did you practice?') ?> <span class="hint"><?= t('(required)') ?></span></label><p class="hint" id="prac-hint"><?= t('Up to 2,000 characters.') ?></p><textarea id="practice" name="practice" rows="2" required <?= field_aria('practice', 'prac-hint') ?>><?= h($oldPrac ? old_in('practice') : '') ?></textarea><?= field_error('practice') ?></div>
-      <div class="field"><label for="minutes"><?= t('How long (minutes)') ?> <span class="hint"><?= t('(optional)') ?></span></label>
-        <p class="hint" id="min-hint"><?= t('Whole minutes, up to 600.') ?></p>
-        <input type="number" id="minutes" name="minutes" min="0" max="600" step="1" inputmode="numeric" value="<?= h($oldPrac ? old_in('minutes') : '') ?>" <?= field_aria('minutes', 'min-hint') ?>><?= field_error('minutes') ?></div>
+      <div class="field"><label for="practice"><?= t('What did you practice?') ?> <span class="hint"><?= t('(required)') ?> <?= t('Up to 2,000 characters.') ?></span></label><textarea id="practice" name="practice" rows="2" required <?= field_aria('practice') ?>><?= h($oldPrac ? old_in('practice') : '') ?></textarea><?= field_error('practice') ?></div>
+      <div class="field"><label for="minutes"><?= t('How long (minutes)') ?> <span class="hint"><?= t('(optional)') ?> <?= t('Whole minutes, up to 600.') ?></span></label>
+        <input type="number" id="minutes" name="minutes" min="0" max="600" step="1" inputmode="numeric" value="<?= h($oldPrac ? old_in('minutes') : '') ?>" <?= field_aria('minutes') ?>><?= field_error('minutes') ?></div>
     </div>
     <button type="submit" name="log_practice" value="1" class="btn btn-secondary"><?= t('Log practice') ?></button>
   </form>
@@ -1125,7 +1122,7 @@ if ($devLoans || $devRepairs || $devChecks): ?>
   <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked"><?= csrf_field() ?>
     <?= form_error_summary(['in_use-' . $fid => 'Are you still using it?'], ['in_use-' . $fid => 'use-yes-' . $fid]) ?>
     <input type="hidden" name="followup_id" value="<?= $fid ?>">
-    <fieldset role="radiogroup" aria-required="true" <?= field_aria('in_use-' . $fid) ?>><legend><?= t('Are you still using it?') ?> <span class="visually-hidden">(<?= t('required') ?>)</span></legend>
+    <fieldset role="radiogroup" aria-required="true" <?= field_aria('in_use-' . $fid) ?>><legend><?= t('Are you still using it?') ?> <span class="hint"><?= t('(required)') ?></span></legend>
       <?= field_error('in_use-' . $fid) ?>
       <label><input type="radio" id="use-yes-<?= $fid ?>" name="in_use" value="yes"> <?= t('Yes') ?></label>
       <label><input type="radio" name="in_use" value="no"> <?= t('No') ?></label>
@@ -1159,9 +1156,8 @@ if ($devLoans || $devRepairs || $devChecks): ?>
       <div class="field"><label><input type="radio" name="req_type" value="<?= $rtVal ?>" <?= ($oldReq !== '' ? $oldReq : 'appointment') === $rtVal ? 'checked' : '' ?>> <?= t($rtLabel) ?></label></div>
       <?php endforeach; ?>
     </fieldset>
-    <div class="field"><label for="rdetails"><?= t('Tell us what you need') ?> <span class="hint"><?= t('(required)') ?></span></label>
-      <p class="hint" id="rdetails-hint"><?= t('Preferred days and times, what you need, or your question.') ?> <?= t('Up to 2,000 characters.') ?></p>
-      <textarea id="rdetails" name="details" rows="3" required <?= field_aria('req_details', 'rdetails-hint') ?>><?= h($oldReq !== '' ? old_in('details') : '') ?></textarea><?= field_error('req_details') ?></div>
+    <div class="field"><label for="rdetails"><?= t('Tell us what you need') ?> <span class="hint"><?= t('(required)') ?> <?= t('Preferred days and times, what you need, or your question.') ?> <?= t('Up to 2,000 characters.') ?></span></label>
+      <textarea id="rdetails" name="details" rows="3" required <?= field_aria('req_details') ?>><?= h($oldReq !== '' ? old_in('details') : '') ?></textarea><?= field_error('req_details') ?></div>
     <button type="submit" name="new_request" value="1" class="btn btn-primary"><?= t('Send request') ?></button>
   </form>
   <?php endif; ?>
@@ -1198,12 +1194,12 @@ if ($devLoans || $devRepairs || $devChecks): ?>
 <section class="card" aria-labelledby="up-h">
   <h2 id="up-h"><?= t('Share a document') ?></h2>
   <?php if (!$caseClosed): ?>
-  <p class="muted" id="up-hint"><?= t('Upload a document for your instructor — a form, an ID, or anything they asked for. PDF, Office, text or image files up to 15 megabytes (MB).') ?></p>
+  <p class="muted"><?= t('Upload a document for your instructor — a form, an ID, or anything they asked for. PDF, Office, text or image files up to 15 megabytes (MB).') ?></p>
   <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" enctype="multipart/form-data" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['doc_title' => 'What is this?', 'document' => 'Choose a file']) ?>
     <div class="field"><label for="doc_title"><?= t('What is this?') ?> <span class="hint"><?= t('(optional)') ?></span></label><input type="text" id="doc_title" name="doc_title" maxlength="190" value="<?= h(old_in('upload_doc') !== '' ? old_in('doc_title') : '') ?>" <?= field_aria('doc_title') ?>><?= field_error('doc_title') ?></div>
-    <div class="field"><label for="document"><?= t('Choose a file') ?> <span class="hint"><?= t('(required)') ?></span></label><input type="file" id="document" name="document" accept=".pdf,.docx,.xlsx,.txt,.rtf,.png,.jpg,.jpeg" required <?= field_aria('document', 'up-hint') ?>><?= field_error('document') ?></div>
+    <div class="field"><label for="document"><?= t('Choose a file') ?> <span class="hint"><?= t('(required)') ?></span></label><input type="file" id="document" name="document" accept=".pdf,.docx,.xlsx,.txt,.rtf,.png,.jpg,.jpeg" required <?= field_aria('document') ?>><?= field_error('document') ?></div>
     <button type="submit" name="upload_doc" value="1" class="btn btn-primary"><?= t('Upload') ?></button>
   </form>
   <?php endif; ?>
@@ -1250,9 +1246,8 @@ if (!$caseClosed || $thread): ?>
     <?= csrf_field() ?>
     <?= form_error_summary(['message' => 'Your message', 'msg_file' => 'Attach a file']) ?>
     <div class="field">
-      <label for="message"><?= t('Your message') ?> <span class="hint"><?= t('(required unless you attach a file)') ?></span></label>
-      <p class="hint" id="message-hint"><?= t('Up to 5,000 characters.') ?></p>
-      <textarea id="message" name="message" rows="4" <?= field_aria('message', 'message-hint') ?>><?= h(old_in('send_message') !== '' ? old_in('message') : '') ?></textarea>
+      <label for="message"><?= t('Your message') ?> <span class="hint"><?= t('(required unless you attach a file)') ?> <?= t('Up to 5,000 characters.') ?></span></label>
+      <textarea id="message" name="message" rows="4" <?= field_aria('message') ?>><?= h(old_in('send_message') !== '' ? old_in('message') : '') ?></textarea>
       <?= field_error('message') ?>
     </div>
     <div class="field"><label for="msg_file"><?= t('Attach a file') ?> <span class="hint"><?= t('(optional; PDF, Office, text or image, up to 15 MB)') ?></span></label>
@@ -1321,7 +1316,7 @@ if (!$caseClosed || $thread): ?>
           <option value=""><?= h(__('No preference')) ?></option>
           <?= select_options($contactOpts, $pv('p_contact', $client['a11y_contact'] ?? '')) ?>
         </select></div>
-      <div class="field"><label for="p_notes"><?= t('Anything else we should know') ?></label><p class="hint" id="p-notes-hint"><?= t('Up to 16,000 characters.') ?></p><textarea id="p_notes" name="p_notes" rows="2" <?= field_aria('p_notes', 'p-notes-hint') ?>><?= h($pv('p_notes', $client['a11y_notes'] ?? '')) ?></textarea><?= field_error('p_notes') ?></div>
+      <div class="field"><label for="p_notes"><?= t('Anything else we should know') ?> <span class="hint"><?= t('Up to 16,000 characters.') ?></span></label><textarea id="p_notes" name="p_notes" rows="2" <?= field_aria('p_notes') ?>><?= h($pv('p_notes', $client['a11y_notes'] ?? '')) ?></textarea><?= field_error('p_notes') ?></div>
     </fieldset>
     <button type="submit" name="update_profile" value="1" class="btn btn-primary"><?= t('Save my information') ?></button>
   </form>

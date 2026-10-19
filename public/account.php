@@ -1,7 +1,7 @@
 <?php
 require __DIR__ . '/inc/bootstrap.php';
 require __DIR__ . '/inc/layout.php';
-require __DIR__ . '/inc/totp.php';
+require_once __DIR__ . '/inc/totp.php';
 require __DIR__ . '/inc/account_actions.php';
 csrf_check();
 $user = require_login();
@@ -164,8 +164,8 @@ page_header('My Account', $user, 'account');
 <p class="muted">Your own settings: display, password, sign-in methods and calendar address.</p>
 <?php if (can('admin')): // Agency-wide settings moved to their own page (3.0.27). ?>
 <div class="page-actions">
-  <a class="btn btn-primary" href="admin.php" aria-describedby="admin-link-hint">Administration</a>
-  <span id="admin-link-hint" class="muted">Team, permissions, sign-in, forms, email, data retention and AI settings.</span>
+  <a class="btn btn-primary" href="admin.php">Administration</a>
+  <span class="muted">Team, permissions, sign-in, forms, email, data retention and AI settings.</span>
 </div>
 <?php endif; ?>
 <section class="card" aria-labelledby="display-settings">
@@ -282,15 +282,13 @@ page_header('My Account', $user, 'account');
         <?= csrf_field() ?>
         <?= form_error_summary(['totp_pw' => 'Account password', 'totp_code' => 'Code from the app']) ?>
         <div class="field">
-          <label for="totp_pw">Confirm your account password (required)</label>
-          <span class="hint" id="totp_pw-hint">Adding a sign-in method is sensitive, so your password is checked first.</span>
-          <input type="password" id="totp_pw" name="password" required autocomplete="current-password" <?= field_aria('totp_pw', 'totp_pw-hint') ?>>
+          <label for="totp_pw">Confirm your account password <?= required_mark() ?> <span class="hint">Adding a sign-in method is sensitive, so your password is checked first.</span></label>
+          <input type="password" id="totp_pw" name="password" required autocomplete="current-password" <?= field_aria('totp_pw') ?>>
           <?= field_error('totp_pw') ?>
         </div>
         <div class="field">
-          <label for="totp_code">Enter the 6-digit code the app shows now, to confirm</label>
-          <span class="hint" id="totp_code-hint">Codes change every 30 seconds: enter the code shown right before you choose Confirm and enable.</span>
-          <input type="text" id="totp_code" name="totp_code" class="otp-input" inputmode="numeric" maxlength="20" required autocomplete="one-time-code" <?= field_aria('totp_code', 'totp_code-hint') ?>>
+          <label for="totp_code">Enter the 6-digit code the app shows now, to confirm <span class="hint">Codes change every 30 seconds: enter the code shown right before you choose Confirm and enable.</span></label>
+          <input type="text" id="totp_code" name="totp_code" class="otp-input" inputmode="numeric" maxlength="20" required autocomplete="one-time-code" <?= field_aria('totp_code') ?>>
           <?= field_error('totp_code') ?>
         </div>
         <button type="submit" name="totp_confirm" value="1" class="btn btn-primary">Confirm and enable</button>
@@ -330,10 +328,10 @@ page_header('My Account', $user, 'account');
     $calToken = $ct->fetchColumn();
     // Creating or replacing the address re-checks the account password (as
     // adding an authenticator app does); the field is the same in both forms.
-    $calPwField = '<div class="field"><label for="cal_pw">Confirm your account password for the calendar address (required)</label>'
-        . '<span class="hint" id="cal_pw-hint">The address gives access to your schedule, so your password is checked first.'
+    $calPwField = '<div class="field"><label for="cal_pw">Confirm your account password for the calendar address ' . required_mark()
+        . ' <span class="hint">The address gives access to your schedule, so your password is checked first.'
         . (entra_cfg() ? ' If you sign in only with Microsoft and have no password here, first set one with "Forgot your password?" on the sign-in page.' : '')
-        . '</span><input type="password" id="cal_pw" name="password" required autocomplete="current-password" ' . field_aria('cal_pw', 'cal_pw-hint') . '>'
+        . '</span></label><input type="password" id="cal_pw" name="password" required autocomplete="current-password" ' . field_aria('cal_pw') . '>'
         . field_error('cal_pw') . '</div>';
     ?>
     <?php if (!can('schedule')): ?>
@@ -434,7 +432,7 @@ page_header('My Account', $user, 'account');
       <input type="text" id="pk_name" maxlength="120" value="">
     </div>
     <div class="field">
-      <label for="pk_pw">Confirm your account password <span class="hint">required — adding a sign-in method is sensitive</span></label>
+      <label for="pk_pw">Confirm your account password <?= required_mark() ?> <span class="hint">adding a sign-in method is sensitive</span></label>
       <input type="password" id="pk_pw" autocomplete="current-password">
     </div>
     <button type="button" id="pk_add" class="btn btn-secondary">Add a passkey on this device</button>
@@ -442,13 +440,20 @@ page_header('My Account', $user, 'account');
     <p class="field-error" id="pk_err" role="alert"></p>
     <script>
     (function(){
-      var btn = document.getElementById('pk_add'), err = document.getElementById('pk_err');
+      var btn = document.getElementById('pk_add'), err = document.getElementById('pk_err'), pw = document.getElementById('pk_pw');
       function b64uToBuf(s){s=s.replace(/-/g,'+').replace(/_/g,'/');var bin=atob(s),a=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i);return a.buffer;}
       function bufToB64u(b){var a=new Uint8Array(b),s='';for(var i=0;i<a.length;i++)s+=String.fromCharCode(a[i]);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
       function fail(m){err.textContent=m;}
+      // A message the server wrote (wrong password, too many tries, already registered,
+      // the device did not confirm it was you) is shown as it is (4.28.0), as on the sign-in page.
+      function serverError(m, onPassword){var e=new Error(m);e.fromServer=true;e.onPassword=!!onPassword;return e;}
+      function markPassword(bad){
+        if (bad) { pw.setAttribute('aria-invalid','true'); pw.setAttribute('aria-describedby','pk_err'); }
+        else { pw.removeAttribute('aria-invalid'); pw.removeAttribute('aria-describedby'); }
+      }
       if (!window.PublicKeyCredential) { btn.disabled = true; fail('This browser does not support passkeys.'); return; }
       btn.addEventListener('click', function(){
-        err.textContent = '';
+        err.textContent = ''; markPassword(false);
         // The password is checked before the device prompt, so a typo never
         // costs a Face ID / PIN / security-key round trip.
         fetch('passkey.php?action=reg_options', {method:'POST', credentials:'same-origin',
@@ -458,7 +463,8 @@ page_header('My Account', $user, 'account');
           .then(function(d){
             // Signed out after too many wrong passwords: the sign-in page explains.
             if (d.redirect) { location.href = d.redirect; return new Promise(function(){}); }
-            if (!d.ok) throw new Error(d.error || 'Could not start.');
+            // Before the device prompt, the only refusals are about the password.
+            if (!d.ok) throw serverError(d.error || 'The passkey could not be started. Try again.', true);
             var o = d.options;
             o.challenge = b64uToBuf(o.challenge);
             o.user.id = b64uToBuf(o.user.id);
@@ -476,13 +482,15 @@ page_header('My Account', $user, 'account');
           })
           .then(function(r){return r.json();})
           .then(function(d){
-            if (!d.ok) throw new Error(d.error || 'Could not save.');
+            if (!d.ok) throw serverError(d.error || 'The passkey could not be saved. Try again.', false);
             // The server queued a "Passkey added" message; the reloaded page
             // moves focus to it, so the save is announced.
             location.hash = 'passkeys';
             location.reload();
           })
-          .catch(function(e){ fail(e && (e.name === 'NotAllowedError' || e.name === 'AbortError') ? 'The passkey was not added: the request was cancelled or timed out. Choose Add passkey to try again.' : (e && e.name === 'InvalidStateError' ? 'This passkey is already registered on this account.' : 'The passkey was not added. Try again, or use a different device or browser.')); });
+          .catch(function(e){
+            if (e && e.fromServer) { markPassword(e.onPassword); fail(e.message); return; }
+            fail(e && (e.name === 'NotAllowedError' || e.name === 'AbortError') ? 'The passkey was not added: the request was cancelled or timed out. Choose Add passkey to try again.' : (e && e.name === 'InvalidStateError' ? 'This passkey is already registered on this account.' : 'The passkey was not added. Try again, or use a different device or browser.')); });
       });
     })();
     </script>

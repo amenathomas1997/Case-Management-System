@@ -40,7 +40,8 @@ if (isset($_GET['download'])) {
     header('Content-Disposition: attachment; filename="staff-compliance-' . date('Y-m-d') . '.csv"');
     $out = fopen('php://output', 'w');
     fwrite($out, "\xEF\xBB\xBF"); // so spreadsheets read accented names correctly
-    // The shared writer (inc/security.php) keeps a cell from being read as a formula.
+    // The shared writer (inc/security.php) runs every cell through csv_cell() (4.28.0), so a credential
+    // name a staff member typed (for example one starting with =) is never read as a formula.
     write_csv_row($out, ['Staff member', 'Kind', 'Item', 'Status', 'Date', 'Detail']);
     foreach ($rows as $r) write_csv_row($out, array_slice($r, 1));
     fclose($out);

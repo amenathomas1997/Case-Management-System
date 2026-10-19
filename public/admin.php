@@ -330,15 +330,13 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
       <?= field_error('nu_email') ?>
     </div>
     <div class="field">
-      <label for="nu_password">Temporary password (leave empty to email them an invitation instead; otherwise at least 10 characters)</label>
-      <?php if ($nuRefill): ?><span class="hint" id="nu_password-again">For safety a typed password is never kept after an error: type it again.</span><?php endif; ?>
- <input type="text" id="nu_password" name="password" minlength="10" autocomplete="off" <?= field_aria('nu_password', $nuRefill ? 'nu_password-again' : '') ?>>
+      <label for="nu_password">Temporary password (leave empty to email them an invitation instead; otherwise at least 10 characters)<?php if ($nuRefill): ?> <span class="hint">For safety a typed password is never kept after an error: type it again.</span><?php endif; ?></label>
+      <input type="text" id="nu_password" name="password" minlength="10" autocomplete="off" <?= field_aria('nu_password') ?>>
       <?= field_error('nu_password') ?>
     </div>
     <div class="field">
-      <label for="nu_group">Permission group *</label>
-      <span class="hint" id="nu_group-hint">Decides which areas this person can open. "Own caseload only" groups see just the clients assigned to them.</span>
-      <select id="nu_group" name="group_id" required <?= field_aria('nu_group', 'nu_group-hint') ?>>
+      <label for="nu_group">Permission group * <span class="hint">Decides which areas this person can open. "Own caseload only" groups see just the clients assigned to them.</span></label>
+      <select id="nu_group" name="group_id" required <?= field_aria('nu_group') ?>>
         <option value="">— Choose a group —</option>
         <?php foreach ($allGroups as $g): ?>
         <option value="<?= (int)$g['id'] ?>" <?= $nuGroup === (string)(int)$g['id'] ? 'selected' : '' ?>><?= h($g['name']) ?><?= $g['own_caseload_only'] ? ' (own caseload only)' : '' ?></option>
@@ -348,9 +346,8 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
       <?= field_error('nu_group') ?>
     </div>
     <div class="field">
-      <label for="nu_role">Legacy role</label>
-      <span class="hint" id="nu_role-hint">Used only with "Legacy (by role below)": staff then see every client and billing, admins everything. Both can provide any service, including counseling to Pre-ETS students.</span>
-      <select id="nu_role" name="role" aria-describedby="nu_role-hint">
+      <label for="nu_role">Legacy role <span class="hint">Used only with "Legacy (by role below)": staff then see every client and billing, admins everything. Both can provide any service, including counseling to Pre-ETS students.</span></label>
+      <select id="nu_role" name="role">
         <option value="instructor">Staff (instructor/counselor)</option>
         <option value="admin" <?= $nuRefill && old_in('role') === 'admin' ? 'selected' : '' ?>>Admin</option>
       </select>
@@ -490,9 +487,8 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
   <form method="post" action="admin.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['support_phone' => 'Support phone number']) ?>
     <div class="field">
-      <label for="support_phone">Support phone number</label>
-      <span class="hint" id="support_phone-hint">Shown to clients, families, guardians and referrers on the public pages (the client portal, the public referral form and consent and survey links) as the number to call for help. Digits, spaces, plus, hyphens and parentheses only, up to 30 characters. Leave it blank to show none.</span>
-      <input type="text" id="support_phone" name="support_phone" inputmode="tel" autocomplete="off" maxlength="30" value="<?= h($curPhone) ?>" <?= field_aria('support_phone', 'support_phone-hint') ?>>
+      <label for="support_phone">Support phone number <span class="hint">Shown to clients, families, guardians and referrers on the public pages (the client portal, the public referral form and consent and survey links) as the number to call for help. Digits, spaces, plus, hyphens and parentheses only, up to 30 characters. Leave it blank to show none.</span></label>
+      <input type="text" id="support_phone" name="support_phone" inputmode="tel" autocomplete="off" maxlength="30" value="<?= h($curPhone) ?>" <?= field_aria('support_phone') ?>>
       <?= field_error('support_phone') ?>
     </div>
     <button type="submit" name="save_support_phone" value="1" class="btn btn-secondary btn-sm">Save support phone number</button>
@@ -594,25 +590,22 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
       <div class="field"><label><input type="checkbox" name="sr_business" value="1" <?= ($srRefill ? old_in('sr_business') === '1' : $srCfg['business']) ? 'checked' : '' ?>> Business summary (referrals, clients served, sessions, no-shows, hours, closures, compared with the period before and last year; totals only)</label></div>
     </fieldset>
     <div class="field">
-      <label for="sr_recipients">Recipients</label>
-      <span class="hint" id="sr_recipients-hint">One email address per line (commas also work). Each address receives its own copy.</span>
-      <textarea id="sr_recipients" name="sr_recipients" rows="3" <?= field_aria('sr_recipients', 'sr_recipients-hint') ?>><?= h($srRefill ? old_in('sr_recipients') : implode("\n", $srCfg['recipients'])) ?></textarea>
+      <label for="sr_recipients">Recipients <span class="hint">One email address per line (commas also work). Each address receives its own copy.</span></label>
+      <textarea id="sr_recipients" name="sr_recipients" rows="3" <?= field_aria('sr_recipients') ?>><?= h($srRefill ? old_in('sr_recipients') : implode("\n", $srCfg['recipients'])) ?></textarea>
       <?= field_error('sr_recipients') ?>
     </div>
     <div class="field">
-      <label for="sr_day">Day of the month</label>
-      <span class="hint" id="sr_day-hint">1 to 28, so every month has the day. The reports go out with the morning automated run on that day; a run missed that day is caught up on the next run that month.</span>
+      <label for="sr_day">Day of the month <span class="hint">1 to 28, so every month has the day. The reports go out with the morning automated run on that day; a run missed that day is caught up on the next run that month.</span></label>
       <?php $srDaySel = $srRefill ? old_in('sr_day') : (string)$srCfg['day']; ?>
-      <select id="sr_day" name="sr_day" <?= field_aria('sr_day', 'sr_day-hint') ?>>
+      <select id="sr_day" name="sr_day" <?= field_aria('sr_day') ?>>
         <?php for ($d = 1; $d <= 28; $d++): ?><option value="<?= $d ?>" <?= $srDaySel === (string)$d ? 'selected' : '' ?>><?= $d ?></option><?php endfor; ?>
       </select>
       <?= field_error('sr_day') ?>
     </div>
     <div class="field">
-      <label for="sr_period">Period each report covers</label>
-      <span class="hint" id="sr_period-hint">Previous month sends every month; previous quarter sends once a quarter, in the month after it ends.</span>
+      <label for="sr_period">Period each report covers <span class="hint">Previous month sends every month; previous quarter sends once a quarter, in the month after it ends.</span></label>
       <?php $srPeriodSel = $srRefill ? old_in('sr_period') : $srCfg['period']; ?>
-      <select id="sr_period" name="sr_period" <?= field_aria('sr_period', 'sr_period-hint') ?>>
+      <select id="sr_period" name="sr_period" <?= field_aria('sr_period') ?>>
         <?php foreach (SCHEDULED_REPORT_PERIODS as $k => $label): ?><option value="<?= h($k) ?>" <?= $srPeriodSel === $k ? 'selected' : '' ?>><?= h($label) ?></option><?php endforeach; ?>
       </select>
       <?= field_error('sr_period') ?>
@@ -629,8 +622,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
   </form>
   <h3 id="report-sending-h">Counselor progress reports</h3>
   <form method="post" action="admin.php#report-sending-h" class="stacked"><?= csrf_field() ?>
-    <div class="field"><label><input type="checkbox" name="reports_auto_send" value="1"<?= (setting('reports_auto_send') ?? '0') === '1' ? ' checked' : '' ?>> Email due progress reports to counselors automatically, without review</label>
-      <span class="hint" id="auto-send-hint">Unticked (recommended): each due report opens a task for the client's instructor, who adds a short narrative and sends it from the track's Send report page.</span></div>
+    <div class="field"><label><input type="checkbox" name="reports_auto_send" value="1"<?= (setting('reports_auto_send') ?? '0') === '1' ? ' checked' : '' ?>> Email due progress reports to counselors automatically, without review <span class="hint">Unticked (recommended): each due report opens a task for the client's instructor, who adds a short narrative and sends it from the track's Send report page.</span></label></div>
     <button type="submit" name="save_report_sending" value="1" class="btn btn-secondary btn-sm">Save report sending</button>
   </form>
 </section>

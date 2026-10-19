@@ -3,7 +3,8 @@ declare(strict_types=1);
 // Referral deadlines report (4.25.0): how each referral received in a period met the deadlines its agency
 // sets (Funding agencies: business days to contact, and to hold the first assessment once accepted; 3 and 10
 // when none is set). Measured by the tasks the deadlines create: "Contact new referral" (ref-contact-<referral>)
-// and "Schedule initial assessment" (assess-<client>), done on or before their due date, or not.
+// and "Schedule initial assessment" (assess-<client>), done on or before their due date, or not. A referral
+// attached to an existing client is judged by its "Follow up the new referral" task (reref-<referral>, 4.28.0).
 
 /**
  * The report for referrals received from $from to $to: totals, by agency, and each referral. $scopeUser limits
@@ -15,9 +16,17 @@ function referral_deadline_report(string $from, string $to, ?int $scopeUser = nu
             at.due_date AS assess_due, at.status AS assess_status, at.done_at AS assess_done
         FROM referrals r
         LEFT JOIN tasks ct ON ct.auto_key = CONCAT('ref-contact-', r.id)
-        LEFT JOIN tasks at ON r.client_id IS NOT NULL AND at.auto_key = CONCAT('assess-', r.client_id)
+        LEFT JOIN tasks rt ON rt.auto_key = CONCAT('reref-', r.id)
+        LEFT JOIN tasks at0 ON r.client_id IS NOT NULL AND at0.auto_key = CONCAT('assess-', r.client_id) AND at0.created_at >= r.created_at
         LEFT JOIN clients c ON c.id = r.client_id
-        WHERE DATE(r.created_at) BETWEEN ? AND ?" . ($scopeUser !== null ? ' AND (r.assigned_to = ? OR c.assigned_to = ?)' : '') . ' ORDER BY r.created_at DESC';
+        WHERE DATE(r.created_at) BETWEEN ? AND ?" . ($scopeUser !== null
+            // The rule referral_in_scope() uses (4.28.0): a converted referral belongs to whoever holds its
+            // client now; an open one to the person it is assigned to.
+            ? " AND ((r.status = 'Converted' AND c.assigned_to = ?) OR (r.status <> 'Converted' AND r.assigned_to = ?))" : '') . ' ORDER BY r.created_at DESC';
+    // A referral attached to an existing client (4.28.0) is judged by its own follow-up task
+    // (reref-<referral>), never by the assessment task of an earlier referral for that client.
+    $sql = str_replace('at.due_date AS assess_due, at.status AS assess_status, at.done_at AS assess_done',
+        'IF(rt.id IS NOT NULL, rt.due_date, at0.due_date) AS assess_due, IF(rt.id IS NOT NULL, rt.status, at0.status) AS assess_status, IF(rt.id IS NOT NULL, rt.done_at, at0.done_at) AS assess_done', $sql);
     $q = db()->prepare($sql);
     $q->execute($scopeUser !== null ? [$from, $to, $scopeUser, $scopeUser] : [$from, $to]);
     $today = date('Y-m-d');

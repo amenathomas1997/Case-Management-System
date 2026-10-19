@@ -172,6 +172,8 @@ struct ScoredDetailView: View {
 
 struct AdministerSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let clientId: Int
     let instrument: Instrument
@@ -285,9 +287,15 @@ struct AdministerSheet: View {
         var scoreDict: [String: Int] = [:]
         for it in items { if let v = scores[it.id] { scoreDict[String(it.id)] = v } }
         do {
-            let _: OKResponse = try await api.call("save_scored", body: ["client_id": clientId, "instrument_id": instrument.id, "assessed_on": APIDate.day(date), "notes": notes, "scores": scoreDict])
+            var body: [String: Any] = ["client_id": clientId, "instrument_id": instrument.id, "assessed_on": APIDate.day(date), "notes": notes, "scores": scoreDict]
+            body["idem_key"] = idem.key(for: body)
+            let _: OKResponse = try await api.call("save_scored", body: body)
+            idem.answered()
             // The list announces the result once this sheet has gone.
             onDone(); dismiss()
-        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        } catch {
+            idem.failed(error)
+            busy = false; showFormError(IdemKey.message(for: error, what: "the assessment"), in: &self.error)
+        }
     }
 }

@@ -77,6 +77,7 @@ fun ScoredNewScreen(api: Api, nav: NavHostController, clientId: Int) {
     var date by rememberSaveable { mutableStateOf(today()) }
     var notes by rememberSaveable { mutableStateOf("") }
     var confirming by remember { mutableStateOf(false) }
+    var scoredKey by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -105,7 +106,9 @@ fun ScoredNewScreen(api: Api, nav: NavHostController, clientId: Int) {
             if (confirming) Confirm("Save this assessment?", "All ${its.size} items rated, total score ${scores.values.sum()}. A saved assessment cannot be changed.", "Save assessment", {
                 scope.launchSave({ busy = it }, { error = it }) {
                     val s = JSONObject(); scores.forEach { (k, v) -> s.put(k.toString(), v) }
-                    val res = api.call("save_scored", body = JSONObject().put("client_id", clientId).put("instrument_id", chosen.toInt()).put("assessed_on", date.trim()).put("notes", notes.trim()).put("scores", s))
+                    // 4.28.0: a retry after a lost reply saves it once (see sendOnce).
+                    val res = api.callOnce("save_scored", JSONObject().put("client_id", clientId).put("instrument_id", chosen.toInt()).put("assessed_on", date.trim()).put("notes", notes.trim()).put("scores", s),
+                        scoredKey, { scoredKey = it }, "the assessment")
                     Flash.pending = "Assessment saved: ${res.optInt("total")} of ${res.optInt("max")}."
                     nav.popBackStack()
                 }

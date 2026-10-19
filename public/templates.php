@@ -371,9 +371,8 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
     <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['category' => 'Category', 'specific_goal' => 'Specific objective', 'measurable_metric' => 'Measurable criteria', 'focus_area' => 'Focus area']) ?>
     <p class="hint">Fields marked * are required.</p>
-    <div class="field"><label for="category">Category <?= required_mark() ?></label>
-      <span class="hint" id="category-hint">e.g., JAWS / Screen Reader, iOS / Mobile</span>
-      <input type="text" id="category" name="category" required maxlength="80" value="<?= h(old_in('category')) ?>" <?= field_aria('category', 'category-hint') ?>><?= field_error('category') ?></div>
+    <div class="field"><label for="category">Category <?= required_mark() ?> <span class="hint">e.g., JAWS / Screen Reader, iOS / Mobile</span></label>
+      <input type="text" id="category" name="category" required maxlength="80" value="<?= h(old_in('category')) ?>" <?= field_aria('category') ?>><?= field_error('category') ?></div>
     <div class="field"><label for="specific_goal">Specific objective <?= required_mark() ?></label>
       <textarea id="specific_goal" name="specific_goal" rows="2" required <?= field_aria('specific_goal') ?>><?= h(old_in('specific_goal')) ?></textarea><?= field_error('specific_goal') ?></div>
     <div class="field"><label for="measurable_metric">Measurable criteria <?= required_mark() ?></label>
@@ -469,9 +468,8 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
     <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['bundle_name' => 'Bundle name', 'bundle_description' => 'Description', 'bundle_categories' => 'RSA categories'], ['bundle_categories' => 'bcat-0']) ?>
     <p class="hint">Fields marked * are required.</p>
-    <div class="field"><label for="bundle_name">Bundle name (billing label) <?= required_mark() ?></label>
-      <span class="hint" id="bundle_name-hint">e.g., “Pre-ETS Rehab Tech”, “Tech Referral”</span>
-      <input type="text" id="bundle_name" name="bundle_name" required maxlength="120" value="<?= h(old_in('bundle_name')) ?>" <?= field_aria('bundle_name', 'bundle_name-hint') ?>><?= field_error('bundle_name') ?></div>
+    <div class="field"><label for="bundle_name">Bundle name (billing label) <?= required_mark() ?> <span class="hint">e.g., “Pre-ETS Rehab Tech”, “Tech Referral”</span></label>
+      <input type="text" id="bundle_name" name="bundle_name" required maxlength="120" value="<?= h(old_in('bundle_name')) ?>" <?= field_aria('bundle_name') ?>><?= field_error('bundle_name') ?></div>
     <div class="field"><label for="bundle_client_type">Client type</label>
       <select id="bundle_client_type" name="bundle_client_type"><?= select_options(array_merge(cms_list_items('client_types'), ['Any']), old_in('bundle_client_type') ?: 'VR') ?></select></div>
     <div class="field"><label for="bundle_description">Description</label>
@@ -538,15 +536,13 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
     <div class="field"><label for="instrument_desc">Description</label>
       <input type="text" id="instrument_desc" name="instrument_desc" maxlength="500" value="<?= h(old_in('instrument_desc')) ?>" <?= field_aria('instrument_desc') ?>><?= field_error('instrument_desc') ?></div>
     <div class="grid-2">
-      <div class="field"><label for="scale_min">Lowest rating <?= required_mark() ?></label>
-        <span class="hint" id="scale-hint">whole numbers from -10 to 10; the highest must be greater than the lowest</span>
-        <input type="number" id="scale_min" name="scale_min" value="<?= h(old_in('scale_min', '0')) ?>" min="-10" max="10" step="1" required <?= field_aria('scale_min', 'scale-hint') ?>><?= field_error('scale_min') ?></div>
-      <div class="field"><label for="scale_max">Highest rating <?= required_mark() ?></label>
-        <input type="number" id="scale_max" name="scale_max" value="<?= h(old_in('scale_max', '4')) ?>" min="-10" max="10" step="1" required <?= field_aria('scale_max', 'scale-hint') ?>><?= field_error('scale_max') ?></div>
+      <div class="field"><label for="scale_min">Lowest rating <?= required_mark() ?> <span class="hint">whole numbers from -10 to 10; the highest must be greater than the lowest</span></label>
+        <input type="number" id="scale_min" name="scale_min" value="<?= h(old_in('scale_min', '0')) ?>" min="-10" max="10" step="1" required <?= field_aria('scale_min') ?>><?= field_error('scale_min') ?></div>
+      <div class="field"><label for="scale_max">Highest rating <?= required_mark() ?> <span class="hint">greater than the lowest, up to 10</span></label>
+        <input type="number" id="scale_max" name="scale_max" value="<?= h(old_in('scale_max', '4')) ?>" min="-10" max="10" step="1" required <?= field_aria('scale_max') ?>><?= field_error('scale_max') ?></div>
     </div>
-    <div class="field"><label for="scale_labels">Rating labels</label>
-      <span class="hint" id="scale_labels-hint">optional; one per level as <code>value=label</code> separated by semicolons, e.g. <code>0=0 Not at all;4=4 Fully</code>. Levels without a label show the number.</span>
-      <input type="text" id="scale_labels" name="scale_labels" maxlength="600" value="<?= h(old_in('scale_labels')) ?>" <?= field_aria('scale_labels', 'scale_labels-hint') ?>><?= field_error('scale_labels') ?></div>
+    <div class="field"><label for="scale_labels">Rating labels <span class="hint">optional; one per level as <code>value=label</code> separated by semicolons, e.g. <code>0=0 Not at all;4=4 Fully</code>. Levels without a label show the number.</span></label>
+      <input type="text" id="scale_labels" name="scale_labels" maxlength="600" value="<?= h(old_in('scale_labels')) ?>" <?= field_aria('scale_labels') ?>><?= field_error('scale_labels') ?></div>
     <?php // Required, with no default: the funder report counts a gain in this direction. ?>
     <fieldset <?= has_field_error('higher_is_better') ? 'aria-describedby="err-higher_is_better"' : '' ?>>
       <legend>Higher ratings mean <?= required_mark() ?></legend>
@@ -555,9 +551,8 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
       <div class="field"><label><input type="radio" id="hib-<?= $hv ?>" name="higher_is_better" value="<?= $hv ?>"<?= old_in('higher_is_better') === (string)$hv ? ' checked' : '' ?><?= has_field_error('higher_is_better') ? ' aria-invalid="true"' : '' ?>> <?= h($hl) ?></label></div>
       <?php endforeach; ?>
     </fieldset>
-    <div class="field"><label for="instrument_items">Items <?= required_mark() ?></label>
-      <span class="hint" id="instrument_items-hint">one item per line, up to 255 characters each; each is rated on the scale above when administered</span>
-      <textarea id="instrument_items" name="instrument_items" rows="6" required <?= field_aria('instrument_items', 'instrument_items-hint') ?>><?= h(old_in('instrument_items')) ?></textarea><?= field_error('instrument_items') ?></div>
+    <div class="field"><label for="instrument_items">Items <?= required_mark() ?> <span class="hint">one item per line, up to 255 characters each; each is rated on the scale above when administered</span></label>
+      <textarea id="instrument_items" name="instrument_items" rows="6" required <?= field_aria('instrument_items') ?>><?= h(old_in('instrument_items')) ?></textarea><?= field_error('instrument_items') ?></div>
     <button type="submit" name="add_instrument" value="1" class="btn btn-primary">Add instrument</button>
   </form>
   </details>

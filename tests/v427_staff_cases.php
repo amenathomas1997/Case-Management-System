@@ -50,5 +50,7 @@ set_setting('clients_filter_1','');
 [$code,,$err]=$renderPage('clients',['who'=>'unassigned']);
 check(setting('clients_filter_1')==='','A link to the client list with a caseload does not change the remembered choice'.($err?": $err":''));
 [$code,,$err]=$renderPage('clients',['who'=>'unassigned','save'=>'1']);
+check(setting('clients_filter_1')==='','A GET link with save=1 does not change it either (4.28.0)'.($err?": $err":''));
+[$code,,$err]=$renderPage('clients',[],['filter_clients'=>'1','who'=>'unassigned']);
 check(setting('clients_filter_1')==='unassigned','Sending the filter form remembers the choice'.($err?": $err":''));
 set_setting('clients_filter_1','');

@@ -156,6 +156,8 @@ fun ClientAiScreen(api: Api, nav: NavHostController, clientId: Int) {
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val idem = rememberSaveable { UUID.randomUUID().toString() }
+    // 4.28.0: the assessment's own retry key (see sendOnce).
+    var assessKey by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     Page {
         if (tools.isEmpty()) { Text("No AI help for clients is switched on for your account."); return@Page }
@@ -202,7 +204,7 @@ fun ClientAiScreen(api: Api, nav: NavHostController, clientId: Int) {
                     scope.launchSave({ busy = it }, { error = it }) {
                         val b = JSONObject().put("client_id", clientId).put("assessment_date", today())
                         fields.forEach { (k, v) -> b.put(k, v.trim()) }
-                        api.call("add_assessment", body = b); saved = true
+                        api.callOnce("add_assessment", b, assessKey, { assessKey = it }, "the assessment"); saved = true
                     }
                 }
             }

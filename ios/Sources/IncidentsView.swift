@@ -217,6 +217,8 @@ struct IncidentsView: View {
 
 struct AddIncidentSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let types: [String]
     let severities: [String]
@@ -310,7 +312,9 @@ struct AddIncidentSheet: View {
                                    "location": location, "description": description, "action_taken": actionTaken]
         if let clientId { body["client_id"] = clientId }
         do {
+            body["idem_key"] = idem.key(for: body)
             let _: OKResponse = try await api.call("add_incident", body: body)
+            idem.answered()
             // The list announces the result once this sheet has gone.
             onSaved(); dismiss()
         } catch APIError.network {
@@ -318,6 +322,6 @@ struct AddIncidentSheet: View {
             // logging it again would record it twice.
             busy = false
             showFormError("The connection dropped before the server answered, so it isn't known whether this incident was logged. Check the incidents list for \(type) on \(date.formatted(date: .abbreviated, time: .omitted)) before logging it again.", in: &self.error)
-        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        } catch { idem.answered(); busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

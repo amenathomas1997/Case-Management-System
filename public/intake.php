@@ -182,8 +182,8 @@ page_header('Guided intake', $user, 'clients');
     <div class="field"><label for="tried">Technology tried or currently used</label><textarea id="tried" name="tried" rows="2"><?= h($answers['tried']) ?></textarea></div>
     <div class="field"><label for="context">Work / education context</label><textarea id="context" name="context" rows="2"><?= h($answers['context']) ?></textarea></div>
   </fieldset>
-  <?php if ($generated): ?><p class="hint" id="regen-hint">Drafting again replaces the assessment draft below, including any changes you made to it.</p><?php endif; ?>
-  <button type="submit" name="generate" value="1" class="btn btn-primary" id="intake-generate"<?= $generated ? ' aria-describedby="regen-hint"' : '' ?>>Draft assessment with AI</button>
+  <?php if ($generated): ?><p class="hint">Drafting again replaces the assessment draft below, including any changes you made to it.</p><?php endif; ?>
+  <button type="submit" name="generate" value="1" class="btn btn-primary" id="intake-generate">Draft assessment with AI</button>
   <?php /* Empty at load, so the drafting message written into it is announced. */ ?>
   <p id="intake-status" role="status" class="hint"></p>
 </form>

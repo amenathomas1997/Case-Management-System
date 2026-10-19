@@ -203,6 +203,8 @@ struct KBDetailView: View {
 
 struct KBEditSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let article: KBArticle?
     /// Called after a successful save (false) or delete (true).
@@ -289,9 +291,13 @@ struct KBEditSheet: View {
         }
         busy = true; error = nil
         var b: [String: Any] = ["title": title, "category": category, "body": body_, "is_public": isPublic ? 1 : 0]
-        if let a = article { b["id"] = a.id }
-        do { let _: OKResponse = try await api.call("save_kb", body: b); onDone(false); dismiss() }
-        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        if let a = article { b["id"] = a.id } else { b["idem_key"] = idem.key(for: b) }
+        do { let _: OKResponse = try await api.call("save_kb", body: b); idem.answered(); onDone(false); dismiss() }
+        catch {
+            idem.failed(error)
+            busy = false
+            showFormError(article == nil ? IdemKey.message(for: error, what: "the article") : error.localizedDescription, in: &self.error)
+        }
     }
     private func delete(_ id: Int) async {
         busy = true; error = nil

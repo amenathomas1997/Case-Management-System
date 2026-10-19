@@ -577,11 +577,17 @@ struct ScheduleView: View {
         }
     }
 
+    /// The signed-in person's own sessions (4.28.0): reminders, the widget and Siri use only
+    /// these, never every session the account can see. A session with no instructor sent is kept.
+    private var ownSessions: [Session] {
+        sessions.filter { $0.userId == nil || $0.userId == api.userId }
+    }
+
     /// The day summary for the home-screen widget and the "Today's sessions" Siri shortcut:
     /// today's session times and check-ins, never a name (see TodaySnapshot).
     private func writeTodaySnapshot() {
         let now = Date()
-        let entries: [TodaySnapshot.Entry] = sessions.compactMap { session in
+        let entries: [TodaySnapshot.Entry] = ownSessions.compactMap { session in
             guard let start = APIDate.parseDateTimeCentral(session.startAt),
                   Calendar.current.isDate(start, inSameDayAs: now) else { return nil }
             return TodaySnapshot.Entry(start: start, end: APIDate.parseDateTimeCentral(session.endAt),
@@ -647,7 +653,7 @@ struct ScheduleView: View {
             offlineSince = savedAt
             // Reminders follow the schedule as last loaded from the server (not the saved copy).
             if savedAt == nil {
-                LocalNotifications.shared.scheduleSessions(sessions)
+                LocalNotifications.shared.scheduleSessions(ownSessions)
                 // Check-ins the server now reports no longer need this phone's own record.
                 for session in sessions where session.checkedInAt != nil { checkedInLocal[session.id] = nil }
                 writeTodaySnapshot()
@@ -766,6 +772,10 @@ struct NewSessionSheet: View {
     /// The server's hash of the warnings shown (4.27.0), sent back with the approval so it
     /// covers exactly those warnings.
     @State private var authorizationHash: String?
+    /// The refusal's authorization_warnings (4.28.0), shown instead of parsing its message.
+    @State private var serverWarnings: [String]?
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not book the session twice.
+    @State private var idem = IdemKey()
     @State private var location = ""
     @State private var notes = ""
     @State private var isRemote = false
@@ -992,15 +1002,24 @@ struct NewSessionSheet: View {
                 "meeting_url": isRemote ? link : "",
             ]
             if authorizationAcknowledged, let authorizationHash { request["authorization_ack_hash"] = authorizationHash }
+            // 4.28.0: a retry after a lost reply is recognised, so the session is not booked twice.
+            request["idem_key"] = idem.key(for: request)
             var refusedHash: String?
+            var refusedWarnings: [String]?
             let result: Result
             do {
                 result = try await api.call("schedule_session", body: request,
-                                            refusal: { refusedHash = $0["authorization_hash"] as? String })
+                                            refusal: {
+                                                refusedHash = $0["authorization_hash"] as? String
+                                                refusedWarnings = $0["authorization_warnings"] as? [String]
+                                            })
             } catch {
                 authorizationHash = refusedHash
+                serverWarnings = refusedWarnings
+                idem.failed(error)
                 throw error
             }
+            idem.answered()
             let base = result.sessionsCreated > 1 ? "Series of \(result.sessionsCreated) sessions scheduled." : "Session scheduled."
             let msg = base + (result.inviteSent ? " Calendar invite emailed." : "")
             // Said by the schedule once this sheet has closed (closing it would cut it off).
@@ -1008,9 +1027,17 @@ struct NewSessionSheet: View {
             dismiss()
         } catch APIError.server(let message) where message.hasPrefix(Self.authorizationReviewPrefix) {
             // The warnings are shown with the approval switch, which is offered only now.
+            // 4.28.0: the warnings themselves, from the refusal's authorization_warnings, never the
+            // server's instruction sentences parsed out of its message.
             var warnings = message.dropFirst(Self.authorizationReviewPrefix.count).trimmingCharacters(in: .whitespaces)
-            if let instruction = warnings.range(of: " Review the track and explicitly approve", options: .backwards) {
-                warnings = String(warnings[..<instruction.lowerBound])
+            if let list = serverWarnings, !list.isEmpty {
+                warnings = list.joined(separator: " ")
+            } else {
+                for sentence in [" These warnings are not the ones you approved", " Review the track and explicitly approve"] {
+                    if let instruction = warnings.range(of: sentence, options: .backwards) {
+                        warnings = String(warnings[..<instruction.lowerBound])
+                    }
+                }
             }
             authorizationWarning = warnings
             authorizationAcknowledged = false
@@ -1152,6 +1179,9 @@ struct MoveSessionSheet: View {
     @State private var start: Date
     @State private var hours: Double
     @State private var warnings: [String] = []
+    /// The hash of the warnings shown (4.28.0), sent as confirm_hash with Move anyway; cleared
+    /// when the time or length changes (the server shows the warnings for the new one first).
+    @State private var warningsHash: String?
     @State private var busy = false
     @State private var error: String?
 
@@ -1181,6 +1211,8 @@ struct MoveSessionSheet: View {
                 }
             }
             .navigationTitle("Move session")
+            .onChange(of: start) { _ in warnings = []; warningsHash = nil }
+            .onChange(of: hours) { _ in warnings = []; warningsHash = nil }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button(busy ? "Moving…" : "Move") { Task { await move(confirm: false) } }.disabled(busy) }
@@ -1193,13 +1225,16 @@ struct MoveSessionSheet: View {
         defer { busy = false }
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm"; f.locale = Locale(identifier: "en_US_POSIX")
         do {
-            let r: MoveSessionResult = try await api.call("move_session", body: ["session_id": session.id, "start_at": f.string(from: start),
-                                                                                  "duration": hours, "confirm": confirm])
+            var body: [String: Any] = ["session_id": session.id, "start_at": f.string(from: start),
+                                       "duration": hours, "confirm": confirm]
+            if confirm, let warningsHash { body["confirm_hash"] = warningsHash }
+            let r: MoveSessionResult = try await api.call("move_session", body: body)
             if r.moved == true {
                 onMoved(r.message ?? "Session moved.")
                 dismiss()
             } else {
                 warnings = r.warnings ?? []
+                warningsHash = r.warningsHash
                 announce("Not moved yet. " + warnings.joined(separator: " ") + " Choose Move anyway if the time is right.")
             }
         } catch { showFormError(error.localizedDescription, in: &self.error) }

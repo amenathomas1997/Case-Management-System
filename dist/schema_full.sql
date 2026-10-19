@@ -8723,6 +8723,7 @@ CREATE TABLE IF NOT EXISTS `invoice_payments` (
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `qbo_id` varchar(40) DEFAULT NULL,
   PRIMARY KEY (`id`),
+  UNIQUE KEY `invoice_qbo_payment` (`invoice_id`,`qbo_id`),
   KEY `invoice_id` (`invoice_id`),
   CONSTRAINT `fk_payment_invoice` FOREIGN KEY (`invoice_id`) REFERENCES `invoices` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;

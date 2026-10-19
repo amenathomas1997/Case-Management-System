@@ -248,7 +248,7 @@ page_header('Training report', $user, 'clients');
           // report — it never runs the AI draft, which would change the cover note. ?>
     <button type="submit" name="send_report" value="1" class="visually-hidden" tabindex="-1" aria-hidden="true">Email report to counselor</button>
     <div class="field">
-      <label for="recipient">Send to <span class="hint"><?= $noCounselorEmail ? 'No counselor email on file; enter one' : 'Defaults to the VR counselor on ' . h($t['client_name']) . '\'s file' ?></span></label>
+      <label for="recipient">Send to <?= required_mark() ?> <span class="hint"><?= $noCounselorEmail ? 'No counselor email on file; enter one' : 'Defaults to the VR counselor on ' . h($t['client_name']) . '\'s file' ?></span></label>
       <input type="email" id="recipient" name="recipient" required value="<?= h($recipientVal) ?>" <?= $noCounselorEmail ? field_aria('recipient', 'recipient-missing') : field_aria('recipient') ?>>
       <?= field_error('recipient') ?>
       <?php if ($noCounselorEmail): ?>
@@ -260,8 +260,8 @@ page_header('Training report', $user, 'clients');
       <textarea id="intro" name="intro" rows="<?= $aiDraft ? 8 : 3 ?>" <?= field_aria('intro') ?>><?= h($introShown) ?></textarea>
       <?= field_error('intro') ?>
       <?php if (ai_feature_enabled('draft')): ?>
-      <button type="submit" name="ai_draft" value="1" class="btn btn-secondary btn-sm" formnovalidate aria-describedby="ai-draft-hint">Draft with AI</button>
-      <span class="hint" id="ai-draft-hint">Generates a cover note from this track's progress and adds it below anything you have already typed — you can edit it before sending.</span>
+      <button type="submit" name="ai_draft" value="1" class="btn btn-secondary btn-sm" formnovalidate>Draft with AI</button>
+      <span class="hint">Generates a cover note from this track's progress and adds it below anything you have already typed — you can edit it before sending.</span>
       <?php endif; ?>
     </div>
     <fieldset class="field"><legend>Kind of report</legend>

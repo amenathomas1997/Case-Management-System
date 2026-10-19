@@ -13,6 +13,13 @@ header('Cache-Control: no-store');
 header('X-Content-Type-Options: nosniff');
 
 function out(array $data, int $status = 200): never {
+    // A create or send action opened with api_idem_begin (4.28.0) keeps its first
+    // successful reply, so the same idem_key sent again gets it back (inc/api_parity.php).
+    if (isset($GLOBALS['API_IDEM_OPEN'])) {
+        [$idemAction, $idemUid, $idemKey] = $GLOBALS['API_IDEM_OPEN'];
+        unset($GLOBALS['API_IDEM_OPEN']);
+        if ($status === 200 && ($data['ok'] ?? null) === true && empty($data['repeat']) && function_exists('api_idem_end')) api_idem_end($idemAction, $idemUid, $idemKey, $data);
+    }
     http_response_code($status);
     echo json_encode($data);
     exit;
@@ -213,6 +220,59 @@ function api_name_key(string $s): string {
     return mb_convert_case(preg_replace('/\s+/u', ' ', trim($s)) ?? trim($s), MB_CASE_FOLD, 'UTF-8');
 }
 
+/** Text searched for as typed (4.28.0, as search.php): bind as "LIKE ? ESCAPE '!'", so % and _ are matched literally. */
+function api_like(string $q): string {
+    return '%' . strtr($q, ['!' => '!!', '%' => '!%', '_' => '!_']) . '%';
+}
+
+/** An authenticator seed as stored, made readable (4.28.0: seeds are kept encrypted, inc/security.php). */
+function api_totp_secret(?string $stored): ?string {
+    if ($stored === null || $stored === '') return null;
+    return function_exists('totp_secret_plain') ? totp_secret_plain($stored) : $stored;
+}
+
+/** Labels of the client fields save_client can change (4.28.0), for a stale-save refusal. */
+const API_CLIENT_FIELDS = ['name' => 'Name', 'dob' => 'Date of birth', 'email' => 'Email', 'phone' => 'Phone', 'address' => 'Address',
+    'status' => 'Status', 'assigned_to' => 'Instructor', 'counselor_name' => 'Counselor name', 'counselor_email' => 'Counselor email',
+    'counselor_phone' => 'Counselor phone', 'counselor_agency' => 'Counselor agency', 'client_type' => 'Client type', 'school' => 'School',
+    'a11y_screen_reader' => 'Screen reader', 'a11y_format' => 'Preferred format', 'a11y_primary_tech' => 'Primary assistive technology',
+    'a11y_contact' => 'Preferred contact method', 'a11y_notes' => 'Accessibility notes', 'guardian_name' => 'Guardian name',
+    'guardian_phone' => 'Guardian phone', 'guardian_email' => 'Guardian email', 'vr_case_number' => 'VR case number',
+    'ipe_goal' => 'IPE employment goal', 'ipe_date' => 'IPE date', 'ipe_amended_on' => 'IPE amendment date', 'state' => 'State', 'office_id' => 'Office'];
+function api_client_field_norm(string $f, mixed $v): string {
+    if (in_array($f, ['assigned_to', 'office_id'], true)) return (string)(int)$v;
+    if ($f === 'a11y_screen_reader') return !empty($v) ? '1' : '0';
+    return is_scalar($v) ? trim((string)$v) : '';
+}
+/**
+ * The fields of the saved row ($locked) that someone else changed: with $orig (the values
+ * the app's form was opened with), those that differ from it; without it (the app sends
+ * only loaded_at), those the app sent that differ from what is saved now.
+ */
+function api_client_changed_fields(array $locked, ?array $orig, array $input): array {
+    $out = [];
+    foreach (API_CLIENT_FIELDS as $f => $label) {
+        $base = $orig ?? $input;
+        if (!array_key_exists($f, $base) || !array_key_exists($f, $locked)) continue;
+        if (api_client_field_norm($f, $locked[$f]) !== api_client_field_norm($f, $base[$f])) $out[] = $label;
+    }
+    return $out;
+}
+/** "a", "a and b", "a, b and c". */
+function api_list_words(array $words): string {
+    $words = array_values($words);
+    if (count($words) < 2) return (string)($words[0] ?? '');
+    return implode(', ', array_slice($words, 0, -1)) . ' and ' . end($words);
+}
+
+/** Whether the account signs in with an authenticator app, and whether its seed can be read here (4.28.0). */
+function api_seed_state(array $user): string {
+    if (function_exists('totp_seed_state')) return totp_seed_state($user);
+    if (empty($user['totp_enabled']) || trim((string)($user['totp_secret'] ?? '')) === '') return 'none';
+    return api_totp_secret($user['totp_secret']) !== null ? 'ok' : 'unreadable';
+}
+const API_SEED_UNREADABLE = 'Your authenticator app can\'t be checked on this server. Ask an administrator to reset two-step verification.';
+
 /** The app sign-in challenge for one channel 'api' login_otps row (see action=login). */
 function api_login_challenge(int $otpId, string $codeHash): string {
     return hash_hmac('sha256', 'api-login-challenge:' . $otpId, $codeHash);
@@ -229,7 +289,7 @@ if ($postMax > 0 && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $postMax) {
 // Every value is read as a single string or number unless its key is one the
 // code reads as a list/object. Anything else is refused up front, so a stray
 // array can never be cast to "Array" or to 1 and written to a record.
-const API_ARRAY_INPUT_KEYS = ['scores', 'levels', 'present', 'homework', 'values', 'history', 'params', 'sections', 'answers', 'custom', 'info'];   // custom and info: 4.25.0 (custom fields, release requests)
+const API_ARRAY_INPUT_KEYS = ['scores', 'levels', 'present', 'homework', 'values', 'history', 'params', 'sections', 'answers', 'custom', 'info', 'orig'];   // custom and info: 4.25.0 (custom fields, release requests); orig: 4.28.0 (a stale save's opened values)
 // A decoded JSON body takes many times its own size in memory, so a body larger than
 // this is decoded only once the caller's token has been checked (below): only the
 // app's own uploads (documents, signatures) need more, and an anonymous caller can
@@ -315,7 +375,14 @@ if ($action === 'login') {
     // An account with an authenticator app signs in with it (4.27.0, the owner's decision):
     // no code is emailed, so the mailbox alone can never finish an app sign-in. The row
     // still carries the password step (verify needs it) with a hash no code matches.
-    $totpOnly = !empty($user['totp_enabled']) && !empty($user['totp_secret']);
+    // Decided on the account's setting, not on whether the seed can be read (4.28.0): an
+    // authenticator account whose seed cannot be read is refused, never sent an email code.
+    $seedState = api_seed_state($user);
+    $totpOnly = $seedState !== 'none';
+    if ($seedState === 'unreadable') {
+        db()->prepare('DELETE FROM login_attempts WHERE id = ?')->execute([$attemptRow]);
+        fail(API_SEED_UNREADABLE, 403);
+    }
     if ($totpOnly) {
         // No code is sent, so a correct password is not counted against the code cap (as
         // login.php): its attempt row is simply removed.
@@ -404,11 +471,15 @@ if ($action === 'verify') {
     // a sign-in the password step did not start.
     $challenge = is_string($input['login_challenge'] ?? null) ? $input['login_challenge'] : '';
     $verified = false;
+    // The challenge is checked first (4.28.0): only the device that did this sign-in's
+    // password step holds it. A guess without it takes none of the code's tries and does
+    // not count against the account, so someone who knows only a staff email cannot use
+    // up a pending code or lock the real user's verify step.
+    if ($otp && ($challenge === '' || !hash_equals(api_login_challenge((int)$otp['id'], (string)$otp['code_hash']), $challenge))) $otp = null;
     if (!$otp) {
         // Nothing to test: no sign-in is waiting for this address (or the address is not a
-        // user's). The guess must not count against the address, or anyone who knows a
-        // staff email could lock its two-step sign-in without a password; it counts only
-        // toward the sender's own IP limit.
+        // user's, or the guess is not from the device that started it). The guess must not
+        // count against the address; it counts only toward the sender's own IP limit.
         db()->prepare("UPDATE login_attempts SET email = 'verify-anon' WHERE id = ?")->execute([$guessRow]);
     }
     if ($otp) {
@@ -416,14 +487,18 @@ if ($action === 'verify') {
         // try counted only after the slow check could be spent many times at once.
         $take = db()->prepare('UPDATE login_otps SET attempts = attempts + 1 WHERE id = ? AND consumed = 0 AND attempts < 5');
         $take->execute([$otp['id']]);
-        if ($take->rowCount() === 1
-            && $challenge !== '' && hash_equals(api_login_challenge((int)$otp['id'], (string)$otp['code_hash']), $challenge)) {
+        if ($take->rowCount() === 1) {
             // The emailed code counts only for an account with no authenticator app (4.27.0).
-            $codeOk = ($user['totp_enabled'] && $user['totp_secret'])
-                ? totp_verify_once($user['totp_secret'], $code, (int)$user['id'])
+            $seedState = api_seed_state($user);
+            if ($seedState === 'unreadable') fail(API_SEED_UNREADABLE, 403);
+            $totpSeed = $seedState === 'ok' ? api_totp_secret($user['totp_secret'] ?? null) : null;
+            $codeOk = $seedState === 'ok'
+                ? totp_verify_once($totpSeed, $code, (int)$user['id'])
                 : password_verify($code, $otp['code_hash']);
             // The try just taken counts toward the row's attempts, hence $tryTaken.
             $verified = $codeOk && claim_login_otp((int)$otp['id'], true);
+            // A seed stored before 4.28.0 is stored encrypted once it has been used (inc/security.php).
+            if ($verified && $totpSeed !== null && function_exists('totp_secret_upgrade')) totp_secret_upgrade((int)$user['id'], $user['totp_secret'], $totpSeed);
         }
     }
     // A wrong guess keeps the failure recorded above.
@@ -605,11 +680,36 @@ function api_referral_scope_sql(string $t): string {
 
 $studentScope = caseload_scoped() ? ' AND c.assigned_to = ' . $userId : '';
 
+/* Sent again after a lost reply (4.28.0): every create or send action takes the app's
+   idem_key and is done once (api_idem_begin / api_idem_end in inc/api_parity.php; out()
+   keeps the first successful reply). An action that saves or edits ($input id) is guarded
+   only when it creates. The actions with a dedupe of their own (add_note, log_hours,
+   add_expense, update_goal, post_message, and api_425's signatures and releases) keep it. */
+const API_IDEM_ACTIONS = ['send_report', 'schedule_session', 'add_incident', 'upload_document', 'add_goal', 'assign_homework', 'save_scored',
+    'add_assessment', 'add_booking', 'add_worksite', 'add_device_request', 'add_contract', 'add_cohort', 'log_cohort_session', 'add_equipment',
+    'add_reservation', 'loan_equipment', 'equipment_service', 'convert_referral', 'send_portal_link', 'send_vrc_portal', 'request_consent',
+    'at_issue', 'save_client', 'save_kb', 'save_task', 'save_track', 'save_credential', 'at_save', 'device_request_update', 'cohort_member'];
+require __DIR__ . '/inc/api_parity.php';   // the retry guard; the parity actions run only for API_PARITY_ACTIONS
+if (in_array($action, API_IDEM_ACTIONS, true) && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    $idemCreates = match ($action) {
+        'save_client', 'save_kb', 'save_task', 'save_credential', 'at_save' => (int)($input['id'] ?? 0) <= 0,
+        'save_track' => (int)($input['id'] ?? $_GET['id'] ?? 0) <= 0,
+        'device_request_update' => ($input['op'] ?? '') === 'add_quote',
+        'cohort_member' => ($input['op'] ?? '') !== 'remove',
+        default => true,
+    };
+    $idemKey = is_string($input['idem_key'] ?? null) ? $input['idem_key'] : null;
+    if ($idemCreates && $idemKey !== null) {
+        $idemPrev = api_idem_begin($action, $userId, $idemKey);
+        if ($idemPrev !== null) out($idemPrev);
+        $GLOBALS['API_IDEM_OPEN'] = [$action, $userId, $idemKey];
+    }
+}
+
 if (str_starts_with($action, 'at_')) {
     require __DIR__ . '/inc/at_api.php';
 }
 if (in_array($action, API_ACCOUNT_ACTIONS, true)) require __DIR__ . '/inc/api_account.php';
-if (in_array($action, API_PARITY_ACTIONS, true)) require __DIR__ . '/inc/api_parity.php';
 
 switch ($action) {
     case 'workflow_actions':
@@ -694,10 +794,35 @@ switch ($action) {
         $start = preg_match('/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$/', $startIn) ? strtotime(str_replace('T', ' ', $startIn) . ':00') : false;
         $dur = (float)($input['duration'] ?? 0);
         if ($start === false || $dur < 0.25 || $dur > 12) fail('Give the new start (YYYY-MM-DD HH:MM) and a length from 0.25 to 12 hours.', 422);
-        $r = session_move($sid, $start, $start + (int)round($dur * 3600), $userId, !empty($input['confirm']), 'mobile');
+        $end = $start + (int)round($dur * 3600);
+        // "Move anyway" approves only the warnings shown, for this time (4.28.0), as a
+        // booking's authorization warnings (schedule_session): the answer that shows them
+        // carries warnings_hash, and the move goes ahead only when the app sends it back as
+        // confirm_hash. A warning that appeared since, or a different time, is shown first.
+        // Older builds send only confirm true: that counts when this user was shown these
+        // same warnings for this same move in the last hour.
+        $confirmed = false;
+        $mq = db()->prepare("SELECT * FROM scheduled_sessions WHERE id = ? AND status = 'Scheduled'");
+        $mq->execute([$sid]);
+        $moveRow = $mq->fetch();
+        $moveWarnings = $moveRow ? session_move_warnings($moveRow, $start, $end) : [];
+        $moveHash = function_exists('session_move_hash') ? session_move_hash($moveWarnings, $start, $end) : hash('sha256', json_encode([array_values($moveWarnings), $start, $end]));
+        if ($moveWarnings) {
+            $shownKey = 'moveshown:' . substr(hash('sha256', $userId . '|' . $sid . '|' . $moveHash), 0, 48);
+            $sentHash = is_string($input['confirm_hash'] ?? null) ? $input['confirm_hash'] : '';
+            $confirmed = $sentHash !== ''
+                ? hash_equals($moveHash, $sentHash) && ($input['confirm'] ?? true) !== false
+                : in_array($input['confirm'] ?? null, [true, 1, '1'], true) && api_throttle_count($shownKey, 3600) > 0;
+            if (!$confirmed) api_throttle_record($shownKey);
+        }
+        // The approval is passed as the fingerprint of the warnings approved, so warnings
+        // found again under the instructor's lock must be the same ones (inc/session_changes.php).
+        $r = session_move($sid, $start, $end, $userId, $confirmed ? $moveHash : false, 'mobile');
         if ($r['error'] !== null) fail($r['error'], 422);
-        out(['ok' => true, 'moved' => $r['moved'], 'warnings' => $r['warnings'],
-            'message' => $r['moved'] ? 'Moved to ' . date('l, F j \a\t g:i A', $start) . '.' : 'Not moved yet: ' . implode(' ', $r['warnings'])]);
+        $reply = ['ok' => true, 'moved' => $r['moved'], 'warnings' => $r['warnings'],
+            'message' => $r['moved'] ? 'Moved to ' . date('l, F j \a\t g:i A', $start) . '.' : 'Not moved yet: ' . implode(' ', $r['warnings'])];
+        if (!$r['moved']) $reply['warnings_hash'] = (string)($r['hash'] ?? '') !== '' ? (string)$r['hash'] : $moveHash;
+        out($reply);
     }
 
     /* Email the client a new portal link, as the client page does (3.0.40). */
@@ -788,7 +913,7 @@ switch ($action) {
         // Retention-archived clients leave the day-to-day list, as on the website
         // (clients.php); only an administrator can list them, with ?archived=1.
         $sql .= (!empty($_GET['archived']) && can('admin')) ? ' AND archived_at IS NOT NULL' : ' AND archived_at IS NULL';
-        if ($q !== '') { $sql .= " AND name LIKE ?"; $params[] = "%$q%"; }
+        if ($q !== '') { $sql .= " AND name LIKE ? ESCAPE '!'"; $params[] = api_like($q); }
         if (caseload_scoped()) { $sql .= " AND assigned_to = ?"; $params[] = $userId; }
         $sql .= " ORDER BY name LIMIT 200";
         $s = db()->prepare($sql);
@@ -809,7 +934,7 @@ switch ($action) {
         $q = trim((string)($_GET['q'] ?? ''));
         $sql = 'SELECT id, name, status FROM clients WHERE archived_at IS NULL';
         $params = [];
-        if ($q !== '') { $sql .= ' AND name LIKE ?'; $params[] = "%$q%"; }
+        if ($q !== '') { $sql .= " AND name LIKE ? ESCAPE '!'"; $params[] = api_like($q); }
         if ($choicesRefOnly) {
             // The same referral visibility as the referrals list: a caseload-scoped user
             // sees a converted referral when the client it became is theirs, which the
@@ -825,9 +950,11 @@ switch ($action) {
         $id = (int)($_GET['id'] ?? 0);
         api_require_client($id, $userId);
         record_client_view($userId, $id, api_app_name());
-        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email, vr_case_number, ipe_goal, ipe_date, ipe_amended_on, state, time_zone, office_id FROM clients WHERE id = ?');
+        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email, vr_case_number, ipe_goal, ipe_date, ipe_amended_on, state, time_zone, office_id, updated_at FROM clients WHERE id = ?');
         $c->execute([$id]);
         $client = $c->fetch();
+        // updated_at (4.28.0): sent back as save_client's loaded_at, so a save from a form
+        // opened before someone else's change is refused instead of undoing it.
         if (!$client) fail('Client not found.', 404);
         // The office that serves them (4.22.0): office_id and its name, null when none.
         $client['office_id'] = $client['office_id'] !== null ? (int)$client['office_id'] : null;
@@ -1438,11 +1565,18 @@ switch ($action) {
         // (a new client gets the creating user's office, as on the website).
         // Custom fields (4.25.0): custom = {field id: value}; only the fields sent change.
         $cfApiVals = [];
-        if (is_array($input['custom'] ?? null)) {
+        $cfFields = custom_fields_all(true);
+        // A new client must have every required answer (4.28.0), as on the website: a
+        // required field the app did not send counts as left blank.
+        $cfRequiredNew = $cid === 0 && array_filter($cfFields, fn($f) => (int)$f['required'] === 1);
+        if (is_array($input['custom'] ?? null) || $cfRequiredNew) {
             $cfPost = [];
-            foreach ($input['custom'] as $fid => $val) if (ctype_digit((string)$fid) && (is_string($val) || is_int($val) || is_float($val))) $cfPost['cf_' . (int)$fid] = (string)$val;
-            [$cfApiVals, $cfApiErrs] = custom_input($cfPost, custom_fields_all(true), false, $old ? custom_values_for((int)$old['id']) : []);
-            if ($cfApiErrs) fail(implode(' ', $cfApiErrs), 422);
+            foreach ((array)($input['custom'] ?? []) as $fid => $val) if (ctype_digit((string)$fid) && (is_string($val) || is_int($val) || is_float($val))) $cfPost['cf_' . (int)$fid] = (string)$val;
+            if ($cid === 0) foreach ($cfFields as $f) if ((int)$f['required'] === 1 && !array_key_exists('cf_' . (int)$f['id'], $cfPost)) $cfPost['cf_' . (int)$f['id']] = '';
+            [$cfApiVals, $cfApiErrs] = custom_input($cfPost, $cfFields, false, $old ? custom_values_for((int)$old['id']) : []);
+            if ($cfApiErrs) out(['ok' => false, 'error' => implode(' ', $cfApiErrs), 'fields' => $cfApiErrs], 422);
+            // A new client is saved with the answers given; blanks have nothing to remove.
+            if ($cid === 0) $cfApiVals = array_filter($cfApiVals, fn($v) => $v !== '');
         }
         $officeSentApi = array_key_exists('office_id', $input);
         $officeApi = $officeSentApi ? office_input($input['office_id'], isset($old['office_id']) ? (int)$old['office_id'] : null) : null;
@@ -1500,15 +1634,21 @@ switch ($action) {
         // the website checks it; older builds, which do not ask, record 'Not recorded'.
         $closing = str_starts_with($status, 'Closed') && (($old['status'] ?? null) !== $status);
         $closureData = null;
-        if ($closing) {
+        // Why the case closes; refused (422) when the app's answers are not valid. Run again
+        // on the locked row when the case turns out to be closing only there (below).
+        $closureFor = function () use ($input): array {
             if (array_key_exists('closure_reason', $input)) {
-                [$closureData, $closureErrs] = closure_input(array_map(fn($v) => is_scalar($v) ? (string)$v : '', $input));
-                if ($closureErrs) out(['ok' => false, 'error' => implode(' ', $closureErrs), 'errors' => $closureErrs], 422);
-            } else {
-                $closureData = ['reason' => 'Not recorded', 'note' => 'Closed from an app version that does not ask the reason', 'employed' => null, 'employer' => null,
-                    'job_title' => null, 'job_start' => null, 'hours_per_week' => null, 'hourly_wage' => null, 'independence_outcome' => null];
+                [$data, $errs] = closure_input(array_map(fn($v) => is_scalar($v) ? (string)$v : '', $input));
+                if ($errs) {
+                    if (db()->inTransaction()) db()->rollBack();
+                    out(['ok' => false, 'error' => implode(' ', $errs), 'errors' => $errs], 422);
+                }
+                return $data;
             }
-        }
+            return ['reason' => 'Not recorded', 'note' => 'Closed from an app version that does not ask the reason', 'employed' => null, 'employer' => null,
+                'job_title' => null, 'job_start' => null, 'hours_per_week' => null, 'hourly_wage' => null, 'independence_outcome' => null];
+        };
+        if ($closing) $closureData = $closureFor();
         // Caseload-scoped users always own the clients they save. Everyone else may
         // unassign (0) or pick an active staff member; an id that is not an active
         // user would hide the client from every caseload.
@@ -1572,14 +1712,47 @@ switch ($action) {
         $redraftedInvoices = 0;
         // Draft invoices bill whoever the client's counselor is now (the Bill to that
         // generate_invoice() writes), as client_edit.php; sent ones keep what was sent.
+        // Before 4.28.0's draft_invoices_readdress(): counselor name, agency and confirmed email.
         $billTo = fn(array $c): string => implode("\n", array_filter(array_map(fn($v) => trim((string)$v),
-            [$c['counselor_name'] ?? null, $c['counselor_agency'] ?? null, $c['counselor_email'] ?? null]), fn($v) => $v !== ''));
-        $newBillTo = $billTo(['counselor_name' => $vals[7], 'counselor_agency' => $vals[10], 'counselor_email' => $vals[8]]);
+            [$c['counselor_name'] ?? null, $c['counselor_agency'] ?? null, (int)($c['counselor_verified'] ?? 0) === 1 ? ($c['counselor_email'] ?? null) : null]), fn($v) => $v !== ''));
+        $newBillTo = $billTo(['counselor_name' => $vals[7], 'counselor_agency' => $vals[10], 'counselor_email' => $vals[8], 'counselor_verified' => $counselorVerified]);
+        $sessionsReminded = 0;
         // One transaction: the status history row, the client row, its moved tasks,
         // upcoming sessions and converted referrals are saved together or not at all.
         db()->beginTransaction();
         try {
             if ($isUpdate) {
+                // Two people editing the same client (4.28.0, as client_edit.php): the row is
+                // locked first. An app that sends loaded_at (the client action's updated_at)
+                // is refused when the record changed after it was opened, so a stale form never
+                // reopens a closed case or undoes a reassignment. Without loaded_at (older
+                // builds) it is saved as before. Closing is judged on the locked row, so two
+                // simultaneous closures cannot both record one.
+                $lk = db()->prepare('SELECT * FROM clients WHERE id = ? FOR UPDATE');
+                $lk->execute([$cid]);
+                $locked = $lk->fetch();
+                if (!$locked) { db()->rollBack(); fail('Client not found.', 404); }
+                $loadedAt = is_string($input['loaded_at'] ?? null) && trim($input['loaded_at']) !== '' ? trim($input['loaded_at']) : null;
+                if ($loadedAt !== null && $loadedAt !== (string)$locked['updated_at']) {
+                    db()->rollBack();
+                    $changed = api_client_changed_fields($locked, is_array($input['orig'] ?? null) ? $input['orig'] : null, $input);
+                    out(['ok' => false, 'conflict' => true, 'changed' => $changed, 'updated_at' => (string)$locked['updated_at'],
+                        'error' => (is_array($input['orig'] ?? null) && $changed ? 'Someone else changed ' . api_list_words($changed) . ' since you opened this client.' : 'Someone else changed this client since you opened it.')
+                            . ' Reload to see their changes.'], 409);
+                }
+                // A status or instructor the app did not send stays as it is now, not as it was read.
+                if (!array_key_exists('status', $input)) { $status = (string)$locked['status']; $vals[5] = $status; }
+                if (!caseload_scoped() && !array_key_exists('assigned_to', $input)) {
+                    $assignedTo = $locked['assigned_to'] !== null ? (int)$locked['assigned_to'] : null;
+                    $vals[6] = $assignedTo;
+                    $newAssignee = $assignedTo;
+                }
+                $closingNow = str_starts_with($status, 'Closed') && $locked['status'] !== $status;
+                if ($closingNow && $closureData === null) $closureData = $closureFor();
+                $closing = $closingNow;
+                $old = $locked;
+                $unarchive = $old['archived_at'] !== null && !str_starts_with($status, 'Closed');
+                $oldAssignee = $old['assigned_to'] !== null ? (int)$old['assigned_to'] : null;
                 record_status_change($cid, $old['status'], $status, $userId, $statusNote ?: ($closing ? 'Closed: ' . $closureData['reason'] . ' (mobile)' : 'Updated from mobile'));
                 on_hold_save($cid, $status, (string)$old['status'], (string)$statusNote, $holdUntil);
                 if ($closing) client_closure_record($cid, $status, $closureData, $userId);
@@ -1596,7 +1769,19 @@ switch ($action) {
                     $pr->execute([$cid]);
                     $portalRevoked = $pr->rowCount();
                 }
-                if ($newBillTo !== $billTo($old)) {
+                // Upcoming sessions remind the new address (4.28.0): a reminder already sent
+                // went to the old one.
+                if (strcasecmp(trim((string)($clientEmail ?? '')), trim((string)($old['email'] ?? ''))) !== 0) {
+                    $rs = db()->prepare("UPDATE scheduled_sessions SET reminder_sent = 0, client_reminded_at = NULL WHERE client_id = ? AND status = 'Scheduled' AND start_at >= NOW()");
+                    $rs->execute([$cid]);
+                    $sessionsReminded = $rs->rowCount();
+                }
+                // Draft invoices are addressed as generate_invoice() addresses them (4.28.0,
+                // inc/billing.php): the agency's billing lines, the counselor and a confirmed
+                // email for VR, the client for private pay.
+                if (function_exists('draft_invoices_readdress')) {
+                    $redraftedInvoices = draft_invoices_readdress($cid);
+                } elseif ($newBillTo !== $billTo($old)) {
                     $rb = db()->prepare("UPDATE invoices i JOIN training_tracks t ON t.id = i.track_id SET i.bill_to = ?
                         WHERE t.client_id = ? AND i.status = 'Draft' AND NOT (i.bill_to <=> ?)");
                     $rb->execute([$newBillTo, $cid, $newBillTo]);
@@ -1664,6 +1849,7 @@ switch ($action) {
         if ($redraftedInvoices > 0) {
             audit($userId, 'invoice.bill_to', 'client', $cid, $redraftedInvoices . ' draft invoice(s) re-addressed to the current counselor (mobile)');
         }
+        if ($sessionsReminded > 0) audit($userId, 'session.reminder_reset', 'client', $cid, $sessionsReminded . ' upcoming session reminder(s) to go to the new email address (mobile)');
         // The moved tasks get their own entry, as on the website (client_edit.php).
         if ($tasksMoved > 0) {
             audit($userId, 'task.reassign', 'client', $cid, $tasksMoved . ' open task(s) moved from instructor #'
@@ -1725,7 +1911,11 @@ switch ($action) {
         $smsAgreed = array_key_exists('sms_consent', $input) ? !empty($input['sms_consent'])
             : (!empty($old['sms_consent_at']) && sms_number((string)($old['phone'] ?? '')) === sms_number((string)($input['phone'] ?? $old['phone'] ?? '')));
         $smsNote = sms_consent_save($cid, $smsAgreed, is_string($input['sms_consent_source'] ?? null) ? $input['sms_consent_source'] : (string)($old['sms_consent_source'] ?? ''), $old['phone'] ?? null, $userId);
-        out(['ok' => true, 'client_id' => $cid, 'unarchived' => $unarchive, 'survey_sent' => $surveySent, 'duplicate_warning' => $dupWarning, 'sms_note' => $smsNote]);
+        // updated_at: the version now saved (4.28.0), the app's loaded_at for its next save.
+        $savedAt = db()->prepare('SELECT updated_at FROM clients WHERE id = ?');
+        $savedAt->execute([$cid]);
+        out(['ok' => true, 'client_id' => $cid, 'unarchived' => $unarchive, 'survey_sent' => $surveySent, 'duplicate_warning' => $dupWarning, 'sms_note' => $smsNote,
+            'updated_at' => (string)$savedAt->fetchColumn()]);
     }
 
     case 'goals':
@@ -1743,8 +1933,8 @@ switch ($action) {
         $tplCat = trim((string)($_GET['category'] ?? ''));
         if ($tplCat !== '') { $tplWhere[] = 'category = ?'; $tplArgs[] = $tplCat; }
         foreach (array_slice(preg_split('/\s+/', trim((string)($_GET['q'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) ?: [], 0, 6) as $word) {
-            $tplWhere[] = '(specific_goal LIKE ? OR category LIKE ? OR focus_area LIKE ?)';
-            $like = '%' . $word . '%'; array_push($tplArgs, $like, $like, $like);
+            $tplWhere[] = "(specific_goal LIKE ? ESCAPE '!' OR category LIKE ? ESCAPE '!' OR focus_area LIKE ? ESCAPE '!')";
+            $like = api_like($word); array_push($tplArgs, $like, $like, $like);
         }
         $tq = db()->prepare('SELECT id, category, specific_goal, measurable_metric, focus_area FROM goal_templates'
             . ($tplWhere ? ' WHERE ' . implode(' AND ', $tplWhere) : '') . ' ORDER BY category, specific_goal LIMIT 51');
@@ -2070,7 +2260,7 @@ switch ($action) {
     case 'search':
         $q = trim((string)($_GET['q'] ?? ''));
         if (mb_strlen($q) < 2) fail('Enter at least 2 characters.');
-        $like = "%$q%";
+        $like = api_like($q);   // matched with ESCAPE '!' below: % and _ are taken literally (4.28.0)
         $results = [];
         $run = function (string $label, string $sql, array $params) use (&$results) {
             $s = db()->prepare($sql . ' LIMIT 15');
@@ -2083,18 +2273,18 @@ switch ($action) {
         $scopeParams = $scoped ? [$userId] : [];
         // kind says what each id is ('client', 'note', 'referral', 'track'), so the app can
         // open a referral hit (which has no client) and a track hit at the track itself.
-        $run('Clients', "SELECT id, name AS title, status AS subtitle, id AS client_id, 'client' AS kind FROM clients c WHERE (name LIKE ? OR phone LIKE ? OR email LIKE ?)" . $scopeAnd,
+        $run('Clients', "SELECT id, name AS title, status AS subtitle, id AS client_id, 'client' AS kind FROM clients c WHERE (name LIKE ? ESCAPE '!' OR phone LIKE ? ESCAPE '!' OR email LIKE ? ESCAPE '!')" . $scopeAnd,
             array_merge([$like, $like, $like], $scopeParams));
         $run('Notes', "SELECT n.id, CONCAT(c.name, ': ', n.subject) AS title, n.note_type AS subtitle, n.client_id, 'note' AS kind
-            FROM client_notes n JOIN clients c ON c.id = n.client_id WHERE (n.subject LIKE ? OR n.body LIKE ?)" . $scopeAnd . " ORDER BY n.created_at DESC",
+            FROM client_notes n JOIN clients c ON c.id = n.client_id WHERE (n.subject LIKE ? ESCAPE '!' OR n.body LIKE ? ESCAPE '!')" . $scopeAnd . " ORDER BY n.created_at DESC",
             array_merge([$like, $like], $scopeParams));
         if (can('referrals')) {
-            $run('Referrals', "SELECT id, CONCAT(client_name, ' — ', reason) AS title, status AS subtitle, NULL AS client_id, 'referral' AS kind FROM referrals WHERE (client_name LIKE ? OR reason LIKE ? OR counselor_name LIKE ?)"
+            $run('Referrals', "SELECT id, CONCAT(client_name, ' — ', reason) AS title, status AS subtitle, NULL AS client_id, 'referral' AS kind FROM referrals WHERE (client_name LIKE ? ESCAPE '!' OR reason LIKE ? ESCAPE '!' OR counselor_name LIKE ? ESCAPE '!')"
                 . ($scoped ? ' AND ' . api_referral_scope_sql('referrals') : ''),
                 array_merge([$like, $like, $like], $scoped ? [$userId, $userId] : []));
         }
         $run('Tracks', "SELECT t.id, CONCAT(c.name, ': ', t.title) AS title, CONCAT('Auth ', t.auth_number) AS subtitle, t.client_id, 'track' AS kind
-            FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE (t.title LIKE ? OR t.auth_number LIKE ?)" . $scopeAnd,
+            FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE (t.title LIKE ? ESCAPE '!' OR t.auth_number LIKE ? ESCAPE '!')" . $scopeAnd,
             array_merge([$like, $like], $scopeParams));
         out(['ok' => true, 'results' => $results]);
 
@@ -2479,8 +2669,8 @@ switch ($action) {
         elseif ($refStatus === 'closed') $sql .= " AND r.status = 'Closed'";
         $refQ = trim((string)($_GET['q'] ?? ''));
         if ($refQ !== '') {
-            $sql .= ' AND (r.client_name LIKE ? OR r.reason LIKE ? OR r.counselor_name LIKE ?)';
-            array_push($params, "%$refQ%", "%$refQ%", "%$refQ%");
+            $sql .= " AND (r.client_name LIKE ? ESCAPE '!' OR r.reason LIKE ? ESCAPE '!' OR r.counselor_name LIKE ? ESCAPE '!')";
+            array_push($params, api_like($refQ), api_like($refQ), api_like($refQ));
         }
         if (caseload_scoped()) { $sql .= ' AND ' . api_referral_scope_sql('r'); array_push($params, $userId, $userId); }
         // Open referrals come first, so converted ones can never push a referral still
@@ -2691,9 +2881,10 @@ switch ($action) {
             $isCounselor ? $ref['counselor_phone'] : null, $isCounselor ? $ref['counselor_agency'] : null,
             $counselorConfirmed ? 1 : 0, 1,
         ]);
-        // The self-referrer's agreement to texts (4.17.0) goes with them.
-        if (!empty($ref['sms_ok'])) db()->prepare("UPDATE clients SET sms_consent_at = ?, sms_consent_source = 'Referral form' WHERE id = LAST_INSERT_ID()")->execute([$ref['created_at']]);
+        // Read straight after the INSERT (4.28.0): after an UPDATE lastInsertId() is 0.
         $clientId = (int)db()->lastInsertId();
+        // The self-referrer's agreement to texts (4.17.0) goes with them.
+        if (!empty($ref['sms_ok'])) db()->prepare("UPDATE clients SET sms_consent_at = ?, sms_consent_source = 'Referral form' WHERE id = ?")->execute([$ref['created_at'], $clientId]);
         office_place_new_client($clientId, $userId);   // 4.22.0: the accepting person's office
         custom_copy_referral_to_client($id, $clientId);   // 4.24.0: answers to the organisation's own questions
         // As on the website: the referral's language, and its state with that state's time zone (4.1.0).
@@ -3115,6 +3306,7 @@ switch ($action) {
         $q = db()->prepare('SELECT wa.*, c.name AS client_name FROM worksite_assessments wa JOIN clients c ON c.id = wa.client_id WHERE wa.id = ?'); $q->execute([$id]); $r = $q->fetch();
         if (!$r) fail('This worksite assessment no longer exists. It may have been deleted on the website. Go back to the list and refresh it.', 404);
         api_require_client((int)$r['client_id'], $userId);
+        // updated_at (part of the row) is sent back as save_worksite's loaded_at (4.28.0).
         out(['ok' => true, 'assessment' => $r]);
     }
     case 'add_worksite': {
@@ -3139,16 +3331,52 @@ switch ($action) {
         if ($waAssessed !== null && $waFollowUp !== null && $waFollowUp < $waAssessed) {
             fail('The follow-up date cannot be before the assessment date.', 422);
         }
-        db()->prepare('UPDATE worksite_assessments SET employer=?, job_title=?, worksite_location=?, assessment_date=?, job_tasks=?, barriers=?, recommendations=?, status=?, follow_up_date=?, outcome=? WHERE id=?')
-            ->execute([api_text($input, 'employer', 190, 'Employer') ?: null, api_text($input, 'job_title', 190, 'Job title') ?: null,
+        $waVals = [api_text($input, 'employer', 190, 'Employer') ?: null, api_text($input, 'job_title', 190, 'Job title') ?: null,
                 api_text($input, 'worksite_location', 255, 'Worksite location') ?: null,
                 $waAssessed, api_text($input, 'job_tasks', API_TEXT_BYTES, 'Job tasks', true) ?: null,
                 api_text($input, 'barriers', API_TEXT_BYTES, 'Barriers', true) ?: null,
                 api_text($input, 'recommendations', API_TEXT_BYTES, 'Recommendations', true) ?: null,
                 api_choice($input, 'status', $statuses, 'Status', null) ?? $r['status'],
-                $waFollowUp, api_text($input, 'outcome', API_TEXT_BYTES, 'Outcome', true) ?: null, $id]);
+                $waFollowUp, api_text($input, 'outcome', API_TEXT_BYTES, 'Outcome', true) ?: null, $id];
+        // Two editors (4.28.0): an app that sends loaded_at (the worksite_assessment's
+        // updated_at) is refused when the assessment changed after it was opened, so the
+        // later save never quietly replaces the other person's text. Without loaded_at
+        // (older builds) it is saved as before.
+        db()->beginTransaction();
+        try {
+            $lk = db()->prepare('SELECT * FROM worksite_assessments WHERE id = ? FOR UPDATE');
+            $lk->execute([$id]);
+            $waLocked = $lk->fetch();
+            if (!$waLocked) { db()->rollBack(); fail('This worksite assessment no longer exists, so your changes were not saved. Copy anything you typed, then go back to the list.', 404); }
+            $waLoaded = is_string($input['loaded_at'] ?? null) && trim($input['loaded_at']) !== '' ? trim($input['loaded_at']) : null;
+            if ($waLoaded !== null && $waLoaded !== (string)$waLocked['updated_at']) {
+                db()->rollBack();
+                $waLabels = ['employer' => 'Employer', 'job_title' => 'Job title', 'worksite_location' => 'Worksite location', 'assessment_date' => 'Assessment date',
+                    'job_tasks' => 'Job tasks', 'barriers' => 'Barriers', 'recommendations' => 'Recommendations', 'status' => 'Status',
+                    'follow_up_date' => 'Follow-up date', 'outcome' => 'Outcome'];
+                $waOrig = is_array($input['orig'] ?? null) ? $input['orig'] : null;
+                $waChanged = [];
+                foreach ($waLabels as $f => $label) {
+                    $base = $waOrig ?? $input;
+                    if (!array_key_exists($f, $base)) continue;
+                    if (trim((string)($waLocked[$f] ?? '')) !== (is_scalar($base[$f]) ? trim((string)$base[$f]) : '')) $waChanged[] = $label;
+                }
+                out(['ok' => false, 'conflict' => true, 'changed' => $waChanged, 'updated_at' => (string)$waLocked['updated_at'],
+                    'error' => ($waOrig !== null && $waChanged ? 'Someone else changed ' . api_list_words($waChanged) . ' since you opened this worksite assessment.' : 'Someone else changed this worksite assessment since you opened it.')
+                        . ' Nothing was saved. Copy anything you typed, then reload to see their changes.'], 409);
+            }
+            db()->prepare('UPDATE worksite_assessments SET employer=?, job_title=?, worksite_location=?, assessment_date=?, job_tasks=?, barriers=?, recommendations=?, status=?, follow_up_date=?, outcome=? WHERE id=?')
+                ->execute($waVals);
+            db()->commit();
+        } catch (Throwable $e) {
+            if (db()->inTransaction()) db()->rollBack();
+            throw $e;
+        }
         audit($userId, 'worksite.update', 'worksite_assessment', $id, '(mobile)');
-        out(['ok' => true]);
+        $waAt = db()->prepare('SELECT updated_at FROM worksite_assessments WHERE id = ?');
+        $waAt->execute([$id]);
+        // updated_at: the version now saved, for the app's next save of the same form.
+        out(['ok' => true, 'updated_at' => (string)$waAt->fetchColumn()]);
     }
 
     /* ========================= Procurement ========================= */
@@ -3496,7 +3724,7 @@ switch ($action) {
     /* ========================= Knowledge base ========================= */
     case 'kb_articles': {
         $q = trim((string)($_GET['q'] ?? '')); $where = []; $args = [];
-        foreach (array_slice(preg_split('/\s+/', $q, -1, PREG_SPLIT_NO_EMPTY) ?: [], 0, 6) as $w) { $where[] = '(title LIKE ? OR category LIKE ? OR body LIKE ?)'; $l = '%' . $w . '%'; array_push($args, $l, $l, $l); }
+        foreach (array_slice(preg_split('/\s+/', $q, -1, PREG_SPLIT_NO_EMPTY) ?: [], 0, 6) as $w) { $where[] = "(title LIKE ? ESCAPE '!' OR category LIKE ? ESCAPE '!' OR body LIKE ? ESCAPE '!')"; $l = api_like($w); array_push($args, $l, $l, $l); }
         $sql = 'SELECT id, title, category, is_public, updated_at FROM kb_articles';
         if ($where) $sql .= ' WHERE ' . implode(' AND ', $where);
         $sql .= ' ORDER BY category IS NULL, category, title LIMIT 500';
@@ -3938,7 +4166,7 @@ switch ($action) {
         $ss->execute($args); $stat = $ss->fetch() ?: ['done' => 0, 'in_use' => 0, 'not_use' => 0];
         $retention = ((int)$stat['done'] > 0) ? (int)round(100 * (int)$stat['in_use'] / (int)$stat['done']) : null;
         $base = "SELECT f.id, f.client_id, f.equipment_id, f.interval_days, f.due_date, f.status, f.in_use, f.satisfaction,
-                f.barriers, f.notes, f.completed_at, c.name AS client_name, e.name AS equipment_name, e.serial AS asset_tag
+                f.barriers, f.notes, f.completed_at, c.name AS client_name, c.assigned_to AS assigned_to, e.name AS equipment_name, e.serial AS asset_tag
             FROM equipment_followups f JOIN clients c ON c.id = f.client_id JOIN equipment e ON e.id = f.equipment_id";
         $dueQ = db()->prepare("$base WHERE f.status = 'Pending' AND f.due_date <= CURDATE()$scopeSql ORDER BY f.due_date LIMIT 300");
         $dueQ->execute($args); $due = $dueQ->fetchAll();
@@ -4085,6 +4313,11 @@ switch ($action) {
         // The same message sent again after a lost reply (the apps' idem_key) is posted, and texted, once.
         $idem = preg_match('/^[0-9a-fA-F-]{36}$/', (string)($input['idem_key'] ?? '')) ? strtoupper($input['idem_key']) : null;
         if ($idem !== null) {
+            // A copy arriving while the first (a slow upload) is still being saved waits for it
+            // (4.28.0): the key is stored only after the message, so without the lock both
+            // copies would pass the check below. The lock ends with the request.
+            try { db()->prepare('SELECT GET_LOCK(?, 60)')->execute(['msgidem:' . substr(hash('sha256', $userId . '|' . $cid . '|' . $idem), 0, 40)]); }
+            catch (Throwable $e) { /* the check below still answers later copies */ }
             $seen = db()->prepare('SELECT id FROM messages WHERE staff_id = ? AND idem_key = ? AND client_id = ?');
             $seen->execute([$userId, $idem, $cid]);
             if ($seenId = $seen->fetchColumn()) out(['ok' => true, 'id' => (int)$seenId, 'delivered' => true, 'warning' => null, 'texted' => null, 'repeat' => true]);

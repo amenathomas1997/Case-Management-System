@@ -197,13 +197,15 @@ struct AccountView: View {
             Button("Sign out", role: .destructive) { api.signOut() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Anything you have not saved is discarded. Entries already saved offline stay on this phone.")
+            Text("Anything you have not saved is discarded. Entries already saved offline stay on this phone."
+                 + signOutRemoves(prepared: PreparedSignatures.all(owner: api.userId).count))
         }
         .confirmationDialog("Sign out of the app on every device?", isPresented: $confirmingEverywhere, titleVisibility: .visible) {
             Button("Sign out everywhere", role: .destructive) { Task { await logoutAll() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Every device signed in to the app, this iPhone too, has to sign in again. Anything you have not saved here is discarded. Website sessions are not affected.")
+            Text("Every device signed in to the app, this iPhone too, has to sign in again. Anything you have not saved here is discarded. Website sessions are not affected."
+                 + signOutRemoves(prepared: PreparedSignatures.all(owner: api.userId).count))
         }
     }
 
@@ -229,9 +231,9 @@ struct AccountView: View {
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             }
             .disabled(busy)
-            .accessibilityHint(passwordEffects(passkeys: s.passkeys.count, calFeed: s.hasCalFeed))
+            .accessibilityHint(passwordEffects(passkeys: s.passkeys.count, calFeed: s.hasCalFeed, prepared: PreparedSignatures.all(owner: api.userId).count))
         } header: { sectionHeader("Password") } footer: {
-            Text(passwordEffects(passkeys: s.passkeys.count, calFeed: s.hasCalFeed)).foregroundStyle(Color.secondaryText)
+            Text(passwordEffects(passkeys: s.passkeys.count, calFeed: s.hasCalFeed, prepared: PreparedSignatures.all(owner: api.userId).count)).foregroundStyle(Color.secondaryText)
         }
     }
 
@@ -665,9 +667,23 @@ struct AccountView: View {
     }
 }
 
+/// "1 document" or "3 documents" (4.28.0: sign-out and a password change name the documents
+/// prepared to sign with no signal, which they remove from this phone).
+private func preparedDocuments(_ count: Int) -> String {
+    "\(count) document\(count == 1 ? "" : "s")"
+}
+
+/// What sign-out also removes from this phone, said in its dialogs (here and on Sign in).
+func signOutRemoves(prepared: Int) -> String {
+    prepared > 0
+        ? " The \(preparedDocuments(prepared)) prepared to sign here with no signal \(prepared == 1 ? "is" : "are") removed too; prepare \(prepared == 1 ? "it" : "them") again after signing in."
+        : ""
+}
+
 /// What a password change also does, said before it is made (it cannot be undone).
-private func passwordEffects(passkeys: Int, calFeed: Bool) -> String {
+private func passwordEffects(passkeys: Int, calFeed: Bool, prepared: Int) -> String {
     var effects = ["signs you out on every device, including this app, and discards unsaved drafts on this iPhone"]
+    if prepared > 0 { effects.append("removes the \(preparedDocuments(prepared)) prepared to sign with no signal") }
     if passkeys > 0 { effects.append("removes your \(passkeys) passkey\(passkeys == 1 ? "" : "s") (you can add them again afterwards)") }
     if calFeed { effects.append("turns off your calendar subscription address") }
     let last = effects.removeLast()
@@ -701,7 +717,7 @@ private struct ChangePasswordSheet: View {
                     SecureCaptionedField(label: "New password, at least 10 characters", text: $newPassword, content: .newPassword)
                     SecureCaptionedField(label: "Confirm new password", text: $confirm, content: .newPassword)
                 } footer: {
-                    Text(passwordEffects(passkeys: passkeyCount, calFeed: hasCalFeed) + " You then sign in again with the new password.")
+                    Text(passwordEffects(passkeys: passkeyCount, calFeed: hasCalFeed, prepared: PreparedSignatures.all(owner: api.userId).count) + " You then sign in again with the new password.")
                         .foregroundStyle(Color.secondaryText)
                 }
                 if passkeyCount > 0 {

@@ -266,6 +266,52 @@ function qbo_drop_payment(array $p): void {
         . ' removed: voided or deleted in QuickBooks (#' . $p['qbo_id'] . ')');
 }
 
+/**
+ * Send there the payments recorded here (not ones that came from QuickBooks), each once (4.28.0 order:
+ * before anything is imported). Each payment row is locked while it is sent and checked again first,
+ * so a payment removed on Invoices meanwhile is not sent, and one being sent cannot be removed until
+ * its QuickBooks id is stored (it is then voided there instead, as any payment in QuickBooks). A
+ * payment already imported from QuickBooks under the id this one gets (a reply lost before 4.28.0)
+ * is the same payment: that copy is removed and the totals recalculated. $q (the QuickBooks invoice)
+ * has its Balance lowered for a payment new there, and $linked gains its id. Null, or the error.
+ */
+function qbo_push_payments(array $inv, array &$q, array &$linked): ?string {
+    $mine = db()->prepare("SELECT id FROM invoice_payments WHERE invoice_id = ? AND kind = 'payment' AND qbo_id IS NULL AND (reference IS NULL OR reference NOT LIKE 'QuickBooks payment %') ORDER BY id");
+    $mine->execute([(int)$inv['id']]);
+    $pdo = db();
+    foreach ($mine->fetchAll(PDO::FETCH_COLUMN) as $payId) {
+        // A renewed token is stored outside the transaction below, so a refusal rolling it back never loses it.
+        if (qbo_access_token() === null) return qbo_fail($inv, 'QuickBooks could not be reached to add a payment recorded here.');
+        $pdo->beginTransaction();
+        try {
+            $lk = $pdo->prepare('SELECT * FROM invoice_payments WHERE id = ? AND qbo_id IS NULL FOR UPDATE');
+            $lk->execute([(int)$payId]);
+            $p = $lk->fetch();
+            if (!$p) { $pdo->rollBack(); continue; } // removed here, or sent by another sync, meanwhile
+            [$pc, $pd] = qbo_api('POST', '/payment?requestid=cms-pay-' . (int)$p['id'], ['CustomerRef' => $q['CustomerRef'] ?? null, 'TotalAmt' => round((float)$p['amount'], 2), 'TxnDate' => (string)$p['received_on'],
+                'PaymentRefNum' => mb_substr((string)($p['reference'] ?? ''), 0, 21), 'Line' => [['Amount' => round((float)$p['amount'], 2), 'LinkedTxn' => [['TxnId' => (string)$inv['qbo_id'], 'TxnType' => 'Invoice']]]]]);
+            $pid = (string)($pd['Payment']['Id'] ?? '');
+            if ($pc !== 200 || $pid === '') { $pdo->rollBack(); return qbo_fail($inv, 'A payment recorded here could not be added in QuickBooks (reply ' . $pc . ').'); }
+            $pdo->prepare('SELECT id FROM invoices WHERE id = ? FOR UPDATE')->execute([(int)$inv['id']]);
+            $dup = $pdo->prepare('DELETE FROM invoice_payments WHERE invoice_id = ? AND qbo_id = ? AND id <> ? AND reference = ?');
+            $dup->execute([(int)$inv['id'], $pid, (int)$p['id'], 'QuickBooks payment ' . $pid]);
+            $pdo->prepare('UPDATE invoice_payments SET qbo_id = ? WHERE id = ?')->execute([$pid, (int)$p['id']]);
+            if ($dup->rowCount() > 0) invoice_retotal((int)$inv['id']);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $e;
+        }
+        if ($dup->rowCount() > 0) audit(null, 'invoice.payment_remove', 'invoice', (int)$inv['id'], 'payment ' . fmt_money((float)$p['amount'])
+            . ' imported twice from QuickBooks (#' . $pid . ') removed: it is the payment recorded here');
+        if (!in_array($pid, $linked, true)) {
+            $linked[] = $pid;
+            $q['Balance'] = (float)($q['Balance'] ?? 0) - (float)$p['amount'];
+        }
+    }
+    return null;
+}
+
 /** Bring the payments made on a sent invoice in QuickBooks here: each QuickBooks payment once, with its own date. */
 function qbo_check_payments(array $inv): ?string {
     [$code, $data] = qbo_api('GET', '/invoice/' . rawurlencode((string)$inv['qbo_id']));
@@ -276,9 +322,20 @@ function qbo_check_payments(array $inv): ?string {
     if ($code !== 200 || !isset($data['Invoice'])) return qbo_fail($inv, 'QuickBooks could not be read for this invoice (reply ' . $code . ').');
     $q = $data['Invoice'];
     $linked = [];
+    foreach ((array)($q['LinkedTxn'] ?? []) as $lt) if (($lt['TxnType'] ?? '') === 'Payment' && is_string($lt['TxnId'] ?? null)) $linked[] = (string)$lt['TxnId'];
+    // 4.28.0: payments recorded here go there FIRST (each once, by requestid), before anything linked there
+    // is brought here. A payment sent before whose reply was lost then gets its QuickBooks id back from the
+    // same requestid, so it is never imported again as a second payment.
+    $err = qbo_push_payments($inv, $q, $linked);
+    if ($err !== null) return $err;
+    // A payment recorded here meanwhile, not yet sent there, may be the one QuickBooks lists: nothing is
+    // brought here until it has been sent (the next sync sends it first).
+    $pending = db()->prepare("SELECT COUNT(*) FROM invoice_payments WHERE invoice_id = ? AND kind = 'payment' AND qbo_id IS NULL AND (reference IS NULL OR reference NOT LIKE 'QuickBooks payment %')");
+    $pending->execute([(int)$inv['id']]);
+    $importNow = (int)$pending->fetchColumn() === 0;
     foreach ((array)($q['LinkedTxn'] ?? []) as $lt) {
+        if (!$importNow) break;
         if (($lt['TxnType'] ?? '') !== 'Payment' || !is_string($lt['TxnId'] ?? null)) continue;
-        $linked[] = (string)$lt['TxnId'];
         $ref = 'QuickBooks payment ' . $lt['TxnId'];
         // 4.27.0: a payment recorded here and sent there carries its QuickBooks id, not this reference.
         $seen = db()->prepare('SELECT 1 FROM invoice_payments WHERE invoice_id = ? AND (qbo_id = ? OR reference = ?)');
@@ -308,17 +365,6 @@ function qbo_check_payments(array $inv): ?string {
         if ($pc === 200 && isset($pd['Payment']) && !$zero) continue;
         if (!$notFound && !$zero) return qbo_fail($inv, 'A QuickBooks payment could not be checked (reply ' . $pc . ').');
         qbo_drop_payment($p);
-    }
-    // Payments recorded here (not ones that came from QuickBooks) go there, each once.
-    $mine = db()->prepare("SELECT * FROM invoice_payments WHERE invoice_id = ? AND kind = 'payment' AND qbo_id IS NULL AND (reference IS NULL OR reference NOT LIKE 'QuickBooks payment %')");
-    $mine->execute([(int)$inv['id']]);
-    foreach ($mine->fetchAll() as $p) {
-        [$pc, $pd] = qbo_api('POST', '/payment?requestid=cms-pay-' . (int)$p['id'], ['CustomerRef' => $q['CustomerRef'] ?? null, 'TotalAmt' => round((float)$p['amount'], 2), 'TxnDate' => (string)$p['received_on'],
-            'PaymentRefNum' => mb_substr((string)($p['reference'] ?? ''), 0, 21), 'Line' => [['Amount' => round((float)$p['amount'], 2), 'LinkedTxn' => [['TxnId' => (string)$inv['qbo_id'], 'TxnType' => 'Invoice']]]]]);
-        $pid = (string)($pd['Payment']['Id'] ?? '');
-        if ($pc !== 200 || $pid === '') return qbo_fail($inv, 'A payment recorded here could not be added in QuickBooks (reply ' . $pc . ').');
-        db()->prepare('UPDATE invoice_payments SET qbo_id = ? WHERE id = ?')->execute([$pid, (int)$p['id']]);
-        $q['Balance'] = (float)($q['Balance'] ?? 0) - (float)$p['amount'];
     }
     // 4.27.0: Paid (no longer checked) only when the payments recorded here settle it too. A zero
     // balance there that the payments here do not cover (a void, credit memo or discount) is shown to staff.

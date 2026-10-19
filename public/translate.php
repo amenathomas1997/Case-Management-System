@@ -80,13 +80,11 @@ page_header('Translate', $user, 'ai_tools');
 <form method="post" action="translate.php" class="stacked"><?= csrf_field() ?>
   <div class="grid grid-2">
     <div class="field"><label for="lang">Translate into</label><select id="lang" name="lang"><?= select_options(TRANSLATE_LANGS, $lang) ?></select></div>
-    <div class="field"><label for="other">Other language</label>
-      <span class="hint" id="other-hint">Only when “Other” is chosen above. Letters, spaces, hyphens, apostrophes, periods and parentheses; up to 40 characters.</span>
-      <input type="text" id="other" name="other" value="<?= h($other) ?>" maxlength="40" <?= field_aria('other', 'other-hint') ?>><?= field_error('other') ?></div>
+    <div class="field"><label for="other">Other language <span class="hint">Only when “Other” is chosen above. Letters, spaces, hyphens, apostrophes, periods and parentheses; up to 40 characters.</span></label>
+      <input type="text" id="other" name="other" value="<?= h($other) ?>" maxlength="40" <?= field_aria('other') ?>><?= field_error('other') ?></div>
   </div>
-  <div class="field"><label for="content">Text to translate</label>
-    <span class="hint" id="content-hint">Up to 6,000 characters (about two pages); split longer text into parts.</span>
-    <textarea id="content" name="content" rows="10" <?= field_aria('content', 'content-hint') ?>><?= h($content) ?></textarea><?= field_error('content') ?></div>
+  <div class="field"><label for="content">Text to translate <span class="hint">Up to 6,000 characters (about two pages); split longer text into parts.</span></label>
+    <textarea id="content" name="content" rows="10" <?= field_aria('content') ?>><?= h($content) ?></textarea><?= field_error('content') ?></div>
   <button type="submit" name="go" value="1" class="btn btn-primary">Translate</button>
 </form>
 

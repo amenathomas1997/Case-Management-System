@@ -66,13 +66,13 @@ fun TrackScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
     }
     var goalFor by remember { mutableStateOf<Goal?>(null) }
     var progressFor by remember { mutableStateOf<Goal?>(null) }
-    var addingGoal by remember { mutableStateOf(false) }
-    var addingExpense by remember { mutableStateOf(false) }
+    var addingGoal by rememberSaveable { mutableStateOf(false) }
+    var addingExpense by rememberSaveable { mutableStateOf(false) }
     var deletingExpense by remember { mutableStateOf<JSONObject?>(null) }
     var logFor by remember { mutableStateOf<WorkLog?>(null) }
     var correcting by remember { mutableStateOf<WorkLog?>(null) }
     var deletingLog by remember { mutableStateOf<WorkLog?>(null) }
-    var reporting by remember { mutableStateOf(false) }
+    var reporting by rememberSaveable { mutableStateOf(false) }
     var openNotes by remember { mutableStateOf(setOf<Int>()) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -225,9 +225,9 @@ fun GoalHistoryScreen(api: Api, goalId: Int, goalText: String) {
 /** Correct an unbilled entry's hours and miles, with a reason (correct_log). */
 @Composable
 private fun CorrectLogDialog(api: Api, l: WorkLog, onDone: (String) -> Unit, onCancel: () -> Unit) {
-    var hours by remember { mutableStateOf(hoursText(l.hours)) }
-    var miles by remember { mutableStateOf(hoursText(l.mileage)) }
-    var reason by remember { mutableStateOf("") }
+    var hours by rememberSaveable { mutableStateOf(hoursText(l.hours)) }
+    var miles by rememberSaveable { mutableStateOf(hoursText(l.mileage)) }
+    var reason by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -254,21 +254,18 @@ private fun CorrectLogDialog(api: Api, l: WorkLog, onDone: (String) -> Unit, onC
  */
 @Composable
 private fun SendReportDialog(api: Api, trackId: Int, clientName: String, onDone: (String) -> Unit, onCancel: () -> Unit) {
-    var intro by remember { mutableStateOf("") }
-    var signature by remember { mutableStateOf("") }
+    var intro by rememberSaveable { mutableStateOf("") }
+    var signature by rememberSaveable { mutableStateOf("") }
+    var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     FormDialog("Email the progress report", "Sign and send", busy, enabled = signature.isNotBlank(), onSave = {
         if (busy) return@FormDialog
         scope.launchSave({ busy = it }, { error = it }) {
-            val r = try {
-                api.call("send_report", body = JSONObject().put("track_id", trackId).put("intro", intro.trim()).put("signature", signature.trim()))
-            } catch (e: ApiException) {
-                // The server emails before it answers: sending again could email the counselor twice.
-                if (e.network) throw ApiException("The connection dropped before the server answered, so it isn't known whether the report was sent. Check the client's notes for “Training report emailed to VRC” before sending it again.")
-                throw e
-            }
+            // 4.28.0: the server emails before it answers, so a retry after a lost reply carries the same key and emails once (see sendOnce).
+            val r = api.callOnce("send_report", JSONObject().put("track_id", trackId).put("intro", intro.trim()).put("signature", signature.trim()),
+                idem, { idem = it }, "the report")
             val to = r.str("sent_to")
             onDone(listOfNotNull(if (to == null) "Report signed and emailed." else "Report signed and emailed to $to.", r.str("release_warning")).joinToString(" "))
         }
@@ -290,6 +287,7 @@ private fun AddGoalDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
     var target by rememberSaveable { mutableStateOf("") }
     var picking by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
+    var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -307,14 +305,8 @@ private fun AddGoalDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
             metric.isBlank() -> error = "Measurable criteria: say how progress on this goal is measured."
             target.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(target.trim()) -> error = "Enter the target date as year-month-day, such as ${today()}, or leave it empty."
             else -> scope.launchSave({ busy = it }, { error = it }) {
-                try {
-                    api.call("add_goal", body = JSONObject().put("track_id", trackId).put("specific_goal", specific.trim())
-                        .put("measurable_metric", metric.trim()).put("focus_area", focus.trim()).put("target_date", target.trim()))
-                } catch (e: ApiException) {
-                    // The goal may have been added: adding it again would list it twice.
-                    if (e.network) throw ApiException("The connection dropped before the server answered, so it isn't known whether this goal was added. Check the track's goals for “${specific.trim()}” before adding it again.")
-                    throw e
-                }
+                api.callOnce("add_goal", JSONObject().put("track_id", trackId).put("specific_goal", specific.trim())
+                    .put("measurable_metric", metric.trim()).put("focus_area", focus.trim()).put("target_date", target.trim()), idem, { idem = it }, "the goal")
                 onDone("Goal added.")
             }
         }
@@ -368,13 +360,14 @@ private fun GoalTemplatePicker(api: Api, onPick: (GoalTemplate) -> Unit, onCance
 private fun ProgressDialog(api: Api, g: Goal, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val oldStatus = g.status
     val oldPct = g.progressPct
-    var status by remember { mutableStateOf(oldStatus) }
-    var pct by remember { mutableStateOf(oldPct.toString()) }
-    var pctEntered by remember { mutableStateOf(false) }
-    var note by remember { mutableStateOf("") }
+    var status by rememberSaveable { mutableStateOf(oldStatus) }
+    var pct by rememberSaveable { mutableStateOf(oldPct.toString()) }
+    var pctEntered by rememberSaveable { mutableStateOf(false) }
+    var note by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var pctError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
-    val idem = remember { UUID.randomUUID().toString() }
+    val idem = rememberSaveable { UUID.randomUUID().toString() }
     val scope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = onCancel,
@@ -382,7 +375,7 @@ private fun ProgressDialog(api: Api, g: Goal, onDone: (String) -> Unit, onCancel
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Choice("Status", status, listOf("Not Started", "In Progress", "Achieved").map { it to it }) { status = it; if (it == "Achieved") pct = "100" }
-                Field("Percent done", pct, { pct = it.filter { c -> c.isDigit() }.take(3); pctEntered = true }, hint = "0 to 100", keyboard = KeyboardType.Number)
+                Field("Percent done", pct, { pct = it.filter { c -> c.isDigit() }.take(3); pctEntered = true }, hint = "0 to 100", keyboard = KeyboardType.Number, error = pctError)
                 Field("Note", note, { note = it }, hint = "optional", singleLine = false, minLines = 2)
                 ErrorText(error)
             }
@@ -390,7 +383,8 @@ private fun ProgressDialog(api: Api, g: Goal, onDone: (String) -> Unit, onCancel
         confirmButton = {
             TextButton(enabled = !busy, onClick = {
                 val p = pct.toIntOrNull()
-                if (p == null || p !in 0..100) { error = "Enter the percent done as a whole number from 0 to 100."; return@TextButton }
+                pctError = if (p == null || p !in 0..100) "Enter the percent done as a whole number from 0 to 100." else null
+                if (p == null || pctError != null) { error = pctError; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
                     val b = JSONObject().put("id", g.id).put("status", status).put("progress_pct", p).put("note", note.trim()).put("idem_key", idem)
                     // Reopening at 100 only when the person typed 100 themselves (the server asks otherwise).
@@ -414,6 +408,8 @@ private fun ExpenseDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
     var description by rememberSaveable { mutableStateOf("") }
     var amount by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var dateError by remember { mutableStateOf<String?>(null) }
+    var amountError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val idem = rememberSaveable { UUID.randomUUID().toString() }
     val scope = rememberCoroutineScope()
@@ -422,16 +418,18 @@ private fun ExpenseDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
         title = { Text("Add an expense", modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field("Date", date, { date = it }, hint = "year-month-day")
+                Field("Date", date, { date = it }, hint = "year-month-day", error = dateError)
                 Field("What it was for", description, { description = it })
-                Field("Amount in dollars", amount, { amount = it }, hint = "such as 24.50", keyboard = KeyboardType.Decimal)
+                Field("Amount in dollars", amount, { amount = it }, hint = "such as 24.50", keyboard = KeyboardType.Decimal, error = amountError)
                 ErrorText(error)
             }
         },
         confirmButton = {
             TextButton(enabled = !busy && description.isNotBlank(), onClick = {
                 val a = amount.trim().removePrefix("$")
-                if (!Regex("^\\d{1,7}(\\.\\d{1,2})?$").matches(a) || (a.toDoubleOrNull() ?: 0.0) <= 0) { error = "Enter the amount in dollars, such as 24.50."; return@TextButton }
+                dateError = if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim())) "Enter the date as year-month-day, such as ${today()}." else null
+                amountError = if (!Regex("^\\d{1,7}(\\.\\d{1,2})?$").matches(a) || (a.toDoubleOrNull() ?: 0.0) <= 0) "Enter the amount in dollars, such as 24.50." else null
+                if (dateError != null || amountError != null) { error = dateError ?: amountError; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
                     val b = JSONObject().put("track_id", trackId).put("date", date.trim()).put("description", description.trim()).put("amount", a).put("idem_key", idem)
                     onDone(saveOrQueue(api, "add_expense", b, "Expense: $" + a + " " + description.trim().take(30), "Expense added.").message)
@@ -463,6 +461,8 @@ fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: In
         var start by rememberSaveable { mutableStateOf(t.str("start_date") ?: "") }
         var end by rememberSaveable { mutableStateOf(t.str("expiration_date") ?: "") }
         var reason by rememberSaveable { mutableStateOf("") }
+        // 4.28.0: a new track is added once even when a reply was lost (see sendOnce).
+        var newKey by rememberSaveable { mutableStateOf("") }
         var error by remember { mutableStateOf<String?>(null) }
         var busy by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
@@ -493,7 +493,8 @@ fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: In
                     if (serviceType == t.str("service_type")) b.put("rsa_category", t.str("rsa_category") ?: "")
                     if (trackId > 0) b.put("id", trackId).put("amendment_reason", reason.trim()) else b.put("client_id", clientId)
                     try {
-                        Flash.pending = api.call("save_track", body = b).optString("message").ifEmpty { "Track saved." }
+                        val saved = if (trackId > 0) api.call("save_track", body = b) else api.callOnce("save_track", b, newKey, { newKey = it }, "the new track")
+                        Flash.pending = saved.optString("message").ifEmpty { "Track saved." }
                         nav.popBackStack()
                     } catch (e: ApiException) {
                         // Field errors come back by name: say the first one, with its field.

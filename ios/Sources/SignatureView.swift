@@ -8,6 +8,9 @@ struct SignaturePad: View {
     var status: String = ""
     /// Told when a stroke starts and ends, so a scroll view around the pad can hold still.
     var onDrawing: (Bool) -> Void = { _ in }
+    /// The language the signer reads (4.28.0): "es" names and explains the pad in Spanish, and
+    /// marks it so VoiceOver uses the Spanish voice. nil: English, the phone's own voice.
+    var lang: String? = nil
     @State private var current: [CGPoint] = []
     /// A stroke is in progress. SwiftUI resets this when the drag ends and also when it is
     /// cancelled (an incoming call, an alert, the scroll view taking the touch), which
@@ -57,11 +60,19 @@ struct SignaturePad: View {
             onDrawing(active)
         }
         .accessibilityElement()
-        .accessibilityLabel("Signature area")
-        .accessibilityValue(status)
-        .accessibilityHint("Draw the signature here with one finger. Touches on this area go straight to the pad while VoiceOver is on.")
+        .accessibilityLabel(spoken("Signature area", "Área de firma"))
+        .accessibilityValue(spoken(status, status))
+        .accessibilityHint(spoken("Draw the signature here with one finger. Touches on this area go straight to the pad while VoiceOver is on.",
+                                  "Dibuje la firma aquí con un dedo. Con VoiceOver activado, lo que toque en esta área va directamente a la firma."))
         // Without this trait VoiceOver swallows the drag and nothing can be drawn.
         .accessibilityAddTraits(.allowsDirectInteraction)
+    }
+
+    private func spoken(_ en: String, _ es: String) -> Text {
+        guard let lang, !lang.isEmpty else { return Text(en) }
+        var a = AttributedString(lang == "es" ? es : en)
+        a.languageIdentifier = lang
+        return Text(a)
     }
 }
 
@@ -214,6 +225,9 @@ struct SignatureSheet: View {
                 if ready && strokes.count > 1 { announce("Signature drawn. Save signature is available.") }
             }
         }
+        // In the signer's hands from now on (4.28.0): nothing naming other entries is said.
+        .onAppear { lock.handOver() }
+        .onDisappear { lock.endHandOver() }
     }
 
     private func submit(withSignature: Bool) async {

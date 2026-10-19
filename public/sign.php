@@ -100,7 +100,11 @@ page_header($withdrawn ? 'Document withdrawn' : ($doc['signed_at'] ? 'Document s
 echo lang_toggle();
 // The document's own words are as kept when it was sent (record data): shown as written, never translated, and
 // marked with their language when it is known and differs from the page's.
-$docLang = in_array($doc['lang'] ?? null, ['en', 'es'], true) && $doc['lang'] !== page_lang() ? ' lang="' . $doc['lang'] . '"' : '';
+// A document staff wrote ("Another document") has no language stored: staff write in the
+// English-only staff app, so on a page that is not English it is marked English (4.28.0),
+// as staff-written text is everywhere else on the public pages.
+$docLangCode = in_array($doc['lang'] ?? null, ['en', 'es'], true) ? (string)$doc['lang'] : 'en';
+$docLang = $docLangCode !== page_lang() ? ' lang="' . $docLangCode . '"' : '';
 $paras = array_values(array_filter(array_map('trim', preg_split('/\n\s*\n/', str_replace("\r", '', (string)$doc['body']))), fn($p) => $p !== ''));
 ?>
 <div class="card" style="max-width: 40rem; margin: 2rem auto;">
@@ -136,9 +140,8 @@ $paras = array_values(array_filter(array_map('trim', preg_split('/\n\s*\n/', str
     <?= csrf_field() ?>
     <?= form_error_summary(['signature' => '']) ?>
     <div class="field">
-      <label for="signature"><?= t('Electronic signature') ?> <span aria-hidden="true">*</span><span class="visually-hidden"> (<?= t('required') ?>)</span> <span class="hint"><?= t('Type your full name (') ?><?= h($doc['signer_name']) ?><?= t(') to sign') ?></span></label>
-      <p class="hint" id="sig-hint"><?= t('Capital letters, accents and punctuation do not need to match.') ?></p>
-      <input type="text" id="signature" name="signature" required autocomplete="name" value="<?= h($typedSig) ?>" <?= field_aria('signature', 'sig-hint') ?>>
+      <label for="signature"><?= t('Electronic signature') ?> <span aria-hidden="true">*</span><span class="visually-hidden"> (<?= t('required') ?>)</span> <span class="hint"><?= t('Type your full name (') ?><?= h($doc['signer_name']) ?><?= t(') to sign') ?>. <?= t('Capital letters, accents and punctuation do not need to match.') ?></span></label>
+      <input type="text" id="signature" name="signature" required autocomplete="name" value="<?= h($typedSig) ?>" <?= field_aria('signature') ?>>
       <?php if (has_field_error('signature')): ?><p class="field-error" id="err-signature"><?= t(form_errors()['signature']) ?> <?= t('To sign, type:') ?> <strong><?= h($doc['signer_name']) ?></strong></p><?php endif; ?>
     </div>
     <button type="submit" class="btn btn-primary"><?= t('Sign and submit') ?></button>

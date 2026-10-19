@@ -218,9 +218,8 @@ if (empty($_SESSION[$sessionKey])) {
       <form method="post" action="vrc.php?t=<?= h($token) ?>" class="stacked mt-1" novalidate><?= csrf_field() ?>
         <?= form_error_summary(['code' => '6-digit code']) ?>
         <div class="field">
-          <label for="code">6-digit code</label>
-          <p class="hint" id="code-hint">A code works for 10 minutes after it is emailed, and you can try it 5 times. Email me a code sends a new one.</p>
-          <input type="text" id="code" name="code" class="otp-input" inputmode="numeric" maxlength="20" autocomplete="one-time-code" required <?= field_aria('code', 'code-hint') ?>>
+          <label for="code">6-digit code <span class="hint">A code works for 10 minutes after it is emailed, and you can try it 5 times. Email me a code sends a new one.</span></label>
+          <input type="text" id="code" name="code" class="otp-input" inputmode="numeric" maxlength="20" autocomplete="one-time-code" required <?= field_aria('code') ?>>
           <?= field_error('code') ?>
         </div>
         <button type="submit" name="verify_code" value="1" class="btn btn-primary">Open my portal</button>
@@ -419,13 +418,16 @@ page_header('Your caseload');
   <?php
   // The client's most recent completed session and the next one booked, beside
   // the hours: a counselor sees at a glance whether training is under way.
-  $lastQ = db()->prepare("SELECT start_at FROM scheduled_sessions WHERE client_id = ? AND status = 'Completed' ORDER BY start_at DESC LIMIT 1");
+  // 4.28.0: a VR counselor sees the client's VR-funded tracks only, and only those tracks'
+  // sessions: private-pay, no-charge and other funders' work is not theirs to see.
+  $vrSess = " AND track_id IN (SELECT id FROM training_tracks WHERE client_id = scheduled_sessions.client_id AND billing_mode = 'vr')";
+  $lastQ = db()->prepare("SELECT start_at FROM scheduled_sessions WHERE client_id = ? AND status = 'Completed'$vrSess ORDER BY start_at DESC LIMIT 1");
   $lastQ->execute([(int)$c['id']]);
   $lastSession = $lastQ->fetchColumn();
-  $nextQ = db()->prepare("SELECT start_at FROM scheduled_sessions WHERE client_id = ? AND status = 'Scheduled' AND start_at >= NOW() ORDER BY start_at LIMIT 1");
+  $nextQ = db()->prepare("SELECT start_at FROM scheduled_sessions WHERE client_id = ? AND status = 'Scheduled' AND start_at >= NOW()$vrSess ORDER BY start_at LIMIT 1");
   $nextQ->execute([(int)$c['id']]);
   $nextSession = $nextQ->fetchColumn();
-  $tracks = db()->prepare("SELECT * FROM training_tracks WHERE client_id = ? ORDER BY status = 'Active' DESC");
+  $tracks = db()->prepare("SELECT * FROM training_tracks WHERE client_id = ? AND billing_mode = 'vr' ORDER BY status = 'Active' DESC");
   $tracks->execute([(int)$c['id']]);
   foreach ($tracks->fetchAll() as $t):
       $r = track_rollup((int)$t['id']);
@@ -448,7 +450,7 @@ page_header('Your caseload');
   <?php endforeach; ?>
   <?php // Attendance over the last 90 days (3.0.41): where a missed-session email points.
   $att = db()->prepare("SELECT start_at, status FROM scheduled_sessions WHERE client_id = ? AND start_at < NOW() AND start_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
-      AND status IN ('Completed','No Show','Cancelled') ORDER BY start_at DESC");
+      AND status IN ('Completed','No Show','Cancelled')$vrSess ORDER BY start_at DESC");
   $att->execute([(int)$c['id']]);
   $att = $att->fetchAll();
   $count = fn(string $st) => count(array_filter($att, fn($a) => $a['status'] === $st)); ?>
@@ -550,9 +552,8 @@ if ($convo): ?>
     <?php endif; ?>
     <?php // No maxlength: a browser would cut a long paste silently. The server refuses
     // an over-long message with the whole text left in the box. ?>
-    <div class="field"><label for="message">Your message <span class="hint">required unless you attach a file</span></label>
-      <p class="hint" id="message-hint">Up to 5,000 characters.</p>
-      <textarea id="message" name="message" rows="4" <?= field_aria('message', 'message-hint') ?>><?= h(old_in('message', $draftMsg)) ?></textarea><?= field_error('message') ?></div>
+    <div class="field"><label for="message">Your message <span class="hint">required unless you attach a file; up to 5,000 characters</span></label>
+      <textarea id="message" name="message" rows="4" <?= field_aria('message') ?>><?= h(old_in('message', $draftMsg)) ?></textarea><?= field_error('message') ?></div>
     <?php if ($clients): ?>
     <div class="field"><label for="msg_file">Attach a file about the client chosen above <span class="hint">optional; PDF, Word, Excel, text or image, up to 15 MB</span></label>
       <input type="file" id="msg_file" name="msg_file" accept=".pdf,.docx,.xlsx,.txt,.rtf,.png,.jpg,.jpeg" <?= field_aria('msg_file') ?>><?= field_error('msg_file') ?></div>

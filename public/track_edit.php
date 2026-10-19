@@ -5,6 +5,34 @@ csrf_check();
 $user = require_login();
 require_perm('clients');
 
+/** A save refused because the track changed since the form was opened (4.28.0). */
+final class TrackEditConflict extends RuntimeException {}
+/** The track's fields the edit form shows, with the names said when someone else changed them (4.28.0). */
+const TRACK_EDIT_TRACKED = ['title' => 'Track title', 'service_type' => 'Service type', 'rsa_category' => 'RSA service category', 'bundle_id' => 'Service bundle',
+    'status' => 'Status', 'report_cadence' => 'Automatic progress reports', 'billing_mode' => 'Who pays', 'auth_number' => 'Authorization number',
+    'funding_agency' => 'Funding agency', 'authorized_hours' => 'Authorized hours', 'authorized_amount' => 'Authorized dollar amount',
+    'hourly_rate' => 'Hourly billing rate', 'mileage_rate' => 'Mileage rate', 'start_date' => 'Start date', 'expiration_date' => 'Expiration date'];
+/** One tracked field as the form holds it (a stored row, or what was posted), at the columns' precision. */
+function track_edit_norm(array $src, string $f): string {
+    $v = $src[$f] ?? null;
+    if (!is_scalar($v)) return '';
+    $v = trim((string)$v);
+    if ($f === 'bundle_id') return (string)(int)$v;
+    if ($f === 'billing_mode') return $v === '' ? 'vr' : $v;
+    if (in_array($f, ['authorized_hours', 'hourly_rate', 'authorized_amount', 'mileage_rate'], true)) {
+        $v = str_replace([',', '$'], '', $v);
+        if ($v === '' || !is_numeric($v)) return $v;
+        return number_format(round((float)$v, $f === 'mileage_rate' ? 3 : 2), $f === 'mileage_rate' ? 3 : 2, '.', '');
+    }
+    return $v;
+}
+/** The tracked fields of a stored track row. */
+function track_edit_snapshot(array $row): array {
+    $out = [];
+    foreach (array_keys(TRACK_EDIT_TRACKED) as $f) $out[$f] = track_edit_norm($row, $f);
+    return $out;
+}
+
 $id = (int)($_GET['id'] ?? 0);
 $track = null;
 if ($id) {
@@ -107,12 +135,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $cadence = is_string($_POST['report_cadence'] ?? null) && isset(report_cadence_choices($track['report_cadence'] ?? null)[$_POST['report_cadence']]) ? $_POST['report_cadence'] : 'monthly';
         $vals = [$title, $serviceType, $rsaCategory, $bundleId, $status, $authNumber, $agency, $authHours, $rate, $mileageRate, $start, $exp, $cadence];
         if ($track) {
+            $stale = false;
             db()->beginTransaction();
             try {
                 $locked = db()->prepare('SELECT * FROM training_tracks WHERE id=? FOR UPDATE');
                 $locked->execute([$id]);
                 $track = $locked->fetch();
                 if (!$track) throw new DomainException('Training track no longer exists.');
+                // Two people editing one track (4.28.0): the form carries the values it was
+                // opened with, and a save is refused when the locked row no longer matches
+                // them, so an old form never reverses an amendment or re-prices work back.
+                // A form opened before this release carries none and is saved as before.
+                $origIn = json_decode(is_string($_POST['orig'] ?? null) ? $_POST['orig'] : '', true);
+                if (is_array($origIn)) {
+                    $nowSnap = track_edit_snapshot($track);
+                    foreach ($nowSnap as $f => $nv) {
+                        if (array_key_exists($f, $origIn) && (string)$origIn[$f] !== $nv) throw new TrackEditConflict();
+                    }
+                }
                 // Record an amendment when authorization terms change (compared at
                 // the columns' precision, so re-saving unchanged values is no change).
                 $hoursChanged = round((float)$track['authorized_hours'], 2) !== round($authHours, 2);
@@ -235,10 +275,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $retotalled = $rt->rowCount();
                 }
                 db()->commit();
+            } catch (TrackEditConflict $e) {
+                if (db()->inTransaction()) db()->rollBack();
+                $stale = true;
             } catch (Throwable $e) {
                 if (db()->inTransaction()) db()->rollBack();
                 throw $e;
             }
+        }
+        if ($track && $stale) {
+            // Nothing was saved. The form comes back with this person's own edits and the
+            // saved values for every field they did not touch, the changed fields named;
+            // it carries the track's current values, so a second save goes through.
+            $current = track_edit_snapshot($track);
+            $theirs = [];
+            foreach (TRACK_EDIT_TRACKED as $f => $label) {
+                if (!array_key_exists($f, $origIn)) continue;
+                if ($current[$f] !== (string)$origIn[$f]) $theirs[] = $label;
+                if (track_edit_norm($_POST, $f) === (string)$origIn[$f]) $_POST[$f] = $current[$f];
+            }
+            $freshOrig = $current;
+            $who = $theirs ? (count($theirs) === 1 ? $theirs[0] : implode(', ', array_slice($theirs, 0, -1)) . ' and ' . end($theirs)) : '';
+            $errors['stale'] = $who !== ''
+                ? 'Someone else changed ' . $who . ' since you opened this track. Those fields now show the saved values, and your own changes are kept; review and save again.'
+                : 'Someone else changed this track since you opened it. Your changes are below; review and save again.';
+        } elseif ($track) {
             audit($user['id'], 'track.update', 'track', (int)$track['id'], $changes ? implode('; ', $changes) : 'no changes (' . $title . ')');
             flash('Training track updated.' . ($amended ? ' The authorization change was recorded in the amendment history.' : '')
                 . ($repriced ? ' ' . $repriced . ' work log entr' . ($repriced === 1 ? 'y' : 'ies') . ' not yet invoiced or on a draft invoice now use' . ($repriced === 1 ? 's' : '') . ' the new rate.' : '')
@@ -301,18 +362,21 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
 <h1><?= $track ? 'Edit training track: ' . h($track['title']) . ' for ' . h($client['name']) : 'New training track for ' . h($client['name']) . ($fromAuth ? ', filled in from authorization ' . h((string)$fromAuth['auth_number']) . ': check each field before saving' : '') ?></h1>
 <?php // Focus moves to this summary once on load; each entry links to its field.
 // (The messages already name their field, so no label is put in front of them.) ?>
-<?= form_error_summary(array_fill_keys(array_keys($errors), '')) ?>
+<?= form_error_summary(array_fill_keys(array_keys($errors), ''), ['stale' => 'title']) ?>
 
 <p class="hint">Fields marked * are required.</p>
 <form method="post" class="stacked" novalidate>
   <?= csrf_field() ?><?php if (!$track) echo web_idem_field(); ?>
+  <?php if ($track): // The values this form was opened with (4.28.0), so a save over someone else's change is refused.
+  $formOrig = $freshOrig ?? ($_SERVER['REQUEST_METHOD'] === 'POST' && is_string($_POST['orig'] ?? null) ? $_POST['orig'] : track_edit_snapshot($track)); ?>
+  <input type="hidden" name="orig" value="<?= h(is_string($formOrig) ? $formOrig : (string)json_encode($formOrig)) ?>">
+  <?php endif; ?>
   <?php if (!$track && (int)($_POST['incoming_auth'] ?? 0) > 0): ?><input type="hidden" name="incoming_auth" value="<?= (int)$_POST['incoming_auth'] ?>"><?php endif; ?>
   <fieldset>
     <legend>Track</legend>
     <div class="field">
-      <label for="title">Track title <?= required_mark() ?></label>
-      <span class="hint" id="title-hint">e.g., “Screen Reader Training — JAWS”, “Independent Living Skills — Kitchen &amp; Home”, or “Braille Literacy”</span>
-      <input type="text" id="title" name="title" required maxlength="190" value="<?= $v('title') ?>" <?= field_aria('title', 'title-hint') ?>>
+      <label for="title">Track title <?= required_mark() ?> <span class="hint">e.g., “Screen Reader Training — JAWS”, “Independent Living Skills — Kitchen &amp; Home”, or “Braille Literacy”</span></label>
+      <input type="text" id="title" name="title" required maxlength="190" value="<?= $v('title') ?>" <?= field_aria('title') ?>>
       <?= field_error('title') ?>
     </div>
     <div class="field">
@@ -333,9 +397,8 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
     $descBundles = $keptBundle ? array_merge([$keptBundle], $bundles) : $bundles;
     ?>
     <div class="field">
-      <label for="bundle_id">Service bundle</label>
-      <span class="hint" id="bundle-hint">Bills the RSA program under one label. The chosen bundle's categories are listed after this field.</span>
-      <select id="bundle_id" name="bundle_id" <?= field_aria('bundle_id', 'bundle-hint') ?>>
+      <label for="bundle_id">Service bundle <span class="hint">Bills the RSA program under one label. The chosen bundle's categories are listed after this field.</span></label>
+      <select id="bundle_id" name="bundle_id" <?= field_aria('bundle_id') ?>>
         <option value="0">No bundle (choose a single RSA category below)</option>
         <?php if ($keptBundle): ?>
         <option value="<?= (int)$keptBundle['id'] ?>" disabled <?= $currentBundle === (int)$keptBundle['id'] ? 'selected' : '' ?>>
@@ -362,9 +425,8 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
       </div>
     </div>
     <div class="field">
-      <label for="rsa_category">Single RSA service category</label>
-      <span class="hint" id="rsa-hint">Used when no bundle is chosen — the full RSA-911 taxonomy, grouped as RSA groups it</span>
-      <select id="rsa_category" name="rsa_category" aria-describedby="rsa-hint">
+      <label for="rsa_category">Single RSA service category <span class="hint">Used when no bundle is chosen — the full RSA-911 taxonomy, grouped as RSA groups it</span></label>
+      <select id="rsa_category" name="rsa_category">
         <?= rsa_grouped_options($_POST['rsa_category'] ?? $track['rsa_category'] ?? rsa_default_for($_POST['service_type'] ?? $track['service_type'] ?? 'Assistive Technology')) ?>
       </select>
     </div>
@@ -385,9 +447,8 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
       <select id="status" name="status"><?= select_options(TRACK_STATUSES, $_POST['status'] ?? $track['status'] ?? 'Active') ?></select>
     </div>
     <div class="field">
-      <label for="report_cadence">Automatic progress reports</label>
-      <span class="hint" id="cadence-hint">How often the VR counselor gets an emailed summary</span>
-      <select id="report_cadence" name="report_cadence" aria-describedby="cadence-hint">
+      <label for="report_cadence">Automatic progress reports <span class="hint">How often the VR counselor gets an emailed summary</span></label>
+      <select id="report_cadence" name="report_cadence">
         <?php $cadCur = $_POST['report_cadence'] ?? $track['report_cadence'] ?? 'monthly';
         foreach (report_cadence_choices($track['report_cadence'] ?? null) as $cv => $cl): ?>
         <option value="<?= h($cv) ?>" <?= $cadCur === $cv ? 'selected' : '' ?>><?= h($cl) ?></option>
@@ -399,11 +460,10 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
   <fieldset>
     <legend>Service authorization</legend>
     <div class="field">
-      <label for="billing_mode">Who pays for this training</label>
-      <select id="billing_mode" name="billing_mode" <?= field_aria('billing_mode', 'billing_mode-hint') ?>>
+      <label for="billing_mode">Who pays for this training <span class="hint">VR or agency: needs the authorization below, and work over its dates, hours or dollars is refused until it is amended. Private pay: invoiced to the client. No charge: hours are logged at $0 and never invoiced.</span></label>
+      <select id="billing_mode" name="billing_mode" <?= field_aria('billing_mode') ?>>
         <?php foreach (BILLING_MODES as $mk => $ml): ?><option value="<?= h($mk) ?>"<?= $curMode === $mk ? ' selected' : '' ?>><?= h($ml) ?></option><?php endforeach; ?>
       </select>
-      <span class="hint" id="billing_mode-hint">VR or agency: needs the authorization below, and work over its dates, hours or dollars is refused until it is amended. Private pay: invoiced to the client. No charge: hours are logged at $0 and never invoiced.</span>
       <?= field_error('billing_mode') ?>
     </div>
     <div class="field">
@@ -422,33 +482,29 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
       <?= field_error('authorized_hours') ?>
     </div>
     <div class="field">
-      <label for="authorized_amount">Authorized dollar amount (optional)</label>
-      <span class="hint" id="authorized_amount-hint">When the authorization states a dollar limit. Left blank, the limit is the authorized hours at the hourly rate. Hours, mileage and expenses all count toward it.</span>
-      <input type="text" inputmode="decimal" id="authorized_amount" name="authorized_amount" maxlength="14" value="<?= $v('authorized_amount') ?>" <?= field_aria('authorized_amount', 'authorized_amount-hint') ?>>
+      <label for="authorized_amount">Authorized dollar amount (optional) <span class="hint">When the authorization states a dollar limit. Left blank, the limit is the authorized hours at the hourly rate. Hours, mileage and expenses all count toward it.</span></label>
+      <input type="text" inputmode="decimal" id="authorized_amount" name="authorized_amount" maxlength="14" value="<?= $v('authorized_amount') ?>" <?= field_aria('authorized_amount') ?>>
       <?= field_error('authorized_amount') ?>
     </div>
     <div class="field">
-      <label for="hourly_rate">Hourly billing rate (USD)</label>
-      <span class="hint" id="rate-hint">The rate on the authorization (left blank, the agency's own rate), or the personal rate (<?= fmt_money(billing_settings()['private_rate']) ?> an hour). Not used for No charge.</span>
-      <input type="number" id="hourly_rate" name="hourly_rate" step="0.01" min="0" value="<?= $v('hourly_rate', $newRate) ?>" <?= field_aria('hourly_rate', 'rate-hint') ?>>
+      <label for="hourly_rate">Hourly billing rate (USD) <span class="hint">The rate on the authorization (left blank, the agency's own rate), or the personal rate (<?= fmt_money(billing_settings()['private_rate']) ?> an hour). Not used for No charge.</span></label>
+      <input type="number" id="hourly_rate" name="hourly_rate" step="0.01" min="0" value="<?= $v('hourly_rate', $newRate) ?>" <?= field_aria('hourly_rate') ?>>
       <?= field_error('hourly_rate') ?>
     </div>
     <div class="field">
-      <label for="mileage_rate">Mileage reimbursement rate (USD per mile)</label>
-      <span class="hint" id="mileage-hint">Leave 0 if travel is not billable on this authorization</span>
-      <input type="number" id="mileage_rate" name="mileage_rate" step="0.001" min="0" value="<?= $v('mileage_rate', '0') ?>" <?= field_aria('mileage_rate', 'mileage-hint') ?>>
+      <label for="mileage_rate">Mileage reimbursement rate (USD per mile) <span class="hint">Leave 0 if travel is not billable on this authorization</span></label>
+      <input type="number" id="mileage_rate" name="mileage_rate" step="0.001" min="0" value="<?= $v('mileage_rate', '0') ?>" <?= field_aria('mileage_rate') ?>>
       <?= field_error('mileage_rate') ?>
     </div>
     <?php if ($track): ?>
     <div class="field">
-      <label for="amendment_reason">Amendment reason</label>
-      <span class="hint" id="amend-hint">If you are changing the authorization number, hours, hourly or mileage rate, or expiration, note why (e.g., “VR approved 10 additional hours 7/21”) — kept in the audit history. A new hourly or mileage rate also applies to work logged on this track that is not yet on an invoice, and re-prices and re-totals this track's Draft invoices; a new authorization number or funding agency is shown on those drafts too. Submitted and paid invoices keep what they billed.</span>
+      <label for="amendment_reason">Amendment reason <span class="hint">If you are changing the authorization number, hours, hourly or mileage rate, or expiration, note why (e.g., “VR approved 10 additional hours 7/21”) — kept in the audit history. A new hourly or mileage rate also applies to work logged on this track that is not yet on an invoice, and re-prices and re-totals this track's Draft invoices; a new authorization number or funding agency is shown on those drafts too. Submitted and paid invoices keep what they billed.</span></label>
       <?php // Opened from an approved amendment request (3.0.44): linked when saved, with the reason filled in.
       $amendReqId = (int)($_GET['amend_request'] ?? old_in('amend_request', '0'));
       $amendReqRow = null;
       if ($amendReqId > 0) { $aq = db()->prepare("SELECT * FROM amendment_requests WHERE id = ? AND track_id = ? AND status IN ('Approved','Partly approved')"); $aq->execute([$amendReqId, (int)$track['id']]); $amendReqRow = $aq->fetch() ?: null; }
       if ($amendReqRow): ?><input type="hidden" name="amend_request" value="<?= (int)$amendReqRow['id'] ?>"><?php endif; ?>
-      <input type="text" id="amendment_reason" name="amendment_reason" maxlength="255" value="<?= $amendReqRow && $v('amendment_reason') === '' ? h('VR ' . strtolower($amendReqRow['status']) . ' the amendment requested ' . fmt_date($amendReqRow['requested_on']) . ($amendReqRow['replied_on'] ? ' (reply ' . fmt_date($amendReqRow['replied_on']) . ')' : '')) : $v('amendment_reason') ?>" <?= field_aria('amendment_reason', 'amend-hint') ?>>
+      <input type="text" id="amendment_reason" name="amendment_reason" maxlength="255" value="<?= $amendReqRow && $v('amendment_reason') === '' ? h('VR ' . strtolower($amendReqRow['status']) . ' the amendment requested ' . fmt_date($amendReqRow['requested_on']) . ($amendReqRow['replied_on'] ? ' (reply ' . fmt_date($amendReqRow['replied_on']) . ')' : '')) : $v('amendment_reason') ?>" <?= field_aria('amendment_reason') ?>>
       <?= field_error('amendment_reason') ?>
     </div>
     <?php endif; ?>

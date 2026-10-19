@@ -135,9 +135,8 @@ page_header('Referral form settings', $user, 'admin', [['admin.php', 'Administra
 
 <form method="post" action="referral_settings.php" class="card" novalidate>
   <?= csrf_field() ?>
-  <fieldset id="roles-group" tabindex="-1" aria-describedby="roles-hint<?= has_field_error('roles') ? ' err-roles' : '' ?>">
-    <legend><h2 class="legend-h">Who may refer</h2></legend>
-    <p class="hint" id="roles-hint">Untick a kind of referrer to remove it from the form. Each kind keeps its own required details (for example a school referral still asks for the parent or guardian).</p>
+  <fieldset id="roles-group" tabindex="-1"<?= has_field_error('roles') ? ' aria-describedby="err-roles"' : '' ?>>
+    <legend><h2 class="legend-h">Who may refer</h2> <span class="hint">Untick a kind of referrer to remove it from the form. Each kind keeps its own required details (for example a school referral still asks for the parent or guardian).</span></legend>
     <?= field_error('roles') ?>
     <?php foreach (REFERRER_ROLES as $key => $label): ?>
       <label class="check"><input type="checkbox" name="roles[]" id="role_<?= h($key) ?>" value="<?= h($key) ?>" <?= in_array($key, $checkedRoles, true) ? 'checked' : '' ?>> <?= h($label) ?></label>
@@ -148,13 +147,13 @@ page_header('Referral form settings', $user, 'admin', [['admin.php', 'Administra
     <legend><h2 class="legend-h">Questions and options</h2></legend>
   <?php foreach (RF_LISTS as $k => $label): ?>
   <div class="field">
-    <label for="list_<?= h($k) ?>"><?= h($label) ?><?= $k === 'needs' ? ' <span class="hint">(optional: leave empty to hide the question)</span>' : '' ?></label>
+    <label for="list_<?= h($k) ?>"><?= h($label) ?><?= $k === 'needs' ? ' <span class="hint">(optional: leave empty to hide the question)</span>' : '' ?>
     <?php if (isset(RF_LIST_LIMITS[$k]['joined_chars'])): ?>
-    <p class="hint" id="list-<?= h($k) ?>-hint">One per line. Add <code>| Spanish label</code> to translate it. A referral can choose every service, so all the English labels together, counting 2 characters between each, must fit in <?= RF_LIST_LIMITS[$k]['joined_chars'] ?> characters; the saved list uses <?= $servicesJoined ?>. Spanish labels up to <?= RF_MAX_LABEL ?>; no semicolons.</p>
+    <span class="hint">One per line. Add <code>| Spanish label</code> to translate it. A referral can choose every service, so all the English labels together, counting 2 characters between each, must fit in <?= RF_LIST_LIMITS[$k]['joined_chars'] ?> characters; the saved list uses <?= $servicesJoined ?>. Spanish labels up to <?= RF_MAX_LABEL ?>; no semicolons.</span>
     <?php else: ?>
-    <p class="hint" id="list-<?= h($k) ?>-hint">One per line. Add <code>| Spanish label</code> to translate it. Up to <?= RF_MAX_OPTIONS ?> options; English labels up to <?= RF_LIST_LIMITS[$k]['label'] ?> characters each; Spanish labels up to <?= RF_MAX_LABEL ?>; no semicolons.</p>
-    <?php endif; ?>
-    <textarea id="list_<?= h($k) ?>" name="list_<?= h($k) ?>" rows="<?= $k === 'needs' ? 10 : 6 ?>" <?= field_aria('list_' . $k, 'list-' . $k . '-hint') ?>><?= $v('list_' . $k, rf_list_text($cfg[$k])) ?></textarea>
+    <span class="hint">One per line. Add <code>| Spanish label</code> to translate it. Up to <?= RF_MAX_OPTIONS ?> options; English labels up to <?= RF_LIST_LIMITS[$k]['label'] ?> characters each; Spanish labels up to <?= RF_MAX_LABEL ?>; no semicolons.</span>
+    <?php endif; ?></label>
+    <textarea id="list_<?= h($k) ?>" name="list_<?= h($k) ?>" rows="<?= $k === 'needs' ? 10 : 6 ?>" <?= field_aria('list_' . $k) ?>><?= $v('list_' . $k, rf_list_text($cfg[$k])) ?></textarea>
     <?= field_error('list_' . $k) ?>
   </div>
   <?php endforeach; ?>

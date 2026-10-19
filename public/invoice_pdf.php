@@ -130,6 +130,10 @@ $paidSoFar = $invoice ? (float)($invoice['paid_amount'] ?? 0) : 0.0;
 $writtenOff = $invoice ? (float)($invoice['written_off'] ?? 0) : 0.0;
 $closedNote = $invoice && in_array($invoice['status'], ['Denied', 'Void'], true)
     ? 'This invoice is ' . strtoupper($invoice['status']) . ($invoice['closed_reason'] ? ': ' . $invoice['closed_reason'] : '') . '. Nothing is owed on it; its work was released to be invoiced again.' : '';
+// 4.28.0: a Denied or Void invoice is never printed as "TOTAL DUE": its total is labelled with its status.
+$totalLabel = !$invoice ? 'TOTAL (ALL WORK TO DATE, INCLUDING PREVIOUSLY INVOICED)'
+    : ($closedNote !== '' ? 'INVOICE TOTAL (' . strtoupper((string)$invoice['status']) . ', NOTHING DUE)'
+    : ($paidSoFar > 0 || $writtenOff > 0 ? 'INVOICE TOTAL' : 'TOTAL DUE'));
 
 // The same authorized data is available as a portable, semantic HTML report.
 if (($_GET['format'] ?? '') === 'html') {
@@ -166,7 +170,7 @@ if (($_GET['format'] ?? '') === 'html') {
     $totals = ['Total hours (' . number_format($r['hours_worked'], 2) . ' hours)' => fmt_money($r['billed_amount'])];
     if ($r['mileage_amount'] > 0) $totals['Total mileage (' . number_format($r['mileage'], 1) . ' miles)'] = fmt_money($r['mileage_amount']);
     if ($expTotal > 0) $totals['Total expenses'] = fmt_money($expTotal);
-    $totals[$invoice ? ($paidSoFar > 0 || $writtenOff > 0 ? 'INVOICE TOTAL' : 'TOTAL DUE') : 'TOTAL (ALL WORK TO DATE, INCLUDING PREVIOUSLY INVOICED)'] = fmt_money($invoice ? (float)$invoice['total_amount'] : $r['total_billed'] + $expTotal);
+    $totals[$totalLabel] = fmt_money($invoice ? (float)$invoice['total_amount'] : $r['total_billed'] + $expTotal);
     if ($paidSoFar > 0) $totals['Paid'] = fmt_money($paidSoFar);
     if ($writtenOff > 0) $totals['Written off'] = fmt_money($writtenOff);
     if ($invoice && ($paidSoFar > 0 || $writtenOff > 0)) $totals['BALANCE DUE'] = fmt_money(invoice_balance($invoice));
@@ -362,7 +366,7 @@ if ($expTotal > 0) {
 }
 $grand = $invoice ? (float)$invoice['total_amount'] : $r['total_billed'] + $expTotal;
 $settled = $invoice && ($paidSoFar > 0 || $writtenOff > 0);
-$rowsT[] = [$invoice ? ($settled ? 'INVOICE TOTAL' : 'TOTAL DUE') : 'TOTAL (ALL WORK TO DATE, INCLUDING PREVIOUSLY INVOICED)', fmt_money($grand), !$settled];
+$rowsT[] = [$totalLabel, fmt_money($grand), !$settled];
 if ($paidSoFar > 0) $rowsT[] = ['Paid', fmt_money($paidSoFar), false];
 if ($writtenOff > 0) $rowsT[] = ['Written off', fmt_money($writtenOff), false];
 if ($settled) $rowsT[] = ['BALANCE DUE', fmt_money(invoice_balance($invoice)), true];

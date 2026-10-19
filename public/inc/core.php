@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.27.0';
+const APP_VERSION = '4.28.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -805,6 +805,8 @@ function send_app_mail_now(string $to, string $subject, string $body): bool {
     // private directory) so a tester can read a sign-in code there, and the caller is
     // told it was sent so the page behaves as in production.
     if (mail_disabled_keep($to, $subject, $body)) { $GLOBALS['mail_last_outcome'] = 'sent'; return true; }
+    // Tests only (never on a web server): CMS_TEST_MAIL_OUTCOME=unknown answers as a Graph timeout would.
+    if (PHP_SAPI === 'cli' && getenv('CMS_TEST_MAIL_OUTCOME') === 'unknown') { $GLOBALS['mail_last_outcome'] = 'unknown'; return false; }
     // Preferred path: Microsoft Graph (cmswebnotifications mailbox)
     if (graph_cfg() !== null) {
         $outcome = graph_send_text($to, $subject, $body);
@@ -1237,13 +1239,21 @@ function send_app_mail_attach(string $to, string $subject, string $body, array $
     return $sent;
 }
 
+/** The address an audit row records (4.28.0): the person's, as client_ip() reads it behind a trusted
+ *  proxy, so counts by client_ip() (sso.php's failure cap) match what was written; null in a job. */
+function audit_ip(): ?string {
+    if (!isset($_SERVER['REMOTE_ADDR'])) return null;
+    $ip = function_exists('client_ip') ? client_ip() : (string)$_SERVER['REMOTE_ADDR'];
+    return $ip !== '' ? mb_substr($ip, 0, 45) : null;
+}
+
 /** Record an action in the admin audit trail. */
 function audit(?int $userId, string $action, string $entity = '', ?int $entityId = null, ?string $detail = null): void {
     try {
         db()->prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, detail, ip) VALUES (?,?,?,?,?,?)')
             ->execute([$userId, $action, $entity ?: null, $entityId,
                 $detail !== null ? mb_substr($detail, 0, 255) : null,
-                $_SERVER['REMOTE_ADDR'] ?? null]);
+                audit_ip()]);
     } catch (Throwable $e) {
         error_log('audit failed: ' . get_class($e) . ' ' . $e->getCode() . ' at ' . basename($e->getFile()) . ':' . $e->getLine());
     }

@@ -87,6 +87,7 @@ fun KnowledgeEditScreen(api: Api, nav: NavHostController, id: Int) {
         var category by rememberSaveable { mutableStateOf(a.str("category") ?: "") }
         var body by rememberSaveable { mutableStateOf(a.str("body") ?: "") }
         var public by rememberSaveable { mutableStateOf(a.optBoolean("is_public") || a.optInt("is_public") == 1) }
+        var idem by rememberSaveable { mutableStateOf("") }
         var error by remember { mutableStateOf<String?>(null) }
         var busy by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
@@ -100,7 +101,8 @@ fun KnowledgeEditScreen(api: Api, nav: NavHostController, id: Int) {
                 scope.launchSave({ busy = it }, { error = it }) {
                     val b = JSONObject().put("title", title.trim()).put("category", category.trim()).put("body", body).put("is_public", if (public) 1 else 0)
                     if (id > 0) b.put("id", id)
-                    api.call("save_kb", body = b)
+                    // 4.28.0: a new article is added once, even when a reply was lost (see sendOnce).
+                    if (id > 0) api.call("save_kb", body = b) else api.callOnce("save_kb", b, idem, { idem = it }, "the article")
                     Flash.pending = "Article saved."
                     nav.popBackStack()
                 }
@@ -116,6 +118,8 @@ fun CounselorsScreen(api: Api) {
     val state = rememberLoaded(api.userId) { api.call("counselors").optJSONArray("counselors").objects() }
     var chosen by remember { mutableStateOf<JSONObject?>(null) }
     var ask by remember { mutableStateOf<Pair<JSONObject, Boolean>?>(null) }
+    // 4.28.0: the link is emailed once even when a reply was lost (see sendOnce).
+    var sendKey by rememberSaveable { mutableStateOf("") }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -147,7 +151,7 @@ fun CounselorsScreen(api: Api) {
             if (send) "Send link" else "Turn off link", {
                 scope.launch {
                     try {
-                        if (send) { api.call("send_vrc_portal", body = JSONObject().put("email", c.optString("email")).put("name", c.optString("name"))); notice = "Portal link emailed to $name." }
+                        if (send) { api.callOnce("send_vrc_portal", JSONObject().put("email", c.optString("email")).put("name", c.optString("name")), sendKey, { sendKey = it }, "the portal link"); notice = "Portal link emailed to $name." }
                         else { api.call("revoke_vrc_portal", body = JSONObject().put("email", c.optString("email"))); notice = "Portal link turned off for $name. Send a new link when they need access again." }
                         state.reload()
                     } catch (e: ApiException) { error = e.message }

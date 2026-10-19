@@ -13,6 +13,10 @@ import androidx.navigation.NavHostController
 import kotlinx.coroutines.launch
 import org.casemanagement.app.Api
 import org.casemanagement.app.ApiException
+import org.casemanagement.app.mergeReloaded
+import org.casemanagement.app.mergeReloadedMap
+import org.casemanagement.app.openedValues
+import androidx.compose.runtime.LaunchedEffect
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
 import org.json.JSONObject
@@ -24,7 +28,7 @@ private val CLOSED_REQUEST = setOf("Trained", "Denied", "Cancelled")
 @Composable
 fun ProcurementScreen(api: Api, nav: NavHostController) {
     val state = rememberLoaded(api.userId) { api.call("device_requests").optJSONArray("requests").objects() }
-    var adding by remember { mutableStateOf(false) }
+    var adding by rememberSaveable { mutableStateOf(false) }
     Page {
         PrimaryButton("Request a device") { adding = true }
         Show(state, "device requests") { list ->
@@ -43,16 +47,19 @@ fun ProcurementScreen(api: Api, nav: NavHostController) {
 private fun AddDeviceRequestDialog(api: Api, onDone: (Int) -> Unit, onCancel: () -> Unit) {
     val clients = rememberLoaded(api.userId) { clientChoices(api) }
     val cats = api.formList("device_request_categories", listOf("Other"))
-    var client by remember { mutableStateOf("") }
-    var device by remember { mutableStateOf("") }
-    var cat by remember { mutableStateOf(cats.first()) }
-    var why by remember { mutableStateOf("") }
+    var client by rememberSaveable { mutableStateOf("") }
+    var device by rememberSaveable { mutableStateOf("") }
+    var cat by rememberSaveable { mutableStateOf(cats.first()) }
+    var why by rememberSaveable { mutableStateOf("") }
+    var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     FormDialog("Request a device", "Add", busy, client.isNotEmpty() && device.isNotBlank(), onSave = {
         scope.launchSave({ busy = it }, { error = it }) {
-            onDone(api.call("add_device_request", body = JSONObject().put("client_id", client.toInt()).put("device_name", device.trim()).put("category", cat).put("justification", why.trim())).optInt("id"))
+            // 4.28.0: a retry after a lost reply adds it once (see sendOnce).
+            onDone(api.callOnce("add_device_request", JSONObject().put("client_id", client.toInt()).put("device_name", device.trim()).put("category", cat).put("justification", why.trim()),
+                idem, { idem = it }, "the device request").optInt("id"))
         }
     }, onCancel = onCancel) {
         ErrorText(clients.error)
@@ -70,13 +77,19 @@ fun DeviceRequestScreen(api: Api, id: Int) {
     val state = rememberLoaded(id) { api.call("device_request", mapOf("id" to id.toString())) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var step by remember { mutableStateOf("") }
+    var step by rememberSaveable { mutableStateOf("") }
     var ask by remember { mutableStateOf<Triple<String, String, JSONObject>?>(null) }
+    // 4.28.0: adding a quote is sent with a retry key, so a lost reply never adds it twice (see sendOnce).
+    var quoteKey by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     fun update(body: JSONObject, done: String) {
         error = null
         scope.launch {
-            try { api.call("device_request_update", body = body.put("id", id)); state.reload(); notice = done } catch (e: ApiException) { error = e.message }
+            try {
+                if (body.optString("op") == "add_quote") api.callOnce("device_request_update", body.put("id", id), quoteKey, { quoteKey = it }, "the quote")
+                else api.call("device_request_update", body = body.put("id", id))
+                state.reload(); notice = done
+            } catch (e: ApiException) { error = e.message }
         }
     }
     Show(state, "the request") { r ->
@@ -155,7 +168,7 @@ fun AccommodationsScreen(api: Api, nav: NavHostController) {
     var client by rememberSaveable { mutableStateOf("") }
     val clients = rememberLoaded(api.userId) { clientChoices(api, includeClosed = true) }
     val state = rememberLoaded(client) { api.call("worksite_assessments", if (client.isEmpty()) emptyMap() else mapOf("client_id" to client)) }
-    var adding by remember { mutableStateOf(false) }
+    var adding by rememberSaveable { mutableStateOf(false) }
     Page {
         PrimaryButton("Add a worksite assessment") { adding = true }
         Choice("Show assessments for", client, listOf("" to "All clients") + (clients.data ?: emptyList()).map { it.optInt("id").toString() to it.optString("name") }) { client = it }
@@ -167,16 +180,18 @@ fun AccommodationsScreen(api: Api, nav: NavHostController) {
         }
     }
     if (adding) {
-        var c by remember { mutableStateOf("") }
-        var employer by remember { mutableStateOf("") }
-        var job by remember { mutableStateOf("") }
-        var date by remember { mutableStateOf("") }
+        var c by rememberSaveable { mutableStateOf("") }
+        var employer by rememberSaveable { mutableStateOf("") }
+        var job by rememberSaveable { mutableStateOf("") }
+        var date by rememberSaveable { mutableStateOf("") }
+        var idem by rememberSaveable { mutableStateOf("") }
         var error by remember { mutableStateOf<String?>(null) }
         var busy by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         FormDialog("Add a worksite assessment", "Add", busy, c.isNotEmpty(), onSave = {
             scope.launchSave({ busy = it }, { error = it }) {
-                val id = api.call("add_worksite", body = JSONObject().put("client_id", c.toInt()).put("employer", employer.trim()).put("job_title", job.trim()).put("assessment_date", date.trim())).optInt("id")
+                val id = api.callOnce("add_worksite", JSONObject().put("client_id", c.toInt()).put("employer", employer.trim()).put("job_title", job.trim()).put("assessment_date", date.trim()),
+                    idem, { idem = it }, "the worksite assessment").optInt("id")
                 adding = false; nav.navigate("worksite/$id")
             }
         }, onCancel = { adding = false }) {
@@ -195,24 +210,56 @@ fun WorksiteScreen(api: Api, nav: NavHostController, id: Int) {
     Show(state, "the assessment") { a ->
         val keys = listOf("employer" to "Employer", "job_title" to "Job title", "worksite_location" to "Worksite location", "assessment_date" to "Assessment date (year-month-day)",
             "job_tasks" to "Job tasks", "barriers" to "Barriers", "recommendations" to "Recommendations", "follow_up_date" to "Follow-up date (year-month-day)", "outcome" to "Outcome")
+        fun opened(o: JSONObject) = JSONObject().also { s -> (keys.map { it.first } + "status").forEach { k -> s.put(k, o.str(k) ?: "") }; o.str("updated_at")?.let { s.put("updated_at", it) } }
         val values = rememberSaveable(id) { mutableStateOf(keys.associate { (k, _) -> k to (a.str(k) ?: "") }.toList()) }
         var status by rememberSaveable { mutableStateOf(a.optString("status")) }
+        // 4.28.0: what the form opened with (and when it was read), kept across process death; sent as loaded_at and orig.
+        var baseJson by rememberSaveable(id) { mutableStateOf(opened(a).toString()) }
+        val base = remember(baseJson) { try { JSONObject(baseJson) } catch (e: Exception) { JSONObject() } }
+        var conflict by remember { mutableStateOf(false) }
+        var reloading by remember { mutableStateOf(false) }
+        var notice by remember { mutableStateOf<String?>(null) }
         var error by remember { mutableStateOf<String?>(null) }
         var busy by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         val map = values.value.toMap()
+        // Read again after a conflict: what was changed here stays; everything else takes the saved values.
+        LaunchedEffect(a) {
+            if (!reloading) return@LaunchedEffect
+            reloading = false
+            val was = keys.associate { (k, _) -> k to (base.str(k) ?: "") }
+            val now = keys.associate { (k, _) -> k to (a.str(k) ?: "") }
+            values.value = mergeReloadedMap(values.value.toMap(), was, now).toList()
+            status = mergeReloaded(status, base.str("status") ?: "", a.optString("status"))
+            baseJson = opened(a).toString()
+            conflict = false; error = null
+            notice = "Read again. The other changes are now shown, and what you changed here is kept. Check the form, then save again."
+        }
+        // A reload that failed leaves Reload usable again.
+        LaunchedEffect(state.loading, state.error) { if (reloading && !state.loading && state.error != null) reloading = false }
         Page {
             Heading(a.optString("client_name"), large = true)
+            NoticeText(notice)
             Choice("Status", status, WORKSITE_STATUSES.map { it to it }) { status = it }
             keys.forEach { (k, label) ->
                 Field(label, map[k] ?: "", { v -> values.value = (map + (k to v)).toList() }, singleLine = k !in setOf("job_tasks", "barriers", "recommendations", "outcome"))
             }
             ErrorText(error)
+            if (conflict) SecondaryButton("Reload, keeping my changes") { if (!reloading) { reloading = true; notice = null; state.reload() } }
             PrimaryButton("Save", busy = busy) {
+                if (busy) return@PrimaryButton
+                notice = null
                 scope.launchSave({ busy = it }, { error = it }) {
                     val b = JSONObject().put("id", id).put("status", status)
                     map.forEach { (k, v) -> b.put(k, v.trim()) }
-                    api.call("save_worksite", body = b)
+                    val orig = openedValues(b, base)
+                    base.str("updated_at")?.let { b.put("loaded_at", it) }
+                    b.put("orig", orig)
+                    try { api.call("save_worksite", body = b) } catch (e: ApiException) {
+                        // Someone else saved it since it was opened: the message names what; Reload is offered.
+                        if (e.status == 409 && e.reply?.optBoolean("conflict") == true) conflict = true
+                        throw e
+                    }
                     Flash.pending = "Assessment saved."
                     nav.popBackStack()
                 }

@@ -15,7 +15,7 @@ $db->prepare("INSERT INTO scheduled_sessions(client_id,user_id,start_at,end_at,s
 $moveTo=date('Y-m-d',$first+86400);
 [$code,,$err]=$renderPage('schedule',[],['move_session'=>'1','session_id'=>(string)$s0,'move_date'=>$moveTo,'move_time'=>'09:30','move_duration'=>'1']);
 check($code===0 && $err==='' && $db->query("SELECT start_at FROM scheduled_sessions WHERE id=$s0")->fetchColumn()===date('Y-m-d H:i:s',$first),'An overlapping new time is not taken until it is confirmed' . ($err ? ": $err" : ''));
-[$code,,$err]=$renderPage('schedule',[],['move_session'=>'1','session_id'=>(string)$s0,'move_date'=>$moveTo,'move_time'=>'09:30','move_duration'=>'1.5','move_confirm'=>'1']);
+[$code,,$err]=$renderPage('schedule',[],['move_session'=>'1','session_id'=>(string)$s0,'move_date'=>$moveTo,'move_time'=>'09:30','move_duration'=>'1.5','move_confirm'=>'1','move_hash'=>(function() use ($db,$s0,$moveTo) { $row=$db->query("SELECT * FROM scheduled_sessions WHERE id=$s0")->fetch(); $st=strtotime($moveTo.' 09:30'); return session_move_hash(session_move_warnings($row,$st,$st+5400),$st,$st+5400); })()]);
 $moved=$db->query("SELECT * FROM scheduled_sessions WHERE id=$s0")->fetch();
 check($code===0 && $err==='' && $moved['start_at']===$moveTo.' 09:30:00' && (int)$moved['ics_sequence']===1 && $moved['status']==='Scheduled' && (int)$moved['reminder_sent']===0
     && (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action='session.move' AND entity_id=$s0")->fetchColumn()===1,

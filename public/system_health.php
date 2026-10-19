@@ -111,6 +111,11 @@ if ($dbOk) {
     $withTotp = (int)$q('SELECT COUNT(*) FROM users WHERE is_active = 1 AND totp_enabled = 1');
     $appSessions = (int)$q('SELECT COUNT(DISTINCT user_id) FROM api_tokens WHERE expires_at > NOW() AND wipe_requested_at IS NULL');
 }
+// 4.28.0: the key file that encrypted authenticator seeds and connection tokens need.
+$keyState = $dbOk && function_exists('meeting_key_status') ? meeting_key_status() : 'unknown';
+if ($keyState === 'missing') $problems[] = ['security-h', 'The key file meeting_tokens.key is missing from the private directory, but authenticator apps, meeting accounts or QuickBooks need it: those people cannot sign in with their app. Copy the old key file back (readable only by its owner), or reset two-step verification for them.'];
+elseif ($keyState === 'ok' && ($oneSeed = (string)$q("SELECT totp_secret FROM users WHERE totp_enabled = 1 AND totp_secret LIKE 'v1:%' LIMIT 1")) !== '' && totp_secret_plain($oneSeed) === null) $problems[] = ['security-h', 'The key file meeting_tokens.key does not match the stored authenticator apps (it was replaced, perhaps after a restore), so those people cannot sign in with their app. Copy the original key file back, or reset two-step verification for them.'];
+elseif ($keyState === 'unreadable' && meeting_key_dependents() > 0) $problems[] = ['security-h', 'The key file meeting_tokens.key in the private directory cannot be read (damaged, or readable by others: it must be chmod 600), so authenticator apps, meeting accounts and QuickBooks cannot be used.'];
 if ($failed24 >= 50) $problems[] = ['security-h', "$failed24 failed sign-ins in the last 24 hours, from $failedIps address" . ($failedIps === 1 ? '' : 'es') . '.'];
 
 /* ---- AI assistant ---- */

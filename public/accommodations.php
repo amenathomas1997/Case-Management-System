@@ -56,6 +56,22 @@ function wa_field_errors(): array {
     return $e;
 }
 
+/** The fields the edit form saves, with the names said when someone else changed them (4.28.0). */
+const WA_TRACKED = ['employer' => 'Employer', 'job_title' => 'Job title', 'worksite_location' => 'Worksite location', 'assessment_date' => 'Assessment date',
+    'job_tasks' => 'Essential job tasks', 'barriers' => 'Barriers identified', 'recommendations' => 'Recommended accommodations',
+    'status' => 'Status', 'follow_up_date' => 'Follow-up date', 'outcome' => 'Outcome / follow-up notes'];
+/** One saved field as the form holds it (a stored row or a post): trimmed, LF line endings. */
+function wa_norm(array $src, string $f): string {
+    $v = $src[$f] ?? null;
+    return is_scalar($v) ? str_replace("\r\n", "\n", trim((string)$v)) : '';
+}
+/** The saved fields of a stored row, as the form holds them. */
+function wa_snapshot(array $row): array {
+    $out = [];
+    foreach (array_keys(WA_TRACKED) as $f) $out[$f] = wa_norm($row, $f);
+    return $out;
+}
+
 function wa_badge(string $s): string {
     $map = ['Scheduled' => 'badge-pending', 'Assessed' => 'badge-active', 'Recommendations Sent' => 'badge-active',
         'Implemented' => 'badge-active', 'Follow-up' => 'badge-pending', 'Closed' => 'badge-closed'];
@@ -127,7 +143,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_assessment'])) {
     $errors = wa_field_errors();
     if ($errors) { keep_input(); keep_field_errors($errors); redirect('accommodations.php?id=' . $id); }
     $status = in_array($_POST['status'] ?? '', WA_STATUSES, true) ? $_POST['status'] : $r['status'];
-    db()->prepare('UPDATE worksite_assessments SET employer=?, job_title=?, worksite_location=?, assessment_date=?, job_tasks=?, barriers=?, recommendations=?, status=?, follow_up_date=?, outcome=? WHERE id=?')
+    // Two editors, two tabs, or the website and the app (4.28.0): the row is locked and the
+    // save refused when it changed after this form was opened, so the later save never
+    // quietly replaces the other's text. A form opened before this release carries no
+    // values and is saved as before.
+    $pdo = db();
+    $pdo->beginTransaction();
+    $lk = $pdo->prepare('SELECT * FROM worksite_assessments WHERE id = ? FOR UPDATE');
+    $lk->execute([$id]);
+    $locked = $lk->fetch();
+    $orig = json_decode(is_string($_POST['orig'] ?? null) ? $_POST['orig'] : '', true);
+    $loadedAt = is_string($_POST['loaded_at'] ?? null) ? $_POST['loaded_at'] : null;
+    $current = $locked ? wa_snapshot($locked) : [];
+    $theirs = [];
+    if ($locked && is_array($orig)) {
+        foreach (WA_TRACKED as $f => $label) if (array_key_exists($f, $orig) && $current[$f] !== (string)$orig[$f]) $theirs[] = $label;
+    }
+    if (!$locked || $theirs || ($loadedAt !== null && !is_array($orig) && $loadedAt !== (string)$locked['updated_at'])) {
+        $pdo->rollBack();
+        if (!$locked) { flash('Assessment not found.', 'error'); redirect('accommodations.php'); }
+        // Nothing was saved. The form comes back with this person's own edits and the
+        // saved values for every field they left alone, the changed fields named; it
+        // carries the current version, so saving again goes through.
+        keep_input();
+        foreach (array_keys(WA_TRACKED) as $f) {
+            if (is_array($orig) && array_key_exists($f, $orig) && wa_norm($_POST, $f) === (string)$orig[$f]) $_SESSION['old_input'][$f] = $current[$f];
+        }
+        $_SESSION['old_input']['orig'] = (string)json_encode($current);
+        $_SESSION['old_input']['loaded_at'] = (string)$locked['updated_at'];
+        $who = $theirs ? (count($theirs) === 1 ? $theirs[0] : implode(', ', array_slice($theirs, 0, -1)) . ' and ' . end($theirs)) : '';
+        keep_field_errors(['stale' => $who !== ''
+            ? 'Someone else changed ' . $who . ' since you opened this assessment. Those fields now show the saved values, and your own changes are kept; review and save again.'
+            : 'Someone else changed this assessment since you opened it. Your changes are below; review and save again.']);
+        redirect('accommodations.php?id=' . $id);
+    }
+    $pdo->prepare('UPDATE worksite_assessments SET employer=?, job_title=?, worksite_location=?, assessment_date=?, job_tasks=?, barriers=?, recommendations=?, status=?, follow_up_date=?, outcome=? WHERE id=?')
         ->execute([
             wa_in('employer'),
             wa_in('job_title'),
@@ -140,6 +190,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_assessment'])) {
             wa_date('follow_up_date'),
             wa_in('outcome'),
             $id]);
+    $pdo->commit();
     audit($user['id'], 'worksite.update', 'worksite_assessment', $id, $status);
     flash('Assessment saved.');
     redirect('accommodations.php?id=' . $id);
@@ -200,8 +251,11 @@ if (isset($_GET['id'])) {
     <form method="post" action="accommodations.php" class="stacked" novalidate><?= csrf_field() ?>
       <?= form_error_summary(['employer' => 'Employer', 'job_title' => 'Job title', 'worksite_location' => 'Worksite location',
           'assessment_date' => 'Assessment date', 'job_tasks' => 'Essential job tasks', 'barriers' => 'Barriers identified',
-          'recommendations' => 'Recommended accommodations', 'follow_up_date' => 'Follow-up date', 'outcome' => 'Outcome / follow-up notes']) ?>
+          'recommendations' => 'Recommended accommodations', 'follow_up_date' => 'Follow-up date', 'outcome' => 'Outcome / follow-up notes', 'stale' => ''], ['stale' => 'employer']) ?>
       <input type="hidden" name="id" value="<?= $id ?>">
+      <?php // What this form was opened with (4.28.0), so a save over someone else's change is refused. ?>
+      <input type="hidden" name="orig" value="<?= h($old && old_in('orig') !== '' ? old_in('orig') : (string)json_encode(wa_snapshot($r))) ?>">
+      <input type="hidden" name="loaded_at" value="<?= h($old && old_in('loaded_at') !== '' ? old_in('loaded_at') : (string)$r['updated_at']) ?>">
       <fieldset>
         <legend>Worksite</legend>
         <div class="grid grid-4">

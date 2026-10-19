@@ -195,6 +195,16 @@ final class AppLock: ObservableObject {
     @Published private(set) var unavailableReason: String?
     /// One-time notice shown when the device has nothing to lock the app with.
     @Published var protectionWarning: String?
+    /// The phone is in a signer's hands (4.28.0: a signature sheet or in-person signing is up,
+    /// or closed behind the lock): nothing naming other entries is announced and no offline
+    /// upload starts until the device owner unlocks.
+    @Published private(set) var handedOver = false
+
+    /// Called when a screen the signer uses opens.
+    func handOver() { handedOver = true }
+    /// Called only when that screen has gone (it closes behind the lock). An unlock while it is
+    /// still open does not end the hand-over.
+    func endHandOver() { handedOver = false }
 
     /// Re-lock only after this long in the background, so quick app switches
     /// (checking a text, copying a code) don't re-prompt.
@@ -627,9 +637,21 @@ struct LockScreen: View {
     var unavailableReason: String? = nil
     let retry: () -> Void
 
+    /// Scrolls (4.28.0): at the largest text sizes, and in landscape, the words are taller than
+    /// the screen; nothing is cut off and the Unlock button can always be reached. With room to
+    /// spare it is centred as before.
     var body: some View {
+        GeometryReader { geometry in
+            ScrollView {
+                content
+                    .frame(maxWidth: .infinity, minHeight: geometry.size.height)
+            }
+        }
+    }
+
+    private var content: some View {
         VStack(spacing: 20) {
-            Spacer()
+            Spacer(minLength: 0)
             Image(systemName: "lock.shield")
                 .font(.system(size: 56))
                 .foregroundStyle(Color.brand)
@@ -642,7 +664,6 @@ struct LockScreen: View {
             if let unavailableReason {
                 Text(unavailableReason)
                     .font(.callout.weight(.medium))
-                    .fixedSize(horizontal: false, vertical: true)
             } else if authFailed {
                 Text("Unlock didn't succeed. Try again.")
                     .font(.callout.weight(.medium))
@@ -652,8 +673,9 @@ struct LockScreen: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .onBrandLabel()
-            Spacer()
+            Spacer(minLength: 0)
         }
+        .fixedSize(horizontal: false, vertical: true)
         .multilineTextAlignment(.center)
         .padding()
     }
@@ -702,13 +724,14 @@ struct MainTabs: View {
             if !lock.locked { navigation.apply(api) }
         }
         .onChange(of: scenePhase) { phase in
-            // Coming back to the foreground retries anything written offline.
-            if phase == .active { Task { await api.flushQueue() } }
+            // Coming back to the foreground retries anything written offline (not while the
+            // phone is in a signer's hands: it uploads once the owner unlocks).
+            if phase == .active, !lock.handedOver { Task { await api.flushQueue() } }
         }
         // The connection coming back (4.26.0) sends what was kept with no signal, such as a
         // document signed in a client's home, without waiting for the app to be reopened.
         .onReceive(ConnectionWatcher.shared.$reconnects.dropFirst()) { _ in
-            if scenePhase == .active { Task { await api.flushQueue() } }
+            if scenePhase == .active, !lock.handedOver { Task { await api.flushQueue() } }
         }
         // A tapped reminder or a voice "open …" while the app is unlocked; while locked it
         // waits for the unlock below.
@@ -719,9 +742,15 @@ struct MainTabs: View {
             // The tabs are no longer rebuilt on every unlock (which used to re-run the task
             // above), so the name and permission set are refreshed here instead.
             if !locked {
-                Task { await api.refreshMe() }
+                // Anything that waited while the phone was handed over uploads now (not while a
+                // signing screen is still open in the signer's hands).
+                let handedOver = lock.handedOver
+                Task {
+                    await api.refreshMe()
+                    if !handedOver { await api.flushQueue() }
+                }
                 navigation.apply(api)
-                if let message = unannouncedSync {
+                if !lock.handedOver, let message = unannouncedSync {
                     unannouncedSync = nil
                     // After VoiceOver has settled back on the screen (AppLock restores its place).
                     Task {
@@ -731,11 +760,24 @@ struct MainTabs: View {
                 }
             }
         }
+        // The signing screen has gone (4.28.0): what waited uploads, and a notice is said, once
+        // the app is also unlocked.
+        .onChange(of: lock.handedOver) { handedOver in
+            guard !handedOver, !lock.locked else { return }
+            Task { await api.flushQueue() }
+            if let message = unannouncedSync {
+                unannouncedSync = nil
+                Task {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    if api.syncError == message, !api.syncNoticeDismissed { announce(message) }
+                }
+            }
+        }
         // The sync notice is spoken when its text changes, never again just because the banner
         // was redrawn (returning to the app re-runs the upload); not over the lock screen.
         .onChange(of: api.syncError) { message in
             guard let message, !api.syncNoticeDismissed else { unannouncedSync = nil; return }
-            if lock.locked { unannouncedSync = message } else { announce(message) }
+            if lock.locked || lock.handedOver { unannouncedSync = message } else { announce(message) }
         }
         .safeAreaInset(edge: .top) {
             // The person can dismiss the whole sync notice; a new offline save or sign-in re-enables it,
@@ -896,6 +938,23 @@ extension View {
     UIAccessibility.post(notification: .announcement, argument: message)
 }
 
+/// Text whose parts carry a language (AttributedString.languageIdentifier) as VoiceOver speech:
+/// each part is read with its own language's voice (4.28.0: Spanish in-person signing).
+func speechString(_ text: AttributedString) -> NSAttributedString {
+    let out = NSMutableAttributedString()
+    for run in text.runs {
+        var attributes: [NSAttributedString.Key: Any] = [:]
+        if let lang = run.languageIdentifier { attributes[.accessibilitySpeechLanguage] = lang }
+        out.append(NSAttributedString(string: String(text[run.range].characters), attributes: attributes))
+    }
+    return out
+}
+
+/// An announcement read in the language its parts are marked with.
+@MainActor func announce(_ message: AttributedString) {
+    UIAccessibility.post(notification: .announcement, argument: speechString(message))
+}
+
 /// For the result of a sheet, called once the sheet has gone (a sheet's onDismiss): closing
 /// it moves VoiceOver focus, which cuts off an announcement posted while it was still open.
 @MainActor func announceAfterDismiss(_ message: String) {
@@ -919,22 +978,41 @@ extension View {
     error = message
 }
 
+/// showFormError for a message marked with its language (shown with ErrorBanner's `spoken`).
+@MainActor func showFormError(_ message: AttributedString, in error: inout AttributedString?) {
+    announce(message)
+    formErrorAnnounced = (String(message.characters), Date())
+    error = message
+}
+
 struct ErrorBanner: View {
     let message: String
     /// False where the owner announces changes itself (the offline-sync notice, which is
     /// redrawn on every return to the app and must not be read out each time).
     var announces = true
+    /// The message marked with its language (4.28.0), read with that language's voice; nil:
+    /// the phone's own language.
+    var spoken: AttributedString? = nil
 
     /// A banner set directly (not through showFormError) announces itself when it appears or its
     /// text changes; one showFormError has just announced is not said twice.
     @MainActor private func announceIfNeeded(_ text: String) {
         guard announces else { return }
         if let said = formErrorAnnounced, said.message == text, Date().timeIntervalSince(said.at) < 2 { return }
+        if let spoken, String(spoken.characters) == text { announce(spoken); return }
         UIAccessibility.post(notification: .announcement, argument: text)
     }
 
+    /// "Error: " and the message, the prefix in the message's own language.
+    private var label: Text {
+        guard let spoken else { return Text("Error: \(message)") }
+        var prefix = AttributedString("Error: ")
+        prefix.languageIdentifier = spoken.runs.first?.languageIdentifier
+        return Text(prefix + spoken)
+    }
+
     var body: some View {
-        Text(message)
+        Group { if let spoken { Text(spoken) } else { Text(message) } }
             .font(.callout.weight(.medium))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -942,7 +1020,7 @@ struct ErrorBanner: View {
             // A solid dark red (#9B1C1C): white text on it is 8.2:1 in both appearances (7:1 is
             // needed for callout text; 85% system red was about 3.1:1 in light mode).
             .background(Color.alertFill, in: RoundedRectangle(cornerRadius: 10))
-            .accessibilityLabel("Error: \(message)")
+            .accessibilityLabel(label)
             .onAppear { announceIfNeeded(message) }
             // A banner that is already on screen and gets a new message must be heard too.
             .onChange(of: message) { announceIfNeeded($0) }

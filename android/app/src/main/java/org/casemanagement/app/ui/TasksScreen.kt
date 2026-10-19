@@ -31,6 +31,7 @@ import org.casemanagement.app.parseMessageThreads
 import org.casemanagement.app.parseNotifications
 import org.casemanagement.app.parseReferrals
 import org.casemanagement.app.parseTasks
+import org.casemanagement.app.sendOnce
 import org.json.JSONObject
 import java.util.UUID
 
@@ -104,10 +105,13 @@ fun TasksScreen(api: Api, nav: NavHostController) {
 
 @Composable
 private fun AddTaskDialog(api: Api, onDone: (String) -> Unit, onCancel: () -> Unit) {
-    var title by remember { mutableStateOf("") }
-    var due by remember { mutableStateOf("") }
-    var details by remember { mutableStateOf("") }
+    // Kept across rotation and process death (4.28.0).
+    var title by rememberSaveable { mutableStateOf("") }
+    var due by rememberSaveable { mutableStateOf("") }
+    var details by rememberSaveable { mutableStateOf("") }
+    var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var dueError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     AlertDialog(
@@ -116,16 +120,17 @@ private fun AddTaskDialog(api: Api, onDone: (String) -> Unit, onCancel: () -> Un
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Field("Task", title, { title = it })
-                Field("Due date", due, { due = it }, hint = "optional, year-month-day such as ${today()}")
+                Field("Due date", due, { due = it }, hint = "optional, year-month-day such as ${today()}", error = dueError)
                 Field("Details", details, { details = it }, hint = "optional", singleLine = false, minLines = 3)
                 ErrorText(error)
             }
         },
         confirmButton = {
             TextButton(enabled = !busy && title.isNotBlank(), onClick = {
-                if (due.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(due.trim())) { error = "Enter the due date as year-month-day, such as ${today()}, or leave it empty."; return@TextButton }
+                dueError = if (due.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(due.trim())) "Enter the due date as year-month-day, such as ${today()}, or leave it empty." else null
+                if (dueError != null) { error = dueError; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
-                    val r = api.call("save_task", body = JSONObject().put("title", title.trim()).put("due_date", due.trim()).put("details", details.trim()))
+                    val r = api.callOnce("save_task", JSONObject().put("title", title.trim()).put("due_date", due.trim()).put("details", details.trim()), idem, { idem = it }, "the task")
                     onDone(r.optString("message").ifEmpty { "Task added." })
                 }
             }) { Text(if (busy) "Saving…" else "Add") }
@@ -222,8 +227,9 @@ fun ThreadScreen(api: Api, clientId: Int) {
     var byText by rememberSaveable { mutableStateOf(false) }
     var attach by remember { mutableStateOf<Attachment?>(null) }
     var choosingDoc by remember { mutableStateOf(false) }
-    // One key per message typed, so a send retried after a lost reply is posted (and texted) once.
-    var sendKey by rememberSaveable { mutableStateOf(java.util.UUID.randomUUID().toString()) }
+    // One key per message as it is (4.28.0: channel, text, text-message choice and attachment), so a send
+    // retried after a lost reply is posted (and texted) once, and an edited one is a new message (see sendOnce).
+    var sendKey by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -267,22 +273,26 @@ fun ThreadScreen(api: Api, clientId: Int) {
             else if (textable) Text("Not by text: " + r.textBlocked)
             ErrorText(error)
             PrimaryButton("Send", busy = busy, enabled = text.isNotBlank() || attach != null) {
+                if (busy) return@PrimaryButton
                 scope.launchSave({ busy = it }, { error = it }) {
                     val body = JSONObject().put("client_id", clientId).put("channel", channel).put("body", text.trim())
-                        .put("by_text", byText && channel == "client" && r.textBlocked == null).put("idem_key", sendKey)
-                    val res = when (val at = attach) {
-                        null -> api.call("post_message", body = body)
-                        is Attachment.Doc -> api.call("post_message", body = body.put("document_id", at.id))
+                        .put("by_text", byText && channel == "client" && r.textBlocked == null)
+                    val at = attach
+                    val print = "post_message|" + body.toString() + "|" + when (at) {
+                        null -> ""
+                        is Attachment.Doc -> "doc:${at.id}"
+                        is Attachment.NewFile -> "file:${at.uri}:${at.name}"
+                    }
+                    val res = when (at) {
+                        null -> sendOnce(sendKey, { sendKey = it }, print, "the message") { k -> api.call("post_message", body = body.put("idem_key", k)) }
+                        is Attachment.Doc -> sendOnce(sendKey, { sendKey = it }, print, "the message") { k -> api.call("post_message", body = body.put("document_id", at.id).put("idem_key", k)) }
                         is Attachment.NewFile -> {
                             val tmp = java.io.File(api.docsFolder, "message.tmp")   // emptied at sign-out and a wipe (4.27.0)
                             try {
                                 checkCopied(copyPicked(context, at.uri, tmp))
                                 val short = shortName(at.name)
-                                try {
-                                    api.postWithFile("post_message", body.put("filename", short), "file_b64", tmp, "The message was not sent.")
-                                } catch (e: ApiException) {
-                                    if (e.network) throw ApiException("The connection dropped before the server answered, so it isn't known whether the message was sent. Check the conversation for “$short” before sending it again.")
-                                    throw e
+                                sendOnce(sendKey, { sendKey = it }, print + ":" + tmp.length(), "the message with “$short”") { k ->
+                                    api.postWithFile("post_message", body.put("filename", short).put("idem_key", k), "file_b64", tmp, "The message was not sent.")
                                 }
                             } finally { tmp.delete() }
                         }
@@ -290,8 +300,9 @@ fun ThreadScreen(api: Api, clientId: Int) {
                     text = ""
                     byText = false
                     attach = null
-                    sendKey = java.util.UUID.randomUUID().toString()
-                    notice = res.str("warning") ?: "Message sent."
+                    sendKey = ""
+                    // A repeat the server recognised (an earlier try whose reply was lost) is said as such.
+                    notice = res.str("warning") ?: if (res.optBoolean("repeat")) "This message had already been sent from an earlier try, so it was not sent twice." else "Message sent."
                     state.reload()
                 }
             }

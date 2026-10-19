@@ -25,7 +25,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_wording']) && ca
     $wk = is_string($_POST['wording_key'] ?? null) && isset(LETTER_TEMPLATES[$_POST['wording_key']]) ? $_POST['wording_key'] : '';
     if ($wk === '') redirect('letters.php');
     $body = trim(str_replace("\r\n", "\n", (string)($_POST['wording'] ?? '')));
-    if (mb_strlen($body) > 8000) { flash('Keep a letter to 8,000 characters or fewer.', 'error'); redirect('letters.php?edit=' . $wk . '#wording-h'); }
+    if (mb_strlen($body) > 8000) { keep_input(); keep_field_errors(['wording' => 'Keep a letter to 8,000 characters or fewer.']); redirect('letters.php?edit=' . $wk . '#wording-h'); }
     set_setting('letter_' . $wk, $body);
     audit($user['id'], 'letter.wording', 'settings', null, $wk);
     flash($body === '' ? LETTER_TEMPLATES[$wk][0] . ' uses the built-in wording again.' : LETTER_TEMPLATES[$wk][0] . ' wording saved.');
@@ -36,7 +36,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_wording']) && ca
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $client && $key !== '' && (isset($_POST['save_doc']) || isset($_POST['save_note']) || isset($_POST['download']))) {
     $title = trim((string)($_POST['title'] ?? '')) ?: LETTER_TEMPLATES[$key][0];
     $body = trim(str_replace("\r\n", "\n", (string)($_POST['body'] ?? '')));
-    if ($body === '') { flash('The letter is empty.', 'error'); redirect('letters.php?client=' . $cid . '&letter=' . $key); }
+    // Said on the field, with the title kept (4.28.0).
+    if ($body === '') { keep_input(); keep_field_errors(['body' => 'The letter is empty. Write the letter, or open it again to start from the filled-in wording.']); redirect('letters.php?client=' . $cid . '&letter=' . $key . '#draft-h'); }
+    // The same Save sent twice (4.28.0) files one document, and shares it once.
+    $letterKey = web_idem_key($_POST);
+    if (isset($_POST['save_doc']) && ($firstDoc = web_once_get($letterKey)) !== null) {
+        flash('This letter was already saved to the client\'s documents (the form was sent twice), so it was saved once.', 'info');
+        redirect('client.php?id=' . $cid . '&tab=documents');
+    }
     $title = mb_substr($title, 0, 150);
     $html = plain_document_html($title, $body);
     if (isset($_POST['download'])) {
@@ -65,6 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $client && $key !== '' && (isset($_
         flash('The letter could not be saved. Your wording is kept below; try again, or download it.', 'error');
         redirect('letters.php?client=' . $cid . '&letter=' . $key . '#draft-h');
     }
+    web_once_set($letterKey, (int)$docId);
     audit($user['id'], 'letter.save', 'client', $cid, $title . ' (doc #' . $docId . ($toPortal ? ', in the portal' : '') . ')');
     flash($docId ? 'The letter was saved to the client\'s documents' . ($toPortal ? ', and the client can read it in their portal.' : '.') : 'The letter could not be saved.', $docId ? 'success' : 'error');
     redirect('client.php?id=' . $cid . '&tab=documents');
@@ -83,10 +91,11 @@ page_header('Letters', $user, 'clients', $client ? [['client.php?id=' . $cid, $c
 <section class="card" aria-labelledby="draft-h">
   <h2 id="draft-h"><?= h(LETTER_TEMPLATES[$key][0]) ?></h2>
   <p>Filled in from the record. Check it and change anything before saving; "[not on file]" marks details the record does not have.</p>
-  <form method="post" action="letters.php" class="stacked"><?= csrf_field() ?>
+  <form method="post" action="letters.php" class="stacked"><?= csrf_field() ?><?= web_idem_field() ?>
+    <?= form_error_summary(['body' => 'Letter']) ?>
     <input type="hidden" name="client" value="<?= $cid ?>"><input type="hidden" name="letter" value="<?= h($key) ?>">
     <div class="field"><label for="title">Title</label><input type="text" id="title" name="title" maxlength="150" value="<?= h(old_in('title', LETTER_TEMPLATES[$key][0])) ?>"></div>
-    <div class="field"><label for="body">Letter</label><textarea id="body" name="body" rows="18" style="width:100%"><?= h(old_in('body', letter_render($key, $cid))) ?></textarea></div>
+    <div class="field"><label for="body">Letter</label><textarea id="body" name="body" rows="18" style="width:100%" <?= field_aria('body') ?>><?= h(has_field_error('body') ? old_in('body') : old_in('body', letter_render($key, $cid))) ?></textarea><?= field_error('body') ?></div>
     <div class="field"><label><input type="checkbox" name="to_portal" value="1"> Let the client read it in their portal</label></div>
     <p><button type="submit" name="save_doc" value="1" class="btn btn-primary">Save to the client's documents</button>
       <button type="submit" name="save_note" value="1" class="btn btn-secondary">Keep as a case note</button>
@@ -109,9 +118,10 @@ page_header('Letters', $user, 'clients', $client ? [['client.php?id=' . $cid, $c
   <h3>Change the wording: <?= h(LETTER_TEMPLATES[$edit][0]) ?></h3>
   <p>Fields filled in from the record: <?= h(implode(' ', LETTER_FIELDS)) ?></p>
   <form method="post" action="letters.php" class="stacked"><?= csrf_field() ?>
+    <?= form_error_summary(['wording' => 'Wording']) ?>
     <input type="hidden" name="wording_key" value="<?= h($edit) ?>">
     <div class="field"><label for="wording">Wording (leave it empty to use the built-in wording)</label>
-      <textarea id="wording" name="wording" rows="16" style="width:100%"><?= h(letter_template($edit)) ?></textarea></div>
+      <textarea id="wording" name="wording" rows="16" style="width:100%" <?= field_aria('wording') ?>><?= h(has_field_error('wording') ? old_in('wording') : letter_template($edit)) ?></textarea><?= field_error('wording') ?></div>
     <button type="submit" name="save_wording" value="1" class="btn btn-primary">Save wording</button>
   </form>
   <?php endif; ?>

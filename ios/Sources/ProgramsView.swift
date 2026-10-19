@@ -73,6 +73,8 @@ struct CohortDetail: View {
     @State private var pendingRemove: CohortMember?
     /// A student is being added, so the Add button cannot send it twice.
     @State private var addingMember = false
+    /// Sent as idem_key when adding a member (4.28.0), so a retry after a lost reply is recognised.
+    @State private var memberIdem = IdemKey()
     /// A sheet's success message, announced once the sheet has gone (see announceAfterDismiss).
     @State private var sheetResult: String?
     /// After an add, VoiceOver is put on the new student; after a removal, on the Students
@@ -198,7 +200,10 @@ struct CohortDetail: View {
         // Cleared first so a repeat of the same failure is shown (and announced) again.
         error = nil
         do {
-            let _: OKResponse = try await api.call("cohort_member", body: ["cohort_id": id, "client_id": clientId, "op": op])
+            var body: [String: Any] = ["cohort_id": id, "client_id": clientId, "op": op]
+            if op == "add" { body["idem_key"] = memberIdem.key(for: body) }
+            let _: OKResponse = try await api.call("cohort_member", body: body)
+            if op == "add" { memberIdem.answered() }
             if op == "add" { addMember = nil }
             await load()
             // A known place for VoiceOver once the list has changed, then the result, after the
@@ -206,12 +211,17 @@ struct CohortDetail: View {
             focusedMember = op == "add" ? clientId : -1
             announceAfterDismiss(op == "add" ? "\(name) added to the cohort." : "\(name) removed from the cohort.")
         }
-        catch { showFormError(error.localizedDescription, in: &self.error) }
+        catch {
+            if op == "add" { memberIdem.failed(error) }
+            showFormError(op == "add" ? IdemKey.message(for: error, what: "\(name)'s membership") : error.localizedDescription, in: &self.error)
+        }
     }
 }
 
 struct CohortSessionSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let cohortId: Int; let members: [CohortMember]; let onDone: () -> Void
     @State private var activity = "Job Exploration Counseling"
@@ -281,13 +291,17 @@ struct CohortSessionSheet: View {
         guard let duration else { showFormError(Self.durationMessage, in: &error); return }
         busy = true; error = nil
         // The cohort screen announces the result once this sheet has gone.
-        do { let _: OKResponse = try await api.call("log_cohort_session", body: ["cohort_id": cohortId, "activity": activity, "session_date": APIDate.day(date), "duration_min": duration, "topic": topic, "notes": notes, "present": Array(present)]); onDone(); dismiss() }
-        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        var body: [String: Any] = ["cohort_id": cohortId, "activity": activity, "session_date": APIDate.day(date), "duration_min": duration, "topic": topic, "notes": notes, "present": Array(present).sorted()]
+        body["idem_key"] = idem.key(for: body)
+        do { let _: OKResponse = try await api.call("log_cohort_session", body: body); idem.answered(); onDone(); dismiss() }
+        catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error, what: "the session"), in: &self.error) }
     }
 }
 
 struct CohortNewSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let onDone: () -> Void
     @State private var name = ""; @State private var school = ""; @State private var busy = false; @State private var error: String?
@@ -324,7 +338,9 @@ struct CohortNewSheet: View {
         }
         busy = true; error = nil
         // The programs list announces the result once this sheet has gone.
-        do { let _: OKResponse = try await api.call("add_cohort", body: ["name": name, "school": school]); onDone(); dismiss() }
-        catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        var body: [String: Any] = ["name": name, "school": school]
+        body["idem_key"] = idem.key(for: body)
+        do { let _: OKResponse = try await api.call("add_cohort", body: body); idem.answered(); onDone(); dismiss() }
+        catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error, what: "the cohort"), in: &self.error) }
     }
 }

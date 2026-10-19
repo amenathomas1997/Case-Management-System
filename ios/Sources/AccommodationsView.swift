@@ -25,7 +25,11 @@ struct Worksite: Decodable {
     let barriers: String?; let recommendations: String?; let status: String
     let followUpDate: String?; let outcome: String?
     let clientName: String?
+    /// When it was last changed (4.28.0), sent back as loaded_at; nil from an older server.
+    let updatedAt: String?
 }
+/// save_worksite's reply, read only for the new updated_at (4.28.0) when the server sends it.
+private struct WorksiteSaveStamp: Decodable { let updatedAt: String? }
 struct WorksiteResponse: Decodable { let assessment: Worksite }
 
 let worksiteStatuses = ["Scheduled", "Assessed", "Recommendations Sent", "Implemented", "Follow-up", "Closed"]
@@ -117,6 +121,9 @@ struct WorksiteDetailView: View {
     let id: Int
     let onChanged: () -> Void
     @State private var w: Worksite?
+    /// The assessment's updated_at as loaded or last saved here (4.28.0), sent as loaded_at so
+    /// a save does not undo a change someone else made since.
+    @State private var loadedAt: String?
     @State private var error: String?
     @State private var busy = false
     @State private var loading = false
@@ -206,6 +213,7 @@ struct WorksiteDetailView: View {
             error = nil
             let r: WorksiteResponse = try await api.call("worksite_assessment", query: ["id": String(id)])
             let a = r.assessment; w = a
+            loadedAt = a.updatedAt
             employer = a.employer ?? ""; jobTitle = a.jobTitle ?? ""; location = a.worksiteLocation ?? ""
             jobTasks = a.jobTasks ?? ""; barriers = a.barriers ?? ""; recommendations = a.recommendations ?? ""
             status = a.status; outcome = a.outcome ?? ""
@@ -225,8 +233,16 @@ struct WorksiteDetailView: View {
         // The same calendar day the pickers show (and the one ymd() read), so a save can't shift it.
         b["assessment_date"] = hasDate ? APIDate.day(date) : ""
         b["follow_up_date"] = hasFollow ? APIDate.day(follow) : ""
+        if let loadedAt, !loadedAt.isEmpty { b["loaded_at"] = loadedAt }
         do {
-            let _: OKResponse = try await api.call("save_worksite", body: b)
+            let stamp: WorksiteSaveStamp = try await api.call("save_worksite", body: b)
+            // The next save is checked against this one: the reply's updated_at, else read again.
+            if let at = stamp.updatedAt, !at.isEmpty {
+                loadedAt = at
+            } else {
+                let r: WorksiteResponse? = try? await api.call("worksite_assessment", query: ["id": String(id)])
+                loadedAt = r?.assessment.updatedAt
+            }
             // What was sent is now what is stored, so Back no longer asks about it.
             stored = sent
             busy = false
@@ -241,6 +257,8 @@ struct WorksiteDetailView: View {
 
 struct WorksiteNewSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let onDone: () -> Void
     @State private var selectedClient: Int?
@@ -273,14 +291,16 @@ struct WorksiteNewSheet: View {
     private func submit() async {
         guard let cid = selectedClient else { return }
         busy = true; error = nil
-        do { let _: OKResponse = try await api.call("add_worksite", body: ["client_id": cid, "employer": employer, "job_title": jobTitle, "assessment_date": APIDate.day(date)]); onDone(); dismiss() }
+        var body: [String: Any] = ["client_id": cid, "employer": employer, "job_title": jobTitle, "assessment_date": APIDate.day(date)]
+        body["idem_key"] = idem.key(for: body)
+        do { let _: OKResponse = try await api.call("add_worksite", body: body); idem.answered(); onDone(); dismiss() }
         catch APIError.network {
             // The request may have arrived: it isn't known whether the assessment was created, and
             // creating it again would list it twice.
             showFormError("The connection dropped before the server answered, so it isn't known whether this assessment was created. Check the worksite assessments list for \(date.formatted(date: .abbreviated, time: .omitted)) before creating it again.", in: &self.error)
             busy = false
         }
-        catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
+        catch { idem.answered(); showFormError(error.localizedDescription, in: &self.error); busy = false }
     }
 }
 

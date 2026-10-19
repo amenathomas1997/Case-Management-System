@@ -191,7 +191,8 @@ try {
         if (!filter_var($sv['email'], FILTER_VALIDATE_EMAIL)) continue;
         $lang = client_lang((int)$sv['client_id']);
         [$subj, $body] = email_template_for_client('survey_invite', (int)$sv['client_id'], ['name' => $sv['name'], 'link' => cfg('base_url') . '/survey.php?t=' . $sv['token'] . ($lang === 'es' ? '&lang=es' : '')]);
-        if (send_app_mail($sv['email'], 'Reminder: ' . $subj, $body)) db()->prepare('UPDATE surveys SET reminded_at = NOW() WHERE id = ?')->execute([(int)$sv['id']]);
+        // An unknown outcome (4.28.0) may have arrived: marked, so the client is never reminded twice.
+        if (send_app_mail_outcome($sv['email'], 'Reminder: ' . $subj, $body) !== 'refused') db()->prepare('UPDATE surveys SET reminded_at = NOW() WHERE id = ?')->execute([(int)$sv['id']]);
     }
 } catch (PDOException $e) {
     error_log('daily_alerts: closure follow-ups skipped (' . $e->getCode() . ')'); // mig_3.0.47 not run yet
@@ -278,8 +279,8 @@ try {
     foreach (db()->query("SELECT u.id, u.email, COUNT(n.id) n FROM users u JOIN notifications n ON n.user_id = u.id AND n.read_at IS NULL AND n.created_at > DATE_SUB(NOW(), INTERVAL 1 DAY)
         WHERE u.is_active = 1 AND u.alert_email IN ('daily', 'now') GROUP BY u.id, u.email")->fetchAll() as $au) {
         if (setting('alert_digest_' . (int)$au['id']) === date('Y-m-d')) continue;
-        if (send_app_mail((string)$au['email'], (int)$au['n'] . ' unread alert' . ((int)$au['n'] === 1 ? '' : 's') . ' in ' . cfg('name'),
-            'You have ' . (int)$au['n'] . ' unread alert' . ((int)$au['n'] === 1 ? '' : 's') . ' from the last day in ' . cfg('name') . ".\n\nSign in to read them: " . cfg('base_url') . "/notifications.php\n\n(To change how alerts reach you, open My Account.)\n")) {
+        if (send_app_mail_outcome((string)$au['email'], (int)$au['n'] . ' unread alert' . ((int)$au['n'] === 1 ? '' : 's') . ' in ' . cfg('name'),
+            'You have ' . (int)$au['n'] . ' unread alert' . ((int)$au['n'] === 1 ? '' : 's') . ' from the last day in ' . cfg('name') . ".\n\nSign in to read them: " . cfg('base_url') . "/notifications.php\n\n(To change how alerts reach you, open My Account.)\n") !== 'refused') {
             set_setting('alert_digest_' . (int)$au['id'], date('Y-m-d'));
         }
     }
@@ -466,12 +467,21 @@ if ($alerts) {
     $allText = implode("\n- ", array_column($alerts, 'text'));
     $adminSubject = 'Authorization alerts: ' . count($alerts) . ' item(s) need attention';
     $adminSent = false; $adminFailed = [];
+    // 4.28.0: an email whose outcome is unknown (Graph timed out or answered 5xx after it went out)
+    // counts as sent, so tomorrow's run does not repeat the whole list; that person is told once,
+    // in the app, that it may not have arrived.
+    $uncertainTo = [];
+    $mailOnce = function (int $uid, string $to, string $subject, string $body) use (&$uncertainTo): bool {
+        $o = send_app_mail_outcome($to, $subject, $body);
+        if ($o === 'unknown') $uncertainTo[] = $uid;
+        return $o !== 'refused';
+    };
     $adminList = effective_admin_user_ids();
     if ($adminList) {
         $q = db()->prepare('SELECT id, email FROM users WHERE id IN (' . implode(',', array_fill(0, count($adminList), '?')) . ')');
         $q->execute($adminList);
         foreach ($q->fetchAll() as $adm) {
-            if (send_app_mail((string)$adm['email'], $adminSubject, $header . $allText . $footer)) $adminSent = true;
+            if ($mailOnce((int)$adm['id'], (string)$adm['email'], $adminSubject, $header . $allText . $footer)) $adminSent = true;
             else $adminFailed[] = (int)$adm['id'];
         }
     }
@@ -502,7 +512,7 @@ if ($alerts) {
         $isAdmin = $adminIds !== null ? in_array((int)$uid, $adminIds, true) : in_array('admin', resolve_perms($row)['perms'], true);
         if ($isAdmin) continue;
         $texts = array_map(fn(int $i): string => $alerts[$i]['text'], $indexes);
-        if (!send_app_mail((string)$row['email'], 'Authorization alerts for your clients: ' . count($texts) . ' item(s)',
+        if (!$mailOnce((int)$uid, (string)$row['email'], 'Authorization alerts for your clients: ' . count($texts) . ' item(s)',
                 $header . implode("\n- ", $texts) . $footer)) {
             $instructorFailures++;
             foreach ($indexes as $i) $missed[$i] = true;
@@ -519,6 +529,11 @@ if ($alerts) {
         }
         echo count($alerts) . " alert(s) sent to the administrators.\n";
     }
+    foreach (array_unique($uncertainTo) as $uid) {
+        notify_user($uid, 'The authorization alerts email for ' . date('F j, Y') . ' may not have reached you (the mail service did not confirm it, and it is not sent again). '
+            . 'Review expiring authorizations and usage on the Compliance page.', 'compliance.php');
+    }
+    if ($uncertainTo) echo count(array_unique($uncertainTo)) . " alert email(s) went out unconfirmed; not sent again (those people were told in the app).\n";
     if ($instructorFailures) echo "{$instructorFailures} case worker alert email(s) failed to send — those alerts will retry on the next run.\n";
     $runFailed = !$adminSent || $adminFailed || $instructorFailures;
 } else {

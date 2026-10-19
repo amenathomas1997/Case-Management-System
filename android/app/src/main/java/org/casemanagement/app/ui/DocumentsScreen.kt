@@ -13,6 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -45,8 +46,8 @@ fun DocumentsScreen(api: Api, clientId: Int) {
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var completing by remember { mutableStateOf<HomeworkItem?>(null) }
-    var assigning by remember { mutableStateOf(false) }
-    var uploading by remember { mutableStateOf(false) }
+    var assigning by rememberSaveable { mutableStateOf(false) }
+    var uploading by rememberSaveable { mutableStateOf(false) }
     var chosen by remember { mutableStateOf<DocumentItem?>(null) }
     val scope = rememberCoroutineScope()
     fun share(d: DocumentItem, with: String, on: Boolean) {
@@ -150,11 +151,13 @@ suspend fun openDocument(api: Api, context: android.content.Context, id: Int): S
 @Composable
 private fun AssignHomeworkDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val tracks = rememberLoaded(clientId) { parseTracks(api.call("tracks")).filter { it.clientId == clientId } }
-    var track by remember { mutableStateOf("") }
-    var title by remember { mutableStateOf("") }
-    var instructions by remember { mutableStateOf("") }
-    var due by remember { mutableStateOf("") }
+    var track by rememberSaveable { mutableStateOf("") }
+    var title by rememberSaveable { mutableStateOf("") }
+    var instructions by rememberSaveable { mutableStateOf("") }
+    var due by rememberSaveable { mutableStateOf("") }
+    var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var dueError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     AlertDialog(
@@ -167,14 +170,19 @@ private fun AssignHomeworkDialog(api: Api, clientId: Int, onDone: (String) -> Un
                 if (list.isNotEmpty()) Choice("Training track", track, listOf("" to "Choose a track") + list.map { it.id.toString() to it.title }) { track = it }
                 Field("Title", title, { title = it })
                 Field("Instructions", instructions, { instructions = it }, hint = "optional", singleLine = false, minLines = 3)
-                Field("Due date", due, { due = it }, hint = "year-month-day, optional")
+                Field("Due date", due, { due = it }, hint = "year-month-day, optional", error = dueError)
                 ErrorText(error)
             }
         },
         confirmButton = {
             TextButton(enabled = !busy && track.isNotEmpty() && title.isNotBlank(), onClick = {
+                if (busy) return@TextButton
+                dueError = if (due.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(due.trim())) "Enter the due date as year-month-day, such as ${today()}, or leave it empty." else null
+                if (dueError != null) { error = dueError; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
-                    api.call("assign_homework", body = JSONObject().put("track_id", track.toInt()).put("title", title.trim()).put("instructions", instructions.trim()).put("due_date", due.trim()))
+                    // 4.28.0: a retry after a lost reply assigns it once (see sendOnce).
+                    api.callOnce("assign_homework", JSONObject().put("track_id", track.toInt()).put("title", title.trim()).put("instructions", instructions.trim()).put("due_date", due.trim()),
+                        idem, { idem = it }, "the homework")
                     onDone("Homework assigned. It shows in the client portal.")
                 }
             }) { Text(if (busy) "Saving…" else "Assign") }

@@ -205,29 +205,25 @@ page_header('Federation', $user, 'admin', [['admin.php', 'Administration']]);
     <form method="post" action="federation.php" class="stacked" novalidate>
       <?= csrf_field() ?>
       <div class="field">
-        <label for="tenant_id">Directory (tenant) ID</label>
+        <label for="tenant_id">Directory (tenant) ID <span class="hint">A 36-character ID such as 01c0760b-89cb-4501-83f4-9d36a7299f8a (not the domain name), from the app registration's Overview page in the Microsoft Entra admin center.</span></label>
         <input type="text" id="tenant_id" name="tenant_id" value="<?= h($formTenant) ?>"
                autocomplete="off" spellcheck="false"
-               <?= field_aria('tenant_id', 'tenant-help') ?>>
-        <p class="muted" id="tenant-help">A 36-character ID such as 01c0760b-89cb-4501-83f4-9d36a7299f8a (not the domain name), from the app registration's Overview page in the Microsoft Entra admin center.</p>
+               <?= field_aria('tenant_id') ?>>
         <?= field_error('tenant_id') ?>
       </div>
       <div class="field">
-        <label for="client_id">Application (client) ID</label>
+        <label for="client_id">Application (client) ID <span class="hint">Also a 36-character ID in the same form, shown just above the tenant ID on the app registration's Overview page.</span></label>
         <input type="text" id="client_id" name="client_id" value="<?= h($formClient) ?>"
-               autocomplete="off" spellcheck="false" <?= field_aria('client_id', 'client-help') ?>>
-        <p class="muted" id="client-help">Also a 36-character ID in the same form, shown just above the tenant ID on the app registration's Overview page.</p>
+               autocomplete="off" spellcheck="false" <?= field_aria('client_id') ?>>
         <?= field_error('client_id') ?>
       </div>
       <div class="field">
-        <label for="client_secret">Client secret</label>
+        <label for="client_secret">Client secret <span class="hint"><?= $cfg['client_secret'] !== ''
+            ? 'A secret is saved. Leave blank to keep it, or paste a new one to replace it.'
+            : 'The secret Value from “Certificates &amp; secrets” on the app registration (shown only once when created).' ?><?= $refill ? ' Nothing was saved: if you had typed a new secret, paste it again (a typed secret is never kept after an error).' : '' ?></span></label>
         <input type="password" id="client_secret" name="client_secret" value="" autocomplete="new-password"
                placeholder="<?= $cfg['client_secret'] !== '' ? 'saved — leave blank to keep' : '' ?>"
-               <?= field_aria('client_secret', 'secret-help') ?>>
-        <p class="muted" id="secret-help"><?= $cfg['client_secret'] !== ''
-            ? 'A secret is saved. Leave blank to keep it, or paste a new one to replace it.'
-            : 'The secret Value from “Certificates &amp; secrets” on the app registration (shown only once when created).' ?>
-          <?= $refill ? ' Nothing was saved: if you had typed a new secret, paste it again (a typed secret is never kept after an error).' : '' ?></p>
+               <?= field_aria('client_secret') ?>>
         <?= field_error('client_secret') ?>
       </div>
       <div class="field">
@@ -235,15 +231,14 @@ page_header('Federation', $user, 'admin', [['admin.php', 'Administration']]);
           Enable “Sign in with Microsoft” on the sign-in page</label>
       </div>
       <div class="field">
-        <label for="auto_provision_group">Automatically create accounts for new Microsoft users, in this group</label>
-        <select id="auto_provision_group" name="auto_provision_group" aria-describedby="apg-help">
+        <label for="auto_provision_group">Automatically create accounts for new Microsoft users, in this group <span class="hint">Off: only existing users can sign in. A group name: a member of your own Microsoft organization (not a guest invited into it, and not a personal Microsoft account) who signs in gets an account in that group. Leave off unless you want that.</span></label>
+        <select id="auto_provision_group" name="auto_provision_group">
           <option value="">Off (recommended)</option>
           <?php foreach ($groups as $g): ?>
           <option value="<?= h($g['name']) ?>" <?= $formApg === $g['name'] ? 'selected' : '' ?>>
             <?= h($g['name']) ?></option>
           <?php endforeach; ?>
         </select>
-        <p class="muted" id="apg-help">Off: only existing users can sign in. A group name: anyone in your Microsoft tenant who signs in gets an account in that group. Leave off unless you want that.</p>
       </div>
       <button type="submit" name="save" value="1" class="btn btn-primary">Save settings</button>
     </form>
@@ -270,7 +265,7 @@ page_header('Federation', $user, 'admin', [['admin.php', 'Administration']]);
       <li>Save, then use <strong>Test connection</strong> to confirm everything checks out before telling your team.</li>
     </ol>
     <h3>How sign-in matching works</h3>
-    <p>The first time someone signs in with Microsoft, they are matched to an <strong>active user here with the same email address</strong>, but only when Microsoft says they are a member of your own organization (the acct claim in step 4). A guest or a personal Microsoft account is never matched by email: that person signs in with their password once, then connects Microsoft from My Account. Check each person's email under <a href="account.php">Administration → People & permissions</a>. Password sign-in keeps working alongside Microsoft sign-in.</p>
+    <p>The first time someone signs in with Microsoft, they are matched to an <strong>active user here with the same email address</strong>, but only when Microsoft says they are a member of your own organization (the acct claim in step 4). A guest or a personal Microsoft account is never matched by email: that person signs in with their password once, then connects Microsoft from My Account. Check each person's email under <a href="admin.php#people-h">Administration → People &amp; permissions</a>. Password sign-in keeps working alongside Microsoft sign-in.</p>
   </section>
 </div>
 <?php page_footer();

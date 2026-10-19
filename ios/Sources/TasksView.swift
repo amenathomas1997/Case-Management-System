@@ -289,6 +289,8 @@ struct TasksView: View {
 /// the account may assign tasks). Typed text is kept on this phone until it is saved.
 struct TaskEditSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let existing: TaskItem?
     let canAssign: Bool
@@ -396,8 +398,11 @@ struct TaskEditSheet: View {
         if let existing { body["id"] = existing.id }
         if let clientId { body["client_id"] = clientId }
         if canAssign { body["assigned_to"] = assignee }
+        // A new task (4.28.0): a retry after a lost reply is recognised and not added twice.
+        if existing == nil { body["idem_key"] = idem.key(for: body) }
         do {
             let result: TaskSaveResult = try await api.call("save_task", body: body)
+            idem.answered()
             DraftStore.clear(key: draftKey, owner: api.userId)
             onSaved(result.message ?? (existing == nil ? "Task added." : "Task saved."))
             dismiss()
@@ -406,6 +411,6 @@ struct TaskEditSheet: View {
             // adding it again would list it twice. (Saving an existing task again is harmless.)
             busy = false
             showFormError("The connection dropped before the server answered, so it isn't known whether this task was added. Check the task list for “\(trimmed)” before adding it again; your text is kept here.", in: &self.error)
-        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        } catch { idem.failed(error); busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }

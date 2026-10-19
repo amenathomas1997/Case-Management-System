@@ -12,7 +12,9 @@ const OFFSITE_RESTORE_SECRETS = "The backup leaves out the stored secrets, so af
     . "the Microsoft Graph client secret (Settings, Microsoft Graph email), the Twilio Auth Token (Settings, Text messages), "
     . "the QuickBooks app Client secret (Settings, QuickBooks Online), the Zoom and Microsoft meeting app client secrets (Settings, Online meetings), "
     . "the AI API key (AI drafting assistant) and the Microsoft Entra client secret (Federation). "
-    . "QuickBooks and each staff member's Zoom or Microsoft meeting connection may also need connecting again.\n";
+    . "QuickBooks and each staff member's Zoom or Microsoft meeting connection may also need connecting again. "
+    // 4.28.0: authenticator seeds are encrypted with the same key file as those connections.
+    . "The private folder's meeting_tokens.key file is never in the backup (it is not emailed either): copy it from the old server into the new private folder by hand. It unlocks the stored authenticator seeds and the QuickBooks and meeting connections; without it, each person with an authenticator app is let back in with php reset_2fa.php their@email in the private cron folder, and sets the app up again under My Account.\n";
 
 // Where the application's inc/ directory is: an optional cron_config.php beside
 // this script (it returns the path) wins, then the production path, then the

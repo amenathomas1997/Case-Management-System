@@ -28,29 +28,65 @@ function session_move_warnings(array $sess, int $start, int $end): array {
     return $out;
 }
 
+/** A fingerprint of the move warnings a form was shown, with the time they were about (4.28.0).
+ *  The "Move anyway" box carries it, so it approves exactly those warnings for exactly that
+ *  time: a box ticked and then sent with another time, or warnings that have changed since,
+ *  approve nothing and the new warnings are shown. */
+function session_move_hash(array $warnings, int $start, int $end): string {
+    return hash('sha256', json_encode([array_values($warnings), $start, $end]));
+}
+
 /**
  * Move a Scheduled session. With warnings and no $confirmed, nothing changes and the
- * warnings come back. Returns ['error' => ?string, 'warnings' => [], 'moved' => bool].
+ * warnings come back. $confirmed is either true (the caller showed the warnings itself) or
+ * the session_move_hash() the "Move anyway" box carried, which must match the warnings
+ * found now for this time (4.28.0). Returns ['error' => ?string, 'warnings' => [],
+ * 'moved' => bool, 'hash' => string]. A session moved on its own out of a group leaves
+ * the group (it is now a make-up), and the move runs under the instructor's lock that
+ * every booking path takes, so a booking at the same moment cannot double-book them.
  */
-function session_move(int $sid, int $start, int $end, int $actor, bool $confirmed, string $via = ''): array {
-    if ($end <= $start || $end - $start > 12 * 3600) return ['error' => 'Choose a length from 15 minutes to 12 hours.', 'warnings' => [], 'moved' => false];
-    $q = db()->prepare("SELECT * FROM scheduled_sessions WHERE id = ? AND status = 'Scheduled'");
-    $q->execute([$sid]);
-    $sess = $q->fetch();
-    if (!$sess) return ['error' => 'That session is no longer scheduled, so it was not moved.', 'warnings' => [], 'moved' => false];
-    if ($start === strtotime((string)$sess['start_at']) && $end === strtotime((string)$sess['end_at'])) {
-        return ['error' => 'That is the session\'s current time; nothing was changed.', 'warnings' => [], 'moved' => false];
+function session_move(int $sid, int $start, int $end, int $actor, bool|string $confirmed, string $via = ''): array {
+    if ($end <= $start || $end - $start > 12 * 3600) return ['error' => 'Choose a length from 15 minutes to 12 hours.', 'warnings' => [], 'moved' => false, 'hash' => ''];
+    $pdo = db();
+    $own = !$pdo->inTransaction();
+    if ($own) $pdo->beginTransaction();
+    try {
+        $q = $pdo->prepare("SELECT * FROM scheduled_sessions WHERE id = ? AND status = 'Scheduled'");
+        $q->execute([$sid]);
+        $sess = $q->fetch();
+        if ($sess) {
+            if (function_exists('session_lock_instructor')) session_lock_instructor((int)$sess['user_id']);
+            else $pdo->prepare('SELECT id FROM users WHERE id = ? FOR UPDATE')->execute([(int)$sess['user_id']]);
+            // Read again under the lock: the session may have changed while waiting.
+            $q = $pdo->prepare("SELECT * FROM scheduled_sessions WHERE id = ? AND status = 'Scheduled' FOR UPDATE");
+            $q->execute([$sid]);
+            $sess = $q->fetch();
+        }
+        if (!$sess) { if ($own) $pdo->rollBack(); return ['error' => 'That session is no longer scheduled, so it was not moved.', 'warnings' => [], 'moved' => false, 'hash' => '']; }
+        if ($start === strtotime((string)$sess['start_at']) && $end === strtotime((string)$sess['end_at'])) {
+            if ($own) $pdo->rollBack();
+            return ['error' => 'That is the session\'s current time; nothing was changed.', 'warnings' => [], 'moved' => false, 'hash' => ''];
+        }
+        $warnings = session_move_warnings($sess, $start, $end);
+        $hash = $warnings ? session_move_hash($warnings, $start, $end) : '';
+        $approved = $confirmed === true || (is_string($confirmed) && $confirmed !== '' && $hash !== '' && hash_equals($hash, $confirmed));
+        if ($warnings && !$approved) { if ($own) $pdo->rollBack(); return ['error' => null, 'warnings' => $warnings, 'moved' => false, 'hash' => $hash]; }
+        $leftGroup = !empty($sess['group_uid']);
+        $u = $pdo->prepare("UPDATE scheduled_sessions SET start_at = ?, end_at = ?, reminder_sent = 0, client_reminded_at = NULL, staff_reminded_at = NULL, sms_reminder_sent = 0, client_reply = NULL, client_reply_at = NULL, ics_sequence = ics_sequence + 1"
+            . ($leftGroup ? ', group_uid = NULL' : '') . " WHERE id = ? AND status = 'Scheduled'");
+        $u->execute([date('Y-m-d H:i:s', $start), date('Y-m-d H:i:s', $end), $sid]);
+        if ($u->rowCount() !== 1) { if ($own) $pdo->rollBack(); return ['error' => 'That session changed meanwhile, so it was not moved.', 'warnings' => [], 'moved' => false, 'hash' => '']; }
+        if ($own) $pdo->commit();
+    } catch (Throwable $e) {
+        if ($own && $pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
     }
-    $warnings = session_move_warnings($sess, $start, $end);
-    if ($warnings && !$confirmed) return ['error' => null, 'warnings' => $warnings, 'moved' => false];
-    $u = db()->prepare("UPDATE scheduled_sessions SET start_at = ?, end_at = ?, reminder_sent = 0, client_reminded_at = NULL, staff_reminded_at = NULL, sms_reminder_sent = 0, client_reply = NULL, client_reply_at = NULL, ics_sequence = ics_sequence + 1 WHERE id = ? AND status = 'Scheduled'");
-    $u->execute([date('Y-m-d H:i:s', $start), date('Y-m-d H:i:s', $end), $sid]);
-    if ($u->rowCount() !== 1) return ['error' => 'That session changed meanwhile, so it was not moved.', 'warnings' => [], 'moved' => false];
     audit($actor, 'session.move', 'session', $sid, 'client #' . (int)$sess['client_id'] . ': ' . date('Y-m-d H:i', strtotime((string)$sess['start_at']))
-        . ' → ' . date('Y-m-d H:i', $start) . ($warnings ? ' (confirmed: ' . implode(' ', $warnings) . ')' : '') . ($via !== '' ? ' (' . $via . ')' : ''));
+        . ' → ' . date('Y-m-d H:i', $start) . ($warnings ? ' (confirmed: ' . implode(' ', $warnings) . ')' : '')
+        . ($leftGroup ? ' (left its group session)' : '') . ($via !== '' ? ' (' . $via . ')' : ''));
     client_session_notice([$sid], 'moved');
     session_tell_instructor($sid, 'moved', $actor, (string)$sess['start_at']);
-    return ['error' => null, 'warnings' => $warnings, 'moved' => true];
+    return ['error' => null, 'warnings' => $warnings, 'moved' => true, 'hash' => '', 'left_group' => $leftGroup];
 }
 
 /** Cancel this session and every later Scheduled one in its weekly series. Returns how many. */

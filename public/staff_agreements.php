@@ -138,7 +138,9 @@ page_header('Staff agreements', $user, 'admin', [['admin.php', 'Administration']
   <?php endif; ?>
   <?php if ($editing !== $aid): ?>
   <p><a href="staff_agreements.php?edit=<?= $aid ?>#agreement-<?= $aid ?>">Edit <?= h($a['title']) ?></a></p>
-  <?php else: $mine = old_in('agreement_id') === (string)$aid; ?>
+  <?php else: $mine = old_in('agreement_id') === (string)$aid && old_in('save_agreement') !== '';
+    // After an error the boxes show what was ticked, not what is stored (4.28.0).
+    $tick = fn(string $f, bool $stored): bool => $mine ? old_in($f) === '1' : $stored; ?>
   <h3>Edit</h3>
   <form method="post" action="staff_agreements.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['title' . $sfx => 'Title', 'body' . $sfx => 'Agreement text'], ['title' . $sfx => 't' . $sfx, 'body' . $sfx => 'b' . $sfx]) ?>
@@ -148,9 +150,9 @@ page_header('Staff agreements', $user, 'admin', [['admin.php', 'Administration']
       <input type="text" id="t<?= $sfx ?>" name="title" maxlength="190" value="<?= h($mine ? old_in('title') : $a['title']) ?>" <?= field_aria('title' . $sfx) ?>><?= field_error('title' . $sfx) ?></div>
     <div class="field"><label for="b<?= $sfx ?>">Agreement text <span class="hint">a line starting with # is a heading, a line starting with - is a list item</span></label>
       <textarea id="b<?= $sfx ?>" name="body" rows="18" <?= field_aria('body' . $sfx) ?>><?= h($mine ? old_in('body') : $a['body']) ?></textarea><?= field_error('body' . $sfx) ?></div>
-    <div class="field"><label><input type="checkbox" name="small_correction" value="1"> This change is only a small correction, such as a typo, so nobody is asked to sign again <span class="hint">the same lines, and at most 40 characters different; the change is kept in the history</span></label></div>
-    <div class="field"><label><input type="checkbox" name="counts_as_confidentiality" value="1" <?= $a['counts_as_confidentiality'] ? 'checked' : '' ?>> This is the confidentiality agreement (signing it records the date Compliance follows)</label></div>
-    <div class="field"><label><input type="checkbox" name="active" value="1" <?= $a['active'] ? 'checked' : '' ?>> On: ask staff to sign it</label></div>
+    <div class="field"><label><input type="checkbox" name="small_correction" value="1" <?= $tick('small_correction', false) ? 'checked' : '' ?>> This change is only a small correction, such as a typo, so nobody is asked to sign again <span class="hint">the same lines, and at most 40 characters different; the change is kept in the history</span></label></div>
+    <div class="field"><label><input type="checkbox" name="counts_as_confidentiality" value="1" <?= $tick('counts_as_confidentiality', (bool)$a['counts_as_confidentiality']) ? 'checked' : '' ?>> This is the confidentiality agreement (signing it records the date Compliance follows)</label></div>
+    <div class="field"><label><input type="checkbox" name="active" value="1" <?= $tick('active', (bool)$a['active']) ? 'checked' : '' ?>> On: ask staff to sign it</label></div>
     <button type="submit" name="save_agreement" value="1" class="btn btn-primary">Save<span class="visually-hidden"> <?= h($a['title']) ?></span></button>
   </form>
   <?php endif; ?>
@@ -159,6 +161,10 @@ page_header('Staff agreements', $user, 'admin', [['admin.php', 'Administration']
 <?php if (isset($_GET['new'])): ?>
 <section class="card" aria-labelledby="new-h">
   <h2 id="new-h" tabindex="-1">Write a new agreement</h2>
+  <?php // After an error, "Who signs it", On and Confidentiality are as chosen (4.28.0): a reset to
+        // All staff would turn an exit acknowledgement into one every staff member is asked to sign.
+  $again = old_in('save_agreement') !== '' && old_in('agreement_id') === '0';
+  $newKind = $again && old_in('kind') === 'exit' ? 'exit' : 'staff'; ?>
   <form method="post" action="staff_agreements.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['title' => 'Title', 'body' => 'Agreement text'], ['title' => 'nt', 'body' => 'nb']) ?>
     <input type="hidden" name="agreement_id" value="0">
@@ -167,11 +173,11 @@ page_header('Staff agreements', $user, 'admin', [['admin.php', 'Administration']
     <div class="field"><label for="nb">Agreement text <span class="hint">a line starting with # is a heading, a line starting with - is a list item</span></label>
       <textarea id="nb" name="body" rows="18" <?= field_aria('body') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?></div>
     <fieldset><legend>Who signs it</legend>
-      <div class="field"><label><input type="radio" name="kind" value="staff" checked> All staff</label></div>
-      <div class="field"><label><input type="radio" name="kind" value="exit"> Someone leaving (an exit acknowledgement)</label></div>
+      <div class="field"><label><input type="radio" name="kind" value="staff" <?= $newKind === 'staff' ? 'checked' : '' ?>> All staff</label></div>
+      <div class="field"><label><input type="radio" name="kind" value="exit" <?= $newKind === 'exit' ? 'checked' : '' ?>> Someone leaving (an exit acknowledgement)</label></div>
     </fieldset>
-    <div class="field"><label><input type="checkbox" name="counts_as_confidentiality" value="1"> This is the confidentiality agreement (signing it records the date Compliance follows)</label></div>
-    <div class="field"><label><input type="checkbox" name="active" value="1"> On: ask staff to sign it now</label></div>
+    <div class="field"><label><input type="checkbox" name="counts_as_confidentiality" value="1" <?= $again && old_in('counts_as_confidentiality') === '1' ? 'checked' : '' ?>> This is the confidentiality agreement (signing it records the date Compliance follows)</label></div>
+    <div class="field"><label><input type="checkbox" name="active" value="1" <?= $again && old_in('active') === '1' ? 'checked' : '' ?>> On: ask staff to sign it now</label></div>
     <button type="submit" name="save_agreement" value="1" class="btn btn-primary">Add the agreement</button>
   </form>
 </section>

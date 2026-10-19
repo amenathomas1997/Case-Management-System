@@ -119,10 +119,18 @@ function sms_first_name(string $name): string {
     return explode(' ', $n)[0] ?: $n;
 }
 
-/** Send one text through the service. Returns [provider id|null, status, error|null]. */
+/** What sms_log.error says for a text whose outcome is unknown (4.28.0). */
+const SMS_UNKNOWN_ERROR = 'The texting service did not confirm it in time; it may still arrive, so it is not sent again.';
+
+/**
+ * Send one text through the service. Returns [provider id|null, status, error|null]. The status is
+ * 'unknown' (4.28.0) when the request went out but no answer came back in time, or the service
+ * answered with a server error: Twilio may have queued it, so it must not be sent again.
+ */
 function sms_provider_send(string $to, string $body): array {
-    // Tests: CMS_TEST_SMS=ok answers as the service would; =fail refuses.
+    // Tests: CMS_TEST_SMS=ok answers as the service would; =fail refuses; =timeout gives no answer in time.
     if (PHP_SAPI === 'cli' && ($fake = getenv('CMS_TEST_SMS')) !== false && $fake !== '') {
+        if ($fake === 'timeout') return [null, 'unknown', SMS_UNKNOWN_ERROR];
         return $fake === 'fail' ? [null, 'failed', 'Synthetic refusal'] : ['SM' . bin2hex(random_bytes(16)), 'queued', null];
     }
     $cfg = sms_cfg();
@@ -134,15 +142,18 @@ function sms_provider_send(string $to, string $body): array {
         CURLOPT_USERPWD => $cfg['sid'] . ':' . $cfg['token']]);
     $resp = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $uploaded = (float)curl_getinfo($ch, CURLINFO_SIZE_UPLOAD);
     curl_close($ch);
     $data = is_string($resp) ? json_decode($resp, true) : null;
     if ($code >= 200 && $code < 300 && is_array($data) && !empty($data['sid'])) return [(string)$data['sid'], (string)($data['status'] ?? 'queued'), null];
+    // Sent but unanswered (a timeout after the request went out), or a server error: it may have been queued.
+    if ($code >= 500 || ($code === 0 && $uploaded > 0)) return [null, 'unknown', SMS_UNKNOWN_ERROR];
     return [null, 'failed', mb_substr(is_array($data) ? (string)($data['message'] ?? 'Refused') : 'No answer from the texting service', 0, 255)];
 }
 
 /**
  * Text a client: kept in the log, sent now in their daytime or held until 8 a.m. their time.
- * Returns ['ok' => bool, 'status' => sent|held|failed|blocked, 'message' => words for staff].
+ * Returns ['ok' => bool, 'status' => sent|held|unknown|failed|blocked, 'message' => words for staff].
  */
 function sms_to_client(int $clientId, string $body, string $purpose, ?int $sessionId = null, ?int $sentBy = null): array {
     $c = sms_client($clientId);
@@ -183,7 +194,10 @@ function sms_dispatch(int $logId): array {
     $claim->execute([$logId]);
     if ($claim->rowCount() !== 1) return ['ok' => false, 'status' => 'failed', 'message' => 'That text is no longer waiting.'];
     [$sid, $status, $err] = sms_provider_send((string)$row['phone'], (string)$row['body']);
-    db()->prepare('UPDATE sms_log SET status = ?, provider_sid = ?, error = ?, updated_at = NOW() WHERE id = ?')->execute([$sid ? 'sent' : 'failed', $sid, $err, $logId]);
+    $logged = $sid ? 'sent' : ($status === 'unknown' ? 'unknown' : 'failed');
+    db()->prepare('UPDATE sms_log SET status = ?, provider_sid = ?, error = ?, updated_at = NOW() WHERE id = ?')->execute([$logged, $sid, $err, $logId]);
+    // Not sent again (the client could get it twice); the caller marks what it was for as done.
+    if ($logged === 'unknown') return ['ok' => false, 'status' => 'unknown', 'message' => SMS_UNKNOWN_ERROR];
     return $sid ? ['ok' => true, 'status' => 'sent', 'message' => 'Text sent.'] : ['ok' => false, 'status' => 'failed', 'message' => 'The texting service refused it: ' . $err];
 }
 

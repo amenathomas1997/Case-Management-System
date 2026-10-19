@@ -343,9 +343,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['correct_log'])) {
     $lid = (int)($_POST['log_id'] ?? 0);
     $hIn = is_string($_POST['fix_hours'] ?? null) ? trim($_POST['fix_hours']) : '';
     $mIn = is_string($_POST['fix_miles'] ?? null) ? trim($_POST['fix_miles']) : '';
-    $err = (!is_numeric($hIn) || ($mIn !== '' && !is_numeric($mIn))) ? 'Enter the hours (and miles) as numbers.'
-        : work_log_correct($lid, $id, (float)$hIn, $mIn === '' ? 0.0 : (float)$mIn, is_string($_POST['fix_reason'] ?? null) ? $_POST['fix_reason'] : '', (int)$user['id']);
-    if ($err !== null) { keep_input(); keep_field_errors(['fix_' . $lid => $err]); redirect("track.php?id=$id#log-" . $lid); }
+    // Each error is tied to its own field and listed in the form's summary (4.28.0).
+    if (!is_numeric($hIn)) { $err = 'Enter the hours as a number.'; $errKey = 'fix_'; }
+    elseif ($mIn !== '' && !is_numeric($mIn)) { $err = 'Enter the miles as a number, or leave it blank.'; $errKey = 'fixm_'; }
+    else {
+        $err = work_log_correct($lid, $id, (float)$hIn, $mIn === '' ? 0.0 : (float)$mIn, is_string($_POST['fix_reason'] ?? null) ? $_POST['fix_reason'] : '', (int)$user['id']);
+        $errKey = $err === null ? 'fix_' : (stripos($err, 'reason') !== false || str_starts_with($err, 'Say why') ? 'fixr_' : (str_starts_with($err, 'Enter miles') ? 'fixm_' : 'fix_'));
+    }
+    if ($err !== null) { keep_input(); keep_field_errors([$errKey . $lid => $err]); redirect("track.php?id=$id#log-" . $lid); }
     flash('Entry corrected. The change and its reason are in the audit log.');
     redirect("track.php?id=$id#log-" . $lid);
 }
@@ -712,9 +717,9 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     <dt>Period</dt><dd><?= fmt_date($track['start_date'], true) ?> to <?= fmt_date($track['expiration_date'], true) ?></dd>
     <dt>Authorized funds</dt><dd><?= $noAuthFunds ? $noFundsText : fmt_money($r['authorized_funds']) ?></dd>
   </dl>
-  <p class="hint" id="burndown-hint">The burn-down shows the hours and funds used so far against this authorization, and drafts a request for more.</p>
+  <p class="hint">The burn-down shows the hours and funds used so far against this authorization, and drafts a request for more.</p>
   <?php if ($waitAmend = amendment_waiting_text($id)): // 3.0.44 ?><p><strong><?= h($waitAmend) ?>.</strong></p><?php endif; ?>
-  <p class="page-actions"><a class="btn btn-secondary btn-sm" href="amendment_request.php?track=<?= $id ?>" aria-describedby="burndown-hint">Authorization burn-down &amp; amendment request</a></p>
+  <p class="page-actions"><a class="btn btn-secondary btn-sm" href="amendment_request.php?track=<?= $id ?>">Authorization burn-down &amp; amendment request</a></p>
   <?php
   $amendments = db()->prepare('SELECT a.*, u.name AS changed_by_name FROM auth_amendments a LEFT JOIN users u ON u.id = a.changed_by WHERE a.track_id = ? ORDER BY a.changed_at DESC');
   $amendments->execute([$id]);
@@ -796,8 +801,8 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   if ($savedNote): ?>
   <form method="post" action="track.php?id=<?= $id ?>#assign-hw-h" class="inline-form"><?= csrf_field() ?>
     <input type="hidden" name="note_id" value="<?= (int)$savedNote['id'] ?>">
-    <button type="submit" name="draft_homework" value="1" class="btn btn-secondary btn-sm">Draft homework from this session note<span class="visually-hidden">: <?= h($savedNote['subject']) ?></span></button>
     <span class="hint">An AI draft of practice for the learner, from the note you just saved. You review it before assigning.</span>
+    <button type="submit" name="draft_homework" value="1" class="btn btn-secondary btn-sm">Draft homework from this session note<span class="visually-hidden">: <?= h($savedNote['subject']) ?></span></button>
   </form>
   <?php endif; ?>
   <?php if (track_needs_rate($track) && (float)$track['hourly_rate'] <= 0): ?>
@@ -828,15 +833,12 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
         <?php endforeach; ?>
       </select><?= field_error('goal_id') ?></div>
     <?php endif; ?>
-    <div class="field"><label for="hours">Hours worked</label>
-      <span class="hint" id="hours-hint">Such as 1.5. Leave blank to save only the session note.</span>
-      <input type="number" id="hours" name="hours" step="0.25" min="0.25" max="24" value="<?= h(old_in('hours')) ?>" <?= field_aria('hours', 'hours-hint') ?>><?= field_error('hours') ?></div>
-    <div class="field"><label for="mileage">Mileage / travel (miles)</label>
-      <span class="hint" id="mileage-hint">Miles driven for this session, up to 1000</span>
-      <input type="text" inputmode="decimal" autocomplete="off" id="mileage" name="mileage" value="<?= h(old_in('mileage', '0')) ?>" <?= field_aria('mileage', 'mileage-hint') ?>><?= field_error('mileage') ?></div>
-    <div class="field"><label for="description">Activity description</label>
-      <span class="hint" id="description-hint">Needed with hours: it goes on the invoice.</span>
-      <textarea id="description" name="description" rows="3" <?= field_aria('description', 'description-hint') ?>><?= h(old_in('description')) ?></textarea><?= field_error('description') ?></div>
+    <div class="field"><label for="hours">Hours worked <span class="hint">Such as 1.5. Leave blank to save only the session note.</span></label>
+      <input type="number" id="hours" name="hours" step="0.25" min="0.25" max="24" value="<?= h(old_in('hours')) ?>" <?= field_aria('hours') ?>><?= field_error('hours') ?></div>
+    <div class="field"><label for="mileage">Mileage / travel (miles) <span class="hint">Miles driven for this session, up to 1000</span></label>
+      <input type="text" inputmode="decimal" autocomplete="off" id="mileage" name="mileage" value="<?= h(old_in('mileage', '0')) ?>" <?= field_aria('mileage') ?>><?= field_error('mileage') ?></div>
+    <div class="field"><label for="description">Activity description <span class="hint">Needed with hours: it goes on the invoice.</span></label>
+      <textarea id="description" name="description" rows="3" <?= field_aria('description') ?>><?= h(old_in('description')) ?></textarea><?= field_error('description') ?></div>
     <?php // The session note, saved with the hours (or on its own when Hours worked is
     // blank): the same note the client's Add a note form takes, with the AI generator. ?>
     <h4 id="session-note-h">Session note</h4>
@@ -857,9 +859,8 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
           <?php endforeach; ?>
         </select></div>
     </div>
-    <div class="field"><label for="tn_subject">Note subject</label>
-      <span class="hint" id="tn_subject-hint">Left blank, it is "Session on" and the date.</span>
-      <input type="text" id="tn_subject" name="subject" maxlength="255" value="<?= h(old_in('subject', old_in('session_subject'))) ?>" <?= field_aria('subject', 'tn_subject-hint') ?>><?= field_error('subject') ?></div>
+    <div class="field"><label for="tn_subject">Note subject <span class="hint">Left blank, it is "Session on" and the date.</span></label>
+      <input type="text" id="tn_subject" name="subject" maxlength="255" value="<?= h(old_in('subject', old_in('session_subject'))) ?>" <?= field_aria('subject') ?>><?= field_error('subject') ?></div>
     <fieldset id="tn-struct" <?= $tnCurFmt === 'free' ? 'hidden' : '' ?>>
       <legend class="legend-h"><span id="tn-fmt-name"><?= h($tnCurFmt === 'free' ? 'BIRP' : $tnCurFmt) ?></span> <span class="hint">structured case-note sections</span></legend>
       <?php for ($i = 0; $i < 4; $i++): $n = $i + 1; ?>
@@ -867,9 +868,8 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
         <textarea id="tn_sec<?= $n ?>" name="sec<?= $n ?>" rows="2"><?= h($tnSecVals[$i]) ?></textarea></div>
       <?php endfor; ?>
     </fieldset>
-    <div class="field"><label for="tn_body">Note</label>
-      <span class="hint" id="tn_body-hint">What happened, progress, concerns and the plan for next time. Or paste rough notes and use Generate structured note. Leave the note blank to log only the hours.</span>
-      <textarea id="tn_body" name="body" rows="5" <?= field_aria('note_content', 'tn_body-hint') ?>><?= h(old_in('body', old_in('session_note'))) ?></textarea><?= field_error('note_content') ?></div>
+    <div class="field"><label for="tn_body">Note <span class="hint">What happened, progress, concerns and the plan for next time. Or paste rough notes and use Generate structured note. Leave the note blank to log only the hours.</span></label>
+      <textarea id="tn_body" name="body" rows="5" <?= field_aria('note_content') ?>><?= h(old_in('body', old_in('session_note'))) ?></textarea><?= field_error('note_content') ?></div>
     <?php if ($tnQuestions): ?>
     <div class="alert alert-success" role="note"><strong>Before you save — double-check:</strong>
       <ul style="margin:.3rem 0 0"><?php foreach ($tnQuestions as $q): ?><li><?= h($q) ?></li><?php endforeach; ?></ul></div>
@@ -954,14 +954,14 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
               onclick="return confirm('Move this log entry from <?= fmt_date($l['work_date']) ?> to the trash? An administrator can restore it for 30 days.');">
               Move to trash<span class="visually-hidden"> — log entry from <?= fmt_date($l['work_date']) ?>, <?= fmt_hours((float)$l['hours']) ?>: <?= h(mb_strimwidth($l['description'], 0, 50, '…')) ?></span></button>
           </form>
-          <?php $fk = 'fix_' . (int)$l['id']; $fMine = old_in('log_id') === (string)(int)$l['id'] && old_in('correct_log') !== ''; ?>
-          <details id="log-<?= (int)$l['id'] ?>"<?= has_field_error($fk) ? ' open' : '' ?>><summary>Correct<span class="visually-hidden"> the log entry from <?= fmt_date($l['work_date']) ?></span></summary>
+          <?php $fk = 'fix_' . (int)$l['id']; $fmk = 'fixm_' . (int)$l['id']; $frk = 'fixr_' . (int)$l['id']; $fMine = old_in('log_id') === (string)(int)$l['id'] && old_in('correct_log') !== ''; ?>
+          <details id="log-<?= (int)$l['id'] ?>"<?= has_field_error($fk) || has_field_error($fmk) || has_field_error($frk) ? ' open' : '' ?>><summary>Correct<span class="visually-hidden"> the log entry from <?= fmt_date($l['work_date']) ?></span></summary>
             <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate><?= csrf_field() ?>
               <input type="hidden" name="log_id" value="<?= (int)$l['id'] ?>">
-              <?= field_error($fk) ?>
-              <div class="field"><label for="fh-<?= (int)$l['id'] ?>">Hours</label><input type="text" inputmode="decimal" id="fh-<?= (int)$l['id'] ?>" name="fix_hours" value="<?= h($fMine ? old_in('fix_hours') : (string)(float)$l['hours']) ?>" <?= field_aria($fk) ?>></div>
-              <div class="field"><label for="fm-<?= (int)$l['id'] ?>">Miles</label><input type="text" inputmode="decimal" id="fm-<?= (int)$l['id'] ?>" name="fix_miles" value="<?= h($fMine ? old_in('fix_miles') : (string)(float)$l['mileage']) ?>"></div>
-              <div class="field"><label for="fr-<?= (int)$l['id'] ?>">Reason</label><input type="text" id="fr-<?= (int)$l['id'] ?>" name="fix_reason" maxlength="255" value="<?= $fMine ? h(old_in('fix_reason')) : '' ?>"></div>
+              <?= form_error_summary([$fk => 'Hours', $fmk => 'Miles', $frk => 'Reason'], [$fk => 'fh-' . (int)$l['id'], $fmk => 'fm-' . (int)$l['id'], $frk => 'fr-' . (int)$l['id']]) ?>
+              <div class="field"><label for="fh-<?= (int)$l['id'] ?>">Hours</label><input type="text" inputmode="decimal" id="fh-<?= (int)$l['id'] ?>" name="fix_hours" value="<?= h($fMine ? old_in('fix_hours') : (string)(float)$l['hours']) ?>" <?= field_aria($fk) ?>><?= field_error($fk) ?></div>
+              <div class="field"><label for="fm-<?= (int)$l['id'] ?>">Miles</label><input type="text" inputmode="decimal" id="fm-<?= (int)$l['id'] ?>" name="fix_miles" value="<?= h($fMine ? old_in('fix_miles') : (string)(float)$l['mileage']) ?>" <?= field_aria($fmk) ?>><?= field_error($fmk) ?></div>
+              <div class="field"><label for="fr-<?= (int)$l['id'] ?>">Reason</label><input type="text" id="fr-<?= (int)$l['id'] ?>" name="fix_reason" maxlength="255" value="<?= $fMine ? h(old_in('fix_reason')) : '' ?>" <?= field_aria($frk) ?>><?= field_error($frk) ?></div>
               <button type="submit" name="correct_log" value="1" class="btn btn-secondary btn-sm">Save correction<span class="visually-hidden"> for <?= fmt_date($l['work_date']) ?></span></button>
             </form>
           </details>
@@ -1064,9 +1064,8 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
             <?= csrf_field() ?>
             <input type="hidden" name="goal_id" value="<?= (int)$g['id'] ?>">
             <?php if (!empty($gDraft['reopen_asked'])): ?><input type="hidden" name="reopen_confirmed" value="1"><?php endif; ?>
-            <label for="gs-<?= (int)$g['id'] ?>">Status<?= $gName ?></label>
-            <span class="hint" id="gs-<?= (int)$g['id'] ?>-hint">Achieved sets 100%. Not Started sets 0% unless you change the percent.</span>
-            <select id="gs-<?= (int)$g['id'] ?>" name="goal_status" aria-describedby="gs-<?= (int)$g['id'] ?>-hint"><?= select_options(GOAL_STATUSES, $gDraft['status'] ?? $g['status']) ?></select>
+            <label for="gs-<?= (int)$g['id'] ?>">Status<?= $gName ?> <span class="hint">Achieved sets 100%. Not Started sets 0% unless you change the percent.</span></label>
+            <select id="gs-<?= (int)$g['id'] ?>" name="goal_status"><?= select_options(GOAL_STATUSES, $gDraft['status'] ?? $g['status']) ?></select>
             <label for="pct-<?= (int)$g['id'] ?>">Percent complete<?= $gName ?></label>
             <input type="number" id="pct-<?= (int)$g['id'] ?>" name="progress_pct" min="0" max="100" step="1" value="<?= h($gDraft['pct'] ?? (string)$gpct) ?>" inputmode="numeric" <?= field_aria('goal_pct_' . (int)$g['id']) ?>><?= field_error('goal_pct_' . (int)$g['id']) ?>
             <label for="pn-<?= (int)$g['id'] ?>">Note<?= $gName ?> <span class="hint">optional — what changed</span></label>
@@ -1127,7 +1126,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     </div>
     <div class="field">
       <label for="goal_tpl">Matching templates</label>
-      <select id="goal_tpl" name="goal_tpl" size="8" aria-describedby="tpl-help tpl-preview<?= $tplMissing ? ' tpl-err' : '' ?>"<?= $tplMissing ? ' aria-invalid="true" autofocus' : '' ?>>
+      <select id="goal_tpl" name="goal_tpl" size="8" aria-describedby="tpl-preview<?= $tplMissing ? ' tpl-err' : '' ?>"<?= $tplMissing ? ' aria-invalid="true" autofocus' : '' ?>>
         <?php // Grouped by area: each option is the goal alone; the area is read once per group.
               $tplGroup = null; foreach ($tplResults as $g):
               if ($g['category'] !== $tplGroup): if ($tplGroup !== null) echo '</optgroup>'; $tplGroup = $g['category']; ?>
@@ -1203,9 +1202,8 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     <?= form_error_summary(['specific_goal' => 'Specific objective', 'measurable_metric' => 'Measurable criteria', 'focus_area' => 'Relevant focus area', 'target_date' => 'Target completion date']) ?>
     <div class="field"><label for="specific_goal">Specific objective <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <textarea id="specific_goal" name="specific_goal" required rows="2" <?= field_aria('specific_goal') ?><?= $goalTpl ? ' autofocus' : '' ?>><?= h($goalTpl['specific_goal'] ?? old_in('specific_goal')) ?></textarea><?= field_error('specific_goal') ?></div>
-    <div class="field"><label for="measurable_metric">Measurable criteria <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-      <span class="hint" id="measurable_metric-hint">e.g., “Student will edit a Word document at 30 WPM using keyboard shortcuts.”</span>
-      <textarea id="measurable_metric" name="measurable_metric" required rows="2" <?= field_aria('measurable_metric', 'measurable_metric-hint') ?>><?= h($goalTpl['measurable_metric'] ?? old_in('measurable_metric')) ?></textarea><?= field_error('measurable_metric') ?></div>
+    <div class="field"><label for="measurable_metric">Measurable criteria <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span> <span class="hint">e.g., “Student will edit a Word document at 30 WPM using keyboard shortcuts.”</span></label>
+      <textarea id="measurable_metric" name="measurable_metric" required rows="2" <?= field_aria('measurable_metric') ?>><?= h($goalTpl['measurable_metric'] ?? old_in('measurable_metric')) ?></textarea><?= field_error('measurable_metric') ?></div>
     <div class="field"><label for="focus_area">Relevant focus area</label>
       <input type="text" id="focus_area" name="focus_area" maxlength="190" value="<?= h(old_in('focus_area', $goalTpl['focus_area'] ?? '')) ?>" <?= field_aria('focus_area') ?>><?= field_error('focus_area') ?></div>
     <div class="field"><label for="target_date">Target completion date</label>

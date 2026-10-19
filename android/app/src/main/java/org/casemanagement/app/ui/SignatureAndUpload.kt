@@ -33,6 +33,13 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
+import org.casemanagement.app.decodeStrokes
+import org.casemanagement.app.sendOnce
+import org.casemanagement.app.encodeStrokes
+import org.casemanagement.app.scaleStrokes
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -51,10 +58,29 @@ class SignatureState {
     val strokes = mutableStateOf<List<List<Offset>>>(emptyList())
     var padSize = IntSize(1, 1)
 
+    companion object {
+        /** Keeps the drawing as plain numbers (see encodeStrokes), so it outlives rotation and process death (4.28.0). */
+        val Saver: Saver<SignatureState, FloatArray> = Saver(
+            save = { st -> encodeStrokes(st.padSize.width, st.padSize.height, st.strokes.value.map { s -> s.map { it.x to it.y } }) },
+            restore = { a ->
+                val (w, h, strokes) = decodeStrokes(a)
+                SignatureState().apply { padSize = IntSize(w.coerceAtLeast(1), h.coerceAtLeast(1)); this.strokes.value = strokes.map { s -> s.map { (x, y) -> Offset(x, y) } } }
+            },
+        )
+    }
+
     /** Total ink length in pixels. */
     val ink: Float get() = strokes.value.sumOf { s -> s.zipWithNext().sumOf { (a, b) -> (b - a).getDistance().toDouble() } }.toFloat()
 
     fun clear() { strokes.value = emptyList() }
+
+    /** The pad's new size: what is drawn is fitted to it (4.28.0), so a signature kept across rotation is never cut off. */
+    fun resize(size: IntSize) {
+        if (size == padSize) return
+        if (strokes.value.isNotEmpty()) strokes.value = scaleStrokes(strokes.value.map { s -> s.map { it.x to it.y } }, padSize.width, padSize.height, size.width, size.height)
+            .map { s -> s.map { (x, y) -> Offset(x, y) } }
+        padSize = size
+    }
 
     /** The PNG as base64, or null when there is too little ink (under about 60 points). */
     fun png(density: Float): String? {
@@ -72,13 +98,27 @@ class SignatureState {
     }
 }
 
+/** A [SignatureState] kept across rotation, a text-size change and process death (4.28.0); [keys] start a new one. */
 @Composable
-fun SignaturePad(state: SignatureState, caption: String = "Client signature: hand the phone to the client to sign below with a finger.") {
-    Text(caption)
+fun rememberSignatureState(vararg keys: Any?): SignatureState = rememberSaveable(*keys, saver = SignatureState.Saver) { SignatureState() }
+
+/** [lang] "es": the caption, the pad's description and its button are in Spanish and marked so (4.28.0). */
+@Composable
+fun SignaturePad(state: SignatureState, caption: String = "Client signature: hand the phone to the client to sign below with a finger.", lang: String? = null) {
+    val es = lang == "es"
+    val described = if (es) {
+        (if (state.strokes.value.isEmpty()) "Área de firma, vacía. Firme aquí con el dedo." else "Área de firma, firmada.") +
+            " Con TalkBack activado, pause TalkBack mientras firma, o use solo el nombre escrito."
+    } else {
+        (if (state.strokes.value.isEmpty()) "Signature area, empty. The client signs here with a finger." else "Signature area, signed.") +
+            " With TalkBack on, pause TalkBack while the client signs, or use the typed name instead."
+    }
+    Text(inLanguage(caption, lang))
     Canvas(
         Modifier.fillMaxWidth().height(180.dp).background(Color.White).border(2.dp, MaterialTheme.colorScheme.outline)
-            .onSizeChanged { state.padSize = it }
-            .semantics { contentDescription = (if (state.strokes.value.isEmpty()) "Signature area, empty. The client signs here with a finger." else "Signature area, signed.") + " With TalkBack on, pause TalkBack while the client signs, or use the typed name instead." }
+            .onSizeChanged { state.resize(it) }
+            // A description cannot carry a language, so another language's is given as the pad's text.
+            .semantics { if (lang.isNullOrBlank()) contentDescription = described else text = inLanguage(described, lang) }
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { o -> state.strokes.value = state.strokes.value + listOf(listOf(o)) },
@@ -90,7 +130,7 @@ fun SignaturePad(state: SignatureState, caption: String = "Client signature: han
             if (s.size > 1) drawPath(Path().apply { moveTo(s[0].x, s[0].y); s.drop(1).forEach { lineTo(it.x, it.y) } }, Color.Black, style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round))
         }
     }
-    if (state.strokes.value.isNotEmpty()) SecondaryButton("Clear the signature") { state.clear() }
+    if (state.strokes.value.isNotEmpty()) SecondaryButton(if (es) "Borrar la firma" else "Clear the signature", lang = lang) { state.clear() }
 }
 
 val UPLOAD_TYPES = setOf("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "png", "jpg", "jpeg", "heic")
@@ -139,15 +179,19 @@ fun checkCopied(copied: Long) {
 fun UploadDocumentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val context = LocalContext.current
     val cats = api.formList("doc_categories", listOf("Authorization", "IPE", "Release", "Report", "Resource", "Other"))
-    var file by remember { mutableStateOf<Pair<Uri, String>?>(null) }
-    var category by remember { mutableStateOf("Other") }
-    var title by remember { mutableStateOf("") }
+    // Kept across rotation and process death (4.28.0); the chosen file as its address and name.
+    var fileUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    var fileName by rememberSaveable { mutableStateOf("") }
+    val file = fileUri?.let { it to fileName }
+    var category by rememberSaveable { mutableStateOf("Other") }
+    var title by rememberSaveable { mutableStateOf("") }
+    var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            file = uri to pickedName(context, uri)
+            fileUri = uri; fileName = pickedName(context, uri)
         }
     }
     FormDialog("Upload a document", "Upload", busy, file != null, onSave = {
@@ -160,12 +204,9 @@ fun UploadDocumentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCa
             try {
                 checkCopied(copyPicked(context, uri, tmp))
                 val short = shortName(name)
-                try {
-                    api.uploadDocument(clientId, category, title.trim(), short, tmp)
-                } catch (e: ApiException) {
-                    if (e.network) throw ApiException("The connection dropped before the server answered, so it isn't known whether the document was uploaded. Check the client's documents for “$short” before uploading it again.")
-                    throw e
-                }
+                // 4.28.0: the same key while the same file goes with the same details (see sendOnce).
+                val print = listOf("upload_document", clientId, category, title.trim(), short, tmp.length(), uri).joinToString("|")
+                sendOnce(idem, { idem = it }, print, "the document “$short”") { key -> api.uploadDocument(clientId, category, title.trim(), short, tmp, key) }
             } finally { tmp.delete() }
             onDone("Document uploaded.")
         }

@@ -460,6 +460,8 @@ struct HomeworkSection: View {
 
 struct AssignHomeworkSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let tracks: [Track]
     var item: HomeworkItem? = nil
@@ -597,12 +599,15 @@ struct AssignHomeworkSheet: View {
         do {
             var body: [String: Any] = ["track_id": trackId, "title": title, "instructions": instructions, "due_date": hasDue ? APIDate.day(dueDate) : ""]
             if let item { body["id"] = item.id; body["edit_token"] = editToken ?? item.editToken ?? "" }
+            if item == nil { body["idem_key"] = idem.key(for: body) }
             let _: OKResponse = try await api.call(item == nil ? "assign_homework" : "at_homework_update", body: body)
+            idem.answered()
             // Said by the Homework section once this sheet has closed (closing it would cut it off).
             onDone(item == nil ? "Homework assigned." : "Homework updated.")
             dismiss()
         } catch {
-            showFormError(error.localizedDescription, in: &self.error)
+            idem.failed(error)
+            showFormError(item == nil ? IdemKey.message(for: error, what: "the homework") : error.localizedDescription, in: &self.error)
             busy = false
         }
     }

@@ -19,7 +19,9 @@ function offer_time_problem(int $start, int $end, int $userId, ?int $trackId, ?a
     if ($trackId) {
         if ($moving) {
             // A move uses the hours already reserved, so only the dates and the track are checked.
-            $w = session_move_warnings($moving + ['user_id' => $userId], $start, $end);
+            // The session goes to the offer's instructor (4.28.0): their calendar is the one checked,
+            // so the offer's user_id must win over the session's own ($a + $b keeps $a's keys).
+            $w = session_move_warnings(['user_id' => $userId] + $moving, $start, $end);
             $w = array_values(array_filter($w, fn($x) => !str_contains($x, 'already has a session')));
         } else {
             require_once __DIR__ . '/workflows.php';
@@ -41,6 +43,7 @@ function offer_times_save(int $requestId, array $starts, int $minutes, int $user
     $req = $q->fetch();
     if (!$req || !in_array($req['type'], OFFER_REQUEST_TYPES, true) || in_array($req['status'], ['Done', 'Declined'], true)) return ['error' => 'Times can be offered only on an open appointment or reschedule request.', 'offered' => 0, 'refused' => []];
     if ($minutes < 15 || $minutes > 480) return ['error' => 'Choose a length from 15 minutes to 8 hours.', 'offered' => 0, 'refused' => []];
+    if (($why = offer_staff_problem($userId, (int)$req['client_id'])) !== null) return ['error' => $why, 'field' => 'staff', 'offered' => 0, 'refused' => []];
     $moving = null;
     if ($req['type'] === 'reschedule' && $req['session_id']) {
         $m = db()->prepare("SELECT * FROM scheduled_sessions WHERE id = ? AND status = 'Scheduled'");
@@ -158,16 +161,29 @@ function offer_confirm(int $offerId, int $clientId): array {
             notify_user($instructor, 'A client chose ' . date('D, M j g:i A', $start) . ', but it could not be booked: offer new times', 'portal_requests.php');
             return ['error' => $gone, 'session_id' => null];
         }
+        $oldInstructor = null; $needLink = false;
         if ($moving) {
-            $pdo->prepare("UPDATE scheduled_sessions SET start_at = ?, end_at = ?, reminder_sent = 0, client_reminded_at = NULL, staff_reminded_at = NULL, sms_reminder_sent = 0, client_reply = NULL, client_reply_at = NULL, ics_sequence = ics_sequence + 1 WHERE id = ?")
-                ->execute([$o['start_at'], $o['end_at'], (int)$moving['id']]);
+            // The client chose the time, the instructor and the place offered (4.28.0): all of them
+            // move with the session, so the session, its emails and invites give what was chosen.
+            $remote = (int)$o['is_remote'] === 1;
+            $loc = trim((string)($o['location'] ?? ''));
+            if ($loc === '' && !$remote && !(int)$moving['is_remote']) $loc = trim((string)($moving['location'] ?? ''));
+            // An online meeting link belongs to the instructor who made it: kept only when the
+            // session stays online with the same instructor.
+            $keepUrl = $remote && (int)$moving['is_remote'] === 1 && (int)$moving['user_id'] === $instructor ? ($moving['meeting_url'] ?? null) : null;
+            $needLink = $remote && ($keepUrl === null || $keepUrl === '');
+            // It leaves any group it was booked with (as session_move does): a group shares one time.
+            $pdo->prepare("UPDATE scheduled_sessions SET start_at = ?, end_at = ?, user_id = ?, is_remote = ?, location = ?, meeting_url = ?, group_uid = NULL, reminder_sent = 0, client_reminded_at = NULL, staff_reminded_at = NULL, sms_reminder_sent = 0, client_reply = NULL, client_reply_at = NULL, ics_sequence = ics_sequence + 1 WHERE id = ?")
+                ->execute([$o['start_at'], $o['end_at'], $instructor, $remote ? 1 : 0, $loc !== '' ? mb_substr($loc, 0, 190) : null, $keepUrl, (int)$moving['id']]);
             $sid = (int)$moving['id'];
             $after = ['moved', (string)$moving['start_at']];
+            if ((int)$moving['user_id'] !== $instructor) $oldInstructor = $moving;
         } else {
             $pdo->prepare("INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, is_remote, status) VALUES (?,?,?,?,?,?,?, 'Scheduled')")
                 ->execute([$clientId, $o['track_id'], $instructor, $o['start_at'], $o['end_at'], $o['location'], (int)$o['is_remote']]);
             $sid = (int)$pdo->lastInsertId();
             $after = ['booked', null];
+            $needLink = (int)$o['is_remote'] === 1;
         }
         $pdo->prepare("UPDATE portal_request_offers SET status = 'Chosen', chosen_at = NOW(), session_id = ? WHERE id = ?")->execute([$sid, $offerId]);
         $pdo->prepare("UPDATE portal_request_offers SET status = 'Withdrawn' WHERE request_id = ? AND status = 'Offered'")->execute([(int)$req['id']]);
@@ -184,9 +200,76 @@ function offer_confirm(int $offerId, int $clientId): array {
     // After the commit: the task, the client's invitation, and the instructor (whose calendar
     // is updated for a move; the client, not the instructor, made the change).
     complete_task_by_key('preq-' . (int)$req['id'], null);
+    // An online session gets its link from the instructor's own meeting account, when they
+    // connected one (as self-booking does), before the client's email so it carries the link.
+    if ($needLink) offer_meeting_link($sid, $instructor, $start, $end);
     client_session_notice([$sid], $after[0]);
     if ($after[0] === 'moved') session_tell_instructor($sid, 'moved', 0, $after[1]);
+    if ($oldInstructor) offer_tell_previous_instructor($sid, $oldInstructor);
     notify_user($instructor, 'A client chose an offered time: ' . date('D, M j g:i A', $start), 'schedule.php#s-' . $sid);
     audit(null, 'portal_request.confirm', 'client', $clientId, 'request #' . (int)$req['id'] . ': ' . ($after[0] === 'moved' ? 'moved' : 'booked') . ' session #' . $sid . ' (client chose an offered time)');
     return ['error' => null, 'session_id' => $sid];
+}
+
+/** Make the online meeting link for a session from its instructor's own connected meeting account, if any. Never fails the booking. */
+function offer_meeting_link(int $sid, int $instructor, int $start, int $end): void {
+    try {
+        if (!function_exists('meeting_app') || !function_exists('meeting_account') || !function_exists('meeting_create')) return;
+        foreach (['microsoft', 'zoom'] as $prov) {
+            if (meeting_app($prov) && meeting_account($instructor, $prov)) {
+                $why = null;
+                $url = meeting_create($instructor, $prov, (brand('short') ?: cfg('name')) . ' session', $start, $end, false, $why);
+                if ($url !== null) db()->prepare('UPDATE scheduled_sessions SET meeting_url = ? WHERE id = ?')->execute([$url, $sid]);
+                break;
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('offer_meeting_link: ' . get_class($e));
+    }
+}
+
+/**
+ * Why a staff member cannot be offered as the instructor for a client, or null (4.28.0): someone
+ * limited to their own caseload who is not assigned this client could not open the session's
+ * client, so a time with them is never offered (a reschedule would hand them the session).
+ */
+function offer_staff_problem(int $userId, int $clientId): ?string {
+    $u = db()->prepare('SELECT * FROM users WHERE id = ? AND is_active = 1');
+    $u->execute([$userId]);
+    $row = $u->fetch();
+    if (!$row) return 'Choose who will run the session.';
+    if (!resolve_perms($row)['scoped']) return null;
+    $c = db()->prepare('SELECT assigned_to FROM clients WHERE id = ?');
+    $c->execute([$clientId]);
+    return (int)$c->fetchColumn() === $userId ? null
+        : $row['name'] . ' works only with their own caseload and is not assigned this client. Choose someone who can open the client\'s record.';
+}
+
+/**
+ * A reschedule handed the session to another instructor: the previous one gets a calendar
+ * cancellation for it (same calendar ID, a higher sequence) and a notice. Never fails the booking.
+ */
+function offer_tell_previous_instructor(int $sid, array $old): void {
+    try {
+        $u = db()->prepare('SELECT email FROM users WHERE id = ? AND is_active = 1');
+        $u->execute([(int)$old['user_id']]);
+        $email = (string)$u->fetchColumn();
+        $q = db()->prepare('SELECT s.ics_sequence, c.name AS client_name FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id WHERE s.id = ?');
+        $q->execute([$sid]);
+        $s = $q->fetch();
+        if (!$s) return;
+        $first = preg_split('/\s+/u', trim((string)$s['client_name']))[0] ?? '';
+        $st = strtotime((string)$old['start_at']); $en = strtotime((string)$old['end_at']);
+        notify_user((int)$old['user_id'], 'Session moved to another instructor: ' . $first . ', ' . date('D, M j g:i A', $st), 'schedule.php');
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) return;
+        $ics = build_ics(ics_uid('session', $sid), 'AT Training: ' . $first, 'Training session with ' . $first . '.',
+            (string)($old['location'] ?? ''), $st, $en, (string)cfg('mail_from'), $email);
+        $ics = str_replace(['METHOD:REQUEST', 'STATUS:CONFIRMED'], ['METHOD:CANCEL', 'STATUS:CANCELLED'], $ics);
+        $ics = str_replace('DTSTAMP:', 'SEQUENCE:' . (int)$s['ics_sequence'] . "\r\nDTSTAMP:", $ics);
+        send_app_mail_attach($email, 'Session moved to another instructor — ' . date('D, M j g:i A', $st),
+            "Your training session with {$first} on " . date('l, F j \\a\\t g:i A', $st) . " now has another instructor: the client chose a new time offered with them.\n\nThe attachment removes it from your calendar.\n",
+            [['name' => 'cancel.ics', 'mime' => 'text/calendar; method=CANCEL', 'bytes' => $ics]]);
+    } catch (Throwable $e) {
+        error_log('offer_tell_previous_instructor: ' . get_class($e) . ' ' . $e->getCode());
+    }
 }

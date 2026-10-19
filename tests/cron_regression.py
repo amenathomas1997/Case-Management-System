@@ -122,6 +122,7 @@ function sms_enabled() { return false; }
 function zone_format($tz,$fn) { return $fn(); }
 function zone_date($tz,$f,$ts) { return date($f,$ts); }
 function send_app_mail($to,$subject,$body) { $GLOBALS['to'][]=$to; $GLOBALS['mails'][]=['to'=>$to,'subject'=>$subject,'body'=>$body]; $results=json_decode(getenv('MAIL_RESULTS'),true); return $results[$GLOBALS['calls']++]; }
+function send_app_mail_outcome($to,$subject,$body) { return send_app_mail($to,$subject,$body) ? 'sent' : 'refused'; }
 function notify_admins($subject,$body) { $GLOBALS['admin'][]=$subject; $results=json_decode(getenv('MAIL_RESULTS'),true); return $results[$GLOBALS['calls']++]; }
 function notify_admin_users($message,$link=null) { $GLOBALS['notices'][]=$message; $GLOBALS['links'][]=$link; }
 register_shutdown_function(function() { echo json_encode(['marks'=>$GLOBALS['marks'],'calls'=>$GLOBALS['calls'],'admin'=>$GLOBALS['admin'],'notices'=>$GLOBALS['notices'],'links'=>$GLOBALS['links'],'to'=>$GLOBALS['to'],'mails'=>$GLOBALS['mails']]); });

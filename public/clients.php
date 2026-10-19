@@ -55,11 +55,20 @@ $showArchived = isset($_GET['archived']) && can('admin');
 $instructors = caseload_scoped() ? [] : array_values(array_filter(db()->query("SELECT DISTINCT u.id, u.name FROM users u JOIN clients c ON c.assigned_to = u.id WHERE u.is_active = 1 AND c.archived_at IS NULL ORDER BY u.name")->fetchAll(), fn($i) => (int)$i['id'] !== (int)$user['id']));
 $whoChoices = array_merge(['', 'me', 'unassigned'], array_map(fn($i) => 'u' . (int)$i['id'], $instructors));
 $whoKey = 'clients_filter_' . (int)$user['id'];
+// The filter form is sent as a CSRF-checked POST (4.28.0): only it remembers the caseload, and it
+// then opens the list at a plain address. A link, even one with save=1, shows that caseload
+// without replacing the user's remembered choice.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['filter_clients'])) {
+    $pwho = is_string($_POST['who'] ?? null) && in_array($_POST['who'], $whoChoices, true) ? $_POST['who'] : '';
+    if ((setting($whoKey) ?? '') !== $pwho) set_setting($whoKey, $pwho);
+    $keep = ['who' => $pwho];
+    foreach (['q', 'status', 'type', 'agency', 'school', 'office', 'archived', 'export'] as $fk) {
+        if (is_string($_POST[$fk] ?? null) && trim($_POST[$fk]) !== '') $keep[$fk] = trim($_POST[$fk]);
+    }
+    redirect('clients.php?' . http_build_query($keep));
+}
 if (is_string($_GET['who'] ?? null)) {
     $who = in_array($_GET['who'], $whoChoices, true) ? $_GET['who'] : '';
-    // Saved only when the filter form itself was submitted (4.27.0): a shared or bookmarked link with who=
-    // shows that caseload without replacing the user's remembered choice.
-    if (($_GET['save'] ?? null) === '1' && (setting($whoKey) ?? '') !== $who) set_setting($whoKey, $who);
 } else {
     $savedWho = setting($whoKey);
     $who = $savedWho !== null && in_array($savedWho, $whoChoices, true) ? $savedWho : (caseload_scoped() ? 'me' : '');
@@ -115,8 +124,8 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
 <p class="muted">Closed records past the retention period. Open a record to export its full file and, when appropriate, purge it permanently.</p>
 <?php endif; ?>
 
-<form method="get" action="clients.php" class="card" role="search" aria-label="Filter clients">
-  <input type="hidden" name="save" value="1">
+<form method="post" action="clients.php" class="card" role="search" aria-label="Filter clients">
+  <?= csrf_field() ?><input type="hidden" name="filter_clients" value="1">
   <?php if ($showArchived): ?><input type="hidden" name="archived" value="1"><?php endif; ?>
   <div class="grid grid-2">
     <div class="field">
@@ -131,9 +140,8 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
       </select>
     </div>
     <div class="field">
-      <label for="who">Caseload</label>
-      <span class="hint" id="who-hint">Your choice is remembered for the next time you open Client records.</span>
-      <select id="who" name="who" aria-describedby="who-hint">
+      <label for="who">Caseload <span class="hint">Your choice is remembered for the next time you open Client records.</span></label>
+      <select id="who" name="who">
         <option value="" <?= $who === '' ? 'selected' : '' ?>>Everyone's clients</option>
         <option value="me" <?= $who === 'me' ? 'selected' : '' ?>>My clients</option>
         <option value="unassigned" <?= $who === 'unassigned' ? 'selected' : '' ?>>Unassigned</option>

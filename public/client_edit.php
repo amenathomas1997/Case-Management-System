@@ -269,11 +269,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $pr->execute([(int)$client['id']]);
                     $portalRevoked = $pr->rowCount();
                 }
-                if ($newBillTo !== $billTo($client)) {
+                // 4.28.0: drafts are re-addressed the way generate_invoice() addresses them for
+                // each draft's bill mode (agency billing address for VR, the client for private
+                // pay), by the shared helper in inc/billing.php. It is called on every save, so a
+                // changed client name, address or email re-addresses private-pay drafts too; it
+                // writes only the drafts whose Bill to differs.
+                if (function_exists('draft_invoices_readdress')) {
+                    $redraftedInvoices = draft_invoices_readdress((int)$client['id']);
+                } elseif ($newBillTo !== $billTo($client)) {
                     $rb = $pdo->prepare("UPDATE invoices i JOIN training_tracks t ON t.id = i.track_id SET i.bill_to = ?
                         WHERE t.client_id = ? AND i.status = 'Draft' AND NOT (i.bill_to <=> ?)");
                     $rb->execute([$newBillTo, (int)$client['id'], $newBillTo]);
                     $redraftedInvoices = $rb->rowCount();
+                }
+                // A corrected client email (4.28.0): reminders already marked as handled for the
+                // old address (sent, or skipped because it was unusable) go out again to the new one.
+                if (strcasecmp(trim((string)($emailIn ?? '')), trim((string)($locked['email'] ?? ''))) !== 0) {
+                    $pdo->prepare("UPDATE scheduled_sessions SET reminder_sent = 0, client_reminded_at = NULL
+                        WHERE client_id = ? AND status = 'Scheduled' AND start_at >= NOW()")->execute([(int)$client['id']]);
                 }
                 // The previous instructor's open tasks for this client follow the
                 // client, so nobody is left holding work on a record they may no
@@ -359,7 +372,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 audit($user['id'], 'portal.revoke', 'client', (int)$client['id'], 'client email changed');
             }
             if ($redraftedInvoices > 0) {
-                audit($user['id'], 'invoice.bill_to', 'client', (int)$client['id'], $redraftedInvoices . ' draft invoice(s) re-addressed to the current counselor');
+                audit($user['id'], 'invoice.bill_to', 'client', (int)$client['id'], $redraftedInvoices . ' draft invoice(s) re-addressed (current counselor or client details)');
             }
             if ($movedTasks > 0) {
                 audit($user['id'], 'task.reassign', 'client', (int)$client['id'], $movedTasks . ' open task(s) moved from instructor #'
@@ -416,7 +429,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 . ($movedSessions > 0 ? ' ' . $movedSessions . ' upcoming session' . ($movedSessions === 1 ? '' : 's') . ' moved to the new instructor.'
                     . ($told['to'] ? ' The new instructor was sent the list.' : '') . ($told['from'] ? ' The previous instructor was told they were moved.' : '') : '')
                 . ($portalRevoked > 0 ? ' The email address changed, so the portal link sent to the old address was turned off. Send a new portal link when the client needs one.' : '')
-                . ($redraftedInvoices > 0 ? ' ' . $redraftedInvoices . ' draft invoice' . ($redraftedInvoices === 1 ? ' now bills' : 's now bill') . ' the counselor as entered here.' : '')
+                . ($redraftedInvoices > 0 ? ' ' . $redraftedInvoices . ' draft invoice' . ($redraftedInvoices === 1 ? ' was' : 's were') . ' re-addressed to match these details.' : '')
                 . $ageNote
                 . (($smsNote ?? null) ? ' ' . $smsNote : '')
                 . ($status === 'Active Training' && $client['status'] !== 'Active Training' && ($an = active_without_authorization((int)$client['id'])) ? ' ' . $an : ''));
@@ -497,8 +510,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
     <?php if ($client && trim((string)($client['email'] ?? '')) !== '' && (int)$client['email_verified'] !== 1): ?>
     <?php // An address typed into the public referral form is not checked: nothing is sent to it until confirmed. ?>
     <div class="field">
-      <p class="hint" id="email-unverified"><strong>Unverified — confirm before anything is sent.</strong> <?= h($client['email']) ?> came from the public referral form and has not been checked with the client, so no session reminder, outcome survey or portal link goes to it yet. Confirm it with the client first. Typing a different address above also confirms the new one.</p>
-      <label><input type="checkbox" name="confirm_email" value="1" aria-describedby="email-unverified"<?= $raw('confirm_email') !== null ? ' checked' : '' ?>> Confirmed with the client</label>
+      <label><input type="checkbox" name="confirm_email" value="1"<?= $raw('confirm_email') !== null ? ' checked' : '' ?>> Confirmed with the client <span class="hint"><strong>Unverified — confirm before anything is sent.</strong> <?= h($client['email']) ?> came from the public referral form and has not been checked with the client, so no session reminder, outcome survey or portal link goes to it yet. Typing a different address above also confirms the new one.</span></label>
     </div>
     <?php endif; ?>
     <div class="field"><label for="phone">Phone</label>
@@ -541,11 +553,8 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
   <fieldset>
     <legend>Case status</legend>
     <div class="field">
-      <label for="status">Status</label>
-      <?php if ($client): ?>
-      <span class="hint" id="status-hint">Closing the case (any Closed status) emails the client an outcome survey when you save, unless one was sent in the last 30 days.</span>
-      <?php endif; ?>
-      <select id="status" name="status"<?= $client ? ' aria-describedby="status-hint" data-was="' . h($client['status']) . '"' : '' ?>><?= select_options(cms_choices('client_statuses', $client['status'] ?? null), $raw('status') ?? $client['status'] ?? 'Pending Assessment') ?></select>
+      <label for="status">Status<?php if ($client): ?> <span class="hint">Closing the case (any Closed status) emails the client an outcome survey when you save, unless one was sent in the last 30 days.</span><?php endif; ?></label>
+      <select id="status" name="status"<?= $client ? ' data-was="' . h($client['status']) . '"' : '' ?>><?= select_options(cms_choices('client_statuses', $client['status'] ?? null), $raw('status') ?? $client['status'] ?? 'Pending Assessment') ?></select>
     </div>
     <?php // Asked only when the case is being closed: the script shows it when a Closed status is
     // chosen; it is shown from the start when that was already chosen or refused.
@@ -647,8 +656,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
     <?php if ($client && trim((string)($client['counselor_email'] ?? '')) !== '' && (int)($client['counselor_verified'] ?? 0) !== 1): ?>
     <?php // An unconfirmed address (e.g. from the public referral form): no report goes to it until confirmed. ?>
     <div class="field">
-      <p class="hint" id="counselor-unverified"><strong>Unverified — confirm before reports are sent.</strong> <?= h($client['counselor_email']) ?> has not been confirmed (an address from the public referral form, for example, is not checked), so no monthly progress report, counselor portal link or email filing uses it yet. Check it against the authorization paperwork or the agency first. Typing a different address above also confirms the new one.</p>
-      <label><input type="checkbox" name="confirm_counselor" value="1" aria-describedby="counselor-unverified"<?= $raw('confirm_counselor') !== null ? ' checked' : '' ?>> Confirm this is the VR counselor's email address</label>
+      <label><input type="checkbox" name="confirm_counselor" value="1"<?= $raw('confirm_counselor') !== null ? ' checked' : '' ?>> Confirm this is the VR counselor's email address <span class="hint"><strong>Unverified — confirm before reports are sent.</strong> <?= h($client['counselor_email']) ?> has not been confirmed (an address from the public referral form, for example, is not checked), so no monthly progress report, counselor portal link or email filing uses it yet. Check it against the authorization paperwork or the agency first. Typing a different address above also confirms the new one.</span></label>
     </div>
     <?php endif; ?>
     <div class="field"><label for="counselor_phone">Counselor phone</label>
@@ -678,8 +686,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
   </fieldset>
 
   <fieldset>
-    <legend>Accessibility &amp; access needs</legend>
-    <p class="hint">How this client prefers to receive information and what assistive technology they use, so staff and deliverables can meet their needs.</p>
+    <legend>Accessibility &amp; access needs <span class="hint">How this client prefers to receive information and what assistive technology they use, so staff and deliverables can meet their needs.</span></legend>
     <div class="field">
       <?php // An unchecked box posts nothing, so on a re-shown form only the submitted state counts. ?>
       <label><input type="checkbox" name="a11y_screen_reader" value="1" <?= ($src !== null ? !empty($src['a11y_screen_reader']) : !empty($client['a11y_screen_reader'] ?? 0)) ? 'checked' : '' ?>> This client uses a screen reader</label>
@@ -703,18 +710,16 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       </select>
     </div>
     <div class="field">
-      <label for="preferred_language">Preferred language</label>
-      <p class="hint" id="lang-hint">The client's portal opens in this language, and their emails (portal link, session reminders, outcome survey, guardian consent request) are sent in it.</p>
+      <label for="preferred_language">Preferred language <span class="hint">The client's portal opens in this language, and their emails (portal link, session reminders, outcome survey, guardian consent request) are sent in it.</span></label>
       <?php $curLang = ($raw('preferred_language') ?? $client['preferred_language'] ?? 'en') === 'es' ? 'es' : 'en'; ?>
-      <select id="preferred_language" name="preferred_language" aria-describedby="lang-hint">
+      <select id="preferred_language" name="preferred_language">
         <option value="en" <?= $curLang === 'en' ? 'selected' : '' ?>>English</option>
         <option value="es" <?= $curLang === 'es' ? 'selected' : '' ?> lang="es">Español</option>
       </select>
     </div>
     <div class="field">
-      <label for="a11y_notes">Access notes <span class="hint">communication preferences and accommodations</span></label>
-      <p class="hint" id="a11y-notes-hint">Shown to the client on their portal, where they can also change it. Keep internal remarks in case notes.</p>
-      <textarea id="a11y_notes" name="a11y_notes" rows="3" <?= field_aria('a11y_notes', 'a11y-notes-hint') ?>><?= $v('a11y_notes') ?></textarea><?= field_error('a11y_notes') ?>
+      <label for="a11y_notes">Access notes <span class="hint">communication preferences and accommodations. Shown to the client on their portal, where they can also change it. Keep internal remarks in case notes.</span></label>
+      <textarea id="a11y_notes" name="a11y_notes" rows="3" <?= field_aria('a11y_notes') ?>><?= $v('a11y_notes') ?></textarea><?= field_error('a11y_notes') ?>
     </div>
   </fieldset>
   <?php if ($cfFields = custom_fields_all(true)): // 4.24.0: the organisation's own fields

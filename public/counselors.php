@@ -99,7 +99,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['replace_counselor']))
             $agency = $newAgency !== '' ? $newAgency : (string)($c['counselor_agency'] ?? '');
             $up->execute([$newName, $newEmail, $agency !== '' ? $agency : null, $newPhone !== '' ? $newPhone : null, (int)$c['id']]);
             $note->execute([(int)$c['id'], 'VR counselor changed from ' . $oldName . ' (' . $oldEmail . ') to ' . $newName . ' (' . $newEmail . ').', $user['id']]);
-            $bill->execute([implode("\n", array_filter([$newName, $agency, $newEmail], fn($v) => $v !== '')), (int)$c['id']]);
+            // 4.28.0: re-addressed the way generate_invoice() addresses each draft (agency billing
+            // address for VR, the client for private pay), by the shared helper in inc/billing.php.
+            if (function_exists('draft_invoices_readdress')) draft_invoices_readdress((int)$c['id']);
+            else $bill->execute([implode("\n", array_filter([$newName, $agency, $newEmail], fn($v) => $v !== '')), (int)$c['id']]);
         }
         // The old counselor's portal link no longer opens.
         $pdo->prepare('DELETE FROM vrc_tokens WHERE counselor_email = ?')->execute([$oldEmail]);

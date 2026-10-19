@@ -44,7 +44,14 @@ function move_client_records(PDO $pdo, int $keepId, int $mergeId): void {
     // A privacy incident that lists both records keeps one entry (3.0.38); the duplicate's
     // own entries move to the kept record.
     try {
+        // An incident that listed both (4.28.0): the kept entry takes the earlier notification
+        // date, and the duplicate's entry is removed, so the person is counted once and can be
+        // marked notified (deleting the duplicate client would otherwise leave an orphan row).
+        $pdo->prepare('UPDATE privacy_incident_clients k JOIN privacy_incident_clients d ON d.incident_id = k.incident_id AND d.client_id = ?
+            SET k.notified_at = CASE WHEN k.notified_at IS NULL THEN d.notified_at WHEN d.notified_at IS NULL THEN k.notified_at ELSE LEAST(k.notified_at, d.notified_at) END
+            WHERE k.client_id = ?')->execute([$mergeId, $keepId]);
         $pdo->prepare('UPDATE IGNORE privacy_incident_clients SET client_id = ? WHERE client_id = ?')->execute([$keepId, $mergeId]);
+        $pdo->prepare('DELETE FROM privacy_incident_clients WHERE client_id = ?')->execute([$mergeId]);
     } catch (PDOException $e) {
         if ((string)$e->getCode() !== '42S02') throw $e; // mig_3.0.38 not run yet
     }

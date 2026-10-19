@@ -266,9 +266,8 @@ page_header('Audit log', $user, 'admin', [['admin.php', 'Administration']]);
     </select>
   </div>
   <div class="field">
-    <label for="client">Client record</label>
-    <p class="hint" id="client-hint">Views of their documents, signatures and reports, and changes to their file and to its linked records: tracks, hours, goals, homework, invoices, sessions, AT services, referrals, tasks, incidents, device requests, bookings and documentation reviews of their notes. Entries made under a duplicate record later merged into this one are included. Entries for a linked record that has since been deleted (such as a voided draft invoice) are not matched.</p>
-    <select id="client" name="client" aria-describedby="client-hint">
+    <label for="client">Client record <span class="hint">Views of their documents, signatures and reports, and changes to their file and to its linked records: tracks, hours, goals, homework, invoices, sessions, AT services, referrals, tasks, incidents, device requests, bookings and documentation reviews of their notes. Entries made under a duplicate record later merged into this one are included. Entries for a linked record that has since been deleted (such as a voided draft invoice) are not matched.</span></label>
+    <select id="client" name="client">
       <option value="0">Any record</option>
       <?php foreach ($clientList as $c): ?>
       <option value="<?= (int)$c['id'] ?>" <?= $clientFilter === (int)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?><?= $c['archived_at'] ? ' (archived)' : '' ?> — #<?= (int)$c['id'] ?></option>
@@ -276,14 +275,13 @@ page_header('Audit log', $user, 'admin', [['admin.php', 'Administration']]);
     </select>
   </div>
   <div class="field">
-    <label for="from">From date</label>
-    <span class="hint" id="from-hint">The log opens on the last 7 days. Clear this date to see every date.</span>
-    <input type="date" id="from" name="from" value="<?= h($range['from'] ?? (is_string($_GET['from'] ?? null) ? $_GET['from'] : '')) ?>" <?= field_aria('from', 'from-hint') ?>>
+    <label for="from">From date <span class="hint">The log opens on the last 7 days. Clear this date to see every date.</span></label>
+    <input type="date" id="from" name="from" value="<?= h($range['from'] ?? (is_string($_GET['from'] ?? null) ? $_GET['from'] : '')) ?>" <?= field_aria('from') ?>>
     <?= field_error('from') ?>
   </div>
   <div class="field">
-    <label for="to">To date <span class="hint" id="to-hint">included</span></label>
-    <input type="date" id="to" name="to" value="<?= h($range['to'] ?? (is_string($_GET['to'] ?? null) ? $_GET['to'] : '')) ?>" <?= field_aria('to', 'to-hint') ?>>
+    <label for="to">To date <span class="hint">included</span></label>
+    <input type="date" id="to" name="to" value="<?= h($range['to'] ?? (is_string($_GET['to'] ?? null) ? $_GET['to'] : '')) ?>" <?= field_aria('to') ?>>
     <?= field_error('to') ?>
   </div>
   <div class="page-actions">

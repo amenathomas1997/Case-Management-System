@@ -90,6 +90,9 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_agency
             if ($old['name'] !== $name) {
                 $pdo->prepare('UPDATE training_tracks SET funding_agency = ? WHERE funding_agency = ?')->execute([$name, $old['name']]);
                 $pdo->prepare("UPDATE invoices SET funding_agency = ? WHERE funding_agency = ? AND status = 'Draft'")->execute([$name, $old['name']]);
+                // 4.28.0: the old name is remembered, so reports, the VR portal and the Invoices filter still
+                // count the invoices already sent under it with this agency.
+                agency_rename_record((string)$old['name'], $name);
             }
         } else {
             $pdo->prepare('INSERT INTO funding_agencies (name, state, time_zone, email_domains, vendor_number, terms_days, hourly_rate, mileage_rate, bill_to, notes, is_active, contact_days, assess_days, portal_name, portal_url) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);

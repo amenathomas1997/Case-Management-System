@@ -166,6 +166,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
     }
     fclose($fh);
     if (!$dryRun && $valid) {
+        // 4.28.0: an authorization import re-checks each number without locking training_tracks. The old locking read
+        // could use no index, so it locked every track (and gap) until the import committed and
+        // staff logging hours or editing tracks waited on it. Now each number takes a named lock (two imports
+        // of one number wait for each other), and the check reads the latest committed tracks.
+        $authLocks = [];
+        if ($kind !== 'clients') db()->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        $again = $kind !== 'clients' ? db()->prepare('SELECT id FROM training_tracks WHERE LOWER(TRIM(auth_number)) = ? LIMIT 1') : null;
+        $lockAuth = db()->prepare("SELECT GET_LOCK(CONCAT('cms_auth_', MD5(CONCAT(DATABASE(), ':', ?))), 10)");
         db()->beginTransaction();
         try {
             foreach ($valid as $vi => $v) {
@@ -178,8 +186,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
                 } else {
                     // Checked again inside the transaction (4.27.0): a track added for this authorization since the
                     // file was read (another import, or staff) is not doubled; the row is reported as skipped.
-                    $again = db()->prepare('SELECT id FROM training_tracks WHERE LOWER(TRIM(auth_number)) = ? LIMIT 1 FOR UPDATE');
-                    $again->execute([mb_strtolower((string)$v[3])]);
+                    $authKey = mb_strtolower(trim((string)$v[3]));
+                    $lockAuth->execute([$authKey]);
+                    if ((int)$lockAuth->fetchColumn() !== 1) {
+                        $results[$validAt[$vi]]['ok'] = false;
+                        $results[$validAt[$vi]]['msg'] = 'Authorization ' . $v[3] . ' is being imported by someone else right now; import this row again in a minute';
+                        $skipped++;
+                        continue;
+                    }
+                    $authLocks[] = $authKey;
+                    $again->execute([$authKey]);
                     if ($again->fetchColumn()) {
                         $results[$validAt[$vi]]['ok'] = false;
                         $results[$validAt[$vi]]['msg'] = 'Authorization ' . $v[3] . ' was put on a track while this file was being imported';
@@ -193,6 +209,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
             }
             db()->commit();
         } catch (Throwable $e) { if (db()->inTransaction()) db()->rollBack(); throw $e; }
+        finally {
+            // Held until the tracks are committed, so the other import sees them.
+            $unlock = db()->prepare("SELECT RELEASE_LOCK(CONCAT('cms_auth_', MD5(CONCAT(DATABASE(), ':', ?))))");
+            foreach ($authLocks as $k) { try { $unlock->execute([$k]); $unlock->closeCursor(); } catch (Throwable $e2) { /* released when the connection closes */ } }
+        }
         audit($user['id'], $kind === 'clients' ? 'client.import' : 'track.import', $kind === 'clients' ? 'client' : 'track', null, $imported . ' imported from a spreadsheet');
         flash("Imported {$imported} " . ($kind === 'clients' ? 'client' : 'authorization') . ($imported === 1 ? '' : 's') . '.' . ($skipped ? " Skipped {$skipped}." : ''));
     } elseif ($dryRun) {

@@ -21,9 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -326,11 +323,6 @@ private fun isoWhen(iso: String): String = try {
     if (d == null) iso else java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(d)
 } catch (e: Exception) { iso }
 
-/** Text marked with its language, so TalkBack reads Spanish in a Spanish voice where it can. */
-private fun inLanguage(text: String, lang: String?): AnnotatedString =
-    if (lang.isNullOrBlank()) AnnotatedString(text)
-    else AnnotatedString(text, listOf(AnnotatedString.Range(SpanStyle(localeList = LocaleList(lang)), 0, text.length)))
-
 /** The signing view's words, in English or Spanish as the document is. */
 private class SignWords(es: Boolean, org: String, name: String) {
     val we = if (es) "En este documento, “nosotros” significa $org y “usted” significa la persona que firma." else "In this document, “we” means $org and “you” means the person who signs."
@@ -349,6 +341,7 @@ private class SignWords(es: Boolean, org: String, name: String) {
         else "The name typed does not match the name on this document: $name. Type it again."
     val done = if (es) "Listo" else "Done"
     val handBack = if (es) "Devolver sin firmar" else "Hand back without signing"
+    val wait = if (es) "Espere, por favor…" else "Please wait…"
 }
 
 /**
@@ -375,7 +368,8 @@ fun InPersonSigningHost(api: Api) {
     var locked by rememberSaveable(d.optInt("id")) { mutableStateOf(false) }
     var lockError by remember { mutableStateOf<String?>(null) }
     var noLock by remember { mutableStateOf(false) }
-    val pad = remember(d.optInt("id")) { SignatureState() }
+    // Kept across rotation, a text-size change and the app being closed by the phone (4.28.0).
+    val pad = rememberSignatureState(d.optInt("id"))
     val density = LocalDensity.current.density
     val context = androidx.compose.ui.platform.LocalContext.current
     val lang = d.str("lang")
@@ -450,8 +444,8 @@ fun InPersonSigningHost(api: Api) {
                 }
                 Text(inLanguage(d.optString("title"), lang), style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
                 if (signed) {
-                    NoticeText(if (d.optBoolean("_offline")) w.thanksOffline else w.thanks)
-                    PrimaryButton(w.done) { leave() }
+                    NoticeText(if (d.optBoolean("_offline")) w.thanksOffline else w.thanks, lang)
+                    PrimaryButton(w.done, lang = lang) { leave() }
                     return@Column
                 }
                 Text(inLanguage(w.we, lang), modifier = Modifier.padding(top = 8.dp))
@@ -463,10 +457,13 @@ fun InPersonSigningHost(api: Api) {
                         is BodyBlock.Bullets -> b.items.forEach { Text(inLanguage("• $it", lang), modifier = Modifier.padding(start = 8.dp, top = 2.dp, bottom = 2.dp)) }
                     }
                 }
-                Field(w.typeLabel, typed, { typed = it }, hint = w.typeHint)
-                SignaturePad(pad, caption = w.draw)
-                ErrorText(error ?: api.inPersonError)
-                PrimaryButton(w.sign, busy = busy, enabled = typed.isNotBlank()) {
+                // 4.28.0: the label, buttons and messages carry the document's language too (WCAG 3.1.2).
+                Field(w.typeLabel, typed, { typed = it }, hint = w.typeHint, lang = lang)
+                SignaturePad(pad, caption = w.draw, lang = lang)
+                val shownError = error ?: api.inPersonError
+                // The app's own words in the document's language; anything else (a connection problem) is English.
+                ErrorText(shownError, lang.takeIf { shownError == w.mismatch || shownError == w.tooLate })
+                PrimaryButton(w.sign, busy = busy, enabled = typed.isNotBlank(), lang = lang, busyText = w.wait) {
                     if (busy) return@PrimaryButton
                     // Checked as Sign is pressed: the server takes it only within two days of its start.
                     val started = d.optLong("_started")
@@ -474,7 +471,7 @@ fun InPersonSigningHost(api: Api) {
                     error = null
                     api.signInPerson(typed.trim(), pad.png(density), w.mismatch)
                 }
-                SecondaryButton(w.handBack) { leave() }
+                SecondaryButton(w.handBack, lang = lang) { leave() }
             }
         }
     }

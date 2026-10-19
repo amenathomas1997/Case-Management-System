@@ -77,7 +77,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $fieldErrs) {
         $ok = $user
             ? password_verify($password, $user['password_hash'])
             : password_verify($password, dummy_password_hash()) && false;
-        if ($ok && !empty($user['totp_enabled']) && !empty($user['totp_secret'])) {
+        if ($ok && totp_seed_state($user) === 'unreadable') {
+            // 4.28.0: the seed is stored but this server cannot read it (key file lost or
+            // replaced). Say so plainly instead of a sign-in that can never finish, and never
+            // fall back to an emailed code.
+            db()->prepare('DELETE FROM login_attempts WHERE id = ?')->execute([$attemptRow]);
+            audit((int)$user['id'], 'login.totp_unreadable', 'user', (int)$user['id'], 'authenticator seed stored but not readable with this server\'s key file');
+            $ok = false;
+            $error = TOTP_UNREADABLE_MSG;
+        } elseif ($ok && totp_seed_present($user)) {
             // No email goes to an account with an authenticator app (4.27.0), so a
             // correct password is not a code sent and does not use up the 5-codes
             // cap; verify.php's own failure limit protects the app code.
@@ -100,7 +108,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $fieldErrs) {
             // use the app (or a passkey), so the mailbox alone never gets anyone
             // in. Its row is still made, unsent, to carry the 5 tries per sign-in
             // that verify.php counts for both kinds of code.
-            $totpOnly = !empty($user['totp_enabled']) && !empty($user['totp_secret']);
+            $totpOnly = totp_seed_present($user);
             $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
             // Codes are bound to the channel that issued them: a web code is never
             // accepted by the app sign-in, nor an app code here.

@@ -12,6 +12,9 @@ declare(strict_types=1);
 //   3. puts the uploaded documents back in <private>/uploads,
 //   4. writes <private>/config.php from the answers, with the Microsoft Graph and AI
 //      secrets left blank: the backup never holds them (they are entered again afterwards).
+// The key file <private>/meeting_tokens.key is not in the backup either (4.28.0): it unlocks the
+// stored authenticator seeds and the QuickBooks and meeting connections, so it is copied from the
+// old server by hand; the last lines say what to do without it.
 // Each step is reported in plain sentences. See help.php "Restoring from a backup".
 if (PHP_SAPI !== 'cli') exit("Run this from the command line.\n");
 umask(0077); // config.php, the dump and the documents are private from the moment they are written
@@ -122,4 +125,12 @@ if (is_file($configFile)) {
 $say('');
 $say('Next: copy the application files into the website folder, sign in as an administrator, and open System health.');
 $say('The AI provider key and the Microsoft Entra sign-in secret were not in the backup: enter them again on the AI assistant and Federation pages.');
+// 4.28.0: authenticator seeds are encrypted with this key file, which no backup holds.
+if (is_file($private . '/meeting_tokens.key')) {
+    $say("The key file $private/meeting_tokens.key is in place: if it is the old server's copy, authenticator apps and the QuickBooks and meeting connections keep working.");
+} else {
+    $say("Copy meeting_tokens.key from the old server's private folder into $private now (readable only by the site's user, chmod 600). It is not in the backup. "
+        . 'It unlocks the stored authenticator app seeds and the QuickBooks and meeting connections. Without it, let each person who used an authenticator app back in with '
+        . 'php reset_2fa.php their@email in the private cron folder (they then set the app up again under My Account), and connect QuickBooks and the meeting accounts again.');
+}
 exit(0);

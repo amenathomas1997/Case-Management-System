@@ -129,6 +129,23 @@ if ($inc && !$isAdmin && (int)$inc['reported_by'] !== (int)$user['id']) $inc = n
 if ($inc) {
     $people = privacy_incident_people($id);
     $events = privacy_incident_events($id);
+    // A caseload-limited reporter who is not an administrator (4.28.0) sees only the affected
+    // clients on their own caseload, a count of the others, and not the notices log (which
+    // names whoever was notified).
+    $othersHidden = 0;
+    $limitedView = !$isAdmin && caseload_scoped();
+    if ($limitedView) {
+        $mine = [];
+        if ($people) {
+            $own = db()->prepare('SELECT id FROM clients WHERE assigned_to = ?');
+            $own->execute([(int)$user['id']]);
+            $ownIds = array_flip(array_map('intval', $own->fetchAll(PDO::FETCH_COLUMN)));
+            foreach ($people as $p) { if ($p['client_id'] !== null && isset($ownIds[(int)$p['client_id']])) $mine[] = $p; else $othersHidden++; }
+        }
+        $people = $mine;
+        $eventCount = count($events);
+        $events = [];
+    }
     $left = privacy_days_left($inc);
     $allClients = db()->query('SELECT id, name FROM clients ORDER BY name, id')->fetchAll();
     $edit = fn(string $k): string => h(isset($GLOBALS['OLD_INPUT']['risk_level']) ? old_in($k) : (string)($inc[$k] ?? ''));
@@ -143,8 +160,9 @@ if ($inc) {
   <?php if ($inc['info_involved']): ?><p>Information involved: <?= h($inc['info_involved']) ?></p><?php endif; ?>
 </section>
 <section class="card" aria-labelledby="people-h">
-  <h2 id="people-h">People affected (<?= count($people) ?>)</h2>
-  <?php if (!$people): ?><p class="muted">No one listed yet.</p><?php else: ?>
+  <h2 id="people-h">People affected (<?= count($people) + $othersHidden ?>)</h2>
+  <?php if ($othersHidden > 0): ?><p class="muted"><?= $othersHidden ?> affected <?= $othersHidden === 1 ? 'person is' : 'people are' ?> not on your caseload, so <?= $othersHidden === 1 ? 'is' : 'are' ?> not listed here.</p><?php endif; ?>
+  <?php if (!$people && $othersHidden === 0): ?><p class="muted">No one listed yet.</p><?php elseif ($people): ?>
   <ul>
   <?php foreach ($people as $p): ?>
     <li><?= h($p['client_label']) ?><?= $p['client_id'] === null ? ' (record since removed)' : '' ?>: <?= $p['notified_at'] ? 'notified ' . fmt_date($p['notified_at']) : '<strong>not notified</strong>' ?>
@@ -176,8 +194,8 @@ if ($inc) {
 </section>
 <?php endif; ?>
 <section class="card" aria-labelledby="log-h">
-  <h2 id="log-h">Notices and follow-up (<?= count($events) ?>)</h2>
-  <?php if (!$events): ?><p class="muted">Nothing recorded yet.</p><?php else: ?>
+  <h2 id="log-h">Notices and follow-up (<?= $limitedView ? $eventCount : count($events) ?>)</h2>
+  <?php if ($limitedView): ?><p class="muted">An administrator records the notices and follow-up for this incident.</p><?php elseif (!$events): ?><p class="muted">Nothing recorded yet.</p><?php else: ?>
   <ul>
   <?php foreach ($events as $e): ?>
     <li><strong><?= fmt_date($e['happened_on']) ?>, <?= $e['event_type'] === 'Notice' ? 'notice to ' . h(mb_strtolower((string)$e['recipient'])) : 'follow-up' ?></strong><?= $e['method'] ? ' (' . h($e['method']) . ')' : '' ?><?= $e['by_name'] ? ', recorded by ' . h($e['by_name']) : '' ?>: <span style="white-space:pre-wrap"><?= h($e['detail']) ?></span></li>
@@ -246,7 +264,7 @@ page_header('Privacy incidents', $user, 'admin');
 <details class="card mt-1"<?= array_intersect_key(form_errors(), array_flip(['kind', 'discovered_on', 'occurred_on', 'description', 'info_involved', 'client_id'])) ? ' open' : '' ?>>
   <summary accesskey="n" id="report-h">Report a privacy incident</summary>
   <form method="post" action="privacy_incidents.php" class="stacked" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
-    <?= form_error_summary(['kind' => 'Kind', 'discovered_on' => 'Discovered', 'occurred_on' => 'Happened', 'description' => 'What happened', 'info_involved' => 'Information involved', 'client_id' => 'Client']) ?>
+    <?= form_error_summary(['kind' => 'Kind', 'discovered_on' => 'Discovered', 'occurred_on' => 'Happened', 'description' => 'What happened', 'info_involved' => 'Information involved', 'client_id' => 'Client'], ['client_id' => 'pi_client']) ?>
     <p class="hint">Fields marked * are required.</p>
     <div class="field"><label for="kind">Kind <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><select id="kind" name="kind" <?= field_aria('kind') ?>><option value="">Choose a kind</option><?= select_options(PRIVACY_INCIDENT_KINDS, old_in('kind') ?: null) ?></select><?= field_error('kind') ?></div>
     <div class="field"><label for="discovered_on">Date discovered <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><input type="date" id="discovered_on" name="discovered_on" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('discovered_on', date('Y-m-d'))) ?>" <?= field_aria('discovered_on') ?>><?= field_error('discovered_on') ?></div>

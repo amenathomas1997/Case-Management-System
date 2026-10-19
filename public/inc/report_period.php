@@ -105,7 +105,8 @@ function report_period_saved(string $key): array {
  */
 function report_period_form(string $action, array $period, string $before = '', string $after = '', string $runLabel = 'Run'): string {
     $out = '<form method="get" action="' . h($action) . '" class="page-actions" aria-label="Report period">' . $before;
-    $out .= '<label for="period">Period</label><select id="period" name="period" aria-describedby="period-hint">';
+    // 4.28.0: the hint is inside the label (read with it, no extra line or stop for a screen reader).
+    $out .= '<label for="period">Period <span class="hint">A preset sets the dates itself; to use the From and To dates, choose Custom dates. The period you choose is remembered on every report.</span></label><select id="period" name="period">';
     foreach (REPORT_PERIOD_PRESETS as $k => $label) {
         $out .= '<option value="' . $k . '"' . ($period['preset'] === $k ? ' selected' : '') . '>' . h($label) . '</option>';
     }
@@ -113,7 +114,6 @@ function report_period_form(string $action, array $period, string $before = '', 
     $out .= '<label for="from">From</label><input type="date" id="from" name="from" value="' . h($period['from']) . '">';
     $out .= '<label for="to">To</label><input type="date" id="to" name="to" value="' . h($period['to']) . '">';
     $out .= '<button type="submit" class="btn btn-secondary btn-sm">' . h($runLabel) . '<span class="visually-hidden"> the report for this period</span></button>' . $after;
-    $out .= '<span class="hint" id="period-hint">A preset sets the dates itself; to use the From and To dates, choose Custom dates. The period you choose is remembered on every report.</span>';
     $out .= '<script>document.addEventListener("DOMContentLoaded",function(){var p=document.getElementById("period");["from","to"].forEach(function(id){var e=document.getElementById(id);if(e&&p)e.addEventListener("change",function(){p.value="custom";});});});</script>';
     return $out . '</form>';
 }

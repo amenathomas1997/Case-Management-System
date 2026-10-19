@@ -201,7 +201,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $app->execute([$uid]);
             db()->commit();
             // Sessions started with the removed methods end too (4.27.0).
-            user_session_epoch_bump($uid);
+            $browsersEnded = user_session_epoch_bump($uid);
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
             error_log('users.php reset_2fa failed: ' . get_class($e) . ' ' . $e->getCode());
@@ -209,13 +209,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('users.php?id=' . $uid);
         }
         send_app_mail($target['email'], 'Your sign-in methods were reset',
-            "Hello {$target['name']},\n\nAn administrator reset your authenticator app and passkeys for " . cfg('name') . ", and signed you out of the mobile app.\n"
+            "Hello {$target['name']},\n\nAn administrator reset your authenticator app and passkeys for " . cfg('name') . ", and signed you out of the mobile app"
+            . ($browsersEnded ? ' and of every web browser' : '') . ".\n"
             . "You can sign in with your password and an emailed code, then set them up again under My Account.\n"
             . "If you did not expect this, contact your administrator.\n");
         audit($user['id'], 'user.reset_2fa', 'user', $uid, 'TOTP cleared, ' . $pk->rowCount() . ' passkey(s) removed, ' . $app->rowCount() . ' app session(s) signed out');
-        // Browser sessions are tied to the password, so only a new password ends them.
-        flash("Authenticator app and passkeys were reset for {$target['name']}, and they were signed out of the mobile app ({$app->rowCount()} session(s)). Email sign-in codes still work."
-            . ' A browser where they are already signed in stays signed in until it times out; to end those too, use "Email password reset link" so they set a new password.');
+        // 4.27.0 ends their browser sessions too (the session epoch), so no reset link is needed for that.
+        flash("Authenticator app and passkeys were reset for {$target['name']}, and they were signed out of the mobile app ({$app->rowCount()} session(s))"
+            . ($browsersEnded ? ' and of every web browser where they were signed in' : '') . '. They can sign in with their password and an emailed code.'
+            . ($browsersEnded ? '' : ' A browser where they are already signed in stays signed in until it times out; to end those too, use "Email password reset link" so they set a new password.'));
         redirect('users.php?id=' . $uid);
     }
 
@@ -290,8 +292,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // The new owner must be able to open the clients they receive; a user
         // without the Clients permission would hold records nobody can work.
         if (!$toUser || $toId === $uid || !in_array('clients', $toAccess['perms'], true)) {
-            flash('Choose a different, active user who has the Clients permission to transfer the caseload to.', 'error');
-            redirect('users.php?id=' . $uid);
+            // Tied to the "Move … to" list (4.28.0), with the summary above the form; no flash as well.
+            keep_field_errors(['to_user' => $toId <= 0 ? 'Choose who receives the caseload.'
+                : 'Choose a different, active user who has the Clients permission to transfer the caseload to.']);
+            redirect('users.php?id=' . $uid . '#transfer-h');
         }
         // Open referrals go only to someone who can open them (the referral page
         // and the app refuse any other assignee); otherwise they, and the tasks
@@ -506,9 +510,8 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
           <option value="<?= (int)$g['id'] ?>" <?= (int)$selGroup === (int)$g['id'] ? 'selected' : '' ?>><?= h($g['name']) ?></option>
           <?php endforeach; ?>
         </select></div>
-      <div class="field"><label for="u_hours">Weekly available hours <?= required_mark() ?></label>
-        <span class="hint" id="u_hours-hint">A number from 0 to 80, in half-hour steps (enter 0 for none).</span>
-        <input type="number" id="u_hours" name="weekly_hours" required min="0" max="80" step="0.5" value="<?= h(old_in('weekly_hours', (string)(float)$edit['weekly_hours'])) ?>" <?= field_aria('weekly_hours', 'u_hours-hint') ?>><?= field_error('weekly_hours') ?></div>
+      <div class="field"><label for="u_hours">Weekly available hours <?= required_mark() ?> <span class="hint">A number from 0 to 80, in half-hour steps (enter 0 for none).</span></label>
+        <input type="number" id="u_hours" name="weekly_hours" required min="0" max="80" step="0.5" value="<?= h(old_in('weekly_hours', (string)(float)$edit['weekly_hours'])) ?>" <?= field_aria('weekly_hours') ?>><?= field_error('weekly_hours') ?></div>
       <?php if (offices_on()): ?>
       <div class="field"><label for="u_office">Office</label>
         <select id="u_office" name="office_id"><?= office_options(array_key_exists('office_id', $GLOBALS['OLD_INPUT'] ?? []) ? ((int)old_in('office_id') ?: null) : ((int)($edit['office_id'] ?? 0) ?: null)) ?></select></div>
@@ -538,7 +541,7 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
     <button type="submit" name="send_reset" value="1" class="btn btn-secondary"
       onclick="return confirm(<?= h(json_encode('Email ' . $edit['email'] . ' a password reset link?', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">Email password reset link</button>
     <button type="submit" name="reset_2fa" value="1" class="btn btn-secondary"
-      onclick="return confirm('Reset their authenticator app, remove all passkeys and sign them out of the mobile app? They will be emailed, and email codes keep working.');">Reset authenticator &amp; passkeys</button>
+      onclick="return confirm('Reset their authenticator app, remove all passkeys and sign them out of the mobile app? They are signed out of every web browser too, and emailed; they can sign in again with their password and an emailed code.');">Reset authenticator &amp; passkeys</button>
     <button type="submit" name="revoke_app" value="1" class="btn btn-secondary"
       onclick="return confirm('Sign this user out of the mobile app on every device?');">Sign out of mobile app</button>
     <?php if ((string)$edit['cal_token'] !== ''): ?>
@@ -579,12 +582,13 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
   <form method="post" action="users.php" class="inline-form"><?= csrf_field() ?><input type="hidden" name="uid" value="<?= (int)$edit['id'] ?>">
     <button type="submit" name="request_exit" value="1" class="btn btn-secondary">Ask <?= h($edit['name']) ?> to sign the exit acknowledgement</button></form>
   <?php endif; ?>
-  <h3>Caseload transfer</h3>
-  <p class="hint" id="to_user-hint">Open referrals go only to someone with access to referrals; otherwise they return to the unassigned referral queue. Someone limited to their own caseload receives only the sessions for clients they receive; any others stay here and are listed for you to rebook. Both people are emailed about the sessions that move.</p>
+  <h3 id="transfer-h">Caseload transfer</h3>
+  <p class="hint">Open referrals go only to someone with access to referrals; otherwise they return to the unassigned referral queue. Someone limited to their own caseload receives only the sessions for clients they receive; any others stay here and are listed for you to rebook. Both people are emailed about the sessions that move.</p>
+  <?= form_error_summary(['to_user' => 'Move the caseload to']) ?>
   <form method="post" action="users.php" class="inline-form"><?= csrf_field() ?>
     <input type="hidden" name="uid" value="<?= (int)$edit['id'] ?>">
     <label for="to_user">Move their <?= (int)$edit['caseload'] ?> client(s), open referrals, open tasks, and upcoming sessions to</label>
-    <select id="to_user" name="to_user" aria-describedby="to_user-hint">
+    <select id="to_user" name="to_user" <?= field_aria('to_user') ?>>
       <option value="">— Choose a user —</option>
       <?php foreach ($rows as $r): if ((int)$r['id'] === (int)$edit['id'] || !$r['is_active']) continue;
         $rAccess = resolve_perms($r);
@@ -592,6 +596,7 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
       <option value="<?= (int)$r['id'] ?>"<?= in_array('referrals', $rAccess['perms'], true) ? '' : ' data-noref="1"' ?><?= $rAccess['scoped'] ? ' data-scoped="1"' : '' ?>><?= h($r['name']) ?></option>
       <?php endforeach; ?>
     </select>
+    <?= field_error('to_user') ?>
     <?php // The confirmation names both people, read from the list as it is now, and
           // says what the chosen person's access means for referrals and sessions. ?>
     <button type="submit" name="transfer_caseload" value="1" class="btn btn-secondary"

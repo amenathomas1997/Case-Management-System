@@ -279,12 +279,12 @@ page_header('Amendment request', $user, 'clients');
     <?php if (ai_feature_enabled('draft')): ?>
     <form method="post" action="amendment_request.php?track=<?= $trackId ?>" class="inline-form" id="ai-letter-form"><?= csrf_field() ?>
       <input type="hidden" name="track" value="<?= $trackId ?>">
-      <button type="submit" name="ai_draft" value="1" class="btn btn-secondary btn-sm" aria-describedby="ai-letter-hint">Draft the letter with AI</button>
+      <button type="submit" name="ai_draft" value="1" class="btn btn-secondary btn-sm">Draft the letter with AI</button>
     </form>
     <?php endif; ?>
   </div>
   <?php if (ai_feature_enabled('draft')): ?>
-  <p class="hint" id="ai-letter-hint">The AI drafts from the standard letter's facts. If you have changed the letter, your text is kept and the AI draft appears in a separate box.</p>
+  <p class="hint">The AI drafts from the standard letter's facts. If you have changed the letter, your text is kept and the AI draft appears in a separate box.</p>
   <?php endif; ?>
   <p class="muted">The letter is a draft for you to review and send — nothing is emailed automatically. When you record the approved change on the track, it is saved to the amendment history.</p>
 </section>

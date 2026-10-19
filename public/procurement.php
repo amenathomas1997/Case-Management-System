@@ -448,8 +448,7 @@ if (isset($_GET['id'])) {
           <?php else: ?>
           <?= form_error_summary(['trained_at' => '', 'confirm_trained' => ''], ['confirm_trained' => 'confirm_trained']) ?>
           <div class="field"><label for="trained_at">Training completed on</label><input type="date" id="trained_at" name="trained_at" min="<?= h($r['delivered_at']) ?>" max="<?= date('Y-m-d') ?>" value="<?= h($oldTrain('trained_at', date('Y-m-d'))) ?>" <?= field_aria('trained_at') ?>><?= field_error('trained_at') ?></div>
-          <span class="hint" id="confirm-trained-hint">This closes the request as Trained. A trained request cannot be changed or reopened.</span>
-          <div class="field"><label><input type="checkbox" id="confirm_trained" name="confirm_trained" value="1" required <?= field_aria('confirm_trained', 'confirm-trained-hint') ?>> Training is complete; close this request</label><?= field_error('confirm_trained') ?></div>
+          <div class="field"><label><input type="checkbox" id="confirm_trained" name="confirm_trained" value="1" required <?= field_aria('confirm_trained') ?>> Training is complete; close this request <span class="hint">This closes the request as Trained. A trained request cannot be changed or reopened.</span></label><?= field_error('confirm_trained') ?></div>
           <button type="submit" name="record_training" value="1" class="btn btn-primary">Mark trained &amp; close</button>
           <?php endif; ?>
         </form>
@@ -590,17 +589,15 @@ page_header('Device purchases', $user, 'procurement');
           <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= $oldReq('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
         </select><?= field_error('client_id') ?></div>
       <div class="field"><label for="device_name">Device / technology <?= required_mark() ?></label><input type="text" id="device_name" name="device_name" required maxlength="190" value="<?= h($oldReq('device_name')) ?>" <?= field_aria('device_name') ?>><?= field_error('device_name') ?></div>
-      <div class="field"><label for="category">Category</label>
-        <span class="hint" id="category-hint">CCTV: closed-circuit television (video) magnifier. AAC: augmentative and alternative communication.</span>
+      <div class="field"><label for="category">Category <span class="hint">CCTV: closed-circuit television (video) magnifier. AAC: augmentative and alternative communication.</span></label>
         <?php // The values are the stored categories; only the shown names spell out the abbreviations (as in recommend.php). ?>
-        <select id="category" name="category" aria-describedby="category-hint"><?php $catSel = $oldReq('category', 'Other');
+        <select id="category" name="category"><?php $catSel = $oldReq('category', 'Other');
           foreach (cms_list_items('device_request_categories') as $cv): $cl = ['Magnifier / CCTV' => 'Video magnifier (CCTV, closed-circuit television)', 'AAC Device' => 'Communication device (AAC, augmentative and alternative communication)'][$cv] ?? $cv; ?>
           <option value="<?= h($cv) ?>"<?= $cv === $catSel ? ' selected' : '' ?>><?= h($cl) ?></option>
         <?php endforeach; ?></select></div>
     </div>
-    <div class="field"><label for="justification">Justification of need</label>
-      <span class="hint" id="just-hint">Why this device is needed for the vocational goal</span>
-      <textarea id="justification" name="justification" rows="3" maxlength="4000" <?= field_aria('justification', 'just-hint') ?>><?= h($oldReq('justification')) ?></textarea><?= field_error('justification') ?></div>
+    <div class="field"><label for="justification">Justification of need <span class="hint">Why this device is needed for the vocational goal</span></label>
+      <textarea id="justification" name="justification" rows="3" maxlength="4000" <?= field_aria('justification') ?>><?= h($oldReq('justification')) ?></textarea><?= field_error('justification') ?></div>
     <button type="submit" name="add_request" value="1" class="btn btn-primary">Create request</button>
   </form>
 </details>

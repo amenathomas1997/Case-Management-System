@@ -56,7 +56,7 @@ if (totp_verify($begin['secret'], $wrongCode)) $wrongCode = str_pad((string)(((i
 $call('totp_confirm', ['password' => $acctPw, 'code' => $wrongCode], [], false, 'That code did not match');
 $call('totp_confirm', ['password' => $acctPw, 'code' => totp_code($begin['secret'])]);
 $totpRow = $db->query('SELECT totp_enabled, totp_secret FROM users WHERE id=1')->fetch();
-check((int)$totpRow['totp_enabled'] === 1 && $totpRow['totp_secret'] === $begin['secret'] && $audited('totp.enable') >= 1
+check((int)$totpRow['totp_enabled'] === 1 && totp_secret_plain($totpRow['totp_secret']) === $begin['secret'] && $audited('totp.enable') >= 1
     && (int)$db->query("SELECT COUNT(*) FROM settings WHERE name='totp_pending_1'")->fetchColumn() === 0,
     'A live code with the password turns on the authenticator app, is audited, and clears the setup key');
 $call('totp_begin', [], [], false, 'already turned on');

@@ -110,7 +110,9 @@ function referral_attach(int $id, int $clientId, int $actor): array {
         $intake = referral_intake_note($ref);
         $pdo->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,?)')
             ->execute([$clientId, 'Intake', $intake['subject'], $intake['body'], $actor]);
-        $pdo->prepare("UPDATE referrals SET status = 'Converted', client_id = ?, assigned_to = COALESCE(assigned_to, ?) WHERE id = ?")
+        // The referral follows the client's instructor, as a converted one does (4.28.0), so it is
+        // never shown to its former assignee once it belongs to someone else's caseload.
+        $pdo->prepare("UPDATE referrals SET status = 'Converted', client_id = ?, assigned_to = ? WHERE id = ?")
             ->execute([$clientId, $client['assigned_to'], $id]);
         // Its answers to the organisation's own questions (4.24.0) fill in what the record has not answered.
         if (function_exists('custom_copy_referral_to_client')) custom_copy_referral_to_client($id, $clientId);

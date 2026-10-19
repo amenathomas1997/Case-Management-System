@@ -27,7 +27,10 @@ $error = null;
 // (4.27.0, owner decision): no code is emailed to it, and an emailed code is never
 // accepted for it, so control of the mailbox alone (with "Forgot your password?")
 // does not get anyone in. A lost app is reset by an administrator on Users.
-$totpOnly = !empty($pendingUser['totp_enabled']) && !empty($pendingUser['totp_secret']);
+$totpOnly = totp_seed_present($pendingUser);
+// 4.28.0: a seed this server cannot read (key file lost or replaced) is said plainly; no code can work.
+$totpUnreadable = $totpOnly && totp_seed_state($pendingUser) === 'unreadable';
+if ($totpUnreadable) $error = TOTP_UNREADABLE_MSG;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['resend']) && $totpOnly) {
     // Nothing is emailed to an account with an authenticator app.
@@ -78,8 +81,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['resend'])) {
     redirect('verify.php');
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    require __DIR__ . '/inc/totp.php';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $totpUnreadable) {
+    audit((int)$pendingUser['id'], 'login.totp_unreadable', 'user', (int)$pendingUser['id'], 'authenticator seed stored but not readable with this server\'s key file');
+    $error = TOTP_UNREADABLE_MSG;
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_once __DIR__ . '/inc/totp.php';
     $code = preg_replace('/\D/', '', is_string($_POST['code'] ?? null) ? $_POST['code'] : '');
 
     // Global guess-rate cap for this account (mirrors the mobile API): more than
@@ -146,7 +152,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $tu = db()->prepare('SELECT * FROM users WHERE id = ? AND is_active = 1');
             $tu->execute([$pendingId]);
             $totpUser = $tu->fetch();
-            if ($totpUser && $totpUser['totp_enabled'] && $totpUser['totp_secret'] && totp_verify_once($totpUser['totp_secret'], $code, (int)$totpUser['id'])) {
+            // The seed is stored encrypted (4.28.0); one stored before then is re-stored encrypted once it works.
+            $totpPlain = $totpUser && totp_seed_present($totpUser) ? totp_secret_plain($totpUser['totp_secret']) : null;
+            if ($totpPlain !== null && totp_verify_once($totpPlain, $code, (int)$totpUser['id'])) {
+                totp_secret_upgrade((int)$totpUser['id'], $totpUser['totp_secret'], $totpPlain);
                 db()->prepare('DELETE FROM login_attempts WHERE id = ?')->execute([$guessRow]);
                 if (!claim_login_otp((int)$otp['id'], true)) {
                     flash('That code has expired or was already used. Sign in again.', 'error');
@@ -209,13 +218,12 @@ page_header(($error ? 'Error — ' : '') . 'Enter verification code');
   <form method="post" action="verify.php" class="stacked" novalidate>
     <?= csrf_field() ?>
     <div class="field">
-      <label for="code">6-digit code</label>
+      <?php // 10 minutes is the installer's default (dist/install.php) when the setting is missing. ?>
+      <label for="code">6-digit code <span class="hint"><?= $totpOnly ? 'This sign-in expires ' . ((int)cfg('otp_expiry_minutes') ?: 10) . ' minutes after you entered your password.' : 'The code expires ' . ((int)cfg('otp_expiry_minutes') ?: 10) . ' minutes after it was sent.' ?></span></label>
       <input type="text" id="code" name="code" class="otp-input" inputmode="numeric"
              maxlength="20" required autocomplete="one-time-code" autofocus
              <?= $error ? 'aria-invalid="true"' : '' ?>
-             aria-describedby="<?= $error ? 'code-error ' : '' ?>code-intro code-hint">
-      <?php // 10 minutes is the installer's default (dist/install.php) when the setting is missing. ?>
-      <span class="hint" id="code-hint"><?= $totpOnly ? 'This sign-in expires ' . ((int)cfg('otp_expiry_minutes') ?: 10) . ' minutes after you entered your password.' : 'The code expires ' . ((int)cfg('otp_expiry_minutes') ?: 10) . ' minutes after it was sent.' ?></span>
+             aria-describedby="<?= $error ? 'code-error ' : '' ?>code-intro">
     </div>
     <button type="submit" class="btn btn-primary">Verify and sign in</button>
   </form>

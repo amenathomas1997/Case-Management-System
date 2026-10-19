@@ -229,3 +229,91 @@ function invoice_close(int $id, string $to, string $reason, int $userId): ?strin
     audit($userId, $to === 'Denied' ? 'invoice.denied' : 'invoice.void', 'invoice', $id, $inv['invoice_number'] . ' ' . fmt_money((float)$inv['total_amount']) . ': ' . mb_substr(trim($reason), 0, 200));
     return null;
 }
+
+/**
+ * The Bill to of an invoice (4.28.0), built as generate_invoice() builds it: a private-pay invoice
+ * is billed to the client (name, address, and the email only once confirmed); a VR invoice to the
+ * agency's billing address lines (Funding agencies), then the counselor's name and agency, and the
+ * counselor's email only once confirmed (counselor_verified = 1). $client is a clients row.
+ */
+function invoice_bill_to(array $client, string $mode, ?string $agency): string {
+    $lines = $mode === 'private'
+        ? [$client['name'] ?? null, $client['address'] ?? null, (int)($client['email_verified'] ?? 0) === 1 ? ($client['email'] ?? null) : null]
+        : array_merge(agency_bill_to_lines((string)$agency), [$client['counselor_name'] ?? null, $client['counselor_agency'] ?? null,
+            (int)($client['counselor_verified'] ?? 0) === 1 ? ($client['counselor_email'] ?? null) : null]);
+    return implode("\n", array_filter(array_map(fn($v) => trim((string)$v), $lines), fn($v) => $v !== ''));
+}
+
+/**
+ * Re-address the client's Draft invoices to who they bill now (4.28.0): each Draft's Bill to is
+ * rebuilt for its own bill mode (invoice_bill_to()), so a private-pay Draft stays billed to the
+ * client and a VR Draft keeps its agency's billing address. Sent invoices keep what was sent.
+ * Reads the client row as it is now, so call it after the client's change is written (inside the
+ * same transaction is fine). Returns how many Drafts changed.
+ */
+function draft_invoices_readdress(int $clientId): int {
+    $c = db()->prepare('SELECT name, address, email, email_verified, counselor_name, counselor_agency, counselor_email, counselor_verified FROM clients WHERE id = ?');
+    $c->execute([$clientId]);
+    $client = $c->fetch();
+    if (!$client) return 0;
+    // An older Draft with no agency of its own uses its track's (as the reports do), so it keeps the agency's billing address.
+    $d = db()->prepare("SELECT i.id, i.bill_mode, COALESCE(i.funding_agency, t.funding_agency) AS funding_agency, i.bill_to FROM invoices i JOIN training_tracks t ON t.id = i.track_id WHERE t.client_id = ? AND i.status = 'Draft'");
+    $d->execute([$clientId]);
+    $up = db()->prepare("UPDATE invoices SET bill_to = ? WHERE id = ? AND status = 'Draft'");
+    $changed = 0;
+    foreach ($d->fetchAll() as $inv) {
+        $billTo = invoice_bill_to($client, (string)$inv['bill_mode'] === 'private' ? 'private' : 'vr', (string)$inv['funding_agency']);
+        if ((string)$inv['bill_to'] === $billTo) continue;
+        $up->execute([$billTo !== '' ? $billTo : null, (int)$inv['id']]);
+        $changed += $up->rowCount();
+    }
+    return $changed;
+}
+
+/** Old agency names (4.28.0): agency_key(old name) => the name it was renamed to, kept by Funding agencies. */
+function agency_renames(): array {
+    $m = json_decode((string)(setting('agency_renames') ?? ''), true);
+    return is_array($m) ? array_filter($m, 'is_string') : [];
+}
+
+/** Remember that agency $old is now called $new, so reports and filters still find invoices sent under $old. */
+function agency_rename_record(string $old, string $new): void {
+    if (agency_key($old) === agency_key($new) || trim($old) === '') return;
+    $m = agency_renames();
+    // Earlier names of $old now lead to $new too; $new is no longer an old name of anything.
+    foreach ($m as $k => $v) if (agency_key($v) === agency_key($old)) $m[$k] = $new;
+    unset($m[agency_key($new)]);
+    $m[agency_key($old)] = $new;
+    set_setting('agency_renames', (string)json_encode($m, JSON_UNESCAPED_UNICODE));
+}
+
+/** The agency a name on a track or invoice means today: its current name after any rename, as listed. */
+function agency_resolve(string $name): string {
+    $renames = agency_renames();
+    $seen = 0;
+    // A name listed on Funding agencies today is that agency, even if another agency once had it.
+    while (agency_find($name) === null && isset($renames[agency_key($name)]) && $seen++ < 20) $name = $renames[agency_key($name)];
+    return agency_canonical($name);
+}
+
+/**
+ * Every spelling on file that names this agency (4.28.0): its name, a name it had before a rename,
+ * and other case or spacing, from tracks and invoices. Never empty: the agency itself at least.
+ */
+function agency_spellings(string $agency): array {
+    $agency = trim($agency);
+    if ($agency === '') return [''];
+    $key = agency_key(agency_resolve($agency));
+    $out = [$agency];
+    foreach (db()->query("SELECT DISTINCT funding_agency FROM training_tracks WHERE funding_agency IS NOT NULL AND funding_agency <> ''
+        UNION SELECT DISTINCT funding_agency FROM invoices WHERE funding_agency IS NOT NULL AND funding_agency <> ''")->fetchAll(PDO::FETCH_COLUMN) as $v) {
+        if (agency_key(agency_resolve((string)$v)) === $key) $out[] = (string)$v;
+    }
+    return array_values(array_unique($out));
+}
+
+/** "$expr IN (?, ?, …)" for agency_spellings($agency), with its parameters. */
+function agency_match_sql(string $expr, string $agency): array {
+    $sp = agency_spellings($agency);
+    return [$expr . ' IN (' . implode(',', array_fill(0, count($sp), '?')) . ')', $sp];
+}

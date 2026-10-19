@@ -309,15 +309,16 @@ page_header('Evaluation report', $user, 'clients');
       <label for="signature">Electronic signature <span class="hint">Type your full name (<?= h($user['name']) ?>) — required for emailing</span></label>
       <input type="text" id="signature" name="signature" autocomplete="name" value="<?= h($sigKeep) ?>" <?= field_aria('signature') ?>><?= field_error('signature') ?>
     </div>
+    <?php // Read before the buttons, as plain text (4.28.0: no aria-describedby). ?>
+    <?php if ($aiDraftOn): ?><p class="hint">“Draft narrative with AI” fills only the sections above that are empty or still hold the prefilled text; a section you have written in is kept as it is. To have it drafted, clear it first. Review and edit every section before sending.</p><?php endif; ?>
     <div class="page-actions">
       <?php if ($aiDraftOn): ?>
-      <button type="submit" name="ai_draft" value="1" class="btn btn-secondary" formnovalidate aria-describedby="ai-draft-hint">Draft narrative with AI</button>
+      <button type="submit" name="ai_draft" value="1" class="btn btn-secondary" formnovalidate>Draft narrative with AI</button>
       <?php endif; ?>
       <button type="submit" name="download_html" value="1" class="btn btn-secondary">Download accessible HTML</button>
       <button type="submit" name="download" value="1" class="btn btn-secondary">Download PDF</button>
       <button type="submit" name="email_report" value="1" class="btn btn-primary">Email signed report to counselor</button>
     </div>
-    <?php if ($aiDraftOn): ?><p class="hint" id="ai-draft-hint">“Draft narrative with AI” fills only the sections above that are empty or still hold the prefilled text; a section you have written in is kept as it is. To have it drafted, clear it first. Review and edit every section before sending.</p><?php endif; ?>
   </div>
 </form>
 <?php page_footer();

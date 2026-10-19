@@ -88,8 +88,10 @@ CREATE INDEX IF NOT EXISTS `idx_client` ON `referrals` (`client_id`);
 
 -- ---- 4. Columns and values the 3.0.8 application writes ----
 -- Documents a client uploads through the portal are filed as 'Client Upload'.
+-- A text column, as 4.5.0 made it (Lists allows custom document categories), so
+-- running this file again never narrows it and never blanks a custom category.
 ALTER TABLE `client_documents`
-  MODIFY `category` enum('Authorization','IPE','Release','Report','Resource','Other','Client Upload') NOT NULL DEFAULT 'Other';
+  MODIFY `category` varchar(60) NOT NULL DEFAULT 'Other';
 -- A server that was not in strict mode stored a portal upload made before this
 -- value existed with a blank category; file those rows as client uploads.
 UPDATE `client_documents` SET `category` = 'Client Upload' WHERE `category` = '' AND `uploaded_by` IS NULL;

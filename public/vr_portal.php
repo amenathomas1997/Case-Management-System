@@ -20,8 +20,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['track_state'])) {
     $state = $str('track_state');
     $note = $str('note');
     if ($state === 'returned' && $note === '') {
+        // 4.28.0: the error is shown once, on the field and in the summary at the top (no flash too).
         keep_input(); keep_field_errors(['note_t' . $tid => 'What the agency asked for: say why it was returned.']);
-        flash('Not saved: say what the agency asked for when it returned the authorization.', 'error');
         redirect($back . '#accept-h');
     }
     $done = vr_portal_set_track($tid, $state, $note, $uid, $scopeUser);
@@ -36,7 +36,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['invoice_state'])) {
     $errs = [];
     if (mb_strlen($ref) > 80) $errs['ref_i' . $iid] = 'Payment request number: keep it to 80 characters.';
     if ($state === 'rejected' && $note === '') $errs['note_i' . $iid] = 'Why it was rejected: say what the agency gave as the reason.';
-    if ($errs) { keep_input(); keep_field_errors($errs); flash('Not saved: ' . implode(' ', $errs), 'error'); redirect($back . '#' . ($state === 'rejected' ? 'waiting-h' : 'enter-h')); }
+    if ($errs) { keep_input(); keep_field_errors($errs); redirect($back . '#' . ($state === 'rejected' ? 'waiting-h' : 'enter-h')); }
     $done = vr_portal_set_invoice($iid, $state, $ref, $note, $uid, $scopeUser);
     flash($done ? 'Saved: ' . strtolower(PAYREQ_STATES[$state]) . '.' : 'That invoice could not be updated.', $done ? 'success' : 'error');
     redirect($back . '#' . ($state === 'rejected' ? 'rejected-h' : 'enter-h'));
@@ -72,6 +72,7 @@ $hasErr = fn(string $k) => has_field_error($k);
 page_header('VR portal', $user, 'invoices', [['invoices.php', 'Invoices']]);
 ?>
 <h1>VR portal</h1>
+<?= form_error_summary() ?>
 <p>What is still to do in the VR agencies' own vendor portals: authorizations to accept, invoices to enter as payment requests, and requests to follow up. Mark each one here once it is done there; record payment on Invoices as before. It counts authorizations added and invoices submitted from <?= h(fmt_date(vr_portal_since())) ?>.</p>
 <form method="get" action="vr_portal.php" class="page-actions" role="search" aria-label="Choose an agency">
   <label for="agency">Agency</label>

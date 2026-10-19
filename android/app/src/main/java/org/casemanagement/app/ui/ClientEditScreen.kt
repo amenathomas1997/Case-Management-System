@@ -22,11 +22,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import org.casemanagement.app.Api
+import org.casemanagement.app.ApiException
+import org.casemanagement.app.clientSnapshot
+import org.casemanagement.app.customProblemsByField
+import org.casemanagement.app.mergeReloaded
+import org.casemanagement.app.openedValues
 import org.casemanagement.app.parseOffices
 import org.casemanagement.app.CustomField
 import org.casemanagement.app.customBody
-import org.casemanagement.app.customFieldsProblem
-import org.casemanagement.app.customRequiredProblem
 import org.casemanagement.app.parseCustomFields
 import org.casemanagement.app.prefillCount
 import org.casemanagement.app.objects
@@ -110,15 +113,15 @@ fun Tick(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
 
 /** One of the organisation's own fields, edited as its type asks ("" is Not answered). */
 @Composable
-private fun CustomFieldInput(f: CustomField, value: String, onChange: (String) -> Unit) {
+private fun CustomFieldInput(f: CustomField, value: String, error: String? = null, onChange: (String) -> Unit) {
     val label = f.label + if (f.required) " (required)" else ""
     val hint = f.hint.ifBlank { null }
     when (f.type) {
-        "choice", "yesno" -> Choice(label, value, listOf("" to "Not answered") + (f.options + listOfNotNull(value.takeIf { it.isNotEmpty() && it !in f.options })).map { it to it }, onChange)
-        "textarea" -> Field(label, value, onChange, hint = hint, singleLine = false, minLines = 3)
-        "number" -> Field(label, value, onChange, hint = hint, keyboard = KeyboardType.Decimal)
-        "date" -> Field(label, value, onChange, hint = listOfNotNull(hint, "year-month-day, empty for Not answered").joinToString(", "))
-        else -> Field(label, value, onChange, hint = hint)
+        "choice", "yesno" -> Choice(label, value, listOf("" to "Not answered") + (f.options + listOfNotNull(value.takeIf { it.isNotEmpty() && it !in f.options })).map { it to it }, error, onChange)
+        "textarea" -> Field(label, value, onChange, hint = hint, singleLine = false, minLines = 3, error = error)
+        "number" -> Field(label, value, onChange, hint = hint, keyboard = KeyboardType.Decimal, error = error)
+        "date" -> Field(label, value, onChange, hint = listOfNotNull(hint, "year-month-day, empty for Not answered").joinToString(", "), error = error)
+        else -> Field(label, value, onChange, hint = hint, error = error)
     }
 }
 
@@ -137,11 +140,17 @@ fun ClientEditScreen(api: Api, nav: NavHostController, id: Int) {
         }
         form to staff
     }
-    Show(loaded, "the client") { (c, staff) -> ClientForm(api, nav, id, c, staff) }
+    Show(loaded, "the client") { (c, staff) -> ClientForm(api, nav, id, c, staff, onReload = { loaded.reload() }, loadFailed = !loaded.loading && loaded.error != null) }
+}
+
+/** The texting agreement as the form opened it (4.28.0), kept with the snapshot so Reload and Save can tell what was changed here. */
+private fun formSnapshot(c: JSONObject): JSONObject {
+    val t = c.optJSONObject("_texting")
+    return clientSnapshot(c).put("_sms_agreed", t?.optBoolean("agreed") ?: false).put("_sms_source", t?.str("source") ?: "In person")
 }
 
 @Composable
-private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject, staff: List<JSONObject>) {
+private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject, staff: List<JSONObject>, onReload: () -> Unit, loadFailed: Boolean) {
     val statuses = api.formList("client_statuses", BUILT_IN_STATUSES).let { l -> c.str("status")?.let { if (it in l) l else l + it } ?: l }
     val types = api.formList("client_types", listOf("VR", "Pre-ETS"))
     val reasons = api.formList("closure_reasons", listOf("Goals met", "Declined services", "Moved", "Unable to contact", "Other"))
@@ -201,18 +210,57 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
     var smsSource by rememberSaveable { mutableStateOf(texting?.str("source") ?: "In person") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    // 4.28.0: each problem on its own field as well as in the summary above Save.
+    var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var customErrors by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
+    // A new client is added once, even when the reply was lost (see sendOnce).
+    var idem by rememberSaveable { mutableStateOf("") }
+    // 4.28.0: the record the fields were filled from, kept across process death; its updated_at goes as
+    // loaded_at, so the server refuses a save over someone else's newer changes (409 conflict).
+    var baseJson by rememberSaveable { mutableStateOf(formSnapshot(c).toString()) }
+    val base = remember(baseJson) { try { JSONObject(baseJson) } catch (e: Exception) { JSONObject() } }
+    var conflict by remember { mutableStateOf(false) }
+    var reloading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // Read again after a conflict: what was changed here stays; everything else takes the saved values.
+    LaunchedEffect(c) {
+        if (!reloading) return@LaunchedEffect
+        reloading = false
+        fun m(cur: String, key: String, default: String = "") = mergeReloaded(cur, base.str(key) ?: default, c.str(key) ?: default)
+        fun idOf(o: JSONObject, key: String, none: Int) = if (o.isNull(key) || !o.has(key)) none else o.optInt(key)
+        name = m(name, "name"); status = m(status, "status", "Pending Assessment"); type = m(type, "client_type", types.first())
+        dob = m(dob, "dob"); phone = m(phone, "phone"); email = m(email, "email"); address = m(address, "address"); usState = m(usState, "state")
+        val noOne = if (id == 0) api.userId else 0
+        assigned = mergeReloaded(assigned, idOf(base, "assigned_to", noOne), idOf(c, "assigned_to", noOne))
+        office = mergeReloaded(office, idOf(base, "office_id", -1).let { if (it < 0) "" else it.toString() }, idOf(c, "office_id", -1).let { if (it < 0) "" else it.toString() })
+        counselorName = m(counselorName, "counselor_name"); counselorAgency = m(counselorAgency, "counselor_agency")
+        counselorEmail = m(counselorEmail, "counselor_email"); counselorPhone = m(counselorPhone, "counselor_phone")
+        format = m(format, "a11y_format"); contact = m(contact, "a11y_contact"); tech = m(tech, "a11y_primary_tech"); a11yNotes = m(a11yNotes, "a11y_notes")
+        screenReader = mergeReloaded(screenReader, base.optBoolean("a11y_screen_reader"), c.optBoolean("a11y_screen_reader"))
+        guardianName = m(guardianName, "guardian_name"); guardianPhone = m(guardianPhone, "guardian_phone"); guardianEmail = m(guardianEmail, "guardian_email")
+        school = m(school, "school"); vrCase = m(vrCase, "vr_case_number"); ipeGoal = m(ipeGoal, "ipe_goal")
+        val fresh = formSnapshot(c)
+        smsConsent = mergeReloaded(smsConsent, base.optBoolean("_sms_agreed"), fresh.optBoolean("_sms_agreed"))
+        smsSource = mergeReloaded(smsSource, base.optString("_sms_source"), fresh.optString("_sms_source"))
+        baseJson = fresh.toString()
+        conflict = false; error = null
+        notice = "Read again. The other changes are now shown, and what you changed here is kept. Check the form, then save again."
+    }
+    // A reload that failed leaves Reload usable again (4.28.0).
+    LaunchedEffect(loadFailed) { if (loadFailed) reloading = false }
     val oldStatus = c.str("status")
     val closing = status.startsWith("Closed") && status != oldStatus
     val statusChanged = id > 0 && status != oldStatus
 
     Page {
         Heading(if (id == 0) "Add a client" else "Edit " + (c.str("name") ?: "client"), large = true)
+        NoticeText(notice)
         Field("Full name", name, { name = it })
         Choice("Status", status, statuses.map { it to it }) { status = it }
         if (statusChanged) Field("Reason for the status change", statusNote, { statusNote = it }, hint = if (status == "On Hold") "required for On Hold" else "kept in the history")
         if (closing) {
-            Choice("Why the case is closed", reason, listOf("" to "Choose a reason") + reasons.map { it to it }) { reason = it }
+            Choice("Why the case is closed", reason, listOf("" to "Choose a reason") + reasons.map { it to it }, fieldErrors["reason"]) { reason = it }
             if (reason == "Other") Field("Say why", reasonNote, { reasonNote = it })
             Choice("Employed at closure", employed, listOf("" to "Not recorded", "yes" to "Yes", "no" to "No")) { employed = it }
             if (employed == "yes") {
@@ -245,7 +293,7 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         if (email.isNotBlank() && (c.optBoolean("email_verified").not() || email.trim() != (c.str("email") ?: ""))) Tick("I confirmed this email address with the client", emailConfirmed) { emailConfirmed = it }
         Field("Address", address, { address = it }, singleLine = false)
         // Required (4.19.0): it sets the client's time zone for reminders and texts.
-        Choice(if (stateRequired) "State (required)" else "State, not recorded yet", usState, listOf("" to "Choose a state") + US_STATES) { usState = it }
+        Choice(if (stateRequired) "State (required)" else "State, not recorded yet", usState, listOf("" to "Choose a state") + US_STATES, fieldErrors["state"]) { usState = it }
         if (offices.isNotEmpty()) Choice("Office", office, listOf("" to if (id == 0) "Your own office" else "No office") + offices.map { it.id.toString() to it.name }) { office = it }
         if (api.scoped) Text("Assigned instructor: you. Your account works only its own caseload, so clients you add or edit stay assigned to you.")
         else Choice("Assigned instructor", assigned.toString(), listOf("0" to "Unassigned") + staff.map { it.optInt("id").toString() to it.optString("name") }) { assigned = it.toInt() }
@@ -269,13 +317,22 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         Field("Accessibility notes", a11yNotes, { a11yNotes = it }, hint = "optional", singleLine = false)
         if (customFields.isNotEmpty()) {
             Heading("More details")
-            customFields.forEach { f -> CustomFieldInput(f, customValue(f)) { setCustom(f, it) } }
+            customFields.forEach { f -> CustomFieldInput(f, customValue(f), customErrors[f.id]) { setCustom(f, it) } }
         }
         ErrorText(error)
+        // 4.28.0: someone else saved this client since it was opened: read it again, keeping what was typed here.
+        if (conflict) SecondaryButton("Reload, keeping my changes") { if (!reloading) { reloading = true; notice = null; onReload() } }
         PrimaryButton(if (id == 0) "Add client" else "Save changes", busy = busy, enabled = name.isNotBlank()) {
-            if (closing && reason.isEmpty()) { error = "Choose why the case is closed."; return@PrimaryButton }
-            (if (id == 0) customRequiredProblem(customFields, custom) else customFieldsProblem(customFields, custom))?.let { error = it; return@PrimaryButton }
-            if (usState.isEmpty() && stateRequired) { error = "Choose the state the client lives in. It sets their time zone for reminders and texts."; return@PrimaryButton }
+            if (busy) return@PrimaryButton
+            notice = null
+            fieldErrors = listOfNotNull(
+                if (closing && reason.isEmpty()) "reason" to "Choose why the case is closed." else null,
+                if (usState.isEmpty() && stateRequired) "state" to "Choose the state the client lives in. It sets their time zone for reminders and texts." else null,
+            ).toMap()
+            customErrors = customProblemsByField(customFields, custom, requireAnswers = id == 0)
+            // The summary names the first problem, in the form's order.
+            val first = fieldErrors["reason"] ?: fieldErrors["state"] ?: customErrors.values.firstOrNull()
+            if (first != null) { error = first; return@PrimaryButton }
             scope.launchSave({ busy = it }, { error = it }) {
                 val b = JSONObject().put("id", id).put("name", name.trim()).put("status", status).put("client_type", type)
                     .put("dob", dob.trim()).put("phone", phone.trim()).put("email", email.trim()).put("address", address.trim())
@@ -292,7 +349,10 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
                 if (!api.scoped) b.put("assigned_to", assigned)
                 // Sent only when chosen: a server before 4.19.0 ignores it, and an empty one is refused.
                 if (usState.isNotEmpty()) b.put("state", usState)
-                if (texting?.optBoolean("opted_out") != true) b.put("sms_consent", smsConsent && phone.isNotBlank()).put("sms_consent_source", smsSource)
+                // 4.28.0: the texting agreement goes only when it was set here (a new client, or changed on this form),
+                // so saving never records or withdraws it under this person on someone else's behalf.
+                val smsChanged = id == 0 || smsConsent != base.optBoolean("_sms_agreed") || (smsConsent && smsSource != base.optString("_sms_source"))
+                if (texting?.optBoolean("opted_out") != true && smsChanged) b.put("sms_consent", smsConsent && phone.isNotBlank()).put("sms_consent_source", smsSource)
                 if (statusChanged && statusNote.isNotBlank()) b.put("status_note", statusNote.trim())
                 if (emailConfirmed) b.put("email_verified", true)
                 if (counselorConfirmed) b.put("counselor_verified", true)
@@ -304,7 +364,16 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
                     if (employed == "yes") b.put("closure_employer", employer.trim()).put("closure_job_title", jobTitle.trim())
                         .put("closure_job_start", jobStart.trim()).put("closure_hours", jobHours.trim()).put("closure_wage", wage.trim())
                 }
-                val r = api.call("save_client", body = b)
+                val r = if (id == 0) api.callOnce("save_client", b, idem, { idem = it }, "the new client") else {
+                    base.str("updated_at")?.let { b.put("loaded_at", it) }
+                    // 4.28.0: what the form opened with (the keys sent), so a 409 names only what the other person changed.
+                    b.put("orig", openedValues(b, base))
+                    try { api.call("save_client", body = b) } catch (e: ApiException) {
+                        // The server names the fields someone else changed; Reload is offered next to the message.
+                        if (e.status == 409 && e.reply?.optBoolean("conflict") == true) conflict = true
+                        throw e
+                    }
+                }
                 Flash.pending = listOfNotNull(
                     if (id == 0) "Client added." else "Client saved.",
                     if (r.optBoolean("unarchived")) "The archived record was reopened." else null,

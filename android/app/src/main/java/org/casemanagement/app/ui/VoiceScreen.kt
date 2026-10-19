@@ -15,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -57,6 +58,23 @@ private val SECTION_ROUTES = mapOf(
 
 private data class Turn(val role: String, val text: String)
 
+/*
+ * 4.28.0: the conversation, the question waiting for a yes, and a lost reply's key are kept across
+ * rotation, a text-size change and process death, as plain text.
+ */
+private val turnsSaver = androidx.compose.runtime.saveable.Saver<List<Turn>, String>(
+    save = { l -> org.json.JSONArray(l.map { JSONObject().put("role", it.role).put("text", it.text) }).toString() },
+    restore = { t -> try { org.json.JSONArray(t).let { a -> List(a.length()) { a.getJSONObject(it).let { o -> Turn(o.optString("role"), o.optString("text")) } } } } catch (e: Exception) { emptyList() } },
+)
+private val pendingSaver = androidx.compose.runtime.saveable.Saver<Pair<String, JSONObject>?, String>(
+    save = { p -> p?.let { JSONObject().put("op", it.first).put("params", it.second).toString() } },
+    restore = { t -> try { JSONObject(t).let { o -> o.optString("op") to (o.optJSONObject("params") ?: JSONObject()) } } catch (e: Exception) { null } },
+)
+private val uncertainSaver = androidx.compose.runtime.saveable.Saver<Triple<String, JSONObject, String>?, String>(
+    save = { u -> u?.let { JSONObject().put("op", it.first).put("params", it.second).put("idem", it.third).toString() } },
+    restore = { t -> try { JSONObject(t).let { o -> Triple(o.optString("op"), o.optJSONObject("params") ?: JSONObject(), o.optString("idem")) } } catch (e: Exception) { null } },
+)
+
 /**
  * The voice assistant, as in the iPhone app: say or type what you want ("log 2 hours for Jordan"),
  * it says what it will do and saves only after you say yes. Replies are read by TalkBack when it is
@@ -66,16 +84,16 @@ private data class Turn(val role: String, val text: String)
 fun VoiceScreen(api: Api, nav: NavHostController, clientId: Int, clientName: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var turns by remember { mutableStateOf<List<Turn>>(emptyList()) }
-    var input by remember { mutableStateOf("") }
+    var turns by rememberSaveable(stateSaver = turnsSaver) { mutableStateOf(emptyList()) }
+    var input by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    var pending by remember { mutableStateOf<Pair<String, JSONObject>?>(null) }
+    var pending by rememberSaveable(stateSaver = pendingSaver) { mutableStateOf(null) }
     var unclear by remember { mutableStateOf(0) }
     var link by remember { mutableStateOf<Pair<Int, String>?>(null) }
     var screen by remember { mutableStateOf<Pair<String, String>?>(null) }
     var retry by remember { mutableStateOf<Triple<String, JSONObject, String>?>(null) }
     // A write whose reply was lost: if the same request comes back, its key is used again, so it is never saved twice.
-    var uncertain by remember { mutableStateOf<Triple<String, JSONObject, String>?>(null) }
+    var uncertain by rememberSaveable(stateSaver = uncertainSaver) { mutableStateOf(null) }
     val talkBack = remember { (context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager).isTouchExplorationEnabled }
     val tts = remember { mutableStateOf<TextToSpeech?>(null) }
     DisposableEffect(Unit) {

@@ -121,9 +121,9 @@ fun WaitlistScreen(api: Api) {
 
 @Composable
 private fun WaitlistDialog(api: Api, w: JSONObject, statuses: List<String>, onDone: (String) -> Unit, onCancel: () -> Unit) {
-    var status by remember { mutableStateOf(w.optString("status").takeIf { it in statuses } ?: statuses.firstOrNull() ?: "Waiting") }
-    var followup by remember { mutableStateOf(w.str("followup_date") ?: "") }
-    var notes by remember { mutableStateOf(w.str("notes") ?: "") }
+    var status by rememberSaveable { mutableStateOf(w.optString("status").takeIf { it in statuses } ?: statuses.firstOrNull() ?: "Waiting") }
+    var followup by rememberSaveable { mutableStateOf(w.str("followup_date") ?: "") }
+    var notes by rememberSaveable { mutableStateOf(w.str("notes") ?: "") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -195,7 +195,8 @@ fun InvoicesScreen(api: Api) {
 fun IncidentsScreen(api: Api) {
     var showAll by rememberSaveable { mutableStateOf(false) }
     val state = rememberLoaded(showAll) { api.call("incidents", if (showAll) mapOf("all" to "1") else emptyMap()) }
-    var adding by remember { mutableStateOf(false) }
+    // Kept across rotation and process death, as the report's fields are (4.28.0).
+    var adding by rememberSaveable { mutableStateOf(false) }
     var chosen by remember { mutableStateOf<JSONObject?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -240,13 +241,15 @@ fun IncidentsScreen(api: Api) {
 @Composable
 private fun IncidentDialog(api: Api, r: JSONObject, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val types = r.optJSONArray("types").let { a -> List(a?.length() ?: 0) { a!!.optString(it) } }.ifEmpty { listOf("Injury", "Near miss", "Equipment failure", "Behavioral", "Property damage", "Medical", "Safety concern", "Other") }
-    var date by remember { mutableStateOf(today()) }
-    var type by remember { mutableStateOf(types.firstOrNull() ?: "Other") }
-    var severity by remember { mutableStateOf("Low") }
-    var description by remember { mutableStateOf("") }
-    var location by remember { mutableStateOf("") }
-    var action by remember { mutableStateOf("") }
+    var date by rememberSaveable { mutableStateOf(today()) }
+    var type by rememberSaveable { mutableStateOf(types.firstOrNull() ?: "Other") }
+    var severity by rememberSaveable { mutableStateOf("Low") }
+    var description by rememberSaveable { mutableStateOf("") }
+    var location by rememberSaveable { mutableStateOf("") }
+    var action by rememberSaveable { mutableStateOf("") }
+    var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var dateError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     AlertDialog(
@@ -254,7 +257,7 @@ private fun IncidentDialog(api: Api, r: JSONObject, onDone: (String) -> Unit, on
         title = { Text("Report an incident", modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field("Date", date, { date = it }, hint = "year-month-day")
+                Field("Date", date, { date = it }, hint = "year-month-day", error = dateError)
                 Choice("Type", type, types.map { it to it }) { type = it }
                 Choice("Severity", severity, listOf("Low", "Medium", "High", "Critical").map { it to it }) { severity = it }
                 Field("What happened", description, { description = it }, singleLine = false, minLines = 3)
@@ -265,9 +268,13 @@ private fun IncidentDialog(api: Api, r: JSONObject, onDone: (String) -> Unit, on
         },
         confirmButton = {
             TextButton(enabled = !busy && description.isNotBlank(), onClick = {
+                if (busy) return@TextButton
+                dateError = if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim())) "Enter the date as year-month-day, such as ${today()}." else null
+                if (dateError != null) { error = dateError; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
-                    api.call("add_incident", body = JSONObject().put("incident_date", date.trim()).put("type", type).put("severity", severity)
-                        .put("description", description.trim()).put("location", location.trim()).put("action_taken", action.trim()))
+                    // 4.28.0: a retry after a lost reply reports it once (see sendOnce).
+                    api.callOnce("add_incident", JSONObject().put("incident_date", date.trim()).put("type", type).put("severity", severity)
+                        .put("description", description.trim()).put("location", location.trim()).put("action_taken", action.trim()), idem, { idem = it }, "the incident report")
                     onDone("Incident reported.")
                 }
             }) { Text(if (busy) "Saving…" else "Report") }

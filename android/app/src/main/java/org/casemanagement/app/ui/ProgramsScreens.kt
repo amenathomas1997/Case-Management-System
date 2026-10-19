@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
@@ -57,9 +58,10 @@ val PRE_ETS_ACTIVITIES = listOf("Job Exploration Counseling", "Work-Based Learni
 @Composable
 fun ProgramsScreen(api: Api, nav: NavHostController) {
     val state = rememberLoaded(api.userId) { api.call("cohorts").optJSONArray("cohorts").objects() }
-    var adding by remember { mutableStateOf(false) }
-    var name by remember { mutableStateOf("") }
-    var school by remember { mutableStateOf("") }
+    var adding by rememberSaveable { mutableStateOf(false) }
+    var name by rememberSaveable { mutableStateOf("") }
+    var school by rememberSaveable { mutableStateOf("") }
+    var idem by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -73,7 +75,8 @@ fun ProgramsScreen(api: Api, nav: NavHostController) {
     }
     if (adding) FormDialog("Add a cohort", "Add", busy, name.isNotBlank(), onSave = {
         scope.launchSave({ busy = it }, { error = it }) {
-            val r = api.call("add_cohort", body = JSONObject().put("name", name.trim()).put("school", school.trim()))
+            // 4.28.0: a retry after a lost reply adds it once (see sendOnce).
+            val r = api.callOnce("add_cohort", JSONObject().put("name", name.trim()).put("school", school.trim()), idem, { idem = it }, "the cohort")
             adding = false; name = ""; school = ""; nav.navigate("cohort/${r.optInt("id")}")
         }
     }, onCancel = { adding = false }) {
@@ -90,7 +93,9 @@ fun CohortScreen(api: Api, id: Int) {
     var error by remember { mutableStateOf<String?>(null) }
     var pick by remember { mutableStateOf("") }
     var removing by remember { mutableStateOf<JSONObject?>(null) }
-    var logging by remember { mutableStateOf(false) }
+    // 4.28.0: adding a student is sent with a retry key (see sendOnce).
+    var addKey by rememberSaveable { mutableStateOf("") }
+    var logging by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     fun run(block: suspend () -> String) { error = null; scope.launch { try { notice = block(); state.reload() } catch (e: ApiException) { error = e.message } } }
     Show(state, "the cohort") { r ->
@@ -111,7 +116,7 @@ fun CohortScreen(api: Api, id: Int) {
                     if (pick.isEmpty()) { error = "Choose a student to add."; return@SecondaryButton }
                     val who = available.firstOrNull { it.optInt("id").toString() == pick }?.optString("name")
                     if (who == null) { error = "That student is no longer available to add. Choose again."; pick = ""; return@SecondaryButton }
-                    run { api.call("cohort_member", body = JSONObject().put("cohort_id", id).put("client_id", pick.toInt()).put("op", "add")); pick = ""; "$who added to the cohort." }
+                    run { api.callOnce("cohort_member", JSONObject().put("cohort_id", id).put("client_id", pick.toInt()).put("op", "add"), addKey, { addKey = it }, "the student"); pick = ""; "$who added to the cohort." }
                 }
             }
             val sessions = r.optJSONArray("sessions").objects()
@@ -129,24 +134,27 @@ fun CohortScreen(api: Api, id: Int) {
 
 @Composable
 private fun CohortSessionDialog(api: Api, cohortId: Int, members: List<JSONObject>, onDone: (String) -> Unit, onCancel: () -> Unit) {
-    var activity by remember { mutableStateOf(PRE_ETS_ACTIVITIES.first()) }
-    var date by remember { mutableStateOf(today()) }
-    var minutes by remember { mutableStateOf("50") }
-    var topic by remember { mutableStateOf("") }
-    var notes by remember { mutableStateOf("") }
+    var activity by rememberSaveable { mutableStateOf(PRE_ETS_ACTIVITIES.first()) }
+    var date by rememberSaveable { mutableStateOf(today()) }
+    var minutes by rememberSaveable { mutableStateOf("50") }
+    var topic by rememberSaveable { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
     var present by remember { mutableStateOf(members.map { it.optInt("id") }.toSet()) }
     var confirming by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var minutesError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var idem by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     FormDialog("Log a group session", "Log", busy, onSave = {
         val m = minutes.trim().toIntOrNull()
-        if (m == null || m !in 1..1440) { error = "Duration: enter the session length in whole minutes from 1 to 1440, like 50."; return@FormDialog }
+        minutesError = if (m == null || m !in 1..1440) "Duration: enter the session length in whole minutes from 1 to 1440, like 50." else null
+        if (minutesError != null) { error = minutesError; return@FormDialog }
         confirming = true
     }, onCancel = onCancel) {
         Choice("Activity", activity, PRE_ETS_ACTIVITIES.map { it to it }) { activity = it }
         Field("Date", date, { date = it }, hint = "year-month-day")
-        Field("Length in minutes", minutes, { minutes = it }, keyboard = KeyboardType.Number)
+        Field("Length in minutes", minutes, { minutes = it }, keyboard = KeyboardType.Number, error = minutesError)
         Field("Topic", topic, { topic = it }, hint = "optional")
         Field("Notes", notes, { notes = it }, hint = "optional", singleLine = false)
         Heading("Who was there")
@@ -158,8 +166,9 @@ private fun CohortSessionDialog(api: Api, cohortId: Int, members: List<JSONObjec
         Confirm("Log $activity on ${dayText(date.trim())}, ${minutes.trim()} minutes, ${present.size} of ${members.size} present?",
             (if (absent.isNotEmpty()) "Absent: " + absent.joinToString(", ") + ". " else "") + "A logged session cannot be changed from the app.", "Log session", {
                 scope.launchSave({ busy = it }, { error = it }) {
-                    api.call("log_cohort_session", body = JSONObject().put("cohort_id", cohortId).put("activity", activity).put("session_date", date.trim())
-                        .put("duration_min", minutes.trim().toInt()).put("topic", topic.trim()).put("notes", notes.trim()).put("present", org.json.JSONArray(present.toList())))
+                    api.callOnce("log_cohort_session", JSONObject().put("cohort_id", cohortId).put("activity", activity).put("session_date", date.trim())
+                        .put("duration_min", minutes.trim().toInt()).put("topic", topic.trim()).put("notes", notes.trim()).put("present", org.json.JSONArray(present.sorted())),
+                        idem, { idem = it }, "the group session")
                     onDone("Session logged.")
                 }
             }, { confirming = false })
@@ -171,7 +180,7 @@ private fun CohortSessionDialog(api: Api, cohortId: Int, members: List<JSONObjec
 @Composable
 fun ContractsScreen(api: Api, nav: NavHostController) {
     val state = rememberLoaded(api.userId) { api.call("contracts").optJSONArray("contracts").objects() }
-    var adding by remember { mutableStateOf(false) }
+    var adding by rememberSaveable { mutableStateOf(false) }
     Page {
         PrimaryButton("Add a contract") { adding = true }
         Show(state, "contracts") { list ->
@@ -185,12 +194,13 @@ fun ContractsScreen(api: Api, nav: NavHostController) {
 
 @Composable
 private fun AddContractDialog(api: Api, onDone: (Int) -> Unit, onCancel: () -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var funder by remember { mutableStateOf("") }
-    var number by remember { mutableStateOf("") }
-    var amount by remember { mutableStateOf("") }
-    var start by remember { mutableStateOf("") }
-    var end by remember { mutableStateOf("") }
+    var name by rememberSaveable { mutableStateOf("") }
+    var funder by rememberSaveable { mutableStateOf("") }
+    var number by rememberSaveable { mutableStateOf("") }
+    var amount by rememberSaveable { mutableStateOf("") }
+    var start by rememberSaveable { mutableStateOf("") }
+    var end by rememberSaveable { mutableStateOf("") }
+    var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -198,8 +208,8 @@ private fun AddContractDialog(api: Api, onDone: (Int) -> Unit, onCancel: () -> U
         val a = if (amount.isBlank()) "0" else moneyText(amount)
         if (a == null) { error = "Enter the amount in dollars, such as 12500."; return@FormDialog }
         scope.launchSave({ busy = it }, { error = it }) {
-            onDone(api.call("add_contract", body = JSONObject().put("name", name.trim()).put("funder", funder.trim()).put("contract_number", number.trim())
-                .put("amount", a).put("start_date", start.trim()).put("end_date", end.trim())).optInt("id"))
+            onDone(api.callOnce("add_contract", JSONObject().put("name", name.trim()).put("funder", funder.trim()).put("contract_number", number.trim())
+                .put("amount", a).put("start_date", start.trim()).put("end_date", end.trim()), idem, { idem = it }, "the contract").optInt("id"))
         }
     }, onCancel = onCancel) {
         Field("Name", name, { name = it })
@@ -218,7 +228,7 @@ fun ContractScreen(api: Api, id: Int) {
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var deliverable by remember { mutableStateOf<JSONObject?>(null) }
-    var form by remember { mutableStateOf("") }
+    var form by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     fun update(body: JSONObject, done: String) { error = null; scope.launch { try { api.call("contract_update", body = body.put("contract_id", id)); notice = done; state.reload() } catch (e: ApiException) { error = e.message } } }
     Show(state, "the contract") { r ->
@@ -248,9 +258,9 @@ fun ContractScreen(api: Api, id: Int) {
             confirmButton = { TextButton(onClick = { deliverable = null }) { Text("Cancel") } })
     }
     if (form.isNotEmpty()) {
-        var a by remember { mutableStateOf("") }
-        var b by remember { mutableStateOf(if (form == "spend") today() else "") }
-        var t by remember { mutableStateOf("") }
+        var a by rememberSaveable { mutableStateOf("") }
+        var b by rememberSaveable { mutableStateOf(if (form == "spend") today() else "") }
+        var t by rememberSaveable { mutableStateOf("") }
         var err by remember { mutableStateOf<String?>(null) }
         FormDialog(if (form == "spend") "Add spending" else "Add a deliverable", "Add", false, onSave = {
             if (form == "spend") {
@@ -286,7 +296,7 @@ fun BookingsScreen(api: Api) {
     }
     var chosen by remember { mutableStateOf<JSONObject?>(null) }
     var cancelling by remember { mutableStateOf<JSONObject?>(null) }
-    var adding by remember { mutableStateOf(false) }
+    var adding by rememberSaveable { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -317,50 +327,49 @@ fun BookingsScreen(api: Api) {
 private fun AddBookingDialog(api: Api, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val clients = rememberLoaded(api.userId) { clientChoices(api) }
     val types = api.formList("booking_types", listOf("Interpreter", "CART captioning", "Transportation", "Note-taker", "Other"))
-    var client by remember { mutableStateOf("") }
-    var type by remember { mutableStateOf(types.first()) }
-    var date by remember { mutableStateOf("") }
-    var time by remember { mutableStateOf("") }
-    var minutes by remember { mutableStateOf("60") }
-    var provider by remember { mutableStateOf("") }
-    var location by remember { mutableStateOf("") }
-    var cost by remember { mutableStateOf("") }
-    var notes by remember { mutableStateOf("") }
+    var client by rememberSaveable { mutableStateOf("") }
+    var type by rememberSaveable { mutableStateOf(types.first()) }
+    var date by rememberSaveable { mutableStateOf("") }
+    var time by rememberSaveable { mutableStateOf("") }
+    var minutes by rememberSaveable { mutableStateOf("60") }
+    var provider by rememberSaveable { mutableStateOf("") }
+    var location by rememberSaveable { mutableStateOf("") }
+    var cost by rememberSaveable { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
+    var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     FormDialog("Add a booking", "Add", busy, client.isNotEmpty(), onSave = {
         val t = if (time.isBlank()) null else time24(time)
         val m = minutes.trim().toIntOrNull()
         val c = if (cost.isBlank()) "" else moneyText(cost)
-        error = when {
-            date.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim()) -> "Enter the date as year-month-day, or leave it empty."
-            time.isNotBlank() && t == null -> "Enter the time such as 2:30 PM."
-            m == null || m !in 0..1440 -> "Enter the length in whole minutes, 0 to 1440."
-            c == null -> "Enter the cost in dollars, such as 85.00, or leave it empty."
-            else -> null
-        }
+        // 4.28.0: each problem on its own field, and the first in the summary.
+        fieldErrors = listOfNotNull(
+            if (date.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim())) "date" to "Enter the date as year-month-day, or leave it empty." else null,
+            if (time.isNotBlank() && t == null) "time" to "Enter the time such as 2:30 PM." else null,
+            if (m == null || m !in 0..1440) "minutes" to "Enter the length in whole minutes, 0 to 1440." else null,
+            if (c == null) "cost" to "Enter the cost in dollars, such as 85.00, or leave it empty." else null,
+        ).toMap()
+        error = fieldErrors.values.firstOrNull()
         if (error != null) return@FormDialog
         scope.launchSave({ busy = it }, { error = it }) {
-            try {
-                api.call("add_booking", body = JSONObject().put("client_id", client.toInt()).put("service_type", type)
-                    .put("needed_at", if (date.isBlank()) "" else date.trim() + " " + (t ?: "09:00")).put("duration_min", m)
-                    .put("provider", provider.trim()).put("location", location.trim()).put("cost", c).put("notes", notes.trim()))
-                onDone("Booking added as Requested.")
-            } catch (e: ApiException) {
-                if (e.network) error = "The connection dropped, so it is not known whether the booking was added. Check the list before adding it again." else throw e
-            }
+            api.callOnce("add_booking", JSONObject().put("client_id", client.toInt()).put("service_type", type)
+                .put("needed_at", if (date.isBlank()) "" else date.trim() + " " + (t ?: "09:00")).put("duration_min", m)
+                .put("provider", provider.trim()).put("location", location.trim()).put("cost", c).put("notes", notes.trim()), idem, { idem = it }, "the booking")
+            onDone("Booking added as Requested.")
         }
     }, onCancel = onCancel) {
         ErrorText(clients.error)
         Choice("Client", client, listOf("" to "Choose a client") + (clients.data ?: emptyList()).map { it.optInt("id").toString() to it.optString("name") }) { client = it }
         Choice("Service", type, types.map { it to it }) { type = it }
-        Field("Date needed", date, { date = it }, hint = "year-month-day, optional")
-        Field("Time", time, { time = it }, hint = "such as 2:30 PM, optional")
-        Field("Length in minutes", minutes, { minutes = it }, keyboard = KeyboardType.Number)
+        Field("Date needed", date, { date = it }, hint = "year-month-day, optional", error = fieldErrors["date"])
+        Field("Time", time, { time = it }, hint = "such as 2:30 PM, optional", error = fieldErrors["time"])
+        Field("Length in minutes", minutes, { minutes = it }, keyboard = KeyboardType.Number, error = fieldErrors["minutes"])
         Field("Provider", provider, { provider = it }, hint = "optional")
         Field("Location", location, { location = it }, hint = "optional")
-        Field("Cost in dollars", cost, { cost = it }, hint = "optional", keyboard = KeyboardType.Decimal)
+        Field("Cost in dollars", cost, { cost = it }, hint = "optional", keyboard = KeyboardType.Decimal, error = fieldErrors["cost"])
         Field("Notes", notes, { notes = it }, hint = "optional", singleLine = false)
         ErrorText(error)
     }

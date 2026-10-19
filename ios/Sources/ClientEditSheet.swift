@@ -134,6 +134,17 @@ struct ClientEditSheet: View {
     private static let smsSources = ["In person", "By phone", "In writing", "Referral form", "Client portal"]
     @State private var busy = false
     @State private var error: String?
+    /// The record as last loaded from the server (4.28.0): `existing`, or the one Reload fetched
+    /// after a conflict. Its updated_at is sent as loaded_at.
+    @State private var base: ClientInfo?
+    /// The texting agreement as last loaded (4.28.0): `texting`, or Reload's.
+    @State private var textingBase: ClientTexting?
+    /// The save was refused because someone else changed the client since it was loaded: Reload is offered.
+    @State private var conflict = false
+    @State private var reloading = false
+    /// Sent as idem_key when a new client is created (4.28.0), so a retry after a lost reply
+    /// does not create the client twice.
+    @State private var idem = IdemKey()
 
     /// The form is filled from the record before it is first drawn, so it is never shown blank
     /// (and can't be saved with defaults) while the staff list is still loading.
@@ -142,6 +153,8 @@ struct ClientEditSheet: View {
          onSaved: @escaping (_ clientId: Int, _ message: String) -> Void) {
         self.existing = existing
         self.onSaved = onSaved
+        _base = State(initialValue: existing)
+        _textingBase = State(initialValue: texting)
         self.texting = texting
         self.extras = existing == nil ? nil : extras
         if existing != nil, let extras {
@@ -244,6 +257,19 @@ struct ClientEditSheet: View {
     var body: some View {
         NavigationStack {
             ErrorFocusForm(inNavigationStack: true, error: error) {
+                if conflict {
+                    // 4.28.0: someone else saved this client since it was opened. What was typed
+                    // stays in the form; Reload brings in their changes for the fields not edited here.
+                    Section {
+                        Button {
+                            Task { await reload() }
+                        } label: {
+                            Text(reloading ? "Reloading…" : "Reload the client's saved details, keeping what you typed")
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        }
+                        .disabled(reloading || busy)
+                    }
+                }
                 // Each name stays visible above its field (a filled-in edit form showed bare values).
                 Section("Client") {
                     CaptionedField(label: "Full name (required)", text: $name, prompt: "Full name")
@@ -253,8 +279,8 @@ struct ClientEditSheet: View {
                             if new.trimmingCharacters(in: .whitespaces) != (existing?.phone ?? "").trimmingCharacters(in: .whitespaces) { smsConsent = false }
                         }
                     // Texts (4.17.0), as the website's client form: after STOP, only the client's START turns them back on.
-                    if texting?.optedOut == true {
-                        Text(texting?.words ?? "")
+                    if textingBase?.optedOut == true {
+                        Text(textingBase?.words ?? "")
                     } else if !phone.trimmingCharacters(in: .whitespaces).isEmpty {
                         Toggle("The client agreed to text messages at this number", isOn: $smsConsent)
                         if smsConsent {
@@ -492,11 +518,11 @@ struct ClientEditSheet: View {
                 showFormError("\(missing.label): this is required.", in: &error)
                 return
             }
-            if status.hasPrefix("Closed") && (existing?.status ?? "") != status && closureReason.isEmpty {
+            if status.hasPrefix("Closed") && (base?.status ?? "") != status && closureReason.isEmpty {
                 showFormError("Choose why the case is closing.", in: &error)
                 return
             }
-            if status.hasPrefix("Closed") && (existing?.status ?? "") != status {
+            if status.hasPrefix("Closed") && (base?.status ?? "") != status {
                 for (value, what) in [(closureAtRecommended, "Devices recommended"), (closureAtAcquired, "Devices the client got")] {
                     let t = value.trimmingCharacters(in: .whitespaces)
                     if !t.isEmpty && (t.count > 2 || !t.allSatisfy(\.isASCII) || Int(t) == nil) {
@@ -517,7 +543,7 @@ struct ClientEditSheet: View {
                 "a11y_format": a11yFormat, "a11y_primary_tech": a11yPrimaryTech,
                 "a11y_contact": a11yContact, "a11y_notes": a11yNotes,
             ]
-            if status.hasPrefix("Closed") && (existing?.status ?? "") != status {
+            if status.hasPrefix("Closed") && (base?.status ?? "") != status {
                 body["closure_reason"] = closureReason
                 body["closure_note"] = statusNote
                 body["closure_employed"] = closureEmployed
@@ -549,11 +575,45 @@ struct ClientEditSheet: View {
             if offersEmailConfirmation && confirmEmail { body["email_verified"] = true }
             // Sent only when chosen: a server before 4.19.0 ignores it, and an empty one is refused.
             if !usState.isEmpty { body["state"] = usState }
-            if texting?.optedOut != true {
-                body["sms_consent"] = smsConsent && !phone.trimmingCharacters(in: .whitespaces).isEmpty
-                body["sms_consent_source"] = smsSource
+            // Sent only when changed here (4.28.0): a save (after a Reload too) never records or
+            // withdraws the texting agreement under this person unless they changed it; unsent,
+            // the server keeps it as stored (and clears it for a new number itself).
+            if textingBase?.optedOut != true {
+                let agreed = smsConsent && !phone.trimmingCharacters(in: .whitespaces).isEmpty
+                if agreed != (textingBase?.agreed ?? false)
+                    || (agreed && smsSource != (textingBase?.source ?? "In person")) {
+                    body["sms_consent"] = agreed
+                    body["sms_consent_source"] = smsSource
+                }
             }
-            let result: SaveResult = try await api.call("save_client", body: body)
+            // 4.28.0: the record's updated_at as loaded, so the server refuses the save (409)
+            // when someone else changed the client since, instead of undoing their change.
+            if existing != nil, let loadedAt = base?.updatedAt, !loadedAt.isEmpty {
+                body["loaded_at"] = loadedAt
+                // The values the form opened with (4.28.0), for the keys sent: a conflict then
+                // names the fields the other person changed.
+                if let base { body["orig"] = Self.openedValues(of: base).filter { body[$0.key] != nil } }
+            }
+            // A new client: a retry after a lost reply is recognised and not created twice.
+            if existing == nil { body["idem_key"] = idem.key(for: body) }
+            var refusedConflict = false
+            let result: SaveResult
+            do {
+                result = try await api.call("save_client", body: body,
+                                            refusal: { refusedConflict = ($0["conflict"] as? Bool) == true })
+            } catch {
+                idem.failed(error)
+                if refusedConflict {
+                    conflict = true
+                    let said = error.localizedDescription
+                    showFormError(said + " What you typed is still in the form.", in: &self.error)
+                    busy = false
+                    return
+                }
+                throw error
+            }
+            idem.answered()
+            conflict = false
             // Saving an archived record with an open status re-opens it, as on the website.
             var message = result.unarchived
                 ? "Client saved. The archived record was re-opened and is back in the active client lists."
@@ -571,8 +631,69 @@ struct ClientEditSheet: View {
             onSaved(result.clientId > 0 ? result.clientId : (existing?.id ?? 0), message)
             dismiss()
         } catch {
-            showFormError(error.localizedDescription, in: &self.error)
+            showFormError(existing == nil ? IdemKey.message(for: error, what: "the new client") : error.localizedDescription, in: &self.error)
             busy = false
+        }
+    }
+
+    /// The record's values under the keys save_client takes (sent as `orig`, 4.28.0).
+    private static func openedValues(of c: ClientInfo) -> [String: Any] {
+        [
+            "name": c.name, "phone": c.phone ?? "", "email": c.email ?? "", "address": c.address ?? "",
+            "status": c.status, "assigned_to": c.assignedTo ?? 0,
+            "counselor_name": c.counselorName ?? "", "counselor_agency": c.counselorAgency ?? "",
+            "counselor_email": c.counselorEmail ?? "", "counselor_phone": c.counselorPhone ?? "",
+            "guardian_name": c.guardianName ?? "", "guardian_phone": c.guardianPhone ?? "", "guardian_email": c.guardianEmail ?? "",
+            "vr_case_number": c.vrCaseNumber ?? "", "ipe_goal": c.ipeGoal ?? "",
+            "client_type": c.clientType ?? "VR", "a11y_screen_reader": (c.a11yScreenReader ?? false) ? 1 : 0,
+            "a11y_format": c.a11yFormat ?? "", "a11y_primary_tech": c.a11yPrimaryTech ?? "",
+            "a11y_contact": c.a11yContact ?? "", "a11y_notes": c.a11yNotes ?? "", "state": c.state ?? "",
+        ]
+    }
+
+    /// After a conflict (4.28.0): loads the client as saved now. A field not edited here takes the
+    /// saved value (someone else's change); a field edited here keeps what was typed. The next
+    /// Save is then checked against this load.
+    private func reload() async {
+        guard let id = existing?.id, let old = base else { return }
+        reloading = true
+        defer { reloading = false }
+        do {
+            let fresh: ClientDetail = try await api.call("client", query: ["id": String(id)])
+            let now = fresh.client
+            func take<T: Equatable>(_ field: inout T, _ was: T, _ saved: T) { if field == was { field = saved } }
+            take(&name, old.name, now.name)
+            take(&phone, old.phone ?? "", now.phone ?? "")
+            take(&email, old.email ?? "", now.email ?? "")
+            take(&address, old.address ?? "", now.address ?? "")
+            take(&usState, old.state ?? "", now.state ?? "")
+            take(&status, old.status, now.status)
+            take(&assignedTo, old.assignedTo ?? 0, now.assignedTo ?? 0)
+            take(&counselorName, old.counselorName ?? "", now.counselorName ?? "")
+            take(&counselorAgency, old.counselorAgency ?? "", now.counselorAgency ?? "")
+            take(&counselorEmail, old.counselorEmail ?? "", now.counselorEmail ?? "")
+            take(&counselorPhone, old.counselorPhone ?? "", now.counselorPhone ?? "")
+            take(&guardianName, old.guardianName ?? "", now.guardianName ?? "")
+            take(&guardianPhone, old.guardianPhone ?? "", now.guardianPhone ?? "")
+            take(&guardianEmail, old.guardianEmail ?? "", now.guardianEmail ?? "")
+            take(&vrCaseNumber, old.vrCaseNumber ?? "", now.vrCaseNumber ?? "")
+            take(&ipeGoal, old.ipeGoal ?? "", now.ipeGoal ?? "")
+            take(&clientType, old.clientType ?? "VR", now.clientType ?? "VR")
+            take(&a11yScreenReader, old.a11yScreenReader ?? false, now.a11yScreenReader ?? false)
+            take(&a11yFormat, old.a11yFormat ?? "", now.a11yFormat ?? "")
+            take(&a11yPrimaryTech, old.a11yPrimaryTech ?? "", now.a11yPrimaryTech ?? "")
+            take(&a11yContact, old.a11yContact ?? "", now.a11yContact ?? "")
+            take(&a11yNotes, old.a11yNotes ?? "", now.a11yNotes ?? "")
+            // The texting agreement too: kept only when changed here.
+            take(&smsConsent, textingBase?.agreed ?? false, fresh.texting?.agreed ?? false)
+            take(&smsSource, textingBase?.source ?? "In person", fresh.texting?.source ?? "In person")
+            textingBase = fresh.texting
+            base = now
+            conflict = false
+            let message = "Reloaded. The other person's changes are now in the fields you had not changed; the fields you changed still show what you typed. Check them, then save."
+            showFormError(message, in: &self.error)
+        } catch {
+            showFormError("Could not reload the client. \(error.localizedDescription) What you typed is still in the form.", in: &self.error)
         }
     }
 }
@@ -716,6 +837,8 @@ struct AssessmentsSection: View {
 
 struct AddAssessmentSheet: View {
     @EnvironmentObject var api: API
+    /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
+    @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let clientId: Int
     let onSaved: () -> Void
@@ -765,11 +888,14 @@ struct AddAssessmentSheet: View {
     private func save() async {
         busy = true; error = nil
         do {
-            let _: OKResponse = try await api.call("add_assessment", body: [
+            var body: [String: Any] = [
                 "client_id": clientId, "assessment_date": APIDate.day(date),
                 "primary_disability": disability, "primary_tech": tech,
                 "hardware_details": hardware, "software_version": software, "summary": summary,
-            ])
+            ]
+            body["idem_key"] = idem.key(for: body)
+            let _: OKResponse = try await api.call("add_assessment", body: body)
+            idem.answered()
             // "Assessment saved." is said by the section once this sheet has closed.
             onSaved()
             dismiss()
@@ -779,6 +905,7 @@ struct AddAssessmentSheet: View {
             showFormError("The connection dropped before the server answered, so it isn't known whether this assessment was saved. Check the client's assessments for \(date.formatted(date: .abbreviated, time: .omitted)) before saving it again.", in: &self.error)
             busy = false
         } catch {
+            idem.answered()
             showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }

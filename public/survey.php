@@ -26,13 +26,18 @@ $csrfStale = $_SERVER['REQUEST_METHOD'] === 'POST' && empty($_SESSION['user_id']
     && !(is_string($_POST['csrf'] ?? null) && hash_equals(csrf_token(), $_POST['csrf']));
 if (!$csrfStale) csrf_check();
 
+/** How long an unanswered survey link works after it was sent (4.28.0). */
+if (!defined('SURVEY_LINK_DAYS')) define('SURVEY_LINK_DAYS', 120);
 $rawToken = $_GET['t'] ?? '';   // token rides the query string on GET and POST; never sourced from a cookie
 $token = is_string($rawToken) ? preg_replace('/[^a-f0-9]/', '', $rawToken) : '';
 $survey = null;
 if (strlen($token) === 48) {
     // An archived client's link is not recognized, as on the portal: nothing is
     // greeted by name or written into an archived record.
-    $stmt = db()->prepare('SELECT s.*, c.name AS client_name FROM surveys s JOIN clients c ON c.id = s.client_id WHERE s.token = ? AND c.archived_at IS NULL');
+    // 4.28.0: an unanswered survey link lapses SURVEY_LINK_DAYS after it was sent, like the other
+    // private links; an answered one stays viewable as the client's receipt.
+    $stmt = db()->prepare('SELECT s.*, c.name AS client_name FROM surveys s JOIN clients c ON c.id = s.client_id WHERE s.token = ? AND c.archived_at IS NULL
+        AND (s.completed_at IS NOT NULL OR s.sent_at > DATE_SUB(NOW(), INTERVAL ' . SURVEY_LINK_DAYS . ' DAY))');
     $stmt->execute([$token]);
     $survey = $stmt->fetch();
 }
@@ -44,7 +49,7 @@ if (!$survey) {
     // Say what to do next, with the footer's contact address.
     $linkContact = (string)(cfg('support_email') ?: cfg('mail_from'));
     $phoneContact = support_contact_html(false); // "call {phone} or email {email}" once a support phone is set
-    echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>' . t('This survey link is invalid or has been removed.') . ' '
+    echo '<div class="card auth-card"><h1>' . t('Link not recognized') . '</h1><p>' . t('This survey link is invalid, has expired, or has been removed.') . ' '
         . ($phoneContact !== ''
             ? t('If you would still like to share your feedback,') . ' ' . $phoneContact . ' ' . t('and we will send you a new link.')
             : ($linkContact !== ''
@@ -131,9 +136,9 @@ echo lang_toggle();
     <?php // One focused summary names each unanswered question and links to it (announced once, by the focus move). ?>
     <?= form_error_summary(['satisfaction' => '1. Overall, how satisfied are you with your training?', 'goals_met' => '2. How well did the training meet your goals?',
         'comments' => "3. Anything else you'd like us to know?"], ['satisfaction' => 'sat-1', 'goals_met' => 'goals-1']) ?>
-    <fieldset aria-describedby="sat-hint<?= has_field_error('satisfaction') ? ' err-satisfaction' : '' ?>">
-      <legend><?= t('1. Overall, how satisfied are you with your training?') ?> <span class="hint"><?= t('(required)') ?></span></legend>
-      <p class="hint" id="sat-hint"><?= t('1 = not satisfied · 10 = extremely satisfied') ?></p>
+    <?php // The scale's ends are in the legend (4.28.0: no separate hint line), and on 1 and 10. ?>
+    <fieldset<?= has_field_error('satisfaction') ? ' aria-describedby="err-satisfaction"' : '' ?>>
+      <legend><?= t('1. Overall, how satisfied are you with your training?') ?> <span class="hint"><?= t('(required)') ?> <?= t('1 = not satisfied · 10 = extremely satisfied') ?></span></legend>
       <?= field_error('satisfaction') ?>
       <?php // One choice to a line, top to bottom, with the ends of the scale named on 1 and 10. ?>
       <div class="field scale-list">
@@ -142,9 +147,8 @@ echo lang_toggle();
         <?php endfor; ?>
       </div>
     </fieldset>
-    <fieldset aria-describedby="goals-hint<?= has_field_error('goals_met') ? ' err-goals_met' : '' ?>">
-      <legend><?= t('2. How well did the training meet your goals?') ?> <span class="hint"><?= t('(required)') ?></span></legend>
-      <p class="hint" id="goals-hint"><?= t('1 = not at all · 10 = completely') ?></p>
+    <fieldset<?= has_field_error('goals_met') ? ' aria-describedby="err-goals_met"' : '' ?>>
+      <legend><?= t('2. How well did the training meet your goals?') ?> <span class="hint"><?= t('(required)') ?> <?= t('1 = not at all · 10 = completely') ?></span></legend>
       <?= field_error('goals_met') ?>
       <div class="field scale-list">
         <?php for ($i = 1; $i <= 10; $i++): ?>

@@ -58,6 +58,8 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
     var linkError by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var portalAsk by remember { mutableStateOf(false) }
+    // 4.28.0: the portal link is emailed once even when a reply was lost (see sendOnce).
+    var portalKey by rememberSaveable { mutableStateOf("") }
     var consentAsk by remember { mutableStateOf(false) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     Show(state, "the client") { (r, savedAt) ->
@@ -141,7 +143,7 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
         if (portalAsk) Confirm("Email a new portal link?", "A new link to the client portal is emailed to ${detail.email ?: ""}. Any earlier link stops working.", "Email the link", {
             notice = null; linkError = null
             scope.launch {
-                try { notice = api.call("send_portal_link", body = org.json.JSONObject().put("client_id", id)).optString("message").ifEmpty { "Portal link emailed." } }
+                try { notice = api.callOnce("send_portal_link", org.json.JSONObject().put("client_id", id), portalKey, { portalKey = it }, "the portal link").optString("message").ifEmpty { "Portal link emailed." } }
                 catch (e: ApiException) { linkError = e.message }
             }
         }, { portalAsk = false })
@@ -157,6 +159,7 @@ private fun ConsentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onC
     var email by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var idem by rememberSaveable { mutableStateOf("") }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val r = loaded.data
     val consent = r?.optJSONObject("consent")
@@ -167,7 +170,9 @@ private fun ConsentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onC
     FormDialog("Guardian consent", consent?.str("request_label")?.let { if (it.contains("Resend")) "Resend" else "Send" } ?: "Send", busy,
         enabled = r != null && canRequest && !name.isNullOrBlank() && !email.isNullOrBlank(), onSave = {
             scope.launchSave({ busy = it }, { error = it }) {
-                val res = api.call("request_consent", body = org.json.JSONObject().put("client_id", clientId).put("guardian_name", name!!.trim()).put("guardian_email", email!!.trim()))
+                // 4.28.0: the consent form is emailed once even when a reply was lost (see sendOnce).
+                val res = api.callOnce("request_consent", org.json.JSONObject().put("client_id", clientId).put("guardian_name", name!!.trim()).put("guardian_email", email!!.trim()),
+                    idem, { idem = it }, "the consent request")
                 onDone(res.optString("message").ifEmpty { "Consent form emailed." })
             }
         }, onCancel = onCancel) {
@@ -345,21 +350,24 @@ fun LogHoursScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int
     var miles by rememberSaveable { mutableStateOf("") }
     var description by rememberSaveable { mutableStateOf("") }
     var category by rememberSaveable { mutableStateOf("") }
-    val signature = remember { SignatureState() }
+    // The drawn signature too is kept across rotation and process death (4.28.0).
+    val signature = rememberSignatureState()
     var signedName by rememberSaveable { mutableStateOf("") }
     val density = androidx.compose.ui.platform.LocalDensity.current.density
     val idem = rememberSaveable { java.util.UUID.randomUUID().toString() }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // 4.28.0: each problem on its own field as well as in the summary.
+    var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     Page {
         val t = tracks.data?.firstOrNull { it.id == trackId }
         Heading(t?.let { it.client + ": " + it.title } ?: "Training track")
         val cats = t?.visitCategories ?: emptyList()
         if (cats.isNotEmpty()) Choice("Kind of visit", category, listOf("" to "Not chosen") + cats.map { it to it }) { category = it }
-        Field("Date", date, { date = it }, hint = "year-month-day, such as ${today()}")
-        Field("Hours", hours, { hours = it }, hint = "such as 1.5", keyboard = KeyboardType.Decimal)
-        Field("Miles driven", miles, { miles = it }, hint = "0 if none", keyboard = KeyboardType.Decimal)
+        Field("Date", date, { date = it }, hint = "year-month-day, such as ${today()}", error = fieldErrors["date"])
+        Field("Hours", hours, { hours = it }, hint = "such as 1.5", keyboard = KeyboardType.Decimal, error = fieldErrors["hours"])
+        Field("Miles driven", miles, { miles = it }, hint = "0 if none", keyboard = KeyboardType.Decimal, error = fieldErrors["miles"])
         Field("What was done", description, { description = it }, singleLine = false, minLines = 4)
         SignaturePad(signature)
         Field("Client's typed name", signedName, { signedName = it }, hint = "optional; counts as their acknowledgement")
@@ -367,10 +375,14 @@ fun LogHoursScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int
         PrimaryButton("Log hours", busy = busy, enabled = hours.isNotBlank() && description.isNotBlank()) {
             val h = number(hours)
             val m = number(miles.ifBlank { "0" })
+            fieldErrors = listOfNotNull(
+                if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim())) "date" to "Enter the date as year-month-day, such as ${today()}." else null,
+                if (h == null || h <= 0 || h > 24) "hours" to "Enter the hours as a number from 0.25 to 24, such as 1.5." else null,
+                if (m == null || m < 0 || m > 1000) "miles" to "Enter the miles as a number from 0 to 1000." else null,
+            ).toMap()
             when {
-                h == null || h <= 0 || h > 24 -> error = "Enter the hours as a number from 0.25 to 24, such as 1.5."
-                m == null || m < 0 || m > 1000 -> error = "Enter the miles as a number from 0 to 1000."
-                !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim()) -> error = "Enter the date as year-month-day, such as ${today()}."
+                busy -> {}
+                h == null || m == null || fieldErrors.isNotEmpty() -> error = fieldErrors.values.firstOrNull()
                 else -> scope.launchSave({ busy = it }, { error = it }) {
                     val payload = org.json.JSONObject().put("track_id", trackId).put("hours", h).put("date", date.trim())
                         .put("mileage", m).put("description", description.trim()).put("idem_key", idem)
