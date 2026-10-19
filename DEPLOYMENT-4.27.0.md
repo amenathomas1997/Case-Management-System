@@ -106,3 +106,17 @@ mig_3.0.36 was also made safe to run again: it no longer turns the note type bac
 - Android's storage move could hide unsent work if a write failed
 - iPhone retries without idem_key
 - iPhone dropping 30-day-old entries just before they could be sent
+
+## Published (not deployed)
+
+2026-10-18, after CI passed all three jobs on ed14c1e. The GitHub release v4.27.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 328 files, verified
+
+**Rehearsed:** installed with the 4.26.0 updater onto a copy of a 4.26.0 site.
+- The signature verified, the plan showed no problems, and the backup was made first.
+- The database changes ran (5 statements; database version 4.27.0, users.session_epoch and the reminder columns present).
+- 79 files were replaced, including the scheduled jobs.
+- The sign-in and signing pages then served at 4.27.0.
+
+The live site stays as it is until the owner installs it with Software update. Before or right after installing, add the optional `acct` claim in Microsoft Entra (see above). The 4.27.0 phone apps are built from this tag.
