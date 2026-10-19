@@ -101,3 +101,17 @@ Web 4.28.0, iPhone app 4.28.0 (build 59), Android app 4.28.0 (version code 12). 
   - Reload got stuck after a failure
   - a few retry keys were missing (iPhone too)
 - **iPhone:** the hand-over flag was cleared by an unlock while signing was still open, and Spanish was lost in dialog titles.
+
+## Published (not deployed)
+
+2026-10-18, after CI passed all three jobs on 8b3d7a1. The GitHub release v4.28.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag; it includes cron/reset_2fa.php
+- the signed update package: 330 files, verified
+
+**Rehearsed:** installed with the 4.27.0 updater onto a copy of a 4.27.0 site.
+- The signature verified, the plan showed no problems, and the backup was made first.
+- The database changes ran (5 statements; database version 4.28.0, the invoice_qbo_payment key present).
+- 102 files were replaced, including the scheduled jobs and the new recovery script in the private cron folder.
+- The sign-in, signing and survey pages then served at 4.28.0.
+
+The live site stays as it is until the owner installs it with Software update. The 4.28.0 phone apps are built from this tag.
