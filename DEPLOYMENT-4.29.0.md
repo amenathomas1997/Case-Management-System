@@ -93,3 +93,21 @@ Web 4.29.0, iPhone app 4.29.0 (build 60), Android app 4.29.0 (version code 13). 
 - **Text messages:** request details were in Spanish on staff pages.
 - **Android:** Back was held silently while saving, and save results could reach another account after sign-out.
 - **iPhone:** the track draft lost the amendment reason, the hours list was shown as complete, VoiceOver said "Error: Reloaded", and the segmented picker labels.
+
+**After the review:** CI's browser accessibility check found two error summaries with the same id on Client requests, when two of its forms were refused at once. A later summary on a page now gets its own id (inc/bootstrap.php, 94a630a). It was checked locally on 329 rendered pages and in CI.
+
+## Published (not deployed)
+
+2026-10-19, after CI passed all three jobs on 94a630a. The GitHub release v4.29.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 331 files, verified
+
+**Rehearsed:** installed with the 4.28.0 updater onto a copy of a 4.28.0 site that had one Microsoft identity linked to two accounts.
+- The signature verified, the plan showed no problems, and the backup was made first.
+- The database changes ran (6 statements; database version 4.29.0):
+  - the identity stayed on the active account and was removed from the switched-off one, with an audit entry
+  - idx_entra_oid is now unique
+- 92 files were replaced, including the scheduled jobs; cron/backup.sh stayed executable.
+- The sign-in, signing and survey pages then served at 4.29.0.
+
+The live site stays as it is until the owner installs it with Software update. The 4.29.0 phone apps are built from this tag.
