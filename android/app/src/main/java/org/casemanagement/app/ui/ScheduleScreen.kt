@@ -40,7 +40,10 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
     // The session being completed, kept as text so rotation and process death keep the dialog open (4.28.0).
     var completingJson by rememberSaveable { mutableStateOf<String?>(null) }
     val completing = remember(completingJson) { completingJson?.let { try { JSONObject(it) } catch (e: Exception) { null } } }
-    var moving by remember { mutableStateOf<JSONObject?>(null) }
+    // 4.29.0: the session being moved, kept as text like completing, so the dialog survives rotation
+    // and its typed date and time never pass to another session.
+    var movingJson by rememberSaveable { mutableStateOf<String?>(null) }
+    val moving = remember(movingJson) { movingJson?.let { try { JSONObject(it) } catch (e: Exception) { null } } }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -81,7 +84,7 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
             onDismissRequest = { chosen = null },
             title = { Text(s.optString("client") + ", " + timeText(s.str("start_at")), modifier = Modifier.semantics { heading() }) },
             text = {
-                Column {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
                     if (scheduled && s.str("checked_in_at") == null && !s.optBoolean("overdue")) TextButton(onClick = {
                         // The time the button was pressed (4.27.0), sent only with a copy kept to send later with no
                         // signal, so a late check-in is accepted; one sent now is timed by the server.
@@ -92,7 +95,7 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
                         }
                     }) { Text("Check in now") }
                     if (scheduled) TextButton(onClick = { chosen = null; completingJson = s.toString() }) { Text("Complete the session") }
-                    if (scheduled && !s.optBoolean("overdue")) TextButton(onClick = { chosen = null; moving = s }) { Text("Move to another time") }
+                    if (scheduled && !s.optBoolean("overdue")) TextButton(onClick = { chosen = null; movingJson = s.toString() }) { Text("Move to another time") }
                     if (scheduled) TextButton(onClick = {
                         act { api.call("set_session_status", body = JSONObject().put("session_id", id).put("to", "No Show")); "Recorded as a no-show." }
                     }) { Text("Record a no-show") }
@@ -111,7 +114,7 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
         )
     }
 
-    moving?.let { s -> MoveDialog(api, s, onDone = { m -> moving = null; notice = m; state.reload() }, onCancel = { moving = null }) }
+    moving?.let { s -> MoveDialog(api, s, onDone = { m -> movingJson = null; notice = m; state.reload() }, onCancel = { movingJson = null }) }
 
     completing?.let { s ->
         CompleteDialog(api, s, onDone = { msg -> completingJson = null; notice = msg; state.reload() }, onCancel = { completingJson = null })

@@ -317,3 +317,37 @@ function agency_match_sql(string $expr, string $agency): array {
     $sp = agency_spellings($agency);
     return [$expr . ' IN (' . implode(',', array_fill(0, count($sp), '?')) . ')', $sp];
 }
+
+/**
+ * 4.29.0: the SQL condition "this work is VR agency work". A billed line follows its invoice
+ * (bill_mode is snapshotted when it is invoiced); an unbilled line follows its track's "Who pays".
+ * Private-pay and no-charge work is never counted under a funding agency.
+ * $i may be '' when the query has no invoice join (track-level counts).
+ */
+function vr_work_sql(string $t = 't', string $i = 'i'): string {
+    $track = "COALESCE({$t}.billing_mode, 'vr') = 'vr'";
+    if ($i === '') return $track;
+    return "(CASE WHEN {$i}.id IS NULL THEN COALESCE({$t}.billing_mode, 'vr') ELSE COALESCE({$i}.bill_mode, 'vr') END) = 'vr'";
+}
+
+/**
+ * 4.29.0: one row per agency as it is called today (agency_resolve()), from the given names,
+ * so an agency renamed after some of its invoices were sent is listed once. "Private pay" and
+ * "No charge" are not agencies and are left out.
+ * Returns resolved name => the original names that resolve to it.
+ */
+function agency_resolved_groups(array $names): array {
+    $out = [];
+    foreach ($names as $n) {
+        $n = trim((string)$n);
+        if ($n === '' || in_array(agency_key($n), NOT_AGENCIES, true)) continue;
+        $r = agency_resolve($n);
+        $k = agency_key($r);
+        if (!isset($out[$k])) $out[$k] = ['name' => $r, 'names' => []];
+        $out[$k]['names'][] = $n;
+    }
+    $res = [];
+    foreach ($out as $g) $res[$g['name']] = array_values(array_unique($g['names']));
+    uksort($res, 'strcasecmp');
+    return $res;
+}

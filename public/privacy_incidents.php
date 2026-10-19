@@ -82,7 +82,7 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && $id > 0 && !isset($_POST[
         $c = db()->prepare('SELECT id, name FROM clients WHERE id = ?');
         $c->execute([(int)($_POST['client_id'] ?? 0)]);
         $cl = $c->fetch();
-        if (!$cl) { flash('Choose a client.', 'error'); $back('#people-h'); }
+        if (!$cl) { keep_field_errors(['add_client' => 'Choose a client to add.']); $back('#people-h'); }
         db()->prepare('INSERT IGNORE INTO privacy_incident_clients (incident_id, client_id, client_label) VALUES (?,?,?)')->execute([$id, $cl['id'], $cl['name']]);
         audit($user['id'], 'privacy_incident.person', 'privacy_incident', $id, 'client #' . (int)$cl['id']);
         flash($cl['name'] . ' is listed as affected.');
@@ -172,9 +172,11 @@ if ($inc) {
   <?php endif; ?>
   <?php if ($isAdmin): ?>
   <form method="post" action="privacy_incidents.php?id=<?= $id ?>" class="inline-form"><?= csrf_field() ?>
+    <?= form_error_summary(['add_client' => 'Add an affected client']) ?>
     <label for="add_client">Add an affected client</label>
-    <select id="add_client" name="client_id"><option value="">Choose a client</option><?php foreach ($allClients as $c): ?><option value="<?= (int)$c['id'] ?>"><?= h($c['name']) ?></option><?php endforeach; ?></select>
+    <select id="add_client" name="client_id" <?= field_aria('add_client') ?>><option value="">Choose a client</option><?php foreach ($allClients as $c): ?><option value="<?= (int)$c['id'] ?>"><?= h($c['name']) ?></option><?php endforeach; ?></select>
     <button type="submit" name="add_person" value="1" class="btn btn-secondary btn-sm">Add</button>
+    <?= field_error('add_client') ?>
   </form>
   <?php endif; ?>
 </section>
@@ -210,7 +212,7 @@ if ($inc) {
     <div class="field"><label for="happened_on">Date</label><input type="date" id="happened_on" name="happened_on" value="<?= h(old_in('happened_on', date('Y-m-d'))) ?>" <?= field_aria('happened_on') ?>><?= field_error('happened_on') ?></div>
     <div class="field"><label for="recipient">Notified (for a notice)</label><select id="recipient" name="recipient" <?= field_aria('recipient') ?>><option value="">Choose who</option><?= select_options(PRIVACY_NOTICE_RECIPIENTS, old_in('recipient') ?: null) ?></select><?= field_error('recipient') ?></div>
     <?php if ($people): ?>
-    <div class="field"><label for="notified_client">Affected person notified</label><select id="notified_client" name="notified_client"><option value="0">None</option><?php foreach ($people as $p): if ($p['client_id'] === null) continue; ?><option value="<?= (int)$p['client_id'] ?>"><?= h($p['client_label']) ?></option><?php endforeach; ?></select></div>
+    <div class="field"><label for="notified_client">Affected person notified</label><select id="notified_client" name="notified_client"><option value="0">None</option><?php foreach ($people as $p): if ($p['client_id'] === null) continue; ?><option value="<?= (int)$p['client_id'] ?>"<?= old_in('notified_client') === (string)(int)$p['client_id'] ? ' selected' : '' ?>><?= h($p['client_label']) ?></option><?php endforeach; ?></select></div>
     <?php endif; ?>
     <div class="field"><label for="method">How it was sent</label><input type="text" id="method" name="method" maxlength="60" value="<?= h(old_in('method')) ?>" <?= field_aria('method') ?>><?= field_error('method') ?></div>
     <div class="field"><label for="detail">Details</label><textarea id="detail" name="detail" rows="3" <?= field_aria('detail') ?>><?= h(old_in('detail')) ?></textarea><?= field_error('detail') ?></div>

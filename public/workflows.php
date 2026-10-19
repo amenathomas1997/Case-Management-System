@@ -29,7 +29,7 @@ if($ready)try{
         if($view==='homework'&&isset($_POST['practice_feedback'])){
             $pid=(int)($_POST['practice_id']??0);
             $fbErr=practice_feedback_save($pid,(string)($_POST['feedback']??''),$actor);
-            if($fbErr!==null){flash($fbErr,'error');}else flash('Feedback saved. The client sees it in their portal.');
+            if($fbErr!==null){keep_input();$_SESSION['old_input']['practice_id']=(string)$pid;keep_field_errors(['fb-'.$pid=>$fbErr]);}else flash('Feedback saved. The client sees it in their portal.');
             redirect('workflows.php?view=homework&client_id='.$clientId.'#prac-'.$pid);
         }
         if($view==='waitlist'&&isset($_POST['save_waitlist'])){
@@ -106,8 +106,10 @@ foreach($notes as $i=>$n):$nid=(int)$n['id'];$name=$noteName($n);$ctx='<span cla
 $q=db()->prepare('SELECT p.*,h.title,h.id AS homework_id FROM homework_practice p JOIN homework h ON h.id=p.homework_id JOIN training_tracks t ON t.id=h.track_id WHERE t.client_id=? ORDER BY p.created_at DESC,p.id DESC LIMIT 100');$q->execute([$clientId]);$practice=$q->fetchAll();?>
 <p>Newest 100 practice updates. Client reports do not mark homework complete.</p>
 <?php foreach($practice as $p): $pLabel=$p['title'].', '.fmt_datetime($p['created_at']);?><section class="card" id="prac-<?=(int)$p['id']?>"><h2><?=h($p['title'].' — '.fmt_datetime($p['created_at']))?></h2><p><?=h($p['minutes'].' minutes — '.$p['difficulty'])?></p><?=plain_text_html($p['notes'])?><a href="homework_edit.php?id=<?=(int)$p['homework_id']?>">Review or edit this assignment<span class="visually-hidden"> — <?=h($p['title'])?></span></a>
-<details><summary><?=!empty($p['staff_feedback'])?'Your feedback: '.h(mb_strimwidth((string)$p['staff_feedback'],0,80,'…')):'Give feedback'?><span class="visually-hidden"> on <?=h($pLabel)?></span></summary><form method="post" action="workflows.php?view=homework" class="stacked"><?=csrf_field()?><input type="hidden" name="client_id" value="<?=$clientId?>"><input type="hidden" name="practice_id" value="<?=(int)$p['id']?>">
-<label for="fb-<?=(int)$p['id']?>">Feedback for the client<span class="visually-hidden"> on <?=h($pLabel)?></span></label><textarea id="fb-<?=(int)$p['id']?>" name="feedback" rows="2" maxlength="2000"><?=h((string)($p['staff_feedback']??''))?></textarea>
+<?php $fbId='fb-'.(int)$p['id'];$fbFailed=isset(form_errors()[$fbId]); // a refused feedback is said on its own box, with the typed text kept (4.29.0) ?>
+<details<?=$fbFailed?' open':''?>><summary><?=!empty($p['staff_feedback'])?'Your feedback: '.h(mb_strimwidth((string)$p['staff_feedback'],0,80,'…')):'Give feedback'?><span class="visually-hidden"> on <?=h($pLabel)?></span></summary><form method="post" action="workflows.php?view=homework" class="stacked"><?=csrf_field()?><input type="hidden" name="client_id" value="<?=$clientId?>"><input type="hidden" name="practice_id" value="<?=(int)$p['id']?>">
+<?=form_error_summary([$fbId=>'Feedback for the client'])?>
+<label for="<?=$fbId?>">Feedback for the client<span class="visually-hidden"> on <?=h($pLabel)?></span></label><textarea id="<?=$fbId?>" name="feedback" rows="2" maxlength="2000" <?=field_aria($fbId)?>><?=h($fbFailed?old_in('feedback'):(string)($p['staff_feedback']??''))?></textarea><?=field_error($fbId)?>
 <button type="submit" name="practice_feedback" value="1" class="btn btn-secondary btn-sm"><?=!empty($p['staff_feedback'])?'Update feedback':'Save feedback'?><span class="visually-hidden"> on <?=h($pLabel)?></span></button></form></details></section><?php endforeach;?>
 <?php if(!$practice):?><p>No practice updates for this client yet.</p><?php endif;?>
 <form method="post"><?=csrf_field()?><input type="hidden" name="client_id" value="<?=$clientId?>"><button name="adapt" value="1" class="btn btn-secondary">Draft homework adaptations for review</button></form>

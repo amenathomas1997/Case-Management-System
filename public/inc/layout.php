@@ -60,13 +60,23 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
 <body>
 <a class="skip-link" href="#main" accesskey="m"><?= t('Skip to main content') ?></a>
 <?php /* Staff shortcuts only: clients on the portal, referral or sign-in pages have no Dashboard or staff menu. */ ?>
+<?php
+// Staff on a translated public page (4.29.0): the staff shortcuts, header and menu are English
+// only, so they are written wholly in English and marked lang="en", never read in the page's
+// Spanish voice nor half translated. The page's own content keeps its language.
+$staffEn = $user && page_lang() !== 'en';
+$pageTranslation = $GLOBALS['PUBLIC_TRANSLATION'] ?? null;
+$staffLangAttr = $staffEn ? ' lang="en"' : '';
+if ($staffEn) $GLOBALS['PUBLIC_TRANSLATION'] = false;
+?>
 <?php if ($user): ?>
-<nav class="wrap page-actions cms-page-navigation" aria-label="<?= h(__('Page navigation')) ?>">
-  <span class="nav-item"><a class="btn btn-secondary" href="index.php" data-cms-back aria-describedby="hint-back"><?= t('Go back') ?></a><span id="hint-back" hidden><?= t('Returns to the page you came from. It does not undo a save.') ?></span><span class="nav-hint" aria-hidden="true"><?= t('Returns to the page you came from. It does not undo a save.') ?></span></span>
-  <span class="nav-item"><a class="btn btn-secondary" href="index.php" aria-describedby="hint-dashboard"><?= t('Dashboard') ?></a><span id="hint-dashboard" hidden><?= t('Your starting page.') ?></span><span class="nav-hint" aria-hidden="true"><?= t('Your starting page.') ?></span></span>
-  <span class="nav-item"><a class="btn btn-secondary" href="#main-nav" data-cms-menu accesskey="0" aria-describedby="hint-menu"><?= t('Go to main menu') ?></a><span id="hint-menu" hidden><?= t('Moves to the main menu, grouped by Today, Clients, Services and more.') ?></span><span class="nav-hint" aria-hidden="true"><?= t('Moves to the main menu, grouped by Today, Clients, Services and more.') ?></span></span>
+<nav class="wrap page-actions cms-page-navigation" aria-label="<?= h(__('Page navigation')) ?>"<?= $staffLangAttr ?>>
+  <span class="nav-item"><a class="btn btn-secondary" href="index.php" data-cms-back><?= t('Go back') ?><span class="nav-hint-sr visually-hidden">: <?= t('Returns to the page you came from. It does not undo a save.') ?></span></a><span class="nav-hint" aria-hidden="true"><?= t('Returns to the page you came from. It does not undo a save.') ?></span></span>
+  <span class="nav-item"><a class="btn btn-secondary" href="index.php"><?= t('Dashboard') ?><span class="nav-hint-sr visually-hidden">: <?= t('Your starting page.') ?></span></a><span class="nav-hint" aria-hidden="true"><?= t('Your starting page.') ?></span></span>
+  <span class="nav-item"><a class="btn btn-secondary" href="#main-nav" data-cms-menu accesskey="0"><?= t('Go to main menu') ?><span class="nav-hint-sr visually-hidden">: <?= t('Moves to the main menu, grouped by Today, Clients, Services and more.') ?></span></a><span class="nav-hint" aria-hidden="true"><?= t('Moves to the main menu, grouped by Today, Clients, Services and more.') ?></span></span>
 </nav>
 <?php endif; ?>
+<?php if ($staffEn) $GLOBALS['PUBLIC_TRANSLATION'] = $pageTranslation; ?>
 <section id="low-vision-bar" class="vision-bar" aria-labelledby="vision-title" data-saved="<?= h(__('Display updated.')) ?>" data-account-hidden="<?= $hideVision ? 'true' : 'false' ?>" hidden>
   <div class="wrap">
     <?php /* The heading stays outside the summary: inside it, it becomes part of a button and drops out of the headings list. */ ?>
@@ -95,7 +105,8 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
     <span id="vision-live" class="visually-hidden" role="status"></span>
   </div>
 </section>
-<header class="site-header" aria-label="<?= h(__('Site header')) ?>">
+<?php if ($staffEn) $GLOBALS['PUBLIC_TRANSLATION'] = false; ?>
+<header class="site-header" aria-label="<?= h(__('Site header')) ?>"<?= $staffLangAttr ?>>
   <div class="wrap header-inner">
     <?php if ($user): ?>
     <a class="brand" href="index.php"><?= brand_short_html() ?> <span class="brand-sub"><?= t('Case Management') ?></span></a>
@@ -157,6 +168,7 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
     <?php endif; ?>
   </div>
 </header>
+<?php if ($staffEn) $GLOBALS['PUBLIC_TRANSLATION'] = $pageTranslation; ?>
 <?php if ($user): ?>
 <script>
 /* Enable the collapsible mobile nav (progressive enhancement: with JS off the

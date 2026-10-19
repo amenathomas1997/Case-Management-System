@@ -186,14 +186,15 @@ struct ContractDeliverableSheet: View {
     @EnvironmentObject var api: API
     @Environment(\.dismiss) private var dismiss
     let contractId: Int; let onDone: () -> Void
+    /// Sent as idem_key (4.29.0), so a retry after a lost reply does not add the deliverable twice.
+    @State private var idem = IdemKey()
     @State private var title = ""; @State private var hasDue = false; @State private var due = Date()
     @State private var busy = false; @State private var error: String?
     @State private var askingDiscard = false
     private var hasChanges: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasDue }
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 ContractCaptionedField(label: "Deliverable (required)", text: $title)
                 Toggle("Due date", isOn: $hasDue)
                 if hasDue { DatePicker("Due", selection: $due, displayedComponents: .date) }
@@ -216,10 +217,11 @@ struct ContractDeliverableSheet: View {
         busy = true; error = nil
         var b: [String: Any] = ["contract_id": contractId, "op": "add_deliverable", "title": title]
         if hasDue { b["due_date"] = APIDate.day(due) }
+        b["idem_key"] = idem.key(for: b)
         // The presenter confirms once the sheet has gone: closing it moves VoiceOver focus,
         // which would cut off an announcement made here.
-        do { let _: OKResponse = try await api.call("contract_update", body: b); onDone(); dismiss() }
-        catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
+        do { let _: OKResponse = try await api.call("contract_update", body: b); idem.answered(); onDone(); dismiss() }
+        catch { idem.failed(error); showFormError(IdemKey.message(for: error, what: "the deliverable"), in: &self.error); busy = false }
     }
 }
 
@@ -227,6 +229,8 @@ struct ContractSpendSheet: View {
     @EnvironmentObject var api: API
     @Environment(\.dismiss) private var dismiss
     let contractId: Int; let onDone: () -> Void
+    /// Sent as idem_key (4.29.0), so a retry after a lost reply does not count the spending twice.
+    @State private var idem = IdemKey()
     @State private var amount = ""; @State private var date = Date(); @State private var memo = ""
     @State private var busy = false; @State private var error: String?
     @State private var askingDiscard = false
@@ -237,8 +241,7 @@ struct ContractSpendSheet: View {
     }
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 ContractCaptionedField(label: "Amount (required, digits, like 1250.00)", shortName: "Amount", text: $amount, keyboard: .decimalPad)
                 DatePicker("Date", selection: $date, displayedComponents: .date)
                 ContractCaptionedField(label: "Memo", text: $memo)
@@ -261,14 +264,17 @@ struct ContractSpendSheet: View {
         guard !amount.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { showFormError("Amount is required.", in: &error); return }
         guard let amountText = checkedAmount(amount), !amountText.isEmpty else { showFormError(amountFormatMessage("Amount"), in: &error); return }
         busy = true; error = nil
-        do { let _: OKResponse = try await api.call("contract_update", body: ["contract_id": contractId, "op": "add_spend", "amount": amountText, "spent_on": APIDate.day(date), "memo": memo]); onDone(); dismiss() }
+        var b: [String: Any] = ["contract_id": contractId, "op": "add_spend", "amount": amountText, "spent_on": APIDate.day(date), "memo": memo]
+        b["idem_key"] = idem.key(for: b)
+        do { let _: OKResponse = try await api.call("contract_update", body: b); idem.answered(); onDone(); dismiss() }
         catch APIError.network {
             // The request may have arrived: it isn't known whether the spending was recorded, and
             // saving it again would count the money twice against the contract.
+            // The key is kept (4.29.0): saving again unchanged is recognised and not counted twice.
             showFormError("The connection dropped before the server answered, so it isn't known whether this spending was recorded. Check the contract's spending for $\(amountText) on \(date.formatted(date: .abbreviated, time: .omitted)) before saving it again.", in: &self.error)
             busy = false
         }
-        catch { showFormError(error.localizedDescription, in: &self.error); busy = false }
+        catch { idem.failed(error); showFormError(error.localizedDescription, in: &self.error); busy = false }
     }
 }
 
@@ -287,8 +293,7 @@ struct ContractNewSheet: View {
     }
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 // Captions that stay visible once the fields are filled in.
                 ContractCaptionedField(label: "Name (required)", text: $name)
                 ContractCaptionedField(label: "Funder", text: $funder)

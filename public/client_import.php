@@ -65,12 +65,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
     if (($f['size'] ?? 0) > 2 * 1024 * 1024) { keep_field_errors(['csv' => 'That file is larger than 2 MB. Split it into smaller files.']); redirect('client_import.php?kind=' . $kind); }
     $fh = fopen($f['tmp_name'], 'r');
     $header = $fh ? cimport_row($fh, $converted) : false;
-    if ($header === false) { flash('The file appears to be empty.', 'error'); redirect('client_import.php?kind=' . $kind); }
+    if ($header === false) { keep_field_errors(['csv' => 'The file appears to be empty. Choose a CSV file with a header row and your rows.']); redirect('client_import.php?kind=' . $kind); }
     $header[0] = preg_replace('/^\xEF\xBB\xBF/', '', (string)$header[0]);
     $idx = [];
     foreach ($header as $i => $h) { $k = strtolower((string)preg_replace('/[\s\-]+/u', '_', trim((string)$h))); if (in_array($k, CIMPORT_COLUMNS[$kind], true) && !isset($idx[$k])) $idx[$k] = $i; }
     $need = $kind === 'clients' ? ['name'] : ['client_name', 'auth_number', 'funding_agency', 'authorized_hours', 'hourly_rate'];
-    if ($missing = array_diff($need, array_keys($idx))) { fclose($fh); flash('The file needs these columns: ' . implode(', ', $missing) . '. Download the template.', 'error'); redirect('client_import.php?kind=' . $kind); }
+    if ($missing = array_diff($need, array_keys($idx))) { fclose($fh); keep_field_errors(['csv' => 'The file needs these columns: ' . implode(', ', $missing) . '. Download the template.']); redirect('client_import.php?kind=' . $kind); }
     $get = fn(array $row, string $c) => isset($idx[$c]) ? trim((string)($row[$idx[$c]] ?? '')) : '';
     $staff = [];
     // Only someone who can open client records can hold a caseload (as client_edit.php and the transfer require).

@@ -15,6 +15,8 @@ import org.casemanagement.app.ApiException
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
 import org.json.JSONObject
+import org.casemanagement.app.ratingsFromText
+import org.casemanagement.app.ratingsToText
 
 private val SCORE_FALLBACK = listOf("Unable", "Maximal assistance", "Moderate assistance", "Minimal assistance / prompts", "Independent")
 private val LEVEL_FALLBACK = listOf("Not started", "Introduced", "Practicing", "Proficient", "Mastered")
@@ -73,10 +75,13 @@ fun ScoredNewScreen(api: Api, nav: NavHostController, clientId: Int) {
     val instruments = rememberLoaded(clientId) { api.call("instruments").optJSONArray("instruments").objects() }
     var chosen by rememberSaveable { mutableStateOf("") }
     val items = rememberLoaded(chosen) { if (chosen.isEmpty()) null else api.call("instrument_items", mapOf("id" to chosen)) }
-    var scores by remember(chosen) { mutableStateOf<Map<Int, Int>>(emptyMap()) }
+    // 4.29.0: every rating kept across rotation and a text-size change (as text), and started again
+    // only when another instrument is chosen.
+    var scoresText by rememberSaveable(chosen) { mutableStateOf("") }
+    val scores = ratingsFromText(scoresText)
     var date by rememberSaveable { mutableStateOf(today()) }
     var notes by rememberSaveable { mutableStateOf("") }
-    var confirming by remember { mutableStateOf(false) }
+    var confirming by rememberSaveable { mutableStateOf(false) }
     var scoredKey by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -95,7 +100,7 @@ fun ScoredNewScreen(api: Api, nav: NavHostController, clientId: Int) {
             its.forEachIndexed { n, item ->
                 val id = item.optInt("id")
                 Choice("${n + 1}. " + item.optString("label"), scores[id]?.toString() ?: "", listOf("" to "Choose a rating") + scale.map { (v, l) -> v.toString() to "$v, $l" }) { v ->
-                    scores = if (v.isEmpty()) scores - id else scores + (id to v.toInt())
+                    scoresText = ratingsToText(if (v.isEmpty()) scores - id else scores + (id to v.toInt()))
                 }
             }
             Field("Notes", notes, { notes = it }, hint = "optional", singleLine = false)
@@ -123,7 +128,9 @@ fun CompetencyScreen(api: Api, clientId: Int) {
     val curricula = rememberLoaded(clientId) { api.call("curricula").optJSONArray("curricula").objects() }
     var curriculum by rememberSaveable { mutableStateOf("") }
     val skills = rememberLoaded(curriculum) { if (curriculum.isEmpty()) emptyList() else api.call("client_competency", mapOf("client" to clientId.toString(), "curriculum" to curriculum)).optJSONArray("skills").objects() }
-    var changes by remember(curriculum) { mutableStateOf<Map<Int, Int>>(emptyMap()) }
+    // 4.29.0: the changed levels kept across rotation (as text), started again for another curriculum.
+    var changesText by rememberSaveable(curriculum) { mutableStateOf("") }
+    val changes = ratingsFromText(changesText)
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -141,7 +148,7 @@ fun CompetencyScreen(api: Api, clientId: Int) {
                 val current = changes[id] ?: (if (s.isNull("level")) 0 else s.optInt("level"))
                 Choice(s.optString("skill") + (if (id in changes) ", changed" else ""), current.toString(), levels.mapIndexed { i, l -> i.toString() to l }) { v ->
                     val stored = if (s.isNull("level")) 0 else s.optInt("level")
-                    changes = if (v.toInt() == stored) changes - id else changes + (id to v.toInt())
+                    changesText = ratingsToText(if (v.toInt() == stored) changes - id else changes + (id to v.toInt()))
                 }
             }
             ErrorText(error)
@@ -153,7 +160,7 @@ fun CompetencyScreen(api: Api, clientId: Int) {
                         val l = JSONObject(); changes.forEach { (k, v) -> l.put(k.toString(), v) }
                         val r = api.call("save_competency", body = JSONObject().put("client_id", clientId).put("levels", l))
                         notice = "${r.optInt("saved")} ${if (r.optInt("saved") == 1) "level" else "levels"} saved."
-                        changes = emptyMap(); skills.reload()
+                        changesText = ""; skills.reload()
                     } catch (e: ApiException) {
                         // A skill removed on the website: reload, keeping the unsaved changes.
                         error = e.message; if (e.status == 409) skills.reload()

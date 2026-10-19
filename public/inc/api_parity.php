@@ -16,7 +16,7 @@ declare(strict_types=1);
  *
  * 4.28.0: api.php includes this file for every action, for the retry guard below
  * (api_idem_begin / api_idem_end); the parity actions themselves run only for
- * API_PARITY_ACTIONS.
+ * API_PARITY_ACTIONS. 4.29.0: the guard is opened here, before the parity actions.
  */
 
 /*
@@ -45,7 +45,8 @@ if (!function_exists('api_idem_begin')) {
         // A copy arriving while the first is still working (a slow upload or email) waits for it.
         // Not got (timed out, or an error): the first copy is still working, so this one stops.
         try { $lk = db()->prepare('SELECT GET_LOCK(?, 30)'); $lk->execute([$m]); $got = (string)$lk->fetchColumn() === '1'; } catch (Throwable $e) { $got = false; }
-        if (!$got) out(['ok' => false, 'error' => 'This is still being processed. Try again in a moment.'], 409);
+        // processing (4.29.0): the app keeps its retry key, so the next try gets the first reply.
+        if (!$got) out(['ok' => false, 'processing' => true, 'error' => 'This is still being processed. Try again in a moment.'], 409);
         $q = db()->prepare('SELECT email FROM login_attempts WHERE email LIKE ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 1 DAY) ORDER BY id DESC LIMIT 1');
         $q->execute([$m . ':%']);
         $e = $q->fetchColumn();
@@ -80,6 +81,30 @@ if (!function_exists('api_idem_begin')) {
             error_log('api_idem_end: marker not kept: ' . get_class($e));
         }
     }
+}
+
+/*
+ * The guard itself (4.29.0): opened here, before any action runs. It used to sit in api.php
+ * after this file's parity actions, so save_task, save_track and request_consent (parity
+ * actions that are also in API_IDEM_ACTIONS) were done again on a retry. An action that
+ * saves or edits is guarded only when it creates; contract_update only for its two adds.
+ */
+if (in_array($action ?? '', API_IDEM_ACTIONS, true) && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    $idemCreates = match ($action) {
+        'save_client', 'save_kb', 'save_task', 'save_credential', 'at_save' => (int)($input['id'] ?? 0) <= 0,
+        'save_track' => (int)($input['id'] ?? $_GET['id'] ?? 0) <= 0,
+        'device_request_update' => ($input['op'] ?? '') === 'add_quote',
+        'cohort_member' => ($input['op'] ?? '') !== 'remove',
+        'contract_update' => in_array($input['op'] ?? '', ['add_spend', 'add_deliverable'], true),
+        default => true,
+    };
+    $idemKey = is_string($input['idem_key'] ?? null) ? $input['idem_key'] : null;
+    if ($idemCreates && $idemKey !== null) {
+        $idemPrev = api_idem_begin($action, $userId, $idemKey);
+        if ($idemPrev !== null) out($idemPrev);
+        $GLOBALS['API_IDEM_OPEN'] = [$action, $userId, $idemKey];
+    }
+    unset($idemCreates, $idemKey, $idemPrev);
 }
 
 if (!in_array($action ?? '', API_PARITY_ACTIONS, true)) return;
@@ -189,6 +214,38 @@ function parity_track_choices(array $client, ?array $track): array {
 }
 
 /** A training track's editable values as the app's form reads them. */
+/** The track fields the edit form holds (track_edit.php's TRACK_EDIT_TRACKED), with the names
+ *  said when someone else changed them (4.29.0, the app's stale-save check). */
+const PARITY_TRACK_FIELDS = ['title' => 'Track title', 'service_type' => 'Service type', 'rsa_category' => 'RSA service category', 'bundle_id' => 'Service bundle',
+    'status' => 'Status', 'report_cadence' => 'Automatic progress reports', 'billing_mode' => 'Who pays', 'auth_number' => 'Authorization number',
+    'funding_agency' => 'Funding agency', 'authorized_hours' => 'Authorized hours', 'authorized_amount' => 'Authorized dollar amount',
+    'hourly_rate' => 'Hourly billing rate', 'mileage_rate' => 'Mileage rate', 'start_date' => 'Start date', 'expiration_date' => 'Expiration date'];
+
+/** One tracked field (a stored row, or what the app sent) at the columns' precision (track_edit_norm). */
+function parity_track_norm(array $src, string $f): string {
+    $v = $src[$f] ?? null;
+    if (is_bool($v)) $v = $v ? '1' : '0';
+    if (!is_scalar($v)) return '';
+    $v = trim((string)$v);
+    if ($f === 'bundle_id') return (string)(int)$v;
+    if ($f === 'billing_mode') return $v === '' ? 'vr' : $v;
+    if (in_array($f, ['authorized_hours', 'hourly_rate', 'authorized_amount', 'mileage_rate'], true)) {
+        $v = str_replace([',', '$'], '', $v);
+        if ($v === '' || !is_numeric($v)) return $v;
+        return number_format(round((float)$v, $f === 'mileage_rate' ? 3 : 2), $f === 'mileage_rate' ? 3 : 2, '.', '');
+    }
+    return $v;
+}
+
+/** The saved version of a track's form fields (4.29.0). training_tracks has no updated_at
+ *  column, so the version is a fingerprint of what the edit form shows: the app reads it as
+ *  updated_at and sends it back as save_track's loaded_at. */
+function parity_track_version(array $t): string {
+    $snap = [];
+    foreach (array_keys(PARITY_TRACK_FIELDS) as $f) $snap[$f] = parity_track_norm($t, $f);
+    return 'v' . substr(hash('sha256', (string)json_encode($snap)), 0, 24);
+}
+
 function parity_track_values(array $t): array {
     return [
         'id' => (int)$t['id'], 'client_id' => (int)$t['client_id'], 'title' => (string)$t['title'],
@@ -199,6 +256,11 @@ function parity_track_values(array $t): array {
         'hourly_rate' => (float)$t['hourly_rate'], 'mileage_rate' => (float)($t['mileage_rate'] ?? 0),
         'start_date' => $t['start_date'], 'expiration_date' => $t['expiration_date'],
         'program' => track_program_label($t),
+        // Who pays and the dollar authorization (4.29.0), so an app's orig can carry every field
+        // the stale-save check compares; and the saved version, sent back as save_track's loaded_at.
+        'billing_mode' => (string)(($t['billing_mode'] ?? '') !== '' ? $t['billing_mode'] : 'vr'),
+        'authorized_amount' => isset($t['authorized_amount']) && $t['authorized_amount'] !== null ? (float)$t['authorized_amount'] : null,
+        'updated_at' => parity_track_version($t),
     ];
 }
 
@@ -502,7 +564,9 @@ case 'save_track': {
     // A new VR track with no rate sent charges the agency's own rate (4.2.0), as on the website.
     if ($isVr && !$track && $rate <= 0 && trim((string)($input['hourly_rate'] ?? '')) === '' && ($agencyRate = agency_hourly_rate($agency)) !== null) $rate = $agencyRate;
     if (!$isVr) {
-        if ($agency === '') $agency = $billingMode === 'private' ? 'Private pay' : 'No charge';
+        // The agency names the payer (4.29.0, as track_edit.php): a leftover "State VR" would count
+        // this work as the agency's in its billing summary, the funder report and RSA-911.
+        $agency = $billingMode === 'private' ? 'Private pay' : 'No charge';
         if ($billingMode === 'none') $rate = 0.0;
     }
     $authAmount = array_key_exists('authorized_amount', $input)
@@ -595,6 +659,29 @@ case 'save_track': {
         $locked->execute([$id]);
         $track = $locked->fetch();
         if (!$track) throw new DomainException('Training track no longer exists.');
+        // Two people editing one track (4.29.0, as track_edit.php and save_client): an app
+        // that sends loaded_at (the form's updated_at) and orig (the values the form opened
+        // with) is refused when the track changed since, so an old form never reverses a
+        // colleague's amendment or re-prices work back. Without either (older builds) the
+        // save goes ahead as before.
+        $loadedAt = is_string($input['loaded_at'] ?? null) && trim($input['loaded_at']) !== '' ? trim($input['loaded_at']) : null;
+        $origIn = is_array($input['orig'] ?? null) ? $input['orig'] : null;
+        $nowVersion = parity_track_version($track);
+        $theirs = [];
+        foreach (PARITY_TRACK_FIELDS as $f => $label) {
+            // With orig: the fields that differ from what the form opened with. Without it:
+            // the fields sent that differ from what is saved now.
+            $base = $origIn ?? $input;
+            if (!array_key_exists($f, $base)) continue;
+            if (parity_track_norm($track, $f) !== parity_track_norm($base, $f)) $theirs[] = $label;
+        }
+        $stale = ($loadedAt !== null && !hash_equals($nowVersion, $loadedAt)) || ($origIn !== null && $theirs);
+        if ($stale) {
+            db()->rollBack();
+            out(['ok' => false, 'conflict' => true, 'changed' => $theirs, 'updated_at' => $nowVersion, 'track' => parity_track_values($track),
+                'error' => ($origIn !== null && $theirs ? 'Someone else changed ' . api_list_words($theirs) . ' since you opened this track.' : 'Someone else changed this track since you opened it.')
+                    . ' Nothing was saved. Reload to see their changes, then make yours again.'], 409);
+        }
         $hoursChanged = round((float)$track['authorized_hours'], 2) !== round($authHours, 2);
         $rateChanged = round((float)$track['hourly_rate'], 2) !== round($rate, 2);
         $mileageChanged = round((float)$track['mileage_rate'], 3) !== round($mileageRate, 3);

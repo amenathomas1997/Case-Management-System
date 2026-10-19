@@ -69,6 +69,9 @@ $form = function (?array $c) use ($who): string {
     $type = $c ? (in_array($c['name'], $types, true) ? $c['name'] : 'Other') : '';
     ob_start(); ?>
   <form method="post" action="credentials.php" class="stacked" novalidate><?= csrf_field() ?>
+    <?php // 4.29.0: a focused summary of this form's errors, each linked to its field. ?>
+    <?= form_error_summary(['type' . $sfx => 'Credential', 'number' . $sfx => 'Number', 'issuer' . $sfx => 'Issued by', 'issued_on' . $sfx => 'Date issued', 'expires_on' . $sfx => 'Expires on', 'notes' . $sfx => 'Notes'],
+        ['type' . $sfx => 'ty' . $sfx, 'number' . $sfx => 'nu' . $sfx, 'issuer' . $sfx => 'is' . $sfx, 'issued_on' . $sfx => 'io' . $sfx, 'expires_on' . $sfx => 'eo' . $sfx, 'notes' . $sfx => 'no' . $sfx]) ?>
     <input type="hidden" name="credential_id" value="<?= (int)($c['id'] ?? 0) ?>">
     <input type="hidden" name="user_id" value="<?= $who ?>">
     <div class="field"><label for="ty<?= $sfx ?>">Credential</label>

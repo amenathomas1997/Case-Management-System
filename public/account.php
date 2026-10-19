@@ -104,13 +104,20 @@ function account_field_ids(array $errors, array $ids): array {
 
 /* ---- TOTP: begin setup ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_begin'])) {
+    // 4.29.0 (P14): never a setup whose key could not be kept encrypted (no usable key file).
+    if (($why = totp_store_problem()) !== null) { flash($why, 'error'); redirect('account.php#totp'); }
     $_SESSION['totp_pending_secret'] = totp_generate_secret();
     redirect('account.php#totp');
 }
 
 /* ---- TOTP: confirm with a live code ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_confirm'])) {
-    $r = account_totp_confirm($user, (string)($_SESSION['totp_pending_secret'] ?? ''), $_POST['password'] ?? '', $_POST['totp_code'] ?? '', account_reauth($user));
+    try {
+        $r = account_totp_confirm($user, (string)($_SESSION['totp_pending_secret'] ?? ''), $_POST['password'] ?? '', $_POST['totp_code'] ?? '', account_reauth($user));
+    } catch (TotpStoreRefused $e) {
+        // 4.29.0 (P14): the seed could not be stored encrypted, so nothing was stored.
+        $r = ['ok' => false, 'error' => $e->getMessage()];
+    }
     if ($r['ok']) {
         unset($_SESSION['totp_pending_secret']);
         flash($r['message']);
@@ -215,6 +222,8 @@ page_header('My Account', $user, 'account');
     if ((string)$pwFx['cal'] !== '') $pwEffects[] = 'turns off your calendar subscription address';
     $lastFx = array_pop($pwEffects);
     ?>
+    <?php // About the whole form, so above it rather than joined to one control (4.29.0). ?>
+    <p class="hint">Changing your password <?= h(($pwEffects ? implode(', ', $pwEffects) . ' and ' : '') . $lastFx) ?>.</p>
     <form method="post" action="account.php" class="stacked" novalidate>
       <?= csrf_field() ?>
       <?= form_error_summary(['current_password' => 'Current password', 'new_password' => 'New password', 'confirm_password' => 'Confirm new password', 'ack_passkeys' => 'Passkeys']) ?>
@@ -233,13 +242,12 @@ page_header('My Account', $user, 'account');
         <input type="password" id="confirm_password" name="confirm_password" required autocomplete="new-password" <?= field_aria('confirm_password') ?>>
         <?= field_error('confirm_password') ?>
       </div>
-      <p class="hint" id="pw-effects">Changing your password <?= h(($pwEffects ? implode(', ', $pwEffects) . ' and ' : '') . $lastFx) ?>.</p>
       <?php if ($myPasskeys): ?>
-      <div class="field"><label><input type="checkbox" id="ack_passkeys" name="ack_passkeys" value="1" <?= field_aria('ack_passkeys', 'pw-effects') ?>>
+      <div class="field"><label><input type="checkbox" id="ack_passkeys" name="ack_passkeys" value="1" <?= field_aria('ack_passkeys') ?>>
         I understand my <?= $myPasskeys ?> passkey<?= $myPasskeys === 1 ? '' : 's' ?> will be removed (required)</label>
         <?= field_error('ack_passkeys') ?></div>
       <?php endif; ?>
-      <button type="submit" name="change_password" value="1" class="btn btn-primary" aria-describedby="pw-effects">Change password</button>
+      <button type="submit" name="change_password" value="1" class="btn btn-primary">Change password</button>
     </form>
 
     <h2 id="totp">Authenticator app (optional second option)</h2>

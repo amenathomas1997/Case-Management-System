@@ -178,7 +178,7 @@ page_header('AI assistant', $user, 'admin', [['admin.php', 'Administration']]);
     </fieldset>
 
     <button type="submit" name="save_ai" value="1" class="btn btn-primary">Save settings</button>
-    <a class="btn btn-secondary" href="admin.php#forms-h">Back to My Account</a>
+    <a class="btn btn-secondary" href="admin.php#forms-h">Back to Administration</a>
   </form>
   <p class="muted" style="margin-top:1rem;">Status: <strong><?= $active ? 'Active (' . h($providers[$savedProvider]['label']) . ')' : ($savedEnabled ? 'Enabled, but not fully configured (needs an API key' . ($savedProvider === 'custom' ? ' and base URL' : '') . ')' : 'Off') ?></strong>
     <?= ai_redaction_on() ? ' · <span class="badge badge-closed">Redaction on</span>' : ' · <span class="badge badge-pending">Redaction off</span>' ?></p>

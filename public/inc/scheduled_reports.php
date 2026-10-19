@@ -143,11 +143,21 @@ function outcome_metrics(string $from, string $to, string $rt = 'training_tracks
  * be selected (as on the agency summary). $rt / $ri: the training_tracks and invoices sources.
  */
 function funder_agencies(string $rt = 'training_tracks', string $ri = 'invoices'): array {
-    return db()->query("SELECT funding_agency, SUM(n) n FROM (
-            SELECT funding_agency, 1 n FROM {$rt} training_tracks WHERE funding_agency <> ''
+    // 4.29.0: VR tracks and VR invoices only (private-pay and no-charge work is no agency's),
+    // and one row per agency as it is called today, so an agency renamed after some of its
+    // invoices were sent is listed (and emailed) once, not under both names.
+    $rows = db()->query("SELECT funding_agency, SUM(n) n FROM (
+            SELECT funding_agency, 1 n FROM {$rt} training_tracks WHERE funding_agency <> '' AND COALESCE(billing_mode, 'vr') = 'vr'
             UNION ALL
-            SELECT DISTINCT funding_agency, 0 FROM {$ri} inv WHERE funding_agency IS NOT NULL AND funding_agency <> ''
-        ) x GROUP BY funding_agency ORDER BY funding_agency")->fetchAll();
+            SELECT DISTINCT funding_agency, 0 FROM {$ri} inv WHERE funding_agency IS NOT NULL AND funding_agency <> '' AND COALESCE(bill_mode, 'vr') = 'vr'
+        ) x GROUP BY funding_agency")->fetchAll();
+    $n = [];
+    foreach ($rows as $r) $n[(string)$r['funding_agency']] = (int)$r['n'];
+    $out = [];
+    foreach (agency_resolved_groups(array_keys($n)) as $name => $names) {
+        $out[] = ['funding_agency' => $name, 'n' => array_sum(array_map(fn($x) => $n[$x] ?? 0, $names))];
+    }
+    return $out;
 }
 
 /** Metrics for one funding agency over the period. $rt: the training_tracks source. */
@@ -156,19 +166,23 @@ function funder_metrics(string $agency, string $from, string $to, string $rt = '
     // invoices sent under the old name still count here (agency_spellings()).
     $sp = agency_spellings($agency);
     $inA = '(' . implode(',', array_fill(0, count($sp), '?')) . ')';
-    $clientsOfAgency = "client_id IN (SELECT DISTINCT client_id FROM {$rt} training_tracks WHERE funding_agency IN {$inA})";
+    // 4.29.0: a client counts for the agency through a VR track of theirs only; a private-pay
+    // or no-charge track that still names the agency is not the agency's (vr_work_sql()).
+    $clientsOfAgency = "client_id IN (SELECT DISTINCT client_id FROM {$rt} training_tracks WHERE funding_agency IN {$inA} AND COALESCE(billing_mode, 'vr') = 'vr')";
     // Billed lines count under the agency snapshotted on their invoice (as agency_report.php
     // and analytics.php attribute them), so editing a track's agency later does not move
     // work already invoiced; unbilled lines, and older invoices, use the track's.
+    // 4.29.0: VR work only (the invoice's bill mode once billed, the track's "Who pays" before).
     $agencyExpr = 'COALESCE(i.funding_agency, t.funding_agency)';
+    $vr = vr_work_sql('t', 'i');
     $logs = "work_logs w JOIN {$rt} t ON t.id = w.track_id LEFT JOIN invoices i ON i.id = w.invoice_id";
 
-    $served = db()->prepare("SELECT COUNT(DISTINCT t.client_id) n FROM {$logs} WHERE {$agencyExpr} IN {$inA} AND w.work_date BETWEEN ? AND ?");
+    $served = db()->prepare("SELECT COUNT(DISTINCT t.client_id) n FROM {$logs} WHERE {$vr} AND {$agencyExpr} IN {$inA} AND w.work_date BETWEEN ? AND ?");
     $served->execute([...$sp, $from, $to]); $servedTotal = (int)$served->fetchColumn();
 
     $tot = db()->prepare("SELECT COALESCE(SUM(w.hours),0) hrs, COALESCE(SUM(w.mileage),0) mi,
             COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate,t.hourly_rate),2) + ROUND(w.mileage * COALESCE(w.mileage_rate,t.mileage_rate),2)),0) val
-        FROM {$logs} WHERE {$agencyExpr} IN {$inA} AND w.work_date BETWEEN ? AND ?");
+        FROM {$logs} WHERE {$vr} AND {$agencyExpr} IN {$inA} AND w.work_date BETWEEN ? AND ?");
     $tot->execute([...$sp, $from, $to]); $totals = $tot->fetch();
 
     // Track expenses are billed on the same invoices as the hours and mileage
@@ -176,19 +190,19 @@ function funder_metrics(string $agency, string $from, string $to, string $rt = '
     // agency snapshotted on their invoice — and the total matches the agency billing
     // summary for the same agency and dates.
     $exp = db()->prepare("SELECT COALESCE(SUM(e.amount),0) FROM track_expenses e JOIN {$rt} t ON t.id = e.track_id
-        LEFT JOIN invoices i ON i.id = e.invoice_id WHERE {$agencyExpr} IN {$inA} AND e.expense_date BETWEEN ? AND ?");
+        LEFT JOIN invoices i ON i.id = e.invoice_id WHERE {$vr} AND {$agencyExpr} IN {$inA} AND e.expense_date BETWEEN ? AND ?");
     $exp->execute([...$sp, $from, $to]); $expenses = (float)$exp->fetchColumn();
 
     // Same value expression as the headline total (hours + mileage, each line rounded
     // to the cent as the invoices round it), so the category values add up to it.
     $byCat = db()->prepare("SELECT COALESCE(w.rsa_category, t.rsa_category, 'Uncategorized') cat, COUNT(DISTINCT t.client_id) clients,
             COALESCE(SUM(w.hours),0) hrs, COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate,t.hourly_rate),2) + ROUND(w.mileage * COALESCE(w.mileage_rate,t.mileage_rate),2)),0) val
-        FROM {$logs} WHERE {$agencyExpr} IN {$inA} AND w.work_date BETWEEN ? AND ? GROUP BY cat ORDER BY hrs DESC");
+        FROM {$logs} WHERE {$vr} AND {$agencyExpr} IN {$inA} AND w.work_date BETWEEN ? AND ? GROUP BY cat ORDER BY hrs DESC");
     $byCat->execute([...$sp, $from, $to]); $byCat = $byCat->fetchAll();
 
     $goals = db()->prepare("SELECT COUNT(*) total, SUM(g.status = 'Achieved') achieved, AVG(g.progress_pct) avgpct
         FROM smart_goals g JOIN {$rt} t ON t.id = g.track_id
-        WHERE t.funding_agency IN {$inA} AND g.created_at BETWEEN ? AND ?");
+        WHERE t.funding_agency IN {$inA} AND COALESCE(t.billing_mode, 'vr') = 'vr' AND g.created_at BETWEEN ? AND ?");
     $goals->execute([...$sp, $from, $to . ' 23:59:59']); $goals = $goals->fetch();
 
     $ret = db()->prepare("SELECT COUNT(*) done, SUM(f.in_use = 1) in_use FROM equipment_followups f

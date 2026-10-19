@@ -57,7 +57,7 @@ fun AtRecordScreen(api: Api, nav: NavHostController, id: Int) {
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var issuing by rememberSaveable { mutableStateOf(false) }
-    var returning by remember { mutableStateOf(false) }
+    var returning by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     Show(state, "the record") { r ->
         val rec = r.optJSONObject("record") ?: JSONObject()
@@ -79,8 +79,11 @@ fun AtRecordScreen(api: Api, nav: NavHostController, id: Int) {
             }
             if (!(kind == "reuse" && rec.optString("status") == "Redeployed")) SecondaryButton("Edit") { nav.navigate("atEdit/$kind/$id/0") }
             if ((kind == "repair" || kind == "reuse") && api.can("equipment")) {
-                SecondaryButton("Lend a loaner or the item") { issuing = true }
-                SecondaryButton("Record the return") { returning = true }
+                // 4.29.0: each only when it can work, as on the website: return for a linked loan not
+                // yet returned, lend when nothing is out.
+                val out = values.optString("loan_id").isNotEmpty() && r.optJSONObject("summary")?.optString("Returned") == "Not returned"
+                if (!out) SecondaryButton("Lend a loaner or the item") { issuing = true }
+                if (out) SecondaryButton("Record the return") { returning = true }
             }
             if (kind == "trial") SecondaryButton("Share the trial report") {
                 scope.launch {
@@ -151,6 +154,10 @@ fun AtEditScreen(api: Api, nav: NavHostController, kind: String, id: Int, parent
         var draft by remember { mutableStateOf("") }
         var before by remember { mutableStateOf<Pair<String, String>?>(null) }
         var error by remember { mutableStateOf<String?>(null) }
+        // 4.29.0: the server's refusal shown on the field it names (its message starts with the label).
+        var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+        // 4.29.0: a new record is added once even when a reply was lost (see sendOnce).
+        var newKey by rememberSaveable { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         val map = values.value.toMap()
@@ -158,8 +165,8 @@ fun AtEditScreen(api: Api, nav: NavHostController, kind: String, id: Int, parent
         val locked = if (id > 0) setOf("client_id", "parent_id") + (if (kind == "repair" || kind == "reuse") setOf("equipment_id") else emptySet()) else emptySet()
         Page {
             Heading(if (id > 0) "Edit" else "Add", large = true)
-            Field("Title", title, { title = it })
-            if (statuses.isNotEmpty()) Choice("Status", status, statuses.map { it to it }) { status = it }
+            Field("Title", title, { title = it }, error = fieldErrors["title"])
+            if (statuses.isNotEmpty()) Choice("Status", status, statuses.map { it to it }, error = fieldErrors["status"]) { status = it }
             fields.forEach { f ->
                 val key = f.optString("key"); val label = f.optString("label") + if (f.optBoolean("required")) "" else " (optional)"
                 val v = map[key] ?: ""
@@ -167,11 +174,11 @@ fun AtEditScreen(api: Api, nav: NavHostController, kind: String, id: Int, parent
                 val options = f.optJSONArray("options").objects()
                 when {
                     key in locked -> ListRow(listOf(f.optString("label") + ": " + (options.firstOrNull { it.optString("value") == v }?.optString("label") ?: v)))
-                    f.optString("type") in setOf("select", "reference") || options.isNotEmpty() -> Choice(label, v, listOf("" to "Not chosen") + options.map { it.optString("value") to it.optString("label") }) { set(it) }
-                    f.optString("type") == "score" -> Choice(label, v, listOf("" to "Not chosen") + (1..5).map { it.toString() to "$it of 5" }) { set(it) }
+                    f.optString("type") in setOf("select", "reference") || options.isNotEmpty() -> Choice(label, v, listOf("" to "Not chosen") + options.map { it.optString("value") to it.optString("label") }, error = fieldErrors[key]) { set(it) }
+                    f.optString("type") == "score" -> Choice(label, v, listOf("" to "Not chosen") + (1..5).map { it.toString() to "$it of 5" }, error = fieldErrors[key]) { set(it) }
                     else -> {
                         Field(label, v, set, hint = when (f.optString("type")) { "date" -> "year-month-day"; "money" -> "dollars"; "url" -> "https://…"; else -> null },
-                            singleLine = f.optString("type") != "textarea", keyboard = when (f.optString("type")) { "money" -> KeyboardType.Decimal; "integer" -> KeyboardType.Number; "url" -> KeyboardType.Uri; else -> KeyboardType.Text })
+                            singleLine = f.optString("type") != "textarea", error = fieldErrors[key], keyboard = when (f.optString("type")) { "money" -> KeyboardType.Decimal; "integer" -> KeyboardType.Number; "url" -> KeyboardType.Uri; else -> KeyboardType.Text })
                         if (api.aiHas("draft") && f.optString("type") in setOf("text", "textarea")) SecondaryButton("Draft ${f.optString("label").lowercase()} with AI") { draftFor = key; draft = "" }
                     }
                 }
@@ -197,13 +204,19 @@ fun AtEditScreen(api: Api, nav: NavHostController, kind: String, id: Int, parent
             }
             ErrorText(error)
             PrimaryButton("Save", busy = busy, enabled = title.isNotBlank()) {
+                if (busy) return@PrimaryButton
                 scope.launchSave({ busy = it }, { error = it }) {
+                    fieldErrors = emptyMap()
                     val vals = JSONObject()
                     map.forEach { (k, x) -> vals.put(k, if (fields.firstOrNull { it.optString("key") == k }?.optString("type") == "money") x.replace(',', '.').trim() else x.trim()) }
+                    val b = JSONObject().put("kind", kind).put("id", id).put("version", rec.optInt("version")).put("title", title.trim()).put("status", status).put("values", vals)
                     try {
-                        api.call("at_save", body = JSONObject().put("kind", kind).put("id", id).put("version", rec.optInt("version")).put("title", title.trim()).put("status", status).put("values", vals))
+                        if (id == 0) api.callOnce("at_save", b, newKey, { newKey = it }, "the record") else api.call("at_save", body = b)
                     } catch (e: ApiException) {
-                        if (e.network && id == 0) throw ApiException("The connection dropped before the server answered, so this may have been saved. Go back and check the list before adding it again.")
+                        val m = e.message ?: ""
+                        // The field whose label the message starts with (the longest, so "Due date" wins over "Due").
+                        val labels = fields.map { it.optString("key") to it.optString("label") } + listOf("title" to "Title", "status" to "Status")
+                        labels.filter { (_, l) -> l.isNotEmpty() && m.startsWith(l) }.maxByOrNull { it.second.length }?.let { (k, _) -> fieldErrors = mapOf(k to m) }
                         throw e
                     }
                     Flash.pending = "Saved."

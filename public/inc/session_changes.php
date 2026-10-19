@@ -28,6 +28,41 @@ function session_move_warnings(array $sess, int $start, int $end): array {
     return $out;
 }
 
+/**
+ * The instructor's own Scheduled sessions that overlap any of $occurrences ([[start, end], ...]),
+ * as warning lines for a booking's approval box (4.29.0), worded as the API's: "<Instructor>
+ * already has a session from 10:00 to 11:30 with another client." ("with this client." when it is
+ * a session of the client being booked; for a series the day is named: "on Tue, Oct 20 from ...").
+ * A session of a booked client at exactly the same start is left out (the repeated-submit check
+ * handles it), and so is $excludeGroup. Call it under session_lock_instructor() so a booking made
+ * at the same moment is seen. At most 5 lines, then a count.
+ */
+function session_instructor_overlaps(int $userId, string $userName, array $occurrences, array $bookedClients = [], ?string $excludeGroup = null): array {
+    if ($userId <= 0 || !$occurrences) return [];
+    $own = array_values(array_filter(array_map('intval', $bookedClients)));
+    $q = db()->prepare("SELECT start_at, end_at, client_id FROM scheduled_sessions WHERE user_id = ? AND status = 'Scheduled'
+        AND start_at < ? AND end_at > ? AND (group_uid IS NULL OR group_uid <> ?) ORDER BY start_at, id");
+    $several = count($occurrences) > 1;
+    $lines = []; $more = 0;
+    foreach ($occurrences as $o) {
+        [$s0, $e0] = [(int)$o[0], (int)$o[1]];
+        $q->execute([$userId, date('Y-m-d H:i:s', $e0), date('Y-m-d H:i:s', $s0), (string)($excludeGroup ?? '')]);
+        $hit = null;
+        foreach ($q->fetchAll() as $r) {
+            if (in_array((int)$r['client_id'], $own, true) && strtotime((string)$r['start_at']) === $s0) continue;
+            $hit = $r; break;
+        }
+        if (!$hit) continue;
+        if (count($lines) >= 5) { $more++; continue; }
+        $hs = strtotime((string)$hit['start_at']); $he = strtotime((string)$hit['end_at']);
+        $whose = in_array((int)$hit['client_id'], $own, true) ? (count($own) > 1 ? 'one of these clients' : 'this client') : 'another client';
+        $lines[] = $userName . ' already has a session ' . ($several ? 'on ' . date('D, M j', $hs) . ' ' : '')
+            . 'from ' . date('G:i', $hs) . ' to ' . date('G:i', $he) . ' with ' . $whose . '.';
+    }
+    if ($more) $lines[] = 'And ' . $more . ' more of these dates overlap ' . $userName . '\'s other sessions.';
+    return $lines;
+}
+
 /** A fingerprint of the move warnings a form was shown, with the time they were about (4.28.0).
  *  The "Move anyway" box carries it, so it approves exactly those warnings for exactly that
  *  time: a box ticked and then sent with another time, or warnings that have changed since,

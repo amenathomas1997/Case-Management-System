@@ -39,29 +39,35 @@ try {
     foreach (STAGING_SCRUB_KEEP as $t => $keep) foreach ($keep as $c) if (!isset($cols[$t][$c])) $stale[] = "$t.$c";
     check(!$stale, 'every kept column exists in schema_full.sql' . ($stale ? ': ' . implode(', ', $stale) : ''));
 
-    // One row per table, the marker in every column that takes text.
+    // Two rows per table (4.29.0: a second row is what made two funding agencies both
+    // "[scrubbed]" and stopped the scrub on a UNIQUE key), the marker in every column that
+    // takes text; the rows differ in every column, so each UNIQUE key accepts both.
     $db->exec('SET FOREIGN_KEY_CHECKS=0');
     $seeded = [];
     foreach ($cols as $t => $columns) {
-        $names = []; $vals = [];
-        foreach ($columns as $c => $i) {
-            if (str_contains($i['extra'], 'auto_increment') || str_contains($i['extra'], 'generated')) continue;
-            $ty = $i['type'];
-            if (isset($jsonCols[$t][$c]) || $ty === 'json') $v = '{"m":"' . MARK . '"}';
-            elseif (in_array($ty, STAGING_SCRUB_TEXT_TYPES, true)) $v = $i['len'] !== null && $i['len'] < strlen(MARK . ' note') ? substr(MARK, 0, max(1, $i['len'])) : MARK . ' note';
-            elseif ($ty === 'enum' || $ty === 'set') { preg_match("/'((?:[^']|'')*)'/", $i['ctype'], $m); $v = str_replace("''", "'", $m[1]); }
-            elseif ($ty === 'date') $v = '2001-02-03';
-            elseif (in_array($ty, ['datetime', 'timestamp'], true)) $v = '2001-02-03 04:05:06';
-            elseif ($ty === 'time') $v = '01:02:03';
-            elseif ($ty === 'year') $v = '2001';
-            else $v = '1';
-            $names[] = '`' . $c . '`'; $vals[] = $db->quote($v); $seeded[$t][$c] = $v;
+        foreach ([1, 2] as $row) {
+            $names = []; $vals = [];
+            foreach ($columns as $c => $i) {
+                if (str_contains($i['extra'], 'auto_increment') || str_contains($i['extra'], 'generated')) continue;
+                $ty = $i['type'];
+                $text = $row === 1 ? MARK . ' note' : MARK . ' note 2';
+                if (isset($jsonCols[$t][$c]) || $ty === 'json') $v = '{"m":"' . MARK . '","r":' . $row . '}';
+                elseif (in_array($ty, STAGING_SCRUB_TEXT_TYPES, true)) $v = $i['len'] !== null && $i['len'] < strlen($text) ? substr(($row === 1 ? '' : '2') . MARK, 0, max(1, $i['len'])) : $text;
+                elseif ($ty === 'enum' || $ty === 'set') { preg_match_all("/'((?:[^']|'')*)'/", $i['ctype'], $m); $v = str_replace("''", "'", $m[1][min($row - 1, count($m[1]) - 1)]); }
+                elseif ($ty === 'date') $v = $row === 1 ? '2001-02-03' : '2001-02-04';
+                elseif (in_array($ty, ['datetime', 'timestamp'], true)) $v = $row === 1 ? '2001-02-03 04:05:06' : '2001-02-04 04:05:06';
+                elseif ($ty === 'time') $v = $row === 1 ? '01:02:03' : '01:02:04';
+                elseif ($ty === 'year') $v = $row === 1 ? '2001' : '2002';
+                else $v = (string)$row;
+                $names[] = '`' . $c . '`'; $vals[] = $db->quote($v); $seeded[$t][$c][$row] = $v;
+            }
+            $db->exec("INSERT INTO `$t` (" . implode(', ', $names) . ') VALUES (' . implode(', ', $vals) . ')');
         }
-        $db->exec("INSERT INTO `$t` (" . implode(', ', $names) . ') VALUES (' . implode(', ', $vals) . ')');
     }
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
-    check(true, 'seeded one marked row in each of ' . count($cols) . ' tables');
+    check(true, 'seeded two marked rows in each of ' . count($cols) . ' tables');
 
+    $db->exec("INSERT INTO settings (name, value) VALUES ('cfg.graph.client_secret', 'V429-JOBS synthetic secret')");
     staging_scrub($db);
     staging_admin($db, 'staging-admin@example.invalid', 'correct horse battery staple');
 
@@ -70,7 +76,7 @@ try {
         if (in_array($c, STAGING_SCRUB_KEEP[$t] ?? [], true)) continue;
         if (!in_array($i['type'], STAGING_SCRUB_TEXT_TYPES, true) && !isset($jsonCols[$t][$c])) continue;
         if (!isset($seeded[$t][$c])) continue;
-        $n = (int)$db->query("SELECT COUNT(*) FROM `$t` WHERE BINARY `$c` = BINARY " . $db->quote($seeded[$t][$c]) . " OR `$c` LIKE BINARY " . $db->quote('%' . MARK . '%'))->fetchColumn();
+        $n = (int)$db->query("SELECT COUNT(*) FROM `$t` WHERE BINARY `$c` IN (BINARY " . $db->quote($seeded[$t][$c][1]) . ", BINARY " . $db->quote($seeded[$t][$c][2]) . ") OR `$c` LIKE BINARY " . $db->quote('%' . MARK . '%'))->fetchColumn();
         if ($n) $left[] = "$t.$c";
     }
     check(!$left, 'no free text survives outside the keep list' . ($left ? ': ' . implode(', ', $left) : ''));
@@ -83,7 +89,16 @@ try {
         check(!in_array($db->query("SELECT `$c` FROM `$t`")->fetchColumn(), [false, null], true)
             && !str_contains((string)$db->query("SELECT `$c` FROM `$t`")->fetchColumn(), MARK), "$tc is scrubbed");
     }
-    check($db->query("SELECT name FROM clients")->fetchColumn() === 'Client 1', 'client names become Client N');
+    check($db->query("SELECT name FROM clients ORDER BY id")->fetchColumn() === 'Client 1', 'client names become Client N');
+    // Every UNIQUE key over a scrubbed text column keeps its rows apart (per-row values).
+    foreach (['funding_agencies.name', 'offices.name', 'qbo_customers.name_key', 'sms_log.provider_sid', 'goal_progress.idem_key'] as $tc) {
+        [$t, $c] = explode('.', $tc);
+        if (!isset($cols[$t][$c])) continue;
+        $vals = $db->query("SELECT `$c` FROM `$t` ORDER BY 1")->fetchAll(PDO::FETCH_COLUMN);
+        check(count($vals) === 2 && count(array_unique($vals)) === 2 && !str_contains(implode(' ', $vals), MARK), "$tc: each row gets its own scrubbed value");
+    }
+    check((int)$db->query("SELECT COUNT(*) FROM users WHERE password_hash <> '!staging' AND email <> 'staging-admin@example.invalid'")->fetchColumn() === 0
+        && (int)$db->query("SELECT COUNT(*) FROM settings WHERE name = 'cfg.graph.client_secret'")->fetchColumn() === 0, 'the scrub reached the tables after funding_agencies (passwords and stored secrets)');
     check(str_ends_with((string)$db->query("SELECT email FROM clients")->fetchColumn(), '@example.invalid'), 'client emails become example.invalid');
     check($db->query("SELECT dob FROM clients")->fetchColumn() === '2001-01-01', 'dates of birth keep the year only');
     check($db->query("SELECT due_date FROM homework")->fetchColumn() === '2001-02-03', 'ordinary dates are kept');
@@ -97,6 +112,10 @@ try {
     $sh = file_get_contents($root . '/dist/make_staging.sh');
     check(str_contains($sh, 'staging_scrub.php') && !str_contains($sh, '$plan = ['), 'make_staging.sh runs staging_scrub.php (one scrub, not two)');
     check(!preg_match('/rsync[^\n]*"\$PRIVATE_SRC\/"\s/', $sh), 'make_staging.sh never copies the whole private directory (deploy-*/ dumps stay in production)');
+    check(str_contains($sh, 'trap cleanup EXIT') && str_contains($sh, 'drop_staging_tables ||') && str_contains($sh, 'DB_TOUCHED=1') && str_contains($sh, 'FINISHED=1'),
+        'make_staging.sh drops the staging tables when any step fails after the load starts');
+    check(str_contains($sh, 'write_placeholder_config') && str_contains($sh, 'return false;') && str_contains($sh, 'was not written correctly'),
+        'make_staging.sh never lets the copy fall back to the production config.php');
 } finally {
     drop_all($db);
 }

@@ -114,7 +114,8 @@ class V428Test {
 
     @Test fun aKeptSignatureIsFittedToTheNewPad() {
         val s = listOf(listOf(100f to 50f, 200f to 100f))
-        assertEquals(listOf(listOf(50f to 200f, 100f to 400f)), scaleStrokes(s, 400, 100, 200, 400))
+        // 4.29.0: scaled the same both ways (the smaller factor) and centred, never stretched.
+        assertEquals(listOf(listOf(50f to 200f, 100f to 225f)), scaleStrokes(s, 400, 100, 200, 400))
         // The unknown size a restored pad starts from, or the same size, leaves it as it is.
         assertEquals(s, scaleStrokes(s, 1, 1, 200, 400))
         assertEquals(s, scaleStrokes(s, 400, 100, 400, 100))

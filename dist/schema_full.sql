@@ -1640,7 +1640,7 @@ CREATE TABLE `users` (
   KEY `idx_office` (`office_id`),
   UNIQUE KEY `email` (`email`),
   KEY `idx_cal_token` (`cal_token`),
-  KEY `idx_entra_oid` (`entra_oid`)
+  UNIQUE KEY `idx_entra_oid` (`entra_oid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `vrc_tokens`;

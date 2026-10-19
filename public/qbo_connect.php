@@ -23,7 +23,15 @@ if ($returning) {
     if (isset($_GET['error']) || !preg_match('/^\d{1,40}$/', $realm)) { flash('QuickBooks was not connected (it was cancelled or refused).', 'error'); redirect($back); }
     $tok = qbo_token_request($app, ['grant_type' => 'authorization_code', 'code' => (string)$_GET['code'], 'redirect_uri' => $app['redirect']]);
     if ($tok === null) { flash('QuickBooks did not accept the sign-in, so nothing was connected. Try again, or check the app\'s keys.', 'error'); redirect($back); }
-    qbo_store($tok, $realm, null, (int)$user['id']);
+    try {
+        qbo_store($tok, $realm, null, (int)$user['id']);
+    } catch (MeetingKeyUnavailable $e) {
+        // 4.29.0 (P14): the real reason and the way out, never a server error on the way back from Intuit.
+        error_log('qbo_connect: ' . $e->getMessage());
+        audit((int)$user['id'], 'qbo.connect_fail', 'settings', null, 'key file unusable: ' . mb_substr($e->getMessage(), 0, 150));
+        flash('QuickBooks was not connected: ' . MEETING_KEY_LOST_MSG, 'error');
+        redirect($back);
+    }
     // The company's name, so the page can say which books these are.
     [$code, $info] = qbo_api('GET', '/companyinfo/' . rawurlencode($realm));
     $name = (string)($info['CompanyInfo']['CompanyName'] ?? '');
@@ -33,6 +41,8 @@ if ($returning) {
     redirect($back);
 }
 
+// Not sent off to sign in when the connection could not be stored afterwards (4.29.0).
+try { meeting_key(); } catch (MeetingKeyUnavailable $e) { flash('QuickBooks was not connected: ' . MEETING_KEY_LOST_MSG, 'error'); redirect($back); }
 $state = bin2hex(random_bytes(16));
 $_SESSION['qbo_oauth'] = ['state' => $state];
 header('Location: ' . $app['authorize'] . '?' . http_build_query(['client_id' => $app['id'], 'response_type' => 'code', 'scope' => QBO_SCOPE, 'redirect_uri' => $app['redirect'], 'state' => $state]));

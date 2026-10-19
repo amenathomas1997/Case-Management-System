@@ -231,5 +231,19 @@ function backup_check(bool $import = true): array {
 function graph_secret_days_left(): ?int {
     $d = (string)(setting('graph_credential_expires') ?? '');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) return null;
-    return (int)floor((strtotime($d) - strtotime('today')) / 86400);
+    return ops_calendar_days_until($d);
+}
+
+/**
+ * Whole calendar days from $today (Y-m-d, default today in the app's time zone) to $date (Y-m-d);
+ * negative once it has passed. 4.29.0: counted on the calendar, not in seconds, so the 23-hour
+ * day of the spring clock change never makes 30 into 29 (the 30, 14 and 7-day warnings were
+ * skipped, and "has expired" came a day early).
+ */
+function ops_calendar_days_until(string $date, ?string $today = null): int {
+    $utc = new DateTimeZone('UTC');
+    $from = new DateTimeImmutable(($today ?? date('Y-m-d')) . ' 00:00:00', $utc);
+    $to = new DateTimeImmutable($date . ' 00:00:00', $utc);
+    $diff = $from->diff($to);
+    return $diff->invert ? -(int)$diff->days : (int)$diff->days;
 }

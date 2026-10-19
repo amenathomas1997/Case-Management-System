@@ -24,6 +24,9 @@ import org.casemanagement.app.objects
 import org.casemanagement.app.str
 import org.json.JSONObject
 import java.util.Locale
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import org.casemanagement.app.dialogKey
 
 
 /** Search clients, case notes, referrals and tracks, as the website's search. */
@@ -102,7 +105,9 @@ fun ComplianceScreen(api: Api, nav: NavHostController) {
 @Composable
 fun WaitlistScreen(api: Api) {
     val state = rememberLoaded(api.userId) { api.call("waitlist") }
-    var chosen by remember { mutableStateOf<JSONObject?>(null) }
+    // 4.29.0: the chosen person's referral id, kept across rotation; the dialog's fields are keyed by it,
+    // so one person's status and notes never show on (or save onto) another.
+    var chosenId by rememberSaveable { mutableIntStateOf(0) }
     var notice by remember { mutableStateOf<String?>(null) }
     Show(state, "the waitlist") { r ->
         val statuses = r.optJSONArray("statuses").let { a -> List(a?.length() ?: 0) { a!!.optString(it) } }
@@ -112,10 +117,12 @@ fun WaitlistScreen(api: Api) {
             Heading("Waitlist (${items.size})")
             items.forEach { w ->
                 ListRow(listOf(w.optString("client_name"), w.optString("status") + (w.str("followup_date")?.let { ", follow up " + dayText(it) } ?: ""), w.str("notes") ?: ""),
-                    action = "update it", onClick = { chosen = w })
+                    action = "update it", onClick = { chosenId = w.optInt("referral_id") })
             }
         }
-        chosen?.let { w -> WaitlistDialog(api, w, statuses, onDone = { m -> chosen = null; notice = m; state.reload() }, onCancel = { chosen = null }) }
+        r.optJSONArray("items").objects().firstOrNull { chosenId != 0 && it.optInt("referral_id") == chosenId }?.let { w ->
+            key(dialogKey("waitlist", chosenId)) { WaitlistDialog(api, w, statuses, onDone = { m -> chosenId = 0; notice = m; state.reload() }, onCancel = { chosenId = 0 }) }
+        }
     }
 }
 
@@ -125,28 +132,31 @@ private fun WaitlistDialog(api: Api, w: JSONObject, statuses: List<String>, onDo
     var followup by rememberSaveable { mutableStateOf(w.str("followup_date") ?: "") }
     var notes by rememberSaveable { mutableStateOf(w.str("notes") ?: "") }
     var error by remember { mutableStateOf<String?>(null) }
+    var followupError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     AlertDialog(
-        onDismissRequest = onCancel,
+        onDismissRequest = { if (!busy) onCancel() },
         title = { Text(w.optString("client_name"), modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Choice("Status", status, statuses.map { it to it }) { status = it }
-                Field("Follow up on", followup, { followup = it }, hint = "year-month-day, optional")
+                Field("Follow up on", followup, { followup = it }, hint = "year-month-day, optional", error = followupError)
                 Field("Notes", notes, { notes = it }, singleLine = false)
                 ErrorText(error)
             }
         },
         confirmButton = {
             TextButton(enabled = !busy, onClick = {
+                followupError = if (followup.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(followup.trim())) "Enter the follow-up date as year-month-day, such as ${today()}, or leave it empty." else null
+                followupError?.let { error = it; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
                     val r = api.call("waitlist_update", body = JSONObject().put("referral_id", w.optInt("referral_id")).put("status", status).put("followup_date", followup.trim()).put("notes", notes.trim()))
                     onDone(r.optString("message").ifEmpty { "Saved." })
                 }
             }) { Text(if (busy) "Saving…" else "Save") }
         },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = onCancel) { Text("Cancel") } },
     )
 }
 
@@ -221,7 +231,7 @@ fun IncidentsScreen(api: Api) {
             onDismissRequest = { chosen = null },
             title = { Text(i.optString("type") + ": " + i.optString("status"), modifier = Modifier.semantics { heading() }) },
             text = {
-                Column {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
                     listOf("Open", "Under review", "Closed").filter { it != i.optString("status") }.forEach { to ->
                         TextButton(onClick = {
                             chosen = null

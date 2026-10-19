@@ -41,10 +41,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['go'])) {
         if ($other === '') $errs['other'] = 'Type the language to translate into.';
         elseif (!preg_match('/^[\p{L}\p{M} ()\'’.-]{1,40}$/u', $other)) $errs['other'] = 'The language name can use only letters, spaces, hyphens, apostrophes, periods and parentheses (40 characters maximum).';
     }
-    if ($errs) {
-        set_form_errors($errs);
-        flash(implode(' ', $errs), 'error');
-    }
+    // One announcement (4.29.0): the summary above the form and each field's own error; no flash as well.
+    if ($errs) set_form_errors($errs);
     elseif (!ai_rate_limit((int)$user['id'])) { flash('You have reached the AI usage limit for now. Please wait a few minutes.', 'error'); }
     else {
         // Translations can need more tokens than the source text (non-Latin
@@ -78,6 +76,7 @@ page_header('Translate', $user, 'ai_tools');
 <p class="muted"><strong>The text you paste is sent to the AI provider as-is.</strong> Review machine translations before sending them to a client.</p>
 
 <form method="post" action="translate.php" class="stacked"><?= csrf_field() ?>
+  <?= form_error_summary(['other' => 'Other language', 'content' => 'Text to translate']) ?>
   <div class="grid grid-2">
     <div class="field"><label for="lang">Translate into</label><select id="lang" name="lang"><?= select_options(TRANSLATE_LANGS, $lang) ?></select></div>
     <div class="field"><label for="other">Other language <span class="hint">Only when “Other” is chosen above. Letters, spaces, hyphens, apostrophes, periods and parentheses; up to 40 characters.</span></label>

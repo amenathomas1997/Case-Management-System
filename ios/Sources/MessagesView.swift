@@ -246,6 +246,7 @@ struct MessageThreadView: View {
     }
 
     var body: some View {
+        GeometryReader { screen in
         VStack(spacing: 0) {
             Picker("Channel", selection: $channel) {
                 Text("Client").tag("client")
@@ -290,6 +291,8 @@ struct MessageThreadView: View {
                 }
             }
 
+            // 4.29.0: the controls under the conversation scroll when they would not fit.
+            VStack(spacing: 0) {
             if channel == "client" && textEnabled {
                 if textBlocked == nil {
                     Toggle("Also send it as a text message", isOn: $byText).padding(.horizontal)
@@ -327,6 +330,9 @@ struct MessageThreadView: View {
                 .accessibilityLabel("Send message to \(recipient)")
                 .disabled(sending || (attachment == nil && draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
             }.padding()
+            }
+            .modifier(ScrollsWhenCramped(maxHeight: screen.size.height * 0.5))
+        }
         }
         .navigationTitle(clientName)
         .navigationBarTitleDisplayMode(.inline)

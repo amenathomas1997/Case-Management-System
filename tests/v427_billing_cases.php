@@ -59,7 +59,10 @@ $st427=$db->query("SELECT qbo_status, qbo_error FROM invoices WHERE id=$qi427")-
 check($bad427>=1 && $st427['qbo_status']===null && str_contains((string)$st427['qbo_error'],'Settled in QuickBooks by another kind of transaction'),'A zero balance in QuickBooks not covered by payments here is shown to staff, and the invoice is still checked');
 invoice_apply($qi427,'payment',1000,date('Y-m-d'),'QuickBooks payment PX','Synthetic',1);
 $db->exec("UPDATE invoice_payments SET qbo_id='PX' WHERE invoice_id=$qi427");
-$fq427(['Balance'=>0,'LinkedTxn'=>[['TxnId'=>'PX','TxnType'=>'Payment']]]);
+// 4.29.0: a linked payment is read back on every check (so a changed amount is followed): QuickBooks
+// answers with the same $1,000 applied to this invoice.
+$fq427(['Balance'=>0,'LinkedTxn'=>[['TxnId'=>'PX','TxnType'=>'Payment']]],
+    ["$b427/payment/PX"=>['body'=>['Payment'=>['Id'=>'PX','TxnDate'=>date('Y-m-d'),'Line'=>[['Amount'=>1000,'LinkedTxn'=>[['TxnId'=>'Q427','TxnType'=>'Invoice']]]]]]]]);
 qbo_sync_all();
 check($db->query("SELECT qbo_status FROM invoices WHERE id=$qi427")->fetchColumn()==='paid','Paid in QuickBooks and covered here: marked paid');
 $px427=(int)$db->query("SELECT id FROM invoice_payments WHERE invoice_id=$qi427")->fetchColumn();

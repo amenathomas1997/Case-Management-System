@@ -100,6 +100,9 @@ switch ($action) {
 
     case 'totp_begin':
         if ($acct['totp_enabled']) fail('The authenticator app is already turned on. Turn it off first to set up a different one.', 409);
+        // 4.29.0 (P14): a seed is only ever stored encrypted, so with no usable key file no setup
+        // key is handed out (it could never be confirmed).
+        if (function_exists('totp_store_problem') && ($storeProblem = totp_store_problem()) !== null) fail($storeProblem, 422);
         // Kept on the server (as the website keeps it in the session) until confirmed or run out.
         $secret = totp_generate_secret();
         set_setting('totp_pending_' . $userId, json_encode(['secret' => $secret, 'expires' => time() + API_TOTP_PENDING_SECONDS]));
@@ -108,7 +111,13 @@ switch ($action) {
              'expires_minutes' => intdiv(API_TOTP_PENDING_SECONDS, 60)]);
 
     case 'totp_confirm':
-        $r = account_totp_confirm($acctUser, api_totp_pending($userId), $input['password'] ?? '', $input['code'] ?? '', $acctReauth);
+        // The seed is stored encrypted (4.29.0, P14): with no usable key file nothing is stored,
+        // and the pending setup is kept so it can be confirmed once the key file is fixed.
+        try {
+            $r = account_totp_confirm($acctUser, api_totp_pending($userId), $input['password'] ?? '', $input['code'] ?? '', $acctReauth);
+        } catch (TotpStoreRefused $e) {
+            fail($e->getMessage(), 422);
+        }
         if (!$r['ok']) {
             if (isset($r['error'])) api_totp_pending_clear($userId);   // it had run out
             api_account_refused($r);

@@ -669,7 +669,8 @@ final class SpeechController: NSObject, ObservableObject {
             // of a write is never dropped silently.
             guard gen == generation else { noteAside((r["speak"] as? String) ?? "Saved."); return }
             dispatch(r)
-        } catch APIError.network, APIError.outcomeUnknown {
+        } catch APIError.network, APIError.outcomeUnknown, APIError.processing {
+            // (4.29.0: "still being processed" too: an earlier try with this key is still running.)
             // No reply, a timeout, a server fault or an unreadable reply: the write may have
             // been saved. Never said as "try again" for a write that is not safe to repeat.
             guard Self.retrySafeOps.contains(confirm.op) else {
@@ -964,6 +965,7 @@ struct VoiceView: View {
 
     var body: some View {
         NavigationStack {
+            GeometryReader { screen in
             VStack(spacing: 0) {
                 // One banner (and so one announcement) per problem; the permission case adds a way out.
                 if let err = ctrl.errorText { ErrorBanner(message: err).padding(.horizontal) }
@@ -1034,11 +1036,16 @@ struct VoiceView: View {
                     }
                 }
 
-                statusLine
-                if ctrl.awaitingAnswer { answerButtons }
-                typedEntry
-                controls
-                options
+                // 4.29.0: the controls under the conversation scroll when they would not fit.
+                VStack(spacing: 0) {
+                    statusLine
+                    if ctrl.awaitingAnswer { answerButtons }
+                    typedEntry
+                    controls
+                    options
+                }
+                .modifier(ScrollsWhenCramped(maxHeight: screen.size.height * 0.6))
+            }
             }
             .navigationTitle("Voice assistant")
             .navigationBarTitleDisplayMode(.inline)

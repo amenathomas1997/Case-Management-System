@@ -188,9 +188,18 @@ try {
         if (setting($sentKey) === $srPeriod['stamp']) continue;
         $body = scheduled_report_text($srTitle, $srPeriod['label'], scheduled_report_sections($srKey, $srPeriod['from'], $srPeriod['to']));
         $subject = $srTitle . ' for ' . $srPeriod['label'] . ' — ' . brand('org');
-        $ok = []; $failed = [];
+        $ok = []; $failed = []; $unsure = [];
         foreach ($srCfg['recipients'] as $to) {
-            if (send_app_mail($to, $subject, $body)) $ok[] = $to; else $failed[] = $to;
+            // 4.29.0: an unknown outcome (Graph timed out or answered 5xx after the request went
+            // out) counts as sent, so the report is not mailed to everyone again tomorrow.
+            $o = send_app_mail_outcome($to, $subject, $body);
+            if ($o === 'sent') $ok[] = $to; elseif ($o === 'unknown') { $ok[] = $to; $unsure[] = $to; } else $failed[] = $to;
+        }
+        if ($unsure) {
+            // Said once: the period is marked below, so it is not tried (or reported) again.
+            notify_admins('Scheduled ' . strtolower($srTitle) . ': delivery not confirmed for ' . count($unsure) . ' address(es)',
+                "The mail service did not confirm delivery of the scheduled {$srTitle} for {$srPeriod['label']} to:\n\n- " . implode("\n- ", $unsure)
+                . "\n\nIt may have arrived, so it is not sent again automatically. Ask the recipient, and forward it from another recipient if it did not arrive.\n");
         }
         if ($ok) {
             set_setting($sentKey, $srPeriod['stamp']);

@@ -357,3 +357,29 @@ function loan_handoff_in(int $loanId, ?string $condition): void {
         db()->prepare('UPDATE equipment e JOIN equipment_loans l ON l.equipment_id = e.id SET e.item_condition = ? WHERE l.id = ?')->execute([$condition, $loanId]);
     } catch (PDOException $e) { if ((string)$e->getCode() !== '42S22') throw $e; }
 }
+
+/**
+ * Unreadable entries (4.29.0). A browser sends a date or number box it cannot read (a partly typed
+ * date, "3,000" in a number box in some browsers) as blank, which the server would take for a
+ * deliberate blank and clear the stored value. On submit this marks each such field as
+ * <name>_bad, so input_was_unreadable() refuses it on its field instead. Simple names only.
+ */
+function bad_input_script(): string {
+    return '<script>document.addEventListener("submit",function(e){var f=e.target;if(!f||!f.querySelectorAll)return;'
+        . 'f.querySelectorAll("input[data-bad-input-marker]").forEach(function(m){m.remove();});'
+        . 'f.querySelectorAll("input[type=date],input[type=number],input[type=time]").forEach(function(i){if(i.name&&/^[A-Za-z0-9_]+$/.test(i.name)&&i.validity&&i.validity.badInput){'
+        . 'var m=document.createElement("input");m.type="hidden";m.name=i.name+"_bad";m.value="1";m.setAttribute("data-bad-input-marker","");f.appendChild(m);}});},true);</script>';
+}
+/** Whether bad_input_script() flagged $field as typed but unreadable. */
+function input_was_unreadable(string $field, ?array $post = null): bool {
+    $post ??= $_POST;
+    return !empty($post[$field . '_bad']);
+}
+/** Whether a client chosen on a form is still on file (4.29.0): one merged away or purged while the
+ *  form was open is refused on its field instead of failing the insert with a server error. */
+function client_still_on_file(int $clientId): bool {
+    if ($clientId <= 0) return false;
+    $q = db()->prepare('SELECT 1 FROM clients WHERE id = ?');
+    $q->execute([$clientId]);
+    return (bool)$q->fetchColumn();
+}

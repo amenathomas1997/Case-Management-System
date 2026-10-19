@@ -28,6 +28,22 @@ function move_client_records(PDO $pdo, int $keepId, int $mergeId): void {
     $pdo->prepare("UPDATE client_status_history SET note = CONCAT('[merged] ', LEFT(COALESCE(note, ''), 246))
         WHERE client_id = ? AND (note IS NULL OR note NOT LIKE '[merged] %')")->execute([$mergeId]);
 
+    // One live hold per person and item (4.29.0): where both records hold or wait for the same
+    // item, the stronger entry stays (a reservation over a waitlist place, then the older one) and
+    // the other is cancelled, so cancelling the person's hold later never re-holds it for them.
+    $holds = $pdo->prepare("SELECT id, equipment_id, client_id, status, created_at FROM equipment_reservations
+        WHERE client_id IN (?, ?) AND status IN ('Reserved','Waitlist') ORDER BY equipment_id, id FOR UPDATE");
+    $holds->execute([$keepId, $mergeId]);
+    $byItem = [];
+    foreach ($holds->fetchAll() as $h) $byItem[(int)$h['equipment_id']][] = $h;
+    $cancelHold = $pdo->prepare("UPDATE equipment_reservations SET status = 'Cancelled' WHERE id = ?");
+    foreach ($byItem as $rows) {
+        if (count(array_unique(array_map(fn($r) => (int)$r['client_id'], $rows))) < 2) continue;
+        usort($rows, fn($a, $b) => [$a['status'] === 'Reserved' ? 0 : 1, (string)$a['created_at'], (int)$a['id']]
+            <=> [$b['status'] === 'Reserved' ? 0 : 1, (string)$b['created_at'], (int)$b['id']]);
+        foreach (array_slice($rows, 1) as $r) $cancelHold->execute([(int)$r['id']]);
+    }
+
     foreach (CLIENT_MERGE_TABLES as $table) {
         $pdo->prepare("UPDATE `$table` SET client_id = ? WHERE client_id = ?")->execute([$keepId, $mergeId]);
     }
@@ -39,6 +55,9 @@ function move_client_records(PDO $pdo, int $keepId, int $mergeId): void {
     } catch (PDOException $e) {
         if ((string)$e->getCode() !== '42S02') throw $e; // mig_4.24.0 not run yet
     }
+    // The duplicate's audit entries follow the person (4.29.0), so a later purge of the kept
+    // record clears the details they carry (name, note subjects, guardian email) too.
+    $pdo->prepare("UPDATE audit_log SET entity_id = ? WHERE entity = 'client' AND entity_id = ?")->execute([$keepId, $mergeId]);
     // A STOP on either record holds for the merged one (4.17.0): texts never resume after it.
     $pdo->prepare('UPDATE clients k JOIN clients m ON m.id = ? SET k.sms_opted_out_at = COALESCE(k.sms_opted_out_at, m.sms_opted_out_at) WHERE k.id = ?')->execute([$mergeId, $keepId]);
     // A privacy incident that lists both records keeps one entry (3.0.38); the duplicate's

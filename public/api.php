@@ -258,6 +258,12 @@ function api_client_changed_fields(array $locked, ?array $orig, array $input): a
     }
     return $out;
 }
+/** A note's saved version (4.29.0): the same formula as client.php's client_note_version(),
+ *  so a version the app read here and one the website's form carries agree. */
+function api_note_version(array $n): string {
+    return hash('sha256', json_encode([(string)($n['updated_at'] ?? ''), (string)$n['note_type'], (string)($n['note_format'] ?? ''), (string)$n['subject'], (string)$n['body'],
+        (string)($n['birp_behavior'] ?? ''), (string)($n['birp_intervention'] ?? ''), (string)($n['birp_response'] ?? ''), (string)($n['birp_plan'] ?? '')]));
+}
 /** "a", "a and b", "a, b and c". */
 function api_list_words(array $words): string {
     $words = array_values($words);
@@ -688,23 +694,12 @@ $studentScope = caseload_scoped() ? ' AND c.assigned_to = ' . $userId : '';
 const API_IDEM_ACTIONS = ['send_report', 'schedule_session', 'add_incident', 'upload_document', 'add_goal', 'assign_homework', 'save_scored',
     'add_assessment', 'add_booking', 'add_worksite', 'add_device_request', 'add_contract', 'add_cohort', 'log_cohort_session', 'add_equipment',
     'add_reservation', 'loan_equipment', 'equipment_service', 'convert_referral', 'send_portal_link', 'send_vrc_portal', 'request_consent',
-    'at_issue', 'save_client', 'save_kb', 'save_task', 'save_track', 'save_credential', 'at_save', 'device_request_update', 'cohort_member'];
-require __DIR__ . '/inc/api_parity.php';   // the retry guard; the parity actions run only for API_PARITY_ACTIONS
-if (in_array($action, API_IDEM_ACTIONS, true) && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
-    $idemCreates = match ($action) {
-        'save_client', 'save_kb', 'save_task', 'save_credential', 'at_save' => (int)($input['id'] ?? 0) <= 0,
-        'save_track' => (int)($input['id'] ?? $_GET['id'] ?? 0) <= 0,
-        'device_request_update' => ($input['op'] ?? '') === 'add_quote',
-        'cohort_member' => ($input['op'] ?? '') !== 'remove',
-        default => true,
-    };
-    $idemKey = is_string($input['idem_key'] ?? null) ? $input['idem_key'] : null;
-    if ($idemCreates && $idemKey !== null) {
-        $idemPrev = api_idem_begin($action, $userId, $idemKey);
-        if ($idemPrev !== null) out($idemPrev);
-        $GLOBALS['API_IDEM_OPEN'] = [$action, $userId, $idemKey];
-    }
-}
+    'at_issue', 'save_client', 'save_kb', 'save_task', 'save_track', 'save_credential', 'at_save', 'device_request_update', 'cohort_member',
+    'contract_update'];   // contract_update (4.29.0): its add_spend and add_deliverable
+// The retry guard (api_idem_begin / api_idem_end) is opened inside inc/api_parity.php
+// before any action runs, the parity actions included (4.29.0: save_task, save_track and
+// request_consent are parity actions, and before this they ran before the guard).
+require __DIR__ . '/inc/api_parity.php';
 
 if (str_starts_with($action, 'at_')) {
     require __DIR__ . '/inc/at_api.php';
@@ -735,10 +730,13 @@ switch ($action) {
         $q = db()->prepare('SELECT w.id, w.work_date, w.hours, w.mileage, w.description, w.is_billed, w.goal_id, w.rsa_category, u.name AS author
             FROM work_logs w LEFT JOIN users u ON u.id = w.created_by WHERE w.track_id = ? ORDER BY w.work_date DESC, w.id DESC LIMIT 200');
         $q->execute([$tid]);
+        // total (4.29.0): the track's entries past the 200 listed, so the app says "latest 200 of N".
+        $lc = db()->prepare('SELECT COUNT(*) FROM work_logs WHERE track_id = ?');
+        $lc->execute([$tid]);
         $logs = array_map(fn($l) => ['id' => (int)$l['id'], 'work_date' => $l['work_date'], 'hours' => (float)$l['hours'], 'mileage' => (float)$l['mileage'],
             'description' => (string)$l['description'], 'is_billed' => (bool)$l['is_billed'], 'goal_id' => $l['goal_id'] !== null ? (int)$l['goal_id'] : null,
             'rsa_category' => $l['rsa_category'], 'author' => $l['author']], $q->fetchAll());
-        out(['ok' => true, 'logs' => $logs]);
+        out(['ok' => true, 'logs' => $logs, 'total' => (int)$lc->fetchColumn(), 'limit' => 200]);
     }
     case 'correct_log': {
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') fail('Use POST for changes.', 405);
@@ -913,12 +911,28 @@ switch ($action) {
         // Retention-archived clients leave the day-to-day list, as on the website
         // (clients.php); only an administrator can list them, with ?archived=1.
         $sql .= (!empty($_GET['archived']) && can('admin')) ? ' AND archived_at IS NOT NULL' : ' AND archived_at IS NULL';
-        if ($q !== '') { $sql .= " AND name LIKE ? ESCAPE '!'"; $params[] = api_like($q); }
+        if ($q !== '') {
+            // As the website's client list (clients.php): name, email and counselor name; and
+            // the phone (4.29.0), by its digits, when the search has at least 4 of them (the
+            // last 10, so a leading country code 1 still finds a 10-digit number).
+            $like = api_like($q);
+            $sql .= " AND (name LIKE ? ESCAPE '!' OR email LIKE ? ESCAPE '!' OR counselor_name LIKE ? ESCAPE '!'";
+            array_push($params, $like, $like, $like);
+            $qDigits = preg_replace('/\D+/', '', $q);
+            if (strlen($qDigits) >= 4) {
+                $sql .= " OR REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(phone, ''), ' ', ''), '-', ''), '(', ''), ')', ''), '.', ''), '+', '') LIKE ?";
+                $params[] = '%' . substr($qDigits, -10) . '%';
+            }
+            $sql .= ')';
+        }
         if (caseload_scoped()) { $sql .= " AND assigned_to = ?"; $params[] = $userId; }
+        // total (4.29.0): every match, so the app can say "first 200 of N" instead of "All clients (200)".
+        $cnt = db()->prepare(str_replace('SELECT id, name, status, phone, email FROM', 'SELECT COUNT(*) FROM', $sql));
+        $cnt->execute($params);
         $sql .= " ORDER BY name LIMIT 200";
         $s = db()->prepare($sql);
         $s->execute($params);
-        out(['ok' => true, 'clients' => $s->fetchAll()]);
+        out(['ok' => true, 'clients' => $s->fetchAll(), 'total' => (int)$cnt->fetchColumn(), 'limit' => 200]);
 
     case 'client_choices':
         // Every client a picker may offer (scheduling, loans, reservations, bookings,
@@ -999,6 +1013,8 @@ switch ($action) {
             $noteRow['can_edit'] = ($isAdmin || (int)($noteRow['author_id'] ?? 0) === $userId) && !$noteRow['locked'];
             $noteRow['addendum_to'] = $noteRow['addendum_to'] !== null ? (int)$noteRow['addendum_to'] : null;
             $noteRow['versions'] = count($noteVersionMap[(int)$noteRow['id']] ?? []);
+            // note_version (4.29.0): sent back with update_note, so an edit from an older copy is refused.
+            $noteRow['note_version'] = api_note_version($noteRow);
             $noteRow['track_id'] = $noteRow['track_id'] !== null ? (int)$noteRow['track_id'] : null;
             // Expose the four positional slots as a plain array the app can label
             // by note_format (free = no sections).
@@ -1082,11 +1098,27 @@ switch ($action) {
                 api_bytes_fit(trim($hw['instructions'] ?? ''), API_TEXT_BYTES, 'Homework ' . $hwNumber . ' instructions');
             }
         }
+        // A note written on the phone with no signal (4.29.0) carries recorded_at, when it was
+        // written. Within the last 7 days and not in the future (5 minutes of clock slack), it
+        // is dated then, so it sorts, locks and counts from when it was written. When it
+        // arrives more than 10 minutes later the note says so, as a late entry. Anything
+        // else (no time, one that cannot be read, or out of range) is dated on arrival.
+        $writtenTs = is_string($input['recorded_at'] ?? null) && trim($input['recorded_at']) !== '' ? strtotime(trim($input['recorded_at'])) : false;
+        $writtenAt = null;
+        if ($writtenTs !== false && $writtenTs <= time() + 300 && $writtenTs >= time() - 7 * 86400) {
+            $writtenTs = min($writtenTs, time());
+            $writtenAt = date('Y-m-d H:i:s', $writtenTs);
+            if (time() - $writtenTs > 600) {
+                $lateLine = 'Written on the phone at ' . date('M j, Y g:i A', $writtenTs) . ', received ' . date('M j, Y g:i A') . '.';
+                $body .= "\n\n" . $lateLine;
+                api_bytes_fit($body, API_TEXT_BYTES, 'The note');
+            }
+        }
         db()->beginTransaction();
         try {
-        db()->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key, addendum_to) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
-            ->execute([$cid, $trackId, $na['type'], $na['format'], $subject, $body, $na['cols'][0], $na['cols'][1], $na['cols'][2], $na['cols'][3], $userId, $idem, $addendumTo]);
-        audit($userId, $addendumTo !== null ? 'note.addendum' : 'note.add', 'client', $cid, $subject . ($addendumTo !== null ? ' (addendum to note #' . $addendumTo . ')' : '') . ' (mobile)');
+        db()->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key, addendum_to, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(?, NOW()))')
+            ->execute([$cid, $trackId, $na['type'], $na['format'], $subject, $body, $na['cols'][0], $na['cols'][1], $na['cols'][2], $na['cols'][3], $userId, $idem, $addendumTo, $writtenAt]);
+        audit($userId, $addendumTo !== null ? 'note.addendum' : 'note.add', 'client', $cid, $subject . ($addendumTo !== null ? ' (addendum to note #' . $addendumTo . ')' : '') . ' (mobile' . (isset($lateLine) ? '; ' . $lateLine : '') . ')');
         // Homework captured by the generator: create on the chosen track so it
         // appears in the client's portal (mirrors save_note_homework).
         $hwCreated = 0;
@@ -1167,6 +1199,15 @@ switch ($action) {
         if ($trackId !== null && api_require_track($trackId, $userId) !== (int)$note['client_id']) {
             fail('That training track belongs to a different client.');
         }
+        // Sent again after a lost reply (4.29.0): the note already holds exactly these values, so
+        // the first send was saved. It is answered as saved, with the current version, rather than
+        // refused as a change made by the user themself, and no extra version is kept.
+        $sameAsSaved = (string)$note['subject'] === $subject && (string)$note['body'] === $body
+            && (string)$note['note_type'] === (string)$na['type'] && (string)($note['note_format'] ?? 'free') === (string)$na['format']
+            && ($note['track_id'] !== null ? (int)$note['track_id'] : null) === $trackId
+            && (string)($note['birp_behavior'] ?? '') === (string)($na['cols'][0] ?? '') && (string)($note['birp_intervention'] ?? '') === (string)($na['cols'][1] ?? '')
+            && (string)($note['birp_response'] ?? '') === (string)($na['cols'][2] ?? '') && (string)($note['birp_plan'] ?? '') === (string)($na['cols'][3] ?? '');
+        if ($sameAsSaved) out(['ok' => true, 'unchanged' => true, 'note_version' => api_note_version($note)]);
         // The text being replaced is kept as an earlier version, in the same transaction.
         $pdo = db();
         $pdo->beginTransaction();
@@ -1176,6 +1217,24 @@ switch ($action) {
                 $pdo->rollBack();
                 out(['ok' => false, 'error' => $kept, 'locked' => true], 409);
             }
+            // Opened on an older version (4.29.0, as client.php): someone saved the note since,
+            // so nothing is replaced. Without note_version (older builds) it saves as before.
+            $openedOn = is_string($input['note_version'] ?? null) ? trim($input['note_version']) : '';
+            if ($openedOn !== '') {
+                $cur = $pdo->prepare('SELECT * FROM client_notes WHERE id = ?');
+                $cur->execute([$nid]);
+                $curNote = $cur->fetch() ?: $note;
+                $curVersion = api_note_version($curNote);
+                if (!hash_equals($curVersion, $openedOn)) {
+                    $pdo->rollBack();
+                    $by = db()->prepare('SELECT name FROM users WHERE id = ?');
+                    $by->execute([(int)($curNote['updated_by'] ?? $curNote['author_id'] ?? 0)]);
+                    $byName = (string)($by->fetchColumn() ?: 'Someone else');
+                    out(['ok' => false, 'conflict' => true, 'note_version' => $curVersion,
+                        'error' => $byName . ' changed this note' . (!empty($curNote['updated_at']) ? ' at ' . date('g:i A', strtotime((string)$curNote['updated_at'])) : '')
+                            . ' after you opened it, so your changes were not saved. Reload the note to see their version, then make your changes again.'], 409);
+                }
+            }
             $pdo->prepare('UPDATE client_notes SET track_id = ?, note_type = ?, note_format = ?, subject = ?, body = ?, birp_behavior = ?, birp_intervention = ?, birp_response = ?, birp_plan = ?, updated_at = NOW(), updated_by = ? WHERE id = ?')
                 ->execute([$trackId, $na['type'], $na['format'], $subject, $body, $na['cols'][0], $na['cols'][1], $na['cols'][2], $na['cols'][3], $userId, $nid]);
             $pdo->commit();
@@ -1184,7 +1243,9 @@ switch ($action) {
             throw $e;
         }
         audit($userId, 'note.edit', 'client', (int)$note['client_id'], $subject . ' (mobile)');
-        out(['ok' => true]);
+        $saved = db()->prepare('SELECT * FROM client_notes WHERE id = ?');
+        $saved->execute([$nid]);
+        out(['ok' => true, 'note_version' => api_note_version($saved->fetch() ?: $note)]);
     }
 
     case 'schedule':
@@ -1770,9 +1831,13 @@ switch ($action) {
                     $portalRevoked = $pr->rowCount();
                 }
                 // Upcoming sessions remind the new address (4.28.0): a reminder already sent
-                // went to the old one.
-                if (strcasecmp(trim((string)($clientEmail ?? '')), trim((string)($old['email'] ?? ''))) !== 0) {
-                    $rs = db()->prepare("UPDATE scheduled_sessions SET reminder_sent = 0, client_reminded_at = NULL WHERE client_id = ? AND status = 'Scheduled' AND start_at >= NOW()");
+                // went to the old one. As client_edit.php (4.29.0): only the client's side is
+                // redone (the instructor's reminder, already sent when reminder_sent is 1, is kept
+                // as sent), and a cleared or unconfirmed address redoes nothing.
+                if (strcasecmp(trim((string)($clientEmail ?? '')), trim((string)($old['email'] ?? ''))) !== 0
+                    && trim((string)($clientEmail ?? '')) !== '' && (int)$emailVerified === 1) {
+                    $rs = db()->prepare("UPDATE scheduled_sessions SET staff_reminded_at = IF(reminder_sent = 1, COALESCE(staff_reminded_at, NOW()), staff_reminded_at),
+                        reminder_sent = 0, client_reminded_at = NULL WHERE client_id = ? AND status = 'Scheduled' AND start_at >= NOW()");
                     $rs->execute([$cid]);
                     $sessionsReminded = $rs->rowCount();
                 }
@@ -2028,7 +2093,10 @@ switch ($action) {
         $h = db()->prepare('SELECT gp.progress_pct, gp.status, gp.note, gp.created_at, u.name AS by_name
             FROM goal_progress gp LEFT JOIN users u ON u.id = gp.recorded_by WHERE gp.goal_id = ? ORDER BY gp.created_at DESC, gp.id DESC LIMIT 100');
         $h->execute([$gid]);
-        out(['ok' => true, 'history' => $h->fetchAll()]);
+        // total (4.29.0): every entry, past the 100 listed.
+        $hc = db()->prepare('SELECT COUNT(*) FROM goal_progress WHERE goal_id = ?');
+        $hc->execute([$gid]);
+        out(['ok' => true, 'history' => $h->fetchAll(), 'total' => (int)$hc->fetchColumn(), 'limit' => 100]);
 
     case 'add_expense':
         $tid = (int)($input['track_id'] ?? 0);
@@ -2425,46 +2493,51 @@ switch ($action) {
         for ($w = 0; $w < $repeatWeeks; $w++) {
             if (calendar_busy_overlaps($staffId, $w ? strtotime('+' . $w . ' week', $startTs) : $startTs, $w ? strtotime('+' . $w . ' week', $endTs) : $endTs)) { $warnings[] = 'The instructor\'s Outlook calendar shows them busy then.'; break; }
         }
-        if ($warnings) {
-            // The approval covers exactly the warnings shown (4.27.0), as on the website
-            // (schedule.php schedule_auth_hash): the refusal carries a hash of them, and the
-            // booking goes ahead only when the app sends that hash back as
-            // authorization_ack_hash. Older builds send only authorization_ack true; that
-            // counts only when this user was shown these same warnings for this same booking
-            // in the last hour, so a warning that appeared since is shown before it is approved.
-            $authHash = hash('sha256', json_encode(array_values($warnings)));
-            $shownKey = 'authshown:' . substr(hash('sha256', json_encode([$userId, $clientId, $trackId, $staffId, $startTs, $endTs, $repeatWeeks, $authHash])), 0, 48);
-            $ackHash = $input['authorization_ack_hash'] ?? null;
-            $ackTrue = in_array($input['authorization_ack'] ?? null, [true, 1, '1'], true);
-            $approved = is_string($ackHash) && $ackHash !== ''
-                ? hash_equals($authHash, $ackHash) && ($input['authorization_ack'] ?? true) !== false
-                : $ackTrue && api_throttle_count($shownKey, 3600) > 0;
-            if (!$approved) {
-                api_throttle_record($shownKey);
-                // App builds before 3.0.16 never send authorization_ack (newer ones send true
-                // or false) and have no control to approve the warning, so they are told where
-                // it can be done. Either way nothing is booked; the warnings come as a list too.
-                $changed = $ackTrue || (is_string($ackHash) && $ackHash !== '');
-                out(['ok'=>false,'error'=>'Authorization review: '.implode(' ',$warnings).(array_key_exists('authorization_ack',$input) || array_key_exists('authorization_ack_hash',$input)
-                        ? ($changed ? ' These warnings are not the ones you approved, so nothing was booked. Review them and approve again to book.' : ' Review the track and explicitly approve the warning before booking.')
-                        : ' This booking needs an authorization review that this version of the app cannot record. Book it on the website Schedule page, or update the app.'),
-                    'authorization_warnings'=>$warnings,'authorization_hash'=>$authHash],422);
-            }
-        }
         $ins = db()->prepare('INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, notes, is_remote, meeting_url) VALUES (?,?,?,?,?,?,?,?,?)');
         $firstId = 0;
         $newSessionIds = [];
         $occurrences = [];
+        for ($w = 0; $w < $repeatWeeks; $w++) {
+            // "+N week" keeps the local start time across daylight-saving changes
+            $occurrences[] = [$w === 0 ? $startTs : strtotime("+{$w} week", $startTs), $w === 0 ? $endTs : strtotime("+{$w} week", $endTs)];
+        }
         // The whole series is saved or none of it: a failure part-way through must
         // not leave a partial series that a retry would then duplicate.
         db()->beginTransaction();
         try {
             session_lock_instructor($staffId); // as every booking path does (4.20.0)
-            for ($w = 0; $w < $repeatWeeks; $w++) {
-                // "+N week" keeps the local start time across daylight-saving changes
-                $s0 = $w === 0 ? $startTs : strtotime("+{$w} week", $startTs);
-                $e0 = $w === 0 ? $endTs : strtotime("+{$w} week", $endTs);
-                $occurrences[] = [$s0, $e0];
+            // The instructor's own sessions (4.29.0): under the lock, the shared check the website's
+            // Schedule page uses (inc/session_changes.php), so the wording, the 5-line cap and the
+            // approval hash are the same for the same booking. An overlap is approved like the others.
+            $warnings = array_values(array_merge($warnings, session_instructor_overlaps($staffId, (string)$staff['name'], $occurrences, [$clientId])));
+            if ($warnings) {
+                // The approval covers exactly the warnings shown (4.27.0), as on the website
+                // (schedule.php schedule_auth_hash): the refusal carries a hash of them, and the
+                // booking goes ahead only when the app sends that hash back as
+                // authorization_ack_hash. Older builds send only authorization_ack true; that
+                // counts only when this user was shown these same warnings for this same booking
+                // in the last hour, so a warning that appeared since is shown before it is approved.
+                $authHash = hash('sha256', json_encode(array_values($warnings)));
+                $shownKey = 'authshown:' . substr(hash('sha256', json_encode([$userId, $clientId, $trackId, $staffId, $startTs, $endTs, $repeatWeeks, $authHash])), 0, 48);
+                $ackHash = $input['authorization_ack_hash'] ?? null;
+                $ackTrue = in_array($input['authorization_ack'] ?? null, [true, 1, '1'], true);
+                $approved = is_string($ackHash) && $ackHash !== ''
+                    ? hash_equals($authHash, $ackHash) && ($input['authorization_ack'] ?? true) !== false
+                    : $ackTrue && api_throttle_count($shownKey, 3600) > 0;
+                if (!$approved) {
+                    db()->rollBack();
+                    api_throttle_record($shownKey);
+                    // App builds before 3.0.16 never send authorization_ack (newer ones send true
+                    // or false) and have no control to approve the warning, so they are told where
+                    // it can be done. Either way nothing is booked; the warnings come as a list too.
+                    $changed = $ackTrue || (is_string($ackHash) && $ackHash !== '');
+                    out(['ok'=>false,'error'=>'Authorization review: '.implode(' ',$warnings).(array_key_exists('authorization_ack',$input) || array_key_exists('authorization_ack_hash',$input)
+                            ? ($changed ? ' These warnings are not the ones you approved, so nothing was booked. Review them and approve again to book.' : ' Review the track and explicitly approve the warning before booking.')
+                            : ' This booking needs an authorization review that this version of the app cannot record. Book it on the website Schedule page, or update the app.'),
+                        'authorization_warnings'=>$warnings,'authorization_hash'=>$authHash],422);
+                }
+            }
+            foreach ($occurrences as $w => [$s0, $e0]) {
                 $ins->execute([$clientId, $trackId, $staffId, date('Y-m-d H:i:s', $s0), date('Y-m-d H:i:s', $e0), $location ?: null, $notes ?: null, $isRemote ? 1 : 0, $meetingUrl]);
                 $newSessionIds[] = (int)db()->lastInsertId();
                 if ($w === 0) $firstId = (int)db()->lastInsertId();
@@ -2473,7 +2546,7 @@ switch ($action) {
             db()->commit();
             client_session_notice($newSessionIds, 'booked'); // 3.0.41: the client's calendar invite
         } catch (Throwable $e) {
-            db()->rollBack();
+            if (db()->inTransaction()) db()->rollBack();
             throw $e;
         }
         $c = db()->prepare('SELECT name FROM clients WHERE id = ?');
@@ -2991,7 +3064,12 @@ switch ($action) {
             $item['value'] !== null ? (float)$item['value'] : null,
             $item['purchase_date'] ?? null,
             (int)($item['useful_life_months'] ?? 36));
-        out(['ok' => true, 'item' => api_numeric_fields($item, ['value']), 'maintenance' => array_map(fn($r) => api_numeric_fields($r, ['cost']), $h->fetchAll())]);
+        // maintenance_total (also total, 4.29.0): every service entry, past the 50 listed.
+        $hc = db()->prepare('SELECT COUNT(*) FROM equipment_maintenance WHERE equipment_id = ?');
+        $hc->execute([$eid]);
+        $maintTotal = (int)$hc->fetchColumn();
+        out(['ok' => true, 'item' => api_numeric_fields($item, ['value']), 'maintenance' => array_map(fn($r) => api_numeric_fields($r, ['cost']), $h->fetchAll()),
+            'maintenance_total' => $maintTotal, 'total' => $maintTotal, 'limit' => 50]);
     }
     case 'equipment_service': {
         $eid = (int)($input['equipment_id'] ?? 0);
@@ -3533,7 +3611,11 @@ switch ($action) {
         $mem = db()->prepare('SELECT c.id, c.name FROM cohort_members cm JOIN clients c ON c.id = cm.client_id WHERE cm.cohort_id = ? AND cm.left_at IS NULL' . $studentScope . ' ORDER BY c.name'); $mem->execute([$id]);
         $sess = db()->prepare('SELECT id, session_date, activity, topic, duration_min, (SELECT COUNT(*) FROM cohort_attendance a JOIN clients c ON c.id = a.client_id WHERE a.session_id = cohort_sessions.id AND a.present=1' . $studentScope . ') AS present_n FROM cohort_sessions WHERE cohort_id = ? ORDER BY session_date DESC, id DESC LIMIT 50'); $sess->execute([$id]);
         $avail = db()->prepare("SELECT c.id, c.name FROM clients c WHERE client_type='Pre-ETS' AND status NOT LIKE 'Closed%' AND c.id NOT IN (SELECT client_id FROM cohort_members WHERE cohort_id=? AND left_at IS NULL)" . $studentScope . " ORDER BY name"); $avail->execute([$id]);
-        out(['ok' => true, 'cohort' => $co, 'members' => $mem->fetchAll(), 'sessions' => $sess->fetchAll(), 'available' => $avail->fetchAll()]);
+        // sessions_total (also total, 4.29.0): every session of the group, past the 50 listed.
+        $sc = db()->prepare('SELECT COUNT(*) FROM cohort_sessions WHERE cohort_id = ?'); $sc->execute([$id]);
+        $sessTotal = (int)$sc->fetchColumn();
+        out(['ok' => true, 'cohort' => $co, 'members' => $mem->fetchAll(), 'sessions' => $sess->fetchAll(), 'available' => $avail->fetchAll(),
+            'sessions_total' => $sessTotal, 'total' => $sessTotal, 'limit' => 50]);
     }
     case 'add_cohort': {
         $name = api_text($input, 'name', 190, 'Cohort name');
@@ -4145,6 +4227,7 @@ switch ($action) {
             $noteRow['can_edit'] = ($isAdmin || (int)($noteRow['author_id'] ?? 0) === $userId) && !$noteRow['locked'];
             $noteRow['addendum_to'] = $noteRow['addendum_to'] !== null ? (int)$noteRow['addendum_to'] : null;
             $noteRow['versions'] = count($noteVersionMap[(int)$noteRow['id']] ?? []);
+            $noteRow['note_version'] = api_note_version($noteRow);   // 4.29.0, as the client action
             $noteRow['track_id'] = (int)$noteRow['track_id'];
             $noteRow['sections'] = ($noteRow['note_format'] ?? 'free') !== 'free'
                 ? [ (string)($noteRow['birp_behavior'] ?? ''), (string)($noteRow['birp_intervention'] ?? ''),
@@ -4193,11 +4276,35 @@ switch ($action) {
             out(['ok' => true]);
         }
         if ($op === 'snooze') {
-            $snooze = db()->prepare("UPDATE equipment_followups SET due_date = DATE_ADD(GREATEST(due_date, CURDATE()), INTERVAL 14 DAY) WHERE id = ? AND status = 'Pending'");
-            $snooze->execute([$id]);
-            if ($snooze->rowCount() !== 1) fail('That follow-up was already recorded.', 409);
-            audit($userId, 'followup.snooze', 'client', (int)$fu['client_id'], '14 days (mobile)');
-            out(['ok' => true]);
+            // Sent again after a lost reply (4.29.0): the app sends the due date it showed, and
+            // the follow-up is moved only while it still has that date. A second press, or a
+            // retry, finds it already moved and answers with the new date instead of adding
+            // another 14 days. Without due_date (older builds) it is moved as before.
+            $shownDue = api_date($input, 'due_date', 'Due date');
+            if ($fu['status'] !== 'Pending') fail('That follow-up was already recorded.', 409);
+            if ($shownDue !== null && (string)$fu['due_date'] !== $shownDue) {
+                if ((string)$fu['due_date'] > $shownDue) {
+                    out(['ok' => true, 'already' => true, 'due_date' => (string)$fu['due_date'],
+                        'message' => 'This follow-up was already moved to ' . fmt_date((string)$fu['due_date']) . ', so it was not moved again.']);
+                }
+                fail('This follow-up\'s due date changed since you opened it. It is now due ' . fmt_date((string)$fu['due_date']) . '. Refresh and try again.', 409);
+            }
+            $snooze = db()->prepare("UPDATE equipment_followups SET due_date = DATE_ADD(GREATEST(due_date, CURDATE()), INTERVAL 14 DAY) WHERE id = ? AND status = 'Pending'"
+                . ($shownDue !== null ? ' AND due_date = ?' : ''));
+            $snooze->execute($shownDue !== null ? [$id, $shownDue] : [$id]);
+            if ($snooze->rowCount() !== 1) {
+                // Moved by a copy arriving at the same moment: the same answer as above.
+                $nd = db()->prepare("SELECT due_date, status FROM equipment_followups WHERE id = ?"); $nd->execute([$id]); $now = $nd->fetch();
+                if ($now && $now['status'] === 'Pending' && $shownDue !== null && (string)$now['due_date'] > $shownDue) {
+                    out(['ok' => true, 'already' => true, 'due_date' => (string)$now['due_date'],
+                        'message' => 'This follow-up was already moved to ' . fmt_date((string)$now['due_date']) . ', so it was not moved again.']);
+                }
+                fail('That follow-up was already recorded.', 409);
+            }
+            $nd = db()->prepare('SELECT due_date FROM equipment_followups WHERE id = ?'); $nd->execute([$id]);
+            $newDue = (string)$nd->fetchColumn();
+            audit($userId, 'followup.snooze', 'client', (int)$fu['client_id'], '14 days, to ' . $newDue . ' (mobile)');
+            out(['ok' => true, 'due_date' => $newDue]);
         }
         // complete
         $inUseIn = api_choice($input, 'in_use', ['yes', 'no'], 'In use', null);

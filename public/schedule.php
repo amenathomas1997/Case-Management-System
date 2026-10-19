@@ -230,6 +230,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
     if (!$errors && $f['staff'] && function_exists('calendar_busy_overlaps') && calendar_busy_overlaps((int)$f['staff']['id'], $f['start'], $f['end'])) {
         $authLines[] = $f['staff']['name'] . '\'s Outlook calendar shows them busy then.';
     }
+    // The instructor's own sessions at that time (4.29.0), approved with the rest; read again
+    // under the instructor's lock below, so a booking made meanwhile is seen.
+    $baseLines = $authLines;
+    if (!$errors && $f['staff']) $authLines = array_merge($baseLines, session_instructor_overlaps((int)$f['staff']['id'], (string)$f['staff']['name'], [[$f['start'], $f['end']]], $clientIds));
     if ($authLines && !schedule_auth_approved('g_', $authLines)) {
         $errors['g_authorization_ack'] = 'Authorization review. ' . implode(' ', $authLines)
             . ' Review the tracks, then tick the approval box below if this booking is still appropriate.';
@@ -284,6 +288,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
                 . '. Untick ' . (count($booked) === 1 ? 'that client' : 'those clients') . ', or choose another time. Nothing was saved.']);
             redirect('schedule.php');
         }
+        // Under the lock: the instructor's sessions now. A session booked since the form was
+        // checked brings the approval box back with it, and nothing is saved.
+        $lockedLines = array_merge($baseLines, session_instructor_overlaps((int)$staff['id'], (string)$staff['name'], [[$startTs, $endTs]], $clientIds));
+        if ($lockedLines && !schedule_auth_approved('g_', $lockedLines)) {
+            db()->rollBack();
+            keep_input();
+            $_SESSION['old_input']['g_clients'] = implode(',', $clientIds);
+            $_SESSION['old_input']['g_authorization_hash'] = schedule_auth_hash($lockedLines);
+            unset($_SESSION['old_input']['g_authorization_ack']);
+            keep_field_errors(['g_authorization_ack' => 'Authorization review. ' . implode(' ', $lockedLines)
+                . ' Review the tracks, then tick the approval box below if this booking is still appropriate.']);
+            redirect('schedule.php');
+        }
+        $authLines = $lockedLines;
         $groupSessionIds = [];
         foreach ($clientIds as $cid) {
             $ins->execute([$cid, $trackIds[$cid], (int)$staff['id'], date('Y-m-d H:i:s', $startTs), date('Y-m-d H:i:s', $endTs), $location ?: null, $notes ?: null, $groupUid, $isRemote ? 1 : 0, $meetingUrl]);
@@ -463,7 +481,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         elseif ($f['meeting_url'] !== null) $errors['meeting_make'] = 'A meeting link is typed above and ' . MEETING_PROVIDERS[$meetMake] . ' would make another: clear the link, or choose No.';
         elseif (!meeting_app($meetMake)) $errors['meeting_make'] = MEETING_PROVIDERS[$meetMake] . ' is not set up here any more. Choose No, or type a link.';
         // Only your own account, unless you are an administrator booking for someone (owner rule, 4.10.0).
-        elseif ($f['staff'] && (int)$f['staff']['id'] !== (int)$user['id'] && ($user['role'] ?? '') !== 'admin') $errors['meeting_make'] = 'A meeting can be made only in your own ' . MEETING_PROVIDERS[$meetMake]
+        elseif ($f['staff'] && (int)$f['staff']['id'] !== (int)$user['id'] && !can('admin')) $errors['meeting_make'] = 'A meeting can be made only in your own ' . MEETING_PROVIDERS[$meetMake]
             . ' account. ' . $f['staff']['name'] . ' can make it, or an administrator; otherwise choose No and type a link.';
         elseif ($f['staff'] && !meeting_account((int)$f['staff']['id'], $meetMake)) $errors['meeting_make'] = $f['staff']['name'] . ' has not connected ' . MEETING_PROVIDERS[$meetMake]
             . ((int)$f['staff']['id'] === (int)$user['id'] ? '. Connect it on My Account, Online meetings, then schedule again.' : '. They connect it on their My Account page; until then choose No, or type a link.');
@@ -489,6 +507,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         foreach ($occurrences as [$s0, $e0]) if (calendar_busy_overlaps((int)$f['staff']['id'], $s0, $e0)) $busyDays[] = date('D, M j g:i A', $s0);
         if ($busyDays) $authWarnings[] = $f['staff']['name'] . '\'s Outlook calendar shows them busy then (' . implode('; ', array_slice($busyDays, 0, 5)) . (count($busyDays) > 5 ? '; and ' . (count($busyDays) - 5) . ' more' : '') . ').';
     }
+    // The instructor's own sessions at those times (4.29.0), approved with the rest; read again
+    // under the instructor's lock below, so a booking made meanwhile is seen.
+    $baseWarnings = $authWarnings;
+    if (!$errors && $f['staff']) $authWarnings = array_merge($baseWarnings, session_instructor_overlaps((int)$f['staff']['id'], (string)$f['staff']['name'], $occurrences, [$clientId]));
     if (!$errors && $authWarnings) {
         if (!schedule_auth_approved('', $authWarnings)) {
             $errors['authorization_ack'] = 'Authorization review: ' . implode(' ', $authWarnings)
@@ -562,6 +584,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
                 . implode('; ', $booked) . '. Choose another start date or number of weeks. Nothing was saved.']);
             redirect('schedule.php');
         }
+        // Under the lock: the instructor's sessions now. A session booked since the form was
+        // checked brings the approval box back with it, and nothing is saved.
+        $lockedWarnings = array_merge($baseWarnings, session_instructor_overlaps($staffId, (string)$f['staff']['name'], $occurrences, [$clientId]));
+        if ($lockedWarnings && !schedule_auth_approved('', $lockedWarnings)) {
+            db()->rollBack();
+            keep_input();
+            unset($_SESSION['old_input']['plan_ok'], $_SESSION['old_input']['authorization_ack'], $_SESSION['plan_preview']);
+            $_SESSION['old_input']['authorization_hash'] = schedule_auth_hash($lockedWarnings);
+            keep_field_errors(['authorization_ack' => 'Authorization review: ' . implode(' ', $lockedWarnings)
+                . ' Review the track and the calendar, then tick the approval box below if this booking is still appropriate.']);
+            redirect('schedule.php');
+        }
+        $authWarnings = $lockedWarnings;
         foreach ($occurrences as $w => [$s0, $e0]) {
             $ins->execute([$clientId, $trackId, $staffId, date('Y-m-d H:i:s', $s0), date('Y-m-d H:i:s', $e0), $location ?: null, $notes ?: null, $isRemote ? 1 : 0, $meetingUrl]);
             $newSessionIds[] = (int)db()->lastInsertId();

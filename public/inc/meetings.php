@@ -64,19 +64,157 @@ function meeting_key_status(): string {
     return ($k === false || strlen($k) !== 32) ? 'unreadable' : 'ok';
 }
 
-/** The 32-byte key, made once in the private directory (beside config.php), readable only by its owner. */
-function meeting_key(): string {
+/** The key could not be used (4.29.0): missing while stored values need it, damaged, or
+ *  readable by others. Its message names the file and the way out. */
+final class MeetingKeyUnavailable extends RuntimeException {}
+
+/** The key file exists but the site cannot open it (4.29.0): it may still be the right key. */
+const MEETING_KEY_ACCESS_MSG = 'Nothing was forgotten: the website cannot open the key file meeting_tokens.key (it belongs to another user, perhaps because it was copied back as root, or its mode does not let the site read it). It may still be the right key. Make it owned by the user the website runs as (chown), readable only by that user (chmod 600), then check again.';
+
+/** What the people connecting QuickBooks or a meeting account are told when the key cannot be used. */
+const MEETING_KEY_LOST_MSG = "the server's key file (meeting_tokens.key) is missing or damaged, so no connection can be stored. An administrator can copy the old key file back, or use \"Forget stored connections and keys\" on System health.";
+
+/**
+ * What is wrong with the key file, for System health and its "Forget stored connections
+ * and keys" action (4.29.0, P14): null (nothing), 'missing' (gone while stored values need
+ * it), 'damaged' (read, but not a key), 'access' (the site cannot open the file: wrong owner or
+ * mode; it may be a good key, so nothing is forgotten), 'permissions' (a good key readable by others:
+ * chmod 600 fixes it, nothing needs forgetting), 'mismatch' (a working key that cannot read
+ * some stored values: it was replaced) or 'unknown' (no private directory).
+ */
+function meeting_key_problem(): ?string {
+    $state = meeting_key_status();
+    if ($state === 'unknown') return 'unknown';
+    if ($state === 'missing') return 'missing';
+    if ($state === 'unreadable') {
+        $file = (string)$GLOBALS['CMS_PRIVATE_DIR'] . '/meeting_tokens.key';
+        // A file the site cannot open (another owner, e.g. copied back as root) may be a good key:
+        // never called damaged, so nothing is forgotten that a chown would have saved.
+        if (!is_readable($file)) return 'access';
+        $raw = @file_get_contents($file);
+        if ($raw === false) return 'access';
+        $k = base64_decode(trim($raw), true);
+        return ($k !== false && strlen($k) === 32) ? 'permissions' : 'damaged';
+    }
+    if ($state !== 'ok') return null;
+    return meeting_unreadable_counts() !== ['seeds' => 0, 'meetings' => 0, 'qbo' => 0] ? 'mismatch' : null;
+}
+
+/** How many stored values cannot be read with the key file as it is now: authenticator seeds
+ *  ("v1:"), meeting accounts and the QuickBooks connection. A table not there yet counts as none. */
+function meeting_unreadable_counts(): array {
+    $n = ['seeds' => 0, 'meetings' => 0, 'qbo' => 0];
+    try {
+        foreach (db()->query("SELECT totp_secret FROM users WHERE totp_secret LIKE 'v1:%'")->fetchAll(PDO::FETCH_COLUMN) as $v)
+            if (totp_secret_plain((string)$v) === null) $n['seeds']++;
+    } catch (PDOException $e) {}
+    foreach (['meetings' => 'meeting_accounts', 'qbo' => 'qbo_connection'] as $k => $table) {
+        try {
+            foreach (db()->query("SELECT access_token, refresh_token FROM `$table` WHERE access_token <> '' OR refresh_token <> ''")->fetchAll() as $r)
+                if (!meeting_token_readable($r)) $n[$k]++;
+        } catch (PDOException $e) {}
+    }
+    return $n;
+}
+
+/** Whether a stored connection's tokens open with the key as it is now (an empty one counts as readable). */
+function meeting_token_readable(array $row): bool {
+    foreach (['access_token', 'refresh_token'] as $c) {
+        $v = (string)($row[$c] ?? '');
+        if ($v !== '' && meeting_open($v) === null) return false;
+    }
+    return true;
+}
+
+/**
+ * System health, "Forget stored connections and keys" (4.29.0, P14): the way out after the
+ * key file is lost or replaced, when the old one cannot be copied back. Only what cannot be
+ * read is forgotten:
+ *  - each authenticator app whose seed cannot be read is turned off (as reset_2fa.php does for
+ *    the app; passkeys and sessions are kept), the person is emailed, and it is audited;
+ *  - each meeting account (anyone's) and the QuickBooks connection that cannot be read is removed;
+ *  - a damaged key file is moved aside (meeting_tokens.key.damaged-<time>), never deleted;
+ * then a new key file is made, so QuickBooks, meetings and authenticator apps can be set up again.
+ * Returns ['ok' => bool, 'error' => ?string, 'seeds' => n, 'meetings' => n, 'qbo' => n].
+ */
+function meeting_forget_stored_keys(int $actorId): array {
+    $problem = meeting_key_problem();
+    $none = ['seeds' => 0, 'meetings' => 0, 'qbo' => 0];
+    if ($problem === 'permissions') return $none + ['ok' => false, 'error' => 'Nothing was forgotten: the key file is fine but other users on the server can read it. Make it readable only by its owner (chmod 600 meeting_tokens.key in the private directory), then check again.'];
+    if ($problem === 'access') return $none + ['ok' => false, 'error' => MEETING_KEY_ACCESS_MSG];
+    if ($problem === 'unknown') return $none + ['ok' => false, 'error' => 'Nothing was forgotten: the private directory is not known, so the key file cannot be checked.'];
+    if ($problem === null) return $none + ['ok' => false, 'error' => 'Nothing was forgotten: the key file is working and reads every stored value.'];
+    $dir = (string)$GLOBALS['CMS_PRIVATE_DIR'];
+    $file = $dir . '/meeting_tokens.key';
+    $reset = [];
+    $n = $none;
+    $db = db();
+    $db->beginTransaction();
+    try {
+        $q = $db->query("SELECT id, name, email, is_active, totp_secret FROM users WHERE totp_secret LIKE 'v1:%' FOR UPDATE");
+        $off = $db->prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_last_step = NULL WHERE id = ? AND totp_secret = ?');
+        foreach ($q->fetchAll() as $u) {
+            if (totp_secret_plain((string)$u['totp_secret']) !== null) continue;
+            $off->execute([(int)$u['id'], (string)$u['totp_secret']]);
+            if ($off->rowCount() === 1) { $reset[] = $u; $n['seeds']++; }
+        }
+        try {
+            $rows = $db->query("SELECT id, user_id, provider, access_token, refresh_token FROM meeting_accounts WHERE access_token <> '' OR refresh_token <> '' FOR UPDATE")->fetchAll();
+            $del = $db->prepare('DELETE FROM meeting_accounts WHERE id = ?');
+            foreach ($rows as $r) if (!meeting_token_readable($r)) { $del->execute([(int)$r['id']]); $n['meetings'] += $del->rowCount(); }
+        } catch (PDOException $e) { if ($e->getCode() !== '42S02' && $e->getCode() !== '42S22') throw $e; }
+        try {
+            $c = $db->query("SELECT access_token, refresh_token FROM qbo_connection WHERE id = 1 FOR UPDATE")->fetch();
+            if ($c && !meeting_token_readable($c)) $n['qbo'] = $db->exec('DELETE FROM qbo_connection WHERE id = 1') ? 1 : 0;
+        } catch (PDOException $e) { if ($e->getCode() !== '42S02' && $e->getCode() !== '42S22') throw $e; }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+    // A damaged key file is kept beside, under another name, never deleted.
+    clearstatcache(true, $file);
+    $aside = null;
+    if ($problem === 'damaged' && is_file($file)) {
+        $aside = $file . '.damaged-' . date('Ymd-His');
+        if (!@rename($file, $aside)) {
+            return $n + ['ok' => false, 'error' => 'The stored values that could not be read were forgotten, but the damaged key file could not be moved aside. Rename or remove meeting_tokens.key in the private directory, then check again.'];
+        }
+    }
+    // The new key (a replaced key that works is kept: it is the one now in use).
+    $made = true;
+    try { meeting_key(true); } catch (Throwable $e) { $made = false; error_log('meeting_forget_stored_keys: ' . $e->getMessage()); }
+    audit($actorId, 'keys.forget', 'settings', null, "key file $problem: " . $n['seeds'] . ' authenticator app(s) turned off, ' . $n['meetings'] . ' meeting account(s) and '
+        . $n['qbo'] . ' QuickBooks connection forgotten' . ($aside ? ', damaged key file moved to ' . basename($aside) : '') . ($made ? '' : '; no new key file could be made'));
+    foreach ($reset as $u) {
+        audit($actorId, 'user.reset_2fa', 'user', (int)$u['id'], 'authenticator app turned off by Forget stored connections and keys (its seed could not be read)');
+        if ((int)$u['is_active'] === 1) {
+            send_app_mail((string)$u['email'], 'Your authenticator app was turned off',
+                "Hello {$u['name']},\n\nThe server for " . cfg('name') . " lost the key that protected authenticator apps, so an administrator turned yours off.\n"
+                . "Sign in with your password and the code we email you, then set up the authenticator app again under My Account (remove the old entry from the app first).\n"
+                . "If you did not expect this, contact your administrator.\n");
+        }
+    }
+    if (!$made) return $n + ['ok' => false, 'error' => 'The stored values that could not be read were forgotten, but a new key file could not be made in the private directory. Check that the private directory can be written to, then check again.'];
+    return $n + ['ok' => true, 'error' => null];
+}
+
+/** The 32-byte key, made once in the private directory (beside config.php), readable only by its owner.
+ *  $reload drops the copy kept for this request (after System health forgot the old values). */
+function meeting_key(bool $reload = false): string {
     static $key = null;
+    if ($reload) $key = null;
     if ($key !== null) return $key;
     $dir = (string)($GLOBALS['CMS_PRIVATE_DIR'] ?? '');
-    if ($dir === '' || !is_dir($dir)) throw new RuntimeException('The private directory is not known, so meeting accounts cannot be stored.');
+    if ($dir === '' || !is_dir($dir)) throw new MeetingKeyUnavailable('The private directory is not known, so meeting accounts cannot be stored.');
     $file = $dir . '/meeting_tokens.key';
     if (!is_file($file) && meeting_key_dependents() > 0) {
         // 4.28.0: never a new key while stored values need the old one (after a restore or a
         // move without the key file): a new key would make them unreadable for good, and
-        // System health could no longer tell. Restore the old key file instead.
-        error_log('meeting_key: ' . $file . ' is missing, but stored authenticator seeds or connection tokens need it; no new key was made. Copy the old meeting_tokens.key back (chmod 600).');
-        throw new RuntimeException('The key file meeting_tokens.key is missing from the private directory, but stored values need it. Copy the old key file back.');
+        // System health could no longer tell. Restore the old key file, or (4.29.0) forget
+        // those values with System health's "Forget stored connections and keys".
+        error_log('meeting_key: ' . $file . ' is missing, but stored authenticator seeds or connection tokens need it; no new key was made. Copy the old meeting_tokens.key back (chmod 600), or use Forget stored connections and keys on System health.');
+        throw new MeetingKeyUnavailable('The key file meeting_tokens.key is missing from the private directory, but stored values need it. Copy the old key file back, or use "Forget stored connections and keys" on System health.');
     }
     if (!is_file($file)) {
         // Written to a temporary file and linked into place, so two requests at once can never
@@ -85,15 +223,15 @@ function meeting_key(): string {
         $tmp = $file . '.' . bin2hex(random_bytes(6));
         $ok = @file_put_contents($tmp, base64_encode(random_bytes(32)));
         umask($old);
-        if ($ok === false) throw new RuntimeException('The meeting key could not be written in the private directory.');
+        if ($ok === false) throw new MeetingKeyUnavailable('The meeting key could not be written in the private directory.');
         @link($tmp, $file);
         @unlink($tmp);
-        if (!is_file($file)) throw new RuntimeException('The meeting key could not be written in the private directory.');
+        if (!is_file($file)) throw new MeetingKeyUnavailable('The meeting key could not be written in the private directory.');
     }
     clearstatcache(true, $file);
-    if ((fileperms($file) & 0077) !== 0) throw new RuntimeException('The meeting key file can be read by others; make it readable only by its owner (chmod 600).');
+    if ((fileperms($file) & 0077) !== 0) throw new MeetingKeyUnavailable('The meeting key file can be read by others; make it readable only by its owner (chmod 600).');
     $k = base64_decode(trim((string)file_get_contents($file)), true);
-    if ($k === false || strlen($k) !== 32) throw new RuntimeException('The meeting key file is damaged.');
+    if ($k === false || strlen($k) !== 32) throw new MeetingKeyUnavailable('The meeting key file is damaged.');
     return $key = $k;
 }
 

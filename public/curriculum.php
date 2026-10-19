@@ -57,6 +57,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_skill'])) {
     $curQ = db()->prepare('SELECT id FROM curricula WHERE id = ?');
     $curQ->execute([$curId]);
     if ($curQ->fetchColumn() === false) { flash('Curriculum not found.', 'error'); redirect('curriculum.php'); }
+    // The same Add sent twice (4.29.0) adds the skills once.
+    $skillKey = web_idem_key($_POST);
+    if (web_once_get($skillKey) !== null) { flash('These skills were already added (the form was sent twice), so they were added once.', 'info'); redirect('curriculum.php?manage=' . $curId); }
     // Each problem is tied to the skills box, and what was typed stays in it
     // (a skill is at most 300 characters, the curriculum_skills.skill column).
     $skillLines = [];
@@ -88,6 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_skill'])) {
         $pdo->rollBack();
         throw $e;
     }
+    web_once_set($skillKey, $curId);
     $n = count($skillLines);
     audit($user['id'], 'curriculum.skills', 'curriculum', $curId, $n . ' skills');
     flash("Added {$n} skill(s).");
@@ -300,7 +304,7 @@ if (isset($_GET['manage']) && can('templates')) {
       </ol>
       <?php else: ?><p class="muted">No skills yet.</p><?php endif; ?>
       <h3 id="add-sk-h">Add skills</h3>
-      <form method="post" action="curriculum.php" class="stacked" aria-labelledby="add-sk-h" novalidate><?= csrf_field() ?>
+      <form method="post" action="curriculum.php" class="stacked" aria-labelledby="add-sk-h" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
         <input type="hidden" name="curriculum_id" value="<?= $curId ?>">
         <?= form_error_summary(['skills' => 'Skills']) ?>
         <div class="field"><label for="skills">Skills to add <span class="hint">one per line, up to 300 characters each</span></label>

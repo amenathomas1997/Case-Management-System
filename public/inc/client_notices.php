@@ -250,6 +250,7 @@ function client_session_notice_send(array $sessionIds, string $kind): bool {
  * a working portal link, the authorization number and the portal link, no client name.
  */
 function counselor_auth_notice(int $trackId): bool {
+    $GLOBALS['counselor_auth_notice_outcome'] = 'refused';
     try {
         $q = db()->prepare('SELECT t.auth_number, c.counselor_name, c.counselor_email, c.counselor_verified FROM training_tracks t
             JOIN clients c ON c.id = t.client_id WHERE t.id = ? AND COALESCE(t.billing_mode, \'vr\') = \'vr\'');
@@ -265,7 +266,12 @@ function counselor_auth_notice(int $trackId): bool {
             : fmt_money($r['authorized_funds'] - $r['funds_remaining']) . ' of ' . fmt_money($r['authorized_funds']) . ' used';
         [$subj, $body] = email_template('counselor_auth_low', ['name' => (string)$t['counselor_name'], 'auth' => (string)$t['auth_number'],
             'used' => $used, 'link' => cfg('base_url') . '/vrc.php?t=' . $token]);
-        return send_app_mail((string)$t['counselor_email'], $subj, $body);
+        // 4.29.0: an unknown outcome (Graph timed out or answered 5xx after the request went out)
+        // counts as sent, so the counselor is not emailed the same notice again tomorrow; the
+        // caller reports it once (counselor_auth_notice_outcome).
+        $o = send_app_mail_outcome((string)$t['counselor_email'], $subj, $body);
+        $GLOBALS['counselor_auth_notice_outcome'] = $o;
+        return $o === 'sent' || $o === 'unknown';
     } catch (Throwable $e) {
         error_log('counselor_auth_notice: ' . get_class($e) . ' ' . $e->getCode());
         return false;

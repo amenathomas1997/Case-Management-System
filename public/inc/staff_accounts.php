@@ -131,6 +131,8 @@ function staff_m365_sync(): array {
         db()->prepare('UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0')->execute([(int)$u['id']]);
         db()->prepare('UPDATE login_otps SET consumed = 1 WHERE user_id = ? AND consumed = 0')->execute([(int)$u['id']]);
         audit(null, 'user.deactivate', 'user', (int)$u['id'], 'disabled in Microsoft 365');
+        // Times still offered with them on clients' requests are withdrawn (4.29.0).
+        if (function_exists('offer_withdraw_for_staff')) offer_withdraw_for_staff((int)$u['id'], $u['name'] . '\'s account was switched off');
         $off[] = $u['name'];
     }
     return ['checked' => $checked, 'off' => $off, 'admins' => $admins, 'error' => null];

@@ -462,7 +462,7 @@ struct SignatureRequestSheet: View {
             dismiss()
         } catch {
             busy = false
-            if case APIError.network = error {} else { idem.answered() }
+            idem.failed(error)
             showFormError(error.localizedDescription, in: &self.error)
         }
     }
@@ -1010,7 +1010,7 @@ struct ReleaseRequestSheet: View {
             dismiss()
         } catch {
             busy = false
-            if case APIError.network = error {} else { idem.answered() }
+            idem.failed(error)
             showFormError(error.localizedDescription, in: &self.error)
         }
     }
@@ -1039,9 +1039,20 @@ struct IdemKey {
 
     /// After a failed send (4.28.0): with no answer (a network error) the key is kept, so trying
     /// again with nothing changed is recognised by the server; any answer starts a new one.
+    /// 4.29.0: also kept when the server says an earlier try is still being processed, so trying
+    /// again a moment later, as it advises, is recognised instead of saving a second copy.
     mutating func failed(_ error: Error) {
-        if case APIError.network = error { return }
+        if IdemKey.keeps(error) { return }
         answered()
+    }
+
+    /// Whether the key must be kept after this failure: no answer came, or the server is still
+    /// working on the same key.
+    static func keeps(_ error: Error) -> Bool {
+        switch error {
+        case APIError.network, APIError.processing: return true
+        default: return false
+        }
     }
 
     /// What to say when a create or send failed: with no answer it is not known whether it was

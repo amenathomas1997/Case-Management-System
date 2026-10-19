@@ -97,6 +97,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_goal'])) {
 /* ---- POST: record goal progress (status + percent + note, kept as history) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_goal'])) {
     $gid = (int)($_POST['goal_id'] ?? 0);
+    // The same Record sent twice (4.29.0) is recorded once: one history row, as the app's key does.
+    $progKey = web_idem_key($_POST);
+    if (web_once_get($progKey) !== null) { flash('This progress was already recorded (the form was sent twice), so it was recorded once.', 'info'); redirect("track.php?id=$id#goals"); }
     $own = db()->prepare('SELECT status, progress_pct FROM smart_goals WHERE id = ? AND track_id = ?');
     $own->execute([$gid, $id]);
     $cur = $own->fetch();
@@ -135,10 +138,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_goal'])) {
     try {
         db()->prepare('UPDATE smart_goals SET status = ?, progress_pct = ? WHERE id = ? AND track_id = ?')
             ->execute([$gs, $pct, $gid, $id]);
-        db()->prepare('INSERT INTO goal_progress (goal_id, progress_pct, status, note, recorded_by) VALUES (?,?,?,?,?)')
-            ->execute([$gid, $pct, $gs, $note, $user['id']]);
+        db()->prepare('INSERT INTO goal_progress (goal_id, progress_pct, status, note, recorded_by, idem_key) VALUES (?,?,?,?,?,?)')
+            ->execute([$gid, $pct, $gs, $note, $user['id'], $progKey]);
         db()->commit();
+    } catch (PDOException $e) {
+        db()->rollBack();
+        // Recorded already under this key (another browser session sent it): said once.
+        if ((string)$e->getCode() === '23000' && $progKey !== null) { flash('This progress was already recorded, so it was recorded once.', 'info'); redirect("track.php?id=$id#goals"); }
+        throw $e;
     } catch (Throwable $e) { db()->rollBack(); throw $e; }
+    web_once_set($progKey, $gid);
     audit($user['id'], 'goal.status', 'goal', $gid, $gs . ' ' . $pct . '%');
     flash('Progress recorded — ' . $pct . '% (' . $gs . ').');
     redirect("track.php?id=$id#goals");
@@ -349,6 +358,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['correct_log'])) {
     else {
         $err = work_log_correct($lid, $id, (float)$hIn, $mIn === '' ? 0.0 : (float)$mIn, is_string($_POST['fix_reason'] ?? null) ? $_POST['fix_reason'] : '', (int)$user['id']);
         $errKey = $err === null ? 'fix_' : (stripos($err, 'reason') !== false || str_starts_with($err, 'Say why') ? 'fixr_' : (str_starts_with($err, 'Enter miles') ? 'fixm_' : 'fix_'));
+    }
+    // Invoiced or moved to the trash meanwhile (4.29.0): the row no longer shows its Correct form, so the
+    // refusal is said at the top of the page instead of on a field that is not there.
+    if ($err !== null && ($err === 'That entry no longer exists.' || str_starts_with($err, 'That entry is already on an invoice'))) {
+        flash('Nothing was corrected. ' . $err, 'error');
+        redirect("track.php?id=$id#logs");
     }
     if ($err !== null) { keep_input(); keep_field_errors([$errKey . $lid => $err]); redirect("track.php?id=$id#log-" . $lid); }
     flash('Entry corrected. The change and its reason are in the audit log.');
@@ -717,9 +732,8 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     <dt>Period</dt><dd><?= fmt_date($track['start_date'], true) ?> to <?= fmt_date($track['expiration_date'], true) ?></dd>
     <dt>Authorized funds</dt><dd><?= $noAuthFunds ? $noFundsText : fmt_money($r['authorized_funds']) ?></dd>
   </dl>
-  <p class="hint">The burn-down shows the hours and funds used so far against this authorization, and drafts a request for more.</p>
   <?php if ($waitAmend = amendment_waiting_text($id)): // 3.0.44 ?><p><strong><?= h($waitAmend) ?>.</strong></p><?php endif; ?>
-  <p class="page-actions"><a class="btn btn-secondary btn-sm" href="amendment_request.php?track=<?= $id ?>">Authorization burn-down &amp; amendment request</a></p>
+  <p class="page-actions"><a class="btn btn-secondary btn-sm" href="amendment_request.php?track=<?= $id ?>">Authorization burn-down &amp; amendment request<span class="visually-hidden">: the hours and funds used so far against this authorization, and a draft request for more</span></a></p>
   <?php
   $amendments = db()->prepare('SELECT a.*, u.name AS changed_by_name FROM auth_amendments a LEFT JOIN users u ON u.id = a.changed_by WHERE a.track_id = ? ORDER BY a.changed_at DESC');
   $amendments->execute([$id]);
@@ -801,8 +815,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   if ($savedNote): ?>
   <form method="post" action="track.php?id=<?= $id ?>#assign-hw-h" class="inline-form"><?= csrf_field() ?>
     <input type="hidden" name="note_id" value="<?= (int)$savedNote['id'] ?>">
-    <span class="hint">An AI draft of practice for the learner, from the note you just saved. You review it before assigning.</span>
-    <button type="submit" name="draft_homework" value="1" class="btn btn-secondary btn-sm">Draft homework from this session note<span class="visually-hidden">: <?= h($savedNote['subject']) ?></span></button>
+    <button type="submit" name="draft_homework" value="1" class="btn btn-secondary btn-sm">Draft homework from this session note<span class="visually-hidden">: <?= h($savedNote['subject']) ?>. An AI draft of practice for the learner, which you review before assigning</span></button>
   </form>
   <?php endif; ?>
   <?php if (track_needs_rate($track) && (float)$track['hourly_rate'] <= 0): ?>
@@ -1062,7 +1075,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
           // server explains a bad value next to the field instead of a browser bubble. ?>
           <form method="post" action="track.php?id=<?= $id ?>" class="stacked goal-progress-form" novalidate>
             <?= csrf_field() ?>
-            <input type="hidden" name="goal_id" value="<?= (int)$g['id'] ?>">
+            <input type="hidden" name="goal_id" value="<?= (int)$g['id'] ?>"><?= web_idem_field() ?>
             <?php if (!empty($gDraft['reopen_asked'])): ?><input type="hidden" name="reopen_confirmed" value="1"><?php endif; ?>
             <label for="gs-<?= (int)$g['id'] ?>">Status<?= $gName ?> <span class="hint">Achieved sets 100%. Not Started sets 0% unless you change the percent.</span></label>
             <select id="gs-<?= (int)$g['id'] ?>" name="goal_status"><?= select_options(GOAL_STATUSES, $gDraft['status'] ?? $g['status']) ?></select>
@@ -1106,9 +1119,9 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
   <summary>Add a <abbr title="Specific, Measurable, Attainable, Relevant, Time-bound">SMART</abbr> goal</summary>
   <?php if ($goalTplTotal): ?>
   <?php // Search returns to the picker; Prefill lands on the goal form it filled in. ?>
+  <p class="hint">Search <?= $goalTplTotal ?> goal templates across <?= count($goalCats) ?> areas by tool, task, or keyword, then prefill the form below — you can still edit everything before saving.</p>
   <form method="get" action="track.php#tpl-picker" class="stacked template-picker" aria-label="Start from a goal template" id="tpl-picker">
     <input type="hidden" name="id" value="<?= $id ?>">
-    <p class="hint" id="tpl-help">Search <?= $goalTplTotal ?> goal templates across <?= count($goalCats) ?> areas by tool, task, or keyword, then prefill the form below — you can still edit everything before saving.</p>
     <div class="grid grid-2">
       <div class="field">
         <label for="tpl-cat">Area</label>

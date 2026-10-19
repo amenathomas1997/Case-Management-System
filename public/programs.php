@@ -39,8 +39,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_cohort'])) {
     $end = valid_date($endIn, 2000, $maxYear);
     $errors = [];
     if ($name === '') $errors['name'] = 'Cohort name is required.';
-    if ($startIn !== '' && $start === null) $errors['start_date'] = 'Enter the start date as a real date with a year from 2000 to ' . $maxYear . ' (for example 2026-09-15), or leave it blank.';
-    if ($endIn !== '' && $end === null) $errors['end_date'] = 'Enter the end date as a real date with a year from 2000 to ' . $maxYear . ' (for example 2026-09-15), or leave it blank.';
+    if (input_was_unreadable('start_date') || ($startIn !== '' && $start === null)) $errors['start_date'] = 'Enter the start date as a real date with a year from 2000 to ' . $maxYear . ' (for example 2026-09-15), or leave it blank.';
+    if (input_was_unreadable('end_date') || ($endIn !== '' && $end === null)) $errors['end_date'] = 'Enter the end date as a real date with a year from 2000 to ' . $maxYear . ' (for example 2026-09-15), or leave it blank.';
     elseif ($start !== null && $end !== null && $end < $start) $errors['end_date'] = 'The end date cannot be before the start date.';
     $coordinatorId = (int)($_POST['coordinator_id'] ?? 0) ?: null;
     if ($coordinatorId !== null) {
@@ -428,7 +428,7 @@ $cohorts = db()->query("SELECT co.*, u.name AS coordinator,
     WHERE co.active = " . ($showArchived ? '0' : '1') . cohort_access_sql((int)$user['id']) . " ORDER BY co.start_date IS NULL, co.start_date DESC, co.name")->fetchAll();
 
 // The title, and a heading over the list, say which cohorts are shown.
-page_header($showArchived ? 'Programs (archived cohorts)' : 'Programs', $user, 'programs');
+page_header((form_errors() ? 'Error — ' : '') . ($showArchived ? 'Programs (archived cohorts)' : 'Programs'), $user, 'programs');
 ?>
 <h1>Pre-ETS &amp; group programs</h1>
 <p class="muted">Manage cohorts of Pre-ETS students, log group sessions against the five required activities, and report each student's hours by activity.</p>
@@ -440,16 +440,16 @@ page_header($showArchived ? 'Programs (archived cohorts)' : 'Programs', $user, '
   $coordPick = $oldCohort ? (int)old_in('coordinator_id') : (int)$user['id']; ?>
   <form method="post" action="programs.php" class="stacked" novalidate>
     <?= csrf_field() ?><?= web_idem_field() ?>
-    <?= form_error_summary(['name' => '', 'start_date' => '', 'end_date' => '']) ?>
+    <?= form_error_summary(['name' => '', 'start_date' => '', 'end_date' => '', 'coordinator_id' => 'Coordinator']) ?>
     <div class="grid grid-4">
-      <div class="field"><label for="name">Cohort name <span aria-hidden="true">*</span><span class="visually-hidden">(required)</span></label><input type="text" id="name" name="name" required maxlength="190" placeholder="e.g. Central HS Fall 2026" value="<?= h($oldCohort ? old_in('name') : '') ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
+      <div class="field"><label for="name">Cohort name <?= required_mark() ?></label><input type="text" id="name" name="name" required maxlength="190" placeholder="e.g. Central HS Fall 2026" value="<?= h($oldCohort ? old_in('name') : '') ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
       <div class="field"><label for="school">School / district</label><input type="text" id="school" name="school" maxlength="190" value="<?= h($oldCohort ? old_in('school') : '') ?>"></div>
       <div class="field"><label for="coordinator_id">Coordinator</label>
-        <select id="coordinator_id" name="coordinator_id">
+        <select id="coordinator_id" name="coordinator_id" <?= field_aria('coordinator_id') ?>>
           <option value="">— None —</option>
           <?php foreach (db()->query('SELECT id, name FROM users WHERE is_active = 1 ORDER BY name') as $s): ?>
           <option value="<?= (int)$s['id'] ?>" <?= $coordPick === (int)$s['id'] ? 'selected' : '' ?>><?= h($s['name']) ?></option><?php endforeach; ?>
-        </select></div>
+        </select><?= field_error('coordinator_id') ?></div>
     </div>
     <div class="grid grid-4">
       <div class="field"><label for="start_date">Start</label><input type="date" id="start_date" name="start_date" min="2000-01-01" max="<?= (int)date('Y') + 5 ?>-12-31" value="<?= h($oldCohort ? old_in('start_date') : '') ?>" <?= field_aria('start_date') ?>><?= field_error('start_date') ?></div>
@@ -474,4 +474,5 @@ page_header($showArchived ? 'Programs (archived cohorts)' : 'Programs', $user, '
   </section>
   <?php endforeach; ?>
 </div>
+<?= bad_input_script() ?>
 <?php page_footer();

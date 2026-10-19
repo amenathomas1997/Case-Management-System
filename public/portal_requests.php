@@ -21,11 +21,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
         // A records request closes with what was done: how the copy was delivered, what was
         // corrected, or why it was refused (3.0.38). The client sees it in the portal.
         $outcome = trim(is_string($_POST['outcome'] ?? null) ? $_POST['outcome'] : '');
+        // 4.29.0: an outcome error is on the Outcome box (o-<id>), and the status chosen and the
+        // outcome typed are kept, so the form comes back as it was sent.
         if (isset(RECORDS_REQUEST_TYPES[$row['type']]) && in_array($to, ['Done', 'Declined'], true) && $outcome === '') {
-            keep_field_errors(['to_' . $id => $to === 'Declined' ? 'Say why the request is refused; the client sees it.' : 'Say how the copy was delivered or what was corrected; the client sees it.']);
+            keep_input();
+            keep_field_errors(['outcome_' . $id => $to === 'Declined' ? 'Say why the request is refused; the client sees it.' : 'Say how the copy was delivered or what was corrected; the client sees it.']);
             redirect('portal_requests.php');
         }
-        if (mb_strlen($outcome) > 500) { keep_field_errors(['to_' . $id => 'Keep the outcome to 500 characters or fewer.']); redirect('portal_requests.php'); }
+        if (mb_strlen($outcome) > 500) { keep_input(); keep_field_errors(['outcome_' . $id => 'Keep the outcome to 500 characters or fewer.']); redirect('portal_requests.php'); }
         // Saving the status it already has changes nothing, so nothing is audited.
         if ($to === $row['status']) { flash('Request from ' . $row['client_name'] . ' (' . (PREQ_TYPES[$row['type']] ?? 'Request') . ') is already ' . $to . '; nothing was changed.'); redirect('portal_requests.php'); }
         $closed = ['Done', 'Declined'];
@@ -92,13 +95,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['offer_times'])) {
     $row = $r->fetch();
     if (!$row || (caseload_scoped() && (int)$row['assigned_to'] !== (int)$user['id'])) { flash('That request is not on your caseload.', 'error'); redirect('portal_requests.php'); }
     $starts = [];
-    foreach ([1, 2, 3] as $n) { $v = trim((string)($_POST['time' . $n] ?? '')); if ($v !== '') $starts[] = strtotime($v) ?: -1; }
+    // 4.29.0: each unreadable time is marked on its own box, and the offer form opens again with them.
+    $timeErrs = [];
+    foreach ([1, 2, 3] as $n) {
+        $v = trim(is_string($_POST['time' . $n] ?? null) ? $_POST['time' . $n] : '');
+        if ($v === '') continue;
+        $ts = strtotime($v);
+        if ($ts === false) { $timeErrs['offer_t' . $n . '-' . $id] = 'This time could not be read. Enter a date and a time.'; continue; }
+        $starts[] = $ts;
+    }
     $_POST['offer_req'] = (string)$id; // refills only this request's form
-    if (in_array(-1, $starts, true)) { keep_input(); flash('One of the times could not be read. Enter each as a date and time.', 'error'); redirect('portal_requests.php#offer-' . $id); }
+    if ($timeErrs) { keep_input(); keep_field_errors($timeErrs); redirect('portal_requests.php#offer-' . $id); }
     $staff = (int)($_POST['staff'] ?? 0);
     $su = db()->prepare('SELECT COUNT(*) FROM users WHERE id = ? AND is_active = 1');
     $su->execute([$staff]);
-    if (!(int)$su->fetchColumn()) { keep_input(); flash('Choose who will run the session.', 'error'); redirect('portal_requests.php#offer-' . $id); }
+    if (!(int)$su->fetchColumn()) { keep_input(); keep_field_errors(['offer_staff-' . $id => 'Choose who will run the session.']); redirect('portal_requests.php#offer-' . $id); }
     // 4.28.0: never someone limited to their own caseload who is not assigned this client (they
     // could not open the session's client); the error is on the With field.
     if (($why = offer_staff_problem($staff, (int)$row['client_id'])) !== null) { keep_input(); keep_field_errors(['offer_staff-' . $id => $why]); redirect('portal_requests.php#offer-' . $id); }
@@ -106,7 +117,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['offer_times'])) {
         (string)($_POST['location'] ?? ''), (int)$user['id']);
     if ($res['error'] !== null) {
         keep_input();
-        if (($res['field'] ?? '') === 'staff') keep_field_errors(['offer_staff-' . $id => $res['error']]); else flash($res['error'], 'error');
+        // Each error on the box it is about; one about the request itself (closed, no portal link) is a message.
+        $errField = match (true) {
+            ($res['field'] ?? '') === 'staff' => 'offer_staff-' . $id,
+            str_starts_with($res['error'], 'Choose a length') => 'offer_len-' . $id,
+            str_starts_with($res['error'], 'Choose one of this client') => 'offer_track-' . $id,
+            str_starts_with($res['error'], 'Enter at least one'), str_starts_with($res['error'], 'Offer at most'), str_starts_with($res['error'], 'None of the times') => 'offer_t1-' . $id,
+            default => null,
+        };
+        if ($errField !== null) keep_field_errors([$errField => $res['error']]); else flash($res['error'], 'error');
         redirect('portal_requests.php#offer-' . $id);
     }
     flash($res['offered'] . ' time' . ($res['offered'] === 1 ? '' : 's') . ' offered to ' . $row['client_name'] . '. They choose one in their portal.'
@@ -182,12 +201,13 @@ page_header('Client requests', $user, 'portal_requests');
         <form method="post" action="portal_requests.php" class="inline-form"><?= csrf_field() ?>
           <input type="hidden" name="id" value="<?= (int)$r['id'] ?>">
           <?php $toKey = 'to_' . (int)$r['id']; ?>
-          <?= form_error_summary([$toKey => 'Status for ' . $which], [$toKey => 's-' . (int)$r['id']]) ?>
+          <?php $outKey = 'outcome_' . (int)$r['id']; $stMine = old_in('set_status') !== '' && old_in('id') === (string)(int)$r['id']; ?>
+          <?= form_error_summary([$toKey => 'Status for ' . $which, $outKey => 'Outcome for ' . $which], [$toKey => 's-' . (int)$r['id'], $outKey => 'o-' . (int)$r['id']]) ?>
           <label class="visually-hidden" for="s-<?= (int)$r['id'] ?>">Set status for <?= $which ?></label>
-          <select id="s-<?= (int)$r['id'] ?>" name="to" <?= field_aria($toKey) ?>><?= select_options(PREQ_STATUSES, $r['status']) ?></select><?= field_error($toKey) ?>
+          <select id="s-<?= (int)$r['id'] ?>" name="to" <?= field_aria($toKey) ?>><?= select_options(PREQ_STATUSES, $stMine && in_array(old_in('to'), PREQ_STATUSES, true) ? old_in('to') : $r['status']) ?></select><?= field_error($toKey) ?>
           <?php if (isset(RECORDS_REQUEST_TYPES[$r['type']])): ?>
           <label for="o-<?= (int)$r['id'] ?>">Outcome the client sees<span class="visually-hidden"> for <?= $which ?></span></label>
-          <input type="text" id="o-<?= (int)$r['id'] ?>" name="outcome" maxlength="500" value="<?= h((string)($r['outcome'] ?? '')) ?>">
+          <input type="text" id="o-<?= (int)$r['id'] ?>" name="outcome" maxlength="500" value="<?= h($stMine ? old_in('outcome') : (string)($r['outcome'] ?? '')) ?>" <?= field_aria($outKey) ?>><?= field_error($outKey) ?>
           <?php endif; ?>
           <button type="submit" name="set_status" value="1" class="btn btn-secondary btn-sm">Save<span class="visually-hidden"> status for <?= $which ?></span></button>
         </form>
@@ -207,21 +227,28 @@ page_header('Client requests', $user, 'portal_requests');
                 if ($ms = $msq->fetch()) { $defStaff = (int)$ms['user_id'] ?: $defStaff; $defRemote = (int)$ms['is_remote'] === 1; $defLoc = (string)($ms['location'] ?? ''); }
             } ?>
         <?php if ($open): ?><p>Offered: <?= h(implode('; ', array_map(fn($o) => date('D, M j g:i A', strtotime($o['start_at'])), $open))) ?></p><?php endif; ?>
-        <details id="offer-<?= $rid ?>"<?= has_field_error('offer_staff-' . $rid) ? ' open' : '' ?>><summary><?= $open ? 'Offer different times' : 'Offer times' ?><span class="visually-hidden"> for <?= $which ?></span></summary>
+        <?php // 4.29.0: every field of the offer form can carry its error; the form opens again after any refused offer.
+            $offLabels = ['offer_t1-' . $rid => 'First time', 'offer_t2-' . $rid => 'Second time', 'offer_t3-' . $rid => 'Third time',
+                'offer_len-' . $rid => 'Length', 'offer_staff-' . $rid => 'With', 'offer_track-' . $rid => 'Training track'];
+            $offAnchors = ['offer_t1-' . $rid => 't1-' . $rid, 'offer_t2-' . $rid => 't2-' . $rid, 'offer_t3-' . $rid => 't3-' . $rid,
+                'offer_len-' . $rid => 'len-' . $rid, 'offer_staff-' . $rid => 'st-' . $rid, 'offer_track-' . $rid => 'tr-' . $rid];
+            $offMine = old_in('offer_req') === (string)$rid;
+            $offOpen = $offMine || array_intersect_key(form_errors(), $offLabels); ?>
+        <details id="offer-<?= $rid ?>"<?= $offOpen ? ' open' : '' ?>><summary><?= $open ? 'Offer different times' : 'Offer times' ?><span class="visually-hidden"> for <?= $which ?></span></summary>
           <form method="post" action="portal_requests.php" class="stacked"><?= csrf_field() ?>
             <input type="hidden" name="id" value="<?= $rid ?>">
-            <?= form_error_summary(['offer_staff-' . $rid => 'With'], ['offer_staff-' . $rid => 'st-' . $rid]) ?>
+            <?= form_error_summary($offLabels, $offAnchors) ?>
             <?php foreach ([1 => 'First time', 2 => 'Second time', 3 => 'Third time'] as $n => $lbl): ?>
-            <div class="field"><label for="t<?= $n ?>-<?= $rid ?>"><?= $lbl ?></label><input type="datetime-local" id="t<?= $n ?>-<?= $rid ?>" name="time<?= $n ?>" value="<?= old_in('offer_req') === (string)$rid ? h(old_in('time' . $n)) : '' ?>"></div>
+            <div class="field"><label for="t<?= $n ?>-<?= $rid ?>"><?= $lbl ?></label><input type="datetime-local" id="t<?= $n ?>-<?= $rid ?>" name="time<?= $n ?>" value="<?= $offMine ? h(old_in('time' . $n)) : '' ?>" <?= field_aria('offer_t' . $n . '-' . $rid) ?>><?= field_error('offer_t' . $n . '-' . $rid) ?></div>
             <?php endforeach; ?>
-            <?php if ($r['type'] === 'appointment'): ?><div class="field"><label for="len-<?= $rid ?>">Length</label><select id="len-<?= $rid ?>" name="minutes"><?php foreach ([30, 45, 60, 90, 120, 180] as $mn): ?><option value="<?= $mn ?>"<?= $mn === 60 ? ' selected' : '' ?>><?= $mn ?> minutes</option><?php endforeach; ?></select></div><?php endif; ?>
+            <?php if ($r['type'] === 'appointment'): ?><div class="field"><label for="len-<?= $rid ?>">Length</label><select id="len-<?= $rid ?>" name="minutes" <?= field_aria('offer_len-' . $rid) ?>><?php $lenSel = $offMine && ctype_digit(old_in('minutes')) ? (int)old_in('minutes') : 60; foreach ([30, 45, 60, 90, 120, 180] as $mn): ?><option value="<?= $mn ?>"<?= $mn === $lenSel ? ' selected' : '' ?>><?= $mn ?> minutes</option><?php endforeach; ?></select><?= field_error('offer_len-' . $rid) ?></div><?php endif; ?>
             <div class="field"><label for="st-<?= $rid ?>">With</label><select id="st-<?= $rid ?>" name="staff" <?= field_aria('offer_staff-' . $rid) ?>><?php foreach ($staffList as $sl): ?><option value="<?= (int)$sl['id'] ?>"<?= (int)$sl['id'] === (old_in('offer_req') === (string)$rid && ctype_digit(old_in('staff')) ? (int)old_in('staff') : $defStaff) ? ' selected' : '' ?>><?= h($sl['name']) ?></option><?php endforeach; ?></select><?= field_error('offer_staff-' . $rid) ?></div>
             <?php if ($r['type'] === 'reschedule'): ?><p>The session keeps its length.</p><?php endif; ?>
             <?php if ($r['type'] === 'appointment' && $trackList): ?>
-            <div class="field"><label for="tr-<?= $rid ?>">Training track</label><select id="tr-<?= $rid ?>" name="track_id"><?php foreach ($trackList as $tl): ?><option value="<?= (int)$tl['id'] ?>"><?= h($tl['title']) ?></option><?php endforeach; ?></select></div>
+            <div class="field"><label for="tr-<?= $rid ?>">Training track</label><select id="tr-<?= $rid ?>" name="track_id" <?= field_aria('offer_track-' . $rid) ?>><?php foreach ($trackList as $tl): ?><option value="<?= (int)$tl['id'] ?>"<?= $offMine && old_in('track_id') === (string)(int)$tl['id'] ? ' selected' : '' ?>><?= h($tl['title']) ?></option><?php endforeach; ?></select><?= field_error('offer_track-' . $rid) ?></div>
             <?php endif; ?>
-            <div class="field"><label><input type="checkbox" name="remote" value="1"<?= $defRemote ? ' checked' : '' ?>> Remote</label></div>
-            <div class="field"><label for="loc-<?= $rid ?>">Location</label><input type="text" id="loc-<?= $rid ?>" name="location" maxlength="190" value="<?= h($defLoc) ?>"></div>
+            <div class="field"><label><input type="checkbox" name="remote" value="1"<?= ($offMine ? old_in('remote') === '1' : $defRemote) ? ' checked' : '' ?>> Remote</label></div>
+            <div class="field"><label for="loc-<?= $rid ?>">Location</label><input type="text" id="loc-<?= $rid ?>" name="location" maxlength="190" value="<?= h($offMine ? old_in('location') : $defLoc) ?>"></div>
             <button type="submit" name="offer_times" value="1" class="btn btn-primary btn-sm">Offer these times<span class="visually-hidden"> for <?= $which ?></span></button>
           </form>
         </details>

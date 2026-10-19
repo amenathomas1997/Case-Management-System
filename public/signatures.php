@@ -42,7 +42,15 @@ if ($isPost && isset($_POST['sign_now'])) {
     }
     $typed = trim(is_string($_POST['signature'] ?? null) ? $_POST['signature'] : '');
     $why = $s ? signature_sign_in_person($s, $typed, null, (int)$user['id']) : 'That document is no longer on the record.';
-    if ($why !== null) { keep_input(); keep_field_errors(['signature' => $why]); redirect($here . '&sign=' . (int)$_POST['sign_now']); }
+    // In the document's language (4.29.0): the signer reads it.
+    $docLang = (string)($s['lang'] ?? ($kiosk['lang'] ?? ''));
+    if ($why !== null && $s && signature_status($s) === 'Waiting to be signed here') {
+        keep_input(); keep_field_errors(['signature' => signature_reason_in($why, $docLang, (string)$s['signer_name'])]);
+        redirect($here . '&sign=' . (int)$_POST['sign_now']);
+    }
+    // Nothing left to sign here (expired, withdrawn, signed or gone): the signer is told on the
+    // closing page in their language, and hands the device back.
+    if ($why !== null) { $_SESSION['kiosk_sign_why'] = signature_reason_in($why, $docLang, (string)($s['signer_name'] ?? '')); redirect($here . '&signed=0'); }
     redirect($here . '&signed=1');
 }
 // The device is still in the signer's hands (4.25.0): a page with nothing to follow. Any other page signs out.
@@ -51,7 +59,8 @@ if ($kiosk && !$isPost && isset($_GET['signed'])) {
     $es = ($_SESSION['kiosk_sign']['lang'] ?? '') === 'es';
     page_header($es ? 'Gracias' : 'Thank you');
     echo '<div class="card" style="max-width: 40rem; margin: 2rem auto;"' . ($es ? ' lang="es"' : '') . '><h1>' . ($_GET['signed'] === '1' ? ($es ? 'Quedó firmado. Gracias.' : 'It is signed. Thank you.') : ($es ? 'No se firmó.' : 'Not signed.'))
-        . '</h1><p>' . ($es ? 'Devuelva el dispositivo, por favor.' : 'Please hand the device back.') . '</p></div>'
+        . '</h1>' . (is_string($_SESSION['kiosk_sign_why'] ?? null) && $_GET['signed'] !== '1' ? '<p>' . h($_SESSION['kiosk_sign_why']) . '</p>' : '')
+        . '<p>' . ($es ? 'Devuelva el dispositivo, por favor.' : 'Please hand the device back.') . '</p></div>'
         . '<p style="text-align:center"><a class="btn btn-secondary" href="index.php">Staff: sign in again to carry on</a></p>';
     page_footer();
     exit;
@@ -85,7 +94,13 @@ if (!$isPost && isset($_GET['sign']) && ($s = client_signature((int)$_GET['sign'
     <?= count($lines) > 1 ? '<ul><li>' . implode('</li><li>', array_map('h', $lines)) . '</li></ul>' : '<p>' . h($lines[0]) . '</p>' ?>
   <?php endforeach; ?></div>
   <form method="post" action="<?= h($here) ?>" class="stacked" novalidate><?= csrf_field() ?>
-    <?= form_error_summary(['signature' => $es ? 'Firma electrónica' : 'Electronic signature']) ?>
+    <?php if ($es && isset(form_errors()['signature'])): // the summary in Spanish too (4.29.0): its words come from the document's language, not the staff page's ?>
+    <div class="alert alert-error" tabindex="-1" id="form-error-summary"><p class="legend-h">Corrija lo siguiente:</p>
+      <ul><li><a href="#signature" style="display:inline-flex; align-items:center; min-height:2.75rem;">Firma electrónica: <?= h(form_errors()['signature']) ?></a></li></ul></div>
+    <script>document.addEventListener("DOMContentLoaded",function(){var s=document.getElementById("form-error-summary");if(s)s.focus();});</script>
+    <?php else: ?>
+    <?= form_error_summary(['signature' => 'Electronic signature']) ?>
+    <?php endif; ?>
     <div class="field"><label for="signature"><?= $es ? 'Firma electrónica' : 'Electronic signature' ?> <?= required_mark() ?> <span class="hint"><?= $es ? 'Escriba su nombre completo (' . h($s['signer_name']) . ') para firmar. No importa si las mayúsculas, los acentos o la puntuación son diferentes.' : 'Type your full name (' . h($s['signer_name']) . ') to sign. Capital letters, accents and punctuation do not need to match.' ?></span></label>
       <input type="text" id="signature" name="signature" autocomplete="off" value="<?= h(old_in('signature')) ?>" <?= field_aria('signature') ?>><?= field_error('signature') ?></div>
     <button type="submit" name="sign_now" value="<?= (int)$s['id'] ?>" class="btn btn-primary"><?= $es ? 'Firmar' : 'Sign' ?></button>
@@ -99,6 +114,14 @@ if (!$isPost && isset($_GET['sign']) && ($s = client_signature((int)$_GET['sign'
 }
 // The staff page is never shown on a handed-over device (Back after signing, a stale address).
 if ($kiosk) kiosk_end();
+// "Sign it now" from an older page for a document that can no longer be signed here: the device is
+// never handed over for it (4.29.0).
+if (!$isPost && isset($_GET['sign']) && ($gone = client_signature((int)$_GET['sign'], $id))) {
+    $gst = signature_status($gone);
+    flash($gst === 'Expired, not signed here' ? '“' . $gone['title'] . '” was started more than two days ago, so it can no longer be signed. Start it again below with Sign here now.'
+        : '“' . $gone['title'] . '” is ' . mb_strtolower($gst) . ', so there is nothing to sign.', 'error');
+    redirect($here . ($gst === 'Expired, not signed here' ? '#send-h' : '#list-h'));
+}
 $list = client_signatures($id);
 $minor = !empty($client['guardian_name']) && !empty($client['dob']) && $client['dob'] > date('Y-m-d', strtotime('-18 years'));
 $old = fn(string $k, string $d = ''): string => old_in('kind') !== '' ? old_in($k) : $d;

@@ -12,33 +12,32 @@ if (!is_string($key) || !isset(EMAIL_TEMPLATES[$key])) $key = '';
 
 // Placeholders a customised body must keep, or the email loses the thing it
 // exists to deliver (a sign-in code without {code} locks people out).
-const TPL_REQUIRED = [
-    'otp' => ['{code}' => 'the sign-in code'],
-    'vrc_code' => ['{code}' => 'the access code'],
-    'portal_link' => ['{link}' => 'the portal link'],
-    'consent_request' => ['{link}' => 'the consent form link'],
-    'survey_invite' => ['{link}' => 'the survey link'],
-    'release_request' => ['{link}' => 'the release form link'],
-    'message_notice' => ['{link}' => 'the portal link'],
-    'request_closed' => ['{link}' => 'the portal link'],
-    'portal_expiring' => ['{link}' => 'the portal link'],
-    'counselor_noshow' => ['{link}' => 'the counselor portal link'],
-    'counselor_auth_low' => ['{link}' => 'the counselor portal link'],
-    'loan_due_client' => ['{item}' => 'the item loaned'],
-    'loan_overdue_client' => ['{item}' => 'the item loaned'],
-    'session_booked_client' => ['{sessions}' => 'the session dates'],
-    'session_cancelled_client' => ['{sessions}' => 'the session dates'],
-    'session_moved_client' => ['{sessions}' => 'the new session time'],
-    'report_cover' => ['{ack}' => 'the confirmation link'],
-    'referral_closed' => ['{ref}' => 'the referral reference number'],
-    'times_offered' => ['{link}' => 'the portal link'],
-    'times_offered_es' => ['{link}' => 'the portal link'],
+// 4.29.0: the one list is EMAIL_TEMPLATE_REQUIRED (inc/core.php), which email_template()
+// enforces when sending, so every body the page accepts is one that is actually used
+// (the Spanish templates and "Document to sign" were missing here). This adds only what
+// each placeholder is replaced by, for the error message.
+const TPL_WHAT = [
+    'otp' => 'the sign-in code', 'vrc_code' => 'the access code',
+    'counselor_noshow' => 'the counselor portal link', 'counselor_auth_low' => 'the counselor portal link',
+    'report_cover' => 'the confirmation link', 'referral_closed' => 'the referral reference number',
+    'consent_request' => 'the consent form link', 'survey_invite' => 'the survey link', 'release_request' => 'the release form link',
+    'sign_request' => 'the link to the document to sign', 'session_moved_client' => 'the new session time',
 ];
+const TPL_WHAT_BY_PLACEHOLDER = ['{code}' => 'the code', '{link}' => 'the portal link', '{item}' => 'the item loaned',
+    '{sessions}' => 'the session dates', '{ack}' => 'the confirmation link', '{ref}' => 'the referral reference number'];
+
+/** The placeholders a body for $key must keep: placeholder => what it is replaced by. */
+function tpl_required(string $key): array {
+    $ph = EMAIL_TEMPLATE_REQUIRED[$key] ?? null;
+    if ($ph === null) return [];
+    $base = preg_replace('/_es$/', '', $key);
+    return [$ph => TPL_WHAT[$key] ?? TPL_WHAT[$base] ?? TPL_WHAT_BY_PLACEHOLDER[$ph] ?? 'what the email delivers'];
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_tpl']) && $key !== '') {
     $body = trim((string)($_POST['body'] ?? ''));
     if ($body !== '') {
-        foreach (TPL_REQUIRED[$key] ?? [] as $ph => $what) {
+        foreach (tpl_required($key) as $ph => $what) {
             if (!str_contains($body, $ph)) {
                 keep_input();
                 keep_field_errors(['body' => 'The body must include ' . $ph . ' exactly as shown (lower case, no spaces): it is replaced by '
@@ -59,7 +58,7 @@ page_header('Email templates', $user, 'admin', [['admin.php', 'Administration']]
 ?>
 <h1>Email templates</h1>
 <p class="muted">Change the wording of the emails this system sends. Words in curly braces like <code>{name}</code> are filled in automatically.
-   Leave a field blank to use the built-in wording. <a href="admin.php#forms-h">Back to My Account</a></p>
+   Leave a field blank to use the built-in wording. <a href="admin.php#forms-h">Back to Administration</a></p>
 
 <div class="grid grid-2">
   <section class="card" aria-label="Template list">
@@ -85,7 +84,7 @@ page_header('Email templates', $user, 'admin', [['admin.php', 'Administration']]
       <div class="field"><label for="tpl_subject">Subject <span class="hint">blank = default: “<?= h($def[1]) ?>”</span></label>
         <input type="text" id="tpl_subject" name="subject" maxlength="190" value="<?= h(old_in('subject', $curSubject)) ?>"></div>
       <?php else: ?><input type="hidden" name="subject" value=""><?php endif; ?>
-      <div class="field"><label for="tpl_body">Body <span class="hint">blank = the default shown below<?php if (isset(TPL_REQUIRED[$key])): ?>; must include <?= h(implode(' and ', array_keys(TPL_REQUIRED[$key]))) ?><?php endif; ?></span></label>
+      <div class="field"><label for="tpl_body">Body <span class="hint">blank = the default shown below<?php if (tpl_required($key)): ?>; required: must include <?= h(implode(' and ', array_keys(tpl_required($key)))) ?><?php endif; ?></span></label>
         <textarea id="tpl_body" name="body" rows="9" <?= field_aria('body') ?>><?= h(old_in('body', $curBody)) ?></textarea><?= field_error('body') ?></div>
       <button type="submit" name="save_tpl" value="1" class="btn btn-primary">Save template</button>
     </form>

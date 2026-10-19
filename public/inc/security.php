@@ -110,6 +110,67 @@ function sso_email_match_allowed(array $claims, string $issuer): bool {
 /** The message for a first Microsoft sign-in that cannot be matched by email (4.27.0). */
 const SSO_EMAIL_MATCH_REFUSED_MSG = 'Sign in with your password once, then connect Microsoft from My Account.';
 
+/* ---------- A browser handed over for signing in person (4.29.0, P2) ----------
+   kiosk_end() signs the staff member out, but the browser may still hold their
+   Microsoft session or an unlocked passkey. A short-lived marker cookie outlives
+   the ended session: while it is set, "Sign in with Microsoft" makes Microsoft ask
+   for the password again (prompt=login, checked through auth_time) and a passkey
+   cannot sign in. A full sign-in with password and code (verify.php) clears it. */
+const HANDOVER_COOKIE = 'cms_handover';
+const HANDOVER_SECONDS = 2 * 3600;
+const HANDOVER_PASSKEY_MSG = 'This browser was handed over for signing, so a passkey cannot be used here until someone signs in with their email, password and code.';
+const HANDOVER_SSO_MSG = 'This browser was handed over for signing, and Microsoft did not confirm that it asked for your password just now. Sign in with your email, password and code instead. If you have never had a password here, choose "Forgot your password?" to set one.';
+
+/** True while this browser carries the hand-over marker, or its session is still handed over. */
+function handover_marked(): bool {
+    if (is_array($_SESSION['kiosk_sign'] ?? null)) return true;
+    // Tests (command line only) set the marker without a cookie, as CMS_TEST_SSO_TOKENS does for sso.php.
+    if (PHP_SAPI === 'cli' && getenv('CMS_TEST_HANDOVER') === '1') return true;
+    $v = $_COOKIE[HANDOVER_COOKIE] ?? null;
+    return is_string($v) && ctype_digit($v) && (int)$v > time();
+}
+
+/** True when the marker cookie is set with more than half its time left (no need to renew it). */
+function handover_cookie_fresh(): bool {
+    $v = $_COOKIE[HANDOVER_COOKIE] ?? null;
+    return is_string($v) && ctype_digit($v) && (int)$v > time() + intdiv(HANDOVER_SECONDS, 2);
+}
+
+/** Set (or renew) the marker. The value is its own expiry time, so an old copy is ignored. */
+function handover_mark(): void {
+    $until = time() + HANDOVER_SECONDS;
+    $_COOKIE[HANDOVER_COOKIE] = (string)$until;
+    if (headers_sent()) return;
+    setcookie(HANDOVER_COOKIE, (string)$until, ['expires' => $until, 'path' => '/', 'secure' => (bool)($GLOBALS['isHttps'] ?? true),
+        'httponly' => true, 'samesite' => 'Lax']);
+}
+
+/** Remove the marker (after a full sign-in with password and code). */
+function handover_clear(): void {
+    if (!isset($_COOKIE[HANDOVER_COOKIE])) return;
+    unset($_COOKIE[HANDOVER_COOKIE]);
+    if (headers_sent()) return;
+    setcookie(HANDOVER_COOKIE, '', ['expires' => time() - 3600, 'path' => '/', 'secure' => (bool)($GLOBALS['isHttps'] ?? true),
+        'httponly' => true, 'samesite' => 'Lax']);
+}
+
+/** The query for Microsoft's authorize endpoint. $fresh (a handed-over browser) makes Microsoft
+ *  ask for the password again, whatever session it holds, and report when (auth_time). */
+function sso_authorize_params(string $clientId, string $redirectUri, string $state, string $nonce, bool $fresh): array {
+    $q = ['client_id' => $clientId, 'response_type' => 'code', 'redirect_uri' => $redirectUri, 'response_mode' => 'query',
+        'scope' => 'openid profile email', 'state' => $state, 'nonce' => $nonce];
+    if ($fresh) $q += ['prompt' => 'login', 'max_age' => '0'];
+    return $q;
+}
+
+/** For a sign-in started with $fresh: the ID token must say the password was asked after
+ *  $startedAt (auth_time; 5 minutes allowed for clock difference). No auth_time: refused. */
+function sso_fresh_auth_ok(array $claims, int $startedAt): bool {
+    if (!isset($claims['auth_time']) || !is_numeric($claims['auth_time'])) return false;
+    $at = (int)$claims['auth_time'];
+    return $at >= $startedAt - 300 && $at <= time() + 300;
+}
+
 /**
  * The address a request came from, for per-address limits (4.27.0). The
  * X-Forwarded-For header is used only when config 'trust_proxy' is on AND the
@@ -209,28 +270,40 @@ function totp_secret_plain(?string $stored): ?string {
     return ($seed === false || $seed === '') ? null : totp_seed_b32($seed);
 }
 
-/** What to store in users.totp_secret for a base32 seed. Falls back to the plain
- *  seed (as before 4.28.0) only when the key file cannot be used or the seed is not a
- *  standard 20-byte one; the next successful sign-in tries again. */
+/** Refused storing of an authenticator seed (4.29.0): its message is worded for the person. */
+final class TotpStoreRefused extends RuntimeException {}
+const TOTP_STORE_REFUSED_MSG = "The authenticator app can't be turned on right now, because the server's key file (meeting_tokens.key) is missing or damaged. Nothing was changed. Ask an administrator: System health says how to fix it.";
+
+/** What to store in users.totp_secret for a base32 seed: always the encrypted form.
+ *  4.29.0 (P14): never the plain seed. When the key file cannot be used, or the seed is
+ *  not a standard 20-byte one, it throws TotpStoreRefused (TOTP_STORE_REFUSED_MSG)
+ *  and the caller stores nothing. */
 function totp_secret_store(string $plain): string {
     if (str_starts_with(trim($plain), TOTP_SEAL_PREFIX)) return trim($plain); // already stored form
     $plain = strtoupper(trim($plain));
-    if ($plain === '' || !preg_match('/^[A-Z2-7]+$/', $plain)) return $plain;
-    $seed = totp_seed_b32($plain, true);
-    if (strlen($seed) !== 20 || totp_seed_b32($seed) !== $plain) return $plain;
+    $seed = ($plain !== '' && preg_match('/^[A-Z2-7]+$/', $plain)) ? totp_seed_b32($plain, true) : '';
+    if (strlen($seed) !== 20 || totp_seed_b32($seed) !== $plain) {
+        throw new TotpStoreRefused('The authenticator setup key was not recognised, so nothing was changed. Start the setup again.');
+    }
     try {
         $iv = random_bytes(12);
         $ct = openssl_encrypt($seed, 'aes-256-gcm', meeting_key(), OPENSSL_RAW_DATA, $iv, $tag, 'totp', 12);
         if ($ct === false || strlen((string)$tag) !== 12) throw new RuntimeException('Encryption failed.');
     } catch (Throwable $e) {
-        error_log('totp_secret_store: the authenticator seed was stored unencrypted: ' . $e->getMessage());
-        return $plain;
+        error_log('totp_secret_store: refused, the seed was not stored: ' . $e->getMessage());
+        throw new TotpStoreRefused(TOTP_STORE_REFUSED_MSG, 0, $e);
     }
     return TOTP_SEAL_PREFIX . base64_encode($iv . $tag . $ct);
 }
 
+/** Null when a new authenticator seed can be stored encrypted now, else the message to show
+ *  (checked before the setup starts, so nobody scans a code that cannot be kept). */
+function totp_store_problem(): ?string {
+    try { meeting_key(); return null; } catch (Throwable $e) { return TOTP_STORE_REFUSED_MSG; }
+}
+
 /** The message for an account whose authenticator seed is stored but cannot be read here. */
-const TOTP_UNREADABLE_MSG = "Your authenticator app can't be checked on this server. Ask an administrator to reset two-step verification (or run reset_2fa.php in the cron folder).";
+const TOTP_UNREADABLE_MSG = "Your authenticator app can't be checked on this server. Ask an administrator to reset two-step verification (System health, or Users, or reset_2fa.php in the cron folder).";
 
 /** True when the account has the authenticator app turned on with a stored seed. This alone
  *  decides that it signs in with the app only, never whether the seed can be read: a lost
@@ -256,7 +329,8 @@ function totp_secret_is_legacy(?string $stored): bool {
  *  Only when the row still holds the same value, so a reset at the same moment is never undone. */
 function totp_secret_upgrade(int $userId, ?string $stored, string $plain): void {
     if (!totp_secret_is_legacy($stored)) return;
-    $new = totp_secret_store($plain);
+    // Kept as it was when it cannot be encrypted now (no usable key file, or a non-standard seed).
+    try { $new = totp_secret_store($plain); } catch (TotpStoreRefused $e) { return; }
     if (!str_starts_with($new, TOTP_SEAL_PREFIX)) return;
     try {
         db()->prepare('UPDATE users SET totp_secret = ? WHERE id = ? AND totp_secret = ?')->execute([$new, $userId, $stored]);

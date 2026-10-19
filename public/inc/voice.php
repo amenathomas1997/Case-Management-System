@@ -125,7 +125,11 @@ function voice_pseudonymize(string $text, int $userId): array {
         $text = $out;
         $map[$token] = $name;
     }
-    return [$text, $map];
+    // 4.29.0: email addresses, phone numbers and 9-digit numbers go as "[EMAIL 1]", "[PHONE 1]",
+    // "[SSN 1]" and are mapped back the same way, so what is dictated into a note or task is
+    // saved as said (ai_redact() would otherwise make them "[PHONE]" for good).
+    [$text, $contacts] = ai_pseudonymize_contacts($text);
+    return [$text, $map + $contacts];
 }
 /** The model's fields with each "[CLIENT n]" put back as the name it stands for. */
 function voice_unpseudonymize(array $cmd, array $map): array {
@@ -554,9 +558,25 @@ function voice_execute(string $do, array $in, array $user): array {
             if (calendar_busy_overlaps($uid, $start, $end)) return ['ok' => false, 'error' => 'Your Outlook calendar shows you busy then. Choose another time, or book it on the website\'s Schedule page. Nothing was booked.'];
 
             $location = mb_substr(trim((string)($in['location'] ?? '')), 0, 190);
-            db()->prepare("INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, status) VALUES (?,?,?,?,?,?, 'Scheduled')")
-                ->execute([$cid, $trackId, $uid, date('Y-m-d H:i:s', $start), date('Y-m-d H:i:s', $end), $location ?: null]);
-            $sessionId = (int)db()->lastInsertId();
+            // The speaker's own sessions (4.29.0): under the instructor's lock, as every booking path,
+            // the website's overlap check. Voice cannot record an approval, so an overlap is refused,
+            // as Outlook busy is, and the website's form can book over it.
+            db()->beginTransaction();
+            try {
+                session_lock_instructor($uid);
+                $overlaps = session_instructor_overlaps($uid, (string)$staff['name'], [[$start, $end]], [$cid]);
+                if ($overlaps) {
+                    db()->rollBack();
+                    return ['ok' => false, 'error' => implode(' ', $overlaps) . ' Choose another time, or book it on the website\'s Schedule page. Nothing was booked.'];
+                }
+                db()->prepare("INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, status) VALUES (?,?,?,?,?,?, 'Scheduled')")
+                    ->execute([$cid, $trackId, $uid, date('Y-m-d H:i:s', $start), date('Y-m-d H:i:s', $end), $location ?: null]);
+                $sessionId = (int)db()->lastInsertId();
+                db()->commit();
+            } catch (Throwable $e) {
+                if (db()->inTransaction()) db()->rollBack();
+                throw $e;
+            }
             audit($uid, 'session.add', 'client', $cid, 'voice');
             client_session_notice([$sessionId], 'booked'); // 3.0.41: the client's calendar invite
             // As on the website and in the app, the instructor (the speaker) is emailed a

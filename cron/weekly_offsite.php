@@ -14,7 +14,9 @@ const OFFSITE_RESTORE_SECRETS = "The backup leaves out the stored secrets, so af
     . "the AI API key (AI drafting assistant) and the Microsoft Entra client secret (Federation). "
     . "QuickBooks and each staff member's Zoom or Microsoft meeting connection may also need connecting again. "
     // 4.28.0: authenticator seeds are encrypted with the same key file as those connections.
-    . "The private folder's meeting_tokens.key file is never in the backup (it is not emailed either): copy it from the old server into the new private folder by hand. It unlocks the stored authenticator seeds and the QuickBooks and meeting connections; without it, each person with an authenticator app is let back in with php reset_2fa.php their@email in the private cron folder, and sets the app up again under My Account.\n";
+    . "The private folder's meeting_tokens.key file is never in the backup (it is not emailed either). If it was not restored, copy the old meeting_tokens.key back into the private directory beside config.php (chmod 600): then nothing is lost. If it is gone for good, sign in as an administrator (if every administrator uses an authenticator app with no passkey or Microsoft sign-in, first run php reset_2fa.php admin@example.org in the cron folder for one of them), open System health and use Forget stored connections and keys under Sign-in and security (type FORGET to confirm); then connect QuickBooks again and ask staff to connect Zoom or Teams again on My Account.\n"
+    // 4.29.0: live link tokens are never in the backup either (cron/backup.sh).
+    . "Links are not in the backup: after a restore, send each client a new portal link and each counselor a new portal link, have each instructor copy the calendar-feed address again under My Account, and resend any signature, consent, release, report acknowledgement or survey request still waiting.\n";
 
 // Where the application's inc/ directory is: an optional cron_config.php beside
 // this script (it returns the path) wins, then the production path, then the

@@ -24,9 +24,10 @@ if ($ready && $_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['save_vendo
     $status = $str('agreement_status');
     if (!in_array($status, VENDOR_AGREEMENT_STATUSES, true)) $errs['agreement_status' . $suffix] = 'Choose an agreement status.';
     $signed = $str('signed_on') === '' ? null : valid_date($str('signed_on'), 2000, (int)date('Y'));
-    if ($str('signed_on') !== '' && $signed === null) $errs['signed_on' . $suffix] = 'Enter the date signed with a four-digit year, or leave it blank.';
+    // A partly typed date reaches us blank (4.29.0): refused, never taken as clearing the date.
+    if (input_was_unreadable('signed_on') || ($str('signed_on') !== '' && $signed === null)) $errs['signed_on' . $suffix] = 'Enter the date signed in full with a four-digit year, or leave it blank.';
     $renews = $str('renews_on') === '' ? null : valid_date($str('renews_on'), 2000, (int)date('Y') + 20);
-    if ($str('renews_on') !== '' && $renews === null) $errs['renews_on' . $suffix] = 'Enter the renewal date with a four-digit year, or leave it blank.';
+    if (input_was_unreadable('renews_on') || ($str('renews_on') !== '' && $renews === null)) $errs['renews_on' . $suffix] = 'Enter the renewal date in full with a four-digit year, or leave it blank.';
     $notes = $str('notes');
     if (mb_strlen($notes) > 500) $errs['notes' . $suffix] = 'Keep the notes to 500 characters or fewer.';
     if ($vid === 0) {
@@ -104,9 +105,9 @@ page_header('Vendor agreements', $user, 'admin', [['admin.php', 'Administration'
         'agreement_status' => 'nv_status', 'signed_on' => 'nv_signed', 'renews_on' => 'nv_renews', 'notes' => 'nv_notes']) ?>
     <?php $new = old_in('vendor_id') === '' || old_in('vendor_id') === '0'; $o = fn(string $k): string => $new ? old_in($k) : ''; ?>
     <p class="hint">Fields marked * are required.</p>
-    <div class="field"><label for="nv_vendor">Vendor <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+    <div class="field"><label for="nv_vendor">Vendor <?= required_mark() ?></label>
       <input type="text" id="nv_vendor" name="vendor" maxlength="120" value="<?= h($o('vendor')) ?>" <?= field_aria('vendor') ?>><?= field_error('vendor') ?></div>
-    <div class="field"><label for="nv_service">What they do for you <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
+    <div class="field"><label for="nv_service">What they do for you <?= required_mark() ?></label>
       <input type="text" id="nv_service" name="service" maxlength="255" value="<?= h($o('service')) ?>" <?= field_aria('service') ?>><?= field_error('service') ?></div>
     <div class="field"><label for="nv_info">Client information they handle</label>
       <input type="text" id="nv_info" name="client_info" maxlength="255" value="<?= h($o('client_info')) ?>" <?= field_aria('client_info') ?>><?= field_error('client_info') ?></div>
@@ -118,5 +119,6 @@ page_header('Vendor agreements', $user, 'admin', [['admin.php', 'Administration'
     <button type="submit" name="add_vendor" value="1" class="btn btn-primary">Add vendor</button>
   </form>
 </section>
+<?= bad_input_script() ?>
 <?php endif; ?>
 <?php page_footer();

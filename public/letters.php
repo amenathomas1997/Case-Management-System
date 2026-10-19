@@ -54,7 +54,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $client && $key !== '' && (isset($_
         exit;
     }
     if (isset($_POST['save_note'])) {
+        // Kept once when the form is sent twice (4.29.0), as Save to documents.
+        $noteKey = $letterKey !== null ? $letterKey . '-NOTE' : null;
+        if (web_once_get($noteKey) !== null) {
+            flash('This letter was already kept as a case note (the form was sent twice), so it was kept once.', 'info');
+            redirect('client.php?id=' . $cid . '&tab=notes');
+        }
         db()->prepare("INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?, 'Case Note', ?, ?, ?)")->execute([$cid, mb_substr('Letter: ' . $title, 0, 255), $body, $user['id']]);
+        web_once_set($noteKey, (int)db()->lastInsertId());
         audit($user['id'], 'letter.note', 'client', $cid, $title);
         flash('The letter was kept as a case note.');
         redirect('client.php?id=' . $cid . '&tab=notes');
@@ -96,7 +103,7 @@ page_header('Letters', $user, 'clients', $client ? [['client.php?id=' . $cid, $c
     <input type="hidden" name="client" value="<?= $cid ?>"><input type="hidden" name="letter" value="<?= h($key) ?>">
     <div class="field"><label for="title">Title</label><input type="text" id="title" name="title" maxlength="150" value="<?= h(old_in('title', LETTER_TEMPLATES[$key][0])) ?>"></div>
     <div class="field"><label for="body">Letter</label><textarea id="body" name="body" rows="18" style="width:100%" <?= field_aria('body') ?>><?= h(has_field_error('body') ? old_in('body') : old_in('body', letter_render($key, $cid))) ?></textarea><?= field_error('body') ?></div>
-    <div class="field"><label><input type="checkbox" name="to_portal" value="1"> Let the client read it in their portal</label></div>
+    <div class="field"><label><input type="checkbox" name="to_portal" value="1"<?= old_in('to_portal') === '1' ? ' checked' : '' ?>> Let the client read it in their portal</label></div>
     <p><button type="submit" name="save_doc" value="1" class="btn btn-primary">Save to the client's documents</button>
       <button type="submit" name="save_note" value="1" class="btn btn-secondary">Keep as a case note</button>
       <button type="submit" name="download" value="1" class="btn btn-secondary">Download to print or send</button></p>

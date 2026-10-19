@@ -114,6 +114,8 @@ $editing = (int)($_GET['edit'] ?? 0);
 $form = function (array $m, string $sfx) {
     $mine = old_in('module_id') === (string)($m['id'] ?? 0);
     $v = fn(string $k, string $d) => $mine ? old_in($k) : $d;
+    // 4.29.0: after a refused save the boxes show what was ticked then, not the saved values.
+    $tick = fn(string $k, bool $saved): string => ($mine ? old_in($k) !== '' : $saved) ? 'checked' : '';
     ob_start(); ?>
   <form method="post" action="staff_training.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['title' . $sfx => 'Title', 'body' . $sfx => 'Reading', 'questions' . $sfx => 'Quiz', 'pass_pct' . $sfx => 'Pass mark'], ['title' . $sfx => 'tt' . $sfx, 'body' . $sfx => 'tb' . $sfx, 'questions' . $sfx => 'tq' . $sfx, 'pass_pct' . $sfx => 'tp' . $sfx]) ?>
@@ -126,16 +128,16 @@ $form = function (array $m, string $sfx) {
       <textarea id="tq<?= $sfx ?>" name="questions" rows="12" <?= field_aria('questions' . $sfx) ?>><?= h($v('questions', (string)($m['questions'] ?? ''))) ?></textarea><?= field_error('questions' . $sfx) ?></div>
     <div class="field"><label for="tp<?= $sfx ?>">Pass mark, percent</label>
       <input type="number" id="tp<?= $sfx ?>" name="pass_pct" min="50" max="100" value="<?= h($v('pass_pct', (string)($m['pass_pct'] ?? 80))) ?>" <?= field_aria('pass_pct' . $sfx) ?>><?= field_error('pass_pct' . $sfx) ?></div>
-    <?php if (!empty($m['id'])): ?><div class="field"><label><input type="checkbox" name="small_correction" value="1"> This change is only a small correction to the reading, such as a typo, so nobody takes it again <span class="hint">the same quiz and pass mark, and at most 40 characters different</span></label></div><?php endif; ?>
-    <div class="field"><label><input type="checkbox" name="required" value="1" <?= ($m['required'] ?? 1) ? 'checked' : '' ?>> Required: client records can wait until it is passed (see below)</label></div>
-    <div class="field"><label><input type="checkbox" name="counts_as_privacy" value="1" <?= !empty($m['counts_as_privacy']) ? 'checked' : '' ?>> This is the privacy training (passing it records the date Compliance follows)</label></div>
-    <div class="field"><label><input type="checkbox" name="active" value="1" <?= !empty($m['active']) ? 'checked' : '' ?>> On: ask staff to take it</label></div>
+    <?php if (!empty($m['id'])): ?><div class="field"><label><input type="checkbox" name="small_correction" value="1" <?= $tick('small_correction', false) ?>> This change is only a small correction to the reading, such as a typo, so nobody takes it again <span class="hint">the same quiz and pass mark, and at most 40 characters different</span></label></div><?php endif; ?>
+    <div class="field"><label><input type="checkbox" name="required" value="1" <?= $tick('required', (bool)($m['required'] ?? 1)) ?>> Required: client records can wait until it is passed (see below)</label></div>
+    <div class="field"><label><input type="checkbox" name="counts_as_privacy" value="1" <?= $tick('counts_as_privacy', !empty($m['counts_as_privacy'])) ?>> This is the privacy training (passing it records the date Compliance follows)</label></div>
+    <div class="field"><label><input type="checkbox" name="active" value="1" <?= $tick('active', !empty($m['active'])) ?>> On: ask staff to take it</label></div>
     <button type="submit" name="save_module" value="1" class="btn btn-primary">Save<span class="visually-hidden"> <?= h((string)($m['title'] ?? 'the training')) ?></span></button>
   </form>
 <?php return (string)ob_get_clean();
 };
 
-page_header('Staff training', $user, 'admin', [['admin.php', 'Administration']]);
+page_header((form_errors() ? 'Error — ' : '') . 'Staff training', $user, 'admin', [['admin.php', 'Administration']]);
 ?>
 <h1>Staff training</h1>
 <p>Training staff take themselves, on the website or the phone apps: a reading and a short quiz. Each attempt is kept. Staff take it again a year after passing, or when you change it. The one marked as the privacy training also records the date Compliance follows.</p>
@@ -168,6 +170,7 @@ page_header('Staff training', $user, 'admin', [['admin.php', 'Administration']])
   <h2 id="hold-h" tabindex="-1">Before client records open</h2>
   <p>Whether staff must sign the agreements that are on (Staff agreements) and pass the required training before they can open client records. While something is outstanding, they keep their account, My agreements and My training; client records, referrals, the schedule and the other client areas open once it is done.</p>
   <form method="post" action="staff_training.php" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['access_hold_days' => 'Days staff have to catch up', 'confirm_hold' => 'Confirm'], ['access_hold_days' => 'hold_days']) ?>
     <?php $mode = old_in('access_hold') !== '' ? old_in('access_hold') : access_hold_mode(); ?>
     <fieldset><legend>Hold client records</legend>
       <div class="field"><label><input type="radio" name="access_hold" value="new" <?= $mode === 'new' ? 'checked' : '' ?>> For new staff, until they have signed and passed</label></div>

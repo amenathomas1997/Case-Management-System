@@ -162,7 +162,7 @@ if ($openCid) {
         <label for="body">Reply to the <?= $chanWho ?> <span class="hint">Up to 5,000 characters, or leave it empty to send just a file. It appears on the <?= $openChannel === 'client' ? "client's" : "counselor's" ?> portal.</span></label>
         <textarea id="body" name="body" rows="3" <?= field_aria('body') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?>
         <?php if ($openChannel === 'client' && sms_enabled()): $smsWhy = sms_client_blocked(sms_client($openCid)); // 4.17.0 ?>
-        <?php if ($smsWhy === null): ?><div class="field"><label><input type="checkbox" name="by_text" value="1"> Also send it as a text message <span class="hint">up to 1,600 characters; sent from 8 a.m. to 8 p.m. their time</span></label></div>
+        <?php if ($smsWhy === null): ?><div class="field"><label><input type="checkbox" name="by_text" value="1"<?= old_in('by_text') === '1' ? ' checked' : '' ?>> Also send it as a text message <span class="hint">up to 1,600 characters; sent from 8 a.m. to 8 p.m. their time</span></label></div>
         <?php else: ?><p class="muted">Not by text: <?= h($smsWhy) ?></p><?php endif; ?>
         <?php endif; ?>
         <div class="field"><label for="reply_file">Attach a new file (optional; it is shared with the <?= $chanWho ?>)</label>

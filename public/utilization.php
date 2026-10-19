@@ -26,8 +26,12 @@ $staff = db()->query('SELECT id, name, weekly_hours FROM users WHERE is_active =
 // totals still include them and reconcile with invoices and track hours.
 // Each log's value is its hours and mileage, each rounded to the cent first, as
 // generate_invoice(), unbilled_totals() and track_rollup() price it.
+// 4.29.0: this is a staff view, so every track's hours count (VR, private pay and no charge
+// alike: it is all staff time); no-charge work that was never invoiced has no value, as it is
+// never billed. No hours are attributed to a funding agency here.
 $dq = db()->prepare("SELECT COALESCE(u.id, 0) AS uid, COALESCE(SUM(w.hours),0) AS hrs,
-        COALESCE(SUM(ROUND(w.hours * COALESCE(w.hourly_rate, t.hourly_rate), 2) + ROUND(w.mileage * COALESCE(w.mileage_rate, t.mileage_rate), 2)),0) AS val,
+        COALESCE(SUM(CASE WHEN w.invoice_id IS NULL AND t.billing_mode = 'none' THEN 0 ELSE
+            ROUND(w.hours * COALESCE(w.hourly_rate, t.hourly_rate), 2) + ROUND(w.mileage * COALESCE(w.mileage_rate, t.mileage_rate), 2) END),0) AS val,
         COUNT(DISTINCT t.client_id) AS clients
     FROM work_logs w JOIN {$rt} t ON t.id = w.track_id
     LEFT JOIN users u ON u.id = w.created_by AND u.is_active = 1
@@ -129,7 +133,7 @@ page_header('Utilization', $user, 'analytics');
   </tbody>
 </table>
 </div>
-<p class="muted">Billable hours are the service hours each staff member recorded in their work logs; value is those hours and their logged mileage at the logged rates, as invoiced. Utilization over 100% means more was delivered than the weekly target implies.
+<p class="muted">Billable hours are the service hours each staff member recorded in their work logs; value is those hours and their logged mileage at the logged rates, as invoiced (no-charge work has no value). Utilization over 100% means more was delivered than the weekly target implies.
    Hours logged by staff who are no longer active (or with no recorded staff member) are shown as “Former or unrecorded staff”: they are included in the hours and value totals, but not in team utilization, which compares active staff with their own targets.
    Staff whose weekly target is 0 show “no target”: their hours are likewise in the totals but not in team utilization.</p>
 <?php page_footer();

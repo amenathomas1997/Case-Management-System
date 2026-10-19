@@ -29,7 +29,9 @@ function signature_wording(string $key, string $lang): array {
 function signature_status(array $s): string {
     if (!empty($s['withdrawn_at'])) return 'Withdrawn';
     if (!empty($s['signed_at'])) return 'Signed';
-    if (($s['method'] ?? 'Email') === 'In person') return 'Waiting to be signed here';
+    // In person (4.29.0): signable for two days from when it was started, as
+    // signature_sign_in_person() allows; after that it is expired, and "Sign it now" is not offered.
+    if (($s['method'] ?? 'Email') === 'In person') return strtotime((string)$s['sent_at']) > time() - 2 * 86400 ? 'Waiting to be signed here' : 'Expired, not signed here';
     return strtotime((string)$s['sent_at']) > time() - 86400 * cms_number('sign_link_days') ? 'Awaiting signature' : 'Link expired';
 }
 
@@ -186,6 +188,22 @@ function signature_sign_in_person(array $r, string $typed, ?string $png, ?int $s
     db()->prepare('UPDATE client_signatures SET signature_path = ? WHERE id = ?')->execute([$stored, (int)$r['id']]);
     if ($staff) audit($staff, 'signature.signed_in_person', 'client', (int)$r['client_id'], (string)$r['title'] . ' signed by ' . $typed);
     return null;
+}
+
+/** Why an in-person signature was refused, in the document's language (4.29.0): the signer reads
+ *  it on the handed-over device, inside a Spanish page when the document is Spanish. */
+function signature_reason_in(string $why, string $lang, string $signerName = ''): string {
+    if ($lang !== 'es') return $why;
+    if (str_starts_with($why, 'The name typed does not match the name on the document')) return 'El nombre escrito no coincide con el nombre en el documento: ' . $signerName . '.';
+    return [
+        'This document was withdrawn.' => 'Este documento fue retirado.',
+        'This document is already signed.' => 'Este documento ya está firmado.',
+        'This document was sent by email: it is signed from the link in that email.' => 'Este documento se envió por correo electrónico: se firma desde el enlace de ese correo.',
+        'This document was started more than two days before it was signed. Start it again to sign it.' => 'Este documento se preparó hace más de dos días y ya no se puede firmar. Devuelva el dispositivo, por favor: el personal lo preparará de nuevo.',
+        'The signature could not be saved. Please try again.' => 'No se pudo guardar la firma. Inténtelo de nuevo.',
+        'That document is no longer on the record.' => 'Este documento ya no está en el expediente.',
+        'Type your full name to sign.' => 'Escriba su nombre completo para firmar.',
+    ][$why] ?? $why;
 }
 
 /** One of a client's documents to sign, or null. */

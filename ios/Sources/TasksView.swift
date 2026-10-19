@@ -332,7 +332,8 @@ struct TaskEditSheet: View {
                 Section {
                     OptionalDayField(title: "Due date", text: $due)
                     if canLinkClient {
-                        NewRecordClientPicker(title: "Client (optional)", noneLabel: "None", selection: $clientId)
+                        NewRecordClientPicker(title: "Client (optional)", noneLabel: "None",
+                                              linkedId: existing?.clientId, linkedName: existing?.clientName, selection: $clientId)
                     }
                     if canAssign {
                         Picker("Assign to", selection: $assignee) {
@@ -396,7 +397,9 @@ struct TaskEditSheet: View {
         busy = true; error = nil
         var body: [String: Any] = ["title": trimmed, "details": details, "due_date": due]
         if let existing { body["id"] = existing.id }
-        if let clientId { body["client_id"] = clientId }
+        // 4.29.0: an edit always says the client, 0 for None, so choosing None removes the link
+        // (left out, the server keeps it). Only someone who can link clients sends it on an edit.
+        if let clientId { body["client_id"] = clientId } else if existing != nil && canLinkClient { body["client_id"] = 0 }
         if canAssign { body["assigned_to"] = assignee }
         // A new task (4.28.0): a retry after a lost reply is recognised and not added twice.
         if existing == nil { body["idem_key"] = idem.key(for: body) }

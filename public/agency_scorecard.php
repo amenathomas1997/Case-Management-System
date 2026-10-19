@@ -32,21 +32,23 @@ if ($agencyIn !== '') {
     $ref = referral_deadline_report($from, $to, caseload_scoped() ? (int)$user['id'] : null);
     $refA = array_values(array_filter($ref['rows'], fn($r) => $isAgency((string)$r['agency'])));
     $count = fn(string $k, string $v) => count(array_filter($refA, fn($r) => $r[$k] === $v));
+    // 4.29.0: VR work, VR tracks and VR invoices only (vr_work_sql()); a private-pay or no-charge track
+    // that still names the agency is not the agency's.
     // Billed hours count under the agency on their invoice (as rsa_report.php does), unbilled ones under the track's.
     $served = $one("SELECT COUNT(DISTINCT t.client_id) AS clients, COALESCE(SUM(w.hours), 0) AS hours FROM work_logs w JOIN $rt t ON t.id = w.track_id
         LEFT JOIN invoices i ON i.id = w.invoice_id
-        WHERE COALESCE(i.funding_agency, t.funding_agency) IN ($inA) AND w.work_date BETWEEN ? AND ?", array_merge($spell, [$from, $to]));
+        WHERE " . vr_work_sql('t', 'i') . " AND COALESCE(i.funding_agency, t.funding_agency) IN ($inA) AND w.work_date BETWEEN ? AND ?", array_merge($spell, [$from, $to]));
     $active = $one("SELECT COUNT(*) AS n, COALESCE(SUM(t.authorized_hours), 0) AS hours, COALESCE(SUM((SELECT COALESCE(SUM(w.hours), 0) FROM work_logs w WHERE w.track_id = t.id)), 0) AS used,
-        COALESCE(SUM(t.expiration_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)), 0) AS ending FROM $rt t WHERE t.funding_agency IN ($inA) AND t.status = 'Active'", $spell);
+        COALESCE(SUM(t.expiration_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)), 0) AS ending FROM $rt t WHERE t.funding_agency IN ($inA) AND " . vr_work_sql('t', '') . " AND t.status = 'Active'", $spell);
     $unused = unused_totals(array_values(array_filter(unused_authorizations($from, $to, $rt), fn($r) => $isAgency((string)$r['funding_agency']))))['All'] ?? null;
-    $bill = $one("SELECT COUNT(*) AS n, COALESCE(SUM(i.total_amount), 0) AS invoiced FROM $ri i WHERE i.funding_agency IN ($inA) AND i.status IN ('Submitted', 'Paid') AND i.submitted_at BETWEEN ? AND ?", array_merge($spell, [$from, $to]));
+    $bill = $one("SELECT COUNT(*) AS n, COALESCE(SUM(i.total_amount), 0) AS invoiced FROM $ri i WHERE i.funding_agency IN ($inA) AND i.bill_mode = 'vr' AND i.status IN ('Submitted', 'Paid') AND i.submitted_at BETWEEN ? AND ?", array_merge($spell, [$from, $to]));
     $paid = $one("SELECT COUNT(*) AS n, COALESCE(SUM(COALESCE(i.paid_amount, i.total_amount)), 0) AS paid, AVG(DATEDIFF(i.paid_at, i.submitted_at)) AS days FROM $ri i
-        WHERE i.funding_agency IN ($inA) AND i.status = 'Paid' AND i.paid_at BETWEEN ? AND ? AND i.submitted_at IS NOT NULL", array_merge($spell, [$from, $to]));
+        WHERE i.funding_agency IN ($inA) AND i.bill_mode = 'vr' AND i.status = 'Paid' AND i.paid_at BETWEEN ? AND ? AND i.submitted_at IS NOT NULL", array_merge($spell, [$from, $to]));
     $open = $one("SELECT COUNT(*) AS n, COALESCE(SUM(i.total_amount - COALESCE(i.paid_amount, 0) - i.written_off), 0) AS owed, COALESCE(SUM(i.portal_status = 'entered'), 0) AS in_portal,
-        COALESCE(SUM(i.portal_status = 'rejected'), 0) AS rejected, COALESCE(SUM(DATEDIFF(CURDATE(), i.submitted_at) > ?), 0) AS past_terms FROM $ri i WHERE i.funding_agency IN ($inA) AND i.status = 'Submitted'", array_merge([agency_terms_days($agencyIn)], $spell));
+        COALESCE(SUM(i.portal_status = 'rejected'), 0) AS rejected, COALESCE(SUM(DATEDIFF(CURDATE(), i.submitted_at) > ?), 0) AS past_terms FROM $ri i WHERE i.funding_agency IN ($inA) AND i.bill_mode = 'vr' AND i.status = 'Submitted'", array_merge([agency_terms_days($agencyIn)], $spell));
     $out = $one("SELECT COUNT(*) AS n, COALESCE(SUM(k.employed = 1), 0) AS employed, COALESCE(SUM(k.employed IS NOT NULL), 0) AS asked,
         COALESCE(SUM(k.at_recommended), 0) AS rec, COALESCE(SUM(k.at_acquired), 0) AS got FROM client_closures k
-        WHERE DATE(k.closed_at) BETWEEN ? AND ? AND EXISTS (SELECT 1 FROM $rt t WHERE t.client_id = k.client_id AND t.funding_agency IN ($inA))", array_merge([$from, $to], $spell));
+        WHERE DATE(k.closed_at) BETWEEN ? AND ? AND EXISTS (SELECT 1 FROM $rt t WHERE t.client_id = k.client_id AND t.funding_agency IN ($inA) AND " . vr_work_sql('t', '') . ")", array_merge([$from, $to], $spell));
     $pct = fn($a, $b) => (int)$b > 0 ? (int)round(100 * (int)$a / (int)$b) . '%' : 'n/a';
     $card = [
         'Referrals' => [

@@ -20,6 +20,10 @@ with tempfile.TemporaryDirectory(prefix='cms-cron-test-') as tmp:
     dump.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$DUMP_LOG"\nprintf "synthetic SQL\\n"\n'
                     'case "$*" in *" settings") exit "${SETTINGS_EXIT:-0}";; esac\nexit "${DUMP_EXIT:-0}"\n')
     dump.chmod(0o700)
+    # backup.sh (4.29.0) also needs the mysql client, for the tables whose link tokens it replaces.
+    for client in ('mysql', 'mariadb'):
+        (binaries / client).write_text('#!/bin/sh\nexit 0\n')
+        (binaries / client).chmod(0o700)
     date = binaries / 'date'
     date.write_text('#!/bin/sh\nif [ "$1" = "+%u" ]; then echo 2; else /bin/date "$@"; fi\n')
     date.chmod(0o700)

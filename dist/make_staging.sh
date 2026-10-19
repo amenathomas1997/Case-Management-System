@@ -41,6 +41,10 @@
 #   5. prints what to do next.
 # The dump is written under <private_dst> (mode 0600) and deleted as soon as it
 # is loaded. Safe to run again: it refuses to run when a destination is a source.
+# If any step fails, every table of the staging database is dropped (never a
+# partial, unscrubbed copy), and <private_dst>/config.php stays a placeholder that
+# stops the staging site ("Configuration missing.") instead of letting it fall
+# back to the production configuration.
 set -euo pipefail
 
 usage() { sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
@@ -104,8 +108,31 @@ if [ -n "${DB_PASS_SET:-}" ]; then STAGING_PASS=$DB_PASS_OPT; else STAGING_PASS=
 
 # Credentials go to the clients through temporary defaults files (0600), never the command line.
 WORK=$(mktemp -d "$PRIVATE_DST/staging-work.XXXXXX"); chmod 700 "$WORK"
-cleanup() { rm -rf "$WORK"; }
+DB_TOUCHED=0; FINISHED=0
+drop_staging_tables() {
+  "$MYSQL" --defaults-extra-file="$WORK/staging.cnf" -N -e "SELECT CONCAT('DROP TABLE IF EXISTS \`', REPLACE(table_name, '\`', '\`\`'), '\`;') FROM information_schema.tables WHERE table_schema = DATABASE()" "$STAGING_DB" \
+    | { echo 'SET FOREIGN_KEY_CHECKS=0;'; cat; echo 'SET FOREIGN_KEY_CHECKS=1;'; } | "$MYSQL" --defaults-extra-file="$WORK/staging.cnf" "$STAGING_DB"
+}
+cleanup() {
+  local rc=$?
+  set +e
+  if [ "$FINISHED" != 1 ] && [ "$DB_TOUCHED" = 1 ]; then
+    # 4.29.0: a failed load or scrub must never leave production data in the staging database.
+    echo "make_staging: stopped before the copy was finished; dropping every table of $STAGING_DB so no unscrubbed data stays there" >&2
+    drop_staging_tables || echo "make_staging: COULD NOT drop the tables of $STAGING_DB: drop them by hand now (they may hold unscrubbed production data)" >&2
+  fi
+  rm -rf "$WORK"
+  exit "$rc"
+}
 trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
+# Until step 5 writes the real staging configuration, the copy's config.php is a placeholder
+# that stops the site: with no config.php there, core.php would fall back to its built-in
+# list, which for a docroot inside public_html is the PRODUCTION configuration.
+write_placeholder_config() {
+  ( umask 077; printf '<?php\n// Placeholder written by make_staging.sh: the staging copy is not ready (or its last refresh failed).\n// Returning false stops every page with "Configuration missing." -- never the production configuration.\nreturn false;\n' > "$PRIVATE_DST/config.php.tmp" && mv -f "$PRIVATE_DST/config.php.tmp" "$PRIVATE_DST/config.php" )
+}
+write_placeholder_config
 cnf() {  # cnf <file> <host> <port> <user> <pass>
   ( umask 077; { echo '[client]'; echo "host=$2"; [ -n "$3" ] && echo "port=$3"; echo "user=$4"; printf 'password="%s"\n' "$(printf '%s' "$5" | sed 's/\\/\\\\/g; s/"/\\"/g')"; } > "$1" )
 }
@@ -147,8 +174,8 @@ echo "== 3. Dumping the production database $PROD_DB and loading it into $STAGIN
 DUMP="$WORK/production.sql"
 ( umask 077; "$MYSQLDUMP" --defaults-extra-file="$WORK/prod.cnf" --single-transaction --skip-lock-tables --quick --default-character-set=utf8mb4 "$PROD_DB" > "$DUMP" )
 # Every table in the staging database goes first, so a second run refreshes it.
-"$MYSQL" --defaults-extra-file="$WORK/staging.cnf" -N -e "SELECT CONCAT('DROP TABLE IF EXISTS \`', table_name, '\`;') FROM information_schema.tables WHERE table_schema = DATABASE()" "$STAGING_DB" \
-  | { echo 'SET FOREIGN_KEY_CHECKS=0;'; cat; echo 'SET FOREIGN_KEY_CHECKS=1;'; } | "$MYSQL" --defaults-extra-file="$WORK/staging.cnf" "$STAGING_DB"
+DB_TOUCHED=1
+drop_staging_tables
 "$MYSQL" --defaults-extra-file="$WORK/staging.cnf" --default-character-set=utf8mb4 "$STAGING_DB" < "$DUMP"
 rm -f "$DUMP"
 echo "   loaded; the dump file was deleted"
@@ -160,6 +187,7 @@ ADMIN_PASSWORD=$(php -r 'echo rtrim(strtr(base64_encode(random_bytes(15)), "+/",
 php -d display_errors=stderr "$SCRUB_PHP" "$STAGING_DSN" "$STAGING_USER" "$STAGING_PASS" "$ADMIN_EMAIL" "$ADMIN_PASSWORD"
 
 echo "== 5. Writing $PRIVATE_DST/config.php for staging"
+rm -f "$PRIVATE_DST/config.php.new"
 ( umask 077; php -r '
 $c = require $argv[1];
 $private = $argv[2];
@@ -181,8 +209,14 @@ if (isset($c["sms"])) { $c["sms"]["account_sid"] = ""; $c["sms"]["auth_token"] =
 if (isset($c["meet"])) foreach (["zoom_client_id", "zoom_client_secret", "ms_client_id", "ms_client_secret"] as $k) $c["meet"][$k] = "";
 if (isset($c["qbo"])) { $c["qbo"]["client_id"] = ""; $c["qbo"]["client_secret"] = ""; }
 file_put_contents($argv[8], "<?php\n// STAGING copy written by make_staging.sh — not the production configuration.\nreturn " . var_export($c, true) . ";\n");
-' "$PRIVATE_SRC/config.php" "$PRIVATE_DST" "$STAGING_DSN" "$STAGING_USER" "$STAGING_PASS" "$BASE_URL" "$ADMIN_EMAIL" "$PRIVATE_DST/config.php" )
-chmod 600 "$PRIVATE_DST/config.php"
+' "$PRIVATE_SRC/config.php" "$PRIVATE_DST" "$STAGING_DSN" "$STAGING_USER" "$STAGING_PASS" "$BASE_URL" "$ADMIN_EMAIL" "$PRIVATE_DST/config.php.new" )
+# Never fall back to the production configuration: the staging config.php must have been
+# written, name the staging database and turn mail off, or the run fails (and drops the copy).
+php -r '$c = @include $argv[1]; exit(is_array($c) && ($c["db"]["dsn"] ?? "") === $argv[2] && !empty($c["mail_disabled"]) ? 0 : 1);' "$PRIVATE_DST/config.php.new" "$STAGING_DSN" \
+  || die "the staging config.php was not written correctly; the staging copy was removed"
+chmod 600 "$PRIVATE_DST/config.php.new"
+mv -f "$PRIVATE_DST/config.php.new" "$PRIVATE_DST/config.php"
+FINISHED=1
 [ -f "$PRIVATE_DST/.htaccess" ] || cp "$PRIVATE_SRC/.htaccess" "$PRIVATE_DST/.htaccess" 2>/dev/null || true
 
 cat << EOF

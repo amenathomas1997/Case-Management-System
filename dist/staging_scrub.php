@@ -109,6 +109,14 @@ function staging_scrub(PDO $db): array
         $cols[$r[0]][$r[1]] = ['type' => strtolower((string)$r[2]), 'len' => $r[3] === null ? null : (int)$r[3]];
     }
     $has = fn(string $t, string $c): bool => isset($cols[$t][$c]);
+    // 4.29.0: every column in a UNIQUE key (primary keys included), read from the schema so a
+    // key added later is covered too. Such a column gets a per-row value ("[scrubbed 12]"), never
+    // one literal for every row: two funding agencies or two offices both set to "[scrubbed]"
+    // stopped the scrub with a duplicate-key error and left the rest of production unscrubbed.
+    $unique = [];
+    foreach ($db->query("SELECT table_name, column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND non_unique = 0") as $r) {
+        $unique[$r[0]][$r[1]] = true;
+    }
     // A random 48-character token per row, unique in practice: no production link keeps working.
     $token = "SUBSTRING(SHA2(CONCAT(id, RAND(), \"staging\"), 256), 1, 48)";
     // Column → replacement, applied only where the table and column exist in this schema.
@@ -155,9 +163,17 @@ function staging_scrub(PDO $db): array
             if (!in_array($info['type'], STAGING_SCRUB_TEXT_TYPES, true)) continue;
             $c = '`' . str_replace('`', '``', $col) . '`';
             $fit = fn(string $v): string => $info['len'] !== null && $info['len'] < strlen($v) ? substr($v, 0, $info['len']) : $v;
+            if (isset($unique[$table][$col])) {
+                // A per-row value: the row id where the table has one, else a running number.
+                $n = isset($columns['id']) && !isset($set['id']) ? '`id`' : '(@staging_scrub_row := @staging_scrub_row + 1)';
+                $v = $info['len'] === null || $info['len'] >= 31 ? "CONCAT('[scrubbed ', $n, ']')" : "RIGHT(CONCAT('s', $n), " . max(1, (int)$info['len']) . ")";
+                $set[$col] = "$c = CASE WHEN $c IS NULL OR $c = '' THEN $c ELSE $v END";
+                continue;
+            }
             $set[$col] = "$c = CASE WHEN $c IS NULL OR $c = '' THEN $c WHEN JSON_VALID($c) THEN '" . $fit('{}') . "' ELSE '" . $fit('[scrubbed]') . "' END";
         }
         if ($set) {
+            $db->exec('SET @staging_scrub_row = 0');
             $n = $db->exec("UPDATE `$table` SET " . implode(", ", $set));
             $report[] = "$table: $n rows scrubbed";
         }

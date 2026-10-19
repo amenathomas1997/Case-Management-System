@@ -343,7 +343,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // The reference number and the date we will be in touch by go to the
         // confirmation through this visitor's session, never the address: a number
         // in the URL could be changed to look up someone else's referral.
-        $contactBy = business_days_from(3);
+        // The same deadline as the staff task (4.29.0): the referring agency's own, else 3 business days.
+        $contactBy = business_days_from(isset($contactDays) ? (int)$contactDays : 3);
         $_SESSION['referral_form_keys'] = array_slice(($_SESSION['referral_form_keys'] ?? []) + [$formKey => ['sig' => $formSig, 'done' => $done, 'ref' => $refId, 'by' => $contactBy]], -20, null, true);
         $_SESSION['referral_sent'] = ['ref' => $refId, 'by' => $contactBy, 'done' => $done];
         // Site-wide ceiling on the alerts (not on the referrals): past it, every
@@ -420,7 +421,7 @@ echo lang_toggle();
       <?php if ($helpPhoneContact !== ''): ?><?= t('If you have not heard from us by then,') ?> <?= support_contact_html(false) ?> <?= t('and mention referral') ?> <?= $sentRef ?>.
       <?php elseif ($helpContact !== ''): ?><?= t('If you have not heard from us by then, email') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a> <?= t('and mention referral') ?> <?= $sentRef ?>.<?php endif; ?></p>
     <?php else: ?>
-    <p><?= t('We will contact you within 3 business days.') ?>
+    <p><?= t('We will contact you within a few business days.') ?>
       <?php if ($helpPhoneContact !== ''): ?><?= t('If you have not heard from us by then,') ?> <?= support_contact_html(false) ?>.
       <?php elseif ($helpContact !== ''): ?><?= t('If you have not heard from us by then, email') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a>.<?php endif; ?></p>
     <?php endif; ?>
@@ -446,7 +447,7 @@ echo lang_toggle();
 <h1><?= t('Refer someone to') ?> <?= h(brand('org')) ?></h1>
 <p><?= t('Request assistive technology assessment, training, demonstrations, or recommendations for devices, apps, and software.') ?></p>
 <p><?= t('Use this form to refer yourself or someone else. First, tell us who you are. Then we\'ll show only the questions you need to answer. Fields marked with an asterisk (') ?><span aria-hidden="true">*</span><span class="visually-hidden"><?= t('asterisk') ?></span><?= t(') are required.') ?></p>
-<p><strong><?= t('Need help with this form, or unsure which choice fits?') ?></strong> <?php if ($helpPhoneContact !== ''): ?><?= $helpPhoneContact ?> <?= t('and a person will help you.') ?> <?php elseif ($helpContact !== ''): ?><?= t('Email us at') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a> <?= t('and a person will help you.') ?> <?php endif; ?><?= t('After you send the referral, we will contact you within 3 business days.') ?></p>
+<p><strong><?= t('Need help with this form, or unsure which choice fits?') ?></strong> <?php if ($helpPhoneContact !== ''): ?><?= $helpPhoneContact ?> <?= t('and a person will help you.') ?> <?php elseif ($helpContact !== ''): ?><?= t('Email us at') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a> <?= t('and a person will help you.') ?> <?php endif; ?><?= t('After you send the referral, we will tell you the date we will contact you by.') ?></p>
 
 <?php // The message is announced by moving focus to it once, so it carries no
 // alert role: a focused live region is read twice by some screen readers.

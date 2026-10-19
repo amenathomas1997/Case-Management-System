@@ -206,8 +206,9 @@ struct AdministerSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            // 4.29.0: ErrorFocusForm, so at the accessibility text sizes each rating opens on a
+            // screen of its own with the whole choice shown (ReadablePickers), not cut short.
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 DatePicker("Assessment date", selection: $date, displayedComponents: .date)
                 if !itemsLoaded && error == nil {
                     ProgressView("Loading items…")
@@ -222,7 +223,6 @@ struct AdministerSheet: View {
                             Text("Choose a rating").tag(nil as Int?)
                             ForEach(scaleOptions, id: \.value) { Text($0.label).tag($0.value as Int?) }
                         }
-                        .pickerStyle(.menu)
                         .accessibilityLabel("Score for \(it.label)")
                     }
                 }

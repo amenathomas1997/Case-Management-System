@@ -123,7 +123,8 @@ function api_425(string $action, array $input, int $userId): ?array {
             // A signature sent again after a lost reply (or twice from the offline queue) is already recorded: not an error.
             if (!empty($s['signed_at']) && $s['signed_name'] !== null && signature_name_matches((string)$s['signer_name'], $typed)) return ['ok' => true, 'repeat' => true, 'signatures' => api_425_signature_rows($cid)];
             $why = signature_sign_in_person($s, $typed, $png, $userId, $signedAt);
-            if ($why !== null) return ['ok' => false, 'error' => $why, 'status' => 422];
+            // A Spanish document is refused in Spanish (4.29.0), as the website's signing page.
+            if ($why !== null) return ['ok' => false, 'error' => function_exists('signature_reason_in') ? signature_reason_in($why, (string)($s['lang'] ?? ''), (string)($s['signer_name'] ?? '')) : $why, 'status' => 422];
             notify_admin_users('Signed in person: ' . $s['title'] . ' for ' . $client['name'], 'signatures.php?client=' . $cid);
             return ['ok' => true, 'signatures' => api_425_signature_rows($cid)];
         }

@@ -32,7 +32,8 @@ try{
             if($issueIn['equipment']<=0)$issueErrors['loan_equipment_id']='Equipment is required: choose the device to issue.';
             elseif($record['kind']==='repair'&&$issueIn['equipment']===(int)$record['equipment_id'])$issueErrors['loan_equipment_id']='Equipment: choose a replacement different from the device under repair.';
             // As at_issue() checks it: a mistyped year or a date already past is refused.
-            if($issueIn['due']!==''&&!valid_date($issueIn['due'],2000,(int)date('Y')+5))$issueErrors['loan_due']='Return date: use a valid date with a year from 2000 to '.((int)date('Y')+5).', or leave it blank.';
+            if(input_was_unreadable('loan_due'))$issueErrors['loan_due']='Return date: this was not filled in completely. Enter the full date, or clear it for no return date.';
+            elseif($issueIn['due']!==''&&!valid_date($issueIn['due'],2000,(int)date('Y')+5))$issueErrors['loan_due']='Return date: use a valid date with a year from 2000 to '.((int)date('Y')+5).', or leave it blank.';
             elseif($issueIn['due']!==''&&$issueIn['due']<date('Y-m-d'))$issueErrors['loan_due']='Return date cannot be before today.';
             if(!$issueErrors&&($_POST['confirm_issue']??'')==='1'){at_issue($id,$issueIn['equipment'],$issueIn['client'],$issueIn['due']?:null,$actor);flash('Equipment issued and linked to this record.');redirect('at_services.php?id='.$id);}
             if(!$issueErrors){
@@ -236,7 +237,8 @@ $fixed=$record&&($key==='client_id'||$key==='parent_id'||($key==='equipment_id'&
 <?php if($fixed):$shown=$v===''?'None':'Current selection (not in your list)';foreach($f['options'] as $o)if($o['value']===$v){$shown=$o['label'];break;}?><input type="text" id="at-<?=h($key)?>" value="<?=h($shown)?>" readonly <?=field_aria($key)?>><input type="hidden" name="<?=h($key)?>" value="<?=h($v)?>">
 <?php elseif(in_array($f['type'],['reference','select'],true)):?><select id="at-<?=h($key)?>" name="<?=h($key)?>" <?=$f['required']?'required':''?> <?=field_aria($key)?>><option value="">Choose…</option><?php $found=false;foreach($f['options'] as $o):if($o['value']===$v)$found=true;?><option value="<?=h($o['value'])?>" <?=$o['value']===$v?'selected':''?>><?=h($o['label'])?></option><?php endforeach;if($v!==''&&!$found):?><option value="<?=h($v)?>" selected><?=$record&&$f['type']==='reference'?'Current selection (not in your list; kept if unchanged)':'Not available to choose — pick another option'?></option><?php endif;?></select>
 <?php elseif($f['type']==='textarea'):?><textarea id="at-<?=h($key)?>" name="<?=h($key)?>" rows="4" maxlength="10000" <?=$f['required']?'required':''?> <?=field_aria($key)?>><?=h($v)?></textarea>
-<?php else:$type=match($f['type']){'date'=>'date','money','integer','score'=>'number','url'=>'url',default=>'text'};?><input id="at-<?=h($key)?>" name="<?=h($key)?>" type="<?=$type?>" value="<?=h($v)?>" <?=$type==='number'?'min="'.($f['type']==='money'?'0':'1').'" step="'.($f['type']==='money'?'0.01':'1').'"':''?> <?=$f['type']==='score'?'max="5"':''?> <?=$f['required']?'required':''?> <?=field_aria($key)?>><?php endif;?>
+<?php else:// Amounts and counts are text boxes (4.29.0): a number box sends what it cannot read ("3,000") as blank, which cleared the stored value.
+$type=match($f['type']){'date'=>'date','url'=>'url',default=>'text'};$mode=match($f['type']){'money'=>'decimal','integer','score'=>'numeric',default=>''};?><input id="at-<?=h($key)?>" name="<?=h($key)?>" type="<?=$type?>" value="<?=h($v)?>" <?=$mode!==''?'inputmode="'.$mode.'"':''?> <?=$f['required']?'required':''?> <?=field_aria($key)?>><?php endif;?>
 <?=field_error($key)?><?php endforeach; at_ai_controls($kind,$def['fields']); ?><button class="btn btn-primary" name="save" value="1">Save record</button><a href="at_services.php?<?= $id?'id='.$id:'kind='.h($kind)?>">Cancel</a></form>
 <?php endif;?>
-<?php endif;page_footer(); ?>
+<?php endif;echo bad_input_script();page_footer(); ?>

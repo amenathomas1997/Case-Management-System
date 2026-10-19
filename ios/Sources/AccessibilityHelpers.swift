@@ -52,6 +52,25 @@ func announceRowActions() {
 /// says so with `inNavigationStack`; elsewhere pickers keep the menu style. The choice is made
 /// once, when the form first appears, so changing the text size with a form open does not
 /// rebuild it (its scroll position and focus stay).
+/// Controls fixed below a conversation (4.29.0): at the accessibility text sizes, or in
+/// landscape, they can be taller than the screen, which squeezed the conversation to nothing
+/// and pushed the last controls (Send, the microphone, Accept and try again) out of reach.
+/// There they scroll within at most `maxHeight`; otherwise they are laid out as before.
+struct ScrollsWhenCramped: ViewModifier {
+    let maxHeight: CGFloat
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    func body(content: Content) -> some View {
+        if typeSize.isAccessibilitySize || verticalSizeClass == .compact {
+            ScrollView { content }
+                .frame(maxHeight: max(120, maxHeight))
+        } else {
+            content
+        }
+    }
+}
+
 struct ReadablePickers: ViewModifier {
     let inNavigationStack: Bool
     @Environment(\.dynamicTypeSize) private var typeSize

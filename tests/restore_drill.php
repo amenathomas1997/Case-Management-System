@@ -72,7 +72,7 @@ $check(@file_get_contents("$restoreTo/uploads/drill_document.txt") === 'SYNTHETI
 $check(is_file("$restoreTo/config.php") && (fileperms("$restoreTo/config.php") & 0077) === 0, 'A private config.php is written for the restored site');
 // A wrong password restores nothing.
 $server->exec("DROP DATABASE IF EXISTS `$dstDb`"); $server->exec("CREATE DATABASE `$dstDb`");
-$p = proc_open(array_merge(array_slice($cmd, 0, 5), ["--private=$tmp/wrong", '--base-url=https://drill.example.invalid']), [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+$p = proc_open(array_merge(array_slice($cmd, 0, 5), ["--private=$tmp/wrong", '--base-url=https://drill.example.invalid', '--timezone=America/Chicago']), [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
 fwrite($pipes[0], "not-the-password\n$pass\n"); fclose($pipes[0]);
 $said = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
 $code = proc_close($p);

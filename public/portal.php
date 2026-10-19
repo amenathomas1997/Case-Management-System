@@ -158,6 +158,17 @@ function portal_notify_owner(array $client, string $ownerMsg, string $link, ?str
     else notify_admin_users($adminMsg ?? $ownerMsg, $link, $urgent);
 }
 
+/** A request's details for the client (4.29.0). The client's own words are shown as written. A request
+ *  made by a text reply is stored in English for staff; on a Spanish page its sentence is given in
+ *  Spanish, with the time kept as stored and marked English. */
+function portal_request_details_html(string $details): string {
+    if (page_lang() === 'es' && preg_match('/^Asked by text to (reschedule|cancel) the session on (.+)\.$/su', $details, $m)) {
+        return h($m[1] === 'reschedule' ? 'Pidió por mensaje de texto cambiar la sesión del' : 'Pidió por mensaje de texto cancelar la sesión del')
+            . ' ' . en($m[2]) . '.';
+    }
+    return nl2br(h($details));
+}
+
 $rawToken = $_GET['t'] ?? '';
 $token = is_string($rawToken) ? preg_replace('/[^a-f0-9]/', '', $rawToken) : '';
 $client = null;
@@ -888,7 +899,10 @@ document.addEventListener('submit', function (e) {
       <select id="slot" name="slot" <?= field_aria('book_slot') ?>>
         <option value=""><?= t('Choose a time') ?></option>
       <?php foreach ($bookSlots as $bs): ?>
-        <option value="<?= (int)$bs['start'] ?>"><?= page_lang() === 'es' ? h(portal_when_es($bs['start'])) : en(portal_date('l, F j \a\t g:i A' . (portal_tz() ? ' T' : ''), $bs['start'])) ?>, <?= (int)round(($bs['end'] - $bs['start']) / 60) ?> <?= t('minutes') ?>, <?= $bs['remote'] ? h(__('online')) : h(__('in person at')) . ' ' . en((string)$bs['location']) ?></option>
+        <?php // Plain text only (4.29.0): the parser drops a <span lang> inside an <option>. The label is
+        // in the page's language (the date and words translated; the place is a name), so it needs no lang. ?>
+        <option value="<?= (int)$bs['start'] ?>"><?= h((page_lang() === 'es' ? portal_when_es($bs['start']) : portal_date('l, F j \a\t g:i A' . (portal_tz() ? ' T' : ''), $bs['start']))
+            . ', ' . (int)round(($bs['end'] - $bs['start']) / 60) . ' ' . __('minutes') . ', ' . ($bs['remote'] ? __('online') : __('in person at') . ' ' . (string)$bs['location'])) ?></option>
       <?php endforeach; ?>
       </select><?= field_error('book_slot') ?></div>
     <button type="submit" name="self_book" value="1" class="btn btn-primary btn-sm" onclick="return confirm(<?= h(json_encode(__('Book this time?'))) ?>);"><?= t('Book this time') ?></button>
@@ -1171,7 +1185,7 @@ if ($devLoans || $devRepairs || $devChecks): ?>
       <span class="muted">· <?= en(fmt_date($rq['created_at'])) ?></span><?php if (isset(RECORDS_REQUEST_TYPES[$rq['type']]) && !in_array($rq['status'], ['Done', 'Declined'], true)): ?> <?= t('We answer within 30 days.') ?><?php endif; ?>
       <?php if (!empty($rq['outcome'])): ?><br><?= en((string)$rq['outcome']) ?><?php endif; ?>
       <?php // The whole request, with its line breaks (a list of times stays a list). ?>
-      <?= $rq['details'] ? '<br>' . nl2br(h((string)$rq['details'])) : '' ?>
+      <?= $rq['details'] ? '<br>' . portal_request_details_html((string)$rq['details']) : '' ?>
       <?php $offers = !$caseClosed && in_array($rq['type'], OFFER_REQUEST_TYPES, true) && !in_array($rq['status'], ['Done', 'Declined'], true) ? request_offers((int)$rq['id']) : [];
       if ($offers): ?>
       <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked"><?= csrf_field() ?>

@@ -783,6 +783,14 @@ struct AddNoteSheet: View {
     @State private var subject = ""
     @State private var body_ = ""
     @State private var sections = ["", "", "", ""]
+    /// The note as last loaded (4.29.0): `existing`, or the one Reload fetched after a conflict.
+    /// Its note_version is sent with update_note, so an edit never replaces a newer save.
+    @State private var loadedNote: Note?
+    /// The edit was refused because someone else saved the note since it was opened.
+    @State private var noteConflict = false
+    @State private var reloadingNote = false
+    /// What was typed before Reload replaced it with the saved note, shown so it can be redone.
+    @State private var typedBeforeReload: String?
     @State private var attachTrackId = 0          // 0 = none
     @State private var busy = false
     @State private var aiBusy = false
@@ -847,7 +855,8 @@ struct AddNoteSheet: View {
 
     /// Anything typed, dictated or generated that closing the sheet would throw away.
     private var hasChanges: Bool {
-        if let existing {
+        if let opened = existing.map({ loadedNote ?? $0 }) {
+            let existing = opened
             let saved = existing.sections?.count == 4 ? existing.sections! : ["", "", "", ""]
             // Every field update_note saves, against what onAppear filled in from the note.
             return subject != existing.subject || body_ != existing.body || sections != saved
@@ -919,6 +928,31 @@ struct AddNoteSheet: View {
     var body: some View {
         NavigationStack {
             ErrorFocusForm(inNavigationStack: true, error: error) {
+                if noteConflict {
+                    // 4.29.0: someone else saved this note since it was opened. What was typed
+                    // stays in the form until Reload brings in their version.
+                    Section {
+                        Button {
+                            Task { await reloadNote() }
+                        } label: {
+                            Text(reloadingNote ? "Reloading…" : "Reload the note as saved now")
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        }
+                        .disabled(reloadingNote || busy)
+                        .accessibilityHint("Replaces the form with their version. What you typed is then shown below it, to make your changes again.")
+                    }
+                }
+                if let typedBeforeReload {
+                    Section("What you typed (not saved)") {
+                        Text(typedBeforeReload).font(.callout).textSelection(.enabled)
+                        // Kept on this phone only (no Universal Clipboard) and for ten minutes.
+                        Button("Copy what I typed") {
+                            UIPasteboard.general.setItems([["public.utf8-plain-text": typedBeforeReload]],
+                                                          options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(600)])
+                            announce("Copied.")
+                        }
+                    }
+                }
                 if existing != nil {
                     Text("Edits are recorded on the note and in the audit log.")
                         .font(.caption).foregroundStyle(Color.secondaryText)
@@ -1133,7 +1167,18 @@ struct AddNoteSheet: View {
         do {
             if let existing {
                 payload["id"] = existing.id
-                let _: OKResponse = try await api.call("update_note", body: payload)
+                // 4.29.0: the version the editor opened (or reloaded); none from an older server.
+                if let version = (loadedNote ?? existing).noteVersion, !version.isEmpty { payload["note_version"] = version }
+                var refusedConflict = false
+                do {
+                    let _: OKResponse = try await api.call("update_note", body: payload, refusal: { refusedConflict = ($0["conflict"] as? Bool) == true })
+                } catch where refusedConflict {
+                    noteConflict = true
+                    showFormError(error.localizedDescription + " What you typed is still in the form.", in: &self.error)
+                    busy = false
+                    return
+                }
+                noteConflict = false
             } else {
                 payload["client_id"] = clientId
                 payload["idem_key"] = idemKey
@@ -1169,6 +1214,37 @@ struct AddNoteSheet: View {
         } catch {
             showFormError(error.localizedDescription, in: &self.error)
             busy = false
+        }
+    }
+
+    /// After a conflict (4.29.0): loads the note as saved now into the form, and keeps what was
+    /// typed on screen below it, so the changes can be made again on the newer version.
+    private func reloadNote() async {
+        guard let existing else { return }
+        reloadingNote = true
+        defer { reloadingNote = false }
+        do {
+            let detail: ClientDetail = try await api.call("client", query: ["id": String(clientId)])
+            guard let now = detail.notes.first(where: { $0.id == existing.id }) else {
+                throw APIError.server("The note is not among the client's notes the app loads, so it could not be reloaded here. Close this form and open the note again.")
+            }
+            let typed = structured
+                ? zip(labels + Array(repeating: "", count: 4), sections).filter { !$0.1.isEmpty }.map { "\($0.0.isEmpty ? "Section" : $0.0): \($0.1)" }.joined(separator: "\n\n")
+                : body_
+            typedBeforeReload = "Subject: \(subject)\n\n" + typed
+            noteType = now.noteType
+            noteFormat = now.noteFormat ?? "free"
+            subject = now.subject
+            body_ = now.body
+            attachTrackId = now.trackId ?? 0
+            sections = now.sections?.count == 4 ? now.sections! : ["", "", "", ""]
+            loadedNote = now
+            noteConflict = false
+            // Said as news, not as an error (4.29.0).
+            self.error = nil
+            announce("Reloaded. The form now shows the note as saved by the other person; what you typed is shown in What you typed, near the top. Make your changes again, then save.")
+        } catch {
+            showFormError("Could not reload the note. \(error.localizedDescription) What you typed is still in the form.", in: &self.error)
         }
     }
 }

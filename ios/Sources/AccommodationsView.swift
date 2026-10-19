@@ -267,8 +267,7 @@ struct WorksiteNewSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 NewRecordClientPicker(title: "Client (required)", selection: $selectedClient)
                 WorksiteCaptionedField(label: "Employer", text: $employer)
                 WorksiteCaptionedField(label: "Job title", text: $jobTitle)
@@ -300,7 +299,7 @@ struct WorksiteNewSheet: View {
             showFormError("The connection dropped before the server answered, so it isn't known whether this assessment was created. Check the worksite assessments list for \(date.formatted(date: .abbreviated, time: .omitted)) before creating it again.", in: &self.error)
             busy = false
         }
-        catch { idem.answered(); showFormError(error.localizedDescription, in: &self.error); busy = false }
+        catch { idem.failed(error); showFormError(IdemKey.message(for: error), in: &self.error); busy = false }
     }
 }
 

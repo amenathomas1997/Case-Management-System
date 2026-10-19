@@ -114,7 +114,18 @@ function qbo_api(string $method, string $path, ?array $body = null): array {
     $app = qbo_app(); $c = qbo_connection(); $tok = qbo_access_token();
     if (!$app || !$c || $tok === null) return [0, null];
     $url = $app['api'] . '/v3/company/' . rawurlencode((string)$c['realm_id']) . $path . (str_contains($path, '?') ? '&' : '?') . 'minorversion=' . QBO_MINOR;
-    return qbo_http($method, $url, ['Authorization: Bearer ' . $tok, 'Accept: application/json', 'Content-Type: application/json'], $body !== null ? (string)json_encode($body) : null);
+    $r = qbo_http($method, $url, ['Authorization: Bearer ' . $tok, 'Accept: application/json', 'Content-Type: application/json'], $body !== null ? (string)json_encode($body) : null);
+    // 4.29.0: QuickBooks' rate limit (429) is remembered for the rest of this run (qbo_throttled()).
+    if ((int)$r[0] === 429) $GLOBALS['qbo_throttled'] = true;
+    return $r;
+}
+
+/**
+ * Whether QuickBooks refused a request in this run for too many requests (429, 4.29.0). The work
+ * then stops and is tried again on the next run: nothing is marked as failed.
+ */
+function qbo_throttled(): bool {
+    return !empty($GLOBALS['qbo_throttled']);
 }
 
 /** Run a QuickBooks query ("select * from Customer where ..."): the rows of $entity. */
@@ -248,6 +259,32 @@ function qbo_payment_amount(array $payment, string $invoiceQboId): float {
     return $amount;
 }
 
+/**
+ * Change here a payment whose amount or date was changed in QuickBooks (4.29.0), with the invoice's totals
+ * recalculated, under the invoice's row lock (as qbo_drop_payment()); audited with the old and new figures.
+ * The row is read again under the lock, so a payment removed here meanwhile is left alone.
+ */
+function qbo_adjust_payment(array $p, float $amount, string $on): void {
+    $pdo = db();
+    $own = !$pdo->inTransaction();
+    if ($own) $pdo->beginTransaction();
+    try {
+        $pdo->prepare('SELECT id FROM invoices WHERE id = ? FOR UPDATE')->execute([(int)$p['invoice_id']]);
+        $cur = $pdo->prepare('SELECT * FROM invoice_payments WHERE id = ? AND qbo_id = ? FOR UPDATE');
+        $cur->execute([(int)$p['id'], (string)$p['qbo_id']]);
+        $row = $cur->fetch();
+        if (!$row) { if ($own) $pdo->commit(); return; }
+        $pdo->prepare('UPDATE invoice_payments SET amount = ?, received_on = ? WHERE id = ?')->execute([round($amount, 2), $on, (int)$row['id']]);
+        invoice_retotal((int)$p['invoice_id']);
+        if ($own) $pdo->commit();
+    } catch (Throwable $e) {
+        if ($own && $pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+    audit(null, 'invoice.payment_change', 'invoice', (int)$p['invoice_id'], 'payment #' . $p['qbo_id'] . ' changed in QuickBooks: '
+        . fmt_money((float)$row['amount']) . ' of ' . $row['received_on'] . ' is now ' . fmt_money(round($amount, 2)) . ' of ' . $on);
+}
+
 /** Remove here a payment voided or deleted in QuickBooks (4.27.0), with the invoice's totals recalculated. */
 function qbo_drop_payment(array $p): void {
     $pdo = db();
@@ -291,6 +328,7 @@ function qbo_push_payments(array $inv, array &$q, array &$linked): ?string {
             [$pc, $pd] = qbo_api('POST', '/payment?requestid=cms-pay-' . (int)$p['id'], ['CustomerRef' => $q['CustomerRef'] ?? null, 'TotalAmt' => round((float)$p['amount'], 2), 'TxnDate' => (string)$p['received_on'],
                 'PaymentRefNum' => mb_substr((string)($p['reference'] ?? ''), 0, 21), 'Line' => [['Amount' => round((float)$p['amount'], 2), 'LinkedTxn' => [['TxnId' => (string)$inv['qbo_id'], 'TxnType' => 'Invoice']]]]]);
             $pid = (string)($pd['Payment']['Id'] ?? '');
+            if ($pc === 429) { $pdo->rollBack(); return null; } // rate limited (qbo_throttled()): sent on the next run
             if ($pc !== 200 || $pid === '') { $pdo->rollBack(); return qbo_fail($inv, 'A payment recorded here could not be added in QuickBooks (reply ' . $pc . ').'); }
             $pdo->prepare('SELECT id FROM invoices WHERE id = ? FOR UPDATE')->execute([(int)$inv['id']]);
             $dup = $pdo->prepare('DELETE FROM invoice_payments WHERE invoice_id = ? AND qbo_id = ? AND id <> ? AND reference = ?');
@@ -315,6 +353,7 @@ function qbo_push_payments(array $inv, array &$q, array &$linked): ?string {
 /** Bring the payments made on a sent invoice in QuickBooks here: each QuickBooks payment once, with its own date. */
 function qbo_check_payments(array $inv): ?string {
     [$code, $data] = qbo_api('GET', '/invoice/' . rawurlencode((string)$inv['qbo_id']));
+    if ($code === 429) return null; // rate limited: tried again on the next run
     if ($code === 400 || $code === 404 || (isset($data['Fault']) && !isset($data['Invoice']))) {
         db()->prepare("UPDATE invoices SET qbo_status = 'missing', qbo_error = 'It was deleted in QuickBooks, so it is no longer checked.' WHERE id = ?")->execute([(int)$inv['id']]);
         return null;
@@ -327,12 +366,14 @@ function qbo_check_payments(array $inv): ?string {
     // is brought here. A payment sent before whose reply was lost then gets its QuickBooks id back from the
     // same requestid, so it is never imported again as a second payment.
     $err = qbo_push_payments($inv, $q, $linked);
+    if (qbo_throttled()) return null;
     if ($err !== null) return $err;
     // A payment recorded here meanwhile, not yet sent there, may be the one QuickBooks lists: nothing is
     // brought here until it has been sent (the next sync sends it first).
     $pending = db()->prepare("SELECT COUNT(*) FROM invoice_payments WHERE invoice_id = ? AND kind = 'payment' AND qbo_id IS NULL AND (reference IS NULL OR reference NOT LIKE 'QuickBooks payment %')");
     $pending->execute([(int)$inv['id']]);
     $importNow = (int)$pending->fetchColumn() === 0;
+    $importedNow = [];
     foreach ((array)($q['LinkedTxn'] ?? []) as $lt) {
         if (!$importNow) break;
         if (($lt['TxnType'] ?? '') !== 'Payment' || !is_string($lt['TxnId'] ?? null)) continue;
@@ -342,6 +383,7 @@ function qbo_check_payments(array $inv): ?string {
         $seen->execute([(int)$inv['id'], (string)$lt['TxnId'], $ref]);
         if ($seen->fetchColumn()) continue;
         [$pc, $pd] = qbo_api('GET', '/payment/' . rawurlencode($lt['TxnId']));
+        if ($pc === 429) return null;
         if ($pc !== 200 || !isset($pd['Payment'])) return qbo_fail($inv, 'A QuickBooks payment could not be read (reply ' . $pc . ').');
         $amount = qbo_payment_amount($pd['Payment'], (string)$inv['qbo_id']);
         if ($amount <= 0) continue;
@@ -349,15 +391,39 @@ function qbo_check_payments(array $inv): ?string {
         $err = invoice_apply((int)$inv['id'], 'payment', round($amount, 2), $on, $ref, 'Recorded in QuickBooks', 0);
         if ($err !== null) return qbo_fail($inv, 'A QuickBooks payment could not be recorded here: ' . $err);
         db()->prepare('UPDATE invoice_payments SET qbo_id = ? WHERE invoice_id = ? AND reference = ?')->execute([(string)$lt['TxnId'], (int)$inv['id'], $ref]);
+        $importedNow[(string)$lt['TxnId']] = true;
     }
     // 4.27.0: a payment that came from QuickBooks, or was sent there, for this invoice and is no longer
     // linked to it there (voided or deleted in QuickBooks) is removed here too. QuickBooks is asked
     // about each one first, so a payment still applied to this invoice is never removed.
     $gone = db()->prepare('SELECT * FROM invoice_payments WHERE invoice_id = ? AND qbo_id IS NOT NULL');
     $gone->execute([(int)$inv['id']]);
-    foreach ($gone->fetchAll() as $p) {
-        if (in_array((string)$p['qbo_id'], $linked, true)) continue;
+    // 4.29.0: a payment still linked there is read too, so one whose amount or date was changed in
+    // QuickBooks is changed here as well (qbo_adjust_payment()); one just imported is already current.
+    // Those reads are skipped while nothing can have changed: the payments linked there are exactly the
+    // ones here, and QuickBooks' balance equals the balance here (an amount changed there moves it).
+    $goneRows = $gone->fetchAll();
+    $cur = db()->prepare('SELECT * FROM invoices WHERE id = ?');
+    $cur->execute([(int)$inv['id']]);
+    $curRow = $cur->fetch() ?: $inv;
+    $hereIds = array_map(fn($p) => (string)$p['qbo_id'], $goneRows);
+    $sameSet = count(array_unique($hereIds)) === count(array_unique($linked)) && !array_diff($hereIds, $linked) && !array_diff($linked, $hereIds);
+    $readLinked = !($sameSet && isset($q['Balance']) && abs((float)$q['Balance'] - invoice_balance($curRow)) < 0.005);
+    foreach ($goneRows as $p) {
+        if (isset($importedNow[(string)$p['qbo_id']])) continue;
+        if (in_array((string)$p['qbo_id'], $linked, true)) {
+            if (!$readLinked) continue;
+            [$pc, $pd] = qbo_api('GET', '/payment/' . rawurlencode((string)$p['qbo_id']));
+            if ($pc === 429) return null;
+            if ($pc !== 200 || !isset($pd['Payment'])) return qbo_fail($inv, 'A QuickBooks payment could not be checked (reply ' . $pc . ').');
+            $amount = round(qbo_payment_amount($pd['Payment'], (string)$inv['qbo_id']), 2);
+            if ($amount <= 0) { qbo_drop_payment($p); continue; }
+            $on = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($pd['Payment']['TxnDate'] ?? '')) ? (string)$pd['Payment']['TxnDate'] : (string)$p['received_on'];
+            if (abs($amount - (float)$p['amount']) > 0.004 || $on !== (string)$p['received_on']) qbo_adjust_payment($p, $amount, $on);
+            continue;
+        }
         [$pc, $pd] = qbo_api('GET', '/payment/' . rawurlencode((string)$p['qbo_id']));
+        if ($pc === 429) return null;
         // Gone only when QuickBooks says so: not found (404, or 400 with fault 610 "Object Not Found"),
         // or read back with nothing applied to this invoice. Anything else removes nothing.
         $notFound = $pc === 404 || ($pc === 400 && (string)($pd['Fault']['Error'][0]['code'] ?? '') === '610');
@@ -400,8 +466,11 @@ function qbo_void_invoice(array $inv): ?string {
  */
 function qbo_sync_all(int $limit = 100): array {
     if (!qbo_app() || !qbo_connection()) return [0, 0];
-    if ((int)db()->query("SELECT GET_LOCK('cms_qbo_sync', 0)")->fetchColumn() !== 1) return [0, 0]; // another run is going
+    // 4.29.0: the lock is named for this database, as every other job's lock is: lock names are global to the
+    // database server, so another installation on the same server no longer blocks this one's sync.
+    if ((int)db()->query("SELECT GET_LOCK(CONCAT('cms_qbo_sync_', MD5(DATABASE())), 0)")->fetchColumn() !== 1) return [0, 0]; // another run is going
     $ok = 0; $bad = 0; $lim = max(1, min(1000, $limit));
+    $GLOBALS['qbo_throttled'] = false;
     try {
         $since = (string)(setting('qbo_since') ?? date('Y-m-d'));
         $base = 'SELECT i.*, t.client_id, c.name AS client_name FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id WHERE ';
@@ -413,13 +482,15 @@ function qbo_sync_all(int $limit = 100): array {
         ];
         foreach ($parts as [$fn, $sql]) {
             foreach (db()->query($sql . ' LIMIT ' . $lim)->fetchAll() as $inv) {
+                // 4.29.0: once QuickBooks says too many requests, the rest waits for the next run.
+                if (qbo_throttled()) break 2;
                 try { $fn($inv) === null ? $ok++ : $bad++; }
                 catch (Throwable $e) { $bad++; error_log($fn . ': ' . get_class($e)); }
             }
         }
         set_setting('qbo_synced_at', date('c'));
     } finally {
-        db()->query("SELECT RELEASE_LOCK('cms_qbo_sync')");
+        db()->query("SELECT RELEASE_LOCK(CONCAT('cms_qbo_sync_', MD5(DATABASE())))");
     }
     return [$ok, $bad];
 }

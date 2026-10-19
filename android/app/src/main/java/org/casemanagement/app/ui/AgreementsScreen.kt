@@ -37,6 +37,7 @@ fun AgreementScreen(api: Api, nav: NavHostController, id: Int) {
     var agree by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var agreeError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     Show(state, "the agreement") { a ->
@@ -48,11 +49,12 @@ fun AgreementScreen(api: Api, nav: NavHostController, id: Int) {
                 a.str("signature_id")?.let { sid -> SecondaryButton("Read your signed copy") { nav.navigate("agreementCopy/$sid") } }
             } else {
                 Heading("Sign")
-                Tick("I have read this agreement and agree to it", agree) { agree = it }
+                Tick("I have read this agreement and agree to it", agree, error = agreeError) { agree = it; if (it) agreeError = null }
                 Field("Type your full name to sign", name, { name = it }, hint = "as it is on your account: ${api.userName}")
                 ErrorText(error)
                 PrimaryButton("Sign the agreement", busy = busy, enabled = name.isNotBlank()) {
-                    if (!agree) { error = "Tick that you have read the agreement and agree to it."; return@PrimaryButton }
+                    agreeError = if (!agree) "Tick that you have read the agreement and agree to it." else null
+                    if (!agree) { error = agreeError; return@PrimaryButton }
                     scope.launchSave({ busy = it }, { error = it }) {
                         try {
                             // The fingerprint of the text shown here: a change since it loaded is refused.

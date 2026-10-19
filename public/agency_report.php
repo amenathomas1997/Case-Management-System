@@ -19,9 +19,15 @@ $rt = report_table('training_tracks', (int)$user['id']);
 $ri = report_table('invoices', (int)$user['id']);
 // The agencies on tracks now, plus those snapshotted on invoices, so work billed under
 // an agency a track has since moved away from can still be selected.
-$agencies = db()->query("SELECT funding_agency FROM {$rt} training_tracks
-    UNION SELECT funding_agency FROM {$ri} inv WHERE funding_agency IS NOT NULL
-    ORDER BY funding_agency")->fetchAll(PDO::FETCH_COLUMN);
+// 4.29.0: one entry per agency as it is called today, so a renamed agency is listed once
+// (its old spelling on sent invoices is matched by agency_match_sql()).
+// Only agencies with VR work are offered: a private-pay or no-charge track naming an agency is not its work.
+$agencies = array_keys(agency_resolved_groups(db()->query("SELECT funding_agency FROM {$rt} training_tracks WHERE COALESCE(billing_mode, 'vr') = 'vr'
+    UNION SELECT funding_agency FROM {$ri} inv WHERE funding_agency IS NOT NULL AND bill_mode = 'vr'")->fetchAll(PDO::FETCH_COLUMN)));
+if ($agency !== '' && !in_array($agency, $agencies, true)) {
+    $resolvedChoice = agency_resolve($agency);
+    if (in_array($resolvedChoice, $agencies, true)) $agency = $resolvedChoice;
+}
 
 // Billed lines are reported under the agency and authorization snapshotted on their
 // invoice (generate_invoice), so editing a track later does not move work already
@@ -45,7 +51,9 @@ $sql = "SELECT t.id AS track_id, c.name AS client_name, t.title, {$authExpr} AS 
     JOIN clients c ON c.id = t.client_id
     LEFT JOIN invoices i ON i.id = w.invoice_id
     LEFT JOIN service_bundles b ON b.id = t.bundle_id
-    WHERE w.work_date BETWEEN ? AND ?";
+    WHERE w.work_date BETWEEN ? AND ? AND " . vr_work_sql('t', 'i');
+// 4.29.0: VR agency work only. Private-pay and no-charge work is not billed to an agency,
+// even when its track still names one (vr_work_sql(): invoiced lines by the invoice's bill mode).
 $params = [$from, $to];
 // Caseload-scoped billing users see only their own clients' billing (mirrors report.php / capacity.php).
 if (caseload_scoped()) { $sql .= ' AND c.assigned_to = ?'; $params[] = (int)$user['id']; }
@@ -69,7 +77,7 @@ $esql = "SELECT t.id AS track_id, c.name AS client_name, t.title, {$authExpr} AS
     JOIN clients c ON c.id = t.client_id
     LEFT JOIN invoices i ON i.id = e.invoice_id
     LEFT JOIN service_bundles b ON b.id = t.bundle_id
-    WHERE e.expense_date BETWEEN ? AND ?";
+    WHERE e.expense_date BETWEEN ? AND ? AND " . vr_work_sql('t', 'i');
 $eparams = [$from, $to];
 if (caseload_scoped()) { $esql .= ' AND c.assigned_to = ?'; $eparams[] = (int)$user['id']; }
 if ($agency !== '') { $esql .= ' AND ' . $agencyCond; array_push($eparams, ...$agencyArgs); }
@@ -129,7 +137,7 @@ if (isset($_GET['export'])) {
 page_header('Agency summary', $user, 'analytics');
 ?>
 <h1>Agency billing summary</h1>
-<p class="muted">All billable work in a date range, grouped by authorization — matches how state VR reconciles quarterly.
+<p class="muted">All VR-billable work in a date range, grouped by authorization — matches how state VR reconciles quarterly. Private-pay and no-charge work is not included.
    Hours and mileage are by session date; expenses (billed on the same invoices) are by expense date and included in the total.</p>
 <?php if ($periodNotes): ?><p><?php foreach ($periodNotes as $i => $pn): ?><?= $i ? ' ' : '' ?><?= h($pn) ?><?php endforeach; ?></p><?php endif; ?>
 

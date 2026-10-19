@@ -322,6 +322,6 @@ struct AddIncidentSheet: View {
             // logging it again would record it twice.
             busy = false
             showFormError("The connection dropped before the server answered, so it isn't known whether this incident was logged. Check the incidents list for \(type) on \(date.formatted(date: .abbreviated, time: .omitted)) before logging it again.", in: &self.error)
-        } catch { idem.answered(); busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        } catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error), in: &self.error) }
     }
 }

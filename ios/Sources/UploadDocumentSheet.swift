@@ -255,7 +255,7 @@ struct UploadDocumentSheet: View {
             showFormError("The connection dropped before the server answered, so it isn't known whether the document was uploaded. Check the client's documents for “\(filename)” before uploading it again.", in: &self.error)
             busy = false
         } catch {
-            idem.answered()
+            idem.failed(error)
             showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }

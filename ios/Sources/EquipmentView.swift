@@ -748,7 +748,7 @@ struct LogServiceSheet: View {
             busy = false
             showFormError("The connection dropped before the server answered, so it isn't known whether this service was logged. Check the item's service history for \(type) on \(date.formatted(date: .abbreviated, time: .omitted)) before saving it again.", in: &self.error)
         }
-        catch { idem.answered(); busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error), in: &self.error) }
     }
 }
 
@@ -1056,6 +1056,6 @@ struct AddEquipmentSheet: View {
             busy = false
             showFormError("The connection dropped before the server answered, so it isn't known whether this item was added. Check the equipment list for “\(name.trimmingCharacters(in: .whitespacesAndNewlines))” before adding it again.", in: &self.error)
         }
-        catch { idem.answered(); busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error), in: &self.error) }
     }
 }

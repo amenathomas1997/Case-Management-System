@@ -181,14 +181,21 @@ struct FollowupsView: View {
         guard !acting.contains(f.id) else { return }
         acting.insert(f.id)
         defer { acting.remove(f.id) }
+        struct ActResult: Decodable { let ok: Bool; let message: String? }
+        var body: [String: Any] = ["id": f.id, "op": op]
+        // 4.29.0: a snooze sends the due date shown, so a retry after a lost reply (or a second
+        // press) finds it already moved and is not moved another 14 days.
+        if op == "snooze" { body["due_date"] = f.dueDate }
         do {
-            let _: OKResponse = try await api.call("save_followup", body: ["id": f.id, "op": op])
+            let r: ActResult = try await api.call("save_followup", body: body)
             await load()
             // The row has left Due now: put VoiceOver on that heading, then say what happened,
             // after the focus move so it is not cut off.
             dueHeaderFocused = true
-            announceAfterDismiss(op == "skip" ? "Follow-up skipped." : "Follow-up moved out two weeks.")
-        } catch { showFormError(error.localizedDescription, in: &self.error) }
+            announceAfterDismiss(r.message ?? (op == "skip" ? "Follow-up skipped." : "Follow-up moved out two weeks."))
+        } catch {
+            showFormError(op == "snooze" ? IdemKey.message(for: error, what: "the follow-up's new date") : error.localizedDescription, in: &self.error)
+        }
     }
 
     private func load() async {
@@ -280,12 +287,19 @@ struct RecordFollowupSheet: View {
                 }
                 Section(followup.equipmentName) {
                     Text(followup.clientName).foregroundStyle(Color.secondaryText)
-                    // A segmented picker shows (and speaks) no label of its own. No segment is
-                    // selected until one is chosen.
-                    Text("Still in use? (required)")
-                    Picker("Still in use?", selection: $inUse) {
-                        Text("Yes").tag("yes" as String?); Text("No").tag("no" as String?); Text("Unknown").tag("" as String?)
-                    }.pickerStyle(.segmented)
+                    // A segmented picker shows (and speaks) no label of its own: the question is
+                    // shown above it and given to the picker as its name (4.29.0), so each segment is
+                    // heard with the question and the caption is not a stop of its own. No segment
+                    // is selected until one is chosen.
+                    // The group carries the question, so the segments keep their own names.
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Still in use? (required)").accessibilityHidden(true)
+                        Picker("Still in use?", selection: $inUse) {
+                            Text("Yes").tag("yes" as String?); Text("No").tag("no" as String?); Text("Unknown").tag("" as String?)
+                        }.pickerStyle(.segmented)
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Still in use? (required)")
                     // Each rating says what it means, and "not rated" is a word, not a dash.
                     Picker("Satisfaction", selection: $satisfaction) {
                         Text("Not rated").tag(0)

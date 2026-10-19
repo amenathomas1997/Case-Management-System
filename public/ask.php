@@ -25,12 +25,10 @@ $cutOff = false;   // the AI stopped at its length limit, so the answer is incom
 $asking = $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ask']);
 if ($asking && $question === '') {
     set_form_errors(['question' => 'Type a question to ask.']);
-    flash('Type a question to ask.', 'error');
     $asking = false;
 } elseif ($asking && ($qLen = mb_strlen($question)) > 2000) {
     // Same limit as the app's caseload question; refused, never cut short.
     set_form_errors(['question' => 'Shorten the question to 2,000 characters or fewer (it has ' . number_format($qLen) . ').']);
-    flash('Your question is too long. Shorten it to 2,000 characters or fewer.', 'error');
     $asking = false;
 }
 if ($asking) {
@@ -108,6 +106,8 @@ page_header('Ask your caseload', $user, 'ai_tools');
 <p class="muted">Ask a plain-language question about your clients, goals and notes. Client names are never sent to the AI — they're tokenized and restored in the answer. Read-only.</p>
 
 <form method="post" action="ask.php" class="stacked"><?= csrf_field() ?>
+  <?php // One announcement (4.29.0): the summary, tied to the field's own error; no flash as well. ?>
+  <?= form_error_summary(['question' => 'Your question']) ?>
   <div class="field">
     <label for="question">Your question <span class="hint">Up to 2,000 characters.</span></label>
     <textarea id="question" name="question" rows="3" placeholder="e.g. Which clients have goals under 25% with no note in the last month?" <?= field_aria('question') ?>><?= h($question) ?></textarea><?= field_error('question') ?>

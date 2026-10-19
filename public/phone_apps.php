@@ -41,6 +41,8 @@ page_header('Phone apps', $user, 'admin', [['admin.php', 'Administration']]);
 <section class="card" aria-labelledby="kit-h">
   <h2 id="kit-h" tabindex="-1">Your app kit</h2>
   <form method="post" action="phone_apps.php" class="stacked" novalidate><?= csrf_field() ?>
+    <?php // 4.29.0: a refused kit is announced (focus moves here); the messages that already name their box get no second label. ?>
+    <?= form_error_summary(['display_name' => '', 'spoken_name' => '', 'signin_title' => '', 'app_id' => 'App ID', 'apple_team' => '']) ?>
     <div class="field"><label for="display_name">Name under the icon <span class="hint">short: phones cut off about 12 characters</span></label>
       <input type="text" id="display_name" name="display_name" maxlength="30" value="<?= $val('display_name') ?>" <?= field_aria('display_name') ?>><?= field_error('display_name') ?></div>
     <div class="field"><label for="spoken_name">How screen readers say the app's name</label>

@@ -141,6 +141,16 @@ function offer_confirm(int $offerId, int $clientId): array {
         }
         $start = strtotime((string)$o['start_at']); $end = strtotime((string)$o['end_at']);
         $instructor = (int)$o['user_id'];
+        // The instructor may have been switched off, or the client moved off a caseload-only
+        // instructor's list, since the times were offered (4.29.0): such a time is never booked.
+        // It expires, and the client's current instructor (or the administrators) offer new times.
+        if (offer_staff_problem($instructor, $clientId) !== null) {
+            $pdo->prepare("UPDATE portal_request_offers SET status = 'Expired' WHERE request_id = ? AND user_id = ? AND status = 'Offered'")->execute([(int)$req['id'], $instructor]);
+            $pdo->commit();
+            offer_tell_current_owner($clientId, 'A client chose ' . date('D, M j g:i A', $start) . ' with an instructor who can no longer take it, so it was not booked: offer new times');
+            audit(null, 'portal_request.offer_expired', 'client', $clientId, 'request #' . (int)$req['id'] . ': offered instructor no longer available');
+            return ['error' => 'That time is no longer available. Your instructor has been told and will offer new times.', 'session_id' => null];
+        }
         session_lock_instructor($instructor); // one booking at a time for this instructor, whatever the path (4.20.0)
         $moving = null;
         if ($req['type'] === 'reschedule' && $req['session_id']) {
@@ -272,4 +282,51 @@ function offer_tell_previous_instructor(int $sid, array $old): void {
     } catch (Throwable $e) {
         error_log('offer_tell_previous_instructor: ' . get_class($e) . ' ' . $e->getCode());
     }
+}
+
+/**
+ * Tell whoever now looks after a client about one of their requests (4.29.0): the assigned
+ * instructor while their account is active, else every administrator.
+ */
+function offer_tell_current_owner(int $clientId, string $message): void {
+    try {
+        $q = db()->prepare('SELECT au.id FROM clients c LEFT JOIN users au ON au.id = c.assigned_to AND au.is_active = 1 WHERE c.id = ?');
+        $q->execute([$clientId]);
+        $owner = (int)$q->fetchColumn();
+        $link = 'portal_requests.php?client=' . $clientId;
+        if ($owner) notify_user($owner, $message, $link, true);
+        else notify_admin_users($message, $link, true);
+    } catch (Throwable $e) {
+        error_log('offer_tell_current_owner: ' . get_class($e) . ' ' . $e->getCode());
+    }
+}
+
+/**
+ * Withdraw every time still offered with an instructor (4.29.0): their caseload was transferred
+ * or their account switched off, so a client could otherwise confirm a session nobody runs.
+ * The client's current instructor (or the administrators) is told, once per request, to offer
+ * new times. Returns how many times were withdrawn. Never fails the caller.
+ */
+function offer_withdraw_for_staff(int $userId, string $why): int {
+    try {
+        $q = db()->prepare("SELECT o.id, o.request_id, pr.client_id, c.name AS client_name FROM portal_request_offers o
+            JOIN portal_requests pr ON pr.id = o.request_id JOIN clients c ON c.id = pr.client_id
+            WHERE o.user_id = ? AND o.status = 'Offered'");
+        $q->execute([$userId]);
+        $rows = $q->fetchAll();
+    } catch (PDOException $e) {
+        return 0; // mig_3.0.52 not run yet
+    }
+    if (!$rows) return 0;
+    $ids = array_map(fn($r) => (int)$r['id'], $rows);
+    db()->prepare("UPDATE portal_request_offers SET status = 'Withdrawn' WHERE status = 'Offered' AND id IN (" . implode(',', array_fill(0, count($ids), '?')) . ')')->execute($ids);
+    $told = [];
+    foreach ($rows as $r) {
+        if (isset($told[(int)$r['request_id']])) continue;
+        $told[(int)$r['request_id']] = true;
+        $first = preg_split('/\s+/u', trim((string)$r['client_name']))[0] ?? '';
+        offer_tell_current_owner((int)$r['client_id'], 'Times offered to ' . $first . ' were withdrawn (' . $why . '): offer new times');
+        audit(null, 'portal_request.offer_withdrawn', 'client', (int)$r['client_id'], 'request #' . (int)$r['request_id'] . ': ' . $why);
+    }
+    return count($ids);
 }

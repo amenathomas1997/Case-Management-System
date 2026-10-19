@@ -114,7 +114,11 @@ foreach ($tracks as $t) {
     // The client's counselor is emailed too, once per crossing (owner decision 2026-10-16;
     // portal link only). Marked only once it went, so a day without email tries again.
     if (($hoursLow || $fundsLow) && empty($already["$id:vrc80"])) {
-        if (counselor_auth_notice($id)) $mark->execute([$id, 'vrc80']);
+        if (counselor_auth_notice($id)) {
+            $mark->execute([$id, 'vrc80']);
+            // 4.29.0: marked as sent (never emailed twice), and said once here.
+            if (($GLOBALS['counselor_auth_notice_outcome'] ?? '') === 'unknown') echo date('Y-m-d H:i:s') . " the counselor notice for track $id may not have arrived (the mail service did not confirm it); it is not sent again.\n";
+        }
     } elseif ($hoursClear && $fundsClear && isset($already["$id:vrc80"])) {
         $unmark->execute([$id, 'vrc80']);
     }

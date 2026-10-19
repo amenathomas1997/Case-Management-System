@@ -79,12 +79,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['replace_counselor']))
     $newEmail = strtolower($in('new_email'));
     $newName = $in('new_name'); $newAgency = $in('new_agency'); $newPhone = $in('new_phone');
     $key = 'new_' . sprintf('%u', crc32($oldEmail));
-    $err = null;
-    if (!filter_var($newEmail, FILTER_VALIDATE_EMAIL) || mb_strlen($newEmail) > 190) $err = 'Enter the new counselor\'s email address.';
-    elseif ($newEmail === $oldEmail) $err = 'The new email is the same as the current one.';
-    elseif ($newName === '' || mb_strlen($newName) > 120) $err = 'Enter the new counselor\'s name (120 characters or fewer).';
-    elseif (mb_strlen($newAgency) > 190 || mb_strlen($newPhone) > 40) $err = 'The agency or phone is too long.';
-    if ($err !== null) { keep_input(); keep_field_errors([$key => $err]); redirect('counselors.php#' . $key); }
+    // 4.29.0: each error on its own box (the ids the form gives them), all found at once,
+    // and announced by the form's error summary.
+    $errs = [];
+    if ($newName === '' || mb_strlen($newName) > 120) $errs[$key . '-n'] = 'Enter the new counselor\'s name (120 characters or fewer).';
+    if (!filter_var($newEmail, FILTER_VALIDATE_EMAIL) || mb_strlen($newEmail) > 190) $errs[$key . '-e'] = 'Enter the new counselor\'s email address.';
+    elseif ($newEmail === $oldEmail) $errs[$key . '-e'] = 'The new email is the same as the current one.';
+    if (mb_strlen($newAgency) > 190) $errs[$key . '-a'] = 'Keep the agency to 190 characters.';
+    if (mb_strlen($newPhone) > 40) $errs[$key . '-p'] = 'Keep the phone to 40 characters.';
+    if ($errs) { keep_input(); keep_field_errors($errs); redirect('counselors.php#' . $key . '-form'); }
     $pdo = db();
     $pdo->beginTransaction();
     try {
@@ -175,15 +178,17 @@ page_header('Counselor portal', $user, 'referrals');
             <?= !$tk ? 'Send portal link' : ($tk['live'] ? 'Resend / reset link' : 'Send a new link') ?><span class="visually-hidden"> for <?= h($who) ?></span></button>
         </form>
         <?php if ((int)$c['clients'] > 0): $rk = 'new_' . sprintf('%u', crc32(strtolower($c['email']))); $rMine = old_in('email') === $c['email'] && old_in('replace_counselor') !== ''; ?>
-        <details<?= has_field_error($rk) ? ' open' : '' ?>><summary>Replace with a new counselor<span class="visually-hidden"> for <?= h($who) ?></span></summary>
+        <?php $rLabels = [$rk . '-n' => "New counselor's name", $rk . '-e' => "New counselor's email", $rk . '-a' => 'Agency', $rk . '-p' => 'Phone'];
+              $rErr = (bool)array_intersect_key(form_errors(), $rLabels); ?>
+        <details id="<?= $rk ?>-form"<?= $rErr ? ' open' : '' ?>><summary>Replace with a new counselor<span class="visually-hidden"> for <?= h($who) ?></span></summary>
           <form method="post" action="counselors.php" class="stacked" novalidate><?= csrf_field() ?>
             <input type="hidden" name="email" value="<?= h($c['email']) ?>">
-            <p class="hint" id="<?= $rk ?>">Moves all <?= (int)$c['clients'] ?> of <?= h($who) ?>'s clients to the new counselor, adds a note to each, updates draft invoices and turns off <?= h($who) ?>'s portal link.</p>
-            <?= field_error($rk) ?>
-            <div class="field"><label for="<?= $rk ?>-n">New counselor's name</label><input type="text" id="<?= $rk ?>-n" name="new_name" maxlength="120" value="<?= $rMine ? h(old_in('new_name')) : '' ?>"></div>
-            <div class="field"><label for="<?= $rk ?>-e">New counselor's email</label><input type="email" id="<?= $rk ?>-e" name="new_email" maxlength="190" value="<?= $rMine ? h(old_in('new_email')) : '' ?>"></div>
-            <div class="field"><label for="<?= $rk ?>-a">Agency (leave blank to keep <?= h($c['agency'] ?? 'the current one') ?>)</label><input type="text" id="<?= $rk ?>-a" name="new_agency" maxlength="190" value="<?= $rMine ? h(old_in('new_agency')) : '' ?>"></div>
-            <div class="field"><label for="<?= $rk ?>-p">Phone</label><input type="tel" id="<?= $rk ?>-p" name="new_phone" maxlength="40" value="<?= $rMine ? h(old_in('new_phone')) : '' ?>"></div>
+            <?= form_error_summary($rLabels) ?>
+            <p class="hint">Moves all <?= (int)$c['clients'] ?> of <?= h($who) ?>'s clients to the new counselor, adds a note to each, updates draft invoices and turns off <?= h($who) ?>'s portal link.</p>
+            <div class="field"><label for="<?= $rk ?>-n">New counselor's name</label><input type="text" id="<?= $rk ?>-n" name="new_name" maxlength="120" value="<?= $rMine ? h(old_in('new_name')) : '' ?>" <?= field_aria($rk . '-n') ?>><?= field_error($rk . '-n') ?></div>
+            <div class="field"><label for="<?= $rk ?>-e">New counselor's email</label><input type="email" id="<?= $rk ?>-e" name="new_email" maxlength="190" value="<?= $rMine ? h(old_in('new_email')) : '' ?>" <?= field_aria($rk . '-e') ?>><?= field_error($rk . '-e') ?></div>
+            <div class="field"><label for="<?= $rk ?>-a">Agency <span class="hint">leave blank to keep <?= h($c['agency'] ?? 'the current one') ?></span></label><input type="text" id="<?= $rk ?>-a" name="new_agency" maxlength="190" value="<?= $rMine ? h(old_in('new_agency')) : '' ?>" <?= field_aria($rk . '-a') ?>><?= field_error($rk . '-a') ?></div>
+            <div class="field"><label for="<?= $rk ?>-p">Phone</label><input type="tel" id="<?= $rk ?>-p" name="new_phone" maxlength="40" value="<?= $rMine ? h(old_in('new_phone')) : '' ?>" <?= field_aria($rk . '-p') ?>><?= field_error($rk . '-p') ?></div>
             <button type="submit" name="replace_counselor" value="1" class="btn btn-secondary btn-sm" onclick="return confirm(<?= h(json_encode('Move all of ' . $who . '\'s clients to the new counselor? Their portal link stops working.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">Replace counselor<span class="visually-hidden"> for <?= h($who) ?></span></button>
           </form>
         </details>

@@ -68,7 +68,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $billingMode = isset(BILLING_MODES[$_POST['billing_mode'] ?? '']) ? $_POST['billing_mode'] : 'vr';
     $isVr = $billingMode === 'vr';
     if (!$isVr) {
-        if ($agency === '') $agency = $billingMode === 'private' ? 'Private pay' : 'No charge';
+        // The agency names the payer (4.29.0): a leftover "State VR" would count this work as the
+        // agency's in its billing summary, the funder report and RSA-911.
+        $agency = $billingMode === 'private' ? 'Private pay' : 'No charge';
         if ($billingMode === 'none') $rate = 0.0;
     }
     // A VR track with no rate typed charges the agency's own rate (Funding agencies, 4.2.0).
@@ -473,8 +475,11 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
     </div>
     <div class="field">
       <label for="funding_agency">Funding agency <?= required_mark() ?></label>
-      <input type="text" id="funding_agency" name="funding_agency" required maxlength="190" value="<?= $v('funding_agency', 'State VR') ?>" <?= field_aria('funding_agency') ?>>
+      <input type="text" id="funding_agency" name="funding_agency" required maxlength="190" value="<?= $v('funding_agency', $curMode === 'private' ? 'Private pay' : ($curMode === 'none' ? 'No charge' : 'State VR')) ?>" <?= field_aria('funding_agency') ?>>
       <?= field_error('funding_agency') ?>
+      <script>(function(){var m=document.getElementById('billing_mode'),a=document.getElementById('funding_agency');if(!m||!a)return;
+        var by={private:'Private pay',none:'No charge'};
+        m.addEventListener('change',function(){var v=a.value.trim();if(by[m.value])a.value=by[m.value];else if(v===''||v===by.private||v===by.none)a.value='State VR';});})();</script>
     </div>
     <div class="field">
       <label for="authorized_hours">Authorized hours, total granted (required for VR or agency)</label>

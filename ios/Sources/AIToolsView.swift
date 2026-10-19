@@ -332,6 +332,7 @@ struct RemediateView: View {
 
 struct TranslateView: View {
     @EnvironmentObject var api: API
+    private static let contentHelp = "Pasted text is sent to the provider as-is. Review before sending to a client. Up to 6,000 characters at a time; split longer text into parts."
     @State private var lang = "Spanish"
     @State private var content = ""
     @State private var result: String?
@@ -357,10 +358,14 @@ struct TranslateView: View {
             // never shown under a language it was not made in.
             Picker("Into", selection: $lang) { ForEach(langs, id: \.name) { Text($0.name).tag($0.name) } }
                 .disabled(busy)
-            Section("Content") { TextEditor(text: $content).frame(minHeight: 160).accessibilityLabel("Content to translate").disabled(busy) }
             // The server refuses more than 6,000 characters at once (ai_translate), so the limit
-            // is stated up front and checked here before anything is sent.
-            Text("Pasted text is sent to the provider as-is. Review before sending to a client. Up to 6,000 characters at a time; split longer text into parts.").font(.caption)
+            // is stated up front and checked here before anything is sent. 4.29.0: said as the
+            // field's hint, so it is not a stop of its own.
+            Section("Content") {
+                TextEditor(text: $content).frame(minHeight: 160).accessibilityLabel("Content to translate")
+                    .accessibilityHint(Self.contentHelp).disabled(busy)
+            }
+            Text(Self.contentHelp).font(.caption).accessibilityHidden(true)
             Button { Task { await run() } } label: { Label(busy ? "Translating…" : "Translate", systemImage: "character.bubble") }
                 .accessibilityValue(busy ? "In progress" : "").disabled(busy || content.isEmpty)
             if let result {

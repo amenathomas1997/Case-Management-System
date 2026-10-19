@@ -44,7 +44,7 @@ check(str_contains($html,'id="meetings-h"') && str_contains($html,'Disconnect Zo
 // Booking a remote session with a Zoom link.
 putenv('CMS_TEST_MEETINGS='.json_encode(['https://api.zoom.us/v2/users/me/meetings'=>['status'=>201,'body'=>['join_url'=>'https://zoom.us/j/5550001111']]]));
 $db->exec("INSERT INTO clients(name,status,assigned_to) VALUES('Meeting Synthetic Client','Active Training',1)"); $mc=(int)$db->lastInsertId();
-$mpost=['add_session'=>'1','client_id'=>(string)$mc,'staff_id'=>'1','date'=>date('Y-m-d',strtotime('+3 days')),'time'=>'10:00','duration'=>'1','repeat_weeks'=>'2','is_remote'=>'1','meeting_make'=>'zoom'];
+$mpost=['add_session'=>'1','client_id'=>(string)$mc,'staff_id'=>'1','date'=>date('Y-m-d',strtotime('+3 days')),'time'=>'06:15','duration'=>'1','repeat_weeks'=>'2','is_remote'=>'1','meeting_make'=>'zoom']; // 4.29.0: a time the instructor is free (a clash now needs approval)
 [$code,,$err]=$renderPage('schedule',[],array_diff_key($mpost,['is_remote'=>1]));
 check($db->query("SELECT COUNT(*) FROM scheduled_sessions WHERE client_id=$mc")->fetchColumn()==0,'A Zoom link for a session that is not remote is refused');
 [$code,,$err]=$renderPage('schedule',[],['staff_id'=>'41']+$mpost);

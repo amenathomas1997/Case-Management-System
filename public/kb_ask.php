@@ -44,14 +44,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ask'])) {
     $articles = [];
     if ($question === '') {
         set_form_errors(['question' => 'Type a question to ask.']);
-        flash('Type a question to ask.', 'error');
     } elseif (($qLen = mb_strlen($question)) > 2000) {
         // Same limit as the app's knowledge-base question; refused, never cut short.
         set_form_errors(['question' => 'Shorten the question to 2,000 characters or fewer (it has ' . number_format($qLen) . ').']);
-        flash('Your question is too long. Shorten it to 2,000 characters or fewer.', 'error');
     } elseif (!$terms) {
-        set_form_errors(['question' => 'Include the key words, for example the product or task name.']);
-        flash('That question has no words to search the articles for. Include the key words, for example the product or task name.', 'error');
+        set_form_errors(['question' => 'That question has no words to search the articles for. Include the key words, for example the product or task name.']);
     } else {
         // Rank by how many terms an article contains (a term in the title counts
         // twice), then by most recently updated. COALESCE: a NULL category or body
@@ -105,6 +102,8 @@ page_header('Ask the knowledge base', $user, 'kb');
 <p class="muted">Answers come from the articles in your Staff knowledge base and cite them. The assistant does not search the internet or other sources: if no article covers a question, it says so, and you can add an article on the Knowledge page. Tick the box below to allow a general-knowledge answer instead, clearly marked as not agency procedure.</p>
 
 <form method="post" action="kb_ask.php" class="stacked"><?= csrf_field() ?>
+  <?php // One announcement (4.29.0): the summary, tied to the field's own error; no flash as well. ?>
+  <?= form_error_summary(['question' => 'Your question']) ?>
   <div class="field"><label for="question">Your question</label>
     <input type="text" id="question" name="question" value="<?= h($question) ?>" required placeholder="e.g. How do I set up JAWS voice profiles?" <?= field_aria('question') ?>><?= field_error('question') ?></div>
   <div class="field"><label><input type="checkbox" name="general" value="1"<?= $general ? ' checked' : '' ?>> If no article covers it, answer from general knowledge (marked as not agency procedure)</label></div>

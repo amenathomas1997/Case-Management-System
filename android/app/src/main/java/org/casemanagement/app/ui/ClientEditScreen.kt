@@ -35,6 +35,9 @@ import org.casemanagement.app.prefillCount
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
 import org.json.JSONObject
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.clearAndSetSemantics
 
 val A11Y_FORMATS = listOf("Standard print", "Large print", "Plain text", "Braille-ready (BRF)", "Audio", "Accessible PDF")
 val A11Y_CONTACTS = listOf("No preference", "Email", "Phone", "Client portal", "Postal mail")
@@ -102,12 +105,16 @@ val US_STATES = listOf(
 
 /** A tick box that is one stop, read with its label and state. */
 @Composable
-fun Tick(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(checked, role = Role.Checkbox, onValueChange = onChange),
+fun Tick(label: String, checked: Boolean, error: String? = null, onChange: (Boolean) -> Unit) {
+    // 4.29.0: an error belongs to the tick box itself (read with it), as with Choice.
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(checked, role = Role.Checkbox, onValueChange = onChange)
+        .let { m -> if (error != null) m.semantics { error(error) } else m },
         verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked = checked, onCheckedChange = null)
         Text(label, modifier = Modifier.padding(start = 8.dp))
     }
+    if (error != null) Text(error, color = androidx.compose.material3.MaterialTheme.colorScheme.error, style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(start = 16.dp, bottom = 4.dp).clearAndSetSemantics { })
 }
 
 

@@ -150,6 +150,12 @@ struct TrackDetailView: View {
     /// place of the values this screen was opened with.
     @State private var showingEditTrack = false
     @State private var savedTrack: TrackFormValues?
+    /// The hours logged on the track as last loaded (4.29.0), so the bar follows Log hours,
+    /// corrections and deletions made here instead of the figure the screen opened with.
+    @State private var liveHoursWorked: Double?
+    /// Every entry on the track (4.29.0, the work_logs reply's total); more than are listed
+    /// means older entries are on the website only.
+    @State private var workLogsTotal: Int?
     @Environment(\.dynamicTypeSize) private var typeSize
 
     struct PendingGoalStatus {
@@ -184,11 +190,14 @@ struct TrackDetailView: View {
                     Button { showingEditTrack = true } label: { Label("Edit track", systemImage: "pencil") }
                         .accessibilityHint("Title, status, program, authorization, rates and dates.")
                     // After Edit track, the bar follows the saved authorization, not the one loaded.
+                    // 4.29.0: and the hours logged as last loaded.
                     let authorized = savedTrack?.authorizedHours ?? track.authorizedHours
-                    AuthProgressBar(hoursWorked: track.hoursWorked,
+                    let worked = liveHoursWorked ?? track.hoursWorked
+                    let recomputed = savedTrack != nil || liveHoursWorked != nil
+                    AuthProgressBar(hoursWorked: worked,
                                     authorizedHours: authorized,
-                                    hoursRemaining: savedTrack == nil ? track.hoursRemaining : max(0, authorized - track.hoursWorked),
-                                    pctUsed: savedTrack == nil ? track.pctUsed : (authorized > 0 ? track.hoursWorked / authorized * 100 : 0))
+                                    hoursRemaining: recomputed ? max(0, authorized - worked) : track.hoursRemaining,
+                                    pctUsed: recomputed ? (authorized > 0 ? worked / authorized * 100 : 0) : track.pctUsed)
                 }
                 goalsSection
                 Section(notesHeader) {
@@ -393,7 +402,8 @@ struct TrackDetailView: View {
             }
         }
         // The form says its own results and stays open for another entry.
-        .sheet(isPresented: $showingLogHours) {
+        // 4.29.0: the hours list and bar are reloaded when it closes, so new entries are heard.
+        .sheet(isPresented: $showingLogHours, onDismiss: { Task { await loadWorkLogs() } }) {
             LogHoursView(initialTrackId: track.id)
         }
         .sheet(isPresented: $showingAddGoal, onDismiss: announceSheetResult) {
@@ -642,9 +652,14 @@ struct TrackDetailView: View {
 
     /// own property: inside the screen's body it made the expression too slow to type-check.
     @ViewBuilder private var hoursSection: some View {
-        Section(workLogsLoaded ? "Hours logged (\(workLogs.count))" : "Hours logged") {
+        Section(!workLogsLoaded ? "Hours logged"
+                : (workLogsTotal ?? 0) > workLogs.count ? "Hours logged (latest \(workLogs.count) of \(workLogsTotal ?? 0))"
+                : "Hours logged (\(workLogs.count))") {
             if workLogsLoaded && workLogs.isEmpty {
                 Text("No hours logged on this track.").foregroundStyle(Color.secondaryText)
+            }
+            if workLogsLoaded, let total = workLogsTotal, total > workLogs.count {
+                Text("Older entries are on the track's page on the website.").font(.callout).foregroundStyle(Color.secondaryText)
             }
             ForEach(workLogs) { log in
                 VStack(alignment: .leading, spacing: 2) {
@@ -675,7 +690,18 @@ struct TrackDetailView: View {
         do {
             let r: WorkLogsResponse = try await api.call("work_logs", query: ["track_id": String(track.id)])
             workLogs = r.logs
+            workLogsTotal = r.total
             workLogsLoaded = true
+            // The track's hours logged (4.29.0): the sum of its entries when all are listed (as
+            // the server's own total is), else the track as the client record reports it now.
+            let complete = r.total.map { $0 <= r.logs.count } ?? (r.logs.count < (r.limit ?? 200))
+            if complete {
+                liveHoursWorked = r.logs.reduce(0) { $0 + $1.hours }
+            } else if let cid = trackClientId,
+                      let detail: ClientDetail = try? await api.call("client", query: ["id": String(cid)]),
+                      let now = detail.tracks.first(where: { $0.id == track.id }) {
+                liveHoursWorked = now.hoursWorked
+            }
         } catch {
             if self.error == nil { showFormError(error.localizedDescription, in: &self.error) }
         }
@@ -1148,7 +1174,7 @@ struct AddGoalSheet: View {
             showFormError("The connection dropped before the server answered, so it isn't known whether this goal was added. Check the track's goals for “\(specific.trimmingCharacters(in: .whitespacesAndNewlines))” before adding it again.", in: &self.error)
             busy = false
         } catch {
-            idem.answered()
+            idem.failed(error)
             showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
@@ -1311,9 +1337,8 @@ struct ExpenseSheet: View {
                 // Up to today: the server refuses an expense dated in the future.
                 DatePicker("Date", selection: $date, in: ...Date(), displayedComponents: .date)
                 CaptionedField(label: "Description (required)", text: $descriptionText, prompt: "Description")
-                CaptionedField(label: "Amount in US dollars (required)", text: $amount, prompt: "12.50", keyboard: .decimalPad)
-                Text("Included on the next invoice generated for this authorization.")
-                    .font(.caption).foregroundStyle(Color.secondaryText)
+                CaptionedField(label: "Amount in US dollars (required)", text: $amount, prompt: "12.50", keyboard: .decimalPad,
+                               hint: "Included on the next invoice generated for this authorization.")
             }
             .navigationTitle("Log expense")
             .navigationBarTitleDisplayMode(.inline)
@@ -1434,10 +1459,9 @@ struct SendReportSheet: View {
                     // The exact name the server requires stays visible above the field once
                     // typing starts (a placeholder alone disappeared).
                     CaptionedField(label: "Signature: type your full name (\(api.userName))", text: $signature,
-                                   prompt: api.userName)
+                                   prompt: api.userName,
+                                   hint: "The signature and timestamp are included on the report and recorded on the client's file.")
                         .autocorrectionDisabled()
-                    Text("The signature and timestamp are included on the report and recorded on the client's file.")
-                        .font(.caption).foregroundStyle(Color.secondaryText)
                 }
             }
             .navigationTitle("Email report")
@@ -1487,7 +1511,7 @@ struct SendReportSheet: View {
             showFormError("The connection dropped before the server answered, so it isn't known whether the report was sent. Check the client's notes for “Training report emailed to VRC” before sending it again.", in: &self.error)
             busy = false
         } catch {
-            idem.answered()
+            idem.failed(error)
             showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
@@ -1522,6 +1546,8 @@ struct TrackFormValues: Decodable {
     let mileageRate: Double
     let startDate: String?
     let expirationDate: String?
+    /// The saved version (4.29.0), sent back as save_track's loaded_at; nil from an older server.
+    let updatedAt: String?
 }
 
 struct TrackFormResponse: Decodable {
@@ -1580,7 +1606,14 @@ struct TrackEditSheet: View {
     @State private var error: String?
     @State private var busy = false
     @State private var askingDiscard = false
+    /// The form's values as loaded (or as Reload brought them in): what counts as changed here.
     @State private var original: [String: String] = [:]
+    /// The track as last loaded from the server (4.29.0): its updated_at is sent as loaded_at
+    /// and its values as orig, so a save never reverses a colleague's change made meanwhile.
+    @State private var opened: TrackFormValues?
+    /// The save was refused because someone else changed the track since it was loaded: Reload is offered.
+    @State private var conflict = false
+    @State private var reloading = false
 
     @State private var title = ""
     @State private var serviceType = "Assistive Technology"
@@ -1605,6 +1638,11 @@ struct TrackEditSheet: View {
          "hourly_rate": rate, "mileage_rate": mileage, "amendment_reason": reason, "start_date": startDate, "expiration_date": expirationDate]
     }
     private var hasChanges: Bool { form != nil && fields != original }
+    /// Only the fields changed here (4.29.0): all that a draft keeps and restores.
+    private var changedFields: [String: String] { fields.filter { original[$0.key] != $0.value } }
+    /// Marks a draft that holds only changed fields (4.29.0). An edit draft without it is from
+    /// an earlier build that kept every field, rates and hours included, and is not restored.
+    private static let draftFormat = "_changed_only"
 
     var body: some View {
         NavigationStack {
@@ -1632,18 +1670,36 @@ struct TrackEditSheet: View {
                                  asking: $askingDiscard) {
                 DraftStore.clear(key: draftKey, owner: api.userId); dismiss()
             }
-            // Only real edits are kept: the loaded server values are never saved as a "draft",
-            // or a later open could restore them over newer values and re-price work.
+            // Only real edits are kept (4.29.0: only the fields changed, with what each was when
+            // loaded): the loaded server values are never saved as a draft, or a later open could
+            // restore them over newer values and re-price work.
             .onChange(of: fields) { _ in
                 guard form != nil else { return }
-                if fields != original { DraftStore.save(fields, key: draftKey, owner: api.userId) }
-                else { DraftStore.clear(key: draftKey, owner: api.userId) }
+                let changed = changedFields
+                if changed.isEmpty { DraftStore.clear(key: draftKey, owner: api.userId); return }
+                var draft = changed
+                for key in changed.keys { draft["was." + key] = original[key] ?? "" }
+                draft[Self.draftFormat] = "1"
+                DraftStore.save(draft, key: draftKey, owner: api.userId)
             }
             .task { if form == nil { await load() } }
         }
     }
 
     @ViewBuilder private func formBody(_ form: TrackFormResponse) -> some View {
+        if conflict {
+            // 4.29.0: someone else saved this track since it was opened. What was typed stays in
+            // the form; Reload brings in their changes for the fields not edited here.
+            Section {
+                Button {
+                    Task { await reload() }
+                } label: {
+                    Text(reloading ? "Reloading…" : "Reload the track's saved details, keeping what you typed")
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
+                .disabled(reloading || busy)
+            }
+        }
         Section {
             Text("For \(form.clientName ?? clientName). Fields marked required must be filled in.").font(.callout)
         }
@@ -1673,15 +1729,46 @@ struct TrackEditSheet: View {
             CaptionedField(label: "Authorization number (required)", text: $authNumber)
             CaptionedField(label: "Funding agency (required)", text: $fundingAgency)
             CaptionedField(label: "Authorized hours, total granted (required)", text: $hours, keyboard: .decimalPad)
-            CaptionedField(label: "Hourly billing rate in dollars (required)", text: $rate, prompt: "For example, 85.00", keyboard: .decimalPad)
-            CaptionedField(label: "Mileage rate in dollars per mile", text: $mileage, prompt: "0 when travel is not billable", keyboard: .decimalPad)
+            // 4.29.0: what a new rate does is part of the rate fields (their hint) and shown once,
+            // under the amendment reason, never as a VoiceOver stop of its own.
+            CaptionedField(label: "Hourly billing rate in dollars (required)", text: $rate, prompt: "For example, 85.00", keyboard: .decimalPad,
+                           spokenHint: trackId == nil ? nil : Self.newRateHelp)
+            CaptionedField(label: "Mileage rate in dollars per mile", text: $mileage, prompt: "0 when travel is not billable", keyboard: .decimalPad,
+                           spokenHint: trackId == nil ? nil : Self.newRateHelp)
             if trackId != nil {
-                CaptionedField(label: "Amendment reason", text: $reason, prompt: "Why the authorization changed", lines: 1...3)
-                Text("A new hourly or mileage rate also applies to work on this track not yet invoiced, and re-prices its Draft invoices; submitted and paid invoices keep what they billed.")
-                    .font(.callout).foregroundStyle(Color.secondaryText)
+                CaptionedField(label: "Amendment reason", text: $reason, prompt: "Why the authorization changed", lines: 1...3,
+                               hint: Self.newRateHelp)
             }
             OptionalDayField(title: "Start date", text: $startDate)
             OptionalDayField(title: "Expiration date", text: $expirationDate)
+        }
+    }
+
+    /// The form's fields as the server has them for `t` (blank where the form would offer a default).
+    private static func values(of t: TrackFormValues, rsaDefault: String) -> [String: String] {
+        ["title": t.title, "service_type": t.serviceType, "bundle_id": String(t.bundleId ?? 0),
+         "rsa_category": t.rsaCategory ?? rsaDefault, "status": t.status, "report_cadence": t.reportCadence,
+         "auth_number": t.authNumber, "funding_agency": t.fundingAgency,
+         "authorized_hours": trackNumberString(t.authorizedHours, decimals: 2), "hourly_rate": trackNumberString(t.hourlyRate, decimals: 2),
+         "mileage_rate": trackNumberString(t.mileageRate, decimals: 3), "start_date": t.startDate ?? "", "expiration_date": t.expirationDate ?? ""]
+    }
+
+    private static let newRateHelp = "A new hourly or mileage rate also applies to work on this track not yet invoiced, and re-prices its Draft invoices; submitted and paid invoices keep what they billed."
+
+    /// The fields' readable names, as the server names them in a conflict.
+    private static let fieldNames: [String: String] = [
+        "title": "Track title", "service_type": "Service type", "rsa_category": "RSA service category", "bundle_id": "Service bundle",
+        "status": "Status", "report_cadence": "Automatic progress reports", "auth_number": "Authorization number",
+        "funding_agency": "Funding agency", "authorized_hours": "Authorized hours", "hourly_rate": "Hourly billing rate",
+        "mileage_rate": "Mileage rate", "start_date": "Start date", "expiration_date": "Expiration date",
+    ]
+
+    private static func words(_ names: [String]) -> String {
+        switch names.count {
+        case 0: return ""
+        case 1: return names[0]
+        case 2: return names[0] + " and " + names[1]
+        default: return names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
         }
     }
 
@@ -1709,22 +1796,65 @@ struct TrackEditSheet: View {
         do {
             let r: TrackFormResponse = try await api.call("save_track", query: query)
             if let t = r.track {
-                apply(["title": t.title, "service_type": t.serviceType, "bundle_id": String(t.bundleId ?? 0),
-                       "rsa_category": t.rsaCategory ?? (r.rsaCategories.first ?? ""), "status": t.status, "report_cadence": t.reportCadence,
-                       "auth_number": t.authNumber, "funding_agency": t.fundingAgency,
-                       "authorized_hours": trackNumberString(t.authorizedHours, decimals: 2), "hourly_rate": trackNumberString(t.hourlyRate, decimals: 2),
-                       "mileage_rate": trackNumberString(t.mileageRate, decimals: 3), "start_date": t.startDate ?? "", "expiration_date": t.expirationDate ?? ""])
+                apply(Self.values(of: t, rsaDefault: r.rsaCategories.first ?? ""))
+                opened = t
             } else {
                 serviceType = r.serviceTypes.contains("Assistive Technology") ? "Assistive Technology" : (r.serviceTypes.first ?? "")
                 rsaCategory = r.rsaCategories.contains("Rehabilitation Technology") ? "Rehabilitation Technology" : (r.rsaCategories.first ?? "")
             }
             original = fields
             form = r
-            if let draft = DraftStore.load(key: draftKey, owner: api.userId), draft != original {
-                apply(draft)
-                announceAfterDismiss("Your unsaved changes to this track were restored.")
-            }
+            restoreDraft()
         } catch { showFormError(error.localizedDescription, in: &loadError) }
+    }
+
+    /// Puts back only the fields changed here before (4.29.0). A field someone else has changed
+    /// since the draft was kept is still restored, but named, so it is checked before saving.
+    private func restoreDraft() {
+        guard let draft = DraftStore.load(key: draftKey, owner: api.userId) else { return }
+        // An edit draft from an earlier build kept every field: it is not restored over newer values.
+        guard draft[Self.draftFormat] != nil || trackId == nil else {
+            DraftStore.clear(key: draftKey, owner: api.userId); return
+        }
+        let typed = draft.filter { !$0.key.hasPrefix("was.") && $0.key != Self.draftFormat
+                                   && (Self.fieldNames[$0.key] != nil || $0.key == "amendment_reason") }
+            .filter { original[$0.key] != $0.value }
+        guard !typed.isEmpty else { DraftStore.clear(key: draftKey, owner: api.userId); return }
+        apply(typed)
+        let movedOn = typed.keys.filter { key in draft["was." + key].map { $0 != original[key] } ?? false }
+            .compactMap { Self.fieldNames[$0] }.sorted()
+        if movedOn.isEmpty {
+            announceAfterDismiss("Your unsaved changes to this track were restored.")
+        } else {
+            showFormError("Your unsaved changes to this track were restored. Someone else has changed \(Self.words(movedOn)) since you typed them; check those fields before saving.", in: &error)
+        }
+    }
+
+    /// After a conflict (4.29.0): loads the track as saved now. A field not edited here takes the
+    /// saved value (someone else's change); a field edited here keeps what was typed. The next
+    /// Save is then checked against this load.
+    private func reload() async {
+        guard let trackId, let form else { return }
+        reloading = true
+        defer { reloading = false }
+        do {
+            let r: TrackFormResponse = try await api.call("save_track", query: ["id": String(trackId)])
+            guard let t = r.track else { throw APIError.server("The track could not be found.") }
+            let typed = changedFields
+            let saved = Self.values(of: t, rsaDefault: r.rsaCategories.first ?? form.rsaCategories.first ?? "")
+            apply(saved)
+            apply(typed)
+            // The amendment reason is not a saved field: it counts as changed only when typed.
+            original = saved.merging(["amendment_reason": original["amendment_reason"] ?? ""]) { a, _ in a }
+            opened = t
+            self.form = r
+            conflict = false
+            // Said as news, not as an error (4.29.0).
+            error = nil
+            announce("Reloaded. The other person's changes are now in the fields you had not changed; the fields you changed still show what you typed. Check them, then save.")
+        } catch {
+            showFormError("Could not reload the track. \(error.localizedDescription) What you typed is still in the form.", in: &self.error)
+        }
     }
 
     private func save() async {
@@ -1743,17 +1873,40 @@ struct TrackEditSheet: View {
                                    "authorized_hours": hoursText, "hourly_rate": rateText, "mileage_rate": mileageText,
                                    "start_date": startDate, "expiration_date": expirationDate, "rsa_category": rsaCategory]
         if let trackId { body["id"] = trackId; body["amendment_reason"] = reason } else if let clientId { body["client_id"] = clientId }
+        // 4.29.0: the version loaded and the values the form opened with, so the server refuses
+        // the save (409) when someone else changed the track since, instead of reversing their
+        // amendment and re-pricing work. orig is the server's own values, not the form's defaults.
+        if trackId != nil, let opened, let loadedAt = opened.updatedAt, !loadedAt.isEmpty {
+            body["loaded_at"] = loadedAt
+            var orig = Self.values(of: opened, rsaDefault: "")
+            orig = orig.filter { body[$0.key] != nil }
+            body["orig"] = orig
+        }
         // A new track (4.28.0): a retry after a lost reply is recognised and not created twice.
         if trackId == nil { body["idem_key"] = idem.key(for: body) }
+        var refusedConflict = false
+        var changedNames: [String] = []
         do {
-            let r: TrackSaveResult = try await api.call("save_track", body: body)
+            let r: TrackSaveResult = try await api.call("save_track", body: body, refusal: { reply in
+                refusedConflict = (reply["conflict"] as? Bool) == true
+                changedNames = (reply["changed"] as? [String]) ?? []
+            })
             idem.answered()
+            conflict = false
             DraftStore.clear(key: draftKey, owner: api.userId)
             onSaved(r.message ?? (trackId == nil ? "Training track created." : "Training track updated."), r.track)
             dismiss()
         } catch {
             idem.failed(error)
             busy = false
+            if refusedConflict {
+                conflict = true
+                let said = changedNames.isEmpty
+                    ? "Someone else changed this track since you opened it."
+                    : "Someone else changed \(Self.words(changedNames)) since you opened this track."
+                showFormError(said + " Nothing was saved. Reload to bring in their changes; what you typed stays in the form.", in: &self.error)
+                return
+            }
             showFormError(trackId == nil ? IdemKey.message(for: error, what: "the track") : error.localizedDescription, in: &self.error)
         }
     }
@@ -1783,7 +1936,8 @@ extension WorkLogEntry {
         "\(formatDate(workDate)): \(hours.formatted()) hours" + (mileage > 0 ? ", \(mileage.formatted()) miles" : "") + (isBilled ? ", on an invoice" : ", not yet billed")
     }
 }
-struct WorkLogsResponse: Decodable { let logs: [WorkLogEntry] }
+/// `total` (4.29.0): every entry on the track, of which at most `limit` are listed (nil from an older server).
+struct WorkLogsResponse: Decodable { let logs: [WorkLogEntry]; let total: Int?; let limit: Int? }
 
 /// Correct an unbilled entry's hours and miles, with a reason (correct_log, 3.0.46).
 struct CorrectLogSheet: View {
@@ -1800,17 +1954,17 @@ struct CorrectLogSheet: View {
     init(entry: WorkLogEntry, onSaved: @escaping (String) -> Void) {
         self.entry = entry
         self.onSaved = onSaved
-        _hours = State(initialValue: entry.hours.formatted())
-        _miles = State(initialValue: entry.mileage.formatted())
+        // 4.29.0: without grouping ("1000", not "1,000", which was saved as 1 mile).
+        _hours = State(initialValue: String(format: "%g", entry.hours))
+        _miles = State(initialValue: String(format: "%g", entry.mileage))
     }
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 Section("Entry of \(formatDate(entry.workDate))") {
-                    CaptionedField(label: "Hours", text: $hours, keyboard: .decimalPad)
-                    CaptionedField(label: "Miles", text: $miles, keyboard: .decimalPad)
+                    CaptionedField(label: "Hours, 0 to 24", text: $hours, keyboard: .decimalPad)
+                    CaptionedField(label: "Miles, 0 to 1000", text: $miles, keyboard: .decimalPad)
                     CaptionedField(label: "Reason for the correction", text: $reason)
                 }
             }
@@ -1823,9 +1977,18 @@ struct CorrectLogSheet: View {
     }
 
     private func save() async {
-        guard let h = Double(hours.replacingOccurrences(of: ",", with: ".")), let m = Double(miles.isEmpty ? "0" : miles.replacingOccurrences(of: ",", with: ".")) else {
-            showFormError("Enter the hours and miles as numbers.", in: &error); return
+        // Read as Log hours reads them (4.29.0): digits with a period or one comma as the decimal
+        // point and no thousands separators, so "1,000" is never taken as 1.
+        guard let h = Self.parsedHours(hours) else {
+            showFormError("Hours: enter 0 to 24 hours in digits, like 1.5 or 2.75. Use a period or comma for the decimal point.", in: &error); return
         }
+        guard let mileageText = checkedAmount(miles, maxWholeDigits: 4),
+              mileageText.isEmpty || mileageText.range(of: "^[0-9]+(\\.[0-9]0?)?$", options: .regularExpression) != nil,
+              (Double(mileageText) ?? 0) <= 1000 else {
+            showFormError("Miles: enter the miles driven, from 0 to 1000, in digits with at most one decimal place, like 12.5. Use a period or comma for the decimal point; no thousands separators or units.", in: &error)
+            return
+        }
+        let m = Double(mileageText) ?? 0
         busy = true; error = nil
         defer { busy = false }
         do {
@@ -1833,6 +1996,15 @@ struct CorrectLogSheet: View {
             onSaved(r.message ?? "Entry corrected.")
             dismiss()
         } catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
+
+    /// Hours from 0 to 24 with up to two decimals, typed with a period or one comma.
+    private static func parsedHours(_ raw: String) -> Double? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
+        guard text.range(of: "^[0-9]{1,2}(\\.[0-9]{1,2})?$|^\\.[0-9]{1,2}$", options: .regularExpression) != nil,
+              raw.filter({ $0 == "," || $0 == "." }).count <= 1,
+              let value = Double(text), (0...24).contains(value) else { return nil }
+        return value
     }
 }
 

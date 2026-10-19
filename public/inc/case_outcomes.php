@@ -74,9 +74,30 @@ function referral_close(int $id, string $reason, string $note, int $actor): arra
 
 /** Reopen a Closed referral (closed by mistake): back to New. */
 function referral_reopen(int $id, int $actor): ?string {
-    $st = db()->prepare("UPDATE referrals SET status = 'New', closed_reason = NULL, closed_note = NULL, closed_at = NULL, closed_by = NULL WHERE id = ? AND status = 'Closed'");
-    $st->execute([$id]);
-    if ($st->rowCount() !== 1) return 'Only a closed referral can be reopened.';
+    // What closing settled is undone with it (4.29.0): the "Contact new referral" task is open
+    // again, due within the agency's time to contact from today, and a waitlist entry is Waiting,
+    // so the referral is back in the action center and is not reported as contacted.
+    $pdo = db();
+    $pdo->beginTransaction();
+    try {
+        $q = $pdo->prepare("SELECT * FROM referrals WHERE id = ? FOR UPDATE");
+        $q->execute([$id]);
+        $ref = $q->fetch();
+        if (!$ref || $ref['status'] !== 'Closed') { $pdo->rollBack(); return 'Only a closed referral can be reopened.'; }
+        $pdo->prepare("UPDATE referrals SET status = 'New', closed_reason = NULL, closed_note = NULL, closed_at = NULL, closed_by = NULL WHERE id = ?")->execute([$id]);
+        $days = function_exists('agency_contact_days') ? agency_contact_days(function_exists('referral_agency') ? referral_agency($ref) : null) : 3;
+        $pdo->prepare("UPDATE tasks SET status = 'Open', done_at = NULL, done_by = NULL, due_date = ? WHERE auto_key = ? AND status <> 'Open'")
+            ->execute([business_days_from($days), 'ref-contact-' . $id]);
+        try {
+            $pdo->prepare("UPDATE referral_waitlist SET status = 'Waiting', version = version + 1 WHERE referral_id = ? AND status = 'Closed'")->execute([$id]);
+        } catch (PDOException $e) {
+            if ((string)$e->getCode() !== '42S02') throw $e; // the waitlist table from a later migration
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
     audit($actor, 'referral.reopen', 'referral', $id, null);
     return null;
 }

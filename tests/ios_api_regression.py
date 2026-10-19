@@ -75,11 +75,28 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     static var json: String?            // a reply body other than the default ones
     static var urls: [String] = []      // every request's address, in order
     static var offline = false          // fail every request as with no signal
+    static var bodies: [Data] = []      // every request's body, in order
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         Self.count += 1
         Self.urls.append(request.url?.absoluteString ?? "")
+        if let body = request.httpBody {
+            Self.bodies.append(body)
+        } else if let stream = request.httpBodyStream {
+            stream.open()
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let n = stream.read(&buffer, maxLength: buffer.count)
+                if n <= 0 { break }
+                data.append(buffer, count: n)
+            }
+            stream.close()
+            Self.bodies.append(data)
+        } else {
+            Self.bodies.append(Data())
+        }
         if Self.offline {
             client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
             return
@@ -310,6 +327,37 @@ suffix = r'''
         api.finishSignIn(token: "test-four", userId: 4, name: "New server")
         check(((try? JSONSerialization.jsonObject(with: Data(contentsOf: testQueueURL)) as? [Any]) ?? []).isEmpty,
               "Signing in to a different server removes the previous server's offline entries")
+
+        // 4.29.0: "still being processed" (409 with processing true) is its own error, so the
+        // screens keep their retry key; an offline entry that gets it is kept, not marked refused.
+        StubProtocol.status = 409
+        StubProtocol.json = #"{"ok":false,"processing":true,"error":"This is still being processed. Try again in a moment."}"#
+        do { let _: OKResponse = try await api.call("add_note", body: ["idem_key": "x"]); fatalError("A processing reply was taken for an answer") }
+        catch APIError.processing(let said) { check(said.contains("still being processed"), "A 409 with processing true is reported as still being processed (the retry key is kept)") }
+        catch { fatalError("A processing reply gave \(error)") }
+        try api.enqueue("add_note", body: ["idem_key": UUID().uuidString, "client_id": 1, "subject": "Synthetic processing"], label: "Processing note")
+        await api.flushQueue()
+        let afterProcessing = try api.ownQueuedEntries()
+        check(afterProcessing.count == 1 && afterProcessing[0].lastError == nil && api.syncError?.contains("still being processed") == true,
+              "An offline entry answered \"still being processed\" stays queued with its key and is not marked refused")
+        // 4.29.0: a queued note is sent with the time it was saved on the phone (recorded_at);
+        // one kept longer than the server accepts goes without it.
+        StubProtocol.json = nil
+        StubProtocol.status = 200
+        StubProtocol.bodies = []
+        await api.flushQueue()
+        let sentNote = StubProtocol.bodies.compactMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            .first { ($0["subject"] as? String) == "Synthetic processing" }
+        let recordedAt = (sentNote?["recorded_at"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
+        let leftAfterNote = try api.ownQueuedEntries()
+        check(recordedAt.map { abs($0.timeIntervalSince(afterProcessing[0].savedAt ?? .distantPast)) < 2 } == true && leftAfterNote.isEmpty,
+              "A queued note is sent with recorded_at, the time it was saved on the phone")
+        let eightDays = API.PendingCall(action: "add_note", body: try JSONSerialization.data(withJSONObject: ["subject": "old"]), label: "Old",
+                                        owner: 4, savedAt: Date().addingTimeInterval(-8 * 86400))
+        let hoursEntry = API.PendingCall(action: "log_hours", body: try JSONSerialization.data(withJSONObject: ["hours": 1]), label: "Hours",
+                                         owner: 4, savedAt: Date())
+        check(API.uploadBody(eightDays) == eightDays.body && API.uploadBody(hoursEntry) == hoursEntry.body,
+              "recorded_at is left out for a note older than the server accepts, and never added to other entries")
 
         StubProtocol.status = 302
         do { let _: OKResponse = try await api.call("me"); fatalError("A refused redirect was taken for an answer") }

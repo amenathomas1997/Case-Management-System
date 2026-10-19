@@ -167,6 +167,8 @@ function at_save(string $kind,array $input,int $actor): int {
         $values=[];$stored=$old?at_values($old):[];
         foreach($def['fields'] as $f){
             $raw=$input[$f['key']]??'';
+            // Typed but unreadable to the browser (bad_input_script(), 4.29.0): refused, never stored as blank.
+            if(!empty($input[$f['key'].'_bad']))throw new DomainException($f['label'].': this was not filled in completely, so nothing was saved. Enter it in full'.($f['type']==='date'?', for example 10/31/2026,':'').' or clear it.');
             if($old && !in_array($f['type'],['text','textarea','url','date','money','score','integer','select'],true) && is_scalar($raw) && trim((string)$raw)!=='' && trim((string)$raw)===($stored[$f['key']]??'')){
                 // A reference the record already holds is kept without re-checking it
                 // against this editor's choices: they may not be allowed to list it

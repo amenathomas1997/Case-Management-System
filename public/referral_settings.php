@@ -128,7 +128,7 @@ $servicesJoined = mb_strlen(implode('; ', array_column($cfg['services'], 'en')))
 page_header('Referral form settings', $user, 'admin', [['admin.php', 'Administration']]);
 ?>
 <h1>Referral form settings</h1>
-<p class="muted">Decide what the public <a href="community_referral.php">referral form</a> asks. One option per line; add a Spanish label after a vertical bar, for example <code>Assessment | Evaluación</code>. Options already chosen on past referrals stay on those records even if you remove them here. <a href="admin.php#forms-h">Back to My Account</a></p>
+<p class="muted">Decide what the public <a href="community_referral.php">referral form</a> asks. One option per line; add a Spanish label after a vertical bar, for example <code>Assessment | Evaluación</code>. Options already chosen on past referrals stay on those records even if you remove them here. <a href="admin.php#forms-h">Back to Administration, Forms &amp; email</a></p>
 <?= form_error_summary(['list_purposes' => 'Referral purposes', 'list_services' => 'Assistive technology services', 'list_needs' => 'Specific needs', 'roles' => 'Who may refer', 'hint_purpose_en' => 'Purpose hint (English)', 'hint_purpose_es' => 'Purpose hint (Spanish)',
     'hint_services_en' => 'Services hint (English)', 'hint_services_es' => 'Services hint (Spanish)', 'hint_needs_en' => 'Needs hint (English)', 'hint_needs_es' => 'Needs hint (Spanish)'], ['roles' => 'roles-group']) ?>
 <?php if ($cfg['customized']): ?><p><span class="badge badge-active">customized</span> This form differs from the built-in one.</p><?php endif; ?>

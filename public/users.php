@@ -112,13 +112,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('users.php?id=' . $uid);
         }
         $emailChanged = $email !== strtolower($target['email']);
+        // The Microsoft sign-in link goes with a changed email only while the account is (or is being
+        // made) active (4.29.0): a switched-off account keeps it, so its Microsoft identity stays
+        // known and is refused at sign-in rather than becoming free to link or match again.
+        $clearOid = $emailChanged && $active;
         try {
             change_user_access($uid, (int)$user['id'], ['role' => $role, 'group_id' => $gid, 'is_active' => $active],
-                function (PDO $db) use ($name, $email, $role, $gid, $hours, $active, $uid, $emailChanged, $dates, $target): void {
+                function (PDO $db) use ($name, $email, $role, $gid, $hours, $active, $uid, $emailChanged, $clearOid, $dates, $target): void {
             // Switching someone back on (a rehire) ends an earlier exit request (4.16.0).
             if ($active && !(int)$target['is_active']) $db->prepare('UPDATE users SET exit_requested_at = NULL WHERE id = ?')->execute([$uid]);
             $db->prepare('UPDATE users SET name = ?, email = ?, role = ?, group_id = ?, weekly_hours = ?, is_active = ?'
-                . ($emailChanged ? ', entra_oid = NULL' : '') . ' WHERE id = ?')
+                . ($clearOid ? ', entra_oid = NULL' : '') . ' WHERE id = ?')
                 ->execute([$name, $email, $role, $gid, $hours, $active, $uid]);
             // Their office (4.22.0), when the organisation uses offices.
             // One closed since the form was opened keeps what is stored rather than clearing it.
@@ -148,23 +152,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             redirect('users.php?id=' . $uid);
         }
+        $offersWithdrawn = 0;
         if (!$active) {
             db()->prepare('DELETE FROM api_tokens WHERE user_id = ? AND wipe_requested_at IS NULL')->execute([$uid]);
+            // Times still offered with them on clients' requests are withdrawn (4.29.0): a client
+            // could otherwise confirm a session with an account nobody uses.
+            $offersWithdrawn = offer_withdraw_for_staff($uid, $name . '\'s account was switched off');
         }
         // A changed email ends the person's browser sessions (4.27.0).
         if ($emailChanged) user_session_epoch_bump($uid);
         audit($user['id'], 'user.update', 'user', $uid,
             "{$name} <{$email}> role={$role} group=" . ($gid ?? 'legacy') . ' active=' . $active
-            . ($emailChanged ? ' (email changed; Microsoft sign-in link reset)' : '')
+            . ($emailChanged ? ' (email changed' . ($clearOid ? '; Microsoft sign-in link reset' : '; account off, Microsoft sign-in link kept') . ')' : '')
             . ($emailChanged || !$active ? '; unused reset links and sign-in codes cancelled' : ''));
         // A Microsoft account is never linked again automatically: the person
         // signs in with a password, then links it from My Account.
-        flash('User updated.' . ($emailChanged && !empty($target['entra_oid'])
+        flash('User updated.' . ($clearOid && !empty($target['entra_oid'])
                 ? ' The email changed, so their Microsoft sign-in link was removed. "Sign in with Microsoft" will not work for them until they sign in with their password'
                   . ' (if they have none, use "Email password reset link" below) and choose "Link Microsoft account" under My Account.'
                 : '')
             . ($emailChanged ? ' Any password reset link or sign-in code sent to the old address no longer works.' : '')
-            . (!$active ? ' They were signed out of the mobile app.' : ''));
+            . (!$active ? ' They were signed out of the mobile app.' : '')
+            . ($offersWithdrawn ? ' ' . $offersWithdrawn . ' time(s) offered with them on client requests were withdrawn; each client\'s instructor, or the administrators, were told to offer new times.' : ''));
         redirect('users.php?id=' . $uid);
     }
 
@@ -364,6 +373,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             flash('The caseload transfer could not be completed; no changes were made. Please try again.', 'error');
             redirect('users.php?id=' . $uid);
         }
+        // Times still offered with them on clients' requests are withdrawn (4.29.0): a client
+        // choosing one later would take the session back to the account being emptied.
+        $offersWithdrawn = offer_withdraw_for_staff($uid, $target['name'] . '\'s caseload was transferred to ' . $toUser['name']);
         audit($user['id'], 'user.transfer', 'user', $uid, "caseload -> {$toUser['name']} ({$moved} client(s), {$refsMoved} referral(s)"
             . ($refsQueued || $tasksQueued ? ", {$refsQueued} open referral(s) and {$tasksQueued} task(s) about them returned to the queue" : '')
             . ', ' . count($movedSessions) . ' upcoming session(s) moved'
@@ -407,6 +419,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 : " The email listing the sessions could not be sent to {$toUser['name']}: tell them, and point them to their Schedule page.";
             $msg .= $sentOld ? " {$target['name']} was emailed a notice that they were moved." : " The notice to {$target['name']} could not be emailed.";
         }
+        if ($offersWithdrawn) $msg .= " {$offersWithdrawn} time(s) offered with {$target['name']} on client requests were withdrawn; each client's instructor was told to offer new times.";
         flash($msg);
         if ($leftSessions) {
             // The transfer worked; this is what is still to do, so it is not an error.
@@ -526,7 +539,7 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
       <div class="field"><label for="u_priv">Privacy training completed on (renewed yearly)</label>
         <input type="date" id="u_priv" name="privacy_training_on" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('privacy_training_on', (string)($edit['privacy_training_on'] ?? ''))) ?>" <?= field_aria('privacy_training_on') ?>><?= field_error('privacy_training_on') ?></div>
       <div class="field"><label><input type="checkbox" name="is_active" value="1" <?= $checkedActive ? 'checked' : '' ?>>
-        Active <span class="hint">unchecking blocks sign-in immediately and signs the app out</span></label></div>
+        Active <span class="hint">unchecking blocks sign-in immediately, signs the app out and withdraws times offered with them on client requests</span></label></div>
     </div>
     <button type="submit" name="save_user" value="1" class="btn btn-primary">Save changes</button>
   </form>
@@ -583,7 +596,7 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
     <button type="submit" name="request_exit" value="1" class="btn btn-secondary">Ask <?= h($edit['name']) ?> to sign the exit acknowledgement</button></form>
   <?php endif; ?>
   <h3 id="transfer-h">Caseload transfer</h3>
-  <p class="hint">Open referrals go only to someone with access to referrals; otherwise they return to the unassigned referral queue. Someone limited to their own caseload receives only the sessions for clients they receive; any others stay here and are listed for you to rebook. Both people are emailed about the sessions that move.</p>
+  <p class="hint">Open referrals go only to someone with access to referrals; otherwise they return to the unassigned referral queue. Someone limited to their own caseload receives only the sessions for clients they receive; any others stay here and are listed for you to rebook. Both people are emailed about the sessions that move. Times still offered with them on client requests are withdrawn, and each client's new instructor is told to offer new times.</p>
   <?= form_error_summary(['to_user' => 'Move the caseload to']) ?>
   <form method="post" action="users.php" class="inline-form"><?= csrf_field() ?>
     <input type="hidden" name="uid" value="<?= (int)$edit['id'] ?>">

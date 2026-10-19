@@ -866,6 +866,12 @@ try {
     require __DIR__.'/v428_admin_cases.php';
     require __DIR__.'/v428_public_cases.php';
     require __DIR__.'/v428_jobs_cases.php';
+    require __DIR__.'/v429_auth_cases.php';
+    require __DIR__.'/v429_api_cases.php';
+    require __DIR__.'/v429_cases_cases.php';
+    require __DIR__.'/v429_admin_cases.php';
+    require __DIR__.'/v429_public_cases.php';
+    require __DIR__.'/v429_jobs_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 
@@ -928,7 +934,7 @@ try {
     $db->exec('SET FOREIGN_KEY_CHECKS=1');
     $db->exec((string)file_get_contents($root.'/tests/fixtures/schema_3.0.7.sql'));
     $db->exec("INSERT INTO clients (id,name,email,counselor_email) VALUES (1,'Upgraded synthetic client','upgraded-client@example.invalid','upgraded-counselor@example.invalid'),(2,'Upgraded client without a counselor',NULL,NULL),(3,'Upgraded client with a blank counselor',NULL,'')");
-    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37','3.0.38','3.0.39','3.0.40','3.0.42','3.0.43','3.0.44','3.0.45','3.0.47','3.0.48','3.0.49','3.0.50','3.0.51','3.0.52','3.0.53','3.0.54','3.0.55','4.0.0','4.1.0','4.2.0','4.3.0','4.4.0','4.5.0','4.6.0','4.7.0','4.8.0','4.9.0','4.10.0','4.11.0','4.15.0','4.16.0','4.17.0','4.20.0','4.21.0','4.22.0','4.23.0','4.24.0','4.25.0','4.27.0','4.28.0'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
+    foreach(['3.0.8','3.0.9','3.0.10','3.0.12','3.0.16','3.0.21','3.0.27','3.0.28','3.0.31','3.0.34','3.0.35','3.0.36','3.0.37','3.0.38','3.0.39','3.0.40','3.0.42','3.0.43','3.0.44','3.0.45','3.0.47','3.0.48','3.0.49','3.0.50','3.0.51','3.0.52','3.0.53','3.0.54','3.0.55','4.0.0','4.1.0','4.2.0','4.3.0','4.4.0','4.5.0','4.6.0','4.7.0','4.8.0','4.9.0','4.10.0','4.11.0','4.15.0','4.16.0','4.17.0','4.20.0','4.21.0','4.22.0','4.23.0','4.24.0','4.25.0','4.27.0','4.28.0','4.29.0'] as $version) $migrate($root.'/dist/migrations/mig_'.$version.'.sql');
     check($shape()===$installed,'A real 3.0.7 database upgraded with mig_3.0.8, mig_3.0.9, mig_3.0.10, mig_3.0.12, mig_3.0.16 and mig_3.0.21 has exactly the fresh-install schema, defaults included');
     check((int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=1')->fetchColumn()===3,'The 3.0.21 upgrade keeps every existing client\'s email confirmed');
     $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");
@@ -936,7 +942,13 @@ try {
     check($shape()===$installed && (int)$db->query('SELECT email_verified FROM clients WHERE id=1')->fetchColumn()===0,
         'Running mig_3.0.21 again changes nothing: the schema stays the same and a client email waiting for confirmation stays unconfirmed');
     $db->exec("UPDATE clients SET email_verified=0, counselor_verified=0 WHERE id=2");
+    // 4.29.0: mig_3.0.31 confirms only clients created before 3.0.55 left imports unconfirmed on purpose.
+    $db->exec("UPDATE clients SET created_at='2026-10-01 00:00:00' WHERE email_verified=0");
+    $db->exec("UPDATE clients SET email_verified=0 WHERE id=1");
+    $db->exec("UPDATE clients SET created_at=NOW() WHERE id=1");
     $migrate($root.'/dist/migrations/mig_3.0.31.sql');
+    check((int)$db->query('SELECT email_verified FROM clients WHERE id=1')->fetchColumn()===0,'Running mig_3.0.31 again never confirms an address on a client added after 3.0.55');
+    $db->exec("UPDATE clients SET email_verified=1 WHERE id=1");
     check($shape()===$installed && (int)$db->query('SELECT COUNT(*) FROM clients WHERE email_verified=0')->fetchColumn()===0
         && (int)$db->query('SELECT counselor_verified FROM clients WHERE id=2')->fetchColumn()===0,
         'mig_3.0.31 confirms client emails waiting for confirmation and leaves counselor emails alone');

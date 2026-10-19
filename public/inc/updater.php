@@ -274,14 +274,15 @@ function updater_install(string $zipPath, array $plan, int $userId): array {
     $backupPath = updater_dir() . '/backup-' . APP_VERSION . '-to-' . $plan['version'] . '-' . date('Ymd-His') . '.zip';
     $b = new ZipArchive();
     $added = [];
+    $modes = []; // 4.29.0: each file's mode, so a rollback keeps cron/backup.sh executable
     $ok = $b->open($backupPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true;
     foreach (array_merge(array_keys($targets), $plan['remove']) as $path) {
         if (!$ok) break;
         [$area, $rel] = explode('/', $path, 2);
         $f = $base($area) . '/' . $rel;
-        if (is_file($f)) $ok = $b->addFile($f, $path); else $added[] = $path;
+        if (is_file($f)) { $ok = $b->addFile($f, $path); $modes[$path] = fileperms($f) & 0777; } else $added[] = $path;
     }
-    if ($ok) $ok = $b->addFromString('added.json', json_encode($added)) && $b->close();
+    if ($ok) $ok = $b->addFromString('added.json', json_encode($added)) && $b->addFromString('modes.json', json_encode($modes)) && $b->close();
     if (!$ok) { $z->close(); updater_clean_temps(array_column($targets, 0)); throw new RuntimeException('The backup of the current files could not be made, so nothing was changed.'); }
     $report[] = 'The current files were copied to ' . basename($backupPath) . ' in the private updates folder.';
     // 3. The database changes the new version needs, from the package's own migrations (they only add).
@@ -346,9 +347,10 @@ function updater_restore(string $backupPath): bool {
     $b = new ZipArchive();
     if ($b->open($backupPath) !== true) return false;
     $ok = true;
+    $modes = (array)json_decode((string)$b->getFromName('modes.json'), true);
     for ($i = 0; $i < $b->numFiles; $i++) {
         $name = (string)$b->getNameIndex($i);
-        if ($name === 'added.json' || !updater_safe_path($name)) continue;
+        if ($name === 'added.json' || $name === 'modes.json' || !updater_safe_path($name)) continue;
         [$area, $rel] = explode('/', $name, 2);
         $base = $area === 'cron' ? $cron : $root;
         $data = $b->getFromIndex($i);
@@ -357,7 +359,11 @@ function updater_restore(string $backupPath): bool {
         if (is_file($t) && hash_file('sha256', $t) === hash('sha256', $data)) continue; // never changed
         $tmp = $t . '.cms-update-tmp';
         if (!is_dir(dirname($t))) @mkdir(dirname($t), 0755, true);
-        if (@file_put_contents($tmp, $data) !== strlen($data) || !@rename($tmp, $t)) { @unlink($tmp); $ok = false; continue; }
+        // The mode recorded when the backup was made (4.29.0); a backup made before that keeps the
+        // current file's mode, and a cron shell script stays executable either way (cron runs it directly).
+        $mode = isset($modes[$name]) && is_int($modes[$name]) ? $modes[$name] & 0777 : (is_file($t) ? fileperms($t) & 0777 : 0644);
+        if ($area === 'cron' && str_ends_with($rel, '.sh')) $mode |= 0700;
+        if (@file_put_contents($tmp, $data) !== strlen($data) || !@chmod($tmp, $mode) || !@rename($tmp, $t)) { @unlink($tmp); $ok = false; continue; }
         if (function_exists('opcache_invalidate')) @opcache_invalidate($t, true);
     }
     foreach ((array)json_decode((string)$b->getFromName('added.json'), true) as $name) {

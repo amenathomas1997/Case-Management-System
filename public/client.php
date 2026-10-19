@@ -173,7 +173,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['purge_client'])) {
         // titles, scores) is removed with it. Entries are found by the record they
         // were written against: the client and each record removed below (the
         // incidents kept above, and reuse intakes kept for the device, keep theirs).
-        $auditRefs = ['client' => [$id], 'track' => $purgeTrackIds];
+        // Records merged into this one before 4.29.0 kept their audit entries under their own
+        // (removed) id: those ids are read from this record's merge entries, a merge of a merge
+        // included, so their details are cleared too. Ids still on file are never taken.
+        $mergedIds = [];
+        $mergeQ = $pdo->prepare("SELECT detail FROM audit_log WHERE action = 'client.merge' AND entity = 'client' AND entity_id = ?");
+        $onFile = $pdo->prepare('SELECT 1 FROM clients WHERE id = ?');
+        for ($todo = [$id]; $todo && count($mergedIds) < 500;) {
+            $mergeQ->execute([array_shift($todo)]);
+            foreach ($mergeQ->fetchAll(PDO::FETCH_COLUMN) as $md) {
+                if (!preg_match('/^merged #(\d+) /', (string)$md, $mm)) continue;
+                $mid = (int)$mm[1];
+                if ($mid === $id || isset($mergedIds[$mid])) continue;
+                $onFile->execute([$mid]);
+                if ($onFile->fetchColumn()) continue;
+                $mergedIds[$mid] = true;
+                $todo[] = $mid;
+            }
+        }
+        $mergedIds = array_keys($mergedIds);
+        $auditRefs = ['client' => [$id, ...$mergedIds], 'track' => $purgeTrackIds];
         foreach ([
             'goal' => 'SELECT x.id FROM smart_goals x JOIN training_tracks t ON t.id = x.track_id WHERE t.client_id = ?',
             'homework' => 'SELECT x.id FROM homework x JOIN training_tracks t ON t.id = x.track_id WHERE t.client_id = ?',
@@ -253,7 +272,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['purge_client'])) {
         // too. Links are matched whole, so client 12 never removes client 120's.
         $rq = $pdo->prepare('SELECT id FROM referrals WHERE client_id = ?');
         $rq->execute([$id]);
-        $noteLinks = ['client.php?id=' . $id, 'messages.php?client=' . $id, 'portal_requests.php?client=' . $id];
+        $noteLinks = [];
+        // Signed-document and homework-help alerts name the client too (4.29.0), and so may
+        // alerts still linked to a record merged into this one before merges re-linked them.
+        foreach ([$id, ...$mergedIds] as $nid) array_push($noteLinks, 'client.php?id=' . $nid, 'messages.php?client=' . $nid, 'portal_requests.php?client=' . $nid,
+            'signatures.php?client=' . $nid, 'workflows.php?view=homework&client_id=' . $nid);
+        // Session alerts quote the client's first name and link to the session.
+        foreach ($auditRefs['session'] ?? [] as $sid) $noteLinks[] = 'schedule.php#s-' . (int)$sid;
         foreach ($rq->fetchAll(PDO::FETCH_COLUMN) as $rid) $noteLinks[] = 'referrals.php?view=' . (int)$rid;
         // AT records still tied to the client cascade away with it (reuse intakes
         // were detached above and keep their reminders).
@@ -355,6 +380,13 @@ function can_edit_note(array $note, array $user): bool {
     // A note past the edit window (30 days, inc/records_privacy.php) is locked: a later
     // change is an addendum.
     return note_editable($note, (int)$user['id']);
+}
+
+/** The version of a note an edit form was opened on (4.29.0): its text and when it was last
+ *  saved. An edit sent from an older form is refused instead of silently undoing a newer edit. */
+function client_note_version(array $n): string {
+    return hash('sha256', json_encode([(string)($n['updated_at'] ?? ''), (string)$n['note_type'], (string)($n['note_format'] ?? ''), (string)$n['subject'], (string)$n['body'],
+        (string)($n['birp_behavior'] ?? ''), (string)($n['birp_intervention'] ?? ''), (string)($n['birp_response'] ?? ''), (string)($n['birp_plan'] ?? '')]));
 }
 
 /* A collapsed <details> opens when the URL's #fragment points inside it, so links
@@ -492,6 +524,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
                     if ($hwRows = posted_note_homework($_POST)) $_SESSION['client_note_homework'] = ['client' => $id, 'rows' => $hwRows];
                     flash($kept, 'error');
                     redirect("client.php?id=$id&tab=notes&addendum_to=$noteId#addnote-h");
+                }
+                // Opened on an older version (4.29.0): someone saved the note since. Nothing is
+                // replaced; the typed text comes back in the form, which now carries the current
+                // version, so saving again is a choice made knowing the note changed.
+                $openedOn = is_string($_POST['note_version'] ?? null) ? $_POST['note_version'] : '';
+                if ($openedOn !== '' && !hash_equals(client_note_version($kept), $openedOn)) {
+                    $pdo->rollBack();
+                    $by = db()->prepare('SELECT name FROM users WHERE id = ?');
+                    $by->execute([(int)($kept['updated_by'] ?? $kept['author_id'] ?? 0)]);
+                    $byName = (string)($by->fetchColumn() ?: 'Someone else');
+                    keep_input();
+                    unset($_SESSION['old_input']['note_version']);
+                    if ($hwRows = posted_note_homework($_POST)) $_SESSION['client_note_homework'] = ['client' => $id, 'rows' => $hwRows];
+                    flash($byName . ' changed this note' . (!empty($kept['updated_at']) ? ' at ' . date('g:i A', strtotime((string)$kept['updated_at'])) : '')
+                        . ' after you opened it, so your changes were not saved. Your text is in the form below; the note as it is now is in the list of notes. Save again to replace their version with yours.', 'error');
+                    redirect("client.php?id=$id&tab=notes&edit_note=$noteId#addnote-h");
                 }
                 // A note type since removed from the list is kept when it is sent back unchanged (4.5.0).
                 if (($_POST['note_type'] ?? '') === (string)$note['note_type']) $type = (string)$note['note_type'];
@@ -1318,8 +1366,7 @@ if ($hasA11y): ?>
   <?php if (ai_feature_enabled('draft')): ?>
   <form method="post" action="<?= $tabUrl('overview') ?>" class="inline-form">
     <?= csrf_field() ?>
-    <span class="hint">Summarizes tracks, goals, progress, assessments, and recent notes.</span>
-    <button type="submit" name="ai_do" value="case" class="btn btn-secondary btn-sm">Draft case summary with AI</button>
+    <button type="submit" name="ai_do" value="case" class="btn btn-secondary btn-sm">Draft case summary with AI<span class="visually-hidden">: summarizes tracks, goals, progress, assessments, and recent notes</span></button>
   </form>
   <?php endif; ?>
   <?php if (ai_feature_enabled('progress')): ?><a class="btn btn-secondary btn-sm" href="progress_review.php?client=<?= $id ?>">AI progress review</a><?php endif; ?>
@@ -1674,6 +1721,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     echo form_error_summary($noteSumLabels, $noteSumAnchors); ?>
     <p class="hint">Fields marked * are required.</p>
     <?php if ($editNote): ?><input type="hidden" name="note_id" value="<?= (int)$editNote['id'] ?>">
+    <input type="hidden" name="note_version" value="<?= h(preg_match('/^[0-9a-f]{64}$/D', $noteIn('note_version')) ? $noteIn('note_version') : client_note_version($editNote)) ?>">
     <?php elseif ($addendumParent): ?><input type="hidden" name="addendum_to" value="<?= (int)$addendumParent['id'] ?>"><?php endif; // The same key while this note is being written (a refused save, an AI button), a new one after it is saved; an edit carries one too (4.28.0), so sending it twice adds its homework once. ?>
     <input type="hidden" name="idem_key" value="<?= h(preg_match('/^[0-9a-fA-F-]{36}$/D', $noteIn('idem_key')) ? $noteIn('idem_key') : new_note_key()) ?>">
     <div class="field">
@@ -1788,8 +1836,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     <?php endif; ?>
     <button type="submit" name="add_note" value="1" class="btn btn-primary"><?= $editNote ? 'Save changes' : ($addendumParent ? 'Save addendum' : 'Save note') ?></button>
     <?php if (ai_feature_enabled('draft')): ?>
-    <span class="hint">Pick a format, paste your messy session notes in the box, then "Generate structured note" — it drafts the sections, flags anything missing, and pulls out homework for you to review before saving.</span>
-    <button type="submit" name="ai_do" value="generate" class="btn btn-secondary" formnovalidate>Generate structured note</button>
+    <button type="submit" name="ai_do" value="generate" class="btn btn-secondary" formnovalidate>Generate structured note<span class="visually-hidden">: from the session notes pasted in the box, in the chosen format. It drafts the sections, flags anything missing, and pulls out homework for you to review before saving</span></button>
     <button type="submit" name="ai_do" value="format" class="btn btn-secondary" formnovalidate>Format with AI</button>
     <button type="submit" name="ai_do" value="note" class="btn btn-secondary" formnovalidate>Clean up with AI</button>
     <?php endif; ?>

@@ -149,9 +149,14 @@ fun MoveDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, onCancel: () -
     val start = s.str("start_at") ?: ""
     val startTs = parseServer(start)?.time ?: 0L
     val endTs = parseServer(s.str("end_at"))?.time ?: 0L
-    var date by rememberSaveable { mutableStateOf(start.take(10)) }
-    var time by rememberSaveable { mutableStateOf(timeText(start)) }
-    var duration by rememberSaveable { mutableStateOf(hoursText(if (endTs > startTs) Math.round((endTs - startTs) / 900_000.0) / 4.0 else 1.0)) }
+    // Kept by the session's id (4.29.0): a later Move for another session never takes these.
+    val sid = s.optInt("id")
+    var date by rememberSaveable(sid, key = org.casemanagement.app.dialogKey("move-date", sid)) { mutableStateOf(start.take(10)) }
+    var time by rememberSaveable(sid, key = org.casemanagement.app.dialogKey("move-time", sid)) { mutableStateOf(timeText(start)) }
+    var duration by rememberSaveable(sid, key = org.casemanagement.app.dialogKey("move-length", sid)) { mutableStateOf(hoursText(if (endTs > startTs) Math.round((endTs - startTs) / 900_000.0) / 4.0 else 1.0)) }
+    var dateError by remember { mutableStateOf<String?>(null) }
+    var timeError by remember { mutableStateOf<String?>(null) }
+    var lengthError by remember { mutableStateOf<String?>(null) }
     var warnings by remember { mutableStateOf<List<String>>(emptyList()) }
     // 4.28.0: the server's hash of the warnings shown; Move anyway sends it back, so it covers exactly those.
     var warningsHash by remember { mutableStateOf<String?>(null) }
@@ -164,9 +169,12 @@ fun MoveDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, onCancel: () -
         warningsHash = r.str("warnings_hash")
     }
     fun send(confirm: Boolean) {
+        if (busy) return
         val t = time24(time); val d = number(duration)
-        if (!DAY.matches(date.trim()) || t == null) { error = "Enter the date as year-month-day and a time such as 2:30 PM."; return }
-        if (d == null || d < 0.25 || d > 12) { error = "Enter a length from 0.25 to 12 hours."; return }
+        dateError = if (!DAY.matches(date.trim())) "Enter the date as year-month-day, such as ${today()}." else null
+        timeError = if (t == null) "Enter a time such as 2:30 PM." else null
+        lengthError = if (d == null || d < 0.25 || d > 12) "Enter a length from 0.25 to 12 hours." else null
+        (dateError ?: timeError ?: lengthError)?.let { error = it; return }
         scope.launchSave({ busy = it }, { error = it }) {
             val b = JSONObject().put("session_id", s.optInt("id")).put("start_at", "${date.trim()} $t").put("duration", d).put("confirm", confirm)
             if (confirm) warningsHash?.let { b.put("confirm_hash", it) }
@@ -181,18 +189,18 @@ fun MoveDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, onCancel: () -
         }
     }
     AlertDialog(
-        onDismissRequest = onCancel,
+        onDismissRequest = { if (!busy) onCancel() },
         title = { Text("Move: " + s.optString("client"), modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field("Date", date, { date = it; clearWarnings() }, hint = "year-month-day")
-                Field("Start time", time, { time = it; clearWarnings() }, hint = "such as 2:30 PM")
-                Field("Length in hours", duration, { duration = it; clearWarnings() }, keyboard = KeyboardType.Decimal)
+                Field("Date", date, { date = it; clearWarnings() }, hint = "year-month-day", error = dateError)
+                Field("Start time", time, { time = it; clearWarnings() }, hint = "such as 2:30 PM", error = timeError)
+                Field("Length in hours", duration, { duration = it; clearWarnings() }, keyboard = KeyboardType.Decimal, error = lengthError)
                 ErrorText(error)
                 warnings.forEach { Text(it) }
             }
         },
-        confirmButton = { TextButton(enabled = !busy, onClick = { send(warnings.isNotEmpty()) }) { Text(if (warnings.isNotEmpty()) "Move anyway" else "Move") } },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        confirmButton = { TextButton(enabled = !busy, onClick = { send(warnings.isNotEmpty()) }) { Text(if (busy) "Saving…" else if (warnings.isNotEmpty()) "Move anyway" else "Move") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = onCancel) { Text("Cancel") } },
     )
 }

@@ -151,5 +151,5 @@ putenv('CMS_TEST_FILES'); putenv('CMS_TEST_SESSION_ADD');
 // ---- Restore instructions: the key file for authenticator seeds is copied by hand, never emailed ----
 $off428=(string)file_get_contents($root.'/cron/weekly_offsite.php');
 check(str_contains($off428,'meeting_tokens.key file is never in the backup') && str_contains($off428,'reset_2fa.php')
-    && str_contains((string)file_get_contents($root.'/dist/restore.php'),"Copy meeting_tokens.key from the old server's private folder") && str_contains((string)file_get_contents($root.'/cron/backup.sh'),'cron/reset_2fa.php'),
+    && str_contains((string)file_get_contents($root.'/dist/restore.php'),"copy the old meeting_tokens.key back into the private directory beside config.php") && str_contains((string)file_get_contents($root.'/cron/backup.sh'),'cron/reset_2fa.php'),
     'The restore instructions say to copy the key file across, or to use reset_2fa.php without it');

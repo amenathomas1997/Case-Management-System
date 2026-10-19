@@ -92,7 +92,8 @@ function wa_load(int $id, array $user): ?array {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assessment'])) {
     $cid = (int)($_POST['client_id'] ?? 0);
     if ($cid > 0) scope_check_client_id($cid, $user);
-    $errors = ($cid <= 0 ? ['client_id' => 'Choose a client.'] : []) + wa_field_errors();
+    // A client merged away or purged while the form was open is refused on its field (4.29.0).
+    $errors = ($cid <= 0 ? ['client_id' => 'Choose a client.'] : (!client_still_on_file($cid) ? ['client_id' => 'That client is no longer on file (merged or removed). Choose the client again.'] : [])) + wa_field_errors();
     // The form is novalidate: keep everything that was typed and flag each field.
     if ($errors) { keep_input(); keep_field_errors($errors); redirect('accommodations.php'); }
     // The same form sent twice (Enter pressed again while it loads) creates the

@@ -152,13 +152,16 @@ fun ClientAiScreen(api: Api, nav: NavHostController, clientId: Int) {
         save = { JSONObject(it).toString() },
         restore = { t -> JSONObject(t).let { f -> f.keys().asSequence().associateWith { f.optString(it) } } },
     )) { mutableStateOf(emptyMap()) }
-    var saved by remember { mutableStateOf(false) }
+    // 4.29.0: kept across rotation, so a saved assessment never offers Save again (a second record).
+    var saved by rememberSaveable { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var asking by remember { mutableStateOf(false) }
     val idem = rememberSaveable { UUID.randomUUID().toString() }
     // 4.28.0: the assessment's own retry key (see sendOnce).
     var assessKey by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    HoldBackWhileSaving(busy)
     Page {
         if (tools.isEmpty()) { Text("No AI help for clients is switched on for your account."); return@Page }
         Choice("AI help", tool, tools) { tool = it; resultText = null; error = null; saved = false }
@@ -168,10 +171,12 @@ fun ClientAiScreen(api: Api, nav: NavHostController, clientId: Int) {
             Field("What they have tried", tried, { tried = it }, hint = "optional", singleLine = false)
         }
         ErrorText(error)
-        PrimaryButton(if (busy) "Working… $AI_WAIT" else "Ask the AI", busy = busy, enabled = tool != "intake" || listOf(goals, limits, tried).any { it.isNotBlank() }) {
+        // 4.29.0: asking has its own busy state, so Back is never held while the AI works.
+        PrimaryButton(if (asking) "Working… $AI_WAIT" else "Ask the AI", busy = asking || busy, enabled = tool != "intake" || listOf(goals, limits, tried).any { it.isNotBlank() }) {
+            if (asking) return@PrimaryButton
             error = null; resultText = null; saved = false
             scope.launch {
-                busy = true
+                asking = true
                 try {
                     val r = when (tool) {
                         "recommend" -> api.call("ai_recommend", body = JSONObject().put("client_id", clientId))
@@ -182,7 +187,7 @@ fun ClientAiScreen(api: Api, nav: NavHostController, clientId: Int) {
                     resultText = r.toString()
                     draft = r.optString("text")
                     fields = r.optJSONObject("fields")?.let { f -> f.keys().asSequence().associateWith { f.optString(it) } } ?: emptyMap()
-                } catch (e: ApiException) { error = e.message } finally { busy = false }
+                } catch (e: ApiException) { error = e.message } finally { asking = false }
             }
         }
         val r = result ?: return@Page

@@ -138,6 +138,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $fieldErrs) {
     }
 }
 
+// A browser handed over for signing in person (4.29.0, P2): marked so the signer cannot get back in
+// with the staff member's Microsoft session or passkey; the password and code still work.
+$handedOver = handover_marked();
+if (is_array($_SESSION['kiosk_sign'] ?? null) && !handover_cookie_fresh()) handover_mark();
 page_header(($error || form_errors() ? 'Error — ' : '') . 'Sign in');
 $typedEmail = $email ?? '';
 ?>
@@ -170,16 +174,21 @@ $typedEmail = $email ?? '';
     <button type="submit" class="btn btn-primary">Continue</button>
   </form>
   <p class="mt-1" style="text-align:center;">— or —</p>
+  <?php if ($handedOver): // 4.29.0 (P2): no passkey on a browser handed over for signing ?>
+  <p class="muted"><?= h(HANDOVER_PASSKEY_MSG) ?></p>
+  <?php else: ?>
   <button type="button" id="passkey-btn" class="btn btn-secondary" style="display:block; width:100%; text-align:center;">Sign in with a passkey</button>
   <?php // Always rendered (empty until needed): a live region that is unhidden at the
         // moment it changes is often not announced (VoiceOver with Safari). ?>
   <p class="field-error" id="passkey-err" role="alert"></p>
   <p class="muted" id="passkey-status" role="status"></p>
+  <?php endif; ?>
   <?php if (entra_cfg()): ?>
   <a class="btn btn-secondary mt-1" style="display:block; text-align:center;" href="sso.php?start=1">Sign in with Microsoft</a>
   <?php endif; ?>
   <p class="mt-1"><a href="forgot.php" style="display:inline-flex; align-items:center; min-height:2.75rem;">Forgot your password?</a></p>
 </div>
+<?php if (!$handedOver): ?>
 <script>
 (function(){
   var btn = document.getElementById('passkey-btn'), err = document.getElementById('passkey-err'),
@@ -226,4 +235,5 @@ $typedEmail = $email ?? '';
   });
 })();
 </script>
+<?php endif; ?>
 <?php page_footer();

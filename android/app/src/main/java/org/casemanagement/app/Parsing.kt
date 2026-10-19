@@ -338,6 +338,8 @@ data class EquipmentDetail(
     val id: Int, val name: String, val category: String?, val serial: String?, val condition: String, val status: String,
     val lastServiceDate: String?, val intervalDays: Int?, val value: Double?, val purchaseDate: String?, val usefulLifeMonths: Int?,
     val bookValue: Double?, val notes: String?, val maintenance: List<ServiceEntry>,
+    /** How many service entries there are in all (4.29.0; the list holds the latest ones). */
+    val maintenanceTotal: Int = maintenance.size,
 )
 
 fun parseEquipmentDetail(r: JSONObject): EquipmentDetail? {
@@ -346,6 +348,7 @@ fun parseEquipmentDetail(r: JSONObject): EquipmentDetail? {
         i.str("last_service_date"), i.intOrNull("maintenance_interval_days"), i.numOrNull("value"), i.str("purchase_date"),
         i.intOrNull("useful_life_months"), i.numOrNull("book_value"), i.str("notes"),
         r.optJSONArray("maintenance").objects().map { m -> ServiceEntry(m.str("service_date"), m.text("service_type"), m.str("notes"), m.numOrNull("cost"), m.str("by_name")) })
+        .let { d -> d.copy(maintenanceTotal = listTotal(r, d.maintenance.size, "maintenance_total")) }
 }
 
 /** A service interval typed as whole days from 0 to 3650 (0: no schedule); null when it is not one. */

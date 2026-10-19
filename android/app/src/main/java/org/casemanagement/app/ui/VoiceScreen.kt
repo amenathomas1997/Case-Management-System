@@ -30,6 +30,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 import java.util.UUID
+import org.casemanagement.app.stillProcessing
 
 private val NO_WORDS = setOf("no", "nope", "not", "dont", "cancel", "stop", "never", "nevermind", "wrong", "incorrect")
 private val YES_WORDS = setOf("yes", "yeah", "yep", "ok", "okay", "sure", "confirm", "correct")
@@ -114,7 +115,8 @@ fun VoiceScreen(api: Api, nav: NavHostController, clientId: Int, clientName: Str
             retry = null; uncertain = null
             if (r.optString("url").startsWith("client.php")) Regex("id=(\\d+)").find(r.optString("url"))?.let { link = it.groupValues[1].toInt() to r.optString("url_label").ifEmpty { "Open the record" } }
         } catch (e: ApiException) {
-            val lost = e.network || e.status >= 500
+            // 4.29.0: "still being processed" is not an answer either: the retry keeps its key.
+            val lost = e.network || e.status >= 500 || stillProcessing(e)
             if (!lost) { say(e.message ?: "That was not saved."); retry = null; return }
             if (idem != null) {
                 retry = Triple(op, params, idem); uncertain = Triple(op, params, idem)

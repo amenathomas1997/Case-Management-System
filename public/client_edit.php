@@ -284,8 +284,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 // A corrected client email (4.28.0): reminders already marked as handled for the
                 // old address (sent, or skipped because it was unusable) go out again to the new one.
-                if (strcasecmp(trim((string)($emailIn ?? '')), trim((string)($locked['email'] ?? ''))) !== 0) {
-                    $pdo->prepare("UPDATE scheduled_sessions SET reminder_sent = 0, client_reminded_at = NULL
+                // Only the client's side is redone (4.29.0): the instructor's reminder, already sent
+                // when reminder_sent is 1, is kept as sent; and an address that is cleared, or not
+                // yet confirmed (the client is not written to), redoes nothing.
+                if (strcasecmp(trim((string)($emailIn ?? '')), trim((string)($locked['email'] ?? ''))) !== 0
+                    && trim((string)($emailIn ?? '')) !== '' && $emailVerified === 1) {
+                    $pdo->prepare("UPDATE scheduled_sessions SET staff_reminded_at = IF(reminder_sent = 1, COALESCE(staff_reminded_at, NOW()), staff_reminded_at),
+                        reminder_sent = 0, client_reminded_at = NULL
                         WHERE client_id = ? AND status = 'Scheduled' AND start_at >= NOW()")->execute([(int)$client['id']]);
                 }
                 // The previous instructor's open tasks for this client follow the
@@ -560,14 +565,14 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
     // chosen; it is shown from the start when that was already chosen or refused.
     $cv = fn(string $k): string => h($raw($k) ?? '');
     $showClosure = str_starts_with((string)($raw('status') ?? ''), 'Closed') && ($raw('status') !== ($client['status'] ?? null)) || array_filter(array_keys(form_errors()), fn($k) => str_starts_with((string)$k, 'closure_')); ?>
-    <fieldset id="closure-fields"<?= $showClosure ? '' : ' hidden' ?>>
+    <fieldset id="closure-fields"<?= $showClosure ? '' : ' hidden disabled' ?>>
       <legend>Closing the case</legend>
       <?php if ($client && ($loose = closure_checklist((int)$client['id']))): ?>
       <p><strong>Still open on this record:</strong></p>
       <ul><?php foreach ($loose as [$txt, $href]): ?><li><a href="<?= h($href) ?>"><?= h($txt) ?></a></li><?php endforeach; ?></ul>
       <?php endif; ?>
-      <div class="field"><label for="closure_reason">Why is the case closing?</label>
-        <select id="closure_reason" name="closure_reason" <?= field_aria('closure_reason') ?>><option value="">Choose a reason</option>
+      <div class="field"><label for="closure_reason">Why is the case closing? <?= required_mark() ?></label>
+        <select id="closure_reason" name="closure_reason" required <?= field_aria('closure_reason') ?>><option value="">Choose a reason</option>
           <?php foreach (cms_list_items('closure_reasons') as $cr): ?><option value="<?= h($cr) ?>"<?= ($raw('closure_reason') ?? '') === $cr ? ' selected' : '' ?>><?= h($cr) ?></option><?php endforeach; ?>
         </select><?= field_error('closure_reason') ?></div>
       <div class="field"><label for="closure_note">Note (required for Other)</label>
@@ -603,7 +608,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       <div class="field"><label for="closure_at_note">Technology note (such as a device still on order, or why one is not used)</label>
         <input type="text" id="closure_at_note" name="closure_at_note" maxlength="255" value="<?= $cv('closure_at_note') ?>" <?= field_aria('closure_at_note') ?>><?= field_error('closure_at_note') ?></div>
     </fieldset>
-    <script>(function(){var s=document.getElementById('status'),f=document.getElementById('closure-fields');if(!s||!f)return;var was=s.getAttribute('data-was')||'';function sync(){f.hidden=!(s.value.indexOf('Closed')===0&&s.value!==was);}s.addEventListener('change',sync);sync();<?= $showClosure ? 'f.hidden=false;' : '' ?>})();</script>
+    <script>(function(){var s=document.getElementById('status'),f=document.getElementById('closure-fields');if(!s||!f)return;var was=s.getAttribute('data-was')||'';function sync(){f.hidden=f.disabled=!(s.value.indexOf('Closed')===0&&s.value!==was);}s.addEventListener('change',sync);sync();<?= $showClosure ? 'f.hidden=f.disabled=false;' : '' ?>})();</script>
     <div class="field">
       <label for="status_note">Reason for status change <span class="hint">Required for On Hold; recorded in the history</span></label>
       <input type="text" id="status_note" name="status_note" maxlength="255" value="<?= h($raw('status_note') ?? '') ?>" <?= field_aria('status_note') ?>><?= field_error('status_note') ?>

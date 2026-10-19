@@ -28,7 +28,8 @@ $from = $period['from']; $to = $period['to'];
 // row, as on the agency billing summary. Billed lines are reported under the agency
 // and authorization snapshotted on their invoice (as agency_report.php does), so
 // editing a track later does not move work already invoiced; unbilled lines use the
-// track's.
+// track's. 4.29.0: VR work only (vr_work_sql()): a private-pay or no-charge client is not
+// the state's case and is not sent to it, even when the track still names a VR agency.
 $sql = "SELECT c.id, c.name, c.dob, c.client_type, c.status,
         (SELECT a.primary_disability FROM tech_assessments a WHERE a.client_id = c.id AND a.primary_disability <> '' ORDER BY a.assessment_date DESC LIMIT 1) AS disability,
         GROUP_CONCAT(DISTINCT NULLIF(x.agency,'') ORDER BY x.agency SEPARATOR '; ') AS agencies,
@@ -45,14 +46,14 @@ $sql = "SELECT c.id, c.name, c.dob, c.client_type, c.status,
         FROM work_logs w
         JOIN training_tracks t ON t.id = w.track_id
         LEFT JOIN invoices i ON i.id = w.invoice_id
-        WHERE w.work_date BETWEEN ? AND ?
+        WHERE w.work_date BETWEEN ? AND ? AND " . vr_work_sql('t', 'i') . "
         UNION ALL
         SELECT t.client_id, COALESCE(i.funding_agency, t.funding_agency), COALESCE(i.auth_number, t.auth_number),
             NULLIF(t.rsa_category,''), 0, e.amount, NULL
         FROM track_expenses e
         JOIN training_tracks t ON t.id = e.track_id
         LEFT JOIN invoices i ON i.id = e.invoice_id
-        WHERE e.expense_date BETWEEN ? AND ?
+        WHERE e.expense_date BETWEEN ? AND ? AND " . vr_work_sql('t', 'i') . "
     ) x
     JOIN clients c ON c.id = x.client_id
     WHERE 1=1" . $scopeCond . "

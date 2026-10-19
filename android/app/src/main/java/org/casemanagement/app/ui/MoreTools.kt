@@ -21,6 +21,11 @@ import org.casemanagement.app.ApiException
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
 import org.json.JSONObject
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import org.casemanagement.app.dialogKey
 
 /* ---------------- Knowledge base ---------------- */
 
@@ -138,7 +143,7 @@ fun CounselorsScreen(api: Api) {
     chosen?.let { c ->
         val name = c.optString("name").ifEmpty { c.optString("email") }
         AlertDialog(onDismissRequest = { chosen = null }, title = { Text(name, modifier = Modifier.semantics { heading() }) },
-            text = { Column {
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
                 TextButton(onClick = { chosen = null; ask = c to true }) { Text(if (c.optBoolean("portal_active")) "Resend or reset the link" else if (c.optBoolean("portal_expired")) "Send a new link" else "Send the portal link") }
                 if (c.optBoolean("portal_active")) TextButton(onClick = { chosen = null; ask = c to false }) { Text("Turn off the link") }
             } },
@@ -168,7 +173,9 @@ fun PortalRequestsScreen(api: Api, nav: NavHostController) {
     var all by rememberSaveable { mutableStateOf(false) }
     val state = rememberLoaded(all) { api.call("portal_requests", if (all) mapOf("all" to "1") else emptyMap()) }
     var chosen by remember { mutableStateOf<JSONObject?>(null) }
-    var outcomeFor by remember { mutableStateOf<Pair<JSONObject, String>?>(null) }
+    // 4.29.0: the request whose outcome is being written (its id and the status), kept across rotation.
+    var outcomeId by rememberSaveable { mutableIntStateOf(0) }
+    var outcomeTo by rememberSaveable { mutableStateOf("") }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -197,18 +204,34 @@ fun PortalRequestsScreen(api: Api, nav: NavHostController) {
     chosen?.let { q ->
         val needsOutcome = q.optString("type") in setOf("records", "correction")
         AlertDialog(onDismissRequest = { chosen = null }, title = { Text(q.optString("client_name") + ": " + q.optString("type_label"), modifier = Modifier.semantics { heading() }) },
-            text = { Column {
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
                 listOf("New", "In Progress", "Done", "Declined").filter { it != q.optString("status") }.forEach { s ->
-                    TextButton(onClick = { chosen = null; if (needsOutcome && (s == "Done" || s == "Declined")) outcomeFor = q to s else set(q, s, null) }) { Text("Mark it $s") }
+                    TextButton(onClick = { chosen = null; if (needsOutcome && (s == "Done" || s == "Declined")) { outcomeId = q.optInt("id"); outcomeTo = s } else set(q, s, null) }) { Text("Mark it $s") }
                 }
                 if (api.can("clients")) TextButton(onClick = { chosen = null; nav.navigate("client/${q.optInt("client_id")}") }) { Text("Open the client record") }
             } },
             confirmButton = { TextButton(onClick = { chosen = null }) { Text("Close") } })
     }
-    outcomeFor?.let { (q, to) ->
-        var text by remember(q) { mutableStateOf(q.str("outcome") ?: "") }
-        FormDialog(if (to == "Declined") "Why is the request refused?" else "How was it handled?", "Save", false, text.isNotBlank(), onSave = { outcomeFor = null; set(q, to, text.trim()) }, onCancel = { outcomeFor = null }) {
-            Field("Outcome the client sees", text, { text = it }, hint = "the client sees this in their portal", singleLine = false)
+    state.data?.optJSONArray("requests").objects().firstOrNull { outcomeId != 0 && it.optInt("id") == outcomeId }?.let { q ->
+        val to = outcomeTo
+        key(dialogKey("portal-outcome", outcomeId)) {
+            // 4.29.0: the outcome text is kept across rotation; the dialog stays open, with the text,
+            // until the server took it, and a refusal is shown on the field.
+            var text by rememberSaveable { mutableStateOf(q.str("outcome") ?: "") }
+            var busy by remember { mutableStateOf(false) }
+            var fieldError by remember { mutableStateOf<String?>(null) }
+            FormDialog(if (to == "Declined") "Why is the request refused?" else "How was it handled?", "Save", busy, text.isNotBlank(), onSave = {
+                if (busy) return@FormDialog
+                fieldError = null
+                scope.launchSave({ busy = it }, { fieldError = it }) {
+                    val b = JSONObject().put("id", q.optInt("id")).put("to", to).put("outcome", text.trim())
+                    notice = api.call("portal_request_update", body = b).optString("message").ifEmpty { "Request marked $to." }
+                    error = null; outcomeId = 0; state.reload()
+                }
+            }, onCancel = { outcomeId = 0 }) {
+                Field("Outcome the client sees", text, { text = it }, hint = "the client sees this in their portal", singleLine = false, error = fieldError)
+                ErrorText(fieldError)
+            }
         }
     }
 }

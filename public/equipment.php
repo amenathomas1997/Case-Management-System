@@ -60,7 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_item'])) {
     // refused on its field (it sets the current value), not dropped.
     $purchaseRaw = trim((string)($_POST['purchase_date'] ?? ''));
     $purchase = valid_date($purchaseRaw, 1970, (int)date('Y'));
-    if ($purchaseRaw !== '' && $purchase === null) $errors['purchase_date'] = 'Purchase date: enter the full date (month, day and year) with a year from 1970 to ' . date('Y') . ', or leave it blank.';
+    if (input_was_unreadable('purchase_date') || ($purchaseRaw !== '' && $purchase === null)) $errors['purchase_date'] = 'Purchase date: enter the full date (month, day and year) with a year from 1970 to ' . date('Y') . ', or leave it blank.';
     elseif ($purchase !== null && $purchase > date('Y-m-d')) $errors['purchase_date'] = 'Purchase date cannot be in the future.';
     if ($errors) { keep_input(); keep_field_errors($errors); redirect('equipment.php'); }
     $iv = $ivRaw !== '' ? (int)$ivRaw : null;
@@ -105,13 +105,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['loan_out'])) {
     if ($eid <= 0) $loanErrors['loan_equipment_id'] = 'Item is required: choose an available item.';
     elseif (!$e->fetch()) $loanErrors['loan_equipment_id'] = 'Item: that item is no longer available; choose another.';
     if ($cid <= 0) $loanErrors['loan_client_id'] = 'Client is required: choose who receives the item.';
+    elseif (!client_still_on_file($cid)) $loanErrors['loan_client_id'] = 'Client: that client is no longer on file (merged or removed). Choose the client again.';
     $loanNotes = trim((string)($_POST['notes'] ?? ''));
     if (mb_strlen($loanNotes) > 255) $loanErrors['loan_notes'] = 'Notes must be 255 characters or fewer.';
     // The return date is checked as the app checks one: a date that cannot be read, a
     // mistyped year or a date already past is refused on its field, never dropped.
     $dueRaw = trim((string)($_POST['due_date'] ?? ''));
     $due = valid_date($dueRaw, 2000, (int)date('Y') + 5);
-    if ($dueRaw !== '' && $due === null) $loanErrors['loan_due_date'] = 'Return due: enter the full date (month, day and year) with a year from 2000 to ' . ((int)date('Y') + 5) . ', or leave it blank for no return date.';
+    // A partly typed date reaches us blank (4.29.0): refused, never taken as "no return date".
+    if (input_was_unreadable('due_date') || ($dueRaw !== '' && $due === null)) $loanErrors['loan_due_date'] = 'Return due: enter the full date (month, day and year) with a year from 2000 to ' . ((int)date('Y') + 5) . ', or leave it blank for no return date.';
     elseif ($due !== null && $due < date('Y-m-d')) $loanErrors['loan_due_date'] = 'Return due cannot be before today.';
     if ($loanErrors) { keep_input(); keep_field_errors($loanErrors); redirect('equipment.php'); }
     scope_check_client_id($cid, $user);
@@ -148,6 +150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_reservation'])) {
     elseif ($estatus === false) $resErrors['res_equipment_id'] = 'Item: that item is no longer on file; choose another.';
     elseif ($estatus === 'Retired') $resErrors['res_equipment_id'] = 'Item: that item is retired and cannot be reserved; choose another.';
     if ($cid <= 0) $resErrors['res_client_id'] = 'Client is required: choose who the item is reserved for.';
+    elseif (!client_still_on_file($cid)) $resErrors['res_client_id'] = 'Client: that client is no longer on file (merged or removed). Choose the client again.';
     if ($resErrors) { keep_input(); keep_field_errors($resErrors); redirect('equipment.php#res-form'); }
     scope_check_client_id($cid, $user);
     // Dates are checked as the app checks them: a date that cannot be read, or an
@@ -159,9 +162,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_reservation'])) {
     $from = valid_date($fromRaw, 2000, $maxYear);
     $until = valid_date($untilRaw, 2000, $maxYear);
     $dateErrors = [];
-    if ($fromRaw !== '' && $from === null) $dateErrors['needed_from'] = 'Needed from: enter a valid date (YYYY-MM-DD) with a year from 2000 to ' . $maxYear . '.';
-    if ($untilRaw !== '' && $until === null) $dateErrors['needed_until'] = 'Needed until: enter a valid date (YYYY-MM-DD) with a year from 2000 to ' . $maxYear . '.';
+    if (input_was_unreadable('needed_from') || ($fromRaw !== '' && $from === null)) $dateErrors['needed_from'] = 'Needed from: enter a valid date (YYYY-MM-DD) with a year from 2000 to ' . $maxYear . '.';
+    if (input_was_unreadable('needed_until') || ($untilRaw !== '' && $until === null)) $dateErrors['needed_until'] = 'Needed until: enter a valid date (YYYY-MM-DD) with a year from 2000 to ' . $maxYear . '.';
     elseif ($from !== null && $until !== null && $until < $from) $dateErrors['needed_until'] = '"Needed until" cannot be before "needed from".';
+    // A hold that has already lapsed would never hold the item (4.29.0).
+    elseif ($until !== null && $until < date('Y-m-d')) $dateErrors['needed_until'] = 'Needed until cannot be in the past. Enter today or a later date, or leave it blank.';
     $resNotes = is_string($_POST['notes'] ?? null) ? trim($_POST['notes']) : '';
     if (mb_strlen($resNotes) > 500) $dateErrors['res_notes'] = 'Notes must be 500 characters or fewer.';
     if ($dateErrors) { keep_input(); keep_field_errors($dateErrors); redirect('equipment.php'); }
@@ -380,7 +385,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['log_service'])) {
     $dateRaw = trim((string)($_POST['service_date'] ?? ''));
     $date = valid_date($dateRaw, 2000, (int)date('Y'));
     $svcErrors = [];
-    if ($dateRaw === '') $svcErrors['service_date_' . $eid] = 'Service date is required.';
+    if ($dateRaw === '' && !input_was_unreadable('service_date')) $svcErrors['service_date_' . $eid] = 'Service date is required.';
     elseif ($date === null) $svcErrors['service_date_' . $eid] = 'Service date: enter the full date (month, day and year) with a year from 2000 to ' . date('Y') . '.';
     elseif ($date > date('Y-m-d')) $svcErrors['service_date_' . $eid] = 'Service date cannot be in the future.';
     $type = in_array($_POST['service_type'] ?? '', cms_list_items('maintenance_types'), true) ? $_POST['service_type'] : 'Maintenance';
@@ -441,7 +446,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['correct_service'])) {
     $errors = [];
     // Blank means the item has no service on record. A mistyped year is refused, as
     // when a service is logged.
-    if ($dateRaw !== '' && $date === null) $errors['corrected_date_' . $eid] = 'Corrected last service date: enter the full date (month, day and year) with a year from 2000 to ' . date('Y') . ', or leave it blank for no service on record.';
+    if (input_was_unreadable('corrected_date') || ($dateRaw !== '' && $date === null)) $errors['corrected_date_' . $eid] = 'Corrected last service date: enter the full date (month, day and year) with a year from 2000 to ' . date('Y') . ', or leave it blank for no service on record.';
     elseif ($date !== null && $date > date('Y-m-d')) $errors['corrected_date_' . $eid] = 'Corrected last service date cannot be in the future.';
     if ($reason === '') $errors['correction_reason_' . $eid] = 'Reason for the correction is required.';
     elseif (mb_strlen($reason) > 300) $errors['correction_reason_' . $eid] = 'Reason for the correction must be 300 characters or fewer.';
@@ -517,6 +522,7 @@ if (isset($_GET['retire'])) {
       </form>
     </section>
     <?php
+    echo bad_input_script();
     page_footer();
     exit;
 }
@@ -597,6 +603,7 @@ if (isset($_GET['scan'])) {
       </form>
     </section>
     <?php
+    echo bad_input_script();
     page_footer();
     exit;
 }
@@ -980,4 +987,5 @@ page_header('Equipment & loans', $user, 'equipment');
     <button type="submit" name="add_reservation" value="1" class="btn btn-secondary">Add reservation</button>
   </form>
 </section>
+<?= bad_input_script() ?>
 <?php page_footer();

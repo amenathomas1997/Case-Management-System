@@ -53,6 +53,9 @@ function review_html(string $text): string {
 /* ---- Apply a suggested progress update to one goal ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['apply_progress'])) {
     $gid = (int)($_POST['goal_id'] ?? 0);
+    // The same Record sent twice (4.29.0) is recorded once, as on the track page.
+    $progKey = web_idem_key($_POST);
+    if (web_once_get($progKey) !== null) { flash('This progress was already recorded (the form was sent twice), so it was recorded once.', 'info'); redirect('progress_review.php?client=' . $cid . '#goal-' . $gid); }
     $own = db()->prepare('SELECT sg.status, sg.progress_pct FROM smart_goals sg JOIN training_tracks t ON t.id = sg.track_id WHERE sg.id = ? AND t.client_id = ?');
     $own->execute([$gid, $cid]);
     $cur = $own->fetch();
@@ -98,9 +101,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['apply_progress'])) {
     db()->beginTransaction();
     try {
         db()->prepare('UPDATE smart_goals SET status = ?, progress_pct = ? WHERE id = ?')->execute([$gs, $pct, $gid]);
-        db()->prepare('INSERT INTO goal_progress (goal_id, progress_pct, status, note, recorded_by) VALUES (?,?,?,?,?)')->execute([$gid, $pct, $gs, $note, $user['id']]);
+        db()->prepare('INSERT INTO goal_progress (goal_id, progress_pct, status, note, recorded_by, idem_key) VALUES (?,?,?,?,?,?)')->execute([$gid, $pct, $gs, $note, $user['id'], $progKey]);
         db()->commit();
+    } catch (PDOException $e) {
+        db()->rollBack();
+        if ((string)$e->getCode() === '23000' && $progKey !== null) { flash('This progress was already recorded, so it was recorded once.', 'info'); redirect('progress_review.php?client=' . $cid . '#goal-' . $gid); }
+        throw $e;
     } catch (Throwable $e) { db()->rollBack(); throw $e; }
+    web_once_set($progKey, $gid);
     audit($user['id'], 'goal.status', 'goal', $gid, $gs . ' ' . $pct . '%');
     $gq = db()->prepare('SELECT specific_goal FROM smart_goals WHERE id = ?');
     $gq->execute([$gid]);
@@ -235,7 +243,7 @@ page_header('Progress review: ' . $client['name'], $user, 'clients');
     <script>document.addEventListener("DOMContentLoaded",function(){var e=document.getElementById("goal-recorded");if(e)e.focus();});</script>
     <?php endif; ?>
     <?php // Every control names its goal (in hidden text), so repeated forms are told apart when tabbing. ?>
-    <form method="post" action="progress_review.php?client=<?= $cid ?>" class="stacked" novalidate><?= csrf_field() ?>
+    <form method="post" action="progress_review.php?client=<?= $cid ?>" class="stacked" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
       <?= form_error_summary(['goal_pct_' . $gid => '', 'goal_note_' . $gid => ''], ['goal_pct_' . $gid => 'pc-' . $gid, 'goal_note_' . $gid => 'pn-' . $gid]) ?>
       <input type="hidden" name="goal_id" value="<?= $gid ?>">
       <?php if ($reopenGid === $gid): ?><input type="hidden" name="reopen_confirmed" value="1"><?php endif; ?>

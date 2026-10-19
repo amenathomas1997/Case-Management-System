@@ -9,7 +9,8 @@ import UIKit
 
 // `error` is optional so an `ok: false` reply with no message is still treated as a failure
 // (never decoded as a successful, tolerant result further down).
-struct APIErrorResponse: Decodable { let ok: Bool; let error: String? }
+/// `processing` (4.29.0): the server's 409 "still being processed" (the same retry key is still running).
+struct APIErrorResponse: Decodable { let ok: Bool; let error: String?; let processing: Bool? }
 
 struct LoginStep: Decodable {
     let ok: Bool
@@ -255,7 +256,9 @@ struct Note: Decodable, Identifiable {
     var locked = false
     /// The note this one is an addendum to, if any.
     var addendumTo: Int?
-    private enum CodingKeys: String, CodingKey { case id, noteType, subject, body, createdAt, updatedAt, author, editor, canEdit, noteFormat, trackId, trackTitle, sections, locked, addendumTo }
+    /// The saved version (4.29.0), sent back with update_note; nil from an older server.
+    var noteVersion: String?
+    private enum CodingKeys: String, CodingKey { case id, noteType, subject, body, createdAt, updatedAt, author, editor, canEdit, noteFormat, trackId, trackTitle, sections, locked, addendumTo, noteVersion }
     // Tolerant decode: a single note with a null field must not fail the whole client
     // record and blank the detail screen for a VoiceOver user. Only id is required.
     init(from d: Decoder) throws {
@@ -275,6 +278,7 @@ struct Note: Decodable, Identifiable {
         sections = try? c.decodeIfPresent([String].self, forKey: .sections)
         locked = (try? c.decode(Bool.self, forKey: .locked)) ?? false
         addendumTo = try? c.decodeIfPresent(Int.self, forKey: .addendumTo)
+        noteVersion = try? c.decodeIfPresent(String.self, forKey: .noteVersion)
     }
 }
 
@@ -1061,12 +1065,16 @@ enum APIError: LocalizedError {
     /// A confirmed voice write whose reply was a server fault or unreadable: it may have been
     /// saved, so it is neither a success nor a definite failure.
     case outcomeUnknown
+    /// The server is still working on an earlier try with the same retry key (4.29.0, its 409
+    /// with processing true): the key must be kept, so trying again is recognised.
+    case processing(String)
 
     var errorDescription: String? {
         switch self {
         case .server(let message): return message
         case .network: return "Could not reach the server. Check your connection."
         case .outcomeUnknown: return "The server's reply was lost, so it isn't known whether that was saved. Check before trying again."
+        case .processing(let message): return message
         }
     }
 }
@@ -1424,6 +1432,9 @@ final class API: ObservableObject {
                                        accountChanged: "Your account changed. Sign in again before saving this entry.")
         if let errorBody = try? decoder.decode(APIErrorResponse.self, from: data), !errorBody.ok {
             if let refusal, let fields = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] { refusal(fields) }
+            if errorBody.processing == true {
+                throw APIError.processing(errorBody.error ?? "This is still being processed. Try again in a moment.")
+            }
             throw APIError.server(errorBody.error ?? "Something went wrong.")
         }
         do {
@@ -1476,7 +1487,13 @@ final class API: ObservableObject {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw confirmedWrite ? APIError.outcomeUnknown : APIError.server("Unexpected response from the server.")
         }
-        if (obj["ok"] as? Bool) == false { throw APIError.server((obj["error"] as? String) ?? "Something went wrong.") }
+        if (obj["ok"] as? Bool) == false {
+            // 4.29.0: still being processed (the same key is running): the caller keeps its key.
+            if (obj["processing"] as? Bool) == true {
+                throw APIError.processing((obj["error"] as? String) ?? "This is still being processed. Try again in a moment.")
+            }
+            throw APIError.server((obj["error"] as? String) ?? "Something went wrong.")
+        }
         return obj
     }
 
@@ -1647,6 +1664,25 @@ final class API: ObservableObject {
         userId > 0 ? q.filter { $0.owner == userId }.count : 0
     }
 
+    /// How long after it was kept on the phone a queued note still carries when it was written
+    /// (4.29.0; the server accepts recorded_at up to 7 days back). Older, the server's own time is used.
+    nonisolated static let noteRecordedAtMaxAge: TimeInterval = 7 * 86400 - 3600
+
+    /// What an offline entry sends (4.29.0): as stored, and for a case note the time it was saved
+    /// on the phone as recorded_at (ISO 8601), so a note written with no signal is dated when it
+    /// was written, not when it synced. Left out when that time is unknown, in the future or
+    /// too old for the server to accept, so the note is never refused for it.
+    nonisolated static func uploadBody(_ item: PendingCall, now: Date = Date()) -> Data {
+        guard item.action == "add_note", let saved = item.savedAt,
+              saved <= now, now.timeIntervalSince(saved) < noteRecordedAtMaxAge,
+              var fields = (try? JSONSerialization.jsonObject(with: item.body)) as? [String: Any],
+              fields["recorded_at"] == nil else { return item.body }
+        let format = ISO8601DateFormatter()
+        format.formatOptions = [.withInternetDateTime]
+        fields["recorded_at"] = format.string(from: saved)
+        return (try? JSONSerialization.data(withJSONObject: fields)) ?? item.body
+    }
+
     /// Report success only after the record is durably stored for a known account.
     func enqueue(_ action: String, body: [String: Any], label: String) throws {
         guard API.phoneCanKeepClientData else {
@@ -1711,7 +1747,7 @@ final class API: ObservableObject {
                 request.httpMethod = "POST"
                 request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.httpBody = item.body
+                request.httpBody = API.uploadBody(item)
                 do {
                     let (data, response) = try await API.session.data(for: request)
                     guard let http = response as? HTTPURLResponse else { reachedServer = false; break }
@@ -1726,6 +1762,13 @@ final class API: ObservableObject {
                     if (200..<300).contains(http.statusCode),
                        let ok = try? decoder.decode(OKResponse.self, from: data), ok.ok {
                         done.insert(item.id)
+                    } else if http.statusCode == 409,
+                              (try? decoder.decode(APIErrorResponse.self, from: data))?.processing == true {
+                        // 4.29.0: an earlier try of this entry is still being processed: kept as it is
+                        // (same key) and tried again later, not marked refused.
+                        transient = "“\(item.label)” is still being processed by the server and is still saved on this phone. It will be checked again automatically."
+                        reachedServer = false
+                        break
                     } else if http.statusCode == 409, item.action == "check_in_session" {
                         // Already checked in (from another phone, or an earlier try whose reply
                         // was lost): the check-in is recorded, so the entry is done.

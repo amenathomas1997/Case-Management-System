@@ -64,7 +64,7 @@ page_header('Pricing rules', $user, 'admin', [['admin.php', 'Administration']]);
     <h2 id="sliding-h">Sliding fee</h2>
     <div class="field"><label><input type="checkbox" name="sliding_on" value="1"<?= $on('sliding_on', $p['sliding_on']) ? ' checked' : '' ?>> Free training below a monthly income</label></div>
     <div class="field"><label for="free_below">Free below this monthly income (dollars)</label>
-      <input type="text" inputmode="decimal" id="free_below" name="free_below" maxlength="10" value="<?= h($val('free_below', number_format($p['free_below'], 0, '.', ''))) ?>" <?= field_aria('free_below') ?>><?= field_error('free_below') ?></div>
+      <input type="text" inputmode="decimal" id="free_below" name="free_below" maxlength="10" value="<?= h($val('free_below', number_format($p['free_below'], 2, '.', ''))) ?>" <?= field_aria('free_below') ?>><?= field_error('free_below') ?></div>
     <div class="field"><label for="youth_age">Use a parent's income for anyone younger than (years; 0 for never)</label>
       <input type="number" id="youth_age" name="youth_age" min="0" max="30" step="1" value="<?= h($val('youth_age', (string)$p['youth_age'])) ?>" <?= field_aria('youth_age') ?>><?= field_error('youth_age') ?></div>
   </section>

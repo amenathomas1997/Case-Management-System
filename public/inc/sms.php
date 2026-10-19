@@ -178,6 +178,12 @@ function sms_dispatch(int $logId): array {
     if (!$row) return ['ok' => false, 'status' => 'failed', 'message' => 'That text is no longer waiting.'];
     $c = $row['client_id'] !== null ? sms_client((int)$row['client_id']) : null;
     $why = $row['client_id'] !== null ? sms_client_blocked($c) : null;
+    // A text that waited goes only to the number it was written for (4.29.0): a client whose
+    // number changed meanwhile may have given the old one up, and it may now be someone else's.
+    if ($why === null && $c && (string)sms_number($c['phone'] ?? null) !== (string)$row['phone']) {
+        $why = 'The client\'s phone number changed before the text could go, so it was not sent to the old number.';
+        error_log('sms_dispatch: text #' . $logId . ' dropped, the client\'s number changed after it was queued');
+    }
     // A session text that waited is sent only if the session still stands at the time it names.
     if ($why === null && $c && $row['session_id'] !== null && in_array($row['purpose'], ['reminder', 'booked', 'moved'], true)) {
         $sq = db()->prepare("SELECT start_at FROM scheduled_sessions WHERE id = ? AND status = 'Scheduled' AND start_at > NOW()");
@@ -356,7 +362,7 @@ function sms_inbound(string $from, string $body, string $sid): ?string {
         $when = sms_when($c, strtotime((string)$s['start_at']));
         $what = ['C' => 'confirmed', 'R' => 'reschedule', 'X' => 'cancel'][$word];
         db()->prepare('UPDATE scheduled_sessions SET client_reply = ?, client_reply_at = NOW() WHERE id = ?')->execute([$what, (int)$s['id']]);
-        $staff = (int)($s['user_id'] ?? 0) ?: (int)($c['assigned_to'] ?? 0);
+        $staff = sms_alert_staff($c, $s);
         if ($word === 'C') {
             if ($staff) notify_user($staff, sms_first_name((string)$c['name']) . ' confirmed the session on ' . date('D, M j g:i A', strtotime((string)$s['start_at'])) . ' by text.', 'schedule.php#s-' . (int)$s['id']);
             return $es ? "Gracias, su sesión del $when está confirmada." : "Thank you, your session on $when is confirmed.";
@@ -369,20 +375,46 @@ function sms_inbound(string $from, string $body, string $sid): ?string {
     // Anything else is a message for staff, in the client's message thread (as from the portal).
     $mid = post_message($cid, 'client', 'client', null, $text);
     db()->prepare("UPDATE messages SET via = 'text' WHERE id = ?")->execute([$mid]);
-    $staff = (int)($c['assigned_to'] ?? 0);
+    $staff = sms_alert_staff($c, null);
     if ($staff) notify_user($staff, 'New text message from ' . sms_first_name((string)$c['name']) . '.', 'messages.php?client=' . $cid, true);
-    else notify_admin_users('New text message from a client with no assigned staff member.', 'messages.php?client=' . $cid);
+    else notify_admin_users('New text message from a client with no active assigned staff member.', 'messages.php?client=' . $cid, true);
     return null;
+}
+
+/**
+ * Who is told about a text from a client (4.29.0), as the portal does: the session's instructor
+ * while their account is active, else the client's assigned instructor while active, else 0
+ * (every administrator is told). An alert to a deactivated account is never seen.
+ */
+function sms_alert_staff(array $c, ?array $s): int {
+    $q = db()->prepare('SELECT id FROM users WHERE id = ? AND is_active = 1');
+    foreach ([(int)($s['user_id'] ?? 0), (int)($c['assigned_to'] ?? 0)] as $id) {
+        if ($id <= 0) continue;
+        $q->execute([$id]);
+        if ($q->fetchColumn()) return $id;
+    }
+    return 0;
 }
 
 /** R or X to a reminder: a request for staff to act on (portal requests), never done by a text alone. */
 function sms_reply_request(array $c, array $s, string $word): void {
-    $when = sms_when($c, strtotime((string)$s['start_at']));
+    // Staff read the request and its task on English pages, so it is stored in English, with the
+    // time in the client's own zone (4.29.0); the portal shows it in Spanish to a Spanish speaker
+    // (portal_request_details_html in portal.php).
+    $details = ($word === 'R' ? 'Asked by text to reschedule' : 'Asked by text to cancel') . ' the session on '
+        . zone_date(client_zone($c), 'D, M j \\a\\t g:i A T', strtotime((string)$s['start_at'])) . '.';
     db()->prepare('INSERT INTO portal_requests (client_id, type, session_id, details, status) VALUES (?,?,?,?,?)')
-        ->execute([(int)$c['id'], $word === 'R' ? 'reschedule' : 'cancel', (int)$s['id'], ($word === 'R' ? 'Asked by text to reschedule' : 'Asked by text to cancel') . ' the session on ' . $when . '.', 'New']);
-    $staff = (int)($s['user_id'] ?? 0) ?: (int)($c['assigned_to'] ?? 0);
-    if ($staff) notify_user($staff, sms_first_name((string)$c['name']) . ' asked by text to ' . ($word === 'R' ? 'reschedule' : 'cancel') . ' the session on ' . date('D, M j g:i A', strtotime((string)$s['start_at'])) . '.', 'portal_requests.php', true);
-    else notify_admin_users('A client with no assigned staff member asked by text to ' . ($word === 'R' ? 'reschedule' : 'cancel') . ' a session.', 'portal_requests.php');
+        ->execute([(int)$c['id'], $word === 'R' ? 'reschedule' : 'cancel', (int)$s['id'], $details, 'New']);
+    $reqId = (int)db()->lastInsertId();
+    $staff = sms_alert_staff($c, $s);
+    $label = $word === 'R' ? 'reschedule request' : 'cancellation request';
+    // The same follow-up task a portal request makes (its key lets Client requests close it).
+    // The client's active assigned instructor holds it; unassigned otherwise, for anyone with client access.
+    $owner = sms_alert_staff($c, null);
+    if (function_exists('add_task')) add_task('Client ' . $label . ' (by text): ' . $c['name'], $details, (int)$c['id'], null, business_days_from(1), $owner ?: null, null, 'preq-' . $reqId);
+    $msg = sms_first_name((string)$c['name']) . ' asked by text to ' . ($word === 'R' ? 'reschedule' : 'cancel') . ' the session on ' . date('D, M j g:i A', strtotime((string)$s['start_at'])) . '.';
+    if ($staff) notify_user($staff, $msg, 'portal_requests.php?client=' . (int)$c['id'], true);
+    else notify_admin_users($msg, 'portal_requests.php?client=' . (int)$c['id'], true);
 }
 
 /** A delivery report from the service. */

@@ -106,6 +106,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
             $pdo->prepare('UPDATE clients SET ' . implode(', ', array_map(fn($f) => "`$f` = ?", array_keys($fill))) . ' WHERE id = ?')
                 ->execute([...array_values($fill), $keepId]);
         }
+        // Draft invoices (moved across with the duplicate's tracks, or the kept record's own)
+        // are billed to the kept record's counselor and address now, as an edit re-addresses them (4.29.0).
+        draft_invoices_readdress($keepId);
         $finalAssignee = isset($fill['assigned_to']) ? (int)$fill['assigned_to'] : ($t['assigned_to'] !== null ? (int)$t['assigned_to'] : null);
         $dupeAssignee = $s['assigned_to'] !== null ? (int)$s['assigned_to'] : null;
         $movedTasks = 0;
@@ -153,7 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
         // so client 5 never re-points client 57's.
         $relink = $pdo->prepare('UPDATE notifications SET link = CONCAT(?, SUBSTRING(link, CHAR_LENGTH(?) + 1))
             WHERE link = ? OR link LIKE ? OR link LIKE ?');
-        foreach (['client.php?id=', 'messages.php?client=', 'portal_requests.php?client='] as $base) {
+        foreach (['client.php?id=', 'messages.php?client=', 'portal_requests.php?client=', 'signatures.php?client=', 'workflows.php?view=homework&client_id='] as $base) {
             $old = $base . $mergeId;
             $like = addcslashes($old, '\\%_');
             $relink->execute([$base . $keepId, $old, $old, $like . '&%', $like . '#%']);

@@ -23,6 +23,8 @@ import kotlinx.coroutines.launch
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
 import org.casemanagement.app.zoneWords
+import org.casemanagement.app.listTotal
+import org.casemanagement.app.countLabel
 
 /** The client list, searched on the server as on the website. */
 @Composable
@@ -31,17 +33,20 @@ fun ClientsScreen(api: Api, nav: NavHostController) {
     var search by rememberSaveable { mutableStateOf("") }
     // The whole list is kept on the phone for reading without a signal (a search is not).
     val state = rememberLoaded(search) {
-        if (search.isEmpty()) api.callCached("clients", cacheKey = "clients").let { (r, at) -> parseClients(r) to at }
-        else parseClients(api.call("clients", mapOf("q" to search))) to null
+        // 4.29.0: with the server's total, so a list cut at its limit says so.
+        if (search.isEmpty()) api.callCached("clients", cacheKey = "clients").let { (r, at) -> parseClients(r).let { l -> Triple(l, listTotal(r, l.size), at) } }
+        else api.call("clients", mapOf("q" to search)).let { r -> parseClients(r).let { l -> Triple(l, listTotal(r, l.size), null) } }
     }
     Page {
+        // The server searches the name, email and phone (4.29.0), as the hint says.
         Field("Search clients", q, { q = it }, hint = "name, phone or email")
         SecondaryButton("Search") { search = q.trim() }
         SecondaryButton("Add a client") { nav.navigate("clientEdit/0") }
-        Show(state, "clients") { (list, savedAt) ->
+        Show(state, "clients") { (list, total, savedAt) ->
             OfflineCopyNotice(savedAt)
-            Announce(if (search.isNotEmpty()) "${list.size} ${if (list.size == 1) "client" else "clients"} found" else null)
-            Heading(if (search.isEmpty()) "All clients (${list.size})" else "Clients matching $search (${list.size})")
+            Announce(if (search.isNotEmpty()) (if (total > list.size) "First ${list.size} of $total clients found" else "${list.size} ${if (list.size == 1) "client" else "clients"} found") else null)
+            Heading(countLabel(if (search.isEmpty()) "All clients" else "Clients matching $search", list.size, total, "first"))
+            if (total > list.size) Text("Showing the first ${list.size} of $total, by name. Search to find the others.")
             if (list.isEmpty()) Text("No clients found.")
             list.forEach { c ->
                 ListRow(listOf(c.name, c.status, c.phone ?: ""), onClick = { nav.navigate("client/${c.id}") })
@@ -255,6 +260,8 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
     var error by remember { mutableStateOf<String?>(null) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val structured = format != "free"
+    // 4.29.0: Back waits while the note is saving (it is sent or kept on the phone either way).
+    HoldBackWhileSaving(busy)
     Page {
         Choice("Note type", type, types.map { it to it }) { type = it }
         Choice("Format", format, listOf("free" to "Free text", "BIRP" to "BIRP", "PAIP" to "PAIP", "SOAP" to "SOAP")) { format = it }
@@ -360,6 +367,7 @@ fun LogHoursScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int
     // 4.28.0: each problem on its own field as well as in the summary.
     var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    HoldBackWhileSaving(busy)
     Page {
         val t = tracks.data?.firstOrNull { it.id == trackId }
         Heading(t?.let { it.client + ": " + it.title } ?: "Training track")

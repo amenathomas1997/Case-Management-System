@@ -525,6 +525,34 @@ function ai_redact(string $text, ?array $client = null): string {
 }
 
 /**
+ * 4.29.0: email addresses, 9-digit (SSN-like) numbers and phone numbers in $text replaced by
+ * numbered placeholders ("[EMAIL 1]", "[SSN 1]", "[PHONE 1]"), with the same patterns and order
+ * as ai_redact(), so ai_redact() finds nothing left to blank. Returns [text, [placeholder => value]]:
+ * the voice assistant maps the model's reply back, so a number or address dictated into a note
+ * or task is saved as said instead of as "[PHONE]".
+ */
+function ai_pseudonymize_contacts(string $text): array {
+    $map = [];
+    $n = ['EMAIL' => 0, 'SSN' => 0, 'PHONE' => 0];
+    $swap = function (string $kind) use (&$map, &$n): callable {
+        return function (array $m) use ($kind, &$map, &$n): string {
+            $found = array_search($m[0], $map, true);
+            if ($found !== false && str_starts_with((string)$found, '[' . $kind . ' ')) return (string)$found;
+            $tag = '[' . $kind . ' ' . (++$n[$kind]) . ']';
+            $map[$tag] = $m[0];
+            return $tag;
+        };
+    };
+    $text = preg_replace_callback('/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/', $swap('EMAIL'), $text) ?? $text;
+    $text = preg_replace_callback('/(?<![\d-])(?:\d{3}([- .])\d{2}\1\d{4}|\d{9})(?![\d-])/', $swap('SSN'), $text) ?? $text;
+    $text = preg_replace_callback('/(?<![\d-])(?:\+?1[ .-]?)?(?:\(\d{3}\)|\d{3})[ .-]?\d{3}[ .-]?\d{4}(?![\d-])/', $swap('PHONE'), $text) ?? $text;
+    $phone = $swap('PHONE');
+    $text = preg_replace_callback('/(?<![\w+])\+\d{1,3}(?:[ .-]?\d{2,5}){2,5}(?![\d-])/',
+        fn($m) => preg_match_all('/\d/', $m[0]) >= 8 ? $phone($m) : $m[0], $text) ?? $text;
+    return [$text, $map];
+}
+
+/**
  * Governed generation: enforces the feature toggle, redacts the prompt (unless
  * an admin turned redaction off), calls the provider, and logs usage METADATA
  * only (feature, provider, model, char counts, redacted flag — never the prompt

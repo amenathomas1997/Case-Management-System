@@ -420,8 +420,11 @@ struct ReferralDetailView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Toggle("I have confirmed that \(detail.counselorEmail.trimmingCharacters(in: .whitespacesAndNewlines)) belongs to this person's VR counselor",
                                        isOn: $confirmCounselorEmail)
-                                Text("This email was typed into the public referral form and has not been verified. Once confirmed on the client record, it receives monthly progress reports and can be invited to the counselor portal. Check it against the authorization paperwork or the agency first; leave this off to convert with it unconfirmed.")
+                                    // 4.29.0: the explanation is the switch's hint, not a stop of its own.
+                                    .accessibilityHint(Self.counselorEmailHelp)
+                                Text(Self.counselorEmailHelp)
                                     .font(.caption).foregroundStyle(Color.secondaryText)
+                                    .accessibilityHidden(true)
                             }
                         }
                         Button("Convert to client") { showConvertConfirm = true }
@@ -496,6 +499,8 @@ struct ReferralDetailView: View {
 
     /// A VR counselor referral with an email: converting keeps it unconfirmed unless the
     /// converter ticks the confirmation (the server's own test: source counselor, email set).
+    private static let counselorEmailHelp = "This email was typed into the public referral form and has not been verified. Once confirmed on the client record, it receives monthly progress reports and can be invited to the counselor portal. Check it against the authorization paperwork or the agency first; leave this off to convert with it unconfirmed."
+
     private var hasCounselorEmailToConfirm: Bool {
         guard let detail else { return false }
         return detail.source == "counselor" && !detail.counselorEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

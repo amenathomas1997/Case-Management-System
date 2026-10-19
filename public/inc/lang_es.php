@@ -92,7 +92,6 @@ return [
     // ---- Referral form copy ----
     'Use this form to refer yourself or someone else. First, tell us who you are. Then we\'ll show only the questions you need to answer. Fields marked with an asterisk (' => 'Use este formulario para referirse a sí mismo o a otra persona. Primero, díganos quién es usted. Después solo mostraremos las preguntas que necesita responder. Los campos marcados con un asterisco (',
     ') are required.' => ') son obligatorios.',
-    'and a person will help you. After you send the referral, we will contact you within 3 business days.' => 'y una persona le ayudará. Después de enviar la referencia, nos comunicaremos con usted dentro de 3 días hábiles.',
     '— everything you typed is still in the form:' => '— todo lo que escribió sigue en el formulario:',
     'What does this person need help with? *' => '¿Con qué necesita ayuda esta persona? *',
 
@@ -167,7 +166,7 @@ return [
     'Community Referral' => 'Referencia comunitaria',
     'Referral sent' => 'Referencia enviada',
     'Thank you — the referral has been received.' => 'Gracias — hemos recibido la referencia.',
-    'We will contact you within 3 business days.' => 'Nos comunicaremos con usted dentro de 3 días hábiles.',
+    'We will contact you within a few business days.' => 'Nos comunicaremos con usted en pocos días hábiles.',
     'Your referral number is' => 'Su número de referencia es',
     'We will contact you by' => 'Nos comunicaremos con usted a más tardar el',
     'If you have not heard from us by then, email' => 'Si no ha sabido de nosotros para esa fecha, escriba a',
@@ -184,7 +183,7 @@ return [
     'are required.' => 'son obligatorios.',
     'Need help with this form, or unsure which choice fits?' => '¿Necesita ayuda con este formulario o no sabe qué opción elegir?',
     'and a person will help you.' => 'y una persona le ayudará.',
-    'After you send the referral, we will contact you within 3 business days.' => 'Después de enviar la referencia, nos comunicaremos con usted dentro de 3 días hábiles.',
+    'After you send the referral, we will tell you the date we will contact you by.' => 'Después de enviar la referencia, le diremos la fecha en que nos comunicaremos con usted a más tardar.',
     'Please correct the following and resubmit' => 'Corrija lo siguiente y vuelva a enviar',
     'everything you typed is still in the form:' => 'todo lo que escribió sigue en el formulario:',
     'I am referring as a…' => 'Envío esta referencia como…',
@@ -617,6 +616,7 @@ return [
     'That time is too soon to book now. Your instructor has been told and will offer new times.' => 'Esa hora ya está demasiado próxima para reservarla. Avisamos a su instructor, que le ofrecerá otras horas.',
     'The session to move is no longer booked. Your instructor has been told.' => 'La sesión que quería cambiar ya no está reservada. Avisamos a su instructor.',
     'That time is no longer free. Your instructor has been told and will offer new times.' => 'Esa hora ya no está libre. Avisamos a su instructor, que le ofrecerá otras horas.',
+    'That time is no longer available. Your instructor has been told and will offer new times.' => 'Esa hora ya no está disponible. Avisamos a su instructor, que le ofrecerá otras horas.',
     // 4.24.0: files with messages and shared files.
     'File:' => 'Archivo:',
     'Attach a file' => 'Adjuntar un archivo',

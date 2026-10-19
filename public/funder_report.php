@@ -21,7 +21,10 @@ $ri = report_table('invoices', (int)$user['id']);
 // so work billed under an agency a track has since moved away from can still be selected
 // (as on the agency summary).
 $agencies = funder_agencies($rt, $ri);
-$agency = (string)($_GET['agency'] ?? ($agencies[0]['funding_agency'] ?? ''));
+$agency = is_string($_GET['agency'] ?? null) ? trim($_GET['agency']) : (string)($agencies[0]['funding_agency'] ?? '');
+// 4.29.0: an old name (from a bookmark or an earlier link) is the agency as it is called today,
+// as listed in the picker (funder_agencies() lists each agency once).
+if ($agency !== '') $agency = agency_resolve($agency);
 
 // funder_metrics() and funder_stat_rows() live in inc/scheduled_reports.php, shared
 // with the scheduled monthly funder email, so the two always agree.
@@ -129,7 +132,7 @@ page_header('Funder report', $user, 'analytics');
 ?>
 <style>.kv{display:grid;grid-template-columns:auto 1fr;gap:.25rem 1rem;margin:0}.kv dt{font-weight:600}.kv dd{margin:0}</style>
 <h1>Funder outcome report</h1>
-<p class="muted">One renewal-ready report per funding agency: clients served, hours by category, goal achievement, device retention, assessment gains, and closures.</p>
+<p class="muted">One renewal-ready report per funding agency: clients served, hours by category, goal achievement, device retention, assessment gains, and closures. Only VR work counts; private-pay and no-charge tracks are left out.</p>
 
 <?php
 // The count is spelled out: agencies known only from invoices have no current tracks.

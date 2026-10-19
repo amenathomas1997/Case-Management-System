@@ -21,15 +21,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_wording'])) {
     $changed = [];
     // Each change keeps the words it replaced, dated (the newest 50), so what a guardian
     // agreed to on a given day can be found again; the audit log names what changed.
-    foreach ($vals as $k => $v) {
-        $old = (string)(setting($k) ?? '');
-        if ($old === $v) continue;
-        $hist = json_decode((string)(setting($k . '_history') ?? '[]'), true);
-        $hist = is_array($hist) ? $hist : [];
-        array_unshift($hist, ['until' => date('c'), 'by' => (int)$user['id'], 'text' => $old]);
-        set_setting($k . '_history', json_encode(array_slice($hist, 0, 50), JSON_UNESCAPED_UNICODE));
-        set_setting($k, $v);
-        $changed[] = $k;
+    // 4.29.0: the history is also capped by size, oldest entries dropped first, so it always
+    // fits the settings column (65,535 bytes) and a long text can be changed again and again;
+    // and every text is saved in one transaction, so a failed save changes nothing.
+    $histMax = 60000;
+    db()->beginTransaction();
+    try {
+        foreach ($vals as $k => $v) {
+            $old = (string)(setting($k) ?? '');
+            if ($old === $v) continue;
+            $hist = json_decode((string)(setting($k . '_history') ?? '[]'), true);
+            $hist = is_array($hist) ? $hist : [];
+            array_unshift($hist, ['until' => date('c'), 'by' => (int)$user['id'], 'text' => $old]);
+            $hist = array_slice($hist, 0, 50);
+            $json = (string)json_encode($hist, JSON_UNESCAPED_UNICODE);
+            while (strlen($json) > $histMax && count($hist) > 1) {
+                array_pop($hist);
+                $json = (string)json_encode($hist, JSON_UNESCAPED_UNICODE);
+            }
+            set_setting($k . '_history', $json);
+            set_setting($k, $v);
+            $changed[] = $k;
+        }
+        db()->commit();
+    } catch (Throwable $e) {
+        if (db()->inTransaction()) db()->rollBack();
+        throw $e;
     }
     audit($user['id'], 'settings.wording', 'settings', null, $changed ? implode(', ', $changed) : 'no changes');
     flash($changed ? 'Public wording saved.' : 'Nothing was changed.');

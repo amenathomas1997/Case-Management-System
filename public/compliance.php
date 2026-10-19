@@ -139,7 +139,7 @@ if (can('billing')) {
    recently it was signed. Closed and archived clients are left out, as in the
    lists above: no consent is renewed for a case that is no longer open. */
 $validDays = (int)(setting('consent_validity_days') ?: 365);
-$cf = db()->prepare("SELECT c.id AS cid, c.name AS client,
+$cf = db()->prepare("SELECT c.id AS cid, c.name AS client, c.dob,
         s.guardian_name AS signed_guardian, s.signed_at, s.withdrawn_at,
         p.guardian_name AS pending_guardian, p.sent_at AS pending_sent_at
     FROM clients c
@@ -151,11 +151,21 @@ $cf = db()->prepare("SELECT c.id AS cid, c.name AS client,
 $cf->execute($scopeArg);
 $consentRisk = [];
 $unsignedBefore = date('Y-m-d', strtotime('-14 days'));
+// 4.29.0: the date a client turned 18, once it has passed, or null (as release_covering() judges it):
+// a guardian's consent or release signed before then no longer speaks for the client.
+$adultSince = function (?string $dob) use ($today): ?string {
+    if (!$dob || strtotime($dob) === false) return null;
+    $d = date('Y-m-d', strtotime($dob . ' +18 years'));
+    return $d <= $today ? $d : null;
+};
 foreach ($cf->fetchAll() as $f) {
     $f['kind'] = null;
+    $adult = $adultSince($f['dob'] ?? null);
     $f['guardian_name'] = $f['signed_at'] ? $f['signed_guardian'] : $f['pending_guardian'];
     if ($f['signed_at'] && $f['withdrawn_at']) {
         $f['kind'] = 'Withdrawn'; $f['when'] = substr($f['withdrawn_at'], 0, 10);
+    } elseif ($f['signed_at'] && $adult !== null && substr($f['signed_at'], 0, 10) < $adult) {
+        $f['kind'] = 'Adult'; $f['when'] = $adult;
     } elseif ($f['signed_at']) {
         $exp = date('Y-m-d', strtotime($f['signed_at'] . ' +' . $validDays . ' days'));
         if ($exp <= $soon) { $f['kind'] = $exp < $today ? 'Expired' : 'Expiring'; $f['when'] = $exp; }
@@ -165,7 +175,7 @@ foreach ($cf->fetchAll() as $f) {
     if ($f['kind'] !== null) $consentRisk[] = $f;
 }
 // Consents no longer in force (expired or withdrawn) first.
-$noConsent = fn(array $f): int => in_array($f['kind'], ['Expired', 'Withdrawn'], true) ? 0 : 1;
+$noConsent = fn(array $f): int => in_array($f['kind'], ['Expired', 'Withdrawn', 'Adult'], true) ? 0 : 1;
 usort($consentRisk, fn($a, $b) => [$noConsent($a), $a['when']] <=> [$noConsent($b), $b['when']]);
 
 /* ---- Releases of information (3.0.36) ----
@@ -174,7 +184,7 @@ usort($consentRisk, fn($a, $b) => [$noConsent($a), $a['when']] <=> [$noConsent($
    clients with no current release and no guardian consent in force at all. */
 $releaseRisk = []; $noRelease = [];
 try {
-    $rq = db()->prepare("SELECT r.*, c.name AS client FROM client_releases r JOIN clients c ON c.id = r.client_id
+    $rq = db()->prepare("SELECT r.*, c.name AS client, c.dob FROM client_releases r JOIN clients c ON c.id = r.client_id
         WHERE c.archived_at IS NULL AND c.status NOT LIKE 'Closed%' AND r.signed_at IS NOT NULL" . $scopeSql . "
         ORDER BY r.client_id, r.signed_at DESC, r.id DESC");
     $rq->execute($scopeArg);
@@ -184,18 +194,24 @@ try {
         if (isset($seenRecipient[$k])) continue; // only the newest signed release per recipient
         $seenRecipient[$k] = true;
         $st = release_status($r);
-        if ($st === 'Withdrawn') { $r['kind'] = 'Withdrawn'; $r['when'] = substr($r['withdrawn_at'], 0, 10); }
+        $adult = ($r['signer_role'] ?? '') === 'Guardian' ? $adultSince($r['dob'] ?? null) : null;
+        if ($st === 'Current' && $adult !== null && substr((string)$r['signed_at'], 0, 10) < $adult) { $r['kind'] = 'Adult'; $r['when'] = $adult; }
+        elseif ($st === 'Withdrawn') { $r['kind'] = 'Withdrawn'; $r['when'] = substr($r['withdrawn_at'], 0, 10); }
         elseif ($st === 'Expired') { $r['kind'] = 'Expired'; $r['when'] = $r['expires_on']; }
         elseif ($r['expires_on'] !== null && $r['expires_on'] <= $soon) { $r['kind'] = 'Expiring'; $r['when'] = $r['expires_on']; }
         else continue;
         $releaseRisk[] = $r;
     }
     usort($releaseRisk, fn($a, $b) => [$a['kind'] === 'Expiring' ? 1 : 0, $a['when']] <=> [$b['kind'] === 'Expiring' ? 1 : 0, $b['when']]);
+    // 4.29.0: a guardian's consent or Guardian-signed release from before the client's 18th
+    // birthday no longer counts once that birthday has passed (as release_covering()).
+    $minorSignedSql = fn(string $col): string => "(c.dob IS NOT NULL AND DATE_ADD(c.dob, INTERVAL 18 YEAR) <= CURDATE() AND DATE({$col}) < DATE_ADD(c.dob, INTERVAL 18 YEAR))";
     $nq = db()->prepare("SELECT c.id AS cid, c.name AS client FROM clients c
         WHERE c.archived_at IS NULL AND c.status NOT LIKE 'Closed%'" . $scopeSql . "
-          AND NOT EXISTS (SELECT 1 FROM client_releases r WHERE r.client_id = c.id AND r.signed_at IS NOT NULL AND r.withdrawn_at IS NULL AND r.expires_on >= CURDATE())
+          AND NOT EXISTS (SELECT 1 FROM client_releases r WHERE r.client_id = c.id AND r.signed_at IS NOT NULL AND r.withdrawn_at IS NULL AND r.expires_on >= CURDATE()
+              AND NOT (COALESCE(r.signer_role, '') = 'Guardian' AND " . $minorSignedSql('r.signed_at') . "))
           AND NOT EXISTS (SELECT 1 FROM consent_forms f WHERE f.client_id = c.id AND f.signed_at IS NOT NULL AND f.withdrawn_at IS NULL
-              AND f.signed_at > DATE_SUB(NOW(), INTERVAL ? DAY))
+              AND f.signed_at > DATE_SUB(NOW(), INTERVAL ? DAY) AND NOT " . $minorSignedSql('f.signed_at') . ")
         ORDER BY c.name");
     $nq->execute(array_merge($scopeArg, [$validDays]));
     $noRelease = $nq->fetchAll();
@@ -374,10 +390,10 @@ page_header('Compliance', $user, 'compliance');
       <tr>
         <td><a href="client.php?id=<?= (int)$f['cid'] ?>"><?= h($f['client']) ?></a></td>
         <td><?= h($f['guardian_name']) ?></td>
-        <td><?php $k = $f['kind']; echo '<span class="badge ' . ($k === 'Expired' || $k === 'Withdrawn' ? 'badge-hold' : ($k === 'Expiring' ? 'badge-pending' : 'badge-active')) . '">' . h($k === 'Unsigned' ? 'Not signed' : $k) . '</span>'; ?></td>
-        <td><?= ['Unsigned' => 'sent ', 'Expired' => 'expired ', 'Withdrawn' => 'withdrawn ', 'Expiring' => 'expires '][$f['kind']] . fmt_date($f['when']) ?>
+        <td><?php $k = $f['kind']; echo '<span class="badge ' . ($k === 'Expired' || $k === 'Withdrawn' || $k === 'Adult' ? 'badge-hold' : ($k === 'Expiring' ? 'badge-pending' : 'badge-active')) . '">' . h($k === 'Unsigned' ? 'Not signed' : ($k === 'Adult' ? 'Signed by a guardian before the client turned 18' : $k)) . '</span>'; ?></td>
+        <td><?= ['Unsigned' => 'sent ', 'Expired' => 'expired ', 'Withdrawn' => 'withdrawn ', 'Expiring' => 'expires ', 'Adult' => 'client turned 18 on '][$f['kind']] . fmt_date($f['when']) ?>
           <?= $f['kind'] !== 'Unsigned' && $f['pending_sent_at'] ? '<br><span class="muted">renewal request sent ' . fmt_date(substr($f['pending_sent_at'], 0, 10)) . ', not yet signed</span>' : '' ?></td>
-        <td><a class="btn btn-secondary btn-sm" href="client.php?id=<?= (int)$f['cid'] ?>#demo-h"><?= 'Open client page to ' . ($f['pending_sent_at'] ? 'resend consent request' : ($f['kind'] === 'Withdrawn' ? 'request new consent' : 'renew consent')) ?><span class="visually-hidden"> for <?= h($f['client']) ?></span></a></td>
+        <td><a class="btn btn-secondary btn-sm" href="client.php?id=<?= (int)$f['cid'] ?>#demo-h"><?= 'Open client page to ' . ($f['pending_sent_at'] ? 'resend consent request' : ($f['kind'] === 'Withdrawn' ? 'request new consent' : ($f['kind'] === 'Adult' ? "request the client's own consent" : 'renew consent'))) ?><span class="visually-hidden"> for <?= h($f['client']) ?></span></a></td>
       </tr>
     <?php endforeach; ?>
     </tbody>
@@ -402,7 +418,7 @@ page_header('Compliance', $user, 'compliance');
   <ul>
   <?php foreach ($releaseRisk as $r): ?>
     <li><a href="client.php?id=<?= (int)$r['client_id'] ?>#releases-h"><?= h($r['client']) ?></a>: <?= h($r['recipient_name']) ?> (<?= h($r['recipient_type']) ?>),
-      <?= ['Withdrawn' => 'withdrawn ', 'Expired' => 'expired ', 'Expiring' => 'expires '][$r['kind']] . fmt_date($r['when']) ?>.</li>
+      <?= ['Withdrawn' => 'withdrawn ', 'Expired' => 'expired ', 'Expiring' => 'expires ', 'Adult' => 'signed by a guardian; the client turned 18 on '][$r['kind']] . fmt_date($r['when']) ?>.</li>
   <?php endforeach; ?>
   </ul>
   <?php endif; ?>

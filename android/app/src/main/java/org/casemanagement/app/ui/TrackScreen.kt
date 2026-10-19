@@ -7,7 +7,10 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -24,6 +27,12 @@ import org.casemanagement.app.Goal
 import org.casemanagement.app.GoalTemplate
 import org.casemanagement.app.TrackNotes
 import org.casemanagement.app.WorkLog
+import org.casemanagement.app.countLabel
+import org.casemanagement.app.dialogKey
+import org.casemanagement.app.listTotal
+import org.casemanagement.app.mergeReloadedMap
+import org.casemanagement.app.openedValues
+import org.casemanagement.app.strings
 import org.casemanagement.app.parseGoalProgress
 import org.casemanagement.app.parseGoalTemplates
 import org.casemanagement.app.parseGoals
@@ -42,7 +51,7 @@ import java.util.UUID
 /** Everything the track screen reads; the lists that could not be read are null (said on the screen). */
 private class TrackData(
     val goals: List<Goal>, val expenses: List<JSONObject>, val amend: JSONObject, val active: Boolean,
-    val logs: List<WorkLog>?, val notes: TrackNotes?,
+    val logs: List<WorkLog>?, val notes: TrackNotes?, val logsTotal: Int = logs?.size ?: 0,
 )
 
 /**
@@ -60,18 +69,29 @@ fun TrackScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
         val amend = try { api.call("amendment", mapOf("track" to trackId.toString())) } catch (e: ApiException) { JSONObject() }
         // Only active tracks take hours; the tracks list holds exactly those.
         val active = try { parseTracks(api.call("tracks")).any { it.id == trackId } } catch (e: ApiException) { true }
-        val logs = try { parseWorkLogs(api.call("work_logs", q)) } catch (e: ApiException) { if (e.status == 401) throw e; null }
+        val logsReply = try { api.call("work_logs", q) } catch (e: ApiException) { if (e.status == 401) throw e; null }
+        val logs = logsReply?.let { parseWorkLogs(it) }
         val notes = try { parseTrackNotes(api.call("track_notes", q)) } catch (e: ApiException) { if (e.status == 401) throw e; null }
-        TrackData(goals, expenses, amend, active, logs, notes)
+        // 4.29.0: the server's total, so a cut list says "latest N of M".
+        TrackData(goals, expenses, amend, active, logs, notes, listTotal(logsReply, logs?.size ?: 0))
     }
-    var goalFor by remember { mutableStateOf<Goal?>(null) }
-    var progressFor by remember { mutableStateOf<Goal?>(null) }
+    // 4.29.0: each dialog's opener is the item's id, kept across rotation, so the dialog comes back
+    // for the same item (with what was typed) and never hands its fields to another item.
+    var goalForId by rememberSaveable { mutableIntStateOf(0) }
+    var progressForId by rememberSaveable { mutableIntStateOf(0) }
     var addingGoal by rememberSaveable { mutableStateOf(false) }
     var addingExpense by rememberSaveable { mutableStateOf(false) }
-    var deletingExpense by remember { mutableStateOf<JSONObject?>(null) }
-    var logFor by remember { mutableStateOf<WorkLog?>(null) }
-    var correcting by remember { mutableStateOf<WorkLog?>(null) }
-    var deletingLog by remember { mutableStateOf<WorkLog?>(null) }
+    var deletingExpenseId by rememberSaveable { mutableIntStateOf(0) }
+    var logForId by rememberSaveable { mutableIntStateOf(0) }
+    var correctingId by rememberSaveable { mutableIntStateOf(0) }
+    var deletingLogId by rememberSaveable { mutableIntStateOf(0) }
+    val data = state.data
+    val goalFor = data?.goals?.firstOrNull { it.id == goalForId }
+    val progressFor = data?.goals?.firstOrNull { it.id == progressForId }
+    val logFor = data?.logs?.firstOrNull { it.id == logForId }
+    val correcting = data?.logs?.firstOrNull { it.id == correctingId }
+    val deletingLog = data?.logs?.firstOrNull { it.id == deletingLogId }
+    val deletingExpense = data?.expenses?.firstOrNull { it.optInt("id") == deletingExpenseId }
     var reporting by rememberSaveable { mutableStateOf(false) }
     var openNotes by remember { mutableStateOf(setOf<Int>()) }
     var notice by remember { mutableStateOf<String?>(null) }
@@ -102,7 +122,7 @@ fun TrackScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
             t.goals.forEachIndexed { i, g ->
                 ListRow(listOfNotNull("Goal ${i + 1} of ${t.goals.size}: " + g.specificGoal, g.measurableMetric.ifEmpty { null }?.let { "Measured by: $it" },
                     g.targetDate?.let { "Target: " + dayText(it) }, "${g.progressPct} percent, ${g.status}"),
-                    action = "record progress or see its history", onClick = { goalFor = g })
+                    action = "record progress or see its history", onClick = { goalForId = g.id })
             }
             SecondaryButton("Add a goal") { addingGoal = true }
 
@@ -123,14 +143,15 @@ fun TrackScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
             SecondaryButton("Add a note on this track") { nav.navigate("trackNote/$clientId/$trackId") }
 
             val logs = t.logs
-            Heading(if (logs == null) "Hours logged" else "Hours logged (${logs.size})")
+            Heading(if (logs == null) "Hours logged" else countLabel("Hours logged", logs.size, t.logsTotal))
             when {
                 logs == null -> Text("The hours logged could not be loaded.")
                 logs.isEmpty() -> Text("No hours logged on this track.")
+                t.logsTotal > logs.size -> Text("The older entries are on the website's track page.")
             }
             logs?.forEach { l ->
                 ListRow(listOf(workLogSummary(l), l.description), action = if (l.isBilled) null else "correct or delete it",
-                    onClick = if (l.isBilled) null else ({ logFor = l }))
+                    onClick = if (l.isBilled) null else ({ logForId = l.id }))
             }
 
             Heading("Billable expenses (${t.expenses.size})")
@@ -139,7 +160,7 @@ fun TrackScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
                 val billed = e.optBoolean("is_billed")
                 ListRow(listOf("$" + String.format(Locale.US, "%,.2f", e.optDouble("amount", 0.0)) + ", " + e.optString("description"),
                     dayText(e.str("expense_date")) + if (billed) ", on an invoice" else ", not yet billed"),
-                    action = if (billed) null else "delete it", onClick = if (billed) null else ({ deletingExpense = e }))
+                    action = if (billed) null else "delete it", onClick = if (billed) null else ({ deletingExpenseId = e.optInt("id") }))
             }
             SecondaryButton("Add an expense") { addingExpense = true }
             SecondaryButton("Refresh") { state.reload() }
@@ -148,30 +169,31 @@ fun TrackScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
 
     goalFor?.let { g ->
         AlertDialog(
-            onDismissRequest = { goalFor = null },
+            onDismissRequest = { goalForId = 0 },
             title = { Text(g.specificGoal, modifier = Modifier.semantics { heading() }) },
             text = {
-                Column {
+                // Scrolls (4.29.0), so a long goal at a large text size never hides the buttons.
+                Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text("${g.progressPct} percent, ${g.status}.")
-                    TextButton(onClick = { goalFor = null; progressFor = g }) { Text("Record progress") }
-                    TextButton(onClick = { goalFor = null; nav.navigate("goal/${g.id}/" + android.net.Uri.encode(g.specificGoal.ifEmpty { "-" })) }) { Text("Progress history") }
+                    TextButton(onClick = { goalForId = 0; progressForId = g.id }) { Text("Record progress") }
+                    TextButton(onClick = { goalForId = 0; nav.navigate("goal/${g.id}/" + android.net.Uri.encode(g.specificGoal.ifEmpty { "-" })) }) { Text("Progress history") }
                 }
             },
-            confirmButton = { TextButton(onClick = { goalFor = null }) { Text("Close") } },
+            confirmButton = { TextButton(onClick = { goalForId = 0 }) { Text("Close") } },
         )
     }
     logFor?.let { l ->
         AlertDialog(
-            onDismissRequest = { logFor = null },
+            onDismissRequest = { logForId = 0 },
             title = { Text(workLogSummary(l), modifier = Modifier.semantics { heading() }) },
             text = {
-                Column {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text(l.description)
-                    TextButton(onClick = { logFor = null; correcting = l }) { Text("Correct hours or miles") }
-                    TextButton(onClick = { logFor = null; deletingLog = l }) { Text("Delete the entry") }
+                    TextButton(onClick = { logForId = 0; correctingId = l.id }) { Text("Correct hours or miles") }
+                    TextButton(onClick = { logForId = 0; deletingLogId = l.id }) { Text("Delete the entry") }
                 }
             },
-            confirmButton = { TextButton(onClick = { logFor = null }) { Text("Close") } },
+            confirmButton = { TextButton(onClick = { logForId = 0 }) { Text("Close") } },
         )
     }
     deletingLog?.let { l ->
@@ -181,7 +203,7 @@ fun TrackScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
                 try { notice = api.call("delete_log", body = JSONObject().put("id", l.id)).optString("message").ifEmpty { "Entry deleted." }; state.reload() }
                 catch (e: ApiException) { error = e.message }
             }
-        }, { deletingLog = null })
+        }, { deletingLogId = 0 })
     }
     deletingExpense?.let { e ->
         val what = "$" + String.format(Locale.US, "%,.2f", e.optDouble("amount", 0.0)) + " on " + dayText(e.str("expense_date"))
@@ -192,10 +214,11 @@ fun TrackScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
                 catch (x: ApiException) { error = x.message }
                 state.reload()
             }
-        }, { deletingExpense = null })
+        }, { deletingExpenseId = 0 })
     }
-    correcting?.let { l -> CorrectLogDialog(api, l, onDone = { m -> correcting = null; notice = m; state.reload() }, onCancel = { correcting = null }) }
-    progressFor?.let { g -> ProgressDialog(api, g, onDone = { m -> progressFor = null; notice = m; state.reload() }, onCancel = { progressFor = null }) }
+    // Keyed by the item (4.29.0): fields kept across rotation belong to that item only.
+    correcting?.let { l -> key(dialogKey("correct", l.id)) { CorrectLogDialog(api, l, onDone = { m -> correctingId = 0; notice = m; state.reload() }, onCancel = { correctingId = 0 }) } }
+    progressFor?.let { g -> key(dialogKey("progress", g.id)) { ProgressDialog(api, g, onDone = { m -> progressForId = 0; notice = m; state.reload() }, onCancel = { progressForId = 0 }) } }
     if (addingGoal) AddGoalDialog(api, trackId, onDone = { m -> addingGoal = false; notice = m; state.reload() }, onCancel = { addingGoal = false })
     if (addingExpense) ExpenseDialog(api, trackId, onDone = { m -> addingExpense = false; notice = m; state.reload() }, onCancel = { addingExpense = false })
     if (reporting) SendReportDialog(api, trackId, state.data?.amend?.str("client") ?: "the client", onDone = { m -> reporting = false; notice = m }, onCancel = { reporting = false })
@@ -209,12 +232,14 @@ fun workLogSummary(l: WorkLog): String =
 /** A goal's progress, newest first (goal_progress). */
 @Composable
 fun GoalHistoryScreen(api: Api, goalId: Int, goalText: String) {
-    val state = rememberLoaded(goalId) { parseGoalProgress(api.call("goal_progress", mapOf("goal" to goalId.toString()))) }
+    val state = rememberLoaded(goalId) { api.call("goal_progress", mapOf("goal" to goalId.toString())).let { r -> parseGoalProgress(r).let { it to listTotal(r, it.size) } } }
     Page {
         Heading("Goal: $goalText", large = true)
-        Show(state, "the history") { list ->
-            Announce("${list.size} progress ${if (list.size == 1) "entry" else "entries"}.", key = list.size)
+        Show(state, "the history") { (list, total) ->
+            // 4.29.0: a cut list says so ("latest N of M").
+            Announce(if (total > list.size) "Latest ${list.size} of $total progress entries." else "${list.size} progress ${if (list.size == 1) "entry" else "entries"}.", key = list.size)
             if (list.isEmpty()) Text("No progress recorded yet.")
+            if (total > list.size) Text("Showing the latest ${list.size} of $total entries. The older ones are on the website.")
             list.forEach { h ->
                 ListRow(listOfNotNull("${h.progressPct}%, ${h.status}", whenText(h.createdAt) + (h.byName?.let { ", by $it" } ?: ""), h.note))
             }
@@ -229,20 +254,25 @@ private fun CorrectLogDialog(api: Api, l: WorkLog, onDone: (String) -> Unit, onC
     var miles by rememberSaveable { mutableStateOf(hoursText(l.mileage)) }
     var reason by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var hoursError by remember { mutableStateOf<String?>(null) }
+    var milesError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     FormDialog("Correct the entry of " + dayText(l.workDate), "Save", busy, onSave = {
         if (busy) return@FormDialog
         val h = number(hours)
         val m = number(miles.ifBlank { "0" })
-        if (h == null || m == null) { error = "Enter the hours and miles as numbers."; return@FormDialog }
+        // 4.29.0: each error on its own field, as well as in the summary.
+        hoursError = if (h == null) "Enter the hours as a number, such as 1.5." else null
+        milesError = if (m == null) "Enter the miles as a number, or leave it empty." else null
+        if (h == null || m == null) { error = hoursError ?: milesError; return@FormDialog }
         scope.launchSave({ busy = it }, { error = it }) {
             val r = api.call("correct_log", body = JSONObject().put("id", l.id).put("hours", h).put("mileage", m).put("reason", reason.trim()))
             onDone(r.optString("message").ifEmpty { "Entry corrected." })
         }
     }, onCancel = onCancel) {
-        Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal)
-        Field("Miles", miles, { miles = it }, keyboard = KeyboardType.Decimal)
+        Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal, error = hoursError)
+        Field("Miles", miles, { miles = it }, keyboard = KeyboardType.Decimal, error = milesError)
         Field("Reason for the correction", reason, { reason = it })
         ErrorText(error)
     }
@@ -289,6 +319,9 @@ private fun AddGoalDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
     var notice by remember { mutableStateOf<String?>(null) }
     var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var specificError by remember { mutableStateOf<String?>(null) }
+    var metricError by remember { mutableStateOf<String?>(null) }
+    var targetError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     if (picking) {
@@ -300,10 +333,13 @@ private fun AddGoalDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
     }
     FormDialog("Add a goal", "Add", busy, onSave = {
         if (busy) return@FormDialog
+        // 4.29.0: each error on its own field, as well as in the summary.
+        specificError = if (specific.isBlank()) "Specific objective: say what the client will be able to do." else null
+        metricError = if (metric.isBlank()) "Measurable criteria: say how progress on this goal is measured." else null
+        targetError = if (target.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(target.trim())) "Enter the target date as year-month-day, such as ${today()}, or leave it empty." else null
+        val first = specificError ?: metricError ?: targetError
         when {
-            specific.isBlank() -> error = "Specific objective: say what the client will be able to do."
-            metric.isBlank() -> error = "Measurable criteria: say how progress on this goal is measured."
-            target.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(target.trim()) -> error = "Enter the target date as year-month-day, such as ${today()}, or leave it empty."
+            first != null -> error = first
             else -> scope.launchSave({ busy = it }, { error = it }) {
                 api.callOnce("add_goal", JSONObject().put("track_id", trackId).put("specific_goal", specific.trim())
                     .put("measurable_metric", metric.trim()).put("focus_area", focus.trim()).put("target_date", target.trim()), idem, { idem = it }, "the goal")
@@ -313,10 +349,10 @@ private fun AddGoalDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
     }, onCancel = onCancel) {
         NoticeText(notice)
         SecondaryButton("Start from a template") { picking = true }
-        Field("Specific objective", specific, { specific = it }, hint = "required", singleLine = false, minLines = 2)
-        Field("Measurable criteria", metric, { metric = it }, hint = "required", singleLine = false, minLines = 2)
+        Field("Specific objective", specific, { specific = it }, hint = "required", singleLine = false, minLines = 2, error = specificError)
+        Field("Measurable criteria", metric, { metric = it }, hint = "required", singleLine = false, minLines = 2, error = metricError)
         Field("Focus area", focus, { focus = it }, hint = "optional")
-        Field("Target date", target, { target = it }, hint = "optional, year-month-day")
+        Field("Target date", target, { target = it }, hint = "optional, year-month-day", error = targetError)
         ErrorText(error)
     }
 }
@@ -370,7 +406,8 @@ private fun ProgressDialog(api: Api, g: Goal, onDone: (String) -> Unit, onCancel
     val idem = rememberSaveable { UUID.randomUUID().toString() }
     val scope = rememberCoroutineScope()
     AlertDialog(
-        onDismissRequest = onCancel,
+        // 4.29.0: not closed while saving (Back or a tap outside), so the entry is never left half-sent.
+        onDismissRequest = { if (!busy) onCancel() },
         title = { Text("Progress: " + g.specificGoal, modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -398,7 +435,7 @@ private fun ProgressDialog(api: Api, g: Goal, onDone: (String) -> Unit, onCancel
                 }
             }) { Text(if (busy) "Saving…" else "Save") }
         },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = onCancel) { Text("Cancel") } },
     )
 }
 
@@ -414,7 +451,7 @@ private fun ExpenseDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
     val idem = rememberSaveable { UUID.randomUUID().toString() }
     val scope = rememberCoroutineScope()
     AlertDialog(
-        onDismissRequest = onCancel,
+        onDismissRequest = { if (!busy) onCancel() },
         title = { Text("Add an expense", modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -436,8 +473,25 @@ private fun ExpenseDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
                 }
             }) { Text(if (busy) "Saving…" else "Add") }
         },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = onCancel) { Text("Cancel") } },
     )
+}
+
+/** The track fields the edit form sends, and the form's own defaults for each. */
+private val TRACK_FORM_KEYS = listOf("title", "service_type", "status", "report_cadence", "auth_number", "funding_agency", "authorized_hours",
+    "hourly_rate", "mileage_rate", "start_date", "expiration_date")
+
+/**
+ * What the form opened with (4.29.0), with when the track was read (updated_at), kept across process
+ * death: sent as orig and loaded_at, so the server refuses a save over someone else's newer change.
+ */
+private fun trackOpened(f: JSONObject): JSONObject {
+    val t = f.optJSONObject("track") ?: JSONObject()
+    val defaults = mapOf("service_type" to (f.optJSONArray("service_types")?.optString(0) ?: ""), "status" to "Active", "report_cadence" to "monthly")
+    return JSONObject().also { o ->
+        TRACK_FORM_KEYS.forEach { k -> o.put(k, t.str(k) ?: defaults[k] ?: "") }
+        t.str("updated_at")?.let { o.put("updated_at", it) }
+    }
 }
 
 /** The track's details (title, status, authorization, rates, dates, report schedule), as on the website. */
@@ -448,58 +502,89 @@ fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: In
     }
     Show(state, "the track form") { f ->
         val t = f.optJSONObject("track") ?: JSONObject()
-        var title by rememberSaveable { mutableStateOf(t.str("title") ?: "") }
-        var serviceType by rememberSaveable { mutableStateOf(t.str("service_type") ?: f.optJSONArray("service_types")?.optString(0) ?: "") }
-        var status by rememberSaveable { mutableStateOf(t.str("status") ?: "Active") }
-        var cadence by rememberSaveable { mutableStateOf(t.str("report_cadence") ?: "monthly") }
-        var authNumber by rememberSaveable { mutableStateOf(t.str("auth_number") ?: "") }
-        var agency by rememberSaveable { mutableStateOf(t.str("funding_agency") ?: "") }
-        var hours by rememberSaveable { mutableStateOf(t.str("authorized_hours") ?: "") }
-        var rate by rememberSaveable { mutableStateOf(t.str("hourly_rate") ?: "") }
-        // A new track leaves it empty, so the agency's own (or the default) mileage rate applies.
-        var mileage by rememberSaveable { mutableStateOf(t.str("mileage_rate") ?: "") }
-        var start by rememberSaveable { mutableStateOf(t.str("start_date") ?: "") }
-        var end by rememberSaveable { mutableStateOf(t.str("expiration_date") ?: "") }
+        val values = rememberSaveable(trackId) { mutableStateOf(trackOpened(f).let { o -> TRACK_FORM_KEYS.map { it to o.optString(it) } }) }
+        val map = values.value.toMap()
+        fun v(k: String) = map[k] ?: ""
+        fun set(k: String, x: String) { values.value = (map + (k to x)).toList() }
         var reason by rememberSaveable { mutableStateOf("") }
+        // 4.29.0: what the form opened with, sent as orig and loaded_at (see trackOpened).
+        var baseJson by rememberSaveable(trackId) { mutableStateOf(trackOpened(f).toString()) }
+        val base = remember(baseJson) { try { JSONObject(baseJson) } catch (e: Exception) { JSONObject() } }
+        var conflict by rememberSaveable { mutableStateOf(false) }
+        var reloading by remember { mutableStateOf(false) }
+        var notice by remember { mutableStateOf<String?>(null) }
         // 4.28.0: a new track is added once even when a reply was lost (see sendOnce).
         var newKey by rememberSaveable { mutableStateOf("") }
         var error by remember { mutableStateOf<String?>(null) }
+        var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
         var busy by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         val cadences = f.optJSONArray("cadences").objects().map { it.optString("value") to it.optString("label") }
+        // Read again after a conflict: what was changed here stays; everything else takes the saved values.
+        LaunchedEffect(f) {
+            if (!reloading) return@LaunchedEffect
+            reloading = false
+            val now = trackOpened(f)
+            values.value = mergeReloadedMap(map, TRACK_FORM_KEYS.associateWith { base.optString(it) }, TRACK_FORM_KEYS.associateWith { now.optString(it) })
+                .filterKeys { it in TRACK_FORM_KEYS }.let { m -> TRACK_FORM_KEYS.map { it to (m[it] ?: "") } }
+            baseJson = now.toString()
+            conflict = false; error = null
+            notice = "Read again. The other changes are now shown, and what you changed here is kept. Check the form, then save again."
+        }
+        // A reload that failed leaves Reload usable again.
+        LaunchedEffect(state.loading, state.error) { if (reloading && !state.loading && state.error != null) reloading = false }
         Page {
             Heading(if (trackId > 0) "Edit the track" else "New track for " + f.optString("client_name"), large = true)
-            Field("Title", title, { title = it })
-            Choice("Service type", serviceType, f.optJSONArray("service_types").let { a -> List(a?.length() ?: 0) { a!!.optString(it) } }.map { it to it }) { serviceType = it }
-            Choice("Status", status, f.optJSONArray("statuses").let { a -> List(a?.length() ?: 0) { a!!.optString(it) } }.map { it to it }) { status = it }
-            Choice("Automatic progress reports", cadence, cadences) { cadence = it }
+            NoticeText(notice)
+            Field("Title", v("title"), { set("title", it) }, error = fieldErrors["title"])
+            Choice("Service type", v("service_type"), f.optJSONArray("service_types").let { a -> List(a?.length() ?: 0) { a!!.optString(it) } }.map { it to it }, error = fieldErrors["service_type"]) { set("service_type", it) }
+            Choice("Status", v("status"), f.optJSONArray("statuses").let { a -> List(a?.length() ?: 0) { a!!.optString(it) } }.map { it to it }, error = fieldErrors["status"]) { set("status", it) }
+            Choice("Automatic progress reports", v("report_cadence"), cadences, error = fieldErrors["report_cadence"]) { set("report_cadence", it) }
             Heading("Authorization")
-            Field("Authorization number", authNumber, { authNumber = it })
-            Field("Funding agency", agency, { agency = it })
-            Field("Authorized hours", hours, { hours = it }, keyboard = KeyboardType.Decimal)
-            Field("Hourly rate in dollars", rate, { rate = it }, keyboard = KeyboardType.Decimal)
-            Field("Mileage rate in dollars a mile", mileage, { mileage = it }, keyboard = KeyboardType.Decimal)
-            Field("Start date", start, { start = it }, hint = "year-month-day, optional")
-            Field("End date", end, { end = it }, hint = "year-month-day, optional")
-            if (trackId > 0) Field("Why it changed", reason, { reason = it }, hint = "kept as the amendment reason, optional")
+            Field("Authorization number", v("auth_number"), { set("auth_number", it) }, error = fieldErrors["auth_number"])
+            Field("Funding agency", v("funding_agency"), { set("funding_agency", it) }, error = fieldErrors["funding_agency"])
+            Field("Authorized hours", v("authorized_hours"), { set("authorized_hours", it) }, keyboard = KeyboardType.Decimal, error = fieldErrors["authorized_hours"])
+            Field("Hourly rate in dollars", v("hourly_rate"), { set("hourly_rate", it) }, keyboard = KeyboardType.Decimal, error = fieldErrors["hourly_rate"])
+            // A new track leaves it empty, so the agency's own (or the default) mileage rate applies.
+            Field("Mileage rate in dollars a mile", v("mileage_rate"), { set("mileage_rate", it) }, keyboard = KeyboardType.Decimal, error = fieldErrors["mileage_rate"])
+            Field("Start date", v("start_date"), { set("start_date", it) }, hint = "year-month-day, optional", error = fieldErrors["start_date"])
+            Field("End date", v("expiration_date"), { set("expiration_date", it) }, hint = "year-month-day, optional", error = fieldErrors["expiration_date"])
+            if (trackId > 0) Field("Why it changed", reason, { reason = it }, hint = "kept as the amendment reason, optional", error = fieldErrors["amendment_reason"])
             ErrorText(error)
-            PrimaryButton("Save", busy = busy, enabled = title.isNotBlank()) {
+            if (conflict) SecondaryButton("Reload, keeping my changes") { if (!reloading) { reloading = true; notice = null; state.reload() } }
+            PrimaryButton("Save", busy = busy, enabled = v("title").isNotBlank()) {
+                if (busy) return@PrimaryButton
+                notice = null
                 scope.launchSave({ busy = it }, { error = it }) {
-                    val b = JSONObject().put("title", title.trim()).put("service_type", serviceType).put("status", status).put("report_cadence", cadence)
-                        .put("auth_number", authNumber.trim()).put("funding_agency", agency.trim()).put("authorized_hours", hours.trim())
-                        .put("hourly_rate", rate.trim()).put("mileage_rate", mileage.trim()).put("start_date", start.trim()).put("expiration_date", end.trim())
-                        .put("bundle_id", t.optInt("bundle_id"))
+                    fieldErrors = emptyMap()
+                    val b = JSONObject()
+                    TRACK_FORM_KEYS.forEach { k -> b.put(k, v(k).trim()) }
+                    b.put("bundle_id", t.optInt("bundle_id"))
                     // The RSA category belongs to the service type: kept only while that is unchanged.
-                    if (serviceType == t.str("service_type")) b.put("rsa_category", t.str("rsa_category") ?: "")
-                    if (trackId > 0) b.put("id", trackId).put("amendment_reason", reason.trim()) else b.put("client_id", clientId)
+                    if (v("service_type") == t.str("service_type")) b.put("rsa_category", t.str("rsa_category") ?: "")
+                    if (trackId > 0) {
+                        b.put("orig", openedValues(b, base))
+                        base.str("updated_at")?.let { b.put("loaded_at", it) }
+                        b.put("id", trackId).put("amendment_reason", reason.trim())
+                    } else b.put("client_id", clientId)
                     try {
                         val saved = if (trackId > 0) api.call("save_track", body = b) else api.callOnce("save_track", b, newKey, { newKey = it }, "the new track")
                         Flash.pending = saved.optString("message").ifEmpty { "Track saved." }
                         nav.popBackStack()
                     } catch (e: ApiException) {
-                        // Field errors come back by name: say the first one, with its field.
+                        // Someone else saved it since it was opened (4.29.0): the message names what changed; Reload is offered.
+                        if (e.status == 409 && e.reply?.optBoolean("conflict") == true) {
+                            conflict = true
+                            val changed = e.reply.optJSONArray("changed").strings()
+                            error = (e.message ?: "Someone else changed this track since you opened it.") +
+                                (if (changed.isNotEmpty() && changed.none { (e.message ?: "").contains(it) }) " Changed: " + changed.joinToString(", ") + "." else "") +
+                                " Press Reload, keeping my changes, to see them."
+                            return@launchSave
+                        }
+                        // Field errors come back by name: each on its field, the first said in the summary.
                         val errs = e.reply?.optJSONObject("errors")
-                        error = errs?.keys()?.asSequence()?.firstOrNull()?.let { errs.optString(it) } ?: e.message
+                        fieldErrors = errs?.keys()?.asSequence()?.associateWith { errs.optString(it) } ?: emptyMap()
+                        error = fieldErrors.values.firstOrNull() ?: e.message
                     }
                 }
             }

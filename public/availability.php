@@ -17,8 +17,12 @@ $back = 'availability.php' . ($who !== (int)$user['id'] ? '?user=' . $who : '');
 $str = fn(string $k): string => is_string($_POST[$k] ?? null) ? trim($_POST[$k]) : '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_hours'])) {
+    // The same Add sent twice (4.29.0) adds the hours once, instead of answering the second with "overlap".
+    $hoursKey = web_idem_key($_POST);
+    if (web_once_get($hoursKey) !== null) { flash('Hours added. (The form was sent twice, so they were added once.)', 'info'); redirect($back); }
     $err = availability_add($who, $str('weekday'), $str('from'), $str('to'), $str('mode') !== 'in_person', $str('location'));
     if ($err !== null) { keep_input(); keep_field_errors([$err[0] => $err[1]]); redirect($back . '#add-h'); }
+    web_once_set($hoursKey, $who);
     audit((int)$user['id'], 'availability.add', 'user', $who, $str('weekday') . ' ' . $str('from') . '-' . $str('to'));
     flash('Hours added.');
     redirect($back);
@@ -26,7 +30,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_hours'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_hours'])) {
     $d = db()->prepare('DELETE FROM staff_availability WHERE id = ? AND user_id = ?');
     $d->execute([(int)$_POST['remove_hours'], $who]);
-    if ($d->rowCount()) audit((int)$user['id'], 'availability.remove', 'user', $who, '#' . (int)$_POST['remove_hours']);
+    // From an older page, for hours already removed: said, not reported as done (4.29.0).
+    if (!$d->rowCount()) { flash('Nothing was removed: those hours were already removed.', 'error'); redirect($back); }
+    audit((int)$user['id'], 'availability.remove', 'user', $who, '#' . (int)$_POST['remove_hours']);
     flash('Hours removed. Sessions already booked in them stay booked.');
     redirect($back);
 }
@@ -67,8 +73,9 @@ page_header($title, $user, 'account', [['account.php', 'My Account']]);
 
 <section class="card" aria-labelledby="add-h">
   <h2 id="add-h" tabindex="-1">Add hours</h2>
-  <form method="post" action="availability.php" class="stacked" novalidate><?= csrf_field() ?><input type="hidden" name="user" value="<?= $who ?>">
-    <?= form_error_summary(['weekday' => 'Day', 'from' => 'From', 'to' => 'To', 'mode' => 'How', 'location' => 'Where']) ?>
+  <form method="post" action="availability.php" class="stacked" novalidate><?= csrf_field() ?><?= web_idem_field() ?><input type="hidden" name="user" value="<?= $who ?>">
+    <?php // The messages already start with their field's name ("From: ..."), so the summary adds none (4.29.0). ?>
+    <?= form_error_summary(['weekday' => '', 'from' => '', 'to' => '', 'mode' => '', 'location' => '']) ?>
     <div class="field"><label for="weekday">Day</label>
       <select id="weekday" name="weekday" <?= field_aria('weekday') ?>><?php foreach (SELF_BOOKING_DAYS as $dk => $dn): ?><option value="<?= $dk ?>"<?= old_in('weekday', '1') === (string)$dk ? ' selected' : '' ?>><?= $dn ?></option><?php endforeach; ?></select><?= field_error('weekday') ?></div>
     <div class="field"><label for="from">From</label><input type="time" id="from" name="from" value="<?= h(old_in('from', '09:00')) ?>" <?= field_aria('from') ?>><?= field_error('from') ?></div>

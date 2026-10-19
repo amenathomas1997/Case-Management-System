@@ -24,6 +24,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         flash($sent ? 'A test email was sent to ' . $user['email'] . '. Check that it arrived (and not in junk).' : 'The test email could not be sent. See Email below.', $sent ? 'success' : 'error');
         redirect('system_health.php#email-h');
     }
+    if (isset($_POST['forget_keys'])) {
+        // 4.29.0 (P14): the way out when the key file is lost or replaced and the old one cannot
+        // be copied back. Typed confirmation, since it turns off authenticator apps and connections.
+        $typed = strtoupper(trim(is_string($_POST['forget_confirm'] ?? null) ? $_POST['forget_confirm'] : ''));
+        if ($typed !== 'FORGET') {
+            keep_field_errors(['forget_confirm' => $typed === '' ? 'Type the word FORGET to confirm. Nothing was changed.' : 'That is not the word FORGET. Nothing was changed.']);
+            redirect('system_health.php#forget-keys-h');
+        }
+        $fr = meeting_forget_stored_keys((int)$user['id']);
+        if (!$fr['ok'] && $fr['seeds'] + $fr['meetings'] + $fr['qbo'] === 0) { flash($fr['error'], 'error'); redirect('system_health.php#security-h'); }
+        $done = $fr['seeds'] . ' authenticator app' . ($fr['seeds'] === 1 ? '' : 's') . ' turned off (those people were emailed and sign in with an emailed code until they set it up again), '
+            . $fr['meetings'] . ' meeting account' . ($fr['meetings'] === 1 ? '' : 's') . ' and ' . ($fr['qbo'] ? 'the QuickBooks connection' : 'no QuickBooks connection') . ' forgotten.';
+        flash($fr['ok'] ? 'Done: ' . $done . ' A new key file was made. Connect QuickBooks again on the QuickBooks Online page, and ask staff to connect Zoom or Teams again on My Account.'
+            : $done . ' ' . $fr['error'], $fr['ok'] ? 'success' : 'error');
+        redirect('system_health.php#security-h');
+    }
     if (isset($_POST['save_graph_expiry'])) {
         $d = trim((string)($_POST['graph_expires'] ?? ''));
         if ($d !== '' && !valid_date($d, (int)date('Y'), (int)date('Y') + 3)) { flash('Enter the expiry date as a date within the next three years, or leave it empty.', 'error'); redirect('system_health.php#email-h'); }
@@ -112,10 +128,17 @@ if ($dbOk) {
     $appSessions = (int)$q('SELECT COUNT(DISTINCT user_id) FROM api_tokens WHERE expires_at > NOW() AND wipe_requested_at IS NULL');
 }
 // 4.28.0: the key file that encrypted authenticator seeds and connection tokens need.
-$keyState = $dbOk && function_exists('meeting_key_status') ? meeting_key_status() : 'unknown';
-if ($keyState === 'missing') $problems[] = ['security-h', 'The key file meeting_tokens.key is missing from the private directory, but authenticator apps, meeting accounts or QuickBooks need it: those people cannot sign in with their app. Copy the old key file back (readable only by its owner), or reset two-step verification for them.'];
-elseif ($keyState === 'ok' && ($oneSeed = (string)$q("SELECT totp_secret FROM users WHERE totp_enabled = 1 AND totp_secret LIKE 'v1:%' LIMIT 1")) !== '' && totp_secret_plain($oneSeed) === null) $problems[] = ['security-h', 'The key file meeting_tokens.key does not match the stored authenticator apps (it was replaced, perhaps after a restore), so those people cannot sign in with their app. Copy the original key file back, or reset two-step verification for them.'];
-elseif ($keyState === 'unreadable' && meeting_key_dependents() > 0) $problems[] = ['security-h', 'The key file meeting_tokens.key in the private directory cannot be read (damaged, or readable by others: it must be chmod 600), so authenticator apps, meeting accounts and QuickBooks cannot be used.'];
+// 4.29.0 (P14): what is wrong, and when it is lost or replaced, the action that forgets what cannot be read.
+$keyProblem = $dbOk && function_exists('meeting_key_problem') ? meeting_key_problem() : null;
+$keyCounts = in_array($keyProblem, ['missing', 'damaged', 'mismatch'], true) ? meeting_unreadable_counts() : null;
+$forgetWay = ' If the old key file cannot be found, use "Forget stored connections and keys" below.';
+if ($keyProblem === 'missing') $problems[] = ['security-h', 'The key file meeting_tokens.key is missing from the private directory, but authenticator apps, meeting accounts or QuickBooks need it: those people cannot sign in with their app. Copy the old key file back (readable only by its owner), or reset two-step verification for them.' . $forgetWay];
+elseif ($keyProblem === 'mismatch') $problems[] = ['security-h', 'The key file meeting_tokens.key does not match the stored authenticator apps or connections (it was replaced, perhaps after a restore), so those cannot be used. Copy the original key file back, or reset two-step verification for them.' . $forgetWay];
+elseif ($keyProblem === 'damaged' && meeting_key_dependents() > 0) $problems[] = ['security-h', 'The key file meeting_tokens.key in the private directory cannot be read (damaged), so authenticator apps, meeting accounts and QuickBooks cannot be used.' . $forgetWay];
+elseif ($keyProblem === 'access') $problems[] = ['security-h', 'The website cannot open the key file meeting_tokens.key in the private directory (it belongs to another user, perhaps copied back as root, or its mode does not let the site read it), so authenticator apps, meeting accounts and QuickBooks cannot be used. It may still be the right key: make it owned by the user the website runs as, readable only by that user (chmod 600). Do not forget anything until that is done.'];
+elseif ($keyProblem === 'permissions') $problems[] = ['security-h', 'The key file meeting_tokens.key in the private directory can be read by others: make it readable only by its owner (chmod 600). Until then authenticator apps, meeting accounts and QuickBooks cannot be used.'];
+// 4.29.0: Microsoft sent no auth_time after a hand-over, so Microsoft sign-in cannot work on that browser.
+if ($dbOk && entra_cfg() && (string)(setting('sso_auth_time_missing') ?? '') !== '') $problems[] = ['security-h', 'Microsoft sign-in did not send the optional claim auth_time (last on ' . fmt_date((string)setting('sso_auth_time_missing')) . '), so after a device is handed over for signing nobody can sign in with Microsoft on it. Add auth_time under Token configuration in the app registration (Federation explains).'];
 if ($failed24 >= 50) $problems[] = ['security-h', "$failed24 failed sign-ins in the last 24 hours, from $failedIps address" . ($failedIps === 1 ? '' : 'es') . '.'];
 
 /* ---- AI assistant ---- */
@@ -162,7 +185,7 @@ if ($latest !== '' && version_compare($latest, APP_VERSION, '<')) $latest = '';
 $checked = $dbOk ? update_checked_words() : '';
 $stateWord = ['fresh' => 'Working', 'waiting' => 'Waiting for its first run', 'stale' => 'Overdue', 'overdue' => 'Never ran', 'unreadable' => 'Cannot be checked', 'unchecked' => 'Not checked'];
 
-page_header('System health', $user, 'admin', [['admin.php', 'Administration']]);
+page_header((form_errors() ? 'Error — ' : '') . 'System health', $user, 'admin', [['admin.php', 'Administration']]);
 ?>
 <h1>System health</h1>
 <p>Checked <?= h($when($now)) ?>. <a href="system_health.php">Check again</a></p>
@@ -272,6 +295,20 @@ page_header('System health', $user, 'admin', [['admin.php', 'Administration']]);
     <?php [$vsOk, $vsWords] = virus_scan_health(); // 4.25.0 ?>
     <dt>Virus scanning of uploads</dt><dd><?= $vsOk ? '' : '<strong>' ?><?= h($vsWords) ?><?= $vsOk ? '' : '</strong>' ?></dd>
   </dl>
+  <?php if ($keyCounts !== null): ?>
+  <h3 id="forget-keys-h" tabindex="-1">Forget stored connections and keys</h3>
+  <p>First try to copy the old meeting_tokens.key back into the private directory (readable only by its owner): then nothing is lost.
+     If it is gone for good, this forgets what the server can no longer read:
+     <?= (int)$keyCounts['seeds'] ?> authenticator app<?= $keyCounts['seeds'] === 1 ? '' : 's' ?> (turned off; each person is emailed and signs in with an emailed code until they set it up again),
+     <?= (int)$keyCounts['meetings'] ?> meeting account<?= $keyCounts['meetings'] === 1 ? '' : 's' ?> and <?= $keyCounts['qbo'] ? 'the QuickBooks connection' : 'no QuickBooks connection' ?>.
+     A new key file is then made. Passkeys, passwords and everything else are kept.</p>
+  <form method="post" action="system_health.php#forget-keys-h" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['forget_confirm' => 'Type FORGET to confirm']) ?>
+    <div class="field"><label for="forget_confirm">Type FORGET to confirm <?= required_mark() ?></label>
+      <input type="text" id="forget_confirm" name="forget_confirm" autocomplete="off" required <?= field_aria('forget_confirm') ?>><?= field_error('forget_confirm') ?></div>
+    <button type="submit" name="forget_keys" value="1" class="btn btn-danger">Forget stored connections and keys</button>
+  </form>
+  <?php endif; ?>
   <p><a href="audit.php">Audit log</a></p>
 </section>
 

@@ -83,7 +83,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_request'])) {
     $justification = trim(str_replace("\r\n", "\n", (string)($_POST['justification'] ?? '')));
     // Over-long text is refused, not cut: a scripted or app post must not lose part of the justification.
     $reqErrors = array_filter([
-        'client_id' => $cid <= 0 ? 'Choose a client.' : null,
+        'client_id' => $cid <= 0 ? 'Choose a client.' : (!client_still_on_file($cid) ? 'That client is no longer on file (merged or removed). Choose the client again.' : null),
         'device_name' => $name === '' ? 'Name the device or technology.' : (mb_strlen($name) > 190 ? 'Device / technology: use 190 characters or fewer (you entered ' . mb_strlen($name) . ').' : null),
         'justification' => mb_strlen($justification) > 4000 ? 'Justification of need: use 4,000 characters or fewer (you entered ' . number_format(mb_strlen($justification)) . ').' : null,
     ]);
@@ -141,7 +141,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
         // A quote needs its price: a blank amount would be stored as $0.00 and then
         // read as the cheapest quote and as the letter's estimated cost. The amount
         // must also fit the column (decimal 10,2).
-        $amountRaw = trim((string)($_POST['amount'] ?? ''));
+        $amountRaw = str_replace([',', '$'], '', trim(is_string($_POST['amount'] ?? null) ? $_POST['amount'] : ''));
         $quoteErrors = [];
         if ($vendor === '') $quoteErrors['vendor'] = 'Vendor is required for a quote.';
         if ($amountRaw === '') $quoteErrors['amount'] = 'Amount is required: enter the quoted price, for example 2995.00.';
@@ -174,7 +174,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
     } elseif (isset($_POST['authorize'])) {
         // Blank means no amount; anything else must be a plain amount that fits the
         // column (decimal 10,2), refused on its field rather than read as $0.00.
-        $authAmountRaw = trim((string)($_POST['authorized_amount'] ?? ''));
+        // A text box (4.29.0): a number box sent "3,000" as blank, which erased the stored amount.
+        // Commas and a dollar sign are allowed and dropped.
+        $authAmountRaw = str_replace([',', '$'], '', trim(is_string($_POST['authorized_amount'] ?? null) ? $_POST['authorized_amount'] : ''));
         $authErrors = [];
         if ($authAmountRaw !== '' && !preg_match('/^\d{1,8}(\.\d{1,2})?$/D', $authAmountRaw)) {
             $authErrors['authorized_amount'] = 'Authorized amount: enter the amount in dollars, 0 to 99,999,999.99 with up to two decimal places, for example 2995.00, or leave it blank.';
@@ -374,7 +376,7 @@ if (isset($_GET['id'])) {
         <h3>Add a quote</h3>
         <div class="grid grid-4">
           <div class="field"><label for="vendor">Vendor <?= required_mark() ?></label><input type="text" id="vendor" name="vendor" required maxlength="190" value="<?= $oldQuote('vendor') ?>" <?= field_aria('vendor') ?>><?= field_error('vendor') ?></div>
-          <div class="field"><label for="amount">Amount in US dollars <span aria-hidden="true">*</span><span class="visually-hidden">(required)</span></label><input type="number" id="amount" name="amount" step="0.01" min="0" max="99999999.99" required value="<?= $oldQuote('amount') ?>" <?= field_aria('amount') ?>><?= field_error('amount') ?></div>
+          <div class="field"><label for="amount">Amount in US dollars <?= required_mark() ?></label><input type="text" inputmode="decimal" id="amount" name="amount" maxlength="16" required value="<?= $oldQuote('amount') ?>" <?= field_aria('amount') ?>><?= field_error('amount') ?></div>
           <div class="field"><label for="quote_ref">Quote #</label><input type="text" id="quote_ref" name="quote_ref" maxlength="120" value="<?= $oldQuote('quote_ref') ?>"></div>
           <div class="field"><label for="quote_notes">Notes</label><input type="text" id="quote_notes" name="quote_notes" maxlength="500" value="<?= $oldQuote('quote_notes') ?>"></div>
         </div>
@@ -409,7 +411,7 @@ if (isset($_GET['id'])) {
           <?= form_error_summary(['authorized_amount' => '', 'authorized_at' => '']) ?>
           <div class="field"><label for="funding_source">Funding source</label><input type="text" id="funding_source" name="funding_source" maxlength="120" value="<?= h($oldAuth('funding_source', (string)($r['funding_source'] ?? ''))) ?>" placeholder="e.g. State VR"></div>
           <div class="field"><label for="auth_number">Authorization #</label><input type="text" id="auth_number" name="auth_number" maxlength="80" value="<?= h($oldAuth('auth_number', (string)($r['auth_number'] ?? ''))) ?>"></div>
-          <div class="field"><label for="authorized_amount">Authorized amount</label><input type="number" id="authorized_amount" name="authorized_amount" step="0.01" min="0" max="99999999.99" value="<?= h($oldAuth('authorized_amount', $r['authorized_amount'] !== null ? (string)$r['authorized_amount'] : '')) ?>" <?= field_aria('authorized_amount') ?>><?= field_error('authorized_amount') ?></div>
+          <div class="field"><label for="authorized_amount">Authorized amount</label><input type="text" inputmode="decimal" id="authorized_amount" name="authorized_amount" maxlength="16" value="<?= h($oldAuth('authorized_amount', $r['authorized_amount'] !== null ? (string)$r['authorized_amount'] : '')) ?>" <?= field_aria('authorized_amount') ?>><?= field_error('authorized_amount') ?></div>
           <div class="field"><label for="authorized_at">Authorized on</label><input type="date" id="authorized_at" name="authorized_at" max="<?= date('Y-m-d') ?>" value="<?= h($oldAuth('authorized_at', (string)($r['authorized_at'] ?: date('Y-m-d')))) ?>" <?= field_aria('authorized_at') ?>><?= field_error('authorized_at') ?></div>
           <button type="submit" name="authorize" value="1" class="btn btn-primary">Save authorization</button>
         </form>

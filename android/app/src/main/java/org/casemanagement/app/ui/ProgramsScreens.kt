@@ -25,6 +25,12 @@ import org.casemanagement.app.objects
 import org.casemanagement.app.str
 import org.json.JSONObject
 import java.util.Locale
+import androidx.compose.runtime.key
+import org.casemanagement.app.dialogKey
+import org.casemanagement.app.listTotal
+import org.casemanagement.app.countLabel
+import org.casemanagement.app.idsToText
+import org.casemanagement.app.idsFromText
 
 fun money(d: Double) = "$" + String.format(Locale.US, "%,.2f", d)
 
@@ -120,7 +126,10 @@ fun CohortScreen(api: Api, id: Int) {
                 }
             }
             val sessions = r.optJSONArray("sessions").objects()
-            Heading("Sessions (${sessions.size})")
+            // 4.29.0: the server's total, so a cut list says "latest N of M".
+            val sessionsTotal = listTotal(r, sessions.size, "sessions_total")
+            Heading(countLabel("Sessions", sessions.size, sessionsTotal))
+            if (sessionsTotal > sessions.size) Text("The older sessions are on the website's cohort page.")
             sessions.forEach { s -> ListRow(listOf(s.optString("activity") + ", " + dayText(s.str("session_date")), "${s.optInt("duration_min")} minutes, ${s.optInt("present_n")} present" + (s.str("topic")?.let { ", $it" } ?: ""))) }
         }
         if (logging) CohortSessionDialog(api, id, members, onDone = { m -> logging = false; notice = m; state.reload() }, onCancel = { logging = false })
@@ -139,8 +148,11 @@ private fun CohortSessionDialog(api: Api, cohortId: Int, members: List<JSONObjec
     var minutes by rememberSaveable { mutableStateOf("50") }
     var topic by rememberSaveable { mutableStateOf("") }
     var notes by rememberSaveable { mutableStateOf("") }
-    var present by remember { mutableStateOf(members.map { it.optInt("id") }.toSet()) }
-    var confirming by remember { mutableStateOf(false) }
+    // 4.29.0: who was ticked present is kept across rotation and a text-size change (as text), so
+    // an unticked absent student is never put back as present.
+    var presentText by rememberSaveable { mutableStateOf(idsToText(members.map { it.optInt("id") })) }
+    val present = idsFromText(presentText).filter { id -> members.any { it.optInt("id") == id } }.toSet()
+    var confirming by rememberSaveable { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var minutesError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -158,7 +170,7 @@ private fun CohortSessionDialog(api: Api, cohortId: Int, members: List<JSONObjec
         Field("Topic", topic, { topic = it }, hint = "optional")
         Field("Notes", notes, { notes = it }, hint = "optional", singleLine = false)
         Heading("Who was there")
-        members.forEach { s -> Tick(s.optString("name"), s.optInt("id") in present) { on -> present = if (on) present + s.optInt("id") else present - s.optInt("id") } }
+        members.forEach { s -> Tick(s.optString("name"), s.optInt("id") in present) { on -> presentText = idsToText(if (on) present + s.optInt("id") else present - s.optInt("id")) } }
         ErrorText(error)
     }
     if (confirming) {
@@ -202,11 +214,13 @@ private fun AddContractDialog(api: Api, onDone: (Int) -> Unit, onCancel: () -> U
     var end by rememberSaveable { mutableStateOf("") }
     var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var amountError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     FormDialog("Add a contract", "Add", busy, name.isNotBlank(), onSave = {
         val a = if (amount.isBlank()) "0" else moneyText(amount)
-        if (a == null) { error = "Enter the amount in dollars, such as 12500."; return@FormDialog }
+        amountError = if (a == null) "Enter the budget in dollars, such as 12500." else null
+        if (a == null) { error = amountError; return@FormDialog }
         scope.launchSave({ busy = it }, { error = it }) {
             onDone(api.callOnce("add_contract", JSONObject().put("name", name.trim()).put("funder", funder.trim()).put("contract_number", number.trim())
                 .put("amount", a).put("start_date", start.trim()).put("end_date", end.trim()), idem, { idem = it }, "the contract").optInt("id"))
@@ -215,7 +229,7 @@ private fun AddContractDialog(api: Api, onDone: (Int) -> Unit, onCancel: () -> U
         Field("Name", name, { name = it })
         Field("Funder", funder, { funder = it }, hint = "optional")
         Field("Contract number", number, { number = it }, hint = "optional")
-        Field("Budget in dollars", amount, { amount = it }, keyboard = KeyboardType.Decimal)
+        Field("Budget in dollars", amount, { amount = it }, keyboard = KeyboardType.Decimal, error = amountError)
         Field("Start date", start, { start = it }, hint = "year-month-day, optional")
         Field("End date", end, { end = it }, hint = "year-month-day, optional")
         ErrorText(error)
@@ -253,32 +267,60 @@ fun ContractScreen(api: Api, id: Int) {
     }
     deliverable?.let { d ->
         AlertDialog(onDismissRequest = { deliverable = null }, title = { Text(d.optString("title"), modifier = Modifier.semantics { heading() }) },
-            text = { Column { listOf("Pending", "In Progress", "Submitted", "Accepted").filter { it != d.optString("status") }.forEach { s ->
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) { listOf("Pending", "In Progress", "Submitted", "Accepted").filter { it != d.optString("status") }.forEach { s ->
                 TextButton(onClick = { deliverable = null; update(JSONObject().put("op", "set_deliverable").put("deliverable_id", d.optInt("id")).put("status", s), "${d.optString("title")} marked $s.") }) { Text("Mark it $s") } } } },
             confirmButton = { TextButton(onClick = { deliverable = null }) { Text("Cancel") } })
     }
-    if (form.isNotEmpty()) {
+    if (form.isNotEmpty()) key(dialogKey("contract-form", form)) {
         var a by rememberSaveable { mutableStateOf("") }
         var b by rememberSaveable { mutableStateOf(if (form == "spend") today() else "") }
         var t by rememberSaveable { mutableStateOf("") }
+        // 4.29.0: spending and deliverables are added with a retry key, so a retry after a lost reply
+        // adds them once; the dialog stays open, with what was typed, until the server took it.
+        var addKey by rememberSaveable { mutableStateOf("") }
         var err by remember { mutableStateOf<String?>(null) }
-        FormDialog(if (form == "spend") "Add spending" else "Add a deliverable", "Add", false, onSave = {
+        var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+        var busy by remember { mutableStateOf(false) }
+        val day = Regex("^\\d{4}-\\d{2}-\\d{2}$")
+        FormDialog(if (form == "spend") "Add spending" else "Add a deliverable", "Add", busy, onSave = {
+            if (busy) return@FormDialog
+            val body: JSONObject
+            val done: String
             if (form == "spend") {
                 val m = moneyText(a)
-                if (m == null || m.toDouble() <= 0) { err = "Enter the amount in dollars, such as 120.50."; return@FormDialog }
-                form = ""; update(JSONObject().put("op", "add_spend").put("amount", m).put("spent_on", b.trim()).put("memo", t.trim()), "Spending added.")
+                fieldErrors = listOfNotNull(
+                    if (m == null || m.toDouble() <= 0) "amount" to "Enter the amount in dollars, such as 120.50." else null,
+                    if (!day.matches(b.trim())) "date" to "Enter the date as year-month-day, such as ${today()}." else null,
+                ).toMap()
+                if (fieldErrors.isNotEmpty() || m == null) { err = fieldErrors.values.firstOrNull(); return@FormDialog }
+                body = JSONObject().put("op", "add_spend").put("amount", m).put("spent_on", b.trim()).put("memo", t.trim()); done = "Spending added."
             } else {
-                if (t.isBlank()) { err = "Give the deliverable a title."; return@FormDialog }
-                form = ""; update(JSONObject().put("op", "add_deliverable").put("title", t.trim()).put("due_date", b.trim()), "Deliverable added.")
+                fieldErrors = listOfNotNull(
+                    if (t.isBlank()) "title" to "Give the deliverable a title." else null,
+                    if (b.isNotBlank() && !day.matches(b.trim())) "date" to "Enter the due date as year-month-day, or leave it empty." else null,
+                ).toMap()
+                if (fieldErrors.isNotEmpty()) { err = fieldErrors.values.first(); return@FormDialog }
+                body = JSONObject().put("op", "add_deliverable").put("title", t.trim()).put("due_date", b.trim()); done = "Deliverable added."
+            }
+            scope.launchSave({ busy = it }, { err = it }) {
+                try {
+                    api.callOnce("contract_update", body.put("contract_id", id), addKey, { addKey = it }, if (form == "spend") "the spending" else "the deliverable")
+                } catch (e: ApiException) {
+                    // A refusal naming a field is shown on it.
+                    val errs = e.reply?.optJSONObject("errors")
+                    if (errs != null) fieldErrors = errs.keys().asSequence().associate { k -> (if (k == "spent_on" || k == "due_date") "date" else k) to errs.optString(k) }
+                    throw e
+                }
+                form = ""; notice = done; error = null; state.reload()
             }
         }, onCancel = { form = "" }) {
             if (form == "spend") {
-                Field("Amount in dollars", a, { a = it }, keyboard = KeyboardType.Decimal)
-                Field("Date", b, { b = it }, hint = "year-month-day")
-                Field("What it was for", t, { t = it }, hint = "optional")
+                Field("Amount in dollars", a, { a = it }, keyboard = KeyboardType.Decimal, error = fieldErrors["amount"])
+                Field("Date", b, { b = it }, hint = "year-month-day", error = fieldErrors["date"])
+                Field("What it was for", t, { t = it }, hint = "optional", error = fieldErrors["memo"])
             } else {
-                Field("Title", t, { t = it })
-                Field("Due date", b, { b = it }, hint = "year-month-day, optional")
+                Field("Title", t, { t = it }, error = fieldErrors["title"])
+                Field("Due date", b, { b = it }, hint = "year-month-day, optional", error = fieldErrors["date"])
             }
             ErrorText(err)
         }
@@ -315,7 +357,7 @@ fun BookingsScreen(api: Api) {
     }
     chosen?.let { b ->
         AlertDialog(onDismissRequest = { chosen = null }, title = { Text(b.optString("service_type") + " for " + b.optString("client_name"), modifier = Modifier.semantics { heading() }) },
-            text = { Column { listOf("Requested", "Confirmed", "Completed", "Cancelled").filter { it != b.optString("status") }.forEach { s ->
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) { listOf("Requested", "Confirmed", "Completed", "Cancelled").filter { it != b.optString("status") }.forEach { s ->
                 TextButton(onClick = { chosen = null; if (s == "Cancelled") cancelling = b else setStatus(b, s) }) { Text(if (s == "Cancelled") "Cancel the booking" else "Mark it $s") } } } },
             confirmButton = { TextButton(onClick = { chosen = null }) { Text("Close") } })
     }

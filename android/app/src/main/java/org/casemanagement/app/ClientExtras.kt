@@ -161,6 +161,8 @@ suspend fun <T> sendOnce(saved: String, keep: (String) -> Unit, fingerprint: Str
     return try {
         send(retryKeyId(k)).also { keep("") }
     } catch (e: ApiException) {
+        // 4.29.0: "still being processed" keeps the key, so trying again later finds the first try.
+        if (stillProcessing(e)) throw e
         if (!e.network) { keep(""); throw e }
         // No answer at all (status 0): sent or not, nobody knows. A redirect (3xx) was not taken, so its own words stay.
         if (e.status == 0) throw ApiException(unknownOutcome(what), 0, network = true)
@@ -251,9 +253,49 @@ fun openedValues(sent: JSONObject, opened: JSONObject, skip: Set<String> = setOf
     return o
 }
 
-/** A drawing made on a pad of [fromW]×[fromH] fitted to a pad of [toW]×[toH] (4.28.0: a turned phone keeps the whole signature). */
+/**
+ * A drawing made on a pad of [fromW]×[fromH] fitted to a pad of [toW]×[toH] (4.28.0: a turned phone
+ * keeps the whole signature). 4.29.0: scaled by the smaller factor, the same both ways, and centred,
+ * so the signature is never stretched.
+ */
 fun scaleStrokes(strokes: List<List<Pair<Float, Float>>>, fromW: Int, fromH: Int, toW: Int, toH: Int): List<List<Pair<Float, Float>>> {
     if (fromW <= 1 || fromH <= 1 || toW <= 0 || toH <= 0 || (fromW == toW && fromH == toH)) return strokes
-    val sx = toW.toFloat() / fromW; val sy = toH.toFloat() / fromH
-    return strokes.map { s -> s.map { (x, y) -> x * sx to y * sy } }
+    val f = minOf(toW.toFloat() / fromW, toH.toFloat() / fromH)
+    val dx = (toW - fromW * f) / 2f; val dy = (toH - fromH * f) / 2f
+    return strokes.map { s -> s.map { (x, y) -> x * f + dx to y * f + dy } }
 }
+
+/**
+ * The server's "still being processed" answer (4.29.0: a 409 with processing true; an older server
+ * says it only in words): the first try is still running, so the retry key must be kept.
+ */
+fun stillProcessing(e: ApiException): Boolean =
+    e.status == 409 && (e.reply?.optBoolean("processing") == true || (e.message ?: "").contains("still being processed", ignoreCase = true))
+
+/**
+ * The key that keeps a dialog's typed fields with the item it was opened for (4.29.0): fields are
+ * kept across rotation under this key, so a dialog opened later for another item never takes them.
+ */
+fun dialogKey(kind: String, id: Any?): String = "$kind:$id"
+
+/** How many rows the server has in all (its total, 4.29.0); [shown] when it sends none. */
+fun listTotal(r: JSONObject?, shown: Int, vararg keys: String): Int {
+    if (r == null) return shown
+    for (k in keys.toList() + "total") if (r.has(k) && !r.isNull(k)) return maxOf(r.optInt(k, shown), shown)
+    return shown
+}
+
+/** A list heading with its count, "latest N of M" when the server sent only part of it (4.29.0). */
+fun countLabel(label: String, shown: Int, total: Int, part: String = "latest"): String =
+    if (total > shown) "$label ($part $shown of $total)" else "$label ($shown)"
+
+/** A set of ids as text, for keeping across rotation (4.29.0); [idsFromText] reads it back. */
+fun idsToText(ids: Collection<Int>): String = ids.sorted().joinToString(",")
+fun idsFromText(s: String): Set<Int> = s.split(',').mapNotNull { it.trim().toIntOrNull() }.toSet()
+
+/** Ratings by item id as text, for keeping across rotation (4.29.0); [ratingsFromText] reads them back. */
+fun ratingsToText(m: Map<Int, Int>): String = m.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" }
+fun ratingsFromText(s: String): Map<Int, Int> = s.split(',').mapNotNull { p ->
+    val k = p.substringBefore('=').trim().toIntOrNull(); val v = p.substringAfter('=', "").trim().toIntOrNull()
+    if (k != null && v != null) k to v else null
+}.toMap()

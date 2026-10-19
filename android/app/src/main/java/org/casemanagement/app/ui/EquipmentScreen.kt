@@ -32,6 +32,9 @@ import androidx.navigation.NavHostController
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
 import org.json.JSONObject
+import androidx.compose.runtime.key
+import org.casemanagement.app.dialogKey
+import org.casemanagement.app.countLabel
 
 /**
  * The equipment library: what is on loan (overdue first) and what is available; lend, return,
@@ -84,7 +87,8 @@ fun EquipmentScreen(api: Api, nav: NavHostController) {
             onDismissRequest = { chosen = null },
             title = { Text(e.name, modifier = Modifier.semantics { heading() }) },
             text = {
-                Column {
+                // Scrolls (4.29.0), so the last button is reachable at a large text size.
+                Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text(when (e.status) { "On Loan" -> e.borrower?.let { "On loan to $it." } ?: "On loan."; else -> e.status + "." })
                     if (e.status == "Available") TextButton(onClick = { chosen = null; lendingId = e.id }) { Text("Lend it") }
                     if (e.status == "On Loan") {
@@ -109,7 +113,7 @@ fun EquipmentScreen(api: Api, nav: NavHostController) {
             onDismissRequest = { returning = null },
             title = { Text("Return " + e.name, modifier = Modifier.semantics { heading() }) },
             text = {
-                Column {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text(e.borrower?.let { "On loan to $it." } ?: "On loan.")
                     TextButton(onClick = { ret("") }) { Text("Returned in the same condition") }
                     TextButton(onClick = { ret("Needs Repair") }) { Text("Returned needing repair") }
@@ -118,7 +122,7 @@ fun EquipmentScreen(api: Api, nav: NavHostController) {
             confirmButton = { TextButton(onClick = { returning = null }) { Text("Keep on loan") } },
         )
     }
-    lending?.let { e -> LendDialog(api, e, onDone = { m -> lendingId = null; notice = m; state.reload() }, onCancel = { lendingId = null }) }
+    lending?.let { e -> key(dialogKey("lend", e.id)) { LendDialog(api, e, onDone = { m -> lendingId = null; notice = m; state.reload() }, onCancel = { lendingId = null }) } }
     if (adding) AddEquipmentDialog(api, onDone = { m -> adding = false; notice = m; state.reload() }, onCancel = { adding = false })
 }
 
@@ -169,8 +173,9 @@ fun EquipmentDetailScreen(api: Api, id: Int) {
             NoticeText(intervalNote)
             SecondaryButton("Log a service") { logging = true }
             if (d.status != "Retired") SecondaryButton("Reserve for a client") { reserving = true }
-            Heading("Service history (${d.maintenance.size})")
+            Heading(countLabel("Service history", d.maintenance.size, d.maintenanceTotal))
             if (d.maintenance.isEmpty()) Text("No service logged.")
+            if (d.maintenanceTotal > d.maintenance.size) Text("The older entries are on the website's equipment page.")
             d.maintenance.forEach { m ->
                 ListRow(listOfNotNull(m.serviceType + ", " + dayText(m.serviceDate), m.cost?.let { "Cost " + money(it) }, m.byName?.let { "By $it" }, m.notes))
             }
@@ -188,16 +193,21 @@ private fun LogServiceDialog(api: Api, id: Int, onDone: (String) -> Unit, onCanc
     var notes by rememberSaveable { mutableStateOf("") }
     var cost by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var busy by remember { mutableStateOf(false) }
     var idem by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     FormDialog("Log a service", "Save", busy, onSave = {
         if (busy) return@FormDialog
         val c = if (cost.isBlank()) "" else moneyText(cost)
+        // 4.29.0: each problem on its own field, the first in the summary.
+        fieldErrors = listOfNotNull(
+            if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim())) "date" to "Enter the date as year-month-day, such as ${today()}."
+            else if (date.trim() > today()) "date" to "The service date cannot be in the future." else null,
+            if (c == null) "cost" to "Cost: enter digits, like 12.50, or leave it empty." else null,
+        ).toMap()
         when {
-            !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim()) -> error = "Enter the date as year-month-day, such as ${today()}."
-            date.trim() > today() -> error = "The service date cannot be in the future."
-            c == null -> error = "Cost: enter digits, like 12.50, or leave it empty."
+            fieldErrors.isNotEmpty() || c == null -> error = fieldErrors.values.firstOrNull()
             else -> scope.launchSave({ busy = it }, { error = it }) {
                 // 4.28.0: a retry after a lost reply logs it once (see sendOnce).
                 api.callOnce("equipment_service", JSONObject().put("equipment_id", id).put("service_type", type).put("service_date", date.trim()).put("notes", notes.trim()).put("cost", c),
@@ -207,9 +217,9 @@ private fun LogServiceDialog(api: Api, id: Int, onDone: (String) -> Unit, onCanc
         }
     }, onCancel = onCancel) {
         Choice("Type", type, types.map { it to it }) { type = it }
-        Field("Date", date, { date = it }, hint = "year-month-day")
+        Field("Date", date, { date = it }, hint = "year-month-day", error = fieldErrors["date"])
         Field("Notes", notes, { notes = it }, hint = "optional")
-        Field("Cost in dollars", cost, { cost = it }, hint = "optional, like 12.50", keyboard = KeyboardType.Decimal)
+        Field("Cost in dollars", cost, { cost = it }, hint = "optional, like 12.50", keyboard = KeyboardType.Decimal, error = fieldErrors["cost"])
         ErrorText(error)
     }
 }
@@ -226,6 +236,7 @@ private fun AddEquipmentDialog(api: Api, onDone: (String) -> Unit, onCancel: () 
     var interval by rememberSaveable { mutableStateOf("") }
     var notes by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var busy by remember { mutableStateOf(false) }
     var idem by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -233,10 +244,14 @@ private fun AddEquipmentDialog(api: Api, onDone: (String) -> Unit, onCancel: () 
         if (busy) return@FormDialog
         val v = if (value.isBlank()) "" else moneyText(value)
         val days = if (interval.isBlank()) 0 else intervalDays(interval)
+        // 4.29.0: each problem on its own field, the first in the summary.
+        fieldErrors = listOfNotNull(
+            if (name.isBlank()) "name" to "Item name: enter the item's name." else null,
+            if (v == null) "value" to "Value: enter digits, like 12.50, or leave it empty." else null,
+            if (days == null) "interval" to INTERVAL_MESSAGE else null,
+        ).toMap()
         when {
-            name.isBlank() -> error = "Item name: enter the item's name."
-            v == null -> error = "Value: enter digits, like 12.50, or leave it empty."
-            days == null -> error = INTERVAL_MESSAGE
+            fieldErrors.isNotEmpty() || v == null || days == null -> error = fieldErrors.values.firstOrNull()
             else -> scope.launchSave({ busy = it }, { error = it }) {
                 api.callOnce("add_equipment", JSONObject().put("name", name.trim()).put("category", category).put("serial", serial.trim())
                     .put("condition", condition).put("value", v).put("maintenance_interval_days", days).put("notes", notes.trim()),
@@ -245,12 +260,12 @@ private fun AddEquipmentDialog(api: Api, onDone: (String) -> Unit, onCancel: () 
             }
         }
     }, onCancel = onCancel) {
-        Field("Item name", name, { name = it }, hint = "required")
+        Field("Item name", name, { name = it }, hint = "required", error = fieldErrors["name"])
         Choice("Category", category, categories.map { it to it }) { category = it }
         Field("Serial number", serial, { serial = it }, hint = "optional")
         Choice("Condition", condition, conditions.map { it to it }) { condition = it }
-        Field("Value in dollars", value, { value = it }, hint = "optional, like 12.50", keyboard = KeyboardType.Decimal)
-        Field("Service interval in days", interval, { interval = it }, hint = "optional, 0 to 3650", keyboard = KeyboardType.Number)
+        Field("Value in dollars", value, { value = it }, hint = "optional, like 12.50", keyboard = KeyboardType.Decimal, error = fieldErrors["value"])
+        Field("Service interval in days", interval, { interval = it }, hint = "optional, 0 to 3650", keyboard = KeyboardType.Number, error = fieldErrors["interval"])
         Field("Notes", notes, { notes = it }, hint = "optional")
         ErrorText(error)
     }
@@ -304,15 +319,19 @@ private fun ReservationDialog(api: Api, fixedItem: Int, onDone: (String) -> Unit
     var until by rememberSaveable { mutableStateOf("") }
     var notes by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var fromError by remember { mutableStateOf<String?>(null) }
+    var untilError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var idem by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val day = Regex("^\\d{4}-\\d{2}-\\d{2}$")
     FormDialog("Reserve an item", "Reserve", busy, enabled = item.isNotEmpty() && client.isNotEmpty(), onSave = {
         if (busy) return@FormDialog
+        // 4.29.0: each problem on its own field, the first in the summary.
+        fromError = if (from.isNotBlank() && !day.matches(from.trim())) "Enter Needed from as year-month-day, or leave it empty." else null
+        untilError = if (until.isNotBlank() && !day.matches(until.trim())) "Enter Needed until as year-month-day, or leave it empty." else null
         when {
-            from.isNotBlank() && !day.matches(from.trim()) -> error = "Enter Needed from as year-month-day, or leave it empty."
-            until.isNotBlank() && !day.matches(until.trim()) -> error = "Enter Needed until as year-month-day, or leave it empty."
+            fromError != null || untilError != null -> error = fromError ?: untilError
             else -> scope.launchSave({ busy = it }, { error = it }) {
                 val b = JSONObject().put("equipment_id", item.toInt()).put("client_id", client.toInt()).put("notes", notes.trim())
                 if (from.isNotBlank()) b.put("needed_from", from.trim())
@@ -327,8 +346,8 @@ private fun ReservationDialog(api: Api, fixedItem: Int, onDone: (String) -> Unit
             if (fixedItem == 0) Choice("Item", item, listOf("" to "Choose an item") + items.map { it.id.toString() to "${it.name} (${it.status})" }) { item = it }
             Choice("Client", client, listOf("" to "Choose a client") + clients.map { it.id.toString() to it.name }) { client = it }
         }
-        Field("Needed from", from, { from = it }, hint = "optional, year-month-day")
-        Field("Needed until", until, { until = it }, hint = "optional, year-month-day")
+        Field("Needed from", from, { from = it }, hint = "optional, year-month-day", error = fromError)
+        Field("Needed until", until, { until = it }, hint = "optional, year-month-day", error = untilError)
         Field("Notes", notes, { notes = it }, hint = "optional")
         ErrorText(error)
     }
@@ -367,7 +386,7 @@ private fun LendDialog(api: Api, e: EquipmentItem, onDone: (String) -> Unit, onC
     val scope = rememberCoroutineScope()
     val conditions = api.formList("equipment_conditions", listOf("New", "Good", "Fair", "Needs Repair"))
     AlertDialog(
-        onDismissRequest = onCancel,
+        onDismissRequest = { if (!busy) onCancel() },
         title = { Text("Lend " + e.name, modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -397,7 +416,7 @@ private fun LendDialog(api: Api, e: EquipmentItem, onDone: (String) -> Unit, onC
                 }
             }) { Text(if (busy) "Saving…" else "Lend") }
         },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = onCancel) { Text("Cancel") } },
     )
 }
 
@@ -429,7 +448,7 @@ fun FollowupsScreen(api: Api) {
             }
         }
     }
-    chosen?.let { f -> FollowupDialog(api, f, onDone = { m -> chosenJson = null; notice = m; state.reload() }, onCancel = { chosenJson = null }) }
+    chosen?.let { f -> key(dialogKey("followup", f.optInt("id"))) { FollowupDialog(api, f, onDone = { m -> chosenJson = null; notice = m; state.reload() }, onCancel = { chosenJson = null }) } }
 }
 
 @Composable
@@ -442,8 +461,12 @@ private fun FollowupDialog(api: Api, f: JSONObject, onDone: (String) -> Unit, on
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     fun send(op: String) {
+        // 4.29.0: one press at a time, so a repeated double tap never moves it twice.
+        if (busy) return
         scope.launchSave({ busy = it }, { error = it }) {
             val b = JSONObject().put("id", f.optInt("id")).put("op", op)
+            // The due date shown, so the server moves it only from there (a second snooze changes nothing).
+            if (op == "snooze") f.str("due_date")?.let { b.put("due_date", it) }
             if (op == "complete") {
                 b.put("in_use", inUse).put("barriers", barriers.trim()).put("notes", notes.trim())
                 satisfaction.toIntOrNull()?.let { b.put("satisfaction", it) }
@@ -451,13 +474,15 @@ private fun FollowupDialog(api: Api, f: JSONObject, onDone: (String) -> Unit, on
                     s.reply?.str("warning") ?: s.message
                 })
             } else {
-                api.call("save_followup", body = b)
-                onDone(if (op == "skip") "Follow-up skipped." else "Follow-up moved 14 days later.")
+                val r = api.call("save_followup", body = b)
+                // already: an earlier press (or try) moved it; nothing moved twice.
+                onDone(if (op == "skip") "Follow-up skipped." else if (r.optBoolean("already")) r.str("message") ?: "This follow-up was already moved 14 days later." else "Follow-up moved 14 days later.")
             }
         }
     }
     AlertDialog(
-        onDismissRequest = onCancel,
+        // 4.29.0: not closed while saving (Back or a tap outside), so the entry is never left half-sent.
+        onDismissRequest = { if (!busy) onCancel() },
         title = { Text(f.optString("client_name") + ": " + f.optString("equipment_name"), modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -467,11 +492,11 @@ private fun FollowupDialog(api: Api, f: JSONObject, onDone: (String) -> Unit, on
                 Field("Notes", notes, { notes = it }, hint = "optional", singleLine = false)
                 if (inUse == "no") Text("Saying no adds a case note and a follow-up task, and a recorded follow-up cannot be changed.")
                 ErrorText(error)
-                TextButton(onClick = { send("snooze") }) { Text("Ask again in 14 days") }
-                TextButton(onClick = { send("skip") }) { Text("Skip this check") }
+                TextButton(enabled = !busy, onClick = { send("snooze") }) { Text("Ask again in 14 days") }
+                TextButton(enabled = !busy, onClick = { send("skip") }) { Text("Skip this check") }
             }
         },
         confirmButton = { TextButton(enabled = !busy && inUse.isNotEmpty(), onClick = { send("complete") }) { Text(if (busy) "Saving…" else "Record") } },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = onCancel) { Text("Cancel") } },
     )
 }

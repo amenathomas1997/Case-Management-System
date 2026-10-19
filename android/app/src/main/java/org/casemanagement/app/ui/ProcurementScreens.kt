@@ -20,6 +20,8 @@ import androidx.compose.runtime.LaunchedEffect
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
 import org.json.JSONObject
+import androidx.compose.runtime.key
+import org.casemanagement.app.dialogKey
 
 /* ---------------- Device procurement ---------------- */
 
@@ -82,14 +84,14 @@ fun DeviceRequestScreen(api: Api, id: Int) {
     // 4.28.0: adding a quote is sent with a retry key, so a lost reply never adds it twice (see sendOnce).
     var quoteKey by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    suspend fun send(body: JSONObject) {
+        if (body.optString("op") == "add_quote") api.callOnce("device_request_update", body.put("id", id), quoteKey, { quoteKey = it }, "the quote")
+        else api.call("device_request_update", body = body.put("id", id))
+    }
     fun update(body: JSONObject, done: String) {
         error = null
         scope.launch {
-            try {
-                if (body.optString("op") == "add_quote") api.callOnce("device_request_update", body.put("id", id), quoteKey, { quoteKey = it }, "the quote")
-                else api.call("device_request_update", body = body.put("id", id))
-                state.reload(); notice = done
-            } catch (e: ApiException) { error = e.message }
+            try { send(body); state.reload(); notice = done } catch (e: ApiException) { error = e.message }
         }
     }
     Show(state, "the request") { r ->
@@ -125,13 +127,16 @@ fun DeviceRequestScreen(api: Api, id: Int) {
                 SecondaryButton("Cancel the request") { ask = Triple("Cancel this request?", "It is closed until someone reopens it.", JSONObject().put("op", "status").put("to", "Cancelled")) }
             } else if (status != "Trained") SecondaryButton("Reopen the request") { update(JSONObject().put("op", "status").put("to", "Requested"), "Request reopened.") }
         }
-        if (step.isNotEmpty()) StepDialog(step, q, onSave = { b, done -> step = ""; update(b, done) }, onCancel = { step = "" })
+        // 4.29.0: the dialog stays open, with what was typed, until the server took it; a refusal shows inside it.
+        if (step.isNotEmpty()) key(dialogKey("device-step", step)) {
+            StepDialog(step, q, send = { b -> send(b) }, onDone = { done -> step = ""; error = null; notice = done; state.reload() }, onCancel = { step = "" })
+        }
     }
     ask?.let { (t, m, b) -> Confirm(t, m, "Yes", { update(b, "Done.") }, { ask = null }) }
 }
 
 @Composable
-private fun StepDialog(step: String, q: JSONObject, onSave: (JSONObject, String) -> Unit, onCancel: () -> Unit) {
+private fun StepDialog(step: String, q: JSONObject, send: suspend (JSONObject) -> Unit, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val f = remember(step) {
         when (step) {
             "add_quote" -> listOf("vendor" to "Vendor", "amount" to "Amount in dollars", "quote_ref" to "Quote reference, optional", "notes" to "Notes, optional")
@@ -140,23 +145,56 @@ private fun StepDialog(step: String, q: JSONObject, onSave: (JSONObject, String)
             else -> listOf("serial" to "Serial number", "delivered_at" to "Delivered on, year-month-day", "warranty_until" to "Warranty until, year-month-day, optional")
         }
     }
-    val values = remember(step) { mutableStateOf(f.associate { (k, _) -> k to (q.str(k) ?: "") }) }
+    // 4.29.0: kept across rotation (as pairs), for this step only.
+    val values = rememberSaveable(step) { mutableStateOf(f.map { (k, _) -> k to (q.str(k) ?: "") }) }
+    val map = values.value.toMap()
     var error by remember { mutableStateOf<String?>(null) }
+    var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val title = mapOf("add_quote" to "Add a quote", "authorize" to "Authorization", "order" to "Order", "deliver" to "Delivery")[step] ?: ""
-    FormDialog(title, "Save", false, onSave = {
+    val day = Regex("^\\d{4}-\\d{2}-\\d{2}$")
+    FormDialog(title, "Save", busy, onSave = {
+        if (busy) return@FormDialog
         val b = JSONObject().put("op", step)
-        for ((k, v) in values.value) {
+        val problems = linkedMapOf<String, String>()
+        for ((k, v) in map) {
             if (k.endsWith("amount")) {
-                if (v.isBlank() && k == "amount") { error = "Enter the amount in dollars."; return@FormDialog }
-                if (v.isNotBlank()) { val m = moneyText(v) ?: run { error = "Enter amounts in dollars, such as 1299.00."; return@FormDialog }; b.put(k, m) } else b.put(k, "")
-            } else b.put(k, v.trim())
+                if (v.isBlank() && k == "amount") { problems[k] = "Enter the amount in dollars."; continue }
+                if (v.isNotBlank()) { val m = moneyText(v); if (m == null) problems[k] = "Enter the amount in dollars, such as 1299.00." else b.put(k, m) } else b.put(k, "")
+            } else {
+                if (k.endsWith("_at") || k == "warranty_until") {
+                    if (v.isNotBlank() && !day.matches(v.trim())) problems[k] = "Enter the date as year-month-day, such as ${today()}."
+                }
+                b.put(k, v.trim())
+            }
         }
-        if (step == "add_quote" && values.value["vendor"].isNullOrBlank()) { error = "Enter the vendor."; return@FormDialog }
-        onSave(b, if (step == "add_quote") "Quote added." else "$title saved.")
+        if (step == "add_quote" && map["vendor"].isNullOrBlank()) problems["vendor"] = "Enter the vendor."
+        fieldErrors = problems
+        if (problems.isNotEmpty()) { error = problems.values.first(); return@FormDialog }
+        scope.launchSave({ busy = it }, { error = it }) {
+            try { send(b) } catch (e: ApiException) {
+                // A refusal naming a field (a delivery before the order, say) is shown on that field.
+                val errs = e.reply?.optJSONObject("errors")
+                fieldErrors = errs?.keys()?.asSequence()?.associateWith { errs.optString(it) }
+                    ?: stepFieldOf(e.message ?: "", f.map { it.first })?.let { mapOf(it to (e.message ?: "")) } ?: emptyMap()
+                throw e
+            }
+            onDone(if (step == "add_quote") "Quote added." else "$title saved.")
+        }
     }, onCancel = onCancel) {
-        f.forEach { (k, label) -> Field(label, values.value[k] ?: "", { v -> values.value = values.value + (k to v) }, keyboard = if (k.endsWith("amount")) KeyboardType.Decimal else KeyboardType.Text) }
+        f.forEach { (k, label) -> Field(label, map[k] ?: "", { v -> values.value = (map + (k to v)).toList() }, keyboard = if (k.endsWith("amount")) KeyboardType.Decimal else KeyboardType.Text, error = fieldErrors[k]) }
         ErrorText(error)
     }
+}
+
+/** Which field of a device-request step the server's refusal is about (it names it in words), or null. */
+private fun stepFieldOf(message: String, fields: List<String>): String? {
+    val m = message.lowercase()
+    val words = listOf("vendor" to "vendor", "authorized amount" to "authorized_amount", "amount" to "amount", "amount" to "authorized_amount",
+        "authoriz" to "authorized_at", "order number" to "po_number", "order date" to "ordered_at", "delivery date" to "delivered_at",
+        "deliver" to "delivered_at", "warranty" to "warranty_until", "serial" to "serial", "funding" to "funding_source", "ordered" to "ordered_at")
+    return words.firstOrNull { (w, k) -> m.startsWith(w) && k in fields }?.second ?: words.firstOrNull { (w, k) -> m.contains(w) && k in fields }?.second
 }
 
 /* ---------------- Worksite accommodations ---------------- */

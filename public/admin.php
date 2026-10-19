@@ -277,10 +277,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_scheduled_report
     set_setting('scheduled_reports_day', (string)$srDay);
     set_setting('scheduled_reports_period', $srPeriod);
     audit($user['id'], 'settings.scheduled_reports', 'settings', null,
-        'outcomes=' . ($srOutcomes ? 'on' : 'off') . ' funder=' . ($srFunder ? 'on' : 'off') . ' day=' . $srDay . ' period=' . $srPeriod . ' to ' . count($srParsed['valid']) . ' address(es)');
-    flash(($srOutcomes || $srFunder)
-        ? 'Scheduled reports saved: ' . implode(' and ', array_filter([$srOutcomes ? 'the outcome report' : '', $srFunder ? 'the funder outcome report' : ''])) . ' will be emailed on day ' . $srDay . ' of each month for the ' . strtolower(SCHEDULED_REPORT_PERIODS[$srPeriod]) . '.'
-        : 'Scheduled reports saved: both reports are off, so nothing will be emailed.');
+        'outcomes=' . ($srOutcomes ? 'on' : 'off') . ' funder=' . ($srFunder ? 'on' : 'off') . ' business=' . ($srBusiness ? 'on' : 'off') . ' day=' . $srDay . ' period=' . $srPeriod . ' to ' . count($srParsed['valid']) . ' address(es)');
+    // 4.29.0: the business summary is named too, so ticking only it is not reported as "nothing will be emailed".
+    $srOn = array_values(array_filter([$srOutcomes ? 'the outcome report' : '', $srFunder ? 'the funder outcome report' : '', $srBusiness ? 'the business summary' : '']));
+    $srList = count($srOn) > 1 ? implode(', ', array_slice($srOn, 0, -1)) . ' and ' . end($srOn) : ($srOn[0] ?? '');
+    flash($srOn
+        ? 'Scheduled reports saved: ' . $srList . ' will be' . ' emailed on day ' . $srDay . ' of each month for the ' . strtolower(SCHEDULED_REPORT_PERIODS[$srPeriod]) . '.'
+        : 'Scheduled reports saved: all three reports are off, so nothing will be emailed.');
     redirect('admin.php#scheduled-h');
 }
 
@@ -577,7 +580,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
 
 <section class="card" aria-labelledby="scheduled-h">
   <h2 id="scheduled-h">Scheduled reports</h2>
-  <p class="muted">Email the agency-wide outcome report and the funder outcome report (every funding agency) automatically once a month, as plain text. The figures are the same as on the report pages, so no sign-in is needed to read them. Only people who may see agency-wide figures should be listed.</p>
+  <p class="muted">Email the agency-wide outcome report, the funder outcome report (every funding agency) and the business summary automatically once a month, as plain text. The figures are the same as on the report pages, so no sign-in is needed to read them. Only people who may see agency-wide figures should be listed.</p>
   <?php $srCfg = scheduled_reports_config();
   $srRefill = old_in('save_scheduled_reports') !== '';
   $srSentOut = setting('scheduled_reports_sent_outcomes'); $srSentFun = setting('scheduled_reports_sent_funder'); ?>

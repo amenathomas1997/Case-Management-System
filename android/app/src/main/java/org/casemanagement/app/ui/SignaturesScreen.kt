@@ -44,6 +44,7 @@ import org.casemanagement.app.signatureBlocks
 import org.casemanagement.app.str
 import org.json.JSONArray
 import org.json.JSONObject
+import org.casemanagement.app.stillProcessing
 
 /**
  * A client's documents to sign (4.25.0): what was sent and its state, a new one emailed for
@@ -151,7 +152,8 @@ fun SignaturesScreen(api: Api, clientId: Int) {
                 return try {
                     api.call(action, body = b.put("idem_key", retryKeyId(k))).also { keep("") }
                 } catch (e: ApiException) {
-                    if (!e.network) keep("")
+                    // 4.29.0: "still being processed" keeps the key too.
+                    if (!e.network && !stillProcessing(e)) keep("")
                     throw e
                 }
             }
@@ -538,7 +540,7 @@ fun ReleaseRequestScreen(api: Api, nav: NavHostController, clientId: Int) {
                     requestKey = retryKey(requestKey, b.toString())
                     b.put("idem_key", retryKeyId(requestKey))
                     val r = try { api.call("request_release", body = b).also { requestKey = "" } } catch (e: ApiException) {
-                        if (!e.network) requestKey = ""
+                        if (!e.network && !stillProcessing(e)) requestKey = ""
                         throw e
                     }
                     // 4.27.0: the email's outcome not known; the server says what to do.

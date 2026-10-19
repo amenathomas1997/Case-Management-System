@@ -78,7 +78,8 @@ struct ClientEditSheet: View {
     @State private var address = ""
     @State private var usState = ""
     /// Required for a new client and for one whose state is known (as the website); an older record with none can still be saved.
-    private var stateRequired: Bool { existing == nil || !(existing?.state ?? "").isEmpty }
+    /// 4.29.0: compared with the record as last loaded (`base`, Reload's after a conflict), as the save is.
+    private var stateRequired: Bool { existing == nil || !(base?.state ?? "").isEmpty }
     @State private var status = "Pending Assessment"
     @State private var statusNote = ""
     /// Closing a case (3.0.35): why, and whether the person was employed at closure.
@@ -142,6 +143,8 @@ struct ClientEditSheet: View {
     /// The save was refused because someone else changed the client since it was loaded: Reload is offered.
     @State private var conflict = false
     @State private var reloading = false
+    /// The number Reload put in the phone field (4.29.0), so the phone watcher skips that change.
+    @State private var phoneFilledByReload: String?
     /// Sent as idem_key when a new client is created (4.28.0), so a retry after a lost reply
     /// does not create the client twice.
     @State private var idem = IdemKey()
@@ -198,13 +201,14 @@ struct ClientEditSheet: View {
         FormOptions.list("closure_reasons", ["Employed", "Goals met", "Declined further services", "Unable to contact", "Moved away",
                                              "Health or medical", "Not eligible", "Transferred to another provider", "Other"])
     }
-    private var statusChanged: Bool { existing != nil && existing?.status != status }
+    /// 4.29.0: against `base`, as the save's checks are, so after Reload the closure fields shown are the ones sent.
+    private var statusChanged: Bool { existing != nil && base?.status != status }
 
     /// The unconfirmed email is still the one in the field: it can be confirmed here. A different
     /// address typed by staff is confirmed by the server when saved.
     private var offersEmailConfirmation: Bool {
         emailUnconfirmed && email.trimmingCharacters(in: .whitespacesAndNewlines)
-            == (existing?.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            == (base?.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Only staff with client access can be assigned a client (save_client refuses anyone else,
@@ -275,8 +279,15 @@ struct ClientEditSheet: View {
                     CaptionedField(label: "Full name (required)", text: $name, prompt: "Full name")
                     CaptionedField(label: "Phone", text: $phone, keyboard: .phonePad)
                         // A new number needs the client's agreement again (the server clears it too).
+                        // 4.29.0: compared with the record as last loaded (Reload's after a conflict), and
+                        // not when Reload itself filled in the saved number, so a colleague's recorded
+                        // agreement is never withdrawn by the reload.
                         .onChange(of: phone) { new in
-                            if new.trimmingCharacters(in: .whitespaces) != (existing?.phone ?? "").trimmingCharacters(in: .whitespaces) { smsConsent = false }
+                            if let filled = phoneFilledByReload {
+                                phoneFilledByReload = nil
+                                if new == filled { return }
+                            }
+                            if new.trimmingCharacters(in: .whitespaces) != (base?.phone ?? "").trimmingCharacters(in: .whitespaces) { smsConsent = false }
                         }
                     // Texts (4.17.0), as the website's client form: after STOP, only the client's START turns them back on.
                     if textingBase?.optedOut == true {
@@ -663,7 +674,9 @@ struct ClientEditSheet: View {
             let now = fresh.client
             func take<T: Equatable>(_ field: inout T, _ was: T, _ saved: T) { if field == was { field = saved } }
             take(&name, old.name, now.name)
+            let phoneBefore = phone
             take(&phone, old.phone ?? "", now.phone ?? "")
+            if phone != phoneBefore { phoneFilledByReload = phone }
             take(&email, old.email ?? "", now.email ?? "")
             take(&address, old.address ?? "", now.address ?? "")
             take(&usState, old.state ?? "", now.state ?? "")
@@ -905,7 +918,7 @@ struct AddAssessmentSheet: View {
             showFormError("The connection dropped before the server answered, so it isn't known whether this assessment was saved. Check the client's assessments for \(date.formatted(date: .abbreviated, time: .omitted)) before saving it again.", in: &self.error)
             busy = false
         } catch {
-            idem.answered()
+            idem.failed(error)
             showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
@@ -925,6 +938,11 @@ struct CaptionedField: View {
     var lines: ClosedRange<Int>? = nil
     /// Set on the field itself, so it never depends on a modifier reaching inside this view.
     var keyboard: UIKeyboardType = .default
+    /// Help text (4.29.0): shown under the field and spoken as the field's hint, so it is part
+    /// of the field and never a VoiceOver stop of its own.
+    var hint: String? = nil
+    /// Spoken as the field's hint only, for help shown elsewhere on the form.
+    var spokenHint: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -934,12 +952,18 @@ struct CaptionedField: View {
                 TextField(label, text: $text, prompt: Text(prompt ?? label), axis: .vertical).lineLimit(lines)
                     .keyboardType(keyboard)
                     .accessibilityLabel(label)
+                    .accessibilityHint(hint ?? spokenHint ?? "")
             } else {
                 TextField(label, text: $text, prompt: Text(prompt ?? label))
                     .keyboardType(keyboard)
                     // The field's name for VoiceOver and Voice Control, filled or empty (the
                     // 4.26.0 audit found these fields with no label of their own).
                     .accessibilityLabel(label)
+                    .accessibilityHint(hint ?? spokenHint ?? "")
+            }
+            if let hint {
+                Text(hint).font(.caption).foregroundStyle(Color.secondaryText)
+                    .accessibilityHidden(true)
             }
         }
     }

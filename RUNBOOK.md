@@ -38,7 +38,9 @@ You need the newest off-site backup email and the backup password.
 2. Create an empty database and user.
 3. Upload the install bundle's `docroot/` to the web folder (the same version you ran, or newer). Do not run install.php.
 4. On the server, run `dist/restore.php` (it is in the install bundle):
-   - **Command:** `php restore.php --zip=<backup.zip> --dsn="mysql:host=localhost;dbname=<db>;charset=utf8mb4" --db-user=<user> --private=<private folder>`
+   - **Command:** `php restore.php --zip=<backup.zip> --dsn="mysql:host=localhost;dbname=<db>;charset=utf8mb4" --db-user=<user> --private=<private folder> --timezone=<your time zone>`
+   - `--timezone` is required: your organisation's time zone as on the old server's Settings, for example `America/Chicago` (restore.php refuses to run without it, so times are never shifted).
+   - Copy the key file `meeting_tokens.key` from the old server's private folder into the new private folder (owned by the user the website runs as, and readable only by it: chmod 600). It is not in the backup. Without it, authenticator apps stop working and QuickBooks and the meeting accounts must be connected again.
    - It asks for the backup password and the database password.
    - **What it does:** restores the database and the uploaded documents, and writes config.php.
    - Help, "Restoring from a backup", has the details. Every full test run with a test database practises this whole path on made-up data (tests/restore_drill.php).

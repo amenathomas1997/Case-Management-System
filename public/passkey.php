@@ -170,6 +170,13 @@ if ($action === 'reg_options' || $action === 'reg_finish') {
 }
 
 /* ---------- Sign-in (public) ---------- */
+// A browser handed over for signing in person (4.29.0, P2): an unlocked passkey there could be the
+// staff member's, so only the password and code sign in until someone does (handover_marked()).
+if (($action === 'login_options' || $action === 'login_finish') && handover_marked()) {
+    unset($_SESSION['webauthn_login_challenge']);
+    jout(['ok' => false, 'error' => HANDOVER_PASSKEY_MSG], 403);
+}
+
 if ($action === 'login_options') {
     $challenge = random_bytes(32);
     $_SESSION['webauthn_login_challenge'] = ['c' => $challenge, 't' => time()];
@@ -224,7 +231,7 @@ if ($action === 'login_finish') {
         $ur->execute([(int)$pk['user_id']]);
         $acct = $ur->fetch();
         if (!$acct) throw new PasskeyRefusal('This passkey is no longer linked to an account here. Sign in with your email and password.');
-        establish_user_session($acct);
+        establish_user_session($acct, false); // a passkey is not the password and code: any hand-over marker stays
         audit((int)$pk['user_id'], 'login', 'user', (int)$pk['user_id'], 'passkey (' . $pk['name'] . ')');
         flash('Welcome back, ' . $pk['user_name'] . '.');
         jout(['ok' => true, 'redirect' => resume_url_after_sign_in()]);

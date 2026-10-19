@@ -129,12 +129,15 @@ struct LogHoursView: View {
                 }
                 .voiceOverAdjustable("Hours", value: hoursSpoken(hours), binding: $hours, in: Self.hoursRange, step: 0.25)
                 // The same value typed directly, for an amount far from the stepper's start.
+                // 4.29.0: the format message is part of the field (its hint), not a stop of its own.
                 CaptionedField(label: "Hours, typed (0.25 to 24, in quarter hours)", text: $hoursText,
-                               prompt: "Hours, like 1.5", keyboard: .decimalPad)
-                    .accessibilityHint("Type the hours instead of using the stepper. Logged as the stepper shows them.")
+                               prompt: "Hours, like 1.5", keyboard: .decimalPad,
+                               spokenHint: (hoursTextProblem ? Self.hoursFormatHelp + " " : "")
+                                   + "Type the hours instead of using the stepper. Logged as the stepper shows them.")
                 if hoursTextProblem {
-                    Text("Enter 0.25 to 24 hours in quarter hours, like 1.5 or 2.75. The stepper shows what will be logged.")
+                    Text(Self.hoursFormatHelp)
                         .font(.caption).foregroundStyle(Color.secondaryText)
+                        .accessibilityHidden(true)
                 }
                 // Each name stays visible above its field once it holds text.
                 CaptionedField(label: "Mileage (optional, 0 to 1000 miles)", text: $mileage, keyboard: .decimalPad)
@@ -273,6 +276,7 @@ struct LogHoursView: View {
     }
 
     private static let hoursRange = 0.25...24.0
+    private static let hoursFormatHelp = "Enter 0.25 to 24 hours in quarter hours, like 1.5 or 2.75. The stepper shows what will be logged."
 
     /// Typed hours the stepper could show (0.25 to 24, in quarter hours; a comma may be the
     /// decimal point), or nil.

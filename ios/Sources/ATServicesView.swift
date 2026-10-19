@@ -228,8 +228,12 @@ struct ATRecordView: View {
     /// Set once a linked loan's return is recorded; the notice replaces the return button.
     @State private var returnRecorded = false
     /// The comparison report as the server writes it (at_report, which also records that
-    /// the report was produced); nil until it arrives, when the local text stands in.
+    /// the report was produced). 4.29.0: asked for only when Share is chosen, and cleared first,
+    /// so opening or refreshing the comparison records nothing and an old report is never shared.
     @State private var serverReport: String?
+    /// The text being shared (the share sheet is open while set).
+    @State private var sharing: ATSharedText?
+    @State private var preparingShare = false
     @AccessibilityFocusState private var returnNoticeFocused: Bool
     private var canEdit: Bool {
         guard let r = data?.record else { return false }
@@ -275,7 +279,10 @@ struct ATRecordView: View {
                 }
                 if data.record.kind == "trial" {
                     Section("Comparison report") {
-                        ShareLink(item: serverReport ?? comparisonText(data)) { Label("Share comparison and recommendation", systemImage: "square.and.arrow.up") }
+                        Button { Task { await shareReport(data) } } label: {
+                            Label(preparingShare ? "Preparing the report…" : "Share comparison and recommendation", systemImage: "square.and.arrow.up")
+                        }
+                        .disabled(preparingShare)
                     }
                 }
                 if let kind = childKind(data.record.kind) {
@@ -324,6 +331,7 @@ struct ATRecordView: View {
             if let data { ATEditSheet(kind: data.record.kind, fields: data.fields, statuses: data.statuses, record: data.record, defaults: [:]) { message in sheetResult = message; Task { await load() } } }
         }
         .sheet(item: $child, onDismiss: announceSheetResult) { draft in ATEditSheet(kind: draft.kind, fields: draft.data.fields, statuses: draft.data.statuses, record: nil, defaults: draft.defaults) { message in sheetResult = message; Task { await load() } } }
+        .sheet(item: $sharing) { item in ATActivitySheet(text: item.text) }
         .sheet(isPresented: $issuing, onDismiss: announceSheetResult) { if let data { ATIssueSheet(record: data.record) { message in sheetResult = message; returnRecorded = false; Task { await load() } } } }
         .confirmationDialog("Confirm the equipment has been returned", isPresented: $returning, titleVisibility: .visible) {
             Button("Record return") { Task { await returnEquipment() } }
@@ -378,13 +386,18 @@ struct ATRecordView: View {
     private func load() async {
         do { data = try await api.call("at_detail", query: ["id": String(id)]); error = nil }
         catch { showFormError(error.localizedDescription, in: &self.error) }
-        // The server's own report for a device comparison, so sharing matches the website's
-        // report and is recorded there. A failure is not an error here: the local text is shared.
-        if data?.record.kind == "trial" {
-            if let r: ATReportResponse = try? await api.call("at_report", body: ["id": id]), r.ok, let text = r.text, !text.isEmpty {
-                serverReport = text
-            }
+    }
+    /// Share (4.29.0): the server's own report for the device comparison, asked for now, so
+    /// sharing matches the website's report and is recorded there only when it is shared. A
+    /// failure is not an error here: the text built on the phone is shared instead.
+    private func shareReport(_ data: ATDetailResponse) async {
+        preparingShare = true
+        defer { preparingShare = false }
+        serverReport = nil
+        if let r: ATReportResponse = try? await api.call("at_report", body: ["id": id]), r.ok, let text = r.text, !text.isEmpty {
+            serverReport = text
         }
+        sharing = ATSharedText(text: serverReport ?? comparisonText(data))
     }
     private func prepareChild(_ kind: String, parent: ATRecord) async {
         // Cleared first so the same error coming back is shown (and announced) again.
@@ -602,8 +615,7 @@ struct ATIssueSheet: View {
     @State private var error: String?
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 if choices == nil && error == nil { ProgressView("Loading choices…") }
                 if let choices {
                     Picker("Client (required)", selection: $client) { Text("Choose…").tag(""); ForEach(choices.clients) { Text($0.label).tag($0.value) } }
@@ -851,4 +863,20 @@ struct ATAIDraftPanel: View {
             Task { try? await Task.sleep(nanoseconds: 900_000_000); draftFocused = true }
         } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
+}
+
+
+/// A text handed to the share sheet (4.29.0: the comparison report, fetched when Share is chosen).
+struct ATSharedText: Identifiable {
+    let id = UUID()
+    let text: String
+}
+
+/// The system share sheet for a text.
+struct ATActivitySheet: UIViewControllerRepresentable {
+    let text: String
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [text], applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.29.0' => [
+        'A third full code review was done and every finding fixed. Booking a session now warns when the instructor already has a session at that time, and you approve it before it is booked. Editing a track or a note, on the website or in the phone apps, can no longer overwrite a colleague\'s newer change.',
+        'Reports that count work for a funding agency (the agency billing summary, funder report, RSA-911, agency scorecard and analytics) now count only work that agency pays for: private-pay and no-charge work is no longer counted as VR work. A renamed agency is listed once.',
+        'Safer sign-in and recovery: a person whose account was switched off can no longer get back in through Microsoft, and after handing a device to a client to sign, signing back in needs your password or a fresh Microsoft sign-in. If the private key file is ever lost, System health has a step to start over safely.',
+    ],
     '4.28.0' => [
         'A second full code review was done and every finding fixed. Two people editing the same client, track or worksite assessment can no longer overwrite each other: the second save is refused, names what the other person changed, and keeps your own typing. The phone apps do the same.',
         'Saving or sending again after a lost connection in the phone apps no longer makes a second client, session, report or record. Spanish signing in the apps now speaks every button and message in Spanish, and an open form in the Android app survives turning the phone.',

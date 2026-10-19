@@ -113,6 +113,12 @@ session_name('cms');
 // garbage collector (which would surface as a bare CSRF failure).
 ini_set('session.gc_maxlifetime', (string)(48 * 3600));
 session_start();
+// A device handed over for signing in person (4.29.0, P2): the marker cookie is set with the
+// first reply that carries the hand-over, so it outlives the session even when the browser is
+// closed on the signing page (see handover_marked()).
+if (PHP_SAPI !== 'cli') header_register_callback(function (): void {
+    if (is_array($_SESSION['kiosk_sign'] ?? null) && !handover_cookie_fresh()) handover_mark();
+});
 
 header('Cache-Control: no-store');
 // The PHP version banner (expose_php) helps only someone matching known flaws.
@@ -543,8 +549,11 @@ function fresh_auth_session(): void {
     $_SESSION = $kept;
 }
 
-/** Establish every browser sign-in against the current durable credentials. */
-function establish_user_session(array $row): void {
+/** Establish every browser sign-in against the current durable credentials.
+ *  $fullSignIn: a sign-in with the password and a code (verify.php), which also ends the
+ *  "handed over for signing" marker (4.29.0); Microsoft and passkey sign-ins pass false. */
+function establish_user_session(array $row, bool $fullSignIn = true): void {
+    if ($fullSignIn) handover_clear();
     fresh_auth_session();
     $_SESSION['user_id'] = (int)$row['id'];
     $_SESSION['user_name'] = $row['name'];
@@ -595,6 +604,7 @@ function current_user(): ?array {
 function kiosk_guard(): void {
     $k = $_SESSION['kiosk_sign'] ?? null;
     if (!is_array($k)) return;
+    if (!handover_cookie_fresh()) handover_mark(); // 4.29.0: renewed while the device is handed over
     if (kiosk_request_allowed($k)) return;
     kiosk_end();
 }
@@ -640,12 +650,27 @@ function kiosk_document_waiting(array $k): bool {
 
 /** End the handed-over session: nothing of it is kept; the staff member signs in again. */
 function kiosk_end(): never {
+    // 4.29.0 (P2): this browser stays marked after the session ends, so the browser's Microsoft
+    // session or an unlocked passkey cannot sign the signer straight back in (handover_marked()).
+    handover_mark();
     session_unset();
     session_destroy();
     session_start();
     if (is_script_request()) session_ended_json();
     flash('For privacy, you were signed out after the device was handed over for signing. Sign in again to carry on.', 'info');
-    redirect('login.php');
+    redirect(kiosk_after_url());
+}
+
+/** Where a browser goes once its hand-over has ended (4.29.0): with Microsoft sign-in set up,
+ *  through Microsoft's sign-out first (after the local sign-out above), so neither "Sign in
+ *  with Microsoft" nor a Microsoft mailbox open in that browser is left to the signer; then
+ *  back to the sign-in page (registered as a redirect URI on Federation). */
+function kiosk_after_url(): string {
+    $entra = function_exists('entra_cfg') ? entra_cfg() : null;
+    $tenant = is_array($entra) ? (string)($entra['tenant_id'] ?? '') : '';
+    if ($tenant === '' || !preg_match('/^[A-Za-z0-9.-]+$/', $tenant)) return 'login.php';
+    return 'https://login.microsoftonline.com/' . $tenant . '/oauth2/v2.0/logout?'
+        . http_build_query(['post_logout_redirect_uri' => rtrim((string)cfg('base_url'), '/') . '/login.php']);
 }
 
 function require_login(): array {

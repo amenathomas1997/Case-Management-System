@@ -35,21 +35,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_group'])) {
             redirect('settings.php#graph-h');
         }
     }
-    foreach (CONFIG_OVERRIDES as $k => [$label, $kind, $g]) {
-        if ($g !== $group) continue;
-        $field = str_replace('.', '_', $k);
-        if ($kind === 'secret') {
-            // A secret is never shown again: empty keeps it, unless "clear" is ticked.
-            $typed = (string)($_POST[$field] ?? '');
-            if (!empty($_POST[$field . '_clear'])) $err = config_override_save($k, '', (int)$user['id']);
-            elseif ($typed !== '') $err = config_override_save($k, $typed, (int)$user['id']);
-            else $err = null;
-        } else {
-            $err = config_override_save($k, (string)($_POST[$field] ?? ''), (int)$user['id']);
+    // 4.29.0: the whole group is checked before any of it is kept: every value is saved inside
+    // one transaction, and a single refused value rolls the group back, so a refused save
+    // changes nothing (it used to keep the valid boxes and refuse the rest without saying so).
+    db()->beginTransaction();
+    try {
+        foreach (CONFIG_OVERRIDES as $k => [$label, $kind, $g]) {
+            if ($g !== $group) continue;
+            $field = str_replace('.', '_', $k);
+            if ($kind === 'secret') {
+                // A secret is never shown again: empty keeps it, unless "clear" is ticked.
+                $typed = (string)($_POST[$field] ?? '');
+                if (!empty($_POST[$field . '_clear'])) $err = config_override_save($k, '', (int)$user['id']);
+                elseif ($typed !== '') $err = config_override_save($k, $typed, (int)$user['id']);
+                else $err = null;
+            } else {
+                $err = config_override_save($k, (string)($_POST[$field] ?? ''), (int)$user['id']);
+            }
+            if ($err !== null) $errors[$field] = $err;
         }
-        if ($err !== null) $errors[$field] = $err;
+        if ($errors) db()->rollBack(); else db()->commit();
+    } catch (Throwable $e) {
+        if (db()->inTransaction()) db()->rollBack();
+        throw $e;
     }
-    if ($errors) { keep_input(); keep_field_errors($errors); redirect('settings.php#' . $group . '-h'); }
+    if ($errors) {
+        keep_input();
+        keep_field_errors($errors);
+        redirect('settings.php#' . $group . '-h');
+    }
     flash(SETTINGS_GROUPS[$group] . ' saved.' . ($group === 'graph' ? ' Send yourself a test email to check it works.' : ''));
     redirect('settings.php#' . $group . '-h');
 }
@@ -86,6 +100,10 @@ $current = function (string $k) {
 <section class="card" aria-labelledby="<?= $group ?>-h">
   <h2 id="<?= $group ?>-h"><?= h($title) ?></h2>
   <form method="post" action="settings.php" class="stacked" novalidate><?= csrf_field() ?>
+    <?php // 4.29.0: a refused save is announced (focus moves to this summary), with each error linked to its box.
+    $groupLabels = [];
+    foreach (CONFIG_OVERRIDES as $k => [$label, $kind, $g]) if ($g === $group) $groupLabels[str_replace('.', '_', $k)] = '';
+    echo form_error_summary($groupLabels); ?>
     <?php foreach (CONFIG_OVERRIDES as $k => [$label, $kind, $g]): if ($g !== $group) continue;
         $field = str_replace('.', '_', $k); $stored = (string)(setting('cfg.' . $k) ?? ''); ?>
     <div class="field">
@@ -95,10 +113,10 @@ $current = function (string $k) {
       <?php if ($stored !== ''): ?><label><input type="checkbox" name="<?= $field ?>_clear" value="1"> Remove the stored secret (use config.php's)</label><?php endif; ?>
       <?php elseif ($kind === 'yesno'): ?>
       <label for="<?= $field ?>"><?= h($label) ?></label>
-      <select id="<?= $field ?>" name="<?= $field ?>"><option value="">Use config.php (<?= $current($k) === 'yes' || ($current($k) === '' && in_array($k, YESNO_DEFAULT_YES, true)) ? 'yes' : 'no' ?>)</option><?php foreach (['yes' => 'Yes', 'no' => 'No'] as $yv => $yl): ?><option value="<?= $yv ?>"<?= old_in($field, $stored) === $yv ? ' selected' : '' ?>><?= $yl ?></option><?php endforeach; ?></select><?= field_error($field) ?>
+      <select id="<?= $field ?>" name="<?= $field ?>" <?= field_aria($field) ?>><option value="">Use config.php (<?= $current($k) === 'yes' || ($current($k) === '' && in_array($k, YESNO_DEFAULT_YES, true)) ? 'yes' : 'no' ?>)</option><?php foreach (['yes' => 'Yes', 'no' => 'No'] as $yv => $yl): ?><option value="<?= $yv ?>"<?= old_in($field, $stored) === $yv ? ' selected' : '' ?>><?= $yl ?></option><?php endforeach; ?></select><?= field_error($field) ?>
       <?php elseif ($kind === 'timezone'): ?>
       <label for="<?= $field ?>"><?= h($label) ?></label>
-      <select id="<?= $field ?>" name="<?= $field ?>"><option value="">Use config.php (<?= h(US_TIME_ZONES[$current($k)] ?? str_replace('_', ' ', $current($k))) ?>)</option><?php foreach (CONFIG_TIMEZONES as $tz): ?><option value="<?= h($tz) ?>"<?= $stored === $tz ? ' selected' : '' ?>><?= h(US_TIME_ZONES[$tz] ?? str_replace('_', ' ', $tz)) ?></option><?php endforeach; ?></select>
+      <select id="<?= $field ?>" name="<?= $field ?>" <?= field_aria($field) ?>><option value="">Use config.php (<?= h(US_TIME_ZONES[$current($k)] ?? str_replace('_', ' ', $current($k))) ?>)</option><?php foreach (CONFIG_TIMEZONES as $tz): ?><option value="<?= h($tz) ?>"<?= old_in($field, $stored) === $tz ? ' selected' : '' ?>><?= h(US_TIME_ZONES[$tz] ?? str_replace('_', ' ', $tz)) ?></option><?php endforeach; ?></select><?= field_error($field) ?>
       <?php else: ?>
       <label for="<?= $field ?>"><?= h($label) ?></label>
       <input type="<?= $kind === 'email' ? 'email' : (in_array($kind, ['minutes', 'otp'], true) ? 'number' : 'text') ?>" id="<?= $field ?>" name="<?= $field ?>" value="<?= h(old_in($field, $stored)) ?>" placeholder="<?= h($current($k)) ?>" <?= field_aria($field) ?>><?= field_error($field) ?>
@@ -116,6 +134,7 @@ $current = function (string $k) {
   <h2 id="icon-h">App icon</h2>
   <p><?= brand_icon_uploaded() ? 'Your own icon is in use.' : 'The built-in icons are in use.' ?> It shows when someone adds the system to their phone's home screen.</p>
   <form method="post" action="settings.php" enctype="multipart/form-data" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['icon' => 'App icon']) ?>
     <div class="field"><label for="icon">A square PNG or JPEG picture, at least 512 by 512 pixels</label>
       <input type="file" id="icon" name="icon" accept="image/png,image/jpeg" <?= field_aria('icon') ?>><?= field_error('icon') ?></div>
     <?php if (brand_icon_uploaded()): ?><div class="field"><label><input type="checkbox" name="remove_icon" value="1"> Go back to the built-in icons</label></div><?php endif; ?>

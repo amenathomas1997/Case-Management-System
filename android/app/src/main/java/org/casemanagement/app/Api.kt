@@ -750,8 +750,13 @@ class Api(context: Context) {
         pendingSync = ownPending(loadQueue())
     }
 
+    /** How many times this phone was wiped while the app ran (4.29.0): work begun before a wipe keeps nothing. */
+    var wipes = 0
+        private set
+
     /** [old]: the session the server answered "wipe" to (the current one, or one it refused earlier). */
     fun wipeThisPhone(old: String = token) {
+        wipes++
         val cleared = store.wipeExceptServer()
         token = ""; userId = 0; userName = ""; reauthRequired = false; syncNotice = null
         clearIdentity(keepQueue = false)
@@ -786,18 +791,20 @@ class Api(context: Context) {
      * Keeps an entry to send when there is a signal. Its idem_key goes with every try, so a reply
      * lost on the way can never save it twice.
      */
-    suspend fun enqueue(action: String, body: JSONObject, label: String, owner: Int) = queueLock.withLock {
-        if (owner != userId) throw ApiException("Your account changed, so this was not kept. Nothing was saved.")
+    suspend fun enqueue(action: String, body: JSONObject, label: String, owner: Int, forOwnerWhoLeft: Boolean = false) = queueLock.withLock {
+        // [forOwnerWhoLeft] (4.29.0): the account changed while this was being sent; it is kept for the
+        // account that wrote it (the queue is per account) and sent only when that account signs in.
+        if (owner != userId && !forOwnerWhoLeft) throw ApiException("Your account changed, so this was not kept. Nothing was saved.")
         if (!store.phoneCanKeepClientData) {
             throw ApiException("This phone has no screen lock, so the app keeps nothing on it to send later. Save again when you have a signal, or set a screen lock in Settings.")
         }
-        if (userId <= 0) throw ApiException("Could not verify the account for offline saving. Keep this form open and reconnect before saving.")
+        if (owner <= 0) throw ApiException("Could not verify the account for offline saving. Keep this form open and reconnect before saving.")
         val id = body.optString("idem_key").ifEmpty { UUID.randomUUID().toString() }
         body.put("idem_key", id)
         val q = loadQueue()
-        if (q.none { it.optString("id") == id && it.optInt("owner") == userId }) {
+        if (q.none { it.optString("id") == id && it.optInt("owner") == owner }) {
             q.add(JSONObject().put("id", id).put("action", action).put("body", body.toString()).put("label", label)
-                .put("owner", userId).put("savedAt", System.currentTimeMillis()))
+                .put("owner", owner).put("savedAt", System.currentTimeMillis()))
         }
         saveQueue(q)
     }
@@ -838,7 +845,8 @@ class Api(context: Context) {
                 status in 200..299 && json.optBoolean("ok") -> done.add(item.optString("id"))
                 // Already checked in (another phone, or an earlier try whose reply was lost).
                 status == 409 && item.optString("action") == "check_in_session" -> done.add(item.optString("id"))
-                status >= 500 || status == 429 -> {
+                // 4.29.0: an earlier try is still being processed: kept, and sent again later with the same key.
+                status >= 500 || status == 429 || (status == 409 && json.optBoolean("processing")) -> {
                     transient = "“${item.optString("label")}” could not sync yet and is still saved on this phone. " +
                         json.optString("error").ifEmpty { "It will retry automatically when you reconnect." }
                     break

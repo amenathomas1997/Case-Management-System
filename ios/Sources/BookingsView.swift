@@ -296,7 +296,7 @@ struct BookingEditSheet: View {
             // creating it again would book it twice.
             busy = false
             showFormError("The connection dropped before the server answered, so it isn't known whether this booking was created. Check the bookings list for \(serviceType) on \(neededAt.formatted(date: .abbreviated, time: .shortened)) before creating it again.", in: &self.error)
-        } catch { idem.answered(); busy = false; showFormError(error.localizedDescription, in: &self.error) }
+        } catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error), in: &self.error) }
     }
 }
 
@@ -314,6 +314,10 @@ struct NewRecordClientPicker: View {
     var noneLabel = "Choose…"
     /// Closed clients are left out unless the record may concern one (an incident).
     var includeClosed = false
+    /// The client a saved record is linked to now (4.29.0), named even when the list leaves it
+    /// out (a closed client), so the picker never says "None" for a link that exists.
+    var linkedId: Int? = nil
+    var linkedName: String? = nil
     @Binding var selection: Int?
     @State private var clients: [ClientRow] = []
     @State private var started = false
@@ -324,7 +328,9 @@ struct NewRecordClientPicker: View {
     /// The chosen client's name, or the "no client" choice.
     private var chosenName: String {
         guard let selection else { return noneLabel }
-        return clients.first(where: { $0.id == selection })?.name ?? noneLabel
+        if let name = clients.first(where: { $0.id == selection })?.name { return name }
+        if selection == linkedId, let linkedName, !linkedName.isEmpty { return linkedName }
+        return noneLabel
     }
 
     var body: some View {

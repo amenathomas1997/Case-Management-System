@@ -199,6 +199,9 @@ page_header('Federation', $user, 'admin', [['admin.php', 'Administration']]);
 <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr));">
   <section class="card" aria-labelledby="fed-heading">
     <h2 id="fed-heading">Connection settings</h2>
+    <?php if ((string)(setting('sso_auth_time_missing') ?? '') !== ''): // 4.29.0 ?>
+    <p class="alert alert-error">Microsoft did not send the optional claim auth_time (last on <?= h(fmt_date((string)setting('sso_auth_time_missing'))) ?>), so after a device is handed over for signing nobody can sign in with Microsoft on it until they use their password and code. Add auth_time under Token configuration (step 5 below).</p>
+    <?php endif; ?>
     <?= form_error_summary(['tenant_id' => 'Directory (tenant) ID', 'client_id' => 'Application (client) ID', 'client_secret' => 'Client secret']) ?>
     <?php // novalidate: the server's messages (with a GUID example) are shown in the
           // summary and on the field, instead of the browser's generic "match the format". ?>
@@ -260,12 +263,14 @@ page_header('Federation', $user, 'admin', [['admin.php', 'Administration']]);
       <li>Under <strong>Authentication</strong> → <em>Add a platform</em> → <strong>Web</strong>, add this redirect URI exactly:
         <p><code style="user-select: all; word-break: break-all;"><?= h($redirectUri) ?></code></p></li>
       <li>Copy the <strong>Directory (tenant) ID</strong> and <strong>Application (client) ID</strong> from the app's Overview page into the form here.</li>
-      <li>Under <strong>Token configuration</strong> → <em>Add optional claim</em> → <strong>ID</strong>, tick <strong>acct</strong> and add it. It tells this system that the person is a member of your own organization, not a guest; without it a person's first Microsoft sign-in cannot be matched to their account here by email.</li>
+      <li>Under <strong>Authentication</strong>, add this second redirect URI, so a device handed over for signing in person can also be signed out of Microsoft:
+        <p><code style="user-select: all; word-break: break-all;"><?= h(rtrim((string)cfg('base_url'), '/') . '/login.php') ?></code></p></li>
+      <li>Under <strong>Token configuration</strong> → <em>Add optional claim</em> → <strong>ID</strong>, tick <strong>acct</strong> and <strong>auth_time</strong> and add them. acct tells this system that the person is a member of your own organization, not a guest; without it a person's first Microsoft sign-in cannot be matched to their account here by email. auth_time says when Microsoft last asked for the password: after a device was handed over for signing in person, Microsoft sign-in works only when it shows the password was just typed (otherwise staff sign in with their email, password and code).</li>
       <li>Under <strong>Certificates &amp; secrets</strong>, create a client secret and paste its <em>Value</em> here (it is shown only once).</li>
       <li>Save, then use <strong>Test connection</strong> to confirm everything checks out before telling your team.</li>
     </ol>
     <h3>How sign-in matching works</h3>
-    <p>The first time someone signs in with Microsoft, they are matched to an <strong>active user here with the same email address</strong>, but only when Microsoft says they are a member of your own organization (the acct claim in step 4). A guest or a personal Microsoft account is never matched by email: that person signs in with their password once, then connects Microsoft from My Account. Check each person's email under <a href="admin.php#people-h">Administration → People &amp; permissions</a>. Password sign-in keeps working alongside Microsoft sign-in.</p>
+    <p>The first time someone signs in with Microsoft, they are matched to an <strong>active user here with the same email address</strong>, but only when Microsoft says they are a member of your own organization (the acct claim in step 5). A guest or a personal Microsoft account is never matched by email: that person signs in with their password once, then connects Microsoft from My Account. Check each person's email under <a href="admin.php#people-h">Administration → People &amp; permissions</a>. Password sign-in keeps working alongside Microsoft sign-in. A Microsoft account that belongs to a deactivated user here never signs in and never gets a new account, even when its email has changed.</p>
   </section>
 </div>
 <?php page_footer();

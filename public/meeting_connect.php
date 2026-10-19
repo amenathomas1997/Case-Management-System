@@ -31,6 +31,11 @@ if ($returning) {
     $email = (string)($me['email'] ?? $me['mail'] ?? $me['userPrincipalName'] ?? '');
     try {
         meeting_store((int)$user['id'], $provider, $tok, $email);
+    } catch (MeetingKeyUnavailable $e) {
+        // 4.29.0 (P14): the key file is the problem, not the database.
+        error_log('meeting_connect: ' . $e->getMessage());
+        flash(MEETING_PROVIDERS[$provider] . ' could not be connected: ' . MEETING_KEY_LOST_MSG, 'error');
+        redirect($back);
     } catch (Throwable $e) {
         error_log('meeting_connect: ' . get_class($e) . ' ' . $e->getMessage());
         flash(MEETING_PROVIDERS[$provider] . ' could not be connected: the connection could not be stored. Ask an administrator to run Database upgrade.', 'error');
@@ -41,6 +46,8 @@ if ($returning) {
     redirect($back);
 }
 
+// Not sent off to sign in when the connection could not be stored afterwards (4.29.0).
+try { meeting_key(); } catch (MeetingKeyUnavailable $e) { flash(MEETING_PROVIDERS[$provider] . ' could not be connected: ' . MEETING_KEY_LOST_MSG, 'error'); redirect($back); }
 // Going to Zoom or Microsoft: a one-time value proves the reply belongs to this request.
 $state = bin2hex(random_bytes(16));
 $_SESSION['meeting_oauth'] = ['state' => $state, 'provider' => $provider];

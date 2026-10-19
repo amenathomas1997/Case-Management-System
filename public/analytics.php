@@ -30,15 +30,37 @@ $maxAmt = max(1.0, ...array_map(fn($r) => (float)$r['amt'], $byMonth ?: [['amt' 
 /* Hours & revenue by funding agency (value includes track expenses, as invoiced).
    Billed lines count under the agency snapshotted on their invoice, as on the agency
    summary, so editing a track's agency later does not move work already invoiced;
-   unbilled lines, and older invoices, use the track's. */
-$byAgency = db()->query("SELECT funding_agency, SUM(hrs_part) hrs, SUM(amt_part) amt, COUNT(DISTINCT track_id) tracks FROM (
-        SELECT COALESCE(i.funding_agency, t.funding_agency) funding_agency, t.id track_id, w.hours hrs_part,
+   unbilled lines, and older invoices, use the track's.
+   4.29.0: only VR work counts under an agency (vr_work_sql()); private-pay and no-charge
+   work has rows of its own, so the table still adds up to all work. Each agency is listed
+   once under its name today (agency_resolve()), so a renamed agency is not split. */
+$vrWork = vr_work_sql('t', 'i');
+// pay: 'vr', 'private' (an invoice billed to the client, or a private-pay track) or 'none'.
+$payMode = "CASE WHEN {$vrWork} THEN 'vr' WHEN i.id IS NOT NULL OR t.billing_mode = 'private' THEN 'private' ELSE 'none' END";
+$agencyParts = db()->query("SELECT pay, funding_agency, track_id, SUM(hrs_part) hrs, SUM(amt_part) amt FROM (
+        SELECT {$payMode} pay, COALESCE(i.funding_agency, t.funding_agency) funding_agency, t.id track_id, w.hours hrs_part,
             ROUND(w.hours * COALESCE(w.hourly_rate, t.hourly_rate), 2) + ROUND(w.mileage * COALESCE(w.mileage_rate, t.mileage_rate), 2) amt_part
         FROM work_logs w JOIN {$rt} t ON t.id = w.track_id LEFT JOIN invoices i ON i.id = w.invoice_id
         UNION ALL
-        SELECT COALESCE(i.funding_agency, t.funding_agency), t.id, 0, e.amount
+        SELECT {$payMode}, COALESCE(i.funding_agency, t.funding_agency), t.id, 0, e.amount
         FROM track_expenses e JOIN {$rt} t ON t.id = e.track_id LEFT JOIN invoices i ON i.id = e.invoice_id
-    ) x GROUP BY funding_agency ORDER BY amt DESC")->fetchAll();
+    ) x GROUP BY pay, funding_agency, track_id")->fetchAll();
+$byAgency = [];
+foreach ($agencyParts as $p) {
+    $raw = trim((string)$p['funding_agency']);
+    if ($p['pay'] === 'private') { $k = ' private'; $label = 'Private pay (not an agency)'; }
+    elseif ($p['pay'] === 'none') { $k = ' none'; $label = 'No charge (not an agency)'; }
+    elseif ($raw === '') { $k = ' blank'; $label = 'No agency entered'; }
+    else { $label = agency_resolve($raw); $k = agency_key($label); }
+    $byAgency[$k] ??= ['funding_agency' => $label, 'hrs' => 0.0, 'amt' => 0.0, 'ids' => []];
+    $byAgency[$k]['hrs'] += (float)$p['hrs'];
+    $byAgency[$k]['amt'] += (float)$p['amt'];
+    $byAgency[$k]['ids'][(int)$p['track_id']] = true;
+}
+foreach ($byAgency as &$ba) { $ba['tracks'] = count($ba['ids']); unset($ba['ids']); }
+unset($ba);
+$byAgency = array_values($byAgency);
+usort($byAgency, fn($x, $y) => $y['amt'] <=> $x['amt']);
 
 /* Goal achievement */
 $goalStats = db()->query("SELECT status, COUNT(*) n FROM {$rg} smart_goals GROUP BY status")->fetchAll();
@@ -146,7 +168,7 @@ page_header('Business analytics', $user, 'analytics');
 <div class="grid grid-2">
   <section class="card" aria-labelledby="agency-h">
     <h2 id="agency-h">By funding agency</h2>
-    <p class="muted">All time. Value includes billable track expenses.</p>
+    <p class="muted">All time. Value includes billable track expenses. Private-pay and no-charge work is listed on its own rows, not under an agency.</p>
     <?php if (!$byAgency): ?><p class="muted">No data yet.</p>
     <?php else: ?>
     <div class="table-scroll" tabindex="0" role="region" aria-labelledby="agency-h-cap">
