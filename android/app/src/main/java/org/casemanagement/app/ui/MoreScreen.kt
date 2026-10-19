@@ -178,7 +178,10 @@ fun OfflineScreen(api: Api, nav: NavHostController) {
             },
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = {
-                    scope.launch { api.discardQueued(item.optString("id")); version++; notice = "Entry discarded." }; discard = null
+                    scope.launch {
+                        try { api.discardQueued(item.optString("id")) } catch (e: org.casemanagement.app.ApiException) { notice = e.message; return@launch }
+                        version++; notice = "Entry discarded."
+                    }; discard = null
                 }) { Text("Discard") }
             },
         )

@@ -265,11 +265,12 @@ page_header('Federation', $user, 'admin', [['admin.php', 'Administration']]);
       <li>Under <strong>Authentication</strong> → <em>Add a platform</em> → <strong>Web</strong>, add this redirect URI exactly:
         <p><code style="user-select: all; word-break: break-all;"><?= h($redirectUri) ?></code></p></li>
       <li>Copy the <strong>Directory (tenant) ID</strong> and <strong>Application (client) ID</strong> from the app's Overview page into the form here.</li>
+      <li>Under <strong>Token configuration</strong> → <em>Add optional claim</em> → <strong>ID</strong>, tick <strong>acct</strong> and add it. It tells this system that the person is a member of your own organization, not a guest; without it a person's first Microsoft sign-in cannot be matched to their account here by email.</li>
       <li>Under <strong>Certificates &amp; secrets</strong>, create a client secret and paste its <em>Value</em> here (it is shown only once).</li>
       <li>Save, then use <strong>Test connection</strong> to confirm everything checks out before telling your team.</li>
     </ol>
     <h3>How sign-in matching works</h3>
-    <p>A Microsoft account signs in successfully only if an <strong>active user here has the same email address</strong> as the Microsoft account. Check each person's email under <a href="account.php">Administration → People & permissions</a>. Password + emailed-code sign-in keeps working alongside Microsoft sign-in.</p>
+    <p>The first time someone signs in with Microsoft, they are matched to an <strong>active user here with the same email address</strong>, but only when Microsoft says they are a member of your own organization (the acct claim in step 4). A guest or a personal Microsoft account is never matched by email: that person signs in with their password once, then connects Microsoft from My Account. Check each person's email under <a href="account.php">Administration → People & permissions</a>. Password sign-in keeps working alongside Microsoft sign-in.</p>
   </section>
 </div>
 <?php page_footer();

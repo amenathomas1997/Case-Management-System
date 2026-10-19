@@ -2,9 +2,9 @@
 declare(strict_types=1);
 // Settings administrators change on screen (3.0.54) instead of editing config.php on the
 // server. Each one is stored in the settings table as cfg.<section>.<key> and laid over
-// $CONFIG when the app starts; an empty value means "use config.php". The Graph client
-// secret's name contains "secret", so the nightly backup leaves it out (as the other stored
-// secrets): after a restore it is entered again here.
+// $CONFIG when the app starts; an empty value means "use config.php". Every value of kind
+// 'secret' is left out of the nightly backup (cron/backup.sh names each one) and removed
+// from a staging copy (dist/staging_scrub.php): after a restore they are entered again here.
 
 /** The editable settings: 'section.key' => [label, kind, group]. */
 const CONFIG_OVERRIDES = [
@@ -18,7 +18,7 @@ const CONFIG_OVERRIDES = [
     'app.backup_email' => ['Backup and alert address', 'email', 'addresses'],
     'app.session_timeout_minutes' => ['Sign out after this many idle minutes (5 to 480)', 'minutes', 'signin'],
     'app.otp_expiry_minutes' => ['Sign-in codes last this many minutes (3 to 30)', 'otp', 'signin'],
-    'app.timezone' => ['Your organisation\'s main time zone: every date and time is shown in it, and the scheduled jobs and update checks follow it (times already recorded are then shown in the new zone)', 'timezone', 'time'],
+    'app.timezone' => ['Your organisation\'s main time zone: every date and time is shown in it, and the scheduled jobs and update checks follow it (times already recorded keep their clock time; future sessions keep their clock time in the new zone)', 'timezone', 'time'],
     'brand.name' => ['System name', 'text', 'brand'],
     'brand.short' => ['Short name (page header)', 'text', 'brand'],
     'brand.org' => ['Organisation name (letterhead)', 'text', 'brand'],
@@ -147,7 +147,7 @@ function brand_rgb(string $key = 'color_dark'): array {
 /* ---------- Safe upgrades (3.0.54) ---------- */
 
 /** The database version this code needs: the newest migration it ships. */
-const DB_SCHEMA_VERSION = '4.25.0';
+const DB_SCHEMA_VERSION = '4.27.0';
 
 /** The database version recorded by the migrations, or null for a database from before 3.0.54. */
 function db_schema_version(): ?string {

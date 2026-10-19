@@ -69,15 +69,39 @@ const CLIENT_MERGE_TABLES = [
 const MERGE_FILL_FIELDS = ['dob' => 'Date of birth', 'email' => 'Email', 'phone' => 'Phone', 'address' => 'Address',
     'school' => 'School / district', 'guardian_name' => 'Guardian name', 'guardian_phone' => 'Guardian phone',
     'guardian_email' => 'Guardian email', 'counselor_name' => 'Counselor name', 'counselor_email' => 'Counselor email',
-    'counselor_phone' => 'Counselor phone', 'counselor_agency' => 'Counselor agency', 'assigned_to' => 'Assigned instructor', 'state' => 'State', 'office_id' => 'Office'];
+    'counselor_phone' => 'Counselor phone', 'counselor_agency' => 'Counselor agency', 'assigned_to' => 'Assigned instructor', 'state' => 'State', 'office_id' => 'Office',
+    // 4.27.0: the plan, vision, time zone, language and privacy notice were dropped by a merge before.
+    'vr_case_number' => 'VR case number', 'ipe_goal' => 'IPE employment goal', 'ipe_date' => 'IPE date', 'ipe_amended_on' => 'IPE amendment date',
+    'vision_status' => 'Vision status', 'vision_onset_age' => 'Age when vision loss began', 'time_zone' => 'Time zone',
+    'preferred_language' => 'Preferred language', 'privacy_notice_at' => 'Privacy notice given'];
 const MERGE_FILL_OPT_IN = ['email', 'guardian_email', 'counselor_email'];
-/** The fields blank on $t and set on $s, as field => duplicate's value. */
+/** Fields copied together with the one named: the privacy notice is one fact (when, by whom, how). */
+const MERGE_FILL_WITH = ['privacy_notice_at' => ['privacy_notice_by', 'privacy_notice_how']];
+/** The fields blank on $t and set on $s, as field => duplicate's value. The preferred
+ *  language is never empty: English, the default, counts as blank when the duplicate
+ *  has another language. */
 function merge_fillable(array $t, array $s): array {
     $out = [];
     foreach (array_keys(MERGE_FILL_FIELDS) as $f) {
-        if ((($t[$f] ?? null) === null || $t[$f] === '') && ($s[$f] ?? null) !== null && $s[$f] !== '') $out[$f] = $s[$f];
+        if (!array_key_exists($f, $s)) continue; // a column from a later migration
+        $blank = ($t[$f] ?? null) === null || $t[$f] === '' || ($f === 'preferred_language' && $t[$f] === 'en');
+        if ($blank && ($s[$f] ?? null) !== null && $s[$f] !== '' && !($f === 'preferred_language' && $s[$f] === 'en')) $out[$f] = $s[$f];
     }
     return $out;
+}
+/** The chosen fills as column => value, with the columns that travel with them. */
+function merge_fill_columns(array $fill, array $s): array {
+    foreach (MERGE_FILL_WITH as $f => $with) {
+        if (!isset($fill[$f])) continue;
+        foreach ($with as $w) if (array_key_exists($w, $s)) $fill[$w] = $s[$w];
+    }
+    return $fill;
+}
+/** The legal hold the kept record takes from the duplicate (4.27.0): the duplicate's
+ *  hold_at, hold_by and hold_reason when the kept record has none, else []. */
+function merge_hold_carry(array $t, array $s): array {
+    if (!array_key_exists('hold_at', $s) || empty($s['hold_at']) || !empty($t['hold_at'])) return [];
+    return ['hold_at' => $s['hold_at'], 'hold_by' => $s['hold_by'] ?? null, 'hold_reason' => $s['hold_reason'] ?? null];
 }
 
 /**

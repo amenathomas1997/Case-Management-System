@@ -144,8 +144,19 @@ function client_releases(int $clientId): array {
  */
 function release_covering(int $clientId, string $recipientType, ?string $recipientEmail = null): ?array {
     $email = mb_strtolower(trim((string)$recipientEmail));
+    // A guardian signs for a minor (4.27.0): once the client turns 18 a guardian's
+    // consent or release signed before then no longer speaks for them, and the client
+    // signs their own. One a guardian signed after the 18th birthday (an adult under
+    // guardianship) still counts.
+    $dobQ = db()->prepare('SELECT dob FROM clients WHERE id = ?');
+    $dobQ->execute([$clientId]);
+    $dob = (string)($dobQ->fetchColumn() ?: '');
+    $adultFrom = $dob !== '' && strtotime($dob) !== false ? date('Y-m-d', strtotime($dob . ' +18 years')) : null;
+    $minorSigned = fn(?string $signedAt): bool => $adultFrom !== null && $adultFrom <= date('Y-m-d')
+        && ($signedAt === null || $signedAt === '' || substr($signedAt, 0, 10) < $adultFrom);
     foreach (client_releases($clientId) as $r) {
         if (release_status($r) !== 'Current') continue;
+        if (($r['signer_role'] ?? '') === 'Guardian' && $minorSigned($r['signed_at'] ?? null)) continue;
         if ($r['recipient_type'] === $recipientType || ($email !== '' && mb_strtolower(trim((string)$r['recipient_email'])) === $email)) return $r;
     }
     if (in_array($recipientType, ['VR counselor and agency', 'School'], true)) {
@@ -153,7 +164,7 @@ function release_covering(int $clientId, string $recipientType, ?string $recipie
         $q->execute([$clientId]);
         $c = $q->fetch();
         $days = (int)(setting('consent_validity_days') ?: 365);
-        if ($c && empty($c['withdrawn_at']) && strtotime($c['signed_at'] . ' +' . $days . ' days') >= strtotime('today')) {
+        if ($c && empty($c['withdrawn_at']) && !$minorSigned((string)$c['signed_at']) && strtotime($c['signed_at'] . ' +' . $days . ' days') >= strtotime('today')) {
             return ['recipient_type' => $recipientType, 'recipient_name' => 'Guardian consent', 'signed_name' => $c['signed_name'],
                 'expires_on' => date('Y-m-d', strtotime($c['signed_at'] . ' +' . $days . ' days'))];
         }
@@ -224,11 +235,22 @@ function release_send(int $clientId, array $v, int $actor): array {
     $id = (int)db()->lastInsertId();
     [$subj, $body] = email_template_for_client('release_request', $client, ['name' => $v['signer_name'],
         'link' => cfg('base_url') . '/release.php?t=' . $token . (client_lang($client) === 'es' ? '&lang=es' : '')]);
-    if (!send_app_mail($v['signer_email'], $subj, $body)) {
+    // 4.27.0: when the outcome is unknown (Graph timed out after the request went out) the
+    // email may still arrive, so the release is kept and its link keeps working; staff are
+    // told it may have been sent. Only a send that cannot have gone removes it.
+    $outcome = function_exists('send_app_mail_outcome')
+        ? send_app_mail_outcome($v['signer_email'], $subj, $body)
+        : (send_app_mail($v['signer_email'], $subj, $body) ? 'sent' : 'refused');
+    if ($outcome === 'refused') {
         db()->prepare('DELETE FROM client_releases WHERE id = ?')->execute([$id]);
         return ['error' => 'The release could not be emailed, so nothing was saved. Try again later.', 'id' => 0];
     }
-    audit($actor, 'release.request', 'client', $clientId, 'to ' . $v['signer_email'] . ' for ' . $v['recipient_type'] . ': ' . $v['recipient_name']);
+    audit($actor, 'release.request', 'client', $clientId, 'to ' . $v['signer_email'] . ' for ' . $v['recipient_type'] . ': ' . $v['recipient_name']
+        . ($outcome === 'unknown' ? ' (email outcome unknown)' : ''));
+    if ($outcome === 'unknown') {
+        return ['error' => null, 'id' => $id, 'unknown' => true,
+            'notice' => 'The email service did not confirm the release email, so it may or may not have been sent. The request is kept on the client\'s Releases list. Check with ' . $v['signer_name'] . ' before sending it again, or withdraw it and send a new one.'];
+    }
     return ['error' => null, 'id' => $id];
 }
 
@@ -256,7 +278,7 @@ function release_sign(array $r, string $typed): bool {
     try {
         $s = $pdo->prepare('UPDATE client_releases SET signed_at = NOW(), signed_name = ?, sign_ip = ?, expires_on = DATE_ADD(CURDATE(), INTERVAL ? DAY)
             WHERE id = ? AND signed_at IS NULL AND withdrawn_at IS NULL');
-        $s->execute([$typed, $_SERVER['REMOTE_ADDR'] ?? '', release_validity_days(), (int)$r['id']]);
+        $s->execute([$typed, client_ip(), release_validity_days(), (int)$r['id']]);
         $done = $s->rowCount() === 1;
         if ($done) {
             $pdo->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)')
@@ -490,11 +512,13 @@ function client_records_copy_publish(int $clientId, int $actor): int {
 
 /* ---------- Phones signed in to the app (3.0.39) ---------- */
 
-/** One account's app sessions: in use, waiting to be wiped, or wiped in the last 30 days. */
+/** One account's app sessions: in use, ended in the last 90 days (a phone switched off can
+ *  still be reported lost, 4.27.0), waiting to be wiped, or sent the wipe in the last 30 days. */
 function app_devices(int $userId): array {
     try {
-        $q = db()->prepare('SELECT id, device_name, created_at, last_used_at, expires_at, wipe_requested_at, wiped_at FROM api_tokens
-            WHERE user_id = ? AND (expires_at > NOW() OR wiped_at > DATE_SUB(NOW(), INTERVAL 30 DAY)) ORDER BY COALESCE(last_used_at, created_at) DESC');
+        $q = db()->prepare('SELECT id, device_name, created_at, last_used_at, expires_at, wipe_requested_at, wiped_at, (expires_at > NOW()) AS live FROM api_tokens
+            WHERE user_id = ? AND (expires_at > DATE_SUB(NOW(), INTERVAL 90 DAY)
+                OR (wipe_requested_at IS NOT NULL AND (wiped_at IS NULL OR wiped_at > DATE_SUB(NOW(), INTERVAL 30 DAY)))) ORDER BY COALESCE(last_used_at, created_at) DESC');
         $q->execute([$userId]);
         return $q->fetchAll();
     } catch (PDOException $e) {
@@ -504,15 +528,20 @@ function app_devices(int $userId): array {
 
 /** A device's state in words. */
 function app_device_state(array $d): string {
-    if (!empty($d['wiped_at'])) return 'Wiped ' . fmt_datetime($d['wiped_at']);
+    // The app removes the session when it confirms the wipe (4.27.0), so a row with
+    // wiped_at was told to wipe but has not confirmed yet.
+    if (!empty($d['wiped_at'])) return 'Told to wipe ' . fmt_datetime($d['wiped_at']) . ': told again each time it connects until the app confirms';
     if (!empty($d['wipe_requested_at'])) return 'Reported lost: wiped the next time it connects';
+    if (isset($d['live']) && !(int)$d['live']) return 'Signed out ' . fmt_datetime($d['expires_at']) . ' when the session ended; it can still be reported lost';
     return 'Signed in' . ($d['last_used_at'] ? ', last used ' . fmt_datetime($d['last_used_at']) : '');
 }
 
 /** Sign one phone out ($lost false), or report it lost so it wipes itself ($lost true). */
 function app_device_action(int $tokenId, int $userId, bool $lost, int $actor): bool {
     if ($lost) {
-        $u = db()->prepare('UPDATE api_tokens SET wipe_requested_at = NOW() WHERE id = ? AND user_id = ? AND wipe_requested_at IS NULL AND expires_at > NOW()');
+        // An expired session can be flagged too (4.27.0): the row is kept, and the phone
+        // gets the wipe whenever it next connects (api.php finds wipe-pending rows past expiry).
+        $u = db()->prepare('UPDATE api_tokens SET wipe_requested_at = NOW() WHERE id = ? AND user_id = ? AND wipe_requested_at IS NULL');
         $u->execute([$tokenId, $userId]);
     } else {
         $u = db()->prepare('DELETE FROM api_tokens WHERE id = ? AND user_id = ? AND wipe_requested_at IS NULL');
@@ -533,9 +562,10 @@ function app_devices_html(array $devices, string $action, array $hidden): string
         $name = $d['device_name'] ?: 'A phone';
         $out .= '<li><strong>' . h($name) . '</strong>: signed in ' . fmt_date($d['created_at']) . '. ' . h(app_device_state($d)) . '.';
         if (empty($d['wipe_requested_at']) && empty($d['wiped_at'])) {
+            $live = !isset($d['live']) || (int)$d['live'] === 1;
             $out .= '<form method="post" action="' . h($action) . '" class="inline-form">' . csrf_field() . $fields
                 . '<input type="hidden" name="device_id" value="' . (int)$d['id'] . '">'
-                . '<button type="submit" name="device_signout" value="1" class="btn btn-secondary btn-sm">Sign out<span class="visually-hidden"> ' . h($name) . '</span></button> '
+                . ($live ? '<button type="submit" name="device_signout" value="1" class="btn btn-secondary btn-sm">Sign out<span class="visually-hidden"> ' . h($name) . '</span></button> ' : '')
                 . '<button type="submit" name="device_lost" value="1" class="btn btn-danger btn-sm" onclick="return confirm(' . h(json_encode('Report ' . $name . ' lost? The next time it connects, the app removes its drafts, its unsent offline entries and its saved lists, and signs out. Entries not yet sent are lost.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) . ');">Report lost and wipe<span class="visually-hidden"> ' . h($name) . '</span></button></form>';
         }
         $out .= '</li>';

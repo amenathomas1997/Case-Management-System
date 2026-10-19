@@ -49,6 +49,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['purge_client'])) {
             flash('This record is no longer archived (it was restored or changed while the page was open), so nothing was purged.', 'error');
             redirect("client.php?id=$id");
         }
+        // A hold placed while this page was open (or in the same moment) is seen on
+        // the locked row, so the record is kept (4.27.0).
+        if (!empty($locked['hold_at'])) {
+            $pdo->rollBack();
+            flash('This record was not purged: it was placed on hold (' . (string)$locked['hold_reason'] . ').', 'error');
+            redirect("client.php?id=$id");
+        }
         // List the stored files (documents, assessment attachments, signatures)
         // now, but remove them only after the commit below: a purge that fails
         // and rolls back must not leave rows pointing at files already deleted.
@@ -182,6 +189,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['purge_client'])) {
             'device_request' => 'SELECT id FROM device_requests WHERE client_id = ?',
             'worksite_assessment' => 'SELECT id FROM worksite_assessments WHERE client_id = ?',
             'access_booking' => 'SELECT id FROM access_bookings WHERE client_id = ?',
+            'incoming_authorization' => 'SELECT id FROM incoming_authorizations WHERE client_id = ? OR track_id IN (SELECT id FROM training_tracks WHERE client_id = ?)',
         ] as $entity => $sql) {
             try {
                 $cq = $pdo->prepare($sql);
@@ -210,6 +218,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['purge_client'])) {
                 ->execute(array_merge(['[Removed on retention purge]'], $chunk));
         }
         $purgeCounts['audit'] = count($auditIds);
+        // Authorization emails matched to this client (or to its tracks) keep the
+        // authorization number and dates for the agency's books, but the client's
+        // name, the counselor and the full email text go with the record (4.27.0).
+        // The row itself stays, so its message key still stops the same email
+        // from being imported again; a waiting one is dismissed.
+        try {
+            $iaWhere = 'client_id = ?' . ($purgeTrackIds ? ' OR track_id IN (' . implode(',', array_fill(0, count($purgeTrackIds), '?')) . ')' : '');
+            $pdo->prepare("UPDATE incoming_authorizations SET client_name = NULL, counselor_name = NULL, counselor_email = NULL, email_text = NULL,
+                client_id = NULL, status = IF(status = 'New', 'Dismissed', status) WHERE $iaWhere")
+                ->execute([$id, ...$purgeTrackIds]);
+        } catch (PDOException $e) {
+            if ((string)$e->getCode() !== '42S02') throw $e; // mig_3.0.48 not run yet
+        }
         // Track children first, then client children, then the client.
         $pdo->prepare('DELETE w FROM work_logs w JOIN training_tracks t ON t.id = w.track_id WHERE t.client_id = ?')->execute([$id]);
         $pdo->prepare('DELETE g FROM smart_goals g JOIN training_tracks t ON t.id = g.track_id WHERE t.client_id = ?')->execute([$id]);
@@ -900,7 +921,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['send_release']) || i
             redirect("client.php?id=$id&release_method=email#release-form");
         }
         web_once_set($relKey, $sent['id']);
-        flash('The release form was emailed to ' . $relIn['signer_name'] . ' to sign.');
+        if (!empty($sent['unknown'])) flash($sent['notice'], 'info');
+        else flash('The release form was emailed to ' . $relIn['signer_name'] . ' to sign.');
     }
     redirect("client.php?id=$id#releases-h");
 }
@@ -937,17 +959,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_survey'])) {
     $open = db()->prepare("SELECT sent_at FROM surveys WHERE client_id = ? AND completed_at IS NULL AND sent_at > DATE_SUB(NOW(), INTERVAL 30 DAY) ORDER BY id DESC LIMIT 1");
     $open->execute([$id]);
     if ($was = $open->fetchColumn()) flash('A survey was emailed on ' . fmt_date((string)$was) . ' and is not answered yet. Enter the answers by phone instead, or wait for the reminder.', 'error');
-    elseif (send_outcome_survey($id)) { audit($user['id'], 'survey.send', 'client', $id, 'outcome survey emailed'); flash('Outcome survey emailed.'); }
+    elseif (($GLOBALS['mail_last_outcome'] = null) || send_outcome_survey($id)) { audit($user['id'], 'survey.send', 'client', $id, 'outcome survey emailed'); flash('Outcome survey emailed.'); }
+    elseif (($GLOBALS['mail_last_outcome'] ?? null) === 'unknown') flash('The email service did not confirm the survey email, so it may still arrive. Do not send it again yet; check later whether it was answered.', 'info');
     else flash('The survey was not emailed: the client has no confirmed email address, prefers phone or post, or the email could not be sent. Ask the questions by phone and enter the answers here.', 'error');
     redirect("client.php?id=$id#after-h");
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['phone_survey'])) {
+    // The same answers sent twice (Enter pressed again while it loads) are saved once (4.27.0).
+    $surveyKey = web_idem_key($_POST);
+    if (web_once_get($surveyKey) !== null) {
+        flash('These survey answers were already saved (the form was sent twice), so they were saved once.', 'info');
+        redirect("client.php?id=$id#after-h");
+    }
     $err = survey_record_phone($id, (int)($_POST['satisfaction'] ?? 0), (int)($_POST['goals_met'] ?? 0), is_string($_POST['comments'] ?? null) ? $_POST['comments'] : '', (int)$user['id']);
     if ($err !== null) {
         keep_input();
         keep_field_errors([$err => ($err === 'satisfaction' ? 'Satisfaction' : 'Goals met') . ': enter a rating from 1 to 10.']);
         redirect("client.php?id=$id&phone_survey=1#phone-survey");
     }
+    web_once_set($surveyKey, 1);
     flash('Survey answers recorded.');
     redirect("client.php?id=$id#after-h");
 }
@@ -1533,7 +1563,7 @@ if (str_starts_with((string)$client['status'], 'Closed') || $closeFus || $survey
     <button type="submit" name="send_survey" value="1" class="btn btn-secondary btn-sm">Email the survey</button>
   </form>
   <details id="phone-survey"<?= isset($_GET['phone_survey']) ? ' open' : '' ?>><summary>Enter survey answers taken by phone</summary>
-    <form method="post" action="client.php?id=<?= $id ?>"><?= csrf_field() ?>
+    <form method="post" action="client.php?id=<?= $id ?>"><?= csrf_field() ?><?= web_idem_field() ?>
       <div class="field"><label for="ps_sat">Satisfaction, 1 to 10 <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
         <input type="number" id="ps_sat" name="satisfaction" min="1" max="10" required value="<?= h(old_in('satisfaction')) ?>" <?= field_aria('satisfaction') ?>><?= field_error('satisfaction') ?></div>
       <div class="field"><label for="ps_goals">Goals met, 1 to 10 <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>

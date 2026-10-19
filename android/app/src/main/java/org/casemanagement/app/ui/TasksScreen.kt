@@ -274,7 +274,7 @@ fun ThreadScreen(api: Api, clientId: Int) {
                         null -> api.call("post_message", body = body)
                         is Attachment.Doc -> api.call("post_message", body = body.put("document_id", at.id))
                         is Attachment.NewFile -> {
-                            val tmp = java.io.File(context.cacheDir, "message.tmp")
+                            val tmp = java.io.File(api.docsFolder, "message.tmp")   // emptied at sign-out and a wipe (4.27.0)
                             try {
                                 checkCopied(copyPicked(context, at.uri, tmp))
                                 val short = shortName(at.name)

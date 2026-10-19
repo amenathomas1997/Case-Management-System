@@ -100,8 +100,12 @@ check($lg && str_contains($lg['title'],'Synthetic braille display (serial number
 signature_sign($lg,'Deadline Synthetic Referral');
 check($db->query("SELECT accepted_name FROM equipment_loans WHERE id=$sl")->fetchColumn()==='Deadline Synthetic Referral','Signing the loan agreement records the borrower\'s acceptance on the loan');
 [$code,,$err]=$renderPage('signatures',['client'=>(string)$dc],['withdraw'=>(string)$lg['id']]);
+// 4.27.0: a signed document is never withdrawn.
+check($db->query("SELECT withdrawn_at FROM client_signatures WHERE id=".(int)$lg['id'])->fetchColumn()===null,'A signed document cannot be withdrawn'.($err?": $err":''));
+$db->prepare("INSERT INTO client_signatures(client_id,kind,title,body,signer_role,signer_name,signer_email,token,sent_at) VALUES(?,'other','Synthetic unsigned document','Synthetic text.','Client','Deadline Synthetic Referral','signer@example.invalid',?,NOW())")->execute([$dc,$wtok=bin2hex(random_bytes(24))]);
+[$code,,$err]=$renderPage('signatures',['client'=>(string)$dc],['withdraw'=>(string)$db->lastInsertId()]);
 putenv('CMS_TEST_ANON=1'); putenv('CMS_TEST_SESSION');
-[$code,$html,$err2]=$renderPage('sign',['t'=>$lg['token']]);
+[$code,$html,$err2]=$renderPage('sign',['t'=>$wtok]);
 putenv('CMS_TEST_ANON');
 check(str_contains($html,'Document withdrawn'),'A withdrawn document says so on its link'.($err.$err2?": $err $err2":''));
 check(signature_status(['withdrawn_at'=>null,'signed_at'=>null,'sent_at'=>date('Y-m-d H:i:s',strtotime('-400 days'))])==='Link expired','An old unsigned link expires');

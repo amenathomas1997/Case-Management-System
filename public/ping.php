@@ -2,6 +2,8 @@
 // Session keepalive for the inactivity-timeout warning dialog (WCAG 2.2.1).
 // Extends the session only while it is still valid; 401 once it has expired.
 require __DIR__ . '/inc/bootstrap.php';
+// A device handed over for signing in person: the keep-alive ends that session too (4.27.0), answering 401.
+kiosk_guard();
 
 header('Content-Type: text/plain; charset=UTF-8');
 header('Cache-Control: no-store');

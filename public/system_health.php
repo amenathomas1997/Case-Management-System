@@ -109,7 +109,7 @@ if ($dbOk) {
     $failedIps = (int)$q("SELECT COUNT(DISTINCT ip) FROM login_attempts WHERE success = 0 AND email LIKE '%@%' AND attempted_at > DATE_SUB(NOW(), INTERVAL 1 DAY)");
     $staff = (int)$q('SELECT COUNT(*) FROM users WHERE is_active = 1');
     $withTotp = (int)$q('SELECT COUNT(*) FROM users WHERE is_active = 1 AND totp_enabled = 1');
-    $appSessions = (int)$q('SELECT COUNT(DISTINCT user_id) FROM api_tokens WHERE expires_at > NOW()');
+    $appSessions = (int)$q('SELECT COUNT(DISTINCT user_id) FROM api_tokens WHERE expires_at > NOW() AND wipe_requested_at IS NULL');
 }
 if ($failed24 >= 50) $problems[] = ['security-h', "$failed24 failed sign-ins in the last 24 hours, from $failedIps address" . ($failedIps === 1 ? '' : 'es') . '.'];
 

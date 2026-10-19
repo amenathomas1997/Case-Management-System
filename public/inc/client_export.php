@@ -2,9 +2,14 @@
 declare(strict_types=1);
 require_once __DIR__ . '/at_services.php';
 require_once __DIR__ . '/workflows.php'; // workflows_ready()
+require_once __DIR__ . '/tasks.php'; // task_visibility_sql()
 
-/** Complete structured case data. Caller must authorize access to this client first. */
-function client_export_records(PDO $pdo, int $clientId): array {
+/** Complete structured case data. Caller must authorize access to this client first.
+ *  $user is the person exporting (the signed-in user when null): incidents, tasks and
+ *  the texting log go only as far as they could see them in the app (4.27.0). */
+function client_export_records(PDO $pdo, int $clientId, ?array $user = null): array {
+    $user ??= (function_exists('current_user') ? current_user() : null) ?? [];
+    $uid = (int)($user['id'] ?? 0);
     $client = $pdo->prepare('SELECT * FROM clients WHERE id = ?');
     $client->execute([$clientId]);
     $row = $client->fetch(PDO::FETCH_ASSOC);
@@ -18,14 +23,38 @@ function client_export_records(PDO $pdo, int $clientId): array {
     else $result['device_requests_not_included'] = 'Device requests and their vendor quotes are not in this export: they need procurement access, which this account does not have.';
     if (can('referrals')) $tables[] = 'referrals';
     else $result['referrals_not_included'] = 'Referral records are not in this export: they need referral access, which this account does not have. The intake note made from each referral is included with the client notes.';
+    // Incident reports as the Incidents page shows them: an administrator sees all; others
+    // those they reported, or all of a client on their own caseload (4.27.0).
+    $limits = [];
+    if (!can('admin')) {
+        $limits['incidents'] = $row['assigned_to'] !== null && (int)$row['assigned_to'] === $uid ? ['', []] : [' AND reported_by = ?', [$uid]];
+    }
+    // Tasks as the Tasks page shows them (task_visibility_sql()); the texting log is for administrators only.
+    $taskParams = [];
+    $taskWhere = task_visibility_sql(['id' => $uid] + $user, $taskParams);
+    if ($taskWhere !== '1=1') $limits['tasks'] = [' AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = tasks.id AND ' . $taskWhere . ')', $taskParams];
+    if (!can('admin')) {
+        $tables = array_values(array_diff($tables, ['sms_log']));
+        $result['sms_log_not_included'] = 'The texting log is not in this export: it is for administrators only.';
+    }
     foreach ($tables as $table) {
-        $query = $pdo->prepare("SELECT * FROM `$table` WHERE client_id = ? ORDER BY id");
-        $query->execute([$clientId]);
+        [$extraWhere, $extraParams] = $limits[$table] ?? ['', []];
+        $query = $pdo->prepare("SELECT * FROM `$table` WHERE client_id = ?$extraWhere ORDER BY id");
+        $query->execute([$clientId, ...$extraParams]);
         $rows = $query->fetchAll(PDO::FETCH_ASSOC);
         // Export records, never reusable access links or replay keys.
         foreach ($rows as &$record) unset($record['token'], $record['token_hash'], $record['idem_key']);
         unset($record);
         $result[$table] = $rows;
+        if (isset($limits[$table])) {
+            $all = $pdo->prepare("SELECT COUNT(*) FROM `$table` WHERE client_id = ?");
+            $all->execute([$clientId]);
+            if (($left = (int)$all->fetchColumn() - count($rows)) > 0) {
+                $result[$table . '_not_included'] = $table === 'incidents'
+                    ? $left . ' incident report(s) about this client are not in this export: they were reported by someone else, and the client is not on your caseload. An administrator can export them.'
+                    : $left . ' task(s) for this client are not in this export: they are assigned to other staff. An administrator can export them.';
+            }
+        }
     }
     // Invoices are billing records, shown in the app only with billing access.
     $trackTables = ['smart_goals', 'work_logs', 'track_expenses', 'homework', 'auth_amendments'];

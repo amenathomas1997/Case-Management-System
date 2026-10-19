@@ -103,7 +103,7 @@ struct TodayWidgetView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Today", systemImage: "calendar")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(WidgetColors.secondaryText)
             if entry.snapshot == nil {
                 Text(entry.countText)
                     .font(.callout.weight(.medium))
@@ -118,13 +118,29 @@ struct TodayWidgetView: View {
                 if let checked = entry.checkedInText {
                     Label(checked, systemImage: entry.next?.checkedIn == true ? "checkmark.circle.fill" : "circle")
                         .font(.callout.weight(.medium))
-                        .foregroundStyle(entry.next?.checkedIn == true ? Color.green : Color.secondary)
+                        .foregroundStyle(entry.next?.checkedIn == true ? WidgetColors.checkedIn : WidgetColors.secondaryText)
                 }
             }
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+}
+
+/// Text colours at 4.5:1 or better on the widget's background (4.27.0): the system's
+/// .secondary and green are about 3.4:1 and 2.2:1 on white. Secondary #45454F (9.5:1 on white)
+/// and #D1D1D6 (13.8:1 on black); checked in #116329 (7.4:1 on white) and #7EE787 (13.7:1 on black).
+enum WidgetColors {
+    static let secondaryText = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 209/255, green: 209/255, blue: 214/255, alpha: 1)
+            : UIColor(red: 69/255, green: 69/255, blue: 79/255, alpha: 1)
+    })
+    static let checkedIn = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 126/255, green: 231/255, blue: 135/255, alpha: 1)
+            : UIColor(red: 17/255, green: 99/255, blue: 41/255, alpha: 1)
+    })
 }
 
 @main

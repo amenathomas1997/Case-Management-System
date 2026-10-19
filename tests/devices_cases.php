@@ -19,7 +19,7 @@ check(($wiped['wipe']??null)===true && $db->query("SELECT wiped_at FROM api_toke
 putenv('CMS_TEST_TOKEN='.$phone);
 $again=$call('me',[],[],false);
 putenv('CMS_TEST_TOKEN');
-check(($again['wipe']??null)!==true,'A wiped session is simply refused afterwards');
+check(($again['wipe']??null)===true,'A wiped session keeps being told to wipe until the app confirms (4.27.0)');
 putenv('CMS_TEST_TOKEN='.$other);
 check(isset($call('me')['name']),'Another phone of the same account keeps working');
 putenv('CMS_TEST_TOKEN');

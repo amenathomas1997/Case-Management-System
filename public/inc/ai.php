@@ -538,7 +538,7 @@ function ai_rate_limit(int $userId, int $max = 60, int $mins = 10): bool {
         $q = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL ? MINUTE)");
         $q->execute(['ai-' . $userId, $mins]);
         if ((int)$q->fetchColumn() >= $max) return false;
-        db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'ai-' . $userId]);
+        db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([client_ip(), 'ai-' . $userId]);
     } catch (Throwable $e) { /* never block AI on a limiter error */ }
     return true;
 }

@@ -131,7 +131,7 @@ foreach ($msgs as $m) {
             $seen = db()->prepare('SELECT id FROM incoming_authorizations WHERE message_key = ?');
             $seen->execute([$authKey]);
             if (!$seen->fetchColumn()) {
-                $incId = authorization_email_store($auth, $subject . "\n\n" . $bodyText, 'Mailbox', $authKey, null);
+                $incId = authorization_email_store($auth, $subject . "\n\n" . $bodyText, 'Mailbox', $authKey, null, $fromAddr); // 4.27.0: the authenticated sender
                 $inc = incoming_authorization($incId);
                 $owner = null;
                 if ($inc && $inc['client_id']) {

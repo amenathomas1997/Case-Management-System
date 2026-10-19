@@ -22,7 +22,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_field'])) {
     if ($type === 'choice' && count(custom_field_options(['options' => $options])) < 2) $errs['options' . $sfx] = 'Choices: give at least two, one per line.';
     if (mb_strlen($options) > 4000) $errs['options' . $sfx] = 'Choices: 4,000 characters or fewer in all.';
     $order = preg_match('/^-?\d{1,4}$/', $str('sort_order')) ? (int)$str('sort_order') : 0;
-    if ($errs) { keep_input(); keep_field_errors($errs); flash('Not saved: ' . implode(' ', $errs), 'error'); redirect('custom_fields.php' . ($id ? '#f-' . $id : '#add-h')); }
+    // A new type (or new choices) must fit every answer already given (4.27.0): a text answer under a
+    // date field would be blanked on the next save, so the change is refused and the count is given.
+    if ($id && !isset($errs['type' . $sfx]) && !isset($errs['options' . $sfx])) {
+        $cur = db()->prepare('SELECT * FROM custom_fields WHERE id = ?');
+        $cur->execute([$id]);
+        $old = $cur->fetch();
+        if ($old && $old['type'] !== $type) {
+            $bad = custom_field_misfits(['type' => $type, 'options' => $type === 'choice' ? $options : null], $id);
+            if ($bad > 0) $errs['type' . $sfx] = 'Type: ' . $bad . ' answer' . ($bad === 1 ? ' already given does' : 's already given do') . ' not fit ' . CUSTOM_FIELD_TYPES[$type]
+                . '. Change or clear ' . ($bad === 1 ? 'that answer' : 'those answers') . ' on the client records or referrals first, or add a new field and turn this one off.';
+        }
+    }
+    // Errors are tied to the fields and listed in the form's own summary (no flash, so each is heard once).
+    if ($errs) { keep_input(); keep_field_errors($errs); redirect('custom_fields.php' . ($id ? '#f-' . $id : '#add-h')); }
     $vals = [$label, $str('label_es') ?: null, $str('hint') ?: null, $type, $type === 'choice' ? $options : null, !empty($_POST['required']) ? 1 : 0, !empty($_POST['on_referral']) ? 1 : 0, $order, $id ? (!empty($_POST['is_active']) ? 1 : 0) : 1];
     if ($id) db()->prepare('UPDATE custom_fields SET label = ?, label_es = ?, hint = ?, type = ?, options = ?, required = ?, on_referral = ?, sort_order = ?, is_active = ? WHERE id = ?')->execute([...$vals, $id]);
     else db()->prepare('INSERT INTO custom_fields (label, label_es, hint, type, options, required, on_referral, sort_order, is_active) VALUES (?,?,?,?,?,?,?,?,?)')->execute($vals);
@@ -40,6 +53,8 @@ $form = function (?array $f): string {
     $box = fn(string $k, bool $d): string => ($mine ? old_in($k) !== '' : (isset($f[$k]) ? (int)$f[$k] === 1 : $d)) ? ' checked' : '';
     ob_start(); ?>
   <form method="post" action="custom_fields.php" class="stacked" novalidate><?= csrf_field() ?><input type="hidden" name="field_id" value="<?= $id ?>"><input type="hidden" name="save_field" value="1">
+    <?php // This form's errors, listed once (4.27.0); each message already names its field. ?>
+    <?= $mine ? form_error_summary(array_fill_keys(['label' . $sfx, 'type' . $sfx, 'options' . $sfx, 'hint' . $sfx, 'label_es' . $sfx], ''), ['label' . $sfx => 'fl' . $sfx, 'type' . $sfx => 'ft' . $sfx, 'options' . $sfx => 'fo' . $sfx, 'hint' . $sfx => 'fh' . $sfx, 'label_es' . $sfx => 'fe' . $sfx]) : '' ?>
     <div class="field"><label for="fl<?= $sfx ?>">Label <?= required_mark() ?></label><input type="text" id="fl<?= $sfx ?>" name="label" maxlength="120" value="<?= h($v('label')) ?>" <?= field_aria('label' . $sfx) ?>><?= field_error('label' . $sfx) ?></div>
     <div class="field"><label for="ft<?= $sfx ?>">Type</label><select id="ft<?= $sfx ?>" name="type" <?= field_aria('type' . $sfx) ?>><?= kv_options(CUSTOM_FIELD_TYPES, $v('type') ?: 'text', 'Choose') ?></select><?= field_error('type' . $sfx) ?></div>
     <div class="field"><label for="fo<?= $sfx ?>">Choices, one per line (for Choose one from a list)</label><textarea id="fo<?= $sfx ?>" name="options" rows="4" <?= field_aria('options' . $sfx) ?>><?= h($v('options')) ?></textarea><?= field_error('options' . $sfx) ?></div>

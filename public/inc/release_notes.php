@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.27.0' => [
+        'A full code review was done and every finding fixed. If you use an authenticator app, sign-in now always asks for its code (or a passkey): emailed codes no longer work for your account. A first Microsoft sign-in is matched to your account by email only for members of your own organization; anyone else connects Microsoft once from My Account.',
+        'Safer records: merging clients keeps a legal hold and more details (VR case number, plan, vision, language and time zone); two people saving the same client at once can no longer overwrite each other; a closed referral cannot be converted; and nothing on hold can be deleted from the trash.',
+        'A phone reported lost is told to wipe itself every time it connects until it confirms, even after a password reset. QuickBooks no longer imports a payment twice, and payments in QuickBooks are voided there. Session reminders, the client portal, the VR counselor portal and the phone apps had many smaller fixes.',
+    ],
     '4.26.0' => [
         'Sign with no signal: in the iPhone and Android apps, prepare a document to sign while you have a connection, then have the client sign it in their home even with no signal. The signature is kept safely on the phone and sent, with the time it was signed, as soon as the phone is back online.',
         'The Android app now has everything the iPhone app has: work logs (with corrections), goals and goal progress, progress reports, equipment details, service and reservations, the AI case briefing, and help and privacy.',

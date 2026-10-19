@@ -47,6 +47,14 @@ enum OfflineCache {
         try? FileManager.default.removeItem(at: url)
     }
 
+    /// The accounts this phone keeps anything for (4.27.0).
+    static func owners() -> [Int] {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("OfflineCache", isDirectory: true)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
+        return names.compactMap(Int.init).filter { $0 > 0 }
+    }
+
     /// Everything kept for one account: sign-out removes it with the drafts.
     static func removeAll(owner: Int) {
         guard owner > 0 else { return }

@@ -537,6 +537,9 @@ struct ScheduleView: View {
         confirmation = nil
         error = nil
         let body: [String: Any] = ["session_id": session.id]
+        // When the button was pressed (4.27.0): sent with a check-in kept offline, so a later
+        // upload records the arrival time, not the upload time.
+        let pressedAt = OfflineSignatures.timestamp()
         do {
             let result: CheckInResult = try await api.call("check_in_session", body: body)
             let time = result.checkedInAt.map(Self.checkInTime) ?? Date().formatted(date: .omitted, time: .shortened)
@@ -548,7 +551,9 @@ struct ScheduleView: View {
             writeTodaySnapshot()
         } catch APIError.network {
             do {
-                try api.enqueue("check_in_session", body: body,
+                var queued = body
+                queued["checked_in_at"] = pressedAt
+                try api.enqueue("check_in_session", body: queued,
                                 label: "Session check-in, \(formatDateTime(session.startAt))")
                 checkedInLocal[session.id] = Self.offlineCheckIn
                 writeTodaySnapshot()
@@ -758,6 +763,9 @@ struct NewSessionSheet: View {
     /// the booking as it is sent.
     @State private var authorizationWarning: String?
     @State private var authorizationAcknowledged = false
+    /// The server's hash of the warnings shown (4.27.0), sent back with the approval so it
+    /// covers exactly those warnings.
+    @State private var authorizationHash: String?
     @State private var location = ""
     @State private var notes = ""
     @State private var isRemote = false
@@ -880,6 +888,7 @@ struct NewSessionSheet: View {
     private func clearAuthorizationReview() {
         authorizationWarning = nil
         authorizationAcknowledged = false
+        authorizationHash = nil
     }
 
     /// The server's refusal when a booking needs the authorization warnings approved
@@ -967,7 +976,7 @@ struct NewSessionSheet: View {
                     sessionsCreated = (try? c.decode(Int.self, forKey: .sessionsCreated)) ?? 1
                 }
             }
-            let result: Result = try await api.call("schedule_session", body: [
+            var request: [String: Any] = [
                 "client_id": clientId,
                 "track_id": selectedTrack ?? 0,
                 "staff_id": staffId,
@@ -981,7 +990,17 @@ struct NewSessionSheet: View {
                 "notes": notes,
                 "is_remote": isRemote ? 1 : 0,
                 "meeting_url": isRemote ? link : "",
-            ])
+            ]
+            if authorizationAcknowledged, let authorizationHash { request["authorization_ack_hash"] = authorizationHash }
+            var refusedHash: String?
+            let result: Result
+            do {
+                result = try await api.call("schedule_session", body: request,
+                                            refusal: { refusedHash = $0["authorization_hash"] as? String })
+            } catch {
+                authorizationHash = refusedHash
+                throw error
+            }
             let base = result.sessionsCreated > 1 ? "Series of \(result.sessionsCreated) sessions scheduled." : "Session scheduled."
             let msg = base + (result.inviteSent ? " Calendar invite emailed." : "")
             // Said by the schedule once this sheet has closed (closing it would cut it off).

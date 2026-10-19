@@ -19,6 +19,10 @@ final class LocalNotifications: NSObject, ObservableObject {
 
     var enabled: Bool { UserDefaults.standard.bool(forKey: Self.enabledKey) }
 
+    /// Moves on at every clearScheduled (sign-out, account change, wipe; 4.27.0): scheduling that
+    /// started before it, for the previous account, adds nothing once its await returns.
+    private var generation = 0
+
     private override init() { super.init() }
 
     /// Set at launch, so a tap on a reminder is handled for a cold start too.
@@ -47,9 +51,12 @@ final class LocalNotifications: NSObject, ObservableObject {
     /// Replaces the session reminders with one for each upcoming session, 30 minutes before it
     /// starts (sessions that start sooner than that, or that have started, get none).
     func scheduleSessions(_ sessions: [Session]) {
+        let started = generation
         Task { @MainActor in
             let center = UNUserNotificationCenter.current()
             let pending = await center.pendingNotificationRequests()
+            // The account changed (or signed out) while waiting: these sessions are not its.
+            guard self.generation == started else { return }
             let old = pending.map(\.identifier).filter { $0.hasPrefix(Self.sessionPrefix) }
             center.removePendingNotificationRequests(withIdentifiers: old)
             guard self.enabled else { return }
@@ -64,6 +71,7 @@ final class LocalNotifications: NSObject, ObservableObject {
                 .sorted { $0.1 < $1.1 }
                 .prefix(Self.maxSessions)
             for (session, fireAt) in upcoming {
+                guard self.generation == started else { return }
                 let content = UNMutableNotificationContent()
                 content.title = "Session reminder"
                 content.body = "A session starts in 30 minutes."
@@ -71,7 +79,10 @@ final class LocalNotifications: NSObject, ObservableObject {
                 content.userInfo = ["screen": "schedule"]
                 let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fireAt)
                 let trigger = UNCalendarNotificationTrigger(dateMatching: parts, repeats: false)
-                try? await center.add(UNNotificationRequest(identifier: Self.sessionPrefix + String(session.id), content: content, trigger: trigger))
+                let id = Self.sessionPrefix + String(session.id)
+                try? await center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+                // Cleared while this one was being added: it goes too.
+                if self.generation != started { center.removePendingNotificationRequests(withIdentifiers: [id]); return }
             }
         }
     }
@@ -91,11 +102,17 @@ final class LocalNotifications: NSObject, ObservableObject {
         at.hour = 8; at.minute = 0
         let request = UNNotificationRequest(identifier: Self.followupsId, content: content,
                                             trigger: UNCalendarNotificationTrigger(dateMatching: at, repeats: false))
-        Task { try? await center.add(request) }
+        let started = generation
+        Task { @MainActor in
+            guard self.generation == started else { return }
+            try? await center.add(request)
+            if self.generation != started { center.removePendingNotificationRequests(withIdentifiers: [Self.followupsId]) }
+        }
     }
 
     /// Turning the setting off, and sign-out: nothing scheduled or shown is kept.
     func clearScheduled() {
+        generation += 1
         let center = UNUserNotificationCenter.current()
         center.removeAllPendingNotificationRequests()
         center.removeAllDeliveredNotifications()

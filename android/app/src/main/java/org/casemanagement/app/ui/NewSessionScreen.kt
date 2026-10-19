@@ -70,6 +70,8 @@ fun NewSessionScreen(api: Api, nav: NavHostController) {
         var notes by rememberSaveable { mutableStateOf("") }
         var warnings by remember { mutableStateOf<List<String>>(emptyList()) }
         var approved by remember { mutableStateOf(false) }
+        // 4.27.0: the server's hash of the warnings shown; approving sends it back, so it covers exactly those.
+        var warningsHash by remember { mutableStateOf<String?>(null) }
         var error by remember { mutableStateOf<String?>(null) }
         var busy by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
@@ -114,6 +116,7 @@ fun NewSessionScreen(api: Api, nav: NavHostController) {
                             .put("location", if (remote) "" else location.trim()).put("notes", notes.trim())
                             .put("is_remote", if (remote) 1 else 0).put("authorization_ack", approved)
                         if (remote && link.isNotBlank()) b.put("meeting_url", link.trim())
+                        if (approved) warningsHash?.let { b.put("authorization_ack_hash", it) }
                         val r = api.call("schedule_session", body = b)
                         val n = r.optInt("sessions_created", 1)
                         Flash.pending = (if (n > 1) "$n sessions scheduled." else "Session scheduled.") + if (r.optBoolean("invite_sent")) " A calendar invite was emailed." else ""
@@ -121,7 +124,11 @@ fun NewSessionScreen(api: Api, nav: NavHostController) {
                     } catch (e: ApiException) {
                         val w2 = e.reply?.optJSONArray("authorization_warnings")
                         if (w2 != null && w2.length() > 0) {
-                            warnings = List(w2.length()) { w2.optString(it) }
+                            val shown = List(w2.length()) { w2.optString(it) }
+                            // Different warnings from those approved: approved again.
+                            if (shown != warnings) approved = false
+                            warnings = shown
+                            warningsHash = e.reply?.str("authorization_hash")
                             error = "Check the authorization warnings below, then approve and schedule again."
                         } else if (e.network) {
                             error = "The connection was lost, so it is not known whether the session was booked. Check the Schedule before scheduling it again."

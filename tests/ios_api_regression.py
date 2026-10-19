@@ -58,6 +58,8 @@ b = source.index('    private func loadQueue()', a)
 source = source[:a] + '    private var queueURL: URL { testQueueURL }\n' + source[b:]
 # Do not inspect or migrate any real Application Support or Documents files.
 source = source.replace('FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]', 'testQueueURL.deletingLastPathComponent().appendingPathComponent("legacy")')
+# Nor any real Application Support folder (the lost-phone wipe removes Drafts and OfflineCache there).
+source = source.replace('FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]', 'testQueueURL.deletingLastPathComponent().appendingPathComponent("support")')
 source = source.replace('UserDefaults.standard', 'testDefaults')
 prefix = r'''
 import Foundation
@@ -70,13 +72,16 @@ enum Keychain {
 final class StubProtocol: URLProtocol, @unchecked Sendable {
     static var status = 200
     static var count = 0
+    static var json: String?            // a reply body other than the default ones
+    static var urls: [String] = []      // every request's address, in order
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         Self.count += 1
+        Self.urls.append(request.url?.absoluteString ?? "")
         let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        let json = Self.status == 200 ? #"{"ok":true}"# : #"{"ok":false,"error":"Rejected for test"}"#
+        let json = Self.json ?? (Self.status == 200 ? #"{"ok":true}"# : #"{"ok":false,"error":"Rejected for test"}"#)
         client?.urlProtocol(self, didLoad: Data(json.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
@@ -234,6 +239,70 @@ suffix = r'''
         check(!api.reauthRequired && api.userId == 3 && api.token == "test-three" && api.syncError == nil
               && api.pendingSync == 0 && afterSwitch.count == 2,
               "Another account signing in starts afresh and leaves the first account's entries stored")
+
+        // 4.27.0: an old offline entry is sent first; only what is still here afterwards (refused,
+        // or another account's) is removed once over 30 days old, and the notice names it.
+        let fortyDays = Date().addingTimeInterval(-40 * 86400)
+        let oldSent = API.PendingCall(action: "add_note", body: try JSONSerialization.data(withJSONObject: body), label: "Old sendable note",
+                                      owner: 3, savedAt: fortyDays)
+        try JSONEncoder().encode([oldSent]).write(to: testQueueURL)
+        StubProtocol.status = 200
+        StubProtocol.urls = []
+        await api.flushQueue()
+        check(try api.ownQueuedEntries().isEmpty && StubProtocol.urls.filter { $0.contains("action=add_note") }.count == 1 && api.syncError == nil,
+              "An offline entry over 30 days old is still sent when the server can be reached, not dropped first")
+        let oldRefused = API.PendingCall(action: "add_note", body: try JSONSerialization.data(withJSONObject: body), label: "Old note",
+                                         owner: 3, savedAt: fortyDays)
+        let otherOld = API.PendingCall(action: "add_note", body: try JSONSerialization.data(withJSONObject: body), label: "Someone else's note",
+                                       owner: 9, savedAt: fortyDays)
+        try JSONEncoder().encode([oldRefused, otherOld]).write(to: testQueueURL)
+        StubProtocol.status = 403
+        StubProtocol.urls = []
+        await api.flushQueue()
+        let leftAfterExpiry = try JSONSerialization.jsonObject(with: Data(contentsOf: testQueueURL)) as! [Any]
+        check(leftAfterExpiry.isEmpty && StubProtocol.urls.filter { $0.contains("action=add_note") }.count == 1
+              && api.syncError?.contains("Old note") == true && api.syncError?.contains("30 days") == true,
+              "An offline entry over 30 days old that is still not accepted is removed after the try, and the notice says so")
+        StubProtocol.status = 200
+
+        // 4.27.0: a redirect is followed only to the same https host and port (none written is 443),
+        // and a refused one is explained instead of "Unexpected response from the server."
+        check(RedirectGuard.port(of: URL(string: "https://a.example.org/x")!) == RedirectGuard.port(of: URL(string: "https://a.example.org:443/y")!)
+              && RedirectGuard.port(of: URL(string: "https://a.example.org:8443/x")!) != 443,
+              "A redirect's port written or not counts as the same when it is https's own")
+
+        // 4.27.0: changing the server address keeps the offline entries until a sign-in to a
+        // really different server works; the same server however typed loses nothing.
+        try api.enqueue("add_note", body: ["idem_key": UUID().uuidString, "client_id": 1, "subject": "Synthetic kept"], label: "Kept note")
+        check(api.entriesLostBySigningIn(to: API.apiURL(fromAddress: "HTTPS://Example.INVALID/")!) == 0,
+              "The same server typed differently would remove no offline entries")
+        api.switchServer(to: "other.example.org")
+        check(api.token.isEmpty && FileManager.default.fileExists(atPath: testQueueURL.path)
+              && api.entriesLostBySigningIn(to: API.apiURL(fromAddress: "other.example.org")!) == 1,
+              "Changing the server address ends the session and keeps the offline entries before sign-in")
+        api.finishSignIn(token: "test-four", userId: 4, name: "New server")
+        check(((try? JSONSerialization.jsonObject(with: Data(contentsOf: testQueueURL)) as? [Any]) ?? []).isEmpty,
+              "Signing in to a different server removes the previous server's offline entries")
+
+        StubProtocol.status = 302
+        do { let _: OKResponse = try await api.call("me"); fatalError("A refused redirect was taken for an answer") }
+        catch { check(error.localizedDescription == API.redirectRefused, "A refused redirect says the server's address may have changed") }
+        StubProtocol.status = 200
+
+        // 4.27.0: a 401 that says this phone was reported lost wipes it during an upload too,
+        // and the server is told once the wipe is done.
+        try api.enqueue("add_note", body: ["idem_key": UUID().uuidString, "client_id": 1, "subject": "Synthetic wiped"], label: "Wiped note")
+        StubProtocol.status = 401
+        StubProtocol.json = #"{"ok":false,"wipe":true,"error":"This phone was reported lost."}"#
+        StubProtocol.urls = []
+        await api.flushQueue()
+        try await Task.sleep(nanoseconds: 500_000_000)
+        StubProtocol.json = nil
+        check(api.userId == 0 && api.token.isEmpty && !api.reauthRequired && !FileManager.default.fileExists(atPath: testQueueURL.path)
+              && api.sessionNotice?.contains("reported lost") == true,
+              "A wipe answer during an upload removes the offline entries and signs out, instead of asking to sign in again")
+        check(StubProtocol.urls.contains { $0.contains("action=wipe_done") && $0.hasPrefix("https://other.example.org/") },
+              "After a wipe the app tells the server (wipe_done)")
     }
 }
 '''

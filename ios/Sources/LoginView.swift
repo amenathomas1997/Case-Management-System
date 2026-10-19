@@ -22,6 +22,9 @@ struct LoginView: View {
     @State private var totpAvailable = false
     /// False when the server could not send the code email (the account has an authenticator app).
     @State private var emailSent = true
+    /// The account signs in with its authenticator app only (4.27.0): nothing is emailed, so
+    /// the code step says so and offers no new emailed code.
+    @State private var totpRequired = false
     /// How long the emailed code works, when the server says (nil: not reported).
     @State private var codeMinutes: Int?
     /// From the password step; sent back with the code so the server knows it is this sign-in.
@@ -31,6 +34,28 @@ struct LoginView: View {
     /// Set after "Send a new code" worked, so the screen says that the earlier code is gone.
     @State private var resentNotice: String?
     @State private var confirmingSignOut = false
+    /// Offline entries saved for another server that signing in to this one would remove
+    /// (4.27.0): asked about first, saying how many. Nil when nothing is being asked.
+    @State private var serverChange: ServerChange?
+    /// The server the person agreed to sign in to despite those entries.
+    @State private var confirmedServer: String?
+
+    private struct ServerChange {
+        let entries: Int
+        let drafts: Int
+        let prepared: Int
+        let from: String
+        let to: URL
+
+        /// "2 offline entries, 1 draft and 1 document prepared to sign", naming only what is there.
+        var what: String {
+            func n(_ count: Int, _ one: String, _ many: String) -> String? { count == 0 ? nil : "\(count) \(count == 1 ? one : many)" }
+            let parts = [n(entries, "offline entry", "offline entries"), n(drafts, "unsent draft", "unsent drafts"),
+                         n(prepared, "document prepared to sign", "documents prepared to sign")].compactMap { $0 }
+            return parts.count > 1 ? parts.dropLast().joined(separator: ", ") + " and " + parts.last! : parts.joined()
+        }
+        var total: Int { entries + drafts + prepared }
+    }
     // Keyboard and VoiceOver focus for the code field, so the step change isn't silent.
     @FocusState private var codeFieldFocused: Bool
     @AccessibilityFocusState private var codeFieldVoiceOverFocused: Bool
@@ -40,6 +65,7 @@ struct LoginView: View {
     private var codeDigits: String { code.filter { $0.isASCII && $0.isNumber } }
 
     private var codeInstruction: String {
+        if totpRequired { return "Enter the 6-digit code from your authenticator app." }
         if !emailSent {
             return "The code email could not be sent. Enter the 6-digit code from your authenticator app."
         }
@@ -176,13 +202,16 @@ struct LoginView: View {
                         .accessibilityLabel("Verify and sign in")
                         .accessibilityValue(busy ? "Working" : "")
                         // A fresh code without typing the password again (it is still held here).
-                        Button { Task { await resend() } } label: {
-                            Text("Send a new code").frame(maxWidth: .infinity)
+                        // Not for an authenticator-app account: no code is emailed to it.
+                        if !totpRequired {
+                            Button { Task { await resend() } } label: {
+                                Text("Send a new code").frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                            .disabled(busy)
+                            .accessibilityHint("Sends a new code to your email. The earlier code stops working.")
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
-                        .disabled(busy)
-                        .accessibilityHint("Sends a new code to your email. The earlier code stops working.")
                         Button {
                             awaitingCode = false
                             code = ""
@@ -226,6 +255,19 @@ struct LoginView: View {
             } message: {
                 Text("Anything you have not saved is discarded. Entries already saved offline stay on this phone.")
             }
+            .alert("Offline entries are waiting", isPresented: Binding(get: { serverChange != nil },
+                                                                     set: { if !$0 { serverChange = nil } }),
+                   presenting: serverChange) { change in
+                Button("Sign in to \(change.to.host ?? "the new server")", role: .destructive) {
+                    confirmedServer = change.to.absoluteString
+                    Task { await login() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { change in
+                Text("This phone keeps \(change.what) for \(change.from), not sent yet. Signing in to \(change.to.host ?? "the new server") "
+                     + "removes \(change.total == 1 ? "it" : "all of them") from this phone, for every account. "
+                     + "To keep \(change.total == 1 ? "it" : "them"), cancel and sign in to \(change.from) instead.")
+            }
         }
         .task {
             // An expired session swapped the whole app for this screen (or put this one above
@@ -244,6 +286,7 @@ struct LoginView: View {
 
     private func apply(_ step: LoginStep) {
         totpAvailable = step.totpAvailable
+        totpRequired = step.totpRequired
         emailSent = step.emailSent ?? true
         codeMinutes = step.codeExpiresMinutes.flatMap { $0 > 0 ? $0 : nil }
         loginChallenge = step.loginChallenge
@@ -270,9 +313,23 @@ struct LoginView: View {
         api.sessionNotice = nil
         if asksForServer {
             // Kept before signing in, since every request goes to it; checked first (https only).
-            guard API.apiURL(fromAddress: serverAddress) != nil else {
+            guard let next = API.apiURL(fromAddress: serverAddress) else {
                 busy = false
                 error = "Enter your organisation's web address, such as cms.example.org. It must be a secure (https) address."
+                return
+            }
+            // Entries saved for another server are removed only once this sign-in works, and
+            // only after the person agreed (4.27.0).
+            // Drafts and documents prepared to sign go too (finishSignIn), so they are counted.
+            let waiting = api.entriesLostBySigningIn(to: next)
+            let differs = next.absoluteString != (UserDefaults.standard.string(forKey: API.dataServerKey) ?? API.base.absoluteString)
+            let change = ServerChange(entries: waiting, drafts: differs ? DraftStore.countAllAccounts() : 0,
+                                      prepared: differs ? PreparedSignatures.countAllAccounts() : 0,
+                                      from: URL(string: UserDefaults.standard.string(forKey: API.dataServerKey) ?? "")?.host ?? API.base.host ?? "the previous server",
+                                      to: next)
+            if change.total > 0, confirmedServer != next.absoluteString {
+                busy = false
+                serverChange = change
                 return
             }
             api.switchServer(to: serverAddress)

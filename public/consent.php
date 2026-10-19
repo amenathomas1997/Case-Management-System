@@ -106,7 +106,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$form['signed_at']) {
         try {
             // The signature and its case note must commit together.
             $sign = db()->prepare('UPDATE consent_forms SET signed_at = NOW(), signed_name = ?, sign_ip = ? WHERE id = ? AND signed_at IS NULL');
-            $sign->execute([$signature, $_SERVER['REMOTE_ADDR'] ?? '', $form['id']]);
+            $sign->execute([$signature, client_ip(), $form['id']]);
             if ($sign->rowCount() === 1) {
                 db()->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)')
                     ->execute([(int)$form['client_id'], 'Case Note', 'Guardian consent signed',

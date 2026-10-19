@@ -235,7 +235,7 @@ struct ClientDetailView: View {
                     }
                     if let email = detail.client.email, !email.isEmpty {
                         // As with the phone: an address that can't form a mailto: link is still shown.
-                        if let url = URL(string: "mailto:" + email) {
+                        if let url = mailtoURL(email) {
                             Link(destination: url) { LabeledContent("Email", value: email) }
                         } else {
                             LabeledContent("Email", value: email)
@@ -243,7 +243,7 @@ struct ClientDetailView: View {
                     }
                     contactExtras(detail.client)
                     if let counselorEmail = detail.client.counselorEmail, !counselorEmail.isEmpty {
-                        if let url = URL(string: "mailto:" + counselorEmail) {
+                        if let url = mailtoURL(counselorEmail) {
                             Link(destination: url) { LabeledContent("Counselor email", value: counselorEmail) }
                         } else {
                             LabeledContent("Counselor email", value: counselorEmail)
@@ -1501,8 +1501,8 @@ struct ConsentRequestSheet: View {
                     Text("Sending a new request turns off any earlier consent link that has not been signed.").font(.callout)
                 }
                 Section("Guardian") {
+                    // No name content type (4.27.0): AutoFill would offer the staff member's own name.
                     CaptionedField(label: "Guardian name (required)", text: $name)
-                        .textContentType(.name)
                     CaptionedField(label: "Guardian email (required)", text: $email, keyboard: .emailAddress)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()

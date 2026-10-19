@@ -45,7 +45,7 @@ if (isset($_GET['error'])) {
     if (is_string($state) && $state !== '' && hash_equals((string)($_SESSION['sso_state'] ?? ''), $state)) {
         unset($_SESSION['sso_state']);
         $recent = db()->prepare("SELECT COUNT(*) FROM audit_log WHERE action = 'login.sso_fail' AND ip = ? AND created_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE)");
-        $recent->execute([(string)($_SERVER['REMOTE_ADDR'] ?? '')]);
+        $recent->execute([client_ip()]);
         if ((int)$recent->fetchColumn() < 10) {
             $err = substr((string)preg_replace('/[^a-z_]/', '', strtolower(is_string($_GET['error']) ? $_GET['error'] : '')), 0, 60);
             $desc = is_string($_GET['error_description'] ?? null) && preg_match('/AADSTS\d{1,9}/', $_GET['error_description'], $m) ? ' ' . $m[0] : '';
@@ -125,10 +125,11 @@ if ($oid === '') {
     redirect('login.php');
 }
 
-/* An existing account is matched by email on the first Microsoft sign-in when the
-   person is a member of the configured tenant (owner decision, 2026-10-15: the
-   organisation's own directory vouches for the address). Guest accounts, and
-   anyone whose email differs, link from My Account while signed in. */
+/* An existing account is matched by email on the first Microsoft sign-in only when
+   the ID token proves the person is a member of the configured tenant (owner
+   decisions 2026-10-15 and, for 4.27.0, the `acct` claim present and 0 with this
+   tenant's tid: see sso_email_match_allowed()). Anyone else, and anyone whose
+   email differs, links from My Account while signed in. */
 $linkId = (int)($_SESSION['sso_link_user'] ?? 0);
 unset($_SESSION['sso_link_user']);
 $linkUser = $linkId ? require_login() : null;
@@ -148,9 +149,9 @@ if (!$user && $email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL)) {
     if ($user = $u->fetch()) {
         if ($linkId ? !sso_link_authorized($linkId, $linkUser, (int)$user['id'])
                     : !sso_email_match_allowed($claims, "https://login.microsoftonline.com/{$tenant}/v2.0")) {
-            audit(null, 'login.sso_fail', 'user', (int)$user['id'], 'guest Microsoft account not matched by email: ' . $email);
+            audit(null, 'login.sso_fail', 'user', (int)$user['id'], ($linkId ? 'link refused: ' : 'not shown to be a member of this tenant (acct claim), so not matched by email: ') . $email);
             flash($linkId ? 'That Microsoft account could not be linked to this account. Please try again.'
-                : 'Your Microsoft account is a guest in this organisation, so it is not matched by email. First sign in with your existing credentials, then use Link Microsoft account in My Account.', 'error');
+                : SSO_EMAIL_MATCH_REFUSED_MSG, 'error');
             redirect($failTo);
         }
         $bind = db()->prepare('UPDATE users SET entra_oid = ? WHERE id = ? AND entra_oid IS NULL AND is_active = 1');

@@ -13,7 +13,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             : 'Enter your full email address, for example name@example.org.']);
         redirect('forgot.php');
     }
-    $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+    $ip = client_ip();
     $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = 'pw-reset' AND ip = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)");
     $rl->execute([$ip]);
     // Also at most 3 an hour for the address itself, whatever the sender's IP: each request
@@ -31,14 +31,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             db()->prepare('UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0')->execute([$user['id']]);
             db()->prepare('INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?,?, DATE_ADD(NOW(), INTERVAL 30 MINUTE))')
                 ->execute([$user['id'], hash('sha256', $token)]);
-            send_app_mail($user['email'], 'Reset your password',
+            $resetMail = [$user['email'], 'Reset your password',
                 "Hello {$user['name']},\n\nUse this link to set a new password for " . cfg('name') . ":\n\n"
                 . cfg('base_url') . '/reset.php?t=' . $token
-                . "\n\nThe link expires in 30 minutes. If you did not request this, you can ignore this email.\n");
+                . "\n\nThe link expires in 30 minutes. If you did not request this, you can ignore this email.\n"];
         }
     }
     // Same response either way — do not reveal which emails exist
     flash('If that email belongs to an account, a reset link has been sent. Check your inbox.');
+    // The email is sent after the answer has gone (4.27.0), so a known address
+    // does not answer more slowly than an unknown one. Where PHP runs without
+    // FastCGI (no fastcgi_finish_request) it is sent first, as before.
+    if (isset($resetMail)) {
+        if (function_exists('fastcgi_finish_request')) {
+            header('Location: login.php');
+            session_write_close();
+            fastcgi_finish_request();
+            ignore_user_abort(true);
+        }
+        send_app_mail(...$resetMail);
+        if (function_exists('fastcgi_finish_request')) exit;
+    }
     redirect('login.php');
 }
 

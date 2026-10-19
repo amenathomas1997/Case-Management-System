@@ -114,11 +114,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (($_POST['fax_contact'] ?? '') !== '') $errors['form'] = 'We could not send this referral. Please check the form and choose Send referral again, or email us.';
     $sent = $_SESSION['referral_form_keys'][$formKey] ?? null;
     if (is_array($sent) && hash_equals((string)($sent['sig'] ?? ''), $formSig)) {
-        if (isset($sent['ref'], $sent['by'])) $_SESSION['referral_sent'] = ['ref' => (int)$sent['ref'], 'by' => (string)$sent['by']];
+        if (isset($sent['ref'], $sent['by'])) $_SESSION['referral_sent'] = ['ref' => (int)$sent['ref'], 'by' => (string)$sent['by'], 'done' => (string)($sent['done'] ?? '')];
         redirect('community_referral.php?submitted=1' . (string)($sent['done'] ?? ''));
     }
     if ($csrfStale) $errors['form'] = 'This page was open for a long time, so the referral was not sent yet. Everything you typed is still here. Please review it and choose Send referral again.';
-    $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+    $ip = client_ip();
     // One IPv6 connection can rotate freely within its /64 network, so that
     // network is the unit counted (an IPv4-mapped address stays whole).
     $ipBin = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ? inet_pton($ip) : false;
@@ -343,7 +343,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // in the URL could be changed to look up someone else's referral.
         $contactBy = business_days_from(3);
         $_SESSION['referral_form_keys'] = array_slice(($_SESSION['referral_form_keys'] ?? []) + [$formKey => ['sig' => $formSig, 'done' => $done, 'ref' => $refId, 'by' => $contactBy]], -20, null, true);
-        $_SESSION['referral_sent'] = ['ref' => $refId, 'by' => $contactBy];
+        $_SESSION['referral_sent'] = ['ref' => $refId, 'by' => $contactBy, 'done' => $done];
         // Site-wide ceiling on the alerts (not on the referrals): past it, every
         // referral is still saved with its task, but administrators get one
         // notice instead of a message and email per referral until the hour's
@@ -379,7 +379,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$saved = isset($_GET['submitted']);
+// The confirmation (and the cost) is shown only to the session that just sent a referral (4.27.0):
+// a shared ?submitted=1&fee=… address shows the form, never a made-up success or price.
+$saved = isset($_GET['submitted']) && is_array($_SESSION['referral_sent'] ?? null);
 $helpContact = (string)(cfg('support_email') ?: cfg('mail_from')); // the same contact as the shared footer
 // "Call {phone} or email {email}" once a support phone is set; '' otherwise (email-only wording below).
 $helpPhoneContact = support_contact_html();
@@ -397,6 +399,9 @@ function referral_contact_date(string $ymd): string {
 $sentInfo = $saved && is_array($_SESSION['referral_sent'] ?? null) ? $_SESSION['referral_sent'] : null;
 $sentRef = $sentInfo ? (int)($sentInfo['ref'] ?? 0) : 0;
 $sentBy = $sentInfo ? referral_contact_date((string)($sentInfo['by'] ?? '')) : '';
+// The cost result as the save worked it out, from the session; the address is not read.
+$sentDone = [];
+if ($sentInfo) parse_str(ltrim((string)($sentInfo['done'] ?? ''), '&'), $sentDone);
 unset($_SESSION['referral_sent']);   // shown once: a later visit in this browser doesn't repeat it
 page_header($saved ? 'Referral sent' : ($errors ? 'Error — Community Referral' : 'Community Referral'));
 echo lang_toggle();
@@ -419,10 +424,10 @@ echo lang_toggle();
     <?php endif; ?>
   </div>
   <script>document.addEventListener('DOMContentLoaded',function(){var s=document.getElementById('referral-sent');if(s)s.focus();if(window.Earcon)Earcon.play('success');});</script>
-  <?php if (($feeResult = $_GET['fee'] ?? '') !== ''): ?>
+  <?php if (($feeResult = is_string($sentDone['fee'] ?? null) ? $sentDone['fee'] : '') !== ''): ?>
   <div class="card">
     <h2><?= t('Your cost') ?></h2>
-    <?php $forOther = ($_GET['for'] ?? '') === 'other'; ?>
+    <?php $forOther = ($sentDone['for'] ?? '') === 'other'; ?>
     <?php if ($feeResult === 'vr'): ?>
       <p><strong><?= t('Because there is an open VR case, training is billed to the VR agency at its rate. Ask the VR counselor to send us an authorization.') ?></strong></p>
     <?php elseif ($feeResult === 'free'): ?>

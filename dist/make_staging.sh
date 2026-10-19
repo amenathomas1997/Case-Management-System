@@ -35,7 +35,7 @@
 #      credential; then a staging administrator is created, whose password is
 #      printed ONCE;
 #   4. writes a new config.php for staging (its DSN, base_url, private paths,
-#      SSO off, Graph credentials removed, mail_disabled: every email the copy
+#      SSO off, Graph credentials removed (and every secret stored on Settings), mail_disabled: every email the copy
 #      would send is written to <private_dst>/mail_sink/ instead — the sign-in
 #      code arrives there);
 #   5. prints what to do next.
@@ -176,6 +176,10 @@ $c["mail_sink"] = $private . "/mail_sink";
 // Graph credentials and single sign-on stay in production.
 $c["graph"] = ["tenant_id" => "", "client_id" => "", "client_secret" => "", "sender" => (string)($c["graph"]["sender"] ?? ""), "token_cache" => $private . "/graph_token.json"];
 if (isset($c["entra"])) $c["entra"] = ["enabled" => false, "tenant_id" => "", "client_id" => "", "client_secret" => "", "auto_provision_group" => ""];
+// 4.27.0: so do the Twilio, Zoom, Microsoft meeting and QuickBooks accounts (the scrub removes the copies stored on Settings).
+if (isset($c["sms"])) { $c["sms"]["account_sid"] = ""; $c["sms"]["auth_token"] = ""; }
+if (isset($c["meet"])) foreach (["zoom_client_id", "zoom_client_secret", "ms_client_id", "ms_client_secret"] as $k) $c["meet"][$k] = "";
+if (isset($c["qbo"])) { $c["qbo"]["client_id"] = ""; $c["qbo"]["client_secret"] = ""; }
 file_put_contents($argv[8], "<?php\n// STAGING copy written by make_staging.sh — not the production configuration.\nreturn " . var_export($c, true) . ";\n");
 ' "$PRIVATE_SRC/config.php" "$PRIVATE_DST" "$STAGING_DSN" "$STAGING_USER" "$STAGING_PASS" "$BASE_URL" "$ADMIN_EMAIL" "$PRIVATE_DST/config.php" )
 chmod 600 "$PRIVATE_DST/config.php"

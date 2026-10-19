@@ -206,7 +206,7 @@ page_header('My Account', $user, 'account');
     <?php
     // What a password change also does, said before the button (it cannot be undone).
     $pwFx = db()->prepare('SELECT (SELECT COUNT(*) FROM passkeys WHERE user_id = ?) AS pk,
-        (SELECT COUNT(*) FROM api_tokens WHERE user_id = ?) AS app, (SELECT cal_token FROM users WHERE id = ?) AS cal');
+        (SELECT COUNT(*) FROM api_tokens WHERE user_id = ? AND expires_at > NOW() AND wipe_requested_at IS NULL) AS app, (SELECT cal_token FROM users WHERE id = ?) AS cal');
     $pwFx->execute([$user['id'], $user['id'], $user['id']]);
     $pwFx = $pwFx->fetch();
     $myPasskeys = (int)$pwFx['pk'];
@@ -250,7 +250,7 @@ page_header('My Account', $user, 'account');
     $pendingSecret = $_SESSION['totp_pending_secret'] ?? null;
     ?>
     <?php if ($totpOn): ?>
-      <p><span class="badge badge-closed">Enabled</span> At sign-in you can enter a code from your authenticator app <em>or</em> the emailed code — both work.</p>
+      <p><span class="badge badge-closed">Enabled</span> At sign-in, enter a code from your authenticator app (or use a passkey); codes are no longer emailed.</p>
       <form method="post" action="account.php" class="stacked" novalidate>
         <?= csrf_field() ?>
         <?= form_error_summary(['td_pw' => 'Password']) ?>
@@ -296,7 +296,7 @@ page_header('My Account', $user, 'account');
         <button type="submit" name="totp_confirm" value="1" class="btn btn-primary">Confirm and enable</button>
       </form>
     <?php else: ?>
-      <p>Add an authenticator app as a second way to get sign-in codes. Email codes keep working either way.</p>
+      <p>Add an authenticator app for your sign-in codes. Once it is on, sign-in codes are no longer emailed.</p>
       <form method="post" action="account.php" class="inline-form">
         <?= csrf_field() ?>
         <button type="submit" name="totp_begin" value="1" class="btn btn-secondary">Set up authenticator app</button>

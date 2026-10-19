@@ -589,17 +589,61 @@ function current_user(): ?array {
 /**
  * A device handed over for signing in person (4.25.0, signatures.php): while it is, only that signing page
  * may be opened. Anything else (another page, the back button, a typed address) ends the staff session, so
- * the signer can never reach records; the staff member signs in again to carry on.
+ * the signer can never reach records; the staff member signs in again to carry on (a sign-in starts a fresh
+ * session, which drops the hand-over).
  */
 function kiosk_guard(): void {
     $k = $_SESSION['kiosk_sign'] ?? null;
     if (!is_array($k)) return;
-    $onPage = basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) === 'signatures.php' && (int)($_GET['client'] ?? 0) === (int)$k['client']
-        && ((int)($_GET['sign'] ?? 0) === (int)$k['id'] || (int)($_POST['sign_now'] ?? 0) === (int)$k['id'] || isset($_GET['signed']));
-    if ($onPage) return;
+    if (kiosk_request_allowed($k)) return;
+    kiosk_end();
+}
+
+/**
+ * What the device may still do while it is handed over (4.27.0, tightened):
+ *  - GET the hand-over page for that one document, only while it is still waiting to be signed here;
+ *  - GET the thank-you page (signatures.php?client=…&signed=…);
+ *  - POST that document's own Sign, or Hand back without signing (sign_now=<id>, with or without stop=1),
+ *    and nothing else in the same form.
+ * Everything else, including every other form on the Documents to sign page, ends the session.
+ */
+function kiosk_request_allowed(array $k): bool {
+    if (basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) !== 'signatures.php') return false;
+    if (!is_string($_GET['client'] ?? null) || (int)$_GET['client'] !== (int)($k['client'] ?? 0)) return false;
+    $kid = (int)($k['id'] ?? 0);
+    $method = (string)($_SERVER['REQUEST_METHOD'] ?? 'GET');
+    if ($method === 'GET') {
+        if (array_diff(array_keys($_GET), ['client', 'sign', 'signed'])) return false;
+        if (isset($_GET['signed'])) return !isset($_GET['sign']);
+        if (!is_string($_GET['sign'] ?? null) || (int)$_GET['sign'] !== $kid) return false;
+        return kiosk_document_waiting($k);
+    }
+    if ($method === 'POST') {
+        if (array_diff(array_keys($_POST), ['csrf', 'csrf_uid', 'sign_now', 'signature', 'stop'])) return false;
+        if (!is_string($_POST['sign_now'] ?? null) || (int)$_POST['sign_now'] !== $kid) return false;
+        if (isset($_POST['stop']) && $_POST['stop'] !== '1') return false;
+        return true;
+    }
+    return false;
+}
+
+/** Whether the handed-over document is still "Waiting to be signed here" (signed, withdrawn or gone: no). */
+function kiosk_document_waiting(array $k): bool {
+    if (!function_exists('client_signature') || !function_exists('signature_status')) return false;
+    try {
+        $s = client_signature((int)($k['id'] ?? 0), (int)($k['client'] ?? 0));
+    } catch (PDOException $e) {
+        return false;
+    }
+    return $s !== null && signature_status($s) === 'Waiting to be signed here';
+}
+
+/** End the handed-over session: nothing of it is kept; the staff member signs in again. */
+function kiosk_end(): never {
     session_unset();
     session_destroy();
     session_start();
+    if (is_script_request()) session_ended_json();
     flash('For privacy, you were signed out after the device was handed over for signing. Sign in again to carry on.', 'info');
     redirect('login.php');
 }
@@ -657,6 +701,8 @@ function require_login(): array {
  * Never redirects; an idled-out session is left for the next protected page.
  */
 function optional_login(): ?array {
+    // Help, Privacy and Accessibility never show the staff menu on a handed-over device (4.27.0).
+    kiosk_guard();
     $timeout = ((int) cfg('session_timeout_minutes')) * 60;
     if (isset($_SESSION['last_activity']) && (time() - (int)$_SESSION['last_activity']) > $timeout) return null;
     $u = current_user();

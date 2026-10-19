@@ -57,7 +57,9 @@ $whoChoices = array_merge(['', 'me', 'unassigned'], array_map(fn($i) => 'u' . (i
 $whoKey = 'clients_filter_' . (int)$user['id'];
 if (is_string($_GET['who'] ?? null)) {
     $who = in_array($_GET['who'], $whoChoices, true) ? $_GET['who'] : '';
-    if ((setting($whoKey) ?? '') !== $who) set_setting($whoKey, $who);
+    // Saved only when the filter form itself was submitted (4.27.0): a shared or bookmarked link with who=
+    // shows that caseload without replacing the user's remembered choice.
+    if (($_GET['save'] ?? null) === '1' && (setting($whoKey) ?? '') !== $who) set_setting($whoKey, $who);
 } else {
     $savedWho = setting($whoKey);
     $who = $savedWho !== null && in_array($savedWho, $whoChoices, true) ? $savedWho : (caseload_scoped() ? 'me' : '');
@@ -67,7 +69,7 @@ $sql = 'SELECT c.*, u.name AS instructor, (SELECT COUNT(*) FROM training_tracks 
     FROM clients c LEFT JOIN users u ON u.id = c.assigned_to WHERE 1=1';
 $params = [];
 $sql .= $showArchived ? ' AND c.archived_at IS NOT NULL' : ' AND c.archived_at IS NULL';
-if ($q !== '') { $sql .= ' AND (c.name LIKE ? OR c.email LIKE ? OR c.counselor_name LIKE ?)'; $like = "%$q%"; array_push($params, $like, $like, $like); }
+if ($q !== '') { $sql .= " AND (c.name LIKE ? ESCAPE '!' OR c.email LIKE ? ESCAPE '!' OR c.counselor_name LIKE ? ESCAPE '!')"; $like = '%' . strtr($q, ['!' => '!!', '%' => '!%', '_' => '!_']) . '%'; array_push($params, $like, $like, $like); }
 if (in_array($statusFilter, client_statuses(), true)) { $sql .= ' AND c.status = ?'; $params[] = $statusFilter; }
 if ($who === 'me') { $sql .= ' AND c.assigned_to = ?'; $params[] = $user['id']; }
 elseif ($who === 'unassigned') { $sql .= ' AND c.assigned_to IS NULL'; }
@@ -114,6 +116,7 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
 <?php endif; ?>
 
 <form method="get" action="clients.php" class="card" role="search" aria-label="Filter clients">
+  <input type="hidden" name="save" value="1">
   <?php if ($showArchived): ?><input type="hidden" name="archived" value="1"><?php endif; ?>
   <div class="grid grid-2">
     <div class="field">

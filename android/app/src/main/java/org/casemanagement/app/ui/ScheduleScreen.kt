@@ -80,9 +80,12 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
             text = {
                 Column {
                     if (scheduled && s.str("checked_in_at") == null && !s.optBoolean("overdue")) TextButton(onClick = {
+                        // The time the button was pressed (4.27.0), sent only with a copy kept to send later with no
+                        // signal, so a late check-in is accepted; one sent now is timed by the server.
+                        val pressedAt = org.casemanagement.app.isoTime(System.currentTimeMillis())
                         act {
                             saveOrQueue(api, "check_in_session", JSONObject().put("session_id", id), "Check-in: " + s.optString("client"),
-                                "Checked in.").message
+                                "Checked in.") { it.put("checked_in_at", pressedAt) }.message
                         }
                     }) { Text("Check in now") }
                     if (scheduled) TextButton(onClick = { chosen = null; completing = s }) { Text("Complete the session") }

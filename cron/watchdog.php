@@ -89,6 +89,22 @@ if (function_exists('app_errors_due') && !isset($problems['db'])) {
 }
 
 $alertTo = cfg('backup_email');
+// 4.27.0: the alert address (and whether Graph is set) may live only on Settings, which cannot be
+// read while the database is down. Each run that reads it keeps it in a small private file; a run
+// that cannot reach the database alerts that address (no secret is kept in the file).
+$alertCache = $privateDir . '/watchdog_alert.json';
+if (!isset($problems['db'])) {
+    $keep = json_encode(['to' => (string)($alertTo ?? ''), 'graph' => function_exists('graph_cfg') && graph_cfg() !== null, 'at' => date('c')]);
+    $old = umask(077);
+    if (is_dir($privateDir) && @file_put_contents($alertCache, (string)$keep, LOCK_EX) !== false) @chmod($alertCache, 0600);
+    umask($old);
+} elseif (is_file($alertCache)) {
+    $cached = json_decode((string)@file_get_contents($alertCache), true);
+    if (is_array($cached) && filter_var($cached['to'] ?? '', FILTER_VALIDATE_EMAIL)) $alertTo = (string)$cached['to'];
+    if (is_array($cached) && !empty($cached['graph']) && (!function_exists('graph_cfg') || graph_cfg() === null)) {
+        error_log('CMS watchdog: Microsoft Graph is set on Settings, which cannot be read while the database is down; the alert goes through the server\'s own mail instead.');
+    }
+}
 foreach ($problems as $key => $msg) {
     if (($state[$key] ?? 0) > time() - 6 * 3600) continue; // already alerted recently
     if (!$alertTo) { error_log("CMS watchdog (no backup_email configured): {$key} — {$msg}"); continue; }

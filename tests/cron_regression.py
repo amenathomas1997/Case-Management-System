@@ -107,7 +107,9 @@ class FakeResult {
     }
     function execute($args) { $GLOBALS['marks']++; }
 }
-class FakeDB { function query($sql) { return new FakeResult; } function prepare($sql) { return new FakeResult; } }
+// The per-recipient columns (4.27.0) are reported missing, so this checks the whole-session
+// fallback; tests/v427_portal_cases.php checks per-recipient reminders on a real database.
+class FakeDB { function query($sql) { if (str_contains($sql, 'client_reminded_at')) throw new Exception('no column'); return new FakeResult; } function prepare($sql) { return new FakeResult; } }
 function db() { return new FakeDB; }
 function cfg($key) { return 'https://example.invalid'; }
 // The built-in wording says "tomorrow"; {day} and the other placeholders are shown so the test can read them.

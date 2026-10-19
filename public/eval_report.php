@@ -250,7 +250,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['email_report'])) {
         if ($sent) {
             try {
                 db()->prepare('INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)')
-                    ->execute([(string)($_SERVER['REMOTE_ADDR'] ?? ''), $rlKey]);
+                    ->execute([client_ip(), $rlKey]);
             } catch (Throwable $e) {
                 error_log('eval_report.php: report send not counted: ' . get_class($e) . ' code=' . $e->getCode());
             }

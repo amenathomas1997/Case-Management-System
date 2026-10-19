@@ -149,8 +149,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('users.php?id=' . $uid);
         }
         if (!$active) {
-            db()->prepare('DELETE FROM api_tokens WHERE user_id = ?')->execute([$uid]);
+            db()->prepare('DELETE FROM api_tokens WHERE user_id = ? AND wipe_requested_at IS NULL')->execute([$uid]);
         }
+        // A changed email ends the person's browser sessions (4.27.0).
+        if ($emailChanged) user_session_epoch_bump($uid);
         audit($user['id'], 'user.update', 'user', $uid,
             "{$name} <{$email}> role={$role} group=" . ($gid ?? 'legacy') . ' active=' . $active
             . ($emailChanged ? ' (email changed; Microsoft sign-in link reset)' : '')
@@ -195,9 +197,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             db()->prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_last_step = NULL WHERE id = ?')->execute([$uid]);
             $pk = db()->prepare('DELETE FROM passkeys WHERE user_id = ?');
             $pk->execute([$uid]);
-            $app = db()->prepare('DELETE FROM api_tokens WHERE user_id = ?');
+            $app = db()->prepare('DELETE FROM api_tokens WHERE user_id = ? AND wipe_requested_at IS NULL');
             $app->execute([$uid]);
             db()->commit();
+            // Sessions started with the removed methods end too (4.27.0).
+            user_session_epoch_bump($uid);
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
             error_log('users.php reset_2fa failed: ' . get_class($e) . ' ' . $e->getCode());
@@ -237,7 +241,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (isset($_POST['revoke_app'])) {
-        $d = db()->prepare('DELETE FROM api_tokens WHERE user_id = ?');
+        $d = db()->prepare('DELETE FROM api_tokens WHERE user_id = ? AND wipe_requested_at IS NULL');
         $d->execute([$uid]);
         audit($user['id'], 'user.revoke_app', 'user', $uid, $d->rowCount() . ' app session(s)');
         flash('Signed ' . $target['name'] . ' out of the mobile app everywhere (' . $d->rowCount() . ' session(s)).');
@@ -344,7 +348,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $ids = array_map(fn($s) => (int)$s['id'], $movedSessions);
                 // reminder_sent goes back to 0, so the new instructor still gets the
                 // day-before reminder when the old one had already been sent it.
-                db()->prepare('UPDATE scheduled_sessions SET user_id = ?, reminder_sent = 0 WHERE id IN ('
+                db()->prepare('UPDATE scheduled_sessions SET user_id = ?, reminder_sent = 0, client_reminded_at = NULL, staff_reminded_at = NULL WHERE id IN ('
                     . implode(',', array_fill(0, count($ids), '?')) . ')')->execute(array_merge([$toId], $ids));
             }
             // Open AT records, equipment reservations, group programs and access bookings (3.0.55).
@@ -434,7 +438,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 /* ---------- Data for the page ---------- */
 $rows = db()->query("SELECT u.*, g.name AS group_name, g.perms AS group_perms,
         (SELECT COUNT(*) FROM clients c WHERE c.assigned_to = u.id) AS caseload,
-        (SELECT COUNT(*) FROM api_tokens a WHERE a.user_id = u.id AND a.expires_at > NOW()) AS app_sessions,
+        (SELECT COUNT(*) FROM api_tokens a WHERE a.user_id = u.id AND a.expires_at > NOW() AND a.wipe_requested_at IS NULL) AS app_sessions,
         (SELECT COUNT(*) FROM passkeys p WHERE p.user_id = u.id) AS passkey_count,
         (SELECT MAX(l.created_at) FROM audit_log l WHERE l.user_id = u.id AND l.action = 'login') AS last_login
     FROM users u LEFT JOIN `groups` g ON g.id = u.group_id

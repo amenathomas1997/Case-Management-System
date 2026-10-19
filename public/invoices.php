@@ -596,6 +596,8 @@ $pageNote = $invTotal > $perPage && $onlyId === 0
           <ul>
             <?php foreach ($pays as $p): $pid = (int)$p['id']; ?>
             <li><?= $p['kind'] === 'payment' ? 'Payment' : 'Write-off' ?> of <?= fmt_money((float)$p['amount']) ?> on <?= fmt_date($p['received_on']) ?><?= $p['reference'] ? ', ref ' . h($p['reference']) : '' ?><?= $p['note'] ? ': ' . h($p['note']) : '' ?><?= $p['who'] ? ' (recorded by ' . h($p['who']) . ')' : '' ?>
+              <?php if (($p['qbo_id'] ?? null) !== null && (string)$p['qbo_id'] !== '' && invoice_qbo_checked($i)): /* 4.27.0: only while the sync checks it */ ?>. It is in QuickBooks: to remove it, void it there, and it is removed here at the next sync.</li>
+              <?php continue; endif; ?>
               <form method="post" action="invoices.php" class="inline-form" novalidate><?= csrf_field() ?><?= $listHidden ?>
                 <input type="hidden" name="id" value="<?= $iid ?>"><input type="hidden" name="payment_id" value="<?= $pid ?>">
                 <label for="rm-<?= $pid ?>">Why remove it<span class="visually-hidden">, the <?= $p['kind'] === 'payment' ? 'payment' : 'write-off' ?> of <?= fmt_money((float)$p['amount']) ?></span></label>

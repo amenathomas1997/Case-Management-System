@@ -125,11 +125,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['convert'])) {
         db()->beginTransaction();
         // Re-read under a row lock so a double submit can't create two clients.
-        $lock = db()->prepare("SELECT * FROM referrals WHERE id = ? AND status <> 'Converted' FOR UPDATE");
+        // Only an open referral (New or Reviewed) is converted: one closed from
+        // another page while this one was open is not (4.27.0).
+        $lock = db()->prepare("SELECT * FROM referrals WHERE id = ? AND status IN ('New','Reviewed') FOR UPDATE");
         $lock->execute([$id]);
         $ref = $lock->fetch();
         if (!$ref) {
             db()->rollBack();
+            $cur = db()->prepare('SELECT status FROM referrals WHERE id = ?');
+            $cur->execute([$id]);
+            $curStatus = $cur->fetchColumn();
+            if ($curStatus === 'Closed') {
+                flash('Nothing was changed: this referral was closed, so it cannot be converted. Reopen it first if the person should become a client.', 'error');
+                redirect('referrals.php?view=' . $id);
+            }
             flash('That referral was already converted.', 'error');
             redirect('referrals.php');
         }

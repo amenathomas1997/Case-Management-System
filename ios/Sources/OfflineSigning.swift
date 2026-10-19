@@ -113,6 +113,12 @@ enum PreparedSignatures {
         return current
     }
 
+    /// How many are kept on this phone, of every account (4.27.0: said before a server change
+    /// removes them).
+    static func countAllAccounts() -> Int {
+        OfflineCache.owners().reduce(0) { $0 + all(owner: $1).count }
+    }
+
     static func forClient(_ clientId: Int, owner: Int) -> [PreparedSignature] {
         all(owner: owner).filter { $0.clientId == clientId }.sorted { $0.preparedAt > $1.preparedAt }
     }

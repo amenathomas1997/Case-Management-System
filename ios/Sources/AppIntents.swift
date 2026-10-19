@@ -48,6 +48,9 @@ struct TodaysSessionsIntent: AppIntent {
     static var description = IntentDescription("Says how many sessions are scheduled today and when the next one starts. Never names a client.")
     // Spoken by Siri without bringing the app forward (an opened app silences the reply).
     static var openAppWhenRun = false
+    // Only once the phone is unlocked (4.27.0): the day's session times are not for whoever
+    // is holding a locked phone.
+    static var authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {

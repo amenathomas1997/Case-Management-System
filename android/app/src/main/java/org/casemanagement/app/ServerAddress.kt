@@ -41,8 +41,19 @@ object ServerAddress {
             if (!path.endsWith("/")) path += "/"
             path += "api.php"
         }
-        val port = if (uri.port > 0) ":${uri.port}" else ""
+        // 4.27.0: https's own port (443) is the same server as no port.
+        val port = if (uri.port > 0 && uri.port != 443) ":${uri.port}" else ""
         return "https://$host$port$path"
+    }
+
+    /**
+     * Whether two typed addresses name the same server (4.27.0): compared as the API address each
+     * becomes, so "https://", capitals in the host and a trailing slash make no difference.
+     * An address that cannot be read is never the same as anything.
+     */
+    fun same(a: String, b: String, allowDevHttp: Boolean = false): Boolean {
+        val x = apiUrl(a, allowDevHttp) ?: return false
+        return x == apiUrl(b, allowDevHttp)
     }
 
     /** The host to name to the person ("Signing in to cms.example.org"). */

@@ -7,6 +7,13 @@ declare(strict_types=1);
 // Cron: 45 2 * * * (after the nightly backup)
 if (PHP_SAPI !== 'cli') exit('CLI only.');
 
+/** The stored secrets every backup leaves out (cron/backup.sh), to enter again after a restore (4.27.0). */
+const OFFSITE_RESTORE_SECRETS = "The backup leaves out the stored secrets, so after a restore enter each one that was in use again: "
+    . "the Microsoft Graph client secret (Settings, Microsoft Graph email), the Twilio Auth Token (Settings, Text messages), "
+    . "the QuickBooks app Client secret (Settings, QuickBooks Online), the Zoom and Microsoft meeting app client secrets (Settings, Online meetings), "
+    . "the AI API key (AI drafting assistant) and the Microsoft Entra client secret (Federation). "
+    . "QuickBooks and each staff member's Zoom or Microsoft meeting connection may also need connecting again.\n";
+
 // Where the application's inc/ directory is: an optional cron_config.php beside
 // this script (it returns the path) wins, then the production path, then the
 // repository layout. Nothing needs editing here for a different install.
@@ -120,7 +127,7 @@ foreach ($variants as [$kind, $files]) {
         . "The ZIP password is the off-site backup password the installer showed once. Keep it in your organisation's password manager, not only on the server: if it is lost, this backup cannot be opened. (It is also the 'backup_password' in the server's config.php.)\n"
         . "To restore: unzip with that password, gunzip the .sql.gz file and import it into MariaDB"
         . ($withUploads ? ', then copy the uploads folder back into the private directory' : '') . ".\n"
-        . "The backup leaves out the stored AI API key and Microsoft Entra client secret, so after a restore enter them again on the AI assistant and Federation pages.\n";
+        . OFFSITE_RESTORE_SECRETS;
     $subject = ($full ? 'Full' : 'Daily') . ' off-site CMS backup — ' . date('M j, Y');
     $ok = $size <= OFFSITE_INLINE_MAX
         ? send_app_mail_attach($recipient, $subject, $body, [['name' => $attachName, 'mime' => 'application/zip', 'bytes' => (string)file_get_contents($zipPath)]])
@@ -204,6 +211,8 @@ function offsite_notice(bool $sent): string {
  * extra copy of the backup is left in the mailbox. Nothing secret is logged.
  */
 function offsite_send_large(string $to, string $subject, string $body, string $path, string $name): bool {
+    // 4.27.0: a staging copy's "mail off" holds here too.
+    if (function_exists('mail_disabled_keep') && mail_disabled_keep($to, $subject, $body, [['name' => $name]])) return true;
     $g = graph_cfg();
     if (!$g) return false;
     $size = (int)filesize($path);

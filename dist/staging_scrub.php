@@ -76,10 +76,30 @@ const STAGING_SCRUB_KEEP = [
 ];
 
 // Emptied outright: nothing issued in production may sign in or open a link here.
-const STAGING_SCRUB_EMPTY = ['api_tokens', 'passkeys', 'portal_tokens', 'vrc_tokens', 'password_resets', 'login_otps', 'login_attempts', 'sent_alerts'];
+// 4.27.0: the QuickBooks connection and each staff member's Zoom or Microsoft meeting
+// connection hold the production companies' and accounts' tokens.
+const STAGING_SCRUB_EMPTY = ['api_tokens', 'passkeys', 'portal_tokens', 'vrc_tokens', 'password_resets', 'login_otps', 'login_attempts', 'sent_alerts',
+    'qbo_connection', 'meeting_accounts'];
+
+// Settings removed (4.27.0): every stored secret and provider account stays in production.
+// Every Settings value of kind 'secret' (CONFIG_OVERRIDES in public/inc/settings_admin.php)
+// is named here; tests/v427_billing_cases.php checks the two lists agree. Any other stored
+// setting whose name holds secret, token or api_key goes too.
+const STAGING_SCRUB_SETTINGS = ['ai_api_key', 'entra_enabled', 'entra_tenant_id', 'entra_client_id', 'entra_client_secret', 'entra_auto_provision_group',
+    'cfg.graph.client_secret', 'cfg.sms.account_sid', 'cfg.sms.auth_token', 'cfg.meet.zoom_client_secret', 'cfg.meet.ms_client_secret', 'cfg.qbo.client_secret',
+    'qbo_realm'];
+const STAGING_SCRUB_SETTINGS_LIKE = ['totp_pending_%', 'cfg.graph.%', 'cfg.meet.%', 'cfg.qbo.%', 'cfg.sms.%', '%secret%', '%token%', '%api_key%', 'qbo_item_%'];
 
 const STAGING_SCRUB_TEXT_TYPES = ['char', 'varchar', 'tinytext', 'text', 'mediumtext', 'longtext', 'json',
     'binary', 'varbinary', 'tinyblob', 'blob', 'mediumblob', 'longblob'];
+
+/** The settings a staging copy loses, as SQL on the settings table's name column. */
+function staging_scrub_settings_where(PDO $db): string
+{
+    $names = implode(', ', array_map([$db, 'quote'], STAGING_SCRUB_SETTINGS));
+    $like = implode(' OR ', array_map(fn(string $p): string => 'name LIKE ' . $db->quote($p), STAGING_SCRUB_SETTINGS_LIKE));
+    return "(name IN ($names) OR $like)";
+}
 
 /** Scrubs the database $db is connected to. Returns one line per table changed. */
 function staging_scrub(PDO $db): array
@@ -143,9 +163,11 @@ function staging_scrub(PDO $db): array
         }
     }
     if (isset($cols['settings'])) {
-        // Provider secrets and SSO stay in production; AI features are off until an
-        // administrator turns them on here with staging keys.
-        $db->exec("DELETE FROM settings WHERE name IN (\"ai_api_key\", \"entra_enabled\", \"entra_tenant_id\", \"entra_client_id\", \"entra_client_secret\", \"entra_auto_provision_group\") OR name LIKE \"totp_pending_%\"");
+        // Provider secrets and accounts (Graph, Twilio, Zoom, Microsoft, QuickBooks, AI) and SSO
+        // stay in production; AI features are off until an administrator turns them on here
+        // with staging keys.
+        $n = $db->exec('DELETE FROM settings WHERE ' . staging_scrub_settings_where($db));
+        $report[] = "settings: $n stored secrets and provider accounts removed";
         $db->exec("INSERT INTO settings (name, value) VALUES (\"ai_enabled\", \"0\") ON DUPLICATE KEY UPDATE value = \"0\"");
     }
     $db->exec("SET FOREIGN_KEY_CHECKS=1");

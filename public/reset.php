@@ -51,7 +51,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // A password reset means the old credentials may be compromised:
         // sign the mobile app out everywhere and remove passkeys too, so an
         // attacker-enrolled passkey can't outlive the reset.
-        db()->prepare('DELETE FROM api_tokens WHERE user_id = ?')->execute([$row['user_id']]);
+        // A phone reported lost keeps its row until it confirms the wipe (4.27.0).
+        db()->prepare('DELETE FROM api_tokens WHERE user_id = ? AND wipe_requested_at IS NULL')->execute([$row['user_id']]);
         $pkDel = db()->prepare('DELETE FROM passkeys WHERE user_id = ?');
         $pkDel->execute([$row['user_id']]);
         db()->prepare('UPDATE login_otps SET consumed = 1 WHERE user_id = ?')->execute([$row['user_id']]);
@@ -70,7 +71,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'via emailed reset link; browser and app sessions revoked' . ($pkDel->rowCount() ? ', ' . $pkDel->rowCount() . ' passkey(s) removed' : '')
             . ($hadCalFeed ? ', calendar feed address turned off' : '')
             . ($lockDel->rowCount() ? ', sign-in lockout cleared' : ''));
-        flash('Password changed. Sign in with your new password. (For safety, any passkeys on the account were removed — you can add them back from My Account.)'
+        // A reset never signs in, and never turns the authenticator app off (4.27.0):
+        // the mailbox alone is not enough to get into an account that has one.
+        $tq = db()->prepare('SELECT totp_enabled FROM users WHERE id = ?');
+        $tq->execute([$row['user_id']]);
+        $hasTotp = (bool)$tq->fetchColumn();
+        flash('Password changed. Sign in with your new password' . ($hasTotp ? ' and a code from your authenticator app' : '') . '. (For safety, any passkeys on the account were removed — you can add them back from My Account.)'
             . ($hadCalFeed ? ' Your calendar subscription address was also turned off: create a new one under My Account and subscribe your calendar to it again.' : ''));
         redirect('login.php');
     }

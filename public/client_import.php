@@ -12,6 +12,7 @@ csrf_check();
 $user = require_login();
 require_perm('admin');
 
+const CIMPORT_MAX_ROWS = 2000;   // rows per file (4.27.0)
 const CIMPORT_KINDS = ['clients' => 'Clients', 'authorizations' => 'Open authorizations'];
 const CIMPORT_COLUMNS = [
     'clients' => ['name', 'dob', 'email', 'phone', 'address', 'client_type', 'status', 'instructor_email', 'counselor_name', 'counselor_email', 'counselor_phone', 'counselor_agency', 'guardian_name', 'guardian_phone', 'guardian_email', 'vr_case_number', 'school', 'state'],
@@ -74,11 +75,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
     $staff = [];
     // Only someone who can open client records can hold a caseload (as client_edit.php and the transfer require).
     foreach (db()->query('SELECT id, email, role, group_id FROM users WHERE is_active = 1')->fetchAll() as $s) if (in_array('clients', resolve_perms($s)['perms'], true)) $staff[strtolower((string)$s['email'])] = (int)$s['id'];
-    $valid = []; $results = []; $seen = []; $line = 1;
+    $valid = []; $validAt = []; $results = []; $seen = []; $line = 1; $rows = 0;
+    // Rows already accepted from this file, by the same rules as possible_duplicate_clients() (4.27.0):
+    // the same name; date of birth with the same last name; the same email; the same last 10 phone digits.
+    $seenName = []; $seenDobLast = []; $seenEmail = []; $seenPhone = [];
     $skip = function (string $name, string $msg) use (&$results, &$skipped, &$line) { $results[] = ['line' => $line, 'name' => $name, 'ok' => false, 'msg' => $msg]; $skipped++; };
     while (($row = cimport_row($fh, $converted)) !== false) {
         $line++;
         if (count(array_filter($row, fn($c) => trim((string)$c) !== '')) === 0) continue;
+        // A cap on rows (4.27.0), so one upload cannot run for minutes; nothing is imported from a longer file.
+        if (++$rows > CIMPORT_MAX_ROWS) {
+            fclose($fh);
+            keep_field_errors(['csv' => 'That file has more than ' . number_format(CIMPORT_MAX_ROWS) . ' rows, so nothing was checked or imported. Split it into files of ' . number_format(CIMPORT_MAX_ROWS) . ' rows or fewer.']);
+            redirect('client_import.php?kind=' . $kind);
+        }
         if ($kind === 'clients') {
             $name = $get($row, 'name');
             if ($name === '' || mb_strlen($name) > 120) { $skip($name ?: '(blank)', 'Name is missing or longer than 120 characters'); continue; }
@@ -96,14 +106,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
             if ($stRaw !== '' && $st === null) { $skip($name, 'state must be a US state, such as IA or Iowa'); continue; }
             $ie = strtolower($get($row, 'instructor_email'));
             if ($ie !== '' && !isset($staff[$ie])) { $skip($name, 'instructor_email does not match an active staff account with access to client records'); continue; }
-            $key = mb_strtolower($name) . '|' . $dob;
-            if (isset($seen[$key])) { $skip($name, 'Same person as row ' . $seen[$key] . ' of this file'); continue; }
+            $nameKey = mb_strtolower(trim($name));
+            $words = preg_split('/\s+/', $nameKey) ?: [];
+            $dobLastKey = $dob !== '' ? $dob . '|' . (string)end($words) : null;
+            $emailKey = $emails['email'];
+            $digits = preg_replace('/\D/', '', $get($row, 'phone')) ?? '';
+            $phoneKey = strlen($digits) >= 10 ? substr($digits, -10) : null;
+            $inFile = $seenName[$nameKey] ?? ($dobLastKey !== null ? $seenDobLast[$dobLastKey] ?? null : null)
+                ?? ($emailKey !== null ? $seenEmail[$emailKey] ?? null : null) ?? ($phoneKey !== null ? $seenPhone[$phoneKey] ?? null : null);
+            if ($inFile !== null) { $skip($name, 'Same person as row ' . $inFile . ' of this file (same name; date of birth and last name; email; or phone)'); continue; }
             $dups = possible_duplicate_clients($name, $dob ?: null, $get($row, 'phone') ?: null, $emails['email']);
             if ($dups) { $skip($name, 'Already on file as ' . $dups[0]['name'] . ' (record #' . (int)$dups[0]['id'] . ')'); continue; }
-            $seen[$key] = $line;
+            $seenName[$nameKey] = $line;
+            if ($dobLastKey !== null) $seenDobLast[$dobLastKey] = $line;
+            if ($emailKey !== null) $seenEmail[$emailKey] = $line;
+            if ($phoneKey !== null) $seenPhone[$phoneKey] = $line;
             $cut = fn(string $c, int $n) => ($v = mb_substr($get($row, $c), 0, $n)) !== '' ? $v : null;
             $valid[] = [$name, $dob ?: null, $emails['email'], $cut('phone', 40), $cut('address', 255), $status, $type, $cut('school', 190), $ie !== '' ? $staff[$ie] : null,
                 $cut('counselor_name', 120), $emails['counselor_email'], $cut('counselor_phone', 40), $cut('counselor_agency', 190), $cut('guardian_name', 120), $cut('guardian_phone', 40), $emails['guardian_email'], $cut('vr_case_number', 60), $st];
+            $validAt[] = count($results);
             $results[] = ['line' => $line, 'name' => $name, 'ok' => true, 'msg' => $type . ' · ' . $status . ($dob ? ' · born ' . fmt_date($dob) : '')];
         } else {
             $cname = (string)preg_replace('/\s+/u', ' ', $get($row, 'client_name')); $label = $cname ?: '(blank)';
@@ -114,8 +135,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
             if (count($cl) !== 1) { $skip($label, count($cl) ? 'More than one client has that name: add client_dob' : 'No client by that name (import or add the client first)'); continue; }
             $auth = $get($row, 'auth_number');
             if ($auth === '' || mb_strlen($auth) > 80) { $skip($label, 'auth_number is missing or longer than 80 characters'); continue; }
-            $ex = db()->prepare('SELECT COUNT(*) FROM training_tracks WHERE auth_number = ?'); $ex->execute([$auth]);
-            if ((int)$ex->fetchColumn() > 0 || isset($seen[$auth])) { $skip($label, 'Authorization ' . $auth . ' is already on a track'); continue; }
+            // The same number in other letter case or with spaces is the same authorization (4.27.0).
+            $authKey = mb_strtolower($auth);
+            if (isset($seen[$authKey])) { $skip($label, 'Authorization ' . $auth . ' is already on row ' . $seen[$authKey] . ' of this file'); continue; }
+            $ex = db()->prepare('SELECT COUNT(*) FROM training_tracks WHERE LOWER(TRIM(auth_number)) = ?'); $ex->execute([$authKey]);
+            if ((int)$ex->fetchColumn() > 0) { $skip($label, 'Authorization ' . $auth . ' is already on a track'); continue; }
             $agency = agency_canonical($get($row, 'funding_agency'));
             if ($agency === '' || mb_strlen($agency) > 190) { $skip($label, 'funding_agency is missing'); continue; }
             $num = function (string $c, float $min, float $max, bool $required) use ($get, $row): ?float {
@@ -133,9 +157,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
             if ($start !== '' && $end !== '' && $end < $start) { $skip($label, 'expiration_date is before start_date'); continue; }
             $rsa = $get($row, 'rsa_category');
             if ($rsa !== '' && !in_array($rsa, rsa_all_categories(), true)) { $skip($label, 'rsa_category is not one of the RSA categories'); continue; }
-            $seen[$auth] = $line;
+            $seen[$authKey] = $line;
             $title = mb_substr($get($row, 'title') ?: 'Authorization ' . $auth, 0, 190);
             $valid[] = [(int)$cl[0]['id'], $title, $rsa ?: null, $auth, $agency, $hours, $amount, $rate, $mile ?? 0.0, $start ?: null, $end ?: null];
+            $validAt[] = count($results);
             $results[] = ['line' => $line, 'name' => $cl[0]['name'], 'ok' => true, 'msg' => $auth . ' · ' . $agency . ' · ' . $hours . ' hours at ' . fmt_money((float)$rate) . ($amount ? ' · up to ' . fmt_money((float)$amount) : '')];
         }
     }
@@ -143,7 +168,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
     if (!$dryRun && $valid) {
         db()->beginTransaction();
         try {
-            foreach ($valid as $v) {
+            foreach ($valid as $vi => $v) {
                 if ($kind === 'clients') {
                     db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, client_type, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, guardian_name, guardian_phone, guardian_email, vr_case_number, state, email_verified, counselor_verified)
                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0)')->execute($v);
@@ -151,6 +176,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_import'])) {
                     office_place_new_client($newCid, (int)$user['id']);   // 4.22.0
                     record_status_change($newCid, null, $v[5], (int)$user['id'], 'Client imported from a spreadsheet');
                 } else {
+                    // Checked again inside the transaction (4.27.0): a track added for this authorization since the
+                    // file was read (another import, or staff) is not doubled; the row is reported as skipped.
+                    $again = db()->prepare('SELECT id FROM training_tracks WHERE LOWER(TRIM(auth_number)) = ? LIMIT 1 FOR UPDATE');
+                    $again->execute([mb_strtolower((string)$v[3])]);
+                    if ($again->fetchColumn()) {
+                        $results[$validAt[$vi]]['ok'] = false;
+                        $results[$validAt[$vi]]['msg'] = 'Authorization ' . $v[3] . ' was put on a track while this file was being imported';
+                        $skipped++;
+                        continue;
+                    }
                     db()->prepare("INSERT INTO training_tracks (client_id, title, rsa_category, status, auth_number, funding_agency, authorized_hours, authorized_amount, hourly_rate, mileage_rate, start_date, expiration_date, billing_mode)
                         VALUES (?,?,?,'Active',?,?,?,?,?,?,?,?,'vr')")->execute($v);
                 }
@@ -185,9 +220,10 @@ page_header('Import clients and authorizations', $user, 'admin', [['admin.php', 
     <?php else: ?>
     <li>Each row must name exactly one client (add client_dob when two share a name) and an authorization number not already on a track. Hours and the hourly rate are required.</li>
     <?php endif; ?>
-    <li>Upload with Validate only first, check the result, then upload again to import.</li>
+    <li>Up to <?= number_format(CIMPORT_MAX_ROWS) ?> rows in one file. Upload with Validate only first, check the result, then upload again to import.</li>
   </ol>
   <form method="post" action="client_import.php" enctype="multipart/form-data" class="stacked"><?= csrf_field() ?>
+    <?= form_error_summary(['csv' => 'CSV file']) ?>
     <input type="hidden" name="kind" value="<?= $kind ?>"><input type="hidden" name="import_token" value="<?= h(cimport_token()) ?>">
     <div class="field"><label for="csv">CSV file</label><input type="file" id="csv" name="csv" accept=".csv,text/csv" <?= field_aria('csv') ?>><?= field_error('csv') ?></div>
     <div class="field"><label><input type="checkbox" name="dry_run" value="1" checked> Validate only (nothing is imported)</label></div>

@@ -35,9 +35,9 @@ function account_totp_confirm(array $user, string $secret, $password, $code, cal
     db()->prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1 WHERE id = ?')->execute([$secret, $user['id']]);
     audit((int)$user['id'], 'totp.enable', 'user', (int)$user['id']);
     send_app_mail($user['email'], 'An authenticator app was added to your account',
-        "Hello {$user['name']},\n\nAn authenticator app was just set up for your " . cfg('name') . " account. Its codes can be used at sign-in in place of the emailed code.\n\n"
+        "Hello {$user['name']},\n\nAn authenticator app was just set up for your " . cfg('name') . " account. From now on, signing in asks for a code from that app (or a passkey); sign-in codes are no longer emailed.\n\n"
         . "If this was you, no action is needed. If it was NOT you, disable it under My Account right away, change your password, and tell your administrator.\n");
-    return ['ok' => true, 'message' => 'Authenticator app enabled. At sign-in you can now use either an app code or an emailed code.'];
+    return ['ok' => true, 'message' => 'Authenticator app enabled. From now on, signing in asks for a code from the app (or a passkey) instead of an emailed code. If you lose the app, an administrator can reset it.'];
 }
 
 /** Turn off the authenticator app. */
@@ -88,7 +88,8 @@ function account_change_password(array $user, $current, $new, $confirm, bool $ac
         // Changing the password signs the mobile app out everywhere and revokes
         // enrolled passkeys, matching the reset-password flow (a password change
         // is often a response to suspected compromise).
-        db()->prepare('DELETE FROM api_tokens WHERE user_id = ?')->execute([$user['id']]);
+        // A phone reported lost keeps its row until it confirms the wipe (4.27.0).
+        db()->prepare('DELETE FROM api_tokens WHERE user_id = ? AND wipe_requested_at IS NULL')->execute([$user['id']]);
         db()->prepare('DELETE FROM passkeys WHERE user_id = ?')->execute([$user['id']]);
         db()->prepare('UPDATE login_otps SET consumed = 1 WHERE user_id = ?')->execute([$user['id']]);
         // A reset link emailed before this change must not be able to undo it.
@@ -160,7 +161,21 @@ function account_remove_passkey(array $user, int $pkId): array {
         // A second click, or another open tab: nothing was removed, so nothing is logged.
         return ['ok' => false, 'error' => 'That passkey had already been removed, so nothing changed.'];
     }
-    audit((int)$user['id'], 'passkey.remove', 'user', (int)$user['id'], 'passkey #' . $pkId . ' (' . $pkName . ')');
+    // A passkey is often removed because its device was lost: any browser
+    // session it opened elsewhere ends too (4.27.0). This one carries on.
+    $ended = account_end_other_sessions((int)$user['id']);
+    audit((int)$user['id'], 'passkey.remove', 'user', (int)$user['id'], 'passkey #' . $pkId . ' (' . $pkName . ')' . ($ended ? '; other browser sessions ended' : ''));
     return ['ok' => true, 'name' => $pkName,
-        'message' => 'Passkey "' . $pkName . '" removed. You can still sign in with your password and code.'];
+        'message' => 'Passkey "' . $pkName . '" removed.' . ($ended ? ' Any other browser signed in to your account on the website was signed out.' : '') . ' You can still sign in with your password and code.'];
+}
+
+/**
+ * End every other browser session of an account (4.27.0): after removing a
+ * passkey, and, called by users.php, after an administrator resets its two-step
+ * verification or changes its email. The session making the change carries on
+ * when it is that account's own. False before the 4.27.0 migration adds
+ * users.session_epoch (nothing is ended then).
+ */
+function account_end_other_sessions(int $userId): bool {
+    return user_session_epoch_bump($userId);
 }

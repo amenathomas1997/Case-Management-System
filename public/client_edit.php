@@ -6,6 +6,33 @@ csrf_check();
 $user = require_login();
 require_perm('clients');
 
+/** A save refused because the record changed since the form was opened (4.27.0). */
+final class ClientEditConflict extends RuntimeException {}
+
+/** The record's fields the edit form shows, with the names said when someone else changed them (4.27.0). */
+const CLIENT_EDIT_TRACKED = ['name' => 'Full name', 'dob' => 'Date of birth', 'email' => 'Email', 'phone' => 'Phone', 'address' => 'Address',
+    'status' => 'Status', 'client_type' => 'Client type', 'school' => 'School', 'assigned_to' => 'Instructor',
+    'counselor_name' => 'Counselor name', 'counselor_email' => 'Counselor email', 'counselor_phone' => 'Counselor phone', 'counselor_agency' => 'Counselor agency',
+    'a11y_screen_reader' => 'Uses a screen reader', 'a11y_format' => 'Preferred format', 'a11y_primary_tech' => 'Primary assistive technology',
+    'a11y_contact' => 'Preferred contact', 'a11y_notes' => 'Access notes', 'preferred_language' => 'Language',
+    'guardian_name' => 'Guardian name', 'guardian_phone' => 'Guardian phone', 'guardian_email' => 'Guardian email',
+    'vr_case_number' => 'VR case number', 'ipe_goal' => 'IPE employment goal', 'ipe_date' => 'IPE date', 'ipe_amended_on' => 'IPE amendment date',
+    'vision_status' => 'Vision status', 'vision_onset_age' => 'Age when vision loss began', 'state' => 'State', 'time_zone' => 'Time zone', 'office_id' => 'Office'];
+/** One tracked field as the form holds it: from a stored row ($fromPost false) or from what was posted. */
+function client_edit_norm(array $src, string $f, bool $fromPost): string {
+    $v = $src[$f] ?? null;
+    if ($f === 'a11y_screen_reader') return !empty($v) ? '1' : '0';
+    if ($f === 'assigned_to' || $f === 'office_id') return (string)(int)(is_scalar($v) ? $v : 0);
+    if ($f === 'preferred_language') return $v === 'es' ? 'es' : 'en';
+    return is_scalar($v) ? str_replace("\r\n", "\n", trim((string)$v)) : '';
+}
+/** The tracked fields of a stored row, as the form holds them. */
+function client_edit_snapshot(array $row): array {
+    $out = [];
+    foreach (array_keys(CLIENT_EDIT_TRACKED) as $f) $out[$f] = client_edit_norm($row, $f, false);
+    return $out;
+}
+
 $id = (int)($_GET['id'] ?? 0);
 $client = null;
 if ($id) {
@@ -198,7 +225,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newBillTo = $billTo(['counselor_name' => $vals[9], 'counselor_agency' => $vals[12], 'counselor_email' => $vals[10], 'counselor_verified' => $counselorVerified]);
             $pdo = db();
             $pdo->beginTransaction();
+            $stale = false;
             try {
+                // Two people editing the same client (4.27.0): the row is locked first, and a
+                // save is refused when the record changed after this form was opened (its
+                // updated_at then differs from the one the form carried), so the later save
+                // never quietly overwrites the earlier one. A form opened before this
+                // release carries no value and is saved as before.
+                $lk = $pdo->prepare('SELECT * FROM clients WHERE id = ? FOR UPDATE');
+                $lk->execute([(int)$client['id']]);
+                $locked = $lk->fetch();
+                if (!$locked) throw new RuntimeException('The client row is gone.');
+                $loadedAt = is_string($_POST['loaded_at'] ?? null) ? $_POST['loaded_at'] : null;
+                // "Closing" is judged on the locked row, so two simultaneous closures
+                // cannot both record a closure (or both email the survey).
+                $closingNow = str_starts_with($status, 'Closed') && $locked['status'] !== $status;
+                if (($loadedAt !== null && $loadedAt !== (string)$locked['updated_at']) || ($closingNow && $closureData === null)) {
+                    $freshLoadedAt = (string)$locked['updated_at'];
+                    $conflictRow = $locked;
+                    throw new ClientEditConflict();
+                }
+                $closing = $closingNow;
+                $client['status'] = (string)$locked['status'];
+                $unarchive = $locked['archived_at'] !== null && !str_starts_with($status, 'Closed');
+                $oldAssignee = $locked['assigned_to'] !== null ? (int)$locked['assigned_to'] : null;
                 record_status_change((int)$client['id'], $client['status'], $status, $user['id'], trim($_POST['status_note'] ?? '') ?: ($closing ? 'Closed: ' . $closureData['reason'] : null));
                 on_hold_save((int)$client['id'], $status, (string)$client['status'], trim((string)($_POST['status_note'] ?? '')), $holdUntil);
                 if ($closing) client_closure_record((int)$client['id'], $status, $closureData, (int)$user['id']);
@@ -245,7 +295,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $movedSessionRows = $sq->fetchAll();
                     if ($movedSessionRows) {
                         $ids = array_map(fn($r) => (int)$r['id'], $movedSessionRows);
-                        $pdo->prepare('UPDATE scheduled_sessions SET user_id = ?, reminder_sent = 0 WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')')
+                        $pdo->prepare('UPDATE scheduled_sessions SET user_id = ?, reminder_sent = 0, client_reminded_at = NULL, staff_reminded_at = NULL WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')')
                             ->execute([$assignedTo, ...$ids]);
                         $movedSessions = count($ids);
                     }
@@ -258,10 +308,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $movedReferrals = $mr->rowCount();
                 }
                 $pdo->commit();
+            } catch (ClientEditConflict $e) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                $stale = true;
             } catch (Throwable $e) {
                 if ($pdo->inTransaction()) $pdo->rollBack();
                 throw $e;
             }
+            if ($stale) {
+                // Nothing was saved. The form comes back with this person's own edits (the
+                // fields that differ from the values the form was opened with) and the saved
+                // values for everything else, so saving again never quietly undoes the other
+                // person's change (a closure, a reassignment); the fields they changed are named.
+                // It carries the record's current version, so a second save goes through.
+                // Custom-field answers and the text-message agreement keep what was posted.
+                $orig = json_decode(is_string($_POST['orig'] ?? null) ? $_POST['orig'] : '', true);
+                $current = client_edit_snapshot($conflictRow);
+                $theirs = [];
+                if (is_array($orig)) {
+                    foreach (CLIENT_EDIT_TRACKED as $f => $label) {
+                        if (!array_key_exists($f, $orig)) continue;
+                        if ($current[$f] !== (string)$orig[$f]) $theirs[] = $label;
+                        $onForm = $f === 'a11y_screen_reader' || array_key_exists($f, $_POST);
+                        if (!$onForm || client_edit_norm($_POST, $f, true) !== (string)$orig[$f]) continue; // this person's edit stays
+                        if ($f === 'a11y_screen_reader') {
+                            if ($current[$f] === '1') $_POST[$f] = '1'; else unset($_POST[$f]);
+                        } else {
+                            $_POST[$f] = $current[$f];
+                        }
+                    }
+                }
+                $freshOrig = $current;
+                $who = $theirs ? (count($theirs) === 1 ? $theirs[0] : implode(', ', array_slice($theirs, 0, -1)) . ' and ' . end($theirs)) : '';
+                $errors['stale'] = $who !== ''
+                    ? 'Someone else changed ' . $who . ' since you opened this record. Those fields now show the saved values, and your own changes are kept; review and save again.'
+                    : 'Someone else changed this record since you opened it. Your changes are below; review and save again.';
+                set_form_errors($errors);
+            } else {
             audit($user['id'], 'client.update', 'client', (int)$client['id'], $name
                 . ($oldAssignee !== $assignedTo ? ' (instructor #' . ($oldAssignee ?? 'none') . ' -> #' . ($assignedTo ?? 'none') . ')' : ''));
             if ($counselorVerified === 1 && !$wasVerified) {
@@ -301,8 +384,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $recentSurvey = db()->prepare('SELECT COUNT(*) FROM surveys WHERE client_id = ? AND sent_at > DATE_SUB(NOW(), INTERVAL 30 DAY)');
                 $recentSurvey->execute([(int)$client['id']]);
                 if ((int)$recentSurvey->fetchColumn() === 0) {
+                    $GLOBALS['mail_last_outcome'] = null;
                     if (send_outcome_survey((int)$client['id'])) {
                         flash('An outcome survey was emailed to the client.');
+                    } elseif (($GLOBALS['mail_last_outcome'] ?? null) === 'unknown') {
+                        flash('The email service did not confirm the outcome survey email, so it may still arrive. Check later whether it was answered before sending it again.', 'info');
                     } elseif (client_survey_by_phone((int)$client['id'])) {
                         flash('The client prefers phone or post, so the outcome survey was not emailed. Ask the questions by phone and enter the answers under After closure on the client page.', 'info');
                     } elseif (filter_var($vals[2] ?? '', FILTER_VALIDATE_EMAIL) && $emailVerified !== 1) {
@@ -335,6 +421,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 . (($smsNote ?? null) ? ' ' . $smsNote : '')
                 . ($status === 'Active Training' && $client['status'] !== 'Active Training' && ($an = active_without_authorization((int)$client['id'])) ? ' ' . $an : ''));
             redirect('client.php?id=' . (int)$client['id']);
+            }
         } else {
             // The same form sent twice (Enter pressed again while it loads) creates the
             // client once; the second answer goes to the client the first created.
@@ -377,11 +464,19 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
 <?php endif; ?>
 <?php // Focus moves to this summary once on load; each entry links to its field.
 // (The messages already name their field, so no label is put in front of them.) ?>
-<?= form_error_summary(array_fill_keys(array_keys($errors), '')) ?>
+<?= form_error_summary(array_fill_keys(array_keys($errors), ''), ['stale' => 'name']) ?>
 
 <p class="hint">Fields marked with an asterisk (*) are required.</p>
 <form method="post" class="stacked" novalidate>
   <?= csrf_field() ?><?= web_idem_field() ?>
+  <?php // The version of the record this form was filled from (4.27.0): after a refused
+  // save it is the current one, so saving again applies the reviewed changes.
+  if ($client): $formLoadedAt = $freshLoadedAt ?? ($_SERVER['REQUEST_METHOD'] === 'POST' && is_string($_POST['loaded_at'] ?? null) ? $_POST['loaded_at'] : (string)$client['updated_at']); ?>
+  <input type="hidden" name="loaded_at" value="<?= h($formLoadedAt) ?>">
+  <?php // The values the form was opened with, so a refused save can tell this person's edits from the other person's.
+  $formOrig = $freshOrig ?? ($_SERVER['REQUEST_METHOD'] === 'POST' && is_string($_POST['orig'] ?? null) ? $_POST['orig'] : json_encode(client_edit_snapshot($client))); ?>
+  <input type="hidden" name="orig" value="<?= h(is_string($formOrig) ? $formOrig : (string)json_encode($formOrig)) ?>">
+  <?php endif; ?>
   <fieldset>
     <legend>Demographics</legend>
     <div class="field">
@@ -448,7 +543,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
     <div class="field">
       <label for="status">Status</label>
       <?php if ($client): ?>
-      <span class="hint" id="status-hint">Changing the status to Closed - Rehabilitated emails the client an outcome survey when you save, unless one was sent in the last 30 days.</span>
+      <span class="hint" id="status-hint">Closing the case (any Closed status) emails the client an outcome survey when you save, unless one was sent in the last 30 days.</span>
       <?php endif; ?>
       <select id="status" name="status"<?= $client ? ' aria-describedby="status-hint" data-was="' . h($client['status']) . '"' : '' ?>><?= select_options(cms_choices('client_statuses', $client['status'] ?? null), $raw('status') ?? $client['status'] ?? 'Pending Assessment') ?></select>
     </div>
@@ -634,7 +729,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
   <div class="page-actions">
     <?php // Closing a case as rehabilitated emails the client: confirm that once, on the button
     // (not the form's onsubmit, which session-forms.js would run a second time). ?>
-    <button type="submit" class="btn btn-primary"<?= $client ? ' onclick="var s=document.getElementById(\'status\');return !s||s.value!==\'Closed - Rehabilitated\'||s.getAttribute(\'data-was\')===\'Closed - Rehabilitated\'||confirm(\'Save with the status Closed - Rehabilitated? This emails the client an outcome survey, unless one was sent in the last 30 days.\');"' : '' ?>><?= $client ? 'Save changes' : 'Create client' ?></button>
+    <button type="submit" class="btn btn-primary"<?= $client ? ' onclick="var s=document.getElementById(\'status\');return !s||s.value.indexOf(\'Closed\')!==0||(s.getAttribute(\'data-was\')||\'\').indexOf(\'Closed\')===0||confirm(\'Save and close the case? This emails the client an outcome survey, unless one was sent in the last 30 days.\');"' : '' ?>><?= $client ? 'Save changes' : 'Create client' ?></button>
     <a class="btn btn-secondary" href="<?= $client ? 'client.php?id=' . (int)$client['id'] : 'clients.php' ?>">Cancel<span class="visually-hidden"> and return to <?= $client ? h($client['name']) : 'the client list' ?></span></a>
   </div>
 </form>

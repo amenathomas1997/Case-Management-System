@@ -270,6 +270,7 @@ return [
     // Each message starts with its field's label, as the form shows it.
     'I am referring as a…: please choose the one that fits best.' => 'Envío esta referencia como…: elija la opción que mejor le corresponda.',
     'Your name is required.' => 'Su nombre es obligatorio.',
+    'Choose Yes or No.' => 'Elija Sí o No.',
     'Your phone is required.' => 'Su teléfono es obligatorio.',
     'Tell us about the need is required.' => 'Cuéntenos sobre la necesidad — este campo es obligatorio.',
     'Their full name is required.' => 'El nombre completo de la persona es obligatorio.',

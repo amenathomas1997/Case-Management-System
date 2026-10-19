@@ -55,12 +55,27 @@ function portal_link_touch(string $table, string $where, $value): void {
 }
 
 /**
+ * The internet address a limit is counted by: an IPv6 address is grouped by its /64 (4.27.0),
+ * since one connection is usually given a whole /64 and could otherwise step through it.
+ */
+function portal_rate_ip(string $ip): string {
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+        $bin = inet_pton($ip);
+        if ($bin !== false) return (string)inet_ntop(substr($bin, 0, 8) . str_repeat("\0", 8)) . '/64';
+    }
+    return $ip;
+}
+
+/**
  * "Email me a new link" on the dead-link page: sends only to the client's own confirmed
  * address on file, and the answer never says whether the address is known. Limited to
- * three tries an hour from one internet address.
+ * three tries an hour from one internet address (an IPv6 /64 counts as one), and two
+ * emails a day to one client (4.27.0). While the client's link still works, that same link
+ * is sent again and nothing is replaced, so someone who knows the address cannot break a
+ * working link; a new link is made only once the old one has lapsed.
  */
 function portal_link_self_service(string $email): void {
-    $ip = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    $ip = portal_rate_ip(client_ip());
     $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = 'portal-newlink' AND ip = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 MINUTE)");
     $rl->execute([$ip]);
     if ((int)$rl->fetchColumn() >= 3) return;
@@ -73,7 +88,28 @@ function portal_link_self_service(string $email): void {
     $q->execute([$email]);
     $ids = $q->fetchAll(PDO::FETCH_COLUMN);
     if (count($ids) !== 1) return;
-    portal_link_send((int)$ids[0], null, 'requested by the client from the expired-link page');
+    $clientId = (int)$ids[0];
+    $key = 'portal-newlink-c' . $clientId;
+    $day = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)");
+    $day->execute([$key]);
+    if ((int)$day->fetchColumn() >= 2) return;
+    db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?, ?, 1)")->execute([$ip, $key]);
+    $live = db()->prepare('SELECT token FROM portal_tokens WHERE client_id = ? AND (expires_at IS NULL OR expires_at > NOW())');
+    $live->execute([$clientId]);
+    $current = (string)($live->fetchColumn() ?: '');
+    if ($current === '') {
+        portal_link_send($clientId, null, 'requested by the client from the expired-link page');
+        return;
+    }
+    $c = db()->prepare('SELECT * FROM clients WHERE id = ?');
+    $c->execute([$clientId]);
+    $client = $c->fetch();
+    if (!$client) return;
+    [$subj, $body] = email_template_for_client('portal_link', $client, ['name' => $client['name'],
+        'link' => cfg('base_url') . '/portal.php?t=' . $current . (client_lang($client) === 'es' ? '&lang=es' : '')]);
+    if (send_app_mail((string)$client['email'], $subj, $body)) {
+        audit(null, 'portal.resend', 'client', $clientId, 'the working link sent again, requested from the expired-link page');
+    }
 }
 
 /**

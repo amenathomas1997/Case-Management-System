@@ -16,6 +16,32 @@ function api_425_signature_rows(int $clientId): array {
         'sent_at' => $s['sent_at'], 'signed_at' => $s['signed_at'], 'signed_name' => $s['signed_name'], 'has_drawn_signature' => !empty($s['signature_path'])], client_signatures($clientId));
 }
 
+/**
+ * Sent again after a lost reply (4.27.0): start_signature, send_signature and request_release
+ * carry the app's idem_key. The first result's id is kept for 24 hours as a marker row
+ * (login_attempts, as api_throttle_record), keyed on the action, the user, the client and the
+ * key, so the same key from the same user answers that id again and nothing is created or
+ * emailed twice. A named lock holds a second copy arriving at the same moment until the first
+ * has answered (the lock ends with the request).
+ */
+function api_425_idem_marker(string $action, int $userId, int $cid, array $input): ?string {
+    $k = is_string($input['idem_key'] ?? null) ? trim($input['idem_key']) : '';
+    if (!preg_match('/^[A-Za-z0-9-]{8,64}$/', $k)) return null;
+    $m = 'idem425:' . substr(hash('sha256', $action . '|' . $userId . '|' . $cid . '|' . strtoupper($k)), 0, 40);
+    try { db()->prepare('SELECT GET_LOCK(?, 10)')->execute([$m]); } catch (Throwable $e) { /* the marker alone still answers later copies */ }
+    return $m;
+}
+function api_425_idem_seen(?string $marker): ?int {
+    if ($marker === null) return null;
+    $q = db()->prepare('SELECT email FROM login_attempts WHERE email LIKE ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 1 DAY) ORDER BY id DESC LIMIT 1');
+    $q->execute([$marker . ':%']);
+    $e = $q->fetchColumn();
+    return $e === false ? null : (int)substr((string)$e, strlen($marker) + 1);
+}
+function api_425_idem_keep(?string $marker, int $id): void {
+    if ($marker !== null && $id > 0) api_throttle_record($marker . ':' . $id);
+}
+
 function api_425(string $action, array $input, int $userId): ?array {
     if (!array_key_exists($action, API_425_PERMS)) return null;
     if (!can(API_425_PERMS[$action])) return ['ok' => false, 'error' => "Your account doesn't have access to that.", 'status' => 403];
@@ -58,18 +84,30 @@ function api_425(string $action, array $input, int $userId): ?array {
         case 'start_signature': {
             if (!empty($client['archived_at'])) return ['ok' => false, 'error' => 'This client is archived; nothing can be sent.', 'status' => 409];
             $inPerson = $action === 'start_signature';
+            $idem = api_425_idem_marker($action, $userId, $cid, $input);
+            if (($seenId = api_425_idem_seen($idem)) !== null && ($s = client_signature($seenId, $cid))) {
+                if (!$inPerson) return ['ok' => true, 'id' => $seenId, 'repeat' => true];
+                return ['ok' => true, 'id' => $seenId, 'repeat' => true, 'title' => (string)$s['title'], 'body' => (string)$s['body'], 'lang' => $s['lang'], 'signer_name' => (string)$s['signer_name'], 'org' => brand('org'),
+                    'sent_at' => $s['sent_at'], 'sign_by' => date('Y-m-d H:i:s', strtotime((string)$s['sent_at']) + 2 * 86400)];
+            }
             $loans = signature_open_loans($cid);
             [$errs, $v] = signature_input(array_map(fn($x) => is_scalar($x) ? (string)$x : '', $input), $loans, $inPerson);
             if ($errs) return ['ok' => false, 'error' => implode(' ', $errs), 'fields' => $errs, 'status' => 422];
             if ($inPerson) {
                 $id = signature_start_in_person($client, $v, $loans, $userId);
+                api_425_idem_keep($idem, $id);
                 $s = client_signature($id, $cid);
                 // sent_at: when the server started it (4.26.0): the two days to sign it count from here.
                 return ['ok' => true, 'id' => $id, 'title' => (string)$s['title'], 'body' => (string)$s['body'], 'lang' => $s['lang'], 'signer_name' => (string)$s['signer_name'], 'org' => brand('org'),
                     'sent_at' => $s['sent_at'], 'sign_by' => date('Y-m-d H:i:s', strtotime((string)$s['sent_at']) + 2 * 86400)];
             }
+            // Each request emails someone outside the agency: at most 10 an hour per staff
+            // member, as consent requests (4.27.0).
+            if (api_throttle_count('signature-mail-' . $userId, 3600) >= 10) return ['ok' => false, 'error' => 'Too many documents sent to sign in the last hour. Wait a while, then try again.', 'status' => 429];
+            api_throttle_record('signature-mail-' . $userId);
             $sent = signature_send($client, $v, $loans, $userId);
             if ($sent['error']) return ['ok' => false, 'error' => $sent['error'], 'status' => 502];
+            api_425_idem_keep($idem, (int)$sent['id']);
             return ['ok' => true, 'id' => (int)$sent['id']];
         }
         case 'sign_in_person': {
@@ -90,13 +128,22 @@ function api_425(string $action, array $input, int $userId): ?array {
             return ['ok' => true, 'signatures' => api_425_signature_rows($cid)];
         }
         case 'withdraw_signature':
-            if (!signature_withdraw((int)($input['id'] ?? 0), $cid, $userId)) return ['ok' => false, 'error' => 'That document was already withdrawn.', 'status' => 409];
+            $wres = signature_withdraw_result((int)($input['id'] ?? 0), $cid, $userId);
+            // A document signed meanwhile (or on the phone with no signal) stays signed (4.27.0).
+            if ($wres === 'signed') return ['ok' => false, 'signed' => true, 'error' => 'This document is already signed.', 'status' => 409];
+            if ($wres !== 'withdrawn') return ['ok' => false, 'error' => 'That document was already withdrawn.', 'status' => 409];
             return ['ok' => true, 'signatures' => api_425_signature_rows($cid)];
         case 'release_choices':
             return ['ok' => true, 'recipient_types' => array_values(cms_list_items('release_recipient_types')), 'info_items' => array_values(cms_list_items('release_info_items')),
                 'validity_days' => release_validity_days()];
         case 'request_release': {
             if (!empty($client['archived_at'])) return ['ok' => false, 'error' => 'This client is archived; nothing can be sent.', 'status' => 409];
+            $idem = api_425_idem_marker($action, $userId, $cid, $input);
+            if (($seenId = api_425_idem_seen($idem)) !== null) {
+                $still = db()->prepare('SELECT id FROM client_releases WHERE id = ? AND client_id = ?');
+                $still->execute([$seenId, $cid]);
+                if ($still->fetchColumn()) return ['ok' => true, 'id' => $seenId, 'repeat' => true];
+            }
             $in = array_map(fn($x) => is_scalar($x) ? (string)$x : $x, $input);
             [$errs, $v] = release_input($in, 'Email');
             if ($errs) return ['ok' => false, 'error' => implode(' ', $errs), 'fields' => $errs, 'status' => 422];
@@ -104,8 +151,14 @@ function api_425(string $action, array $input, int $userId): ?array {
             $again = db()->prepare('SELECT id FROM client_releases WHERE client_id = ? AND signer_email = ? AND recipient_name = ? AND created_by = ? AND withdrawn_at IS NULL AND sent_at > DATE_SUB(NOW(), INTERVAL 2 MINUTE) LIMIT 1');
             $again->execute([$cid, $v['signer_email'], $v['recipient_name'], $userId]);
             if ($rid = (int)$again->fetchColumn()) return ['ok' => true, 'id' => $rid];
+            // At most 10 release requests an hour per staff member, as consent requests (4.27.0).
+            if (api_throttle_count('release-mail-' . $userId, 3600) >= 10) return ['ok' => false, 'error' => 'Too many release requests in the last hour. Wait a while, then try again.', 'status' => 429];
+            api_throttle_record('release-mail-' . $userId);
             $sent = release_send($cid, $v, $userId);
             if ($sent['error']) return ['ok' => false, 'error' => $sent['error'], 'status' => 502];
+            api_425_idem_keep($idem, (int)$sent['id']);
+            // The email's outcome unknown (4.27.0): the request is kept, and staff are told it may have gone.
+            if (!empty($sent['unknown'])) return ['ok' => true, 'id' => (int)$sent['id'], 'unknown' => true, 'message' => (string)$sent['notice']];
             return ['ok' => true, 'id' => (int)$sent['id']];
         }
         case 'referral_deadlines':

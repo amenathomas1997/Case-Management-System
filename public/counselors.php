@@ -40,7 +40,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_portal'])) {
         flash('A portal link was just sent to ' . $name . ' (' . $email . '); the link in that email is the one that works. Wait a minute before sending another.', 'error');
         redirect('counselors.php');
     }
-    db()->prepare('INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)')->execute([(string)($_SERVER['REMOTE_ADDR'] ?? ''), $portalKey]);
+    db()->prepare('INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)')->execute([client_ip(), $portalKey]);
     $token = bin2hex(random_bytes(24));
     // Email first and store the new link only once it has gone out: storing it
     // replaces (and so revokes) the counselor's current link.

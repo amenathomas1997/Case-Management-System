@@ -23,7 +23,7 @@ if ($text === '') { http_response_code(400); exit; }
 $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 10 MINUTE)");
 $rl->execute(['tts-' . (int)$user['id']]);
 if ((int)$rl->fetchColumn() >= 60) { http_response_code(429); exit; }
-db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'tts-' . (int)$user['id']]);
+db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([client_ip(), 'tts-' . (int)$user['id']]);
 
 $res = ai_speak($text, $voice, (int)$user['id']);
 if (!$res['ok']) {

@@ -135,8 +135,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_reservation'])) {
     $e = db()->prepare('SELECT status FROM equipment WHERE id = ?');
     $e->execute([$eid]);
     $estatus = $e->fetchColumn();
-    if ($estatus === false || $cid <= 0) { flash('Choose an item and a client.', 'error'); redirect('equipment.php'); }
-    if ($estatus === 'Retired') { flash('That item is retired and cannot be reserved.', 'error'); redirect('equipment.php'); }
+    // Tied to the fields and listed in the form's summary (4.27.0), with what was chosen kept.
+    $resErrors = [];
+    if ($eid <= 0) $resErrors['res_equipment_id'] = 'Item is required: choose the item to reserve.';
+    elseif ($estatus === false) $resErrors['res_equipment_id'] = 'Item: that item is no longer on file; choose another.';
+    elseif ($estatus === 'Retired') $resErrors['res_equipment_id'] = 'Item: that item is retired and cannot be reserved; choose another.';
+    if ($cid <= 0) $resErrors['res_client_id'] = 'Client is required: choose who the item is reserved for.';
+    if ($resErrors) { keep_input(); keep_field_errors($resErrors); redirect('equipment.php#res-form'); }
     scope_check_client_id($cid, $user);
     // Dates are checked as the app checks them: a date that cannot be read, or an
     // end before the start, is refused on its field with what was typed kept.
@@ -460,7 +465,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_interval'])) {
     $eid = (int)($_POST['equipment_id'] ?? 0);
     $ex = db()->prepare('SELECT id FROM equipment WHERE id = ?'); $ex->execute([$eid]);
     if (!$ex->fetchColumn()) { flash('Item not found.', 'error'); redirect('equipment.php'); }
-    $iv = ($_POST['interval'] ?? '') !== '' ? max(0, min(3650, (int)$_POST['interval'])) : null;
+    // Anything but a whole number from 0 to 3650 is refused on the field (4.27.0), never read as "no schedule".
+    $ivRaw = is_string($_POST['interval'] ?? null) ? trim($_POST['interval']) : '';
+    if (!is_string($_POST['interval'] ?? '') || ($ivRaw !== '' && (!preg_match('/^\d{1,4}$/D', $ivRaw) || (int)$ivRaw > 3650))) {
+        keep_input(); keep_field_errors(['interval_' . $eid => 'Service every: enter a whole number of days from 0 to 3650, or leave it blank for no schedule.']);
+        redirect('equipment.php#mi-' . $eid);
+    }
+    $iv = $ivRaw !== '' ? (int)$ivRaw : null;
     db()->prepare('UPDATE equipment SET maintenance_interval_days = ? WHERE id = ?')->execute([$iv ?: null, $eid]);
     audit($user['id'], 'equipment.interval', 'equipment', $eid, $iv ? $iv . ' days' : 'cleared');
     flash('Maintenance schedule updated.');
@@ -828,7 +839,8 @@ page_header('Equipment & loans', $user, 'equipment');
         $mine = old_in('equipment_id') === (string)$iid;
         $oldSvc = fn(string $k, string $d = ''): string => ($mine && old_in('log_service') !== '') ? old_in($k, $d) : $d;
         $oldCor = fn(string $k, string $d = ''): string => ($mine && old_in('correct_service') !== '') ? old_in($k, $d) : $d;
-        $rowErr = has_field_error($svcKey) || has_field_error($snKey) || has_field_error($scostKey) || has_field_error($cdKey) || has_field_error($crKey); ?>
+        $ivKey = 'interval_' . $iid;
+        $rowErr = has_field_error($svcKey) || has_field_error($snKey) || has_field_error($scostKey) || has_field_error($cdKey) || has_field_error($crKey) || has_field_error($ivKey); ?>
         <span class="<?= $mClass ?>"><?= h($mLabel) ?></span>
         <details class="goal-history"<?= $rowErr ? ' open' : '' ?>>
           <summary>Service<?= $hist ? ' (' . count($hist) . ')' : '' ?><span class="visually-hidden"> — <?= h($i['name']) ?></span></summary>
@@ -860,8 +872,10 @@ page_header('Equipment & loans', $user, 'equipment');
           <?php endif; ?>
           <form method="post" action="equipment.php" class="inline-form" style="margin-top:.4rem"><?= csrf_field() ?>
             <input type="hidden" name="equipment_id" value="<?= (int)$i['id'] ?>">
+            <?= form_error_summary([$ivKey => ''], [$ivKey => 'mi-' . $iid]) ?>
             <label for="mi-<?= (int)$i['id'] ?>">Service every<span class="visually-hidden"> (days)</span><span class="visually-hidden"> — <?= h($i['name']) ?></span></label>
-            <input type="number" id="mi-<?= (int)$i['id'] ?>" name="interval" min="0" max="3650" step="1" value="<?= $i['maintenance_interval_days'] !== null ? (int)$i['maintenance_interval_days'] : '' ?>" style="max-width:5rem"> <span aria-hidden="true">days</span>
+            <?php // A text box (4.27.0): a number box posts blank for typed letters, which would clear the schedule. ?>
+            <input type="text" inputmode="numeric" id="mi-<?= (int)$i['id'] ?>" name="interval" maxlength="4" value="<?= h(has_field_error($ivKey) ? old_in('interval') : ($i['maintenance_interval_days'] !== null ? (string)(int)$i['maintenance_interval_days'] : '')) ?>" style="max-width:5rem" <?= field_aria($ivKey) ?>> <span aria-hidden="true">days</span><?= field_error($ivKey) ?>
             <button type="submit" name="set_interval" value="1" class="btn btn-secondary btn-sm">Set<span class="visually-hidden"> service interval — <?= h($i['name']) ?></span></button>
           </form>
           <?php if ($hist): ?>
@@ -939,18 +953,18 @@ page_header('Equipment & loans', $user, 'equipment');
   <?php else: ?><p class="muted">No active reservations.</p><?php endif; ?>
   <?php // After a rejected date the form comes back filled in, with the error on its field.
   $oldRes = fn(string $k): string => old_in('add_reservation') !== '' ? old_in($k) : ''; ?>
-  <form method="post" action="equipment.php" class="stacked" style="margin-top:1rem"><?= csrf_field() ?>
+  <form method="post" action="equipment.php" class="stacked" style="margin-top:1rem" id="res-form"><?= csrf_field() ?>
     <h3>Reserve or waitlist an item</h3>
-    <?= form_error_summary(['res_client_id' => '', 'needed_from' => '', 'needed_until' => '', 'res_notes' => ''], ['res_client_id' => 'res_client', 'needed_from' => 'res_from', 'needed_until' => 'res_until', 'res_notes' => 'res_notes']) ?>
+    <?= form_error_summary(['res_equipment_id' => '', 'res_client_id' => '', 'needed_from' => '', 'needed_until' => '', 'res_notes' => ''], ['res_equipment_id' => 'res_item', 'res_client_id' => 'res_client', 'needed_from' => 'res_from', 'needed_until' => 'res_until', 'res_notes' => 'res_notes']) ?>
     <?= $requiredNote ?>
     <div class="grid grid-4">
       <div class="field"><label for="res_item">Reserve: item <?= required_mark() ?></label>
-        <select id="res_item" name="equipment_id" required>
+        <select id="res_item" name="equipment_id" required <?= field_aria('res_equipment_id') ?>>
           <option value="">— Choose —</option>
           <?php foreach ($items as $i): if ($i['status'] === 'Retired') continue; ?>
           <option value="<?= (int)$i['id'] ?>" <?= $oldRes('equipment_id') === (string)$i['id'] ? 'selected' : '' ?>><?= h($i['name']) ?> (<?= h($i['status']) ?>)</option>
           <?php endforeach; ?>
-        </select></div>
+        </select><?= field_error('res_equipment_id') ?></div>
       <div class="field"><label for="res_client">Reserve: client <?= required_mark() ?></label>
         <select id="res_client" name="client_id" required <?= field_aria('res_client_id') ?>>
           <option value="">— Choose —</option>

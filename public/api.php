@@ -158,7 +158,7 @@ function api_throttle_count(string $key, int $seconds): int {
 }
 function api_throttle_record(string $key): void {
     db()->prepare('INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)')
-        ->execute([(string)($_SERVER['REMOTE_ADDR'] ?? ''), $key]);
+        ->execute([client_ip(), $key]);
 }
 
 /** Whether this user already saved the offline entry sent under $idem: a client note
@@ -254,7 +254,7 @@ $inputDeferred = strlen($rawInput) > API_ANON_BODY_BYTES;
 if ($inputDeferred && in_array($action, ['login', 'verify'], true)) fail('That request is too large.', 413);
 $input = $inputDeferred ? [] : api_decode_input($rawInput);
 if (!$inputDeferred) $rawInput = '';
-$ip = $_SERVER['REMOTE_ADDR'] ?? '';
+$ip = client_ip();
 
 /* ---------- Unauthenticated: login + verify ---------- */
 if ($action === 'login') {
@@ -277,9 +277,16 @@ if ($action === 'login') {
     // have their own limit and never use up the sign-in budget of everyone on the IP.
     db()->prepare('INSERT INTO login_attempts (ip, email, success) VALUES (?,?,0)')->execute([$ip, $lkey]);
     $attemptRow = (int)db()->lastInsertId();
-    $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE success = 0 AND attempted_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE) AND (email IN (?, ?) OR (ip = ? AND email NOT LIKE 'reauth:%' AND email NOT LIKE 'vrc-fail-%'))");
-    $rl->execute([$lkey, $email, $ip]);
-    if ((int)$rl->fetchColumn() > 8) {   // 8 earlier failures plus this attempt
+    // The same limits as login.php (4.27.0): 8 for this account from this address, 20 for
+    // this account from anywhere, 30 for this address across accounts. Wrong codes at the
+    // second step ('verify:'), password re-checks and counselor-portal codes have limits of
+    // their own and do not use up the address's budget.
+    $rl = db()->prepare("SELECT COALESCE(SUM(email IN (?, ?) AND ip = ?), 0) AS here, COALESCE(SUM(email IN (?, ?)), 0) AS anywhere,
+        COALESCE(SUM(ip = ? AND email NOT LIKE 'reauth:%' AND email NOT LIKE 'verify:%' AND email NOT LIKE 'vrc-fail-%'), 0) AS by_ip
+        FROM login_attempts WHERE success = 0 AND attempted_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE) AND (email IN (?, ?) OR ip = ?)");
+    $rl->execute([$lkey, $email, $ip, $lkey, $email, $ip, $lkey, $email, $ip]);
+    $fails = $rl->fetch();
+    if ((int)$fails['here'] > 8 || (int)$fails['anywhere'] > 20 || (int)$fails['by_ip'] > 30) {   // each count includes this attempt
         db()->prepare('DELETE FROM login_attempts WHERE id = ?')->execute([$attemptRow]);
         fail('Too many attempts. Wait 15 minutes.', 429);
     }
@@ -305,32 +312,43 @@ if ($action === 'login') {
         : password_verify($password, dummy_password_hash()) && false;
     // A wrong password keeps the failure recorded above.
     if (!$ok) fail('Incorrect email or password.', 401);
-    db()->prepare('UPDATE login_attempts SET success = 1 WHERE id = ?')->execute([$attemptRow]);
-    // The code cap again, now counting this sign-in, so correct passwords sent in
-    // parallel cannot all pass the check above and each email a code.
-    $sentQ->execute([$lkey]);
-    if ((int)$sentQ->fetchColumn() > 5) fail('Too many sign-in attempts. Please wait 15 minutes and try again.', 429);
+    // An account with an authenticator app signs in with it (4.27.0, the owner's decision):
+    // no code is emailed, so the mailbox alone can never finish an app sign-in. The row
+    // still carries the password step (verify needs it) with a hash no code matches.
+    $totpOnly = !empty($user['totp_enabled']) && !empty($user['totp_secret']);
+    if ($totpOnly) {
+        // No code is sent, so a correct password is not counted against the code cap (as
+        // login.php): its attempt row is simply removed.
+        db()->prepare('DELETE FROM login_attempts WHERE id = ?')->execute([$attemptRow]);
+    } else {
+        db()->prepare('UPDATE login_attempts SET success = 1 WHERE id = ?')->execute([$attemptRow]);
+        // The code cap again, now counting this sign-in, so correct passwords sent in
+        // parallel cannot all pass the check above and each email a code.
+        $sentQ->execute([$lkey]);
+        if ((int)$sentQ->fetchColumn() > 5) fail('Too many sign-in attempts. Please wait 15 minutes and try again.', 429);
+    }
     $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
     // Only an earlier app code is cancelled: a pending website sign-in code stays usable.
     db()->prepare("UPDATE login_otps SET consumed = 1 WHERE user_id = ? AND channel = 'api' AND consumed = 0")->execute([$user['id']]);
     // channel 'api': only this endpoint's verify step can redeem the row (never a
     // code from a website sign-in, and the website never redeems this one).
-    $codeHash = password_hash($code, PASSWORD_DEFAULT);
+    $codeHash = password_hash($totpOnly ? bin2hex(random_bytes(16)) : $code, PASSWORD_DEFAULT);
     db()->prepare("INSERT INTO login_otps (user_id, code_hash, expires_at, channel) VALUES (?,?, DATE_ADD(NOW(), INTERVAL ? MINUTE), 'api')")
         ->execute([$user['id'], $codeHash, ((int)cfg('otp_expiry_minutes') ?: 10)]);
     // login_challenge binds the verify step to THIS password step: it is keyed with
     // the row's own salted code hash, which never leaves the server, so someone who
     // knows only the email (and perhaps a code) cannot redeem another person's row.
     $loginChallenge = api_login_challenge((int)db()->lastInsertId(), $codeHash);
-    $sent = send_app_mail($user['email'], 'Your sign-in code: ' . $code,
+    $sent = !$totpOnly && send_app_mail($user['email'], 'Your sign-in code: ' . $code,
         "Your one-time sign-in code for the mobile app is:\n\n    {$code}\n\nIt expires in " . ((int)cfg('otp_expiry_minutes') ?: 10) . " minutes.\n");
     // Without the email and without an authenticator app there is no way to finish
     // signing in, so say so now instead of showing a code screen no code will reach.
-    if (!$sent && !($user['totp_enabled'] && $user['totp_secret'])) {
+    if (!$sent && !$totpOnly) {
         fail('The sign-in code email could not be sent. Contact your administrator.', 502);
     }
     // code_expires_minutes: the emailed code's lifetime, for the app's sign-in text.
-    out(['ok' => true, 'step' => 'otp_required', 'totp_available' => (bool)$user['totp_enabled'], 'email_sent' => $sent,
+    // totp_required (4.27.0): ask for the authenticator code only; no email code is coming.
+    out(['ok' => true, 'step' => 'otp_required', 'totp_available' => (bool)$user['totp_enabled'], 'totp_required' => $totpOnly, 'email_sent' => $sent,
          'code_expires_minutes' => ((int)cfg('otp_expiry_minutes') ?: 10), 'login_challenge' => $loginChallenge]);
 }
 
@@ -349,7 +367,11 @@ if ($action === 'verify') {
     // all see room under the cap and all be tested.
     db()->prepare('INSERT INTO login_attempts (ip, email, success) VALUES (?,?,0)')->execute([$ip, $vkey]);
     $guessRow = (int)db()->lastInsertId();
-    $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE success = 0 AND attempted_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE) AND (email = ? OR (ip = ? AND email NOT LIKE 'reauth:%' AND email NOT LIKE 'vrc-fail-%'))");
+    // Per account, as verify.php (4.27.0): wrong codes for one account from a shared
+    // office address never lock everyone else on it out. Guesses with no sign-in pending
+    // ('verify-anon', below) are still limited per address. The code row's 5 tries cap
+    // each sign-in as well.
+    $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE success = 0 AND attempted_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE) AND (email = ? OR (ip = ? AND email = 'verify-anon'))");
     $rl->execute([$vkey, $ip]);
     if ((int)$rl->fetchColumn() > 8) {   // 8 earlier failures plus this guess
         // Refused untested, so it is not a failure of its own.
@@ -396,8 +418,10 @@ if ($action === 'verify') {
         $take->execute([$otp['id']]);
         if ($take->rowCount() === 1
             && $challenge !== '' && hash_equals(api_login_challenge((int)$otp['id'], (string)$otp['code_hash']), $challenge)) {
-            $codeOk = ($user['totp_enabled'] && $user['totp_secret'] && totp_verify_once($user['totp_secret'], $code, (int)$user['id']))
-                || password_verify($code, $otp['code_hash']);
+            // The emailed code counts only for an account with no authenticator app (4.27.0).
+            $codeOk = ($user['totp_enabled'] && $user['totp_secret'])
+                ? totp_verify_once($user['totp_secret'], $code, (int)$user['id'])
+                : password_verify($code, $otp['code_hash']);
             // The try just taken counts toward the row's attempts, hence $tryTaken.
             $verified = $codeOk && claim_login_otp((int)$otp['id'], true);
         }
@@ -419,14 +443,28 @@ if ($action === 'verify') {
 /* ---------- Authentication for everything else ---------- */
 $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
 if (!preg_match('/Bearer\s+([a-f0-9]{64})/', $auth, $m)) fail('Sign in required.', 401);
-$t = db()->prepare('SELECT t.*, u.name, u.role, u.group_id, u.is_active FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.expires_at > NOW()');
+// A session waiting to wipe is found even after it expired (4.27.0), so a phone reported
+// lost still wipes when it next connects, however long it was switched off.
+$t = db()->prepare('SELECT t.*, u.name, u.role, u.group_id, u.is_active FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?
+    AND (t.expires_at > NOW() OR (t.wipe_requested_at IS NOT NULL AND (t.wiped_at IS NULL OR t.wiped_at > DATE_SUB(NOW(), INTERVAL 30 DAY))))');
 $t->execute([hash('sha256', $m[1])]);
 $tok = $t->fetch();
-// A phone reported lost (3.0.39): its next request tells the app to remove everything it
-// keeps (drafts, the offline queue and cached lists) and sign out. The session then ends.
+// A phone reported lost (3.0.39): its requests tell the app to remove everything it keeps
+// (drafts, the offline queue and cached lists) and sign out. Since 4.27.0 the answer is
+// repeated on every request (for 30 days after it was first sent) until the app confirms
+// with action=wipe_done, so a lost reply or a request the app does not check for the flag
+// cannot leave the phone unwiped.
 if ($tok && !empty($tok['wipe_requested_at'])) {
-    db()->prepare('UPDATE api_tokens SET wiped_at = NOW(), expires_at = NOW() WHERE id = ?')->execute([$tok['id']]);
-    audit((int)$tok['user_id'], 'user.device_wiped', 'user', (int)$tok['user_id'], (string)($tok['device_name'] ?? 'mobile app'));
+    if ($action === 'wipe_done') {
+        $done = db()->prepare('DELETE FROM api_tokens WHERE id = ? AND wipe_requested_at IS NOT NULL');
+        $done->execute([$tok['id']]);
+        if ($done->rowCount() === 1) audit((int)$tok['user_id'], 'user.device_wipe_confirmed', 'user', (int)$tok['user_id'], (string)($tok['device_name'] ?? 'mobile app'));
+        out(['ok' => true, 'wipe' => true]);
+    }
+    if (empty($tok['wiped_at'])) {
+        db()->prepare('UPDATE api_tokens SET wiped_at = NOW(), expires_at = LEAST(expires_at, NOW()) WHERE id = ? AND wiped_at IS NULL')->execute([$tok['id']]);
+        audit((int)$tok['user_id'], 'user.device_wiped', 'user', (int)$tok['user_id'], (string)($tok['device_name'] ?? 'mobile app'));
+    }
     out(['ok' => false, 'wipe' => true, 'error' => 'This phone was reported lost, so everything the app kept on it was removed and it was signed out.'], 401);
 }
 if (!$tok || !$tok['is_active']) fail('Session expired — sign in again.', 401);
@@ -647,6 +685,7 @@ switch ($action) {
         if ($scid === false) fail('That session is no longer scheduled.', 404);
         api_require_client((int)$scid, $userId);
         if ($action !== 'move_session') {
+            if ($action === 'cancel_group' && ($why = session_group_scope_error($sid, $userId)) !== null) fail($why, 403);
             $n = $action === 'cancel_series' ? session_cancel_series($sid, $userId) : session_cancel_group($sid, $userId);
             if (!$n) fail('Nothing was cancelled: those sessions are no longer scheduled.', 409);
             out(['ok' => true, 'cancelled' => $n, 'message' => 'Cancelled ' . $n . ' session' . ($n === 1 ? '' : 's') . '.']);
@@ -674,6 +713,11 @@ switch ($action) {
     case 'logout':
         db()->prepare('DELETE FROM api_tokens WHERE id = ?')->execute([$tok['id']]);
         out(['ok' => true]);
+
+    case 'wipe_done':
+        // Only a session reported lost is removed by wipe_done (above, 4.27.0); a phone
+        // that was not reported lost has nothing to confirm and stays signed in.
+        out(['ok' => true, 'wipe' => false]);
 
     case 'dashboard':
         // Every section respects the caller's permissions and caseload scope.
@@ -1315,7 +1359,11 @@ switch ($action) {
         // track that is not Active is refused until an amendment is recorded (3.0.34;
         // authorization_ack from older app builds no longer overrides it). Checked under
         // the track's lock below, with the insert.
-        $sigPath = save_signature_png(is_string($input['signature_b64'] ?? null) ? $input['signature_b64'] : null);
+        // A drawn signature that cannot be stored refuses the entry (4.27.0), as
+        // complete_session does: the hours are never kept without the signature sent with them.
+        $sigB64 = is_string($input['signature_b64'] ?? null) && trim($input['signature_b64']) !== '' ? $input['signature_b64'] : null;
+        $sigPath = $sigB64 !== null ? save_signature_png($sigB64) : null;
+        if ($sigB64 !== null && $sigPath === null) fail('The signature could not be saved, so the hours were not logged. Ask the client to sign again, or type their name instead.', 422);
         // A typed "name as signed" is an attestation on its own, with or without a drawing.
         $signedName = $signedNameIn !== '' ? $signedNameIn : null;
         // The rates are snapshotted under a row lock (as auto_log_session does), so a
@@ -1571,7 +1619,7 @@ switch ($action) {
                     $movedSessions = $ss->fetchAll();
                     if ($movedSessions) {
                         $movedIds = array_map(fn($r) => (int)$r['id'], $movedSessions);
-                        db()->prepare('UPDATE scheduled_sessions SET user_id = ?, reminder_sent = 0 WHERE id IN (' . implode(',', array_fill(0, count($movedIds), '?')) . ')')
+                        db()->prepare('UPDATE scheduled_sessions SET user_id = ?, reminder_sent = 0, client_reminded_at = NULL, staff_reminded_at = NULL WHERE id IN (' . implode(',', array_fill(0, count($movedIds), '?')) . ')')
                             ->execute(array_merge([$newAssignee], $movedIds));
                         $sessionsMoved = count($movedIds);
                     }
@@ -2188,14 +2236,29 @@ switch ($action) {
             if (calendar_busy_overlaps($staffId, $w ? strtotime('+' . $w . ' week', $startTs) : $startTs, $w ? strtotime('+' . $w . ' week', $endTs) : $endTs)) { $warnings[] = 'The instructor\'s Outlook calendar shows them busy then.'; break; }
         }
         if ($warnings) {
-            if (!in_array($input['authorization_ack']??null,[true,1,'1'],true)) {
+            // The approval covers exactly the warnings shown (4.27.0), as on the website
+            // (schedule.php schedule_auth_hash): the refusal carries a hash of them, and the
+            // booking goes ahead only when the app sends that hash back as
+            // authorization_ack_hash. Older builds send only authorization_ack true; that
+            // counts only when this user was shown these same warnings for this same booking
+            // in the last hour, so a warning that appeared since is shown before it is approved.
+            $authHash = hash('sha256', json_encode(array_values($warnings)));
+            $shownKey = 'authshown:' . substr(hash('sha256', json_encode([$userId, $clientId, $trackId, $staffId, $startTs, $endTs, $repeatWeeks, $authHash])), 0, 48);
+            $ackHash = $input['authorization_ack_hash'] ?? null;
+            $ackTrue = in_array($input['authorization_ack'] ?? null, [true, 1, '1'], true);
+            $approved = is_string($ackHash) && $ackHash !== ''
+                ? hash_equals($authHash, $ackHash) && ($input['authorization_ack'] ?? true) !== false
+                : $ackTrue && api_throttle_count($shownKey, 3600) > 0;
+            if (!$approved) {
+                api_throttle_record($shownKey);
                 // App builds before 3.0.16 never send authorization_ack (newer ones send true
                 // or false) and have no control to approve the warning, so they are told where
                 // it can be done. Either way nothing is booked; the warnings come as a list too.
-                out(['ok'=>false,'error'=>'Authorization review: '.implode(' ',$warnings).(array_key_exists('authorization_ack',$input)
-                        ? ' Review the track and explicitly approve the warning before booking.'
+                $changed = $ackTrue || (is_string($ackHash) && $ackHash !== '');
+                out(['ok'=>false,'error'=>'Authorization review: '.implode(' ',$warnings).(array_key_exists('authorization_ack',$input) || array_key_exists('authorization_ack_hash',$input)
+                        ? ($changed ? ' These warnings are not the ones you approved, so nothing was booked. Review them and approve again to book.' : ' Review the track and explicitly approve the warning before booking.')
                         : ' This booking needs an authorization review that this version of the app cannot record. Book it on the website Schedule page, or update the app.'),
-                    'authorization_warnings'=>$warnings],422);
+                    'authorization_warnings'=>$warnings,'authorization_hash'=>$authHash],422);
             }
         }
         $ins = db()->prepare('INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, notes, is_remote, meeting_url) VALUES (?,?,?,?,?,?,?,?,?)');
@@ -2571,10 +2634,18 @@ switch ($action) {
         $id = (int)($input['id'] ?? 0);
         db()->beginTransaction();
         // Lock the row so two conversions can't both create a client.
-        $s = db()->prepare("SELECT * FROM referrals WHERE id = ? AND status <> 'Converted' FOR UPDATE");
+        // Only an open referral (New or Reviewed) is converted, as on the website (4.27.0).
+        $s = db()->prepare("SELECT * FROM referrals WHERE id = ? AND status IN ('New','Reviewed') FOR UPDATE");
         $s->execute([$id]);
         $ref = $s->fetch();
-        if (!$ref) { db()->rollBack(); fail('Referral not found or already converted.', 404); }
+        if (!$ref) {
+            db()->rollBack();
+            $cur = db()->prepare('SELECT status FROM referrals WHERE id = ?');
+            $cur->execute([$id]);
+            $curStatus = $cur->fetchColumn();
+            if ($curStatus === 'Closed') fail('Nothing was changed: this referral was closed, so it cannot be converted. Reopen it first if the person should become a client.', 409);
+            fail('Referral not found or already converted.', $curStatus === false ? 404 : 409);
+        }
         if (!api_referral_in_scope($ref, $userId)) {
             db()->rollBack();
             fail('That referral is assigned to someone else.', 403);
@@ -3912,7 +3983,21 @@ switch ($action) {
         try {
             $claim = db()->prepare("UPDATE equipment_followups SET status = 'Completed', in_use = ?, satisfaction = ?, barriers = ?, notes = ?, completed_at = NOW(), completed_by = ? WHERE id = ? AND status = 'Pending'");
             $claim->execute([$inUse, $sat, $barriers, $notes, $userId, $id]);
-            if ($claim->rowCount() !== 1) { db()->rollBack(); fail('That follow-up was already recorded.', 409); }
+            if ($claim->rowCount() !== 1) {
+                db()->rollBack();
+                // A replay after a lost reply (4.27.0): the same person already completed it
+                // with the same answers, so it was saved; the app is told so, not refused.
+                $now = db()->prepare('SELECT status, in_use, satisfaction, barriers, notes, completed_by FROM equipment_followups WHERE id = ?');
+                $now->execute([$id]);
+                $was = $now->fetch();
+                if ($was && $was['status'] === 'Completed' && (int)$was['completed_by'] === $userId
+                    && ($was['in_use'] === null ? null : (int)$was['in_use']) === $inUse
+                    && ($was['satisfaction'] === null ? null : (int)$was['satisfaction']) === $sat
+                    && ($was['barriers'] ?? null) === $barriers && ($was['notes'] ?? null) === $notes) {
+                    out(['ok' => true, 'repeat' => true, 'abandoned' => $inUse === 0, 'task_created' => null, 'warning' => null]);
+                }
+                fail('That follow-up was already recorded.', 409);
+            }
             if ($inUse === 0) {
                 db()->prepare("INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?, 'Case Note', ?, ?, ?)")
                     ->execute([(int)$fu['client_id'], mb_substr('Device no longer in use: ' . $fu['equipment_name'], 0, 255),
@@ -4316,6 +4401,7 @@ switch ($action) {
         // The 4.0.0 actions (inc/api_more.php): alerts, client requests, invoices and tasks.
         $more = api_more($action, $input, $userId) ?? api_425($action, $input, $userId);   // and the 4.25.0 ones (inc/api_425.php)
         if ($more === null) fail('Unknown action.', 404);
-        if (empty($more['ok'])) fail((string)$more['error'], (int)($more['status'] ?? 400));
+        // A refusal keeps its other fields (4.27.0: fields, signed), without the status.
+        if (empty($more['ok'])) { $st = (int)($more['status'] ?? 400); unset($more['status']); out(['ok' => false, 'error' => (string)$more['error']] + $more, $st); }
         out($more);
 }

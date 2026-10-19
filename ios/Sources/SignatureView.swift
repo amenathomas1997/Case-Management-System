@@ -70,8 +70,9 @@ struct SignaturePad: View {
 /// The sheet stays open until the completion is saved: if it fails, the signature is still on
 /// the pad for a retry, so the client is never asked to sign again.
 /// The phone is handed to the client here, so however the sheet closes the app locks: the
-/// rest of the app (other clients' records) opens again only for the device owner. The one
-/// exception is a Cancel before the pad was ever drawn on, when the phone was not handed over.
+/// rest of the app (other clients' records) opens again only for the device owner. Cancel
+/// included (4.27.0): once the sheet has been shown, the phone may be in the client's hands
+/// whether or not they drew on the pad (as InPersonSigningView).
 struct SignatureSheet: View {
     let clientName: String
     let onDone: (_ signatureB64: String?, _ signedName: String?) async throws -> Void
@@ -87,10 +88,6 @@ struct SignatureSheet: View {
     @State private var error: String?
     /// A stroke is being drawn: the scroll view holds still so the pen isn't taken for a scroll.
     @State private var drawing = false
-    /// The pad has been drawn on (even if cleared since): the phone has been in the client's
-    /// hands, so the sheet closes behind the lock. A Cancel before any drawing (the sheet opened
-    /// by mistake, the phone never handed over) does not lock the device owner out.
-    @State private var padTouched = false
 
     /// Total drawn distance — an accidental tap or tiny mark isn't a signature.
     private var inkLength: CGFloat {
@@ -115,10 +112,9 @@ struct SignatureSheet: View {
         return typeSize.isAccessibilitySize ? 160 : 220
     }
 
-    /// Closes the sheet behind the app lock (see the type's note), unless nothing was ever
-    /// drawn and the sheet is only being cancelled: then nobody but the owner has held the phone.
-    private func close(lockApp: Bool = true) {
-        if lockApp { lock.lockNow() }
+    /// Closes the sheet behind the app lock, however it closes (see the type's note).
+    private func close() {
+        lock.lockNow()
         dismiss()
     }
 
@@ -153,7 +149,7 @@ struct SignatureSheet: View {
                         .foregroundStyle(Color.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                     SignaturePad(strokes: $strokes, padSize: $padSize, status: padStatus,
-                                 onDrawing: { drawing = $0; if $0 { padTouched = true } })
+                                 onDrawing: { drawing = $0 })
                         .frame(maxWidth: .infinity)
                         .frame(height: padHeight)
                     HStack {
@@ -197,12 +193,11 @@ struct SignatureSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // Backs out: the session stays scheduled and nothing is logged. The app locks
-                // only if the pad was drawn on (the phone may have been handed over).
+                // (4.27.0: always, as the phone may have been handed over before any drawing).
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { close(lockApp: padTouched) }
+                    Button("Cancel") { close() }
                         .disabled(busy)
-                        .accessibilityHint(padTouched ? "Leaves the session scheduled and locks the app."
-                                                      : "Leaves the session scheduled.")
+                        .accessibilityHint("Leaves the session scheduled and locks the app.")
                 }
             }
             // No swipe-down: every way out goes through the lock.

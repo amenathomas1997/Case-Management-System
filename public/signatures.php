@@ -14,8 +14,14 @@ if (!$client) { flash('Client not found.', 'error'); redirect('clients.php'); }
 scope_check_client($client, $user);
 $loans = signature_open_loans($id);
 $here = 'signatures.php?client=' . $id;
+// The device is handed over for signing in person (4.27.0): only the hand-over page, its own Sign or Hand
+// back post and the thank-you page run (kiosk_guard() has already refused anything else). No other form on
+// this page is ever handled, and the staff page is never shown: anything left over ends the session.
+$kiosk = is_array($_SESSION['kiosk_sign'] ?? null) ? $_SESSION['kiosk_sign'] : null;
+$isPost = $_SERVER['REQUEST_METHOD'] === 'POST';
+if ($kiosk && $isPost && (!isset($_POST['sign_now']) || (int)$_POST['sign_now'] !== (int)$kiosk['id'])) kiosk_end();
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['send_signature']) || isset($_POST['sign_here']))) {
+if (!$kiosk && $isPost && (isset($_POST['send_signature']) || isset($_POST['sign_here']))) {
     if (!empty($client['archived_at'])) { flash('This client is archived; nothing can be sent.', 'error'); redirect($here); }
     $inPerson = isset($_POST['sign_here']);
     [$errs, $v] = signature_input($_POST, $loans, $inPerson);
@@ -27,7 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['send_signature']) ||
     flash('Sent to ' . $v['signer_name'] . ' to sign.');
     redirect($here . '#list-h');
 }
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['sign_now'])) {
+if ($isPost && isset($_POST['sign_now'])) {
     $s = client_signature((int)$_POST['sign_now'], $id);
     if (isset($_POST['stop'])) {
         // Stopped without signing: the request is withdrawn; the hand-over ends with the next page.
@@ -40,7 +46,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['sign_now'])) {
     redirect($here . '&signed=1');
 }
 // The device is still in the signer's hands (4.25.0): a page with nothing to follow. Any other page signs out.
-if (isset($_GET['signed']) && isset($_SESSION['kiosk_sign'])) {
+if ($kiosk && !$isPost && isset($_GET['signed'])) {
     $GLOBALS['CMS_KIOSK'] = true;
     $es = ($_SESSION['kiosk_sign']['lang'] ?? '') === 'es';
     page_header($es ? 'Gracias' : 'Thank you');
@@ -50,14 +56,16 @@ if (isset($_GET['signed']) && isset($_SESSION['kiosk_sign'])) {
     page_footer();
     exit;
 }
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['withdraw'])) {
-    $done = signature_withdraw((int)$_POST['withdraw'], $id, (int)$user['id']);
-    flash($done ? 'Withdrawn. Its link no longer signs anything.' : 'That document was already withdrawn.', $done ? 'success' : 'error');
+if ($kiosk && $isPost) kiosk_end(); // its own post has redirected above; no other form runs during a hand-over
+if ($isPost && isset($_POST['withdraw'])) {
+    $res = signature_withdraw_result((int)$_POST['withdraw'], $id, (int)$user['id']);
+    flash($res === 'withdrawn' ? 'Withdrawn. Its link no longer signs anything.'
+        : ($res === 'signed' ? 'Nothing was changed: this document is already signed, so it cannot be withdrawn.' : 'That document was already withdrawn.'), $res === 'withdrawn' ? 'success' : 'error');
     redirect($here . '#list-h');
 }
 
 // The page to hand to the signer (4.25.0): the document and a typed-name signature, nothing else.
-if (isset($_GET['sign']) && ($s = client_signature((int)$_GET['sign'], $id)) && signature_status($s) === 'Waiting to be signed here') {
+if (!$isPost && isset($_GET['sign']) && ($s = client_signature((int)$_GET['sign'], $id)) && signature_status($s) === 'Waiting to be signed here') {
     // From here the device is in the signer's hands: only this page opens until staff sign in again.
     $_SESSION['kiosk_sign'] = ['client' => $id, 'id' => (int)$s['id'], 'lang' => (string)($s['lang'] ?? '')];
     $GLOBALS['CMS_KIOSK'] = true;
@@ -89,6 +97,8 @@ if (isset($_GET['sign']) && ($s = client_signature((int)$_GET['sign'], $id)) && 
     page_footer();
     exit;
 }
+// The staff page is never shown on a handed-over device (Back after signing, a stale address).
+if ($kiosk) kiosk_end();
 $list = client_signatures($id);
 $minor = !empty($client['guardian_name']) && !empty($client['dob']) && $client['dob'] > date('Y-m-d', strtotime('-18 years'));
 $old = fn(string $k, string $d = ''): string => old_in('kind') !== '' ? old_in($k) : $d;

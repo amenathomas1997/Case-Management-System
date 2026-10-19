@@ -35,8 +35,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['restore'])) {
     redirect($back);
 }
 
+/**
+ * The legal hold on the client a trash entry belongs to (4.27.0), or null. Documents
+ * and notes name their client; work logs and expenses are found through their track.
+ */
+function trash_entry_hold(int $trashId): ?array {
+    $q = db()->prepare('SELECT entity, payload FROM trash WHERE id = ?');
+    $q->execute([$trashId]);
+    $tr = $q->fetch();
+    $p = $tr ? json_decode((string)$tr['payload'], true) : null;
+    if (!is_array($p)) return null;
+    // A trashed client record carries its own hold.
+    if ($tr['entity'] === 'clients') return empty($p['hold_at']) ? null : ['hold_at' => $p['hold_at'], 'hold_reason' => (string)($p['hold_reason'] ?? 'no reason given')];
+    $clientId = (int)($p['client_id'] ?? 0);
+    if ($clientId === 0 && !empty($p['track_id'])) {
+        $t = db()->prepare('SELECT client_id FROM training_tracks WHERE id = ?');
+        $t->execute([(int)$p['track_id']]);
+        $clientId = (int)$t->fetchColumn();
+    }
+    return $clientId > 0 ? client_hold($clientId) : null;
+}
+
 /* ---- Purge one entry now ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['purge'])) {
+    // Nothing of a client on hold is deleted for good, by hand or by the nightly job (4.27.0).
+    if ($hold = trash_entry_hold((int)($_POST['trash_id'] ?? 0))) {
+        flash('Not deleted: this item belongs to a client record on hold (' . $hold['hold_reason'] . '). Lift the hold on the client page first if it may be deleted.', 'error');
+        redirect($back);
+    }
     try {
         if ($row = purge_trash((int)($_POST['trash_id'] ?? 0))) {
             audit($user['id'], 'trash.purge', $row['entity'], (int)$row['entity_id'], $row['label']);

@@ -44,9 +44,14 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
     var challenge by rememberSaveable { mutableStateOf("") }
     var awaitingCode by rememberSaveable { mutableStateOf(false) }
     var codeHelp by rememberSaveable { mutableStateOf("") }
+    // 4.27.0: an account with an authenticator app signs in with its code only (no emailed code).
+    var totpOnly by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
+    // 4.27.0: the other server the person agreed to sign in to, after being told what it removes.
+    var agreedServer by rememberSaveable { mutableStateOf("") }
+    var askSwitch by remember { mutableStateOf<Int?>(null) }
     val codeFocus = remember { FocusRequester() }
 
     fun host() = ServerAddress.host(api.base)
@@ -65,21 +70,24 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
                     error = "Enter your organisation's web address, such as cms.example.org. It must be a secure (https) address."
                     return
                 }
-                api.switchServer(server)
+                // Signing in to another server removes what is waiting to send: said first, with how much.
+                val waiting = api.unsentOnPhone
+                if (api.isOtherServer(server) && waiting > 0 && !ServerAddress.same(server, agreedServer, BuildConfig.DEBUG)) {
+                    askSwitch = waiting
+                    return
+                }
+                // Nothing is removed yet: only once signing in to it has worked (4.27.0).
+                api.tryServer(server)
             }
             val step = api.call("login", body = JSONObject().put("email", email.trim()).put("password", password))
             challenge = step.optString("login_challenge")
             val sent = step.optBoolean("email_sent", true)
             val minutes = step.optInt("code_expires_minutes", 10)
-            val totp = step.optBoolean("totp_available")
-            codeHelp = when {
-                !sent -> "The code email could not be sent. Enter the code from your authenticator app."
-                totp -> "Enter the 6-digit code we emailed you (it works for $minutes minutes), or the code from your authenticator app."
-                else -> "Enter the 6-digit code we emailed you. It works for $minutes minutes."
-            }
+            totpOnly = step.optBoolean("totp_required")
+            codeHelp = loginCodeHelp(sent, step.optBoolean("totp_available"), totpOnly, minutes)
             code = ""
             awaitingCode = true
-            notice = if (resend) "A new code was sent. Codes sent earlier no longer work." else "Password accepted. $codeHelp"
+            notice = if (resend && !totpOnly) "A new code was sent. Codes sent earlier no longer work." else "Password accepted. $codeHelp"
         } catch (e: ApiException) {
             error = (if (asksForServer && !resend) "Signing in to ${host()} did not work. Check the address if it is new. " else "") + e.message
         } finally {
@@ -93,7 +101,10 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
             val body = JSONObject().put("email", email.trim()).put("code", code.filter { it.isDigit() })
                 .put("device_name", Api.deviceName)
             if (challenge.isNotEmpty()) body.put("login_challenge", challenge)
+            if (asksForServer) api.tryServer(server)
             val r = api.call("verify", body = body)
+            // Signed in: another server's entries and account go now, not before (4.27.0).
+            if (asksForServer) api.commitServer(server)
             api.finishSignIn(r.optString("token"), r.optInt("user_id"), r.optString("name"), email.trim())
         } catch (e: ApiException) {
             error = e.message
@@ -102,6 +113,8 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
         }
     }
 
+    // A session that ended may since have been reported lost (4.27.0): asked about while this shows.
+    LaunchedEffect(Unit) { while (true) { api.checkRefusedSession(); kotlinx.coroutines.delay(60_000) } }
     LaunchedEffect(awaitingCode) { if (awaitingCode) try { codeFocus.requestFocus() } catch (e: Exception) { } }
 
     Surface(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
@@ -122,6 +135,16 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
                 if (reauth) SecondaryButton("Sign in as someone else instead") {
                     if (api.unsentSignaturesWarning != null && !leaving) leaving = true else api.abandonReauth()
                 }
+                askSwitch?.let { n ->
+                    val items = if (n == 1) "1 item" else "$n items"
+                    val before = ServerAddress.host(ServerAddress.apiUrl(api.storedServer, BuildConfig.DEBUG) ?: api.storedServer)
+                    Confirm("Sign in to a different server?",
+                        "This phone has $items waiting to be sent to $before (offline entries, or signatures taken with no signal). " +
+                            "Signing in to a different server removes ${if (n == 1) "it" else "them"} from this phone, and ${if (n == 1) "it is" else "they are"} lost. " +
+                            "To keep ${if (n == 1) "it" else "them"}, choose Cancel, sign in to $before and let ${if (n == 1) "it" else "them"} send first.",
+                        "Remove ${if (n == 1) "it" else "them"} and continue",
+                        { agreedServer = server; scope.launch { passwordStep(false) } }, { askSwitch = null })
+                }
                 if (leaving) Confirm("Sign in as someone else?", (api.unsentSignaturesWarning ?: "") + " Documents prepared to sign on this phone are removed.", "Sign in as someone else",
                     { api.abandonReauth() }, { leaving = false })
             } else {
@@ -131,9 +154,20 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
                     modifier = Modifier.focusRequester(codeFocus))
                 ErrorText(error)
                 PrimaryButton("Sign in", busy = busy, enabled = code.length >= 6) { scope.launch { verify() } }
-                SecondaryButton("Send a new code") { scope.launch { passwordStep(true) } }
+                if (!totpOnly) SecondaryButton("Send a new code") { scope.launch { passwordStep(true) } }
                 SecondaryButton("Start again") { awaitingCode = false; code = ""; password = ""; error = null; notice = null }
             }
         }
     }
+}
+
+/**
+ * What the code step says (4.27.0): [totpRequired] (an account with an authenticator app) asks for
+ * that app's code only, as the emailed code does not work for it.
+ */
+fun loginCodeHelp(emailSent: Boolean, totpAvailable: Boolean, totpRequired: Boolean, minutes: Int): String = when {
+    totpRequired -> "Enter the 6-digit code from your authenticator app."
+    !emailSent -> "The code email could not be sent. Enter the code from your authenticator app."
+    totpAvailable -> "Enter the 6-digit code we emailed you (it works for $minutes minutes), or the code from your authenticator app."
+    else -> "Enter the 6-digit code we emailed you. It works for $minutes minutes."
 }

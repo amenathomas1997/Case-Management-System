@@ -139,7 +139,7 @@ if (empty($_SESSION[$sessionKey])) {
             redirect('vrc.php?t=' . $token);
         }
         db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")
-            ->execute([$_SERVER['REMOTE_ADDR'] ?? '', $sendKey]);
+            ->execute([client_ip(), $sendKey]);
         $sendRow = (int)db()->lastInsertId();
         $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         $_SESSION[$codeKey] = ['hash' => password_hash($code, PASSWORD_DEFAULT), 'exp' => time() + 600, 'tries' => 0];
@@ -189,7 +189,7 @@ if (empty($_SESSION[$sessionKey])) {
             $liveCode = $c && $c['exp'] > time();
             if ($liveCode) {
                 db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,0)")
-                    ->execute([$_SERVER['REMOTE_ADDR'] ?? '', $failKey]);
+                    ->execute([client_ip(), $failKey]);
                 if ($countSince($failKey, '15 MINUTE') === 10) {
                     audit(null, 'vrcportal.lockout', 'counselor', null, $vrc['counselor_email']);
                     notify_admin_users('Counselor portal paused for 15 minutes after repeated wrong codes: ' . $vrc['counselor_name'], 'counselors.php');
@@ -237,6 +237,11 @@ $clients->execute([strtolower($vrc['counselor_email'])]);
 $clients = $clients->fetchAll();
 
 $myClientIds = array_map(fn($c) => (int)$c['id'], $clients);
+// Times here carry the time zone (4.27.0, e.g. "2:00 PM CDT"): a counselor may be in another one.
+function vrc_when(?string $d): string {
+    $ts = $d ? strtotime($d) : false;
+    return $ts ? date('M j, Y g:i A T', $ts) : fmt_datetime($d);
+}
 
 /* ---- A file shared with the counselor (4.24.0): only their own clients', only what staff shared ---- */
 if (isset($_GET['doc'])) {
@@ -253,8 +258,10 @@ if (isset($_GET['doc'])) {
 
 /* ---- POST: confirm receipt of a report here, without the email link (3.0.41) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_report'])) {
-    $ack = db()->prepare('UPDATE report_acks SET acked_at = NOW(), ack_ip = ? WHERE id = ? AND sent_to = ? AND acked_at IS NULL');
-    $ack->execute([$_SERVER['REMOTE_ADDR'] ?? '', (int)($_POST['ack_id'] ?? 0), strtolower($vrc['counselor_email'])]);
+    // Only reports about clients still linked to this counselor (4.27.0).
+    $ack = db()->prepare('UPDATE report_acks SET acked_at = NOW(), ack_ip = ? WHERE id = ? AND sent_to = ? AND acked_at IS NULL AND client_id IN ('
+        . ($myClientIds ? implode(',', $myClientIds) : '0') . ')');
+    $ack->execute([client_ip(), (int)($_POST['ack_id'] ?? 0), strtolower($vrc['counselor_email'])]);
     if ($ack->rowCount() === 1) {
         audit(null, 'vrcportal.ack', 'counselor', (int)$vrc['id'], 'report receipt #' . (int)$_POST['ack_id']);
         flash('Receipt confirmed. Thank you.');
@@ -343,7 +350,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
         $day->execute(['vrc-msg-cap-' . (int)$vrc['id']]);
         if ((int)$day->fetchColumn() === 0) {
             db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")
-                ->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'vrc-msg-cap-' . (int)$vrc['id']]);
+                ->execute([client_ip(), 'vrc-msg-cap-' . (int)$vrc['id']]);
             notify_admin_users('Counselor portal daily message limit reached for ' . $vrc['counselor_name'] . '. If this was not the counselor, turn off their portal link.', 'counselors.php');
         }
         keep_input();
@@ -359,11 +366,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
         $saved = exchange_save_upload($msgFile, $msgClientId, '', 'counselor');
         if ($saved['error'] !== null) { keep_input(); keep_field_errors(['msg_file' => $saved['error'] . ' Choose the file again.']); redirect('vrc.php?t=' . $token . '#msg-h'); }
         $savedDoc = (int)$saved['id'];
-        db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'vrc-up-' . (int)$vrc['id']]);
+        db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([client_ip(), 'vrc-up-' . (int)$vrc['id']]);
         if ($msg === '') $msg = 'Sent a file.';
     }
     db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")
-        ->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'vrc-msg-' . (int)$vrc['id']]);
+        ->execute([client_ip(), 'vrc-msg-' . (int)$vrc['id']]);
     $clientName = null;
     foreach ($clients as $c) if ((int)$c['id'] === $msgClientId) $clientName = $c['name'];
     // Store in the counselor message thread when it is about a specific client,
@@ -392,8 +399,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_message'])) {
 
 $reports = db()->prepare("SELECT ra.id, ra.client_id, ra.sent_at, ra.acked_at, c.name AS client_name, t.title
     FROM report_acks ra JOIN clients c ON c.id = ra.client_id JOIN training_tracks t ON t.id = ra.track_id
-    WHERE ra.sent_to = ? AND c.archived_at IS NULL ORDER BY ra.sent_at DESC LIMIT 25");
-$reports->execute([strtolower($vrc['counselor_email'])]);
+    WHERE ra.sent_to = ? AND c.archived_at IS NULL AND c.counselor_verified = 1 AND LOWER(c.counselor_email) = ?
+    ORDER BY ra.sent_at DESC LIMIT 25");
+// Only clients still linked to this counselor (4.27.0): a former counselor no longer sees their reports.
+$reports->execute([strtolower($vrc['counselor_email']), strtolower($vrc['counselor_email'])]);
 $reports = $reports->fetchAll();
 
 foreach ($clients as $c) record_client_view(null, (int)$c['id'], 'counselor portal (' . $vrc['counselor_email'] . ')');
@@ -429,7 +438,7 @@ page_header('Your caseload');
     <dt>Authorization</dt><dd><?= h($t['auth_number']) ?> · <?= h($t['service_type'] ?? '') ?> · expires <?= fmt_date($t['expiration_date'], true) ?></dd>
     <dt>Hours</dt><dd><?= fmt_hours($r['hours_worked']) ?> used of <?= fmt_hours($r['authorized_hours']) ?> (<?= fmt_hours($r['hours_remaining']) ?> remaining)</dd>
     <dt>Last session</dt><dd><?= $lastSession ? fmt_date($lastSession) : 'None completed yet' ?></dd>
-    <dt>Next session</dt><dd><?= $nextSession ? fmt_datetime($nextSession) : 'None scheduled' ?></dd>
+    <dt>Next session</dt><dd><?= $nextSession ? h(vrc_when($nextSession)) : 'None scheduled' ?></dd>
     <dt>Goals</dt><dd><?= (int)($goals['achieved'] ?? 0) ?> of <?= (int)($goals['total'] ?? 0) ?> achieved</dd>
   </dl>
   <div class="progress-wrap">
@@ -447,7 +456,7 @@ page_header('Your caseload');
   <?php if (!$att): ?><p class="muted">No past sessions in the last 90 days.</p><?php else: ?>
   <p><?= $count('Completed') ?> attended, <?= $count('No Show') ?> missed, <?= $count('Cancelled') ?> cancelled.</p>
   <details><summary>Each session<span class="visually-hidden"> for <?= h($c['name']) ?></span></summary>
-    <ul><?php foreach ($att as $a): ?><li><?= fmt_datetime($a['start_at']) ?>: <?= h(['Completed' => 'attended', 'No Show' => 'missed', 'Cancelled' => 'cancelled'][$a['status']]) ?></li><?php endforeach; ?></ul>
+    <ul><?php foreach ($att as $a): ?><li><?= h(vrc_when($a['start_at'])) ?>: <?= h(['Completed' => 'attended', 'No Show' => 'missed', 'Cancelled' => 'cancelled'][$a['status']]) ?></li><?php endforeach; ?></ul>
   </details>
   <?php endif; ?>
   <?php // Files shared with the counselor (4.24.0): what staff shared and what the counselor sent.
@@ -469,9 +478,9 @@ page_header('Your caseload');
     <thead><tr><th scope="col">Sent</th><th scope="col">Client / track</th><th scope="col">Receipt</th></tr></thead>
     <tbody>
     <?php foreach ($reports as $rp): ?>
-      <tr><td><?= fmt_datetime($rp['sent_at']) ?></td>
+      <tr><td><?= h(vrc_when($rp['sent_at'])) ?></td>
           <th scope="row"><?= in_array((int)$rp['client_id'], $myClientIds, true) ? '<a href="vrc.php?t=' . h($token) . '&amp;report=' . (int)$rp['id'] . '">' . h($rp['client_name']) . ' — ' . h($rp['title']) . '</a>' : h($rp['client_name']) . ' — ' . h($rp['title']) ?></th>
-          <td><?php if ($rp['acked_at']): ?>Confirmed <?= fmt_datetime($rp['acked_at']) ?>
+          <td><?php if ($rp['acked_at']): ?>Confirmed <?= h(vrc_when($rp['acked_at'])) ?>
             <?php else: ?><form method="post" action="vrc.php?t=<?= h($token) ?>" class="inline-form"><?= csrf_field() ?>
               <input type="hidden" name="ack_id" value="<?= (int)$rp['id'] ?>">
               <button type="submit" name="confirm_report" value="1" class="btn btn-secondary btn-sm">Confirm receipt<span class="visually-hidden">: <?= h($rp['client_name']) ?>, sent <?= fmt_date($rp['sent_at']) ?></span></button></form><?php endif; ?></td></tr>
@@ -512,7 +521,7 @@ if ($convo): ?>
       <li class="msg <?= $m['sender'] === 'counselor' ? 'out' : 'in' ?>">
         <span class="visually-hidden"><?= h($who) ?>:</span>
         <div class="msg-body"><?= nl2br(h($m['body'])) ?><?php if (!empty($m['doc_id'])): ?><br>File: <a href="vrc.php?t=<?= h($token) ?>&amp;doc=<?= (int)$m['doc_id'] ?>"<?= $m['sender'] === 'counselor' ? ' style="color:#fff"' : '' ?>><?= h((string)$m['doc_title']) ?><span class="visually-hidden"> (downloads a file)</span></a><?php endif; ?></div>
-        <div class="msg-meta"><span aria-hidden="true"><?= h($who) ?> · </span><?= h(date('M j, Y, g:i A', strtotime($m['created_at']))) ?></div>
+        <div class="msg-meta"><span aria-hidden="true"><?= h($who) ?> · </span><?= h(date('M j, Y, g:i A T', strtotime($m['created_at']))) ?></div>
       </li>
     <?php endforeach; ?>
   </ol>

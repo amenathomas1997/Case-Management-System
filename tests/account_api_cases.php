@@ -17,7 +17,7 @@ $restoreAppToken = function () use ($db, $appTokenHash): void {
 $otherDevice = function () use ($db): void {
     $db->prepare('INSERT INTO api_tokens (user_id,token_hash,expires_at) VALUES (1,?,DATE_ADD(NOW(), INTERVAL 1 DAY))')->execute([hash('sha256', bin2hex(random_bytes(32)))]);
 };
-$appSessions = fn(): int => (int)$db->query('SELECT COUNT(*) FROM api_tokens WHERE user_id=1')->fetchColumn();
+$appSessions = fn(): int => (int)$db->query('SELECT COUNT(*) FROM api_tokens WHERE user_id=1 AND wipe_requested_at IS NULL')->fetchColumn();
 $reauthFailures = fn(): int => (int)$db->query("SELECT COUNT(*) FROM login_attempts WHERE email='reauth:admin@example.invalid' AND success=0")->fetchColumn();
 $audited = fn(string $action): int => (int)$db->query('SELECT COUNT(*) FROM audit_log WHERE user_id=1 AND action=' . $db->quote($action))->fetchColumn();
 $addPasskey = function (string $name) use ($db): int {

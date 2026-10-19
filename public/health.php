@@ -30,18 +30,21 @@ try {
 }
 $checks[] = ['name' => 'database', 'ok' => $dbOk, 'detail' => $dbOk ? 'The database answered.' : 'The database did not answer.'];
 
-/* Rate limit: 60 requests a minute across all callers is far more than a monitor
-   needs; beyond it the endpoint answers 429 without touching anything else. */
+/* Rate limit (4.27.0: per address, not across all callers, so nobody else can
+   make the monitor see 429s and raise a false alert): 60 requests a minute from
+   one address is far more than a monitor needs; beyond it that address gets 429
+   without touching anything else. */
 if ($dbOk) {
     try {
-        $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = 'health' AND attempted_at > DATE_SUB(NOW(), INTERVAL 1 MINUTE)");
-        $rl->execute();
+        $ip = client_ip();
+        $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = 'health' AND ip = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 1 MINUTE)");
+        $rl->execute([$ip]);
         if ((int)$rl->fetchColumn() >= 60) {
             http_response_code(429);
             echo json_encode(['ok' => false, 'error' => 'Too many requests; poll this address at most a few times a minute.']);
             exit;
         }
-        db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,'health',1)")->execute([(string)($_SERVER['REMOTE_ADDR'] ?? '')]);
+        db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,'health',1)")->execute([$ip]);
     } catch (Throwable $e) { /* the limiter never decides the health answer */ }
 }
 

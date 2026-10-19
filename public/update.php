@@ -42,7 +42,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && updater_enabled() && isset($_POST['
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && updater_enabled() && isset($_POST['install'])) {
-    if (empty($_POST['have_backup'])) { flash('Confirm that there is a backup of the database from today first.', 'error'); redirect('update.php'); }
+    // 4.27.0: the error is tied to the tick box and listed in the error summary.
+    if (empty($_POST['have_backup'])) { keep_field_errors(['have_backup' => 'Confirm that there is a backup of the database from today first.']); redirect('update.php'); }
     try {
         // Checked again here: the file could have changed since it was downloaded.
         if ($pendingZip === '' || !is_file($pendingZip) || !updater_signature_ok($pendingZip, $pendingZip . '.sig')) throw new RuntimeException('The downloaded update is missing or no longer matches its signature. Download it again.');
@@ -102,7 +103,8 @@ page_header('Software update', $user, 'admin', [['admin.php', 'Administration']]
   <?php else: ?>
   <p>The newest database backup on the server was made <?= $newest ? h(date('F j, Y \a\t g:i a', $newest)) : 'never' ?>.<?= !$newest || $newest < time() - 86400 ? ' <strong>Make a fresh copy first (download the database from your hosting control panel).</strong>' : '' ?></p>
   <form method="post" action="update.php" class="stacked"><?= csrf_field() ?>
-    <div class="field"><label><input type="checkbox" name="have_backup" value="1"> There is a backup of the database from today</label></div>
+    <?= form_error_summary(['have_backup' => 'Backup']) ?>
+    <div class="field"><label><input type="checkbox" id="have_backup" name="have_backup" value="1" <?= field_aria('have_backup') ?>> There is a backup of the database from today</label><?= field_error('have_backup') ?></div>
     <?php if ($plan['kept']): ?><p>Kept as your own (you changed them): <?= h(implode(', ', $plan['kept'])) ?>.</p><?php endif; ?>
     <button type="submit" name="install" value="1" class="btn btn-primary">Install version <?= h($plan['version']) ?></button>
   </form>

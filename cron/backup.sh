@@ -39,15 +39,25 @@ umask 077
 DUMP_TMP=$(mktemp "$BACKUP_DIR/.cms_dump.XXXXXX")
 UPLOAD_TMP=""
 trap 'rm -f "$DUMP_TMP"; if [ -n "$UPLOAD_TMP" ]; then rm -f "$UPLOAD_TMP"; fi' EXIT
-# The settings table also holds stored secrets: the AI provider's API key
-# (ai_api_key) and the Microsoft Entra client secret (entra_client_secret). They
-# must not travel in every backup and off-site email, so that table is dumped on
-# its own without them. A restored database therefore needs both entered again,
-# on the AI assistant and Federation pages. If either dump fails, nothing is kept.
+# The settings table also holds stored secrets. They must not travel in every
+# backup and off-site email, so that table is dumped on its own without them
+# (4.27.0: named one by one, as well as anything whose name holds secret, token
+# or api_key; tests/v427_billing_cases.php checks every secret on Settings is left out):
+#   ai_api_key                  the AI provider's key (AI assistant page)
+#   entra_client_secret         Microsoft Entra single sign-on (Federation page)
+#   cfg.graph.client_secret     Microsoft Graph email (Settings, Email)
+#   cfg.sms.auth_token          Twilio text messages (Settings, Text messages)
+#   cfg.meet.zoom_client_secret Zoom meetings (Settings, Online meetings)
+#   cfg.meet.ms_client_secret   Microsoft meetings (Settings, Online meetings)
+#   cfg.qbo.client_secret       QuickBooks Online (Settings, QuickBooks)
+# A restored database therefore needs each one entered again on those pages.
+# If either dump fails, nothing is kept.
+SECRET_SETTINGS="'ai_api_key','entra_client_secret','cfg.graph.client_secret','cfg.sms.auth_token','cfg.meet.zoom_client_secret','cfg.meet.ms_client_secret','cfg.qbo.client_secret'"
+SETTINGS_WHERE="name NOT IN ($SECRET_SETTINGS) AND name NOT LIKE '%secret%' AND name NOT LIKE '%api_key%' AND name NOT LIKE '%token%'"
 { mysqldump --defaults-extra-file="$DB_CNF" \
     --single-transaction --routines --ignore-table="$DB_NAME.settings" "$DB_NAME" \
   && mysqldump --defaults-extra-file="$DB_CNF" \
-    --single-transaction --where="name NOT LIKE '%secret%' AND name NOT LIKE '%api_key%'" \
+    --single-transaction --where="$SETTINGS_WHERE" \
     "$DB_NAME" settings; } | gzip > "$DUMP_TMP"
 mv "$DUMP_TMP" "$BACKUP_DIR/cms_${STAMP}.sql.gz"
 # Weekly (Sunday) copy of uploaded assessment attachments

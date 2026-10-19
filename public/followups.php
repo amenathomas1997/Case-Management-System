@@ -28,7 +28,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($scoped && (int)$row['assigned_to'] !== (int)$user['id']) { flash('That follow-up is not on your caseload.', 'error'); redirect('followups.php'); }
 
     if (isset($_POST['complete'])) {
-        $inUse = ($_POST['in_use'] ?? '') === 'yes' ? 1 : (($_POST['in_use'] ?? '') === 'no' ? 0 : null);
+        // The answer is required (4.27.0): a missing one is refused on its field, never saved as "unknown".
+        if (!in_array($_POST['in_use'] ?? null, ['yes', 'no', 'unknown'], true)) {
+            keep_input(); keep_field_errors(['in_use_' . $id => 'Still in use: choose Yes, No or Unknown.']);
+            redirect('followups.php#fu-' . $id);
+        }
+        $inUse = $_POST['in_use'] === 'yes' ? 1 : ($_POST['in_use'] === 'no' ? 0 : null);
         $sat = (int)($_POST['satisfaction'] ?? 0);
         $sat = ($sat >= 1 && $sat <= 5) ? $sat : null;
         $barriers = mb_substr(trim((string)($_POST['barriers'] ?? '')), 0, 255) ?: null;
@@ -61,9 +66,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         audit($user['id'], 'followup.complete', 'client', (int)$row['client_id'], $useLabel . ' — ' . $row['equipment_name']);
         if ($inUse === 0) {
             // The task is created after the commit; say so plainly if it could not be.
+            // Never to a deactivated account, where nobody would see it (4.27.0): the person recording it instead.
+            $owner = (int)$row['assigned_to'];
+            if ($owner) { $act = db()->prepare('SELECT is_active FROM users WHERE id = ?'); $act->execute([$owner]); if ((int)$act->fetchColumn() !== 1) $owner = 0; }
             $taskMade = add_task('Follow up on abandoned device: ' . $row['equipment_name'] . ' (' . $row['client_name'] . ')',
                 'A device follow-up found this item is no longer in use. Re-assess fit, training, or reassignment.',
-                (int)$row['client_id'], null, date('Y-m-d', strtotime('+3 days')), (int)$row['assigned_to'] ?: (int)$user['id'], (int)$user['id'], 'abandon-' . $id);
+                (int)$row['client_id'], null, date('Y-m-d', strtotime('+3 days')), $owner ?: (int)$user['id'], (int)$user['id'], 'abandon-' . $id);
             if ($taskMade) flash('Recorded. Because the device is no longer in use, a case note and a follow-up task were created.');
             else flash('Recorded, and a case note was added because the device is no longer in use, but the follow-up task could not be created. Add a task for this client from the Tasks page.', 'error');
         } else {
@@ -151,9 +159,11 @@ function fu_when(array $r): string {
   <?php foreach ($due as $r):
     // Every item repeats the same controls, so each one carries the client and
     // device it acts on (and the item is a heading, for heading navigation).
-    $fuName = $r['client_name'] . ', ' . $r['equipment_name']; ?>
+    $fuName = $r['client_name'] . ', ' . $r['equipment_name'];
+    $fid = (int)$r['id']; $useKey = 'in_use_' . $fid; $fuOld = fn(string $k): string => old_in('id') === (string)$fid ? old_in($k) : ''; ?>
     <form method="post" class="fu-item">
       <?= csrf_field() ?><input type="hidden" name="id" value="<?= (int)$r['id'] ?>">
+      <?= form_error_summary([$useKey => ''], [$useKey => 'fu-' . $fid]) ?>
       <h3 class="fu-head">
         <a href="client.php?id=<?= (int)$r['cid'] ?>"><?= h($r['client_name']) ?></a> —
         <?= h($r['equipment_name']) ?><?= $r['asset_tag'] ? ' <span class="muted">(' . h($r['asset_tag']) . ')</span>' : '' ?>
@@ -162,18 +172,19 @@ function fu_when(array $r): string {
       <fieldset class="fu-fields">
         <legend class="visually-hidden">Record the <?= (int)$r['interval_days'] ?>-day follow-up for <?= h($fuName) ?></legend>
         <fieldset class="fu-use"><legend>Still in use? <span class="visually-hidden">(required)</span></legend>
-          <label><input type="radio" name="in_use" value="yes" required> Yes</label>
-          <label><input type="radio" name="in_use" value="no"> No</label>
-          <label><input type="radio" name="in_use" value="unknown"> Unknown</label>
+          <label><input type="radio" id="fu-<?= $fid ?>" name="in_use" value="yes" required <?= field_aria($useKey) ?>> Yes</label>
+          <label><input type="radio" name="in_use" value="no" <?= field_aria($useKey) ?>> No</label>
+          <label><input type="radio" name="in_use" value="unknown" <?= field_aria($useKey) ?>> Unknown</label>
+          <?= field_error($useKey) ?>
         </fieldset>
         <label class="fu-sat">Satisfaction
           <select name="satisfaction">
             <option value="">—</option>
-            <?php for ($n = 5; $n >= 1; $n--): ?><option value="<?= $n ?>"><?= $n ?> / 5</option><?php endfor; ?>
+            <?php for ($n = 5; $n >= 1; $n--): ?><option value="<?= $n ?>"<?= $fuOld('satisfaction') === (string)$n ? ' selected' : '' ?>><?= $n ?> / 5</option><?php endfor; ?>
           </select>
         </label>
-        <label class="fu-bar">Barriers <input type="text" name="barriers" maxlength="255" placeholder="e.g. needs more training, discomfort, broke"></label>
-        <label class="fu-notes">Notes <input type="text" name="notes" maxlength="4000" placeholder="Anything to record"></label>
+        <label class="fu-bar">Barriers <input type="text" name="barriers" maxlength="255" value="<?= h($fuOld('barriers')) ?>" placeholder="e.g. needs more training, discomfort, broke"></label>
+        <label class="fu-notes">Notes <input type="text" name="notes" maxlength="4000" value="<?= h($fuOld('notes')) ?>" placeholder="Anything to record"></label>
       </fieldset>
       <div class="fu-actions">
         <?php // A recorded follow-up cannot be changed, and "No" also adds a case note and a

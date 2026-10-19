@@ -79,7 +79,7 @@ function reauth_password(int $userId, string $password): string {
     if ($password === '') return 'wrong';   // nothing typed is not a guess, so it is not counted
     if (password_verify($password, (string)$row['password_hash'])) return 'ok';
     db()->prepare('INSERT INTO login_attempts (ip, email, success) VALUES (?,?,0)')
-        ->execute([(string)($_SERVER['REMOTE_ADDR'] ?? ''), $key]);
+        ->execute([client_ip(), $key]);
     return $failures + 1 >= 5 ? 'lockout' : 'wrong';
 }
 
@@ -89,13 +89,60 @@ function sso_link_authorized(int $intentId, ?array $actor, int $targetId): bool 
 }
 
 /** Whether a first Microsoft sign-in may be matched to an existing account by its
-    email (owner decision, 2026-10-15). Only for a member of the configured tenant,
-    whose email and user name that organisation's administrators control: a guest
-    (B2B) account carries an idp claim naming its home organisation, and its email
-    is not vouched for by this tenant, so it still has to link from My Account. */
+    email (owner decision, 2026-10-15; tightened in 4.27.0). Only for a member of the
+    configured tenant, whose email and user name that organisation's administrators
+    control. The ID token must carry the optional `acct` claim with the value 0
+    (member; 1 is a guest) and a `tid` naming this tenant (taken from the issuer
+    https://login.microsoftonline.com/<tenant>/v2.0). Without the claim nothing
+    proves membership, so the email is not matched: the person signs in with their
+    password once and connects Microsoft from My Account. A guest (B2B) account's idp
+    claim naming another organisation is refused as before. */
 function sso_email_match_allowed(array $claims, string $issuer): bool {
+    if (!preg_match('~^https://login\.microsoftonline\.com/([^/]+)/v2\.0$~i', $issuer, $m)) return false;
+    $tenant = strtolower($m[1]);
+    if (strtolower((string)($claims['tid'] ?? '')) !== $tenant) return false;
+    // Present and exactly 0: Microsoft sends it as a number; "0" as text is accepted too.
+    if (!array_key_exists('acct', $claims) || !in_array($claims['acct'], [0, '0'], true)) return false;
     $idp = strtolower(trim((string)($claims['idp'] ?? '')));
     return $idp === '' || $idp === strtolower($issuer);
+}
+
+/** The message for a first Microsoft sign-in that cannot be matched by email (4.27.0). */
+const SSO_EMAIL_MATCH_REFUSED_MSG = 'Sign in with your password once, then connect Microsoft from My Account.';
+
+/**
+ * The address a request came from, for per-address limits (4.27.0). The
+ * X-Forwarded-For header is used only when config 'trust_proxy' is on AND the
+ * request really arrived from a trusted proxy: REMOTE_ADDR is listed in config
+ * 'trusted_proxies' (an array of addresses), or, when that list is not set, is a
+ * private or loopback address. The header is then read from the right, skipping
+ * hops listed in 'trusted_proxies' (with no list, the right-most entry is taken),
+ * and the first other hop is the client, even a private
+ * address (an office computer behind the proxy). Entries further left are
+ * written by the client and never trusted. Otherwise REMOTE_ADDR.
+ */
+function client_ip(): string {
+    $remote = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    if (!cfg('trust_proxy')) return $remote;
+    $list = cfg('trusted_proxies');
+    $list = is_array($list) && $list ? array_map('strval', $list) : null;
+    $isTrusted = static function (string $ip) use ($list): bool {
+        if (filter_var($ip, FILTER_VALIDATE_IP) === false) return false;
+        if ($list !== null) return in_array($ip, $list, true);
+        // No list: the proxy is on this machine or the private network.
+        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
+    };
+    if (!$isTrusted($remote)) return $remote;
+    $xff = (string)($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '');
+    if ($xff === '') return $remote;
+    $last = $remote;
+    foreach (array_reverse(array_map('trim', explode(',', $xff))) as $hop) {
+        if (filter_var($hop, FILTER_VALIDATE_IP) === false) return $last; // malformed: stop at the last good hop
+        // Without a list only REMOTE_ADDR is known to be ours: its right-most entry is the client.
+        if ($list === null || !in_array($hop, $list, true)) return $hop;
+        $last = $hop;
+    }
+    return $last; // every hop is a proxy of ours: the left-most one
 }
 
 /** Escape text cells that spreadsheets could interpret as formulas. */

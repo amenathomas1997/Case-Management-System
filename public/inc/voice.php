@@ -955,7 +955,7 @@ function voice_interpret(array $in, array $user): array {
             return ['ok' => true, 'action' => 'answer', 'speak' => 'You have given 40 voice requests in the last 10 minutes, which is the limit. Voice requests will work again in about '
                 . $wait . ' minute' . ($wait === 1 ? '' : 's') . '. You can keep working on screen in the meantime.'];
         }
-        db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'voice-' . $uid]);
+        db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([client_ip(), 'voice-' . $uid]);
 
         [$prompt, $pseudonyms] = voice_pseudonymize($prompt, $uid);
         $res = ai_run('voice', $sys, $prompt, 700, null, $uid);

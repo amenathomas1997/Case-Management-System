@@ -59,9 +59,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['start_track']) || is
     $counselorKept = !empty($_POST['set_counselor']) && trim((string)$client['counselor_email']) !== '' && strcasecmp(trim((string)$client['counselor_email']), (string)$a['counselor_email']) !== 0;
     if ($counselorKept) flash($client['name'] . ' already has a different VR counselor (' . $client['counselor_email'] . '), so it was not changed. Change it on the client\'s edit page if the counselor has changed.', 'info');
     if (!empty($_POST['set_counselor']) && $a['counselor_email'] && !$counselorKept) {
-        db()->prepare('UPDATE clients SET counselor_name = ?, counselor_email = ?, counselor_verified = 1 WHERE id = ?')
-            ->execute([$a['counselor_name'] ?: $client['counselor_name'], $a['counselor_email'], $cid]);
-        audit($user['id'], 'client.counselor', 'client', $cid, 'from authorization ' . $a['auth_number'] . ': ' . ($client['counselor_email'] ?: 'none') . ' -> ' . $a['counselor_email']);
+        // 4.27.0: confirmed only when the counselor sent it to the mailbox themselves; an address read
+        // from the email's text is recorded unconfirmed (an already-confirmed same address stays confirmed).
+        $confirmed = authorization_counselor_confirmed($a) ? 1 : 0;
+        db()->prepare('UPDATE clients SET counselor_verified = IF(LOWER(COALESCE(counselor_email, \'\')) = LOWER(?), GREATEST(counselor_verified, ?), ?), counselor_name = ?, counselor_email = ? WHERE id = ?')
+            ->execute([$a['counselor_email'], $confirmed, $confirmed, $a['counselor_name'] ?: $client['counselor_name'], $a['counselor_email'], $cid]);
+        audit($user['id'], 'client.counselor', 'client', $cid, 'from authorization ' . $a['auth_number'] . ': ' . ($client['counselor_email'] ?: 'none') . ' -> ' . $a['counselor_email'] . ($confirmed ? '' : ' (unconfirmed)'));
+        if (!$confirmed && strcasecmp(trim((string)$client['counselor_email']), (string)$a['counselor_email']) !== 0) {
+            flash($a['counselor_email'] . ' is recorded as ' . $client['name'] . '\'s VR counselor, unconfirmed: no report goes to it until it is confirmed on the client\'s edit page.', 'info');
+        }
     }
     $_SESSION['auth_prefill'] = [$cid => authorization_track_prefill($a, $cid)];
     redirect('track_edit.php?client_id=' . $cid . '&from_auth=' . (int)$a['id']);
@@ -116,7 +122,8 @@ $yn = fn($v) => $v === null || $v === '' ? 'not given' : $v;
       <select id="other_client" name="other_client"><option value="">None</option><?php foreach ($oq->fetchAll() as $o): ?><option value="<?= (int)$o['id'] ?>"><?= h($o['name']) ?></option><?php endforeach; ?></select>
     </fieldset>
     <?php if ($review['counselor_email']): ?>
-    <label><input type="checkbox" name="set_counselor" value="1"<?= $preset && ($pm = array_values(array_filter($matches, fn($m) => (int)$m['id'] === $preset))) && trim((string)$pm[0]['counselor_email']) === '' ? ' checked' : '' ?>> Record <?= h(trim(($review['counselor_name'] ?: '') . ' ' . $review['counselor_email'])) ?> as the client's VR counselor</label>
+    <?php $confirmedCounselor = authorization_counselor_confirmed($review); /* 4.27.0: pre-ticked only when the counselor sent it themselves */ ?>
+    <label><input type="checkbox" name="set_counselor" value="1"<?= $confirmedCounselor && $preset && ($pm = array_values(array_filter($matches, fn($m) => (int)$m['id'] === $preset))) && trim((string)$pm[0]['counselor_email']) === '' ? ' checked' : '' ?>> Record <?= h(trim(($review['counselor_name'] ?: '') . ' ' . $review['counselor_email'])) ?> as the client's VR counselor<?= $confirmedCounselor ? '' : ' (unconfirmed until checked on the client\'s edit page)' ?></label>
     <?php endif; ?>
     <p><button type="submit" name="start_track" value="1" class="btn btn-primary">Start the track from this authorization</button>
       <button type="submit" name="dismiss" value="1" class="btn btn-secondary" onclick="return confirm('Dismiss authorization <?= h(addslashes((string)$review['auth_number'])) ?> without starting a track?');">Dismiss</button></p>

@@ -126,3 +126,17 @@ fun serverTimeMillis(s: String?, zoneId: String): Long? {
 
 /** When a document was started for signing: the server's sent_at, else [fallback] (an older server sends none). */
 fun signingStart(sentAt: String?, zoneId: String, fallback: Long): Long = serverTimeMillis(sentAt, zoneId) ?: fallback
+
+/**
+ * A retry key for a request that must not be sent twice (4.27.0), kept as "<key>|<fingerprint>":
+ * the same key while the request is unchanged (a retry after a lost reply), a new one as soon as
+ * anything in it changes. [saved] is "" before the first send and after the server answered.
+ */
+fun retryKey(saved: String, request: String, newKey: () -> String = { java.util.UUID.randomUUID().toString() }): String {
+    val print = Integer.toHexString(request.hashCode()) + "-" + request.length
+    val key = saved.substringBefore('|')
+    return if (key.isNotEmpty() && saved.substringAfter('|', "") == print) saved else newKey() + "|" + print
+}
+
+/** The key itself, to send as idem_key. */
+fun retryKeyId(saved: String): String = saved.substringBefore('|')

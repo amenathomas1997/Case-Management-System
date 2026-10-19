@@ -115,6 +115,7 @@ suspend fun copyPicked(context: android.content.Context, uri: Uri, tmp: java.io.
     if (size > limit) return -1L
     return withContext(Dispatchers.IO) {
         try {
+            tmp.parentFile?.mkdirs()
             context.contentResolver.openInputStream(uri)?.use { input ->
                 tmp.outputStream().use { out ->
                     val buf = ByteArray(64 * 1024); var total = 0L
@@ -154,10 +155,10 @@ fun UploadDocumentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCa
         val ext = name.substringAfterLast('.', "").lowercase()
         if (ext !in UPLOAD_TYPES) { error = "That file type is not allowed. Choose a PDF, Word, Excel, PowerPoint, text, CSV or picture file."; return@FormDialog }
         scope.launchSave({ busy = it }, { error = it }) {
-            val tmp = java.io.File(context.cacheDir, "upload.tmp")
-            val copied = copyPicked(context, uri, tmp)
+            // In the documents folder, emptied at sign-out, another account and a wipe (4.27.0); made inside the try, so it always goes.
+            val tmp = java.io.File(api.docsFolder, "upload.tmp")
             try {
-                checkCopied(copied)
+                checkCopied(copyPicked(context, uri, tmp))
                 val short = shortName(name)
                 try {
                     api.uploadDocument(clientId, category, title.trim(), short, tmp)

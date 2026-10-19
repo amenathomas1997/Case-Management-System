@@ -97,6 +97,18 @@ foreach ($tracks as $t) {
         }
         continue;
     }
+    // The manual send warns when no current release of information covers the counselor; an
+    // automatic send has nobody to read that warning, so the track is skipped and listed for
+    // the administrators, once per report period (4.27.0).
+    if (function_exists('release_covering') && release_covering((int)$t['cid'], 'VR counselor and agency', $to) === null) {
+        $key = 'rr' . date('Ymd', strtotime($since)) . '-' . intdiv($age, $gap);
+        $noticed->execute([(int)$t['id'], $key]);
+        if (!$noticed->fetchColumn()) {
+            $skipped[] = "{$t['client_name']} — {$t['title']}: no current release of information covers the counselor (record or request one on the client page, then send the report from the track)";
+            $skipMarks[] = [(int)$t['id'], $key];
+        }
+        continue;
+    }
     // One track that cannot be prepared or recorded (a lock wait, a lost
     // connection) never stops the others: it is listed for the administrators.
     // Only the class and code are logged, never client data.

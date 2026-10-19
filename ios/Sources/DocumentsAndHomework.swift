@@ -86,7 +86,7 @@ final class DocumentDownloader: ObservableObject {
         API.identifyApp(&request)
         request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
         running.task = Task { [weak self] in
-            let reply = try? await URLSession.shared.data(for: request)
+            let reply = try? await API.session.data(for: request)
             // The client screen closed meanwhile: the document is not written anywhere.
             guard let self, !Task.isCancelled else { return }
             self.finish(document, reply: reply, api: api, sessionToken: sessionToken)
@@ -95,6 +95,11 @@ final class DocumentDownloader: ObservableObject {
 
     private func finish(_ document: ClientDocument, reply: (Data, URLResponse)?, api: API, sessionToken: String) {
         defer { downloading = false }
+        // A phone reported lost (4.27.0): wiped and signed out, as for every other request.
+        if let (data, response) = reply, let refusal = api.wipeIfReportedLost(response, data: data, sessionToken: sessionToken) {
+            showFormError(refusal, in: &error)
+            return
+        }
         // Signed out (or another account) meanwhile: nothing is written.
         guard api.token == sessionToken else { return }
         guard let reply else {
@@ -106,6 +111,10 @@ final class DocumentDownloader: ObservableObject {
             // The sign-in opens over the app; the download is not retried, so say so.
             showFormError("Your session ended. Sign in again, then open \(document.title) again.", in: &error)
             api.expireSession()
+            return
+        }
+        if API.isRedirect(response) {
+            showFormError("Could not download \(document.title). " + API.redirectRefused, in: &error)
             return
         }
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {

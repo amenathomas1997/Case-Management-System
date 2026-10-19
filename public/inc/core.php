@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.26.0';
+const APP_VERSION = '4.27.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -639,6 +639,23 @@ function purge_trash(int $id, bool $expiredOnly=false): ?array {
         $q = $pdo->prepare('SELECT * FROM trash WHERE id=?'.($expiredOnly?' AND deleted_at < DATE_SUB(NOW(), INTERVAL 30 DAY)':'').' FOR UPDATE');
         $q->execute([$id]); $row = $q->fetch();
         if (!$row) { $pdo->rollBack(); return null; }
+        // 4.27.0: nothing of a client on hold is deleted for good (by hand or by the nightly job).
+        // The client row is locked so a hold placed meanwhile is seen; a held entry stays in the trash.
+        $hp = json_decode((string)$row['payload'], true);
+        $hp = is_array($hp) ? $hp : [];
+        if ($row['entity'] === 'clients' && !empty($hp['hold_at'])) { $pdo->rollBack(); return null; }
+        $holdClient = (int)($hp['client_id'] ?? 0);
+        if ($holdClient === 0 && !empty($hp['track_id'])) {
+            $t = $pdo->prepare('SELECT client_id FROM training_tracks WHERE id = ?');
+            $t->execute([(int)$hp['track_id']]);
+            $holdClient = (int)$t->fetchColumn();
+        }
+        if ($holdClient > 0) {
+            $h = $pdo->prepare('SELECT hold_at FROM clients WHERE id = ? FOR UPDATE');
+            $h->execute([$holdClient]);
+            $held = $h->fetchColumn();
+            if ($held !== false && $held !== null && $held !== '') { $pdo->rollBack(); return null; }
+        }
         if ($row['entity']==='client_documents') {
             $payload = json_decode($row['payload'],true,512,JSON_THROW_ON_ERROR);
             $candidate = basename((string)($payload['path']??''));
@@ -733,10 +750,41 @@ function mail_outcome_note(bool $sent): void {
 
 function send_app_mail(string $to, string $subject, string $body): bool {
     $GLOBALS['mail_last_via'] = 'graph';
+    $GLOBALS['mail_last_outcome'] = 'refused';
     $sent = send_app_mail_now($to, $subject, $body);
     mail_outcome_note($sent);
     if (function_exists('mail_log_record')) mail_log_record($to, (string)$GLOBALS['mail_last_via'], $sent);
     return $sent;
+}
+
+/**
+ * send_app_mail() with what is known of the outcome (4.27.0): 'sent'; 'refused' (it cannot
+ * have gone: no valid address, Graph refused it and mail() did not take it); or 'unknown'
+ * (Graph timed out or answered 5xx after the request went out: it may still arrive, so a
+ * caller keeps whatever the email's link opens, and does not offer to send it again at once).
+ */
+function send_app_mail_outcome(string $to, string $subject, string $body): string {
+    $sent = send_app_mail($to, $subject, $body);
+    $o = (string)($GLOBALS['mail_last_outcome'] ?? '');
+    return $sent ? 'sent' : ($o === 'unknown' ? 'unknown' : 'refused');
+}
+
+/** A staging copy (dist/make_staging.sh sets $CONFIG['mail_disabled']): nothing leaves the
+ *  server. The message is kept as a file in $CONFIG['mail_sink'] (a private directory) so a
+ *  tester can read it there; attachments are listed by name only. True when mail is disabled. */
+function mail_disabled_keep(string $to, string $subject, string $body, array $attachments = []): bool {
+    global $CONFIG;
+    if (empty($CONFIG['mail_disabled'])) return false;
+    $sink = (string)($CONFIG['mail_sink'] ?? '');
+    if ($sink !== '' && is_dir($sink) && is_writable($sink)) {
+        $names = array_map(fn($a) => (string)($a['name'] ?? 'attachment'), $attachments);
+        @file_put_contents($sink . '/' . date('Ymd-His') . '-' . bin2hex(random_bytes(4)) . '.txt',
+            "To: {$to}\nSubject: {$subject}\nDate: " . date('c') . "\n" . ($names ? 'Attachments: ' . implode(', ', $names) . "\n" : '') . "\n{$body}\n");
+    } else {
+        error_log('send_app_mail: mail is disabled on this copy (mail_disabled); message to a recipient not sent.');
+    }
+    $GLOBALS['mail_last_via'] = 'sink';
+    return true;
 }
 
 /** send_app_mail() without the outcome note. */
@@ -749,33 +797,24 @@ function send_app_mail_now(string $to, string $subject, string $body): bool {
     // several recipients through mail(). No address in the log (retention).
     if (!filter_var($to, FILTER_VALIDATE_EMAIL)) {
         error_log('send_app_mail refused a recipient that is not one valid email address.');
+        $GLOBALS['mail_last_outcome'] = 'refused';
         return false;
     }
     // A staging copy (dist/make_staging.sh) sets $CONFIG['mail_disabled']: nothing
     // leaves the server. Each message is kept as a file in $CONFIG['mail_sink'] (a
     // private directory) so a tester can read a sign-in code there, and the caller is
     // told it was sent so the page behaves as in production.
-    global $CONFIG;
-    if (!empty($CONFIG['mail_disabled'])) {
-        $sink = (string)($CONFIG['mail_sink'] ?? '');
-        if ($sink !== '' && is_dir($sink) && is_writable($sink)) {
-            @file_put_contents($sink . '/' . date('Ymd-His') . '-' . bin2hex(random_bytes(4)) . '.txt',
-                "To: {$to}\nSubject: {$subject}\nDate: " . date('c') . "\n\n{$body}\n");
-        } else {
-            error_log('send_app_mail: mail is disabled on this copy (mail_disabled); message to a recipient not sent.');
-        }
-        $GLOBALS['mail_last_via'] = 'sink';
-        return true;
-    }
+    if (mail_disabled_keep($to, $subject, $body)) { $GLOBALS['mail_last_outcome'] = 'sent'; return true; }
     // Preferred path: Microsoft Graph (cmswebnotifications mailbox)
     if (graph_cfg() !== null) {
         $outcome = graph_send_text($to, $subject, $body);
-        if ($outcome === 'sent') return true;
+        if ($outcome === 'sent') { $GLOBALS['mail_last_outcome'] = 'sent'; return true; }
         // No recipient address: the server log is outside the app's retention controls.
         // A timeout or 5xx after the request went out may still be delivered by Graph,
         // so it is not sent a second time through mail(); the caller reports it unsent.
         if ($outcome === 'unknown') {
             error_log('Graph send outcome unknown (timeout or server error); not resent through PHP mail().');
+            $GLOBALS['mail_last_outcome'] = 'unknown';
             return false;
         }
         error_log('Graph send failed; falling back to PHP mail().');
@@ -796,7 +835,9 @@ function send_app_mail_now(string $to, string $subject, string $body): bool {
              . "MIME-Version: 1.0\r\n"
              . "Content-Type: text/plain; charset=UTF-8\r\n"
              . "Content-Transfer-Encoding: 8bit\r\n";
-    return mail($to, $subject, $body, $headers, '-f' . $from);
+    $ok = mail($to, $subject, $body, $headers, '-f' . $from);
+    $GLOBALS['mail_last_outcome'] = $ok ? 'sent' : 'refused';
+    return $ok;
 }
 
 /** Email every active user (team notifications). */
@@ -1188,6 +1229,8 @@ function record_status_change(int $clientId, ?string $old, string $new, ?int $us
 
 /** Email with attachments — Graph only (no fallback). */
 function send_app_mail_attach(string $to, string $subject, string $body, array $attachments): bool {
+    // 4.27.0: a staging copy's "mail off" holds for invitations and attachments too.
+    if (mail_disabled_keep(trim(preg_replace('/[\r\n]+/', '', $to)), preg_replace('/[\r\n]+/', ' ', $subject), $body, $attachments)) return true;
     $sent = graph_cfg() !== null && graph_send_mail($to, $subject, $body, false, null, $attachments);
     mail_outcome_note($sent);
     if (function_exists('mail_log_record')) mail_log_record($to, 'graph', $sent, true);
@@ -1310,7 +1353,8 @@ function session_remote_input(array $post): array {
  * referral form) is skipped like a missing one, so nothing goes to a stranger.
  * When the email does not go out the survey row is removed again, so it is not
  * counted as sent and the 30-day resend guard does not block a retry; callers
- * tell the user on false. */
+ * tell the user on false. When the outcome is unknown (4.27.0: $GLOBALS['mail_last_outcome']
+ * is 'unknown') the row stays, since the email may still arrive. */
 function send_outcome_survey(int $clientId): bool {
     $c = db()->prepare('SELECT name, email, email_verified, a11y_contact FROM clients WHERE id = ?');
     $c->execute([$clientId]);
@@ -1324,8 +1368,10 @@ function send_outcome_survey(int $clientId): bool {
     // In the client's language; the survey page itself opens in it too (lang=).
     $lang = client_lang($clientId);
     [$subj, $body] = email_template_for_client('survey_invite', $clientId, ['name' => $client['name'], 'link' => cfg('base_url') . '/survey.php?t=' . $token . ($lang === 'es' ? '&lang=es' : '')]);
-    if (send_app_mail($client['email'], $subj, $body)) return true;
-    db()->prepare('DELETE FROM surveys WHERE id = ? AND completed_at IS NULL')->execute([$surveyId]);
+    $outcome = send_app_mail_outcome($client['email'], $subj, $body);
+    if ($outcome === 'sent') return true;
+    // 4.27.0: an email that may still arrive keeps its survey, so its link works when it does.
+    if ($outcome === 'refused') db()->prepare('DELETE FROM surveys WHERE id = ? AND completed_at IS NULL')->execute([$surveyId]);
     return false;
 }
 

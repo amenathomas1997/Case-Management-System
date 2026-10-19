@@ -138,6 +138,18 @@ function invoice_apply(int $id, string $kind, float $amount, string $on, ?string
     return null;
 }
 
+/**
+ * Whether the QuickBooks sync checks this invoice's payments (4.27.0): QuickBooks is connected, the
+ * invoice is there, it is Submitted or Paid, and it is not settled or deleted there. With $orSettled,
+ * a settled ('paid') invoice counts too, since refusing a removal puts it back in the check.
+ */
+function invoice_qbo_checked(array $inv, bool $orSettled = false): bool {
+    if (empty($inv['qbo_id']) || !in_array($inv['status'] ?? '', ['Submitted', 'Paid'], true)) return false;
+    $st = $inv['qbo_status'] ?? null;
+    if (!($st === null || ($orSettled && $st === 'paid'))) return false;
+    return function_exists('qbo_app') && qbo_app() !== null && qbo_connection() !== null;
+}
+
 /** Remove one payment or write-off recorded by mistake (with the reason audited). */
 function invoice_payment_remove(int $paymentId, string $reason, int $userId): ?string {
     if (trim($reason) === '') return 'Say why the entry is being removed.';
@@ -148,7 +160,18 @@ function invoice_payment_remove(int $paymentId, string $reason, int $userId): ?s
         $q->execute([$paymentId]);
         $p = $q->fetch();
         if (!$p) { $pdo->rollBack(); return 'That payment entry no longer exists.'; }
-        $pdo->prepare('SELECT id FROM invoices WHERE id = ? FOR UPDATE')->execute([(int)$p['invoice_id']]);
+        $lk = $pdo->prepare('SELECT * FROM invoices WHERE id = ? FOR UPDATE');
+        $lk->execute([(int)$p['invoice_id']]);
+        $inv = $lk->fetch() ?: [];
+        // 4.27.0: a payment that is in QuickBooks, on an invoice the sync still checks, is voided there;
+        // the next sync removes it here. A settled ('paid') invoice is put back in the check first.
+        // When nothing would ever remove it (not connected, the invoice not there or deleted there),
+        // it is removed here as before.
+        if (($p['qbo_id'] ?? null) !== null && (string)$p['qbo_id'] !== '' && $inv && invoice_qbo_checked($inv, true)) {
+            if (($inv['qbo_status'] ?? null) === 'paid') $pdo->prepare('UPDATE invoices SET qbo_status = NULL WHERE id = ?')->execute([(int)$inv['id']]);
+            $pdo->commit();
+            return 'This payment is in QuickBooks: void it there; it is then removed here at the next sync.';
+        }
         $pdo->prepare('DELETE FROM invoice_payments WHERE id = ?')->execute([$paymentId]);
         invoice_retotal((int)$p['invoice_id']);
         $pdo->commit();

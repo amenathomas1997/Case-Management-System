@@ -252,7 +252,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         if ((int)$q->fetchColumn() < $max) return false;
         $q->execute(['portal-cap-' . $key]);
         if ((int)$q->fetchColumn() === 0) {
-            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-cap-' . $key]);
+            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([client_ip(), 'portal-cap-' . $key]);
             notify_admin_users('Portal daily limit reached (' . $what . ') for ' . $client['name'] . '. If this was not the client, revoke the portal link.',
                 'client.php?id=' . (int)$client['id']);
         }
@@ -263,7 +263,15 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['device_checkin'])) {
         $use = $_POST['in_use'] ?? '';
         $satIn = (int)($_POST['satisfaction'] ?? 0);
-        $done = portal_device_checkin_save((int)($_POST['followup_id'] ?? 0), $client,
+        $chkId = (int)($_POST['followup_id'] ?? 0);
+        // No answer to "Are you still using it?" is refused on that question (4.27.0): an empty
+        // check-in would close the follow-up with nothing learned.
+        if ($use !== 'yes' && $use !== 'no') {
+            keep_input();
+            keep_field_errors(['in_use-' . $chkId => 'Choose Yes or No.']);
+            redirect('portal.php?t=' . $token . '&lang=' . page_lang() . '#chk-' . $chkId);
+        }
+        $done = portal_device_checkin_save($chkId, $client,
             $use === 'yes' ? 1 : ($use === 'no' ? 0 : null), $satIn >= 1 && $satIn <= 5 ? $satIn : null,
             is_string($_POST['barriers'] ?? null) ? $_POST['barriers'] : '');
         if ($done) {
@@ -281,7 +289,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         if ((int)$rl->fetchColumn() >= 5) {
             flash_ui('Please wait a moment, then press the button again.', 'error');
         } else {
-            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-learn-' . (int)$client['id']]);
+            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([client_ip(), 'portal-learn-' . (int)$client['id']]);
             // Only the first transition changes a row; notify the instructor then (parity with hw_done).
             if (at_portal_report((int)($_POST['at_learning_id'] ?? 0), (int)$client['id']) > 0) {
                 $fn = explode(' ', $client['name'])[0];
@@ -329,11 +337,17 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $msgFile = is_array($_FILES['msg_file'] ?? null) && (int)($_FILES['msg_file']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE ? $_FILES['msg_file'] : null;
         $upRl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 60 MINUTE)");
         $upRl->execute(['portal-up-' . (int)$client['id']]);
+        // Files with messages count against the same 30-a-day cap as shared documents (4.27.0).
+        $upDay = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE email = ? AND attempted_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)");
+        $upDay->execute(['portal-up-' . (int)$client['id']]);
         if ($msg === '' && $msgFile === null) {
             keep_field_errors(['message' => 'Type a message or attach a file.']);
         } elseif ($msgFile !== null && (int)$upRl->fetchColumn() >= 10) {
             keep_input();
             flash_ui('Please wait a moment before uploading more.', 'error');
+        } elseif ($msgFile !== null && (int)$upDay->fetchColumn() >= 30) {
+            keep_input();
+            flash_ui('You have shared a lot of documents today. Please try again tomorrow, or contact your instructor.', 'error');
         } elseif (mb_strlen($msg) > 5000) {
             // Refused, never cut: the whole message comes back to shorten or split.
             keep_input();
@@ -352,8 +366,8 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 keep_input(); // the message is refilled; a file always has to be chosen again
                 keep_field_errors(['msg_file' => $saved['error']]);
             } else {
-                db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-msg-' . (int)$client['id']]);
-                if ($saved['id']) db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-up-' . (int)$client['id']]);
+                db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([client_ip(), 'portal-msg-' . (int)$client['id']]);
+                if ($saved['id']) db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([client_ip(), 'portal-up-' . (int)$client['id']]);
                 $mid = post_message((int)$client['id'], 'client', 'client', null, $msg !== '' ? $msg : 'Sent a file.');
                 if ($saved['id']) message_attach($mid, (int)$saved['id']);
                 portal_notify_owner($client, 'Message from ' . $client['name'] . ' (portal)' . ($saved['id'] ? ', with a file' : ''), 'messages.php?client=' . (int)$client['id'] . '&channel=client', null, true);
@@ -419,7 +433,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             keep_input();
             flash_ui($capMsg, 'error');
         } else {
-            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-req-' . (int)$client['id']]);
+            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([client_ip(), 'portal-req-' . (int)$client['id']]);
             // A request for a copy of the record or a correction is due in 30 days (3.0.38).
             $dueOn = isset(RECORDS_REQUEST_TYPES[$type]) ? date('Y-m-d', strtotime('+' . RECORDS_REQUEST_DAYS . ' days')) : null;
             db()->prepare('INSERT INTO portal_requests (client_id, type, session_id, details, due_on) VALUES (?,?,?,?,?)')
@@ -514,7 +528,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 $dir = cfg('upload_dir'); if (!is_dir($dir)) mkdir($dir, 0750, true);
                 $stored = bin2hex(random_bytes(16)) . '.' . $ext;
                 if (move_uploaded_file($_FILES['document']['tmp_name'], $dir . '/' . $stored)) {
-                    db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-up-' . (int)$client['id']]);
+                    db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([client_ip(), 'portal-up-' . (int)$client['id']]);
                     try {
                         db()->prepare('INSERT INTO client_documents (client_id, category, title, orig_name, path, uploaded_by) VALUES (?,?,?,?,?,NULL)')
                             ->execute([(int)$client['id'], 'Client Upload', $docTitle !== '' ? $docTitle : mb_substr(mb_scrub($orig, 'UTF-8'), 0, 190),
@@ -642,15 +656,22 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             db()->beginTransaction();
             try {
                 db()->prepare('UPDATE clients SET ' . implode(', ', $sets) . ' WHERE id = ?')->execute($vals);
+                // A new phone number clears the agreement to texts, as staff and app edits do (4.27.0):
+                // it was given for the old number. Never records a new agreement from the portal.
+                $smsCleared = false;
+                if (in_array('phone', $changed, true) && !empty($client['sms_consent_at']) && function_exists('sms_consent_save')) {
+                    $smsCleared = sms_consent_save((int)$client['id'], true, (string)($client['sms_consent_source'] ?? ''), $old['phone'], null) !== null;
+                }
                 db()->prepare("INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)")
                     ->execute([(int)$client['id'], 'Case Note', 'Contact details / access needs changed by client (portal)',
-                        "The client changed these details on their portal (previous → new):\n\n" . implode("\n", $lines)]);
+                        "The client changed these details on their portal (previous → new):\n\n" . implode("\n", $lines)
+                        . ($smsCleared ? "\n\nTexts are off: the phone number changed, so the client's agreement to texts was cleared. Record it again on the client's edit page once they agree for the new number." : '')]);
                 db()->commit();
             } catch (Throwable $e) {
                 if (db()->inTransaction()) db()->rollBack();
                 throw $e;
             }
-            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-prof-' . (int)$client['id']]);
+            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([client_ip(), 'portal-prof-' . (int)$client['id']]);
             audit(null, 'portal.profile_update', 'client', (int)$client['id'], 'changed: ' . implode(', ', $changed));
             $what = $client['name'] . ' changed their ' . strtolower(implode(', ', array_map(fn($k) => $labels[$k], $changed))) . ' (portal)';
             portal_notify_owner($client, $what, 'client.php?id=' . (int)$client['id'] . '&tab=notes');
@@ -690,7 +711,7 @@ if ($client && $_SERVER['REQUEST_METHOD'] === 'POST') {
             keep_input();
             flash_ui($capMsg, 'error');
         } else {
-            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([$_SERVER['REMOTE_ADDR'] ?? '', 'portal-prac-' . (int)$client['id']]);
+            db()->prepare("INSERT INTO login_attempts (ip, email, success) VALUES (?,?,1)")->execute([client_ip(), 'portal-prac-' . (int)$client['id']]);
             db()->prepare("INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)")
                 ->execute([(int)$client['id'], 'Case Note', 'Practice logged by client (portal)', $body]);
             flash_ui('Thanks — your practice was logged.');
@@ -750,9 +771,16 @@ unset($_SESSION['hw_explanation']);
 // on file, and the answer is the same whether or not the address is known.
 if (!$client && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['new_link'])) {
     csrf_check();
-    portal_link_self_service(is_string($_POST['new_link_email'] ?? null) ? $_POST['new_link_email'] : '');
+    $newLinkEmail = is_string($_POST['new_link_email'] ?? null) ? $_POST['new_link_email'] : '';
     flash_ui('If that address belongs to a client with a portal, a new link is on its way. Check your email in a few minutes.', 'info');
-    redirect('portal.php?lang=' . page_lang());
+    // The answer goes first and the email after it (4.27.0), so how long the page takes
+    // never shows whether the address is known.
+    header('Location: portal.php?lang=' . page_lang());
+    session_write_close();
+    ignore_user_abort(true);
+    if (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
+    portal_link_self_service($newLinkEmail);
+    exit;
 }
 if ($client) record_client_view(null, (int)$client['id'], 'client portal');
 page_header($client ? 'My training' : 'Portal');
@@ -1090,20 +1118,24 @@ if ($devLoans || $devRepairs || $devChecks): ?>
   <h3><?= t('Repairs') ?></h3>
   <ul><?php foreach ($devRepairs as $rp): ?><li><?= en((string)$rp['title']) ?>: <?= en((string)$rp['status']) ?></li><?php endforeach; ?></ul>
   <?php endif; ?>
-  <?php foreach ($devChecks as $fc): $fid = (int)$fc['id']; ?>
+  <?php foreach ($devChecks as $fc): $fid = (int)$fc['id'];
+    // A check-in sent back without its answer (4.27.0) is refilled, and the question says why.
+    $chkOld = old_in('device_checkin') !== '' && (int)old_in('followup_id') === $fid; ?>
   <h3 id="chk-<?= $fid ?>"><?= t('How is it going?') ?> <?= en((string)$fc['name']) ?></h3>
   <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked"><?= csrf_field() ?>
+    <?= form_error_summary(['in_use-' . $fid => 'Are you still using it?'], ['in_use-' . $fid => 'use-yes-' . $fid]) ?>
     <input type="hidden" name="followup_id" value="<?= $fid ?>">
-    <fieldset><legend><?= t('Are you still using it?') ?></legend>
-      <label><input type="radio" name="in_use" value="yes"> <?= t('Yes') ?></label>
+    <fieldset role="radiogroup" aria-required="true" <?= field_aria('in_use-' . $fid) ?>><legend><?= t('Are you still using it?') ?> <span class="visually-hidden">(<?= t('required') ?>)</span></legend>
+      <?= field_error('in_use-' . $fid) ?>
+      <label><input type="radio" id="use-yes-<?= $fid ?>" name="in_use" value="yes"> <?= t('Yes') ?></label>
       <label><input type="radio" name="in_use" value="no"> <?= t('No') ?></label>
     </fieldset>
     <div class="field"><label for="sat-<?= $fid ?>"><?= t('How happy are you with it?') ?></label>
       <select id="sat-<?= $fid ?>" name="satisfaction"><option value=""><?= t('Choose') ?></option>
-        <?php foreach ([5 => 'Very happy', 4 => 'Happy', 3 => 'Okay', 2 => 'Unhappy', 1 => 'Very unhappy'] as $sv => $sl): ?><option value="<?= $sv ?>"><?= t($sl) ?></option><?php endforeach; ?>
+        <?php foreach ([5 => 'Very happy', 4 => 'Happy', 3 => 'Okay', 2 => 'Unhappy', 1 => 'Very unhappy'] as $sv => $sl): ?><option value="<?= $sv ?>"<?= $chkOld && old_in('satisfaction') === (string)$sv ? ' selected' : '' ?>><?= t($sl) ?></option><?php endforeach; ?>
       </select></div>
     <div class="field"><label for="bar-<?= $fid ?>"><?= t('Is anything getting in the way?') ?></label>
-      <input type="text" id="bar-<?= $fid ?>" name="barriers" maxlength="255"></div>
+      <input type="text" id="bar-<?= $fid ?>" name="barriers" maxlength="255" value="<?= $chkOld ? h(old_in('barriers')) : '' ?>"></div>
     <button type="submit" name="device_checkin" value="1" class="btn btn-primary"><?= t('Send my answers') ?><span class="visually-hidden"> — <?= en((string)$fc['name']) ?></span></button>
   </form>
   <?php endforeach; ?>

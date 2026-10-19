@@ -111,7 +111,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_assess_tpl'])) {
 // Each library is its own view (?lib=), so a screen reader user lands on one
 // table and one add form rather than all four. A bare templates.php is the goal library.
 $libs = ['goals' => 'SMART goal templates', 'assessments' => 'Assessment templates', 'bundles' => 'Service bundles', 'instruments' => 'Scored assessment instruments'];
-$lib = (string)($_GET['lib'] ?? 'goals');
+$lib = is_string($_GET['lib'] ?? null) ? $_GET['lib'] : 'goals';   // an array is ignored (4.27.0)
 if (!isset($libs[$lib])) $lib = 'goals';
 /** True when the refused add form names one of these fields, so its <details> opens. */
 $tplFormFailed = fn(array $fields): bool => array_intersect_key(form_errors(), array_flip($fields)) !== [];
@@ -120,7 +120,7 @@ $tplFormFailed = fn(array $fields): bool => array_intersect_key(form_errors(), a
 // rendered in full: no rows until a search or an area is chosen. gt_q / gt_cat
 // drive a server-side filter; results are capped.
 $gtQ = trim(is_string($_GET['gt_q'] ?? null) ? $_GET['gt_q'] : '');
-$gtCat = trim((string)($_GET['gt_cat'] ?? ''));
+$gtCat = trim(is_string($_GET['gt_cat'] ?? null) ? $_GET['gt_cat'] : '');
 $gtFiltered = $gtQ !== '' || $gtCat !== '';
 $goalTpls = []; $gtTruncated = false; $goalTplTotal = 0; $goalCats = [];
 if ($lib === 'goals') {
@@ -538,11 +538,11 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
     <div class="field"><label for="instrument_desc">Description</label>
       <input type="text" id="instrument_desc" name="instrument_desc" maxlength="500" value="<?= h(old_in('instrument_desc')) ?>" <?= field_aria('instrument_desc') ?>><?= field_error('instrument_desc') ?></div>
     <div class="grid-2">
-      <div class="field"><label for="scale_min">Lowest rating</label>
+      <div class="field"><label for="scale_min">Lowest rating <?= required_mark() ?></label>
         <span class="hint" id="scale-hint">whole numbers from -10 to 10; the highest must be greater than the lowest</span>
-        <input type="number" id="scale_min" name="scale_min" value="<?= h(old_in('scale_min', '0')) ?>" min="-10" max="10" step="1" <?= field_aria('scale_min', 'scale-hint') ?>><?= field_error('scale_min') ?></div>
-      <div class="field"><label for="scale_max">Highest rating</label>
-        <input type="number" id="scale_max" name="scale_max" value="<?= h(old_in('scale_max', '4')) ?>" min="-10" max="10" step="1" <?= field_aria('scale_max', 'scale-hint') ?>><?= field_error('scale_max') ?></div>
+        <input type="number" id="scale_min" name="scale_min" value="<?= h(old_in('scale_min', '0')) ?>" min="-10" max="10" step="1" required <?= field_aria('scale_min', 'scale-hint') ?>><?= field_error('scale_min') ?></div>
+      <div class="field"><label for="scale_max">Highest rating <?= required_mark() ?></label>
+        <input type="number" id="scale_max" name="scale_max" value="<?= h(old_in('scale_max', '4')) ?>" min="-10" max="10" step="1" required <?= field_aria('scale_max', 'scale-hint') ?>><?= field_error('scale_max') ?></div>
     </div>
     <div class="field"><label for="scale_labels">Rating labels</label>
       <span class="hint" id="scale_labels-hint">optional; one per level as <code>value=label</code> separated by semicolons, e.g. <code>0=0 Not at all;4=4 Fully</code>. Levels without a label show the number.</span>
@@ -555,7 +555,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
       <div class="field"><label><input type="radio" id="hib-<?= $hv ?>" name="higher_is_better" value="<?= $hv ?>"<?= old_in('higher_is_better') === (string)$hv ? ' checked' : '' ?><?= has_field_error('higher_is_better') ? ' aria-invalid="true"' : '' ?>> <?= h($hl) ?></label></div>
       <?php endforeach; ?>
     </fieldset>
-    <div class="field"><label for="instrument_items">Items</label>
+    <div class="field"><label for="instrument_items">Items <?= required_mark() ?></label>
       <span class="hint" id="instrument_items-hint">one item per line, up to 255 characters each; each is rated on the scale above when administered</span>
       <textarea id="instrument_items" name="instrument_items" rows="6" required <?= field_aria('instrument_items', 'instrument_items-hint') ?>><?= h(old_in('instrument_items')) ?></textarea><?= field_error('instrument_items') ?></div>
     <button type="submit" name="add_instrument" value="1" class="btn btn-primary">Add instrument</button>

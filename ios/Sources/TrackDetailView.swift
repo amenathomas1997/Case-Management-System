@@ -809,7 +809,7 @@ struct AmendmentView: View {
                                 .font(.callout)
                         } else if let email = d.counselorEmail, !email.isEmpty {
                             let subject = "Authorization amendment request — \(d.client)"
-                            if let url = mailto(email, subject: subject, body: letter) {
+                            if let url = mailtoURL(email, subject: subject, body: letter) {
                                 Link(destination: url) { Label("Email counselor", systemImage: "paperplane") }
                             }
                         }
@@ -845,19 +845,6 @@ struct AmendmentView: View {
             Button("Keep my letter", role: .cancel) {}
         }
         .task { await load() }
-    }
-
-    /// Everything but ASCII letters, digits and -._~ is percent-encoded (the address keeps its
-    /// @): URLComponents.path left "&" and "," in an address as they were, so a stored address
-    /// holding them could add recipients or headers to the email.
-    private func mailto(_ to: String, subject: String, body: String) -> URL? {
-        let plain = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-        guard let address = to.trimmingCharacters(in: .whitespacesAndNewlines)
-                .addingPercentEncoding(withAllowedCharacters: plain.union(CharacterSet(charactersIn: "@"))),
-              !address.isEmpty,
-              let subjectText = subject.addingPercentEncoding(withAllowedCharacters: plain),
-              let bodyText = body.addingPercentEncoding(withAllowedCharacters: plain) else { return nil }
-        return URL(string: "mailto:\(address)?subject=\(subjectText)&body=\(bodyText)")
     }
 
     private func show(_ reply: AmendmentReply) {
@@ -1827,4 +1814,27 @@ struct CorrectLogSheet: View {
             dismiss()
         } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
+}
+
+/// A mailto: link for an address the app shows (4.27.0: the one way every Mail link is built).
+/// Everything but ASCII letters, digits and -._~ is percent-encoded (the address keeps its
+/// single @): an address taken as it is (from the public referral form, such as
+/// "evil%40evil.com?@example.org") could otherwise send the email somewhere else or add
+/// recipients or headers. Nil for an address with no single @, which is then shown as text.
+func mailtoURL(_ to: String, subject: String? = nil, body: String? = nil) -> URL? {
+    let plain = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+    let trimmed = to.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.filter({ $0 == "@" }).count == 1,
+          let address = trimmed.addingPercentEncoding(withAllowedCharacters: plain.union(CharacterSet(charactersIn: "@"))),
+          !address.hasPrefix("@"), !address.hasSuffix("@") else { return nil }
+    var fields: [String] = []
+    if let subject {
+        guard let text = subject.addingPercentEncoding(withAllowedCharacters: plain) else { return nil }
+        fields.append("subject=\(text)")
+    }
+    if let body {
+        guard let text = body.addingPercentEncoding(withAllowedCharacters: plain) else { return nil }
+        fields.append("body=\(text)")
+    }
+    return URL(string: "mailto:\(address)" + (fields.isEmpty ? "" : "?" + fields.joined(separator: "&")))
 }

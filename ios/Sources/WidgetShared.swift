@@ -67,8 +67,10 @@ struct TodaySnapshot: Codable {
         return try? decoder.decode(TodaySnapshot.self, from: data)
     }
 
-    /// Saved with complete file protection (readable only while the phone is unlocked, which
-    /// is when the home screen is seen); best effort when the container is not available.
+    /// Saved with protection until first unlock, not complete protection: WidgetKit builds the
+    /// widget's timeline in the background, also while the phone is locked, and the widget
+    /// would otherwise show nothing until the app is next opened. It holds times and check-in
+    /// marks only, never a name. Best effort when the container is not available.
     func save() {
         guard let url = Self.fileURL, let data = try? Self.encoder.encode(self) else { return }
         try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])

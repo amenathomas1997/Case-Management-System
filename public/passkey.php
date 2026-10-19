@@ -32,6 +32,8 @@ if (!is_array($input)) $input = [];
  * redirect: idle timeout enforced, live user row re-checked, activity touched.
  */
 function passkey_session_user(): array {
+    // A device handed over for signing in person opens nothing else (4.27.0).
+    kiosk_guard();
     $u = current_user();
     $timeout = ((int)cfg('session_timeout_minutes')) * 60;
     if (!$u || (isset($_SESSION['last_activity']) && (time() - (int)$_SESSION['last_activity']) > $timeout)) {
@@ -216,8 +218,13 @@ if ($action === 'login_finish') {
         db()->prepare('UPDATE passkeys SET sign_count = GREATEST(sign_count, ?), last_used_at = NOW() WHERE id = ?')
             ->execute([(int)$ad['signCount'], (int)$pk['id']]);
 
-        establish_user_session(['id' => $pk['user_id'], 'name' => $pk['user_name'],
-            'email' => $pk['user_email'], 'role' => $pk['user_role'], 'password_hash' => $pk['password_hash']]);
+        // The whole account row, so the session is bound to everything
+        // credential_version() reads (4.27.0: the session epoch as well).
+        $ur = db()->prepare('SELECT * FROM users WHERE id = ? AND is_active = 1');
+        $ur->execute([(int)$pk['user_id']]);
+        $acct = $ur->fetch();
+        if (!$acct) throw new PasskeyRefusal('This passkey is no longer linked to an account here. Sign in with your email and password.');
+        establish_user_session($acct);
         audit((int)$pk['user_id'], 'login', 'user', (int)$pk['user_id'], 'passkey (' . $pk['name'] . ')');
         flash('Welcome back, ' . $pk['user_name'] . '.');
         jout(['ok' => true, 'redirect' => resume_url_after_sign_in()]);

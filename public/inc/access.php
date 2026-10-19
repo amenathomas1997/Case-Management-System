@@ -7,9 +7,47 @@ const DEVICE_FOLLOWUP_DAYS = [30, 60, 90];
  *  add_device_request (api.php) both accept, so they cannot drift apart. */
 const DR_CATEGORIES = ['Braille Display', 'Screen Reader', 'Magnifier / CCTV', 'AAC Device', 'Tablet / Phone', 'Computer', 'Hearing / Amplification', 'Switch / Access', 'Software License', 'Other'];
 
-/** Password hashes are already durable credential versions; no schema upgrade is needed. */
+/**
+ * What a browser session is bound to: the password hash and, from 4.27.0, the
+ * account's session epoch (users.session_epoch), which removing a passkey, an
+ * administrator's two-step reset and an administrator's change of email bump to
+ * end every other session. An epoch of 0 (or a database not yet migrated, where
+ * the column is missing) gives exactly the value earlier releases did, so
+ * sessions open during the upgrade carry on.
+ */
 function credential_version(array $row): string {
-    return hash('sha256', (string)$row['password_hash']);
+    $epoch = (int)($row['session_epoch'] ?? 0);
+    return $epoch > 0
+        ? hash('sha256', (string)$row['password_hash'] . "\0epoch:" . $epoch)
+        : hash('sha256', (string)$row['password_hash']);
+}
+
+/**
+ * End every browser session of $userId (4.27.0) by bumping its session epoch.
+ * When the request's own session is that account's and was valid, it is kept:
+ * the person who made the change stays signed in here. Returns false when the
+ * column is not there yet (before the 4.27.0 migration): nothing is ended then.
+ */
+function user_session_epoch_bump(int $userId): bool {
+    try {
+        db()->prepare('UPDATE users SET session_epoch = session_epoch + 1 WHERE id = ?')->execute([$userId]);
+    } catch (PDOException $e) {
+        error_log('user_session_epoch_bump: session_epoch not available (' . $e->getCode() . ')');
+        return false;
+    }
+    if (isset($_SESSION) && (int)($_SESSION['user_id'] ?? 0) === $userId && ($_SESSION['otp_verified'] ?? false) === true && isset($_SESSION['credential_version'])) {
+        $s = db()->prepare('SELECT * FROM users WHERE id = ?');
+        $s->execute([$userId]);
+        $row = $s->fetch();
+        if ($row) {
+            // Kept only when it matched the account just before the bump.
+            $before = array_replace($row, ['session_epoch' => max(0, (int)($row['session_epoch'] ?? 0) - 1)]);
+            if (hash_equals(credential_version($before), (string)$_SESSION['credential_version'])) {
+                $_SESSION['credential_version'] = credential_version($row);
+            }
+        }
+    }
+    return true;
 }
 
 function session_matches_user(array $session, array $row): bool {

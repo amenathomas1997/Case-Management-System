@@ -41,6 +41,33 @@ function custom_values_for(?int $clientId, ?int $referralId = null): array {
     }
 }
 
+/** Whether a stored answer $v is valid for field $f's type (4.27.0: checked before a type change). */
+function custom_value_fits(array $f, string $v): bool {
+    if ($v === '') return true;
+    return match ((string)$f['type']) {
+        'text' => mb_strlen($v) <= 255,
+        'textarea' => mb_strlen($v) <= 4000,
+        'number' => is_numeric($v) && abs((float)$v) <= 1e12,
+        'date' => valid_date($v, 1900, (int)date('Y') + 10) === $v,
+        'choice' => in_array($v, custom_field_options($f), true),
+        'yesno' => in_array($v, ['Yes', 'No'], true),
+        default => true,
+    };
+}
+
+/** How many answers already given to field $fieldId (clients and referrals) would not fit $f's type and choices. */
+function custom_field_misfits(array $f, int $fieldId): int {
+    try {
+        $q = db()->prepare('SELECT value FROM custom_values WHERE field_id = ?');
+        $q->execute([$fieldId]);
+    } catch (PDOException $e) {
+        return 0;
+    }
+    $n = 0;
+    foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $v) if (!custom_value_fits($f, (string)$v)) $n++;
+    return $n;
+}
+
 /**
  * Check posted values (cf_<id>) for $fields. Only fields that were sent are read, so a form or app that
  * does not show them changes nothing. A choice already stored stays valid after its option is renamed or removed
@@ -48,25 +75,36 @@ function custom_values_for(?int $clientId, ?int $referralId = null): array {
  */
 function custom_input(array $post, array $fields, bool $public = false, array $stored = []): array {
     $vals = []; $errs = [];
-    // On the public form, the messages follow the page's language.
-    $m = fn(string $en, string $es): string => $public && function_exists('page_lang') && page_lang() === 'es' ? $es : $en;
+    // Messages are English source copy, as every other message (4.27.0). On a Spanish public page the Spanish
+    // wording is registered as its translation, so t() in field_error() and the summary shows it marked
+    // lang="es" rather than wrapping ready-made Spanish as English.
+    $es = $public && function_exists('page_lang') && function_exists('register_translations') && page_lang() === 'es';
+    $label = ''; $labelEs = '';
+    $m = function (string $en, string $esText) use ($es, &$label, &$labelEs): string {
+        if ($es) register_translations([$label . $en => $labelEs . $esText]);
+        return $label . $en;
+    };
     foreach ($fields as $f) {
         $k = 'cf_' . (int)$f['id'];
         if (!array_key_exists($k, $post) || !is_string($post[$k])) continue; // not on this form (or not a single value): left as it is
         $v = trim(str_replace("\r", '', $post[$k]));
-        $label = custom_field_label($f, $public);
+        $label = (string)$f['label'];
+        $labelEs = custom_field_label($f, $public);
+        // An answer sent back unchanged is kept as it is (4.27.0), even when it no longer fits the field's
+        // type or list (a type changed before this release): staff are not blocked from saving the record.
+        if ($v !== '' && array_key_exists((int)$f['id'], $stored) && $v === (string)$stored[(int)$f['id']]) { $vals[(int)$f['id']] = $v; continue; }
         if ($v === '') {
-            if ((int)$f['required'] === 1) $errs[$k] = $label . $m(': this is required.', ': esta respuesta es obligatoria.');
+            if ((int)$f['required'] === 1) $errs[$k] = $m(': this is required.', ': esta respuesta es obligatoria.');
             $vals[(int)$f['id']] = '';
             continue;
         }
         switch ($f['type']) {
-            case 'text': if (mb_strlen($v) > 255) $errs[$k] = $label . $m(': keep it to 255 characters.', ': use 255 caracteres como máximo.'); break;
-            case 'textarea': if (mb_strlen($v) > 4000) $errs[$k] = $label . $m(': keep it to 4,000 characters.', ': use 4,000 caracteres como máximo.'); break;
-            case 'number': $n = str_replace(',', '', $v); if (!is_numeric($n) || abs((float)$n) > 1e12) $errs[$k] = $label . $m(': enter a number.', ': escriba un número.'); else $v = $n; break;
-            case 'date': $d = valid_date($v, 1900, (int)date('Y') + 10); if ($d === null) $errs[$k] = $label . $m(': enter a full date.', ': escriba una fecha completa.'); else $v = $d; break;
-            case 'choice': if (!in_array($v, custom_field_options($f), true) && $v !== ($stored[(int)$f['id']] ?? null)) $errs[$k] = $label . $m(': choose one from the list.', ': elija una opción de la lista.'); break;
-            case 'yesno': if (!in_array($v, ['Yes', 'No'], true)) $errs[$k] = $label . $m(': choose Yes or No.', ': elija Sí o No.'); break;
+            case 'text': if (mb_strlen($v) > 255) $errs[$k] = $m(': keep it to 255 characters.', ': use 255 caracteres como máximo.'); break;
+            case 'textarea': if (mb_strlen($v) > 4000) $errs[$k] = $m(': keep it to 4,000 characters.', ': use 4,000 caracteres como máximo.'); break;
+            case 'number': $n = str_replace(',', '', $v); if (!is_numeric($n) || abs((float)$n) > 1e12) $errs[$k] = $m(': enter a number.', ': escriba un número.'); else $v = $n; break;
+            case 'date': $d = valid_date($v, 1900, (int)date('Y') + 10); if ($d === null) $errs[$k] = $m(': enter a full date.', ': escriba una fecha completa.'); else $v = $d; break;
+            case 'choice': if (!in_array($v, custom_field_options($f), true) && $v !== ($stored[(int)$f['id']] ?? null)) $errs[$k] = $m(': choose one from the list.', ': elija una opción de la lista.'); break;
+            case 'yesno': if (!in_array($v, ['Yes', 'No'], true)) $errs[$k] = $m(': choose Yes or No.', ': elija Sí o No.'); break;
         }
         $vals[(int)$f['id']] = $v;
     }
@@ -104,7 +142,14 @@ function custom_fields_html(array $fields, array $values, bool $public = false):
         switch ($f['type']) {
             case 'textarea': $out .= '<textarea id="' . $id . '" name="' . $id . '" rows="3" ' . $aria . '>' . h($val) . '</textarea>'; break;
             case 'number': $out .= '<input type="text" inputmode="decimal" id="' . $id . '" name="' . $id . '" maxlength="20" value="' . h($val) . '" ' . $aria . '>'; break;
-            case 'date': $out .= '<input type="date" id="' . $id . '" name="' . $id . '" value="' . h($val) . '" ' . $aria . '>'; break;
+            case 'date':
+                // A saved answer that is not a date (4.27.0) is shown in a text box, said so in the label, and kept
+                // when sent back unchanged: a date box would show it blank and erase it on the next save.
+                if ($val !== '' && !custom_value_fits($f, $val)) {
+                    $out = substr($out, 0, -strlen('</label>')) . ' <span class="hint">' . $tr('(the saved answer is not a date; type a date written 2026-10-01 to replace it)') . '</span></label>';
+                    $out .= '<input type="text" id="' . $id . '" name="' . $id . '" maxlength="255" value="' . h($val) . '" ' . $aria . '>';
+                } else $out .= '<input type="date" id="' . $id . '" name="' . $id . '" value="' . h($val) . '" ' . $aria . '>';
+                break;
             case 'choice': case 'yesno':
                 $opts = $f['type'] === 'yesno' ? ['Yes', 'No'] : custom_field_options($f);
                 $out .= '<select id="' . $id . '" name="' . $id . '" ' . $aria . '><option value="">' . $tr('Not answered') . '</option>';

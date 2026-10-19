@@ -109,7 +109,7 @@ function staff_agreement_sign(int $userId, int $agreementId, string $typed, int 
     try {
         $ua = mb_substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 255);
         db()->prepare('INSERT INTO staff_agreement_signatures (agreement_id, version, user_id, title, body, signed_name, sign_ip, via, user_agent) VALUES (?,?,?,?,?,?,?,?,?)')
-            ->execute([$agreementId, (int)$agreement['version'], $userId, $agreement['title'], $agreement['body'], $typed, mb_substr((string)($_SERVER['REMOTE_ADDR'] ?? ''), 0, 45), mb_substr($via, 0, 20), $ua !== '' ? $ua : null]);
+            ->execute([$agreementId, (int)$agreement['version'], $userId, $agreement['title'], $agreement['body'], $typed, mb_substr(client_ip(), 0, 45), mb_substr($via, 0, 20), $ua !== '' ? $ua : null]);
         $id = (int)db()->lastInsertId();
         if ((int)$agreement['counts_as_confidentiality'] === 1) db()->prepare('UPDATE users SET confidentiality_signed_on = CURDATE() WHERE id = ?')->execute([$userId]);
         db()->commit();

@@ -635,6 +635,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['move_session']) || i
     if (!$sess) { flash('That session is no longer scheduled.', 'error'); redirect('schedule.php'); }
     schedule_scope_check((int)$sess['client_id'], $user);
     if (isset($_POST['cancel_series']) || isset($_POST['cancel_group'])) {
+        if (isset($_POST['cancel_group']) && ($why = session_group_scope_error($sid, (int)$user['id'])) !== null) {
+            flash($why, 'error');
+            redirect('schedule.php#s-' . $sid);
+        }
         $n = isset($_POST['cancel_series']) ? session_cancel_series($sid, (int)$user['id']) : session_cancel_group($sid, (int)$user['id']);
         flash($n ? 'Cancelled ' . $n . ' session' . ($n === 1 ? '' : 's') . '. Clients with a confirmed email were sent a calendar cancellation.' : 'Nothing was cancelled: those sessions are no longer scheduled.', $n ? 'success' : 'error');
         redirect('schedule.php#upcoming-h');
@@ -994,9 +998,9 @@ function session_row(array $s, string $csrf): void {
             <div class="field"><label for="md-<?= $sidM ?>">New date<span class="visually-hidden"> for the <?= $which ?></span></label>
               <input type="date" id="md-<?= $sidM ?>" name="move_date" value="<?= h($mMine ? old_in('move_date') : date('Y-m-d', strtotime($s['start_at']))) ?>" <?= field_aria($mKey) ?>></div>
             <div class="field"><label for="mt-<?= $sidM ?>">New start time</label>
-              <input type="time" id="mt-<?= $sidM ?>" name="move_time" value="<?= h($mMine ? old_in('move_time') : date('H:i', strtotime($s['start_at']))) ?>"></div>
+              <input type="time" id="mt-<?= $sidM ?>" name="move_time" value="<?= h($mMine ? old_in('move_time') : date('H:i', strtotime($s['start_at']))) ?>" <?= field_aria($mKey) ?>></div>
             <div class="field"><label for="ml-<?= $sidM ?>">Length in hours</label>
-              <input type="text" inputmode="decimal" id="ml-<?= $sidM ?>" name="move_duration" value="<?= h($mMine ? old_in('move_duration') : rtrim(rtrim(number_format((strtotime($s['end_at']) - strtotime($s['start_at'])) / 3600, 2, '.', ''), '0'), '.')) ?>"></div>
+              <input type="text" inputmode="decimal" id="ml-<?= $sidM ?>" name="move_duration" value="<?= h($mMine ? old_in('move_duration') : rtrim(rtrim(number_format((strtotime($s['end_at']) - strtotime($s['start_at'])) / 3600, 2, '.', ''), '0'), '.')) ?>" <?= field_aria($mKey) ?>></div>
             <?php if (has_field_error($mKey) && str_starts_with(form_errors()[$mKey] ?? '', 'Not moved yet')): ?>
             <div class="field"><label><input type="checkbox" name="move_confirm" value="1"> Move anyway</label></div>
             <?php endif; ?>

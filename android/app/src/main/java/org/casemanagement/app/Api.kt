@@ -67,8 +67,22 @@ class Api(context: Context) {
     /** The server's time zone (me.timezone), for "today" and dates sent to it. */
     var serverZone by mutableStateOf(store.string("serverZone").ifEmpty { "America/Chicago" })
         private set
-    /** Work that outlives a screen (signing out). */
-    val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main)
+    /**
+     * Work that outlives a screen (signing out, signing in person). A failure in it (a full phone,
+     * 4.27.0) shows the sync notice instead of closing the app.
+     */
+    val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main +
+        kotlinx.coroutines.CoroutineExceptionHandler { _, e -> syncNotice = problemNotice(e) })
+
+    /**
+     * What to say about a failure in background work (4.27.0): storage (a full phone, the keystore)
+     * as such; anything else plainly, logged for whoever looks into it. Work kept on the phone stays.
+     */
+    private fun problemNotice(e: Throwable): String {
+        val storage = e is IOException || e is java.security.GeneralSecurityException || (e is ApiException && e.message == SAVE_FAILED)
+        if (!storage) android.util.Log.e("CMS", "Background work failed", e)
+        return if (storage) STORAGE_PROBLEM else SOMETHING_WRONG
+    }
     /** Unsent offline entries of this account, and the notice about any the server refused. */
     var pendingSync by mutableIntStateOf(0)
         private set
@@ -90,6 +104,80 @@ class Api(context: Context) {
         if (prepared) o.put("_prepared", true)
         store.putNow(SIGNING_KEY, o.toString())
         inPersonSigning = o
+        inPersonSending = false; inPersonError = null
+    }
+
+    /**
+     * The Sign press while signing in person (4.27.0): sent from [scope], which outlives the screen,
+     * so turning the phone (the screen is made again) never loses the answer. [inPersonSending] and
+     * [inPersonError] are what the screen shows; a signature the server took is marked "_signed" in
+     * [inPersonSigning], which is kept on the phone. "_sent" records that a Sign was sent, so the
+     * hand-back checks with the server before withdrawing anything.
+     */
+    var inPersonSending by mutableStateOf(false)
+        private set
+    var inPersonError by mutableStateOf<String?>(null)
+        private set
+
+    fun signInPerson(typedName: String, png: String?, mismatch: String) {
+        val d = inPersonSigning ?: return
+        if (inPersonSending || d.optBoolean("_signed")) return
+        val clientId = d.optInt("_client_id"); val docId = d.optInt("id")
+        inPersonSending = true; inPersonError = null
+        // The time it was signed here, sent with it if it has to wait for a signal.
+        val signedAt = isoTime(System.currentTimeMillis())
+        val sent = JSONObject(d.toString()).put("_sent", true)
+        store.putNow(SIGNING_KEY, sent.toString()); inPersonSigning = sent
+        scope.launch {
+            try {
+                val b = JSONObject().put("client_id", clientId).put("id", docId).put("typed_name", typedName)
+                png?.let { b.put("signature_b64", it) }
+                try {
+                    call("sign_in_person", body = b)
+                    if (inPersonSigning?.optInt("id") == docId) markInPersonSigned()
+                    try { removePrepared(docId) } catch (e: Exception) { }
+                } catch (e: ApiException) {
+                    // No connection (or no answer in time): kept here, encrypted, and sent later.
+                    // The name is checked here as the server checks it, so a kept signature is not refused for it.
+                    if (!e.network) throw e
+                    if (!typedNameMatches(d.optString("signer_name"), typedName)) throw ApiException(mismatch)
+                    keepSignature(clientId, docId, d.optString("title"), typedName, png, signedAt)
+                    if (inPersonSigning?.optInt("id") == docId) markInPersonSigned(offline = true)
+                }
+            } catch (e: ApiException) {
+                inPersonError = e.message
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                inPersonError = problemNotice(e)
+            } finally {
+                inPersonSending = false
+            }
+        }
+    }
+
+    /**
+     * Leaving a document signed in person unsigned (4.27.0): it is withdrawn, unless the server says
+     * it was signed after all (a Sign whose answer was lost). Returns what to tell staff.
+     */
+    suspend fun withdrawUnsigned(clientId: Int, docId: Int, title: String, checkFirst: Boolean): String {
+        if (checkFirst) {
+            try {
+                val s = call("signature", mapOf("client_id" to clientId.toString(), "id" to docId.toString())).optJSONObject("signature")
+                if (s?.str("signed_at") != null) return "$title was signed in person."
+            } catch (e: ApiException) {
+                return "$title could not be checked or withdrawn, so it is still waiting to be signed here. " +
+                    "Check the client's Documents to sign, and withdraw it there if it is not needed."
+            }
+        }
+        return try {
+            call("withdraw_signature", body = JSONObject().put("client_id", clientId).put("id", docId))
+            "$title was not signed, so the request was withdrawn."
+        } catch (e: ApiException) {
+            if (e.status == 409) "$title was not signed; it had already been withdrawn."
+            else "$title was not signed and could not be withdrawn, so it is still waiting to be signed here. " +
+                "Withdraw it from the client's Documents to sign if it is not needed."
+        }
     }
 
     /** [offline]: signed with no signal; the signature is kept on the phone and sent later. */
@@ -121,8 +209,8 @@ class Api(context: Context) {
 
     private fun ownSigning(key: String): List<JSONObject> = if (userId <= 0) emptyList() else loadSigning(key).filter { it.optInt("owner") == userId }
 
-    private fun saveSigning(key: String, list: List<JSONObject>) {
-        if (!store.putNow(key, JSONArray(list).toString())) throw ApiException("Could not save on this phone. Nothing was lost; try again.")
+    private suspend fun saveSigning(key: String, list: List<JSONObject>) {
+        if (!store.putNowInBackground(key, JSONArray(list).toString())) throw ApiException(SAVE_FAILED)
         preparedSignatures = ownSigning(PREPARED_KEY)
         keptSignatures = ownSigning(KEPT_KEY)
     }
@@ -184,7 +272,12 @@ class Api(context: Context) {
      * refusal is kept with the server's words so staff see it. [retryRefused]: also try again the
      * ones the server refused before (only when staff ask).
      */
-    suspend fun flushSignatures(retryRefused: Boolean = false) = signFlushLock.withLock {
+    suspend fun flushSignatures(retryRefused: Boolean = false) {
+        // A failure here (a full phone, 4.27.0) is said, rather than closing the app at every return to it.
+        try { sendKeptSignatures(retryRefused) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { signingNotice = problemNotice(e) }
+    }
+
+    private suspend fun sendKeptSignatures(retryRefused: Boolean) = signFlushLock.withLock {
         if (userId <= 0 || token.isEmpty()) return@withLock
         val owner = userId
         val sessionToken = token
@@ -273,6 +366,16 @@ class Api(context: Context) {
     init {
         pendingSync = ownPending(loadQueue())
         org.casemanagement.app.ui.serverZoneId = serverZone
+        // 4.27.0: kept lists older than two weeks, or beyond the 30 client records most recently
+        // opened, go at start-up; so do temporary upload copies left by an app that was closed.
+        scope.launch(Dispatchers.IO) {
+            try { store.pruneCache(System.currentTimeMillis()) } catch (e: Exception) { }
+            docsFolder.listFiles { f -> f.name.endsWith(".tmp") }?.forEach { it.delete() }
+            // Where 4.26.0 and earlier made them.
+            listOf("upload.tmp", "message.tmp").forEach { java.io.File(docsFolder.parentFile, it).delete() }
+        }
+        // A session that ended may since have been reported lost: asked about now (4.27.0).
+        scope.launch { checkRefusedSession() }
     }
 
     /* ---------- The server ---------- */
@@ -280,18 +383,42 @@ class Api(context: Context) {
     /** A build that names its server always uses it; the sign-in choice is only for builds without one. */
     val builtInServer: String? = BuildConfig.DEFAULT_SERVER.trim().ifEmpty { null }
 
+    /**
+     * The address typed on Sign in, used for signing in before it is kept (4.27.0): nothing of the
+     * last server's is removed until signing in to the new one has worked.
+     */
+    private var trialServer by mutableStateOf<String?>(null)
+
     val base: String
-        get() = (builtInServer ?: store.string(SecureStore.SERVER_KEY).ifEmpty { null })
+        get() = (builtInServer ?: trialServer ?: store.string(SecureStore.SERVER_KEY).ifEmpty { null })
             ?.let { ServerAddress.apiUrl(it, BuildConfig.DEBUG) } ?: "https://example.invalid/api.php"
 
-    /** Another organisation's server: nothing of the last one's (its account, its unsent entries) goes there. */
-    fun switchServer(address: String) {
-        if (address.trim() == store.string(SecureStore.SERVER_KEY)) return
+    /** Whether [address] is another server than the one kept (4.27.0: "https://", capitals and a trailing slash do not count). */
+    fun isOtherServer(address: String): Boolean {
+        val kept = storedServer
+        return kept.isNotEmpty() && !ServerAddress.same(address, kept, BuildConfig.DEBUG)
+    }
+
+    /** Everything waiting to be sent from this phone, any account's: what signing in to another server removes. */
+    val unsentOnPhone: Int get() = loadQueue().size + loadSigning(KEPT_KEY).size
+
+    /** Signs in to [address] without keeping it yet (see [commitServer]). */
+    fun tryServer(address: String) { trialServer = address.trim() }
+
+    /**
+     * Keeps the address signed in to. Another organisation's server: nothing of the last one's (its
+     * account, its unsent entries, its kept lists) goes there, so they are removed now, after the
+     * sign-in worked and after the Sign in screen warned about anything waiting to be sent.
+     */
+    fun commitServer(address: String) {
+        trialServer = null
+        val a = address.trim()
+        if (!isOtherServer(a)) { if (a != storedServer) store.put(SecureStore.SERVER_KEY, a); return }
         userId = 0; userName = ""; store.remove("userId", "userName", "lastEmail")
         store.removePrefix("cache.")
         clearIdentity(keepQueue = false)
         server425 = null; store.remove("server425")
-        store.put(SecureStore.SERVER_KEY, address.trim())
+        store.put(SecureStore.SERVER_KEY, a)
     }
 
     val storedServer: String get() = store.string(SecureStore.SERVER_KEY)
@@ -381,15 +508,18 @@ class Api(context: Context) {
     suspend fun callCached(action: String, query: Map<String, String> = emptyMap(), cacheKey: String): Pair<JSONObject, Long?> {
         val owner = userId
         val key = "cache.$owner.$cacheKey"
+        // Read before asking: signing out or a wipe meanwhile moves it on, and the reply is then not kept.
+        val generation = store.cacheGeneration
         return try {
             val r = call(action, query)
             if (owner > 0 && owner == userId && store.phoneCanKeepClientData) {
-                store.put(key, JSONObject().put("savedAt", System.currentTimeMillis()).put("data", r).toString())
+                // Off the main thread, and only the 30 client records most recently opened (4.27.0).
+                store.putCached(key, JSONObject().put("savedAt", System.currentTimeMillis()).put("data", r).toString(), generation)
             }
             r to null
         } catch (e: ApiException) {
             if (!e.network) { if (e.status == 403 || e.status == 404) store.remove(key); throw e }
-            val saved = store.string(key).takeIf { it.isNotEmpty() && owner > 0 && store.phoneCanKeepClientData } ?: throw e
+            val saved = store.cached(key).takeIf { it.isNotEmpty() && owner > 0 && store.phoneCanKeepClientData } ?: throw e
             val o = try { JSONObject(saved) } catch (x: Exception) { throw e }
             (o.optJSONObject("data") ?: throw e) to o.optLong("savedAt")
         }
@@ -500,6 +630,7 @@ class Api(context: Context) {
         userName = name; store.put("userName", name)
         sessionNotice = null
         token = newToken; store.put("apiToken", newToken)
+        store.remove(REFUSED_TOKEN_KEY, REFUSED_AT_KEY)
     }
 
     /** Name, permissions and the organisation's lists; after sign-in and on each start. */
@@ -546,7 +677,24 @@ class Api(context: Context) {
         if (token.isEmpty()) return
         sessionNotice = "Your session ended, so sign in again. Your open screens and anything waiting to send are kept."
         if (userId > 0) reauthRequired = true
+        // Kept (4.27.0), so a phone reported lost after its session ended still learns it and wipes.
+        store.put(REFUSED_TOKEN_KEY, token); store.put(REFUSED_AT_KEY, System.currentTimeMillis().toString())
         token = ""; store.remove("apiToken")
+    }
+
+    private val refusedCheck = Mutex()
+
+    /**
+     * Asks the server, with a session it refused, whether this phone was reported lost since
+     * (4.27.0): on each start and while Sign in shows. Kept until signing in works, for at most 30 days.
+     */
+    suspend fun checkRefusedSession() = refusedCheck.withLock {
+        val old = store.string(REFUSED_TOKEN_KEY)
+        if (old.isEmpty()) return@withLock
+        val at = store.string(REFUSED_AT_KEY).toLongOrNull() ?: 0L
+        if (System.currentTimeMillis() - at > REFUSED_KEEP_MS) { store.remove(REFUSED_TOKEN_KEY, REFUSED_AT_KEY); return@withLock }
+        val (status, json) = try { raw("me", emptyMap(), null, old) } catch (e: Exception) { return@withLock }
+        if (status == 401 && json.optBoolean("wipe") && store.string(REFUSED_TOKEN_KEY) == old) wipeThisPhone(old)
     }
 
     /** Sign in as someone else instead of signing back in: the open screens close. */
@@ -575,11 +723,16 @@ class Api(context: Context) {
         pendingSync = ownPending(loadQueue())
     }
 
-    fun wipeThisPhone() {
-        store.wipeExceptServer()
+    /** [old]: the session the server answered "wipe" to (the current one, or one it refused earlier). */
+    fun wipeThisPhone(old: String = token) {
+        val cleared = store.wipeExceptServer()
         token = ""; userId = 0; userName = ""; reauthRequired = false; syncNotice = null
         clearIdentity(keepQueue = false)
+        val docsGone = !docsFolder.exists()
         sessionNotice = "This phone was reported lost, so the app removed what it kept here."
+        // The server keeps answering "wipe" until told it is done (4.27.0): told with that session, errors
+        // aside, and only once everything is removed; otherwise it is asked again next time.
+        if (old.isNotEmpty() && cleared && docsGone) scope.launch { try { raw("wipe_done", emptyMap(), JSONObject(), old) } catch (e: Exception) { } }
     }
 
     /* ---------- Offline entries (the iPhone app's queue, the same rules) ---------- */
@@ -593,8 +746,8 @@ class Api(context: Context) {
         return try { JSONArray(raw).let { a -> MutableList(a.length()) { a.getJSONObject(it) } } } catch (e: Exception) { mutableListOf() }
     }
 
-    private fun saveQueue(q: List<JSONObject>) {
-        if (!store.putNow(QUEUE_KEY, JSONArray(q).toString())) throw ApiException("Could not save on this phone. Nothing was lost; try again.")
+    private suspend fun saveQueue(q: List<JSONObject>) {
+        if (!store.putNowInBackground(QUEUE_KEY, JSONArray(q).toString())) throw ApiException(SAVE_FAILED)
         pendingSync = ownPending(q)
     }
 
@@ -630,7 +783,12 @@ class Api(context: Context) {
     }
 
     /** Sends this account's entries in order; keeps every one the server has not confirmed. */
-    suspend fun flushQueue() = flushLock.withLock {
+    suspend fun flushQueue() {
+        // A failure here (a full phone, 4.27.0) is said, rather than closing the app at every return to it.
+        try { sendQueue() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { syncNotice = problemNotice(e) }
+    }
+
+    private suspend fun sendQueue() = flushLock.withLock {
         if (userId <= 0 || token.isEmpty()) return@withLock
         val owner = userId
         val sessionToken = token
@@ -642,6 +800,8 @@ class Api(context: Context) {
             if (item.optInt("owner") != owner) continue
             val (status, json) = try {
                 raw(item.optString("action"), emptyMap(), JSONObject(item.optString("body")), sessionToken)
+            } catch (e: org.json.JSONException) {
+                refused[item.optString("id")] = "It could not be read on this phone."; continue
             } catch (e: ApiException) { break }
             when {
                 status == 401 -> { if (json.optBoolean("wipe")) wipeThisPhone() else expireSession(); break }
@@ -677,6 +837,14 @@ class Api(context: Context) {
         const val PREPARED_KEY = "preparedSignatures"
         const val KEPT_KEY = "keptSignatures"
         const val NO_CONNECTION = "No connection to the server. Check your signal and try again."
+        const val REFUSED_TOKEN_KEY = "refusedToken"
+        const val REFUSED_AT_KEY = "refusedAt"
+        const val REFUSED_KEEP_MS = 30L * 24 * 60 * 60 * 1000
+        const val SOMETHING_WRONG = "Something went wrong in the app. Your work is kept on this phone; it is tried again when you return to the app."
+        const val SAVE_FAILED = "Could not save on this phone. Nothing was lost; try again."
+        /** A background save failed (4.27.0), most often because the phone's storage is full. */
+        const val STORAGE_PROBLEM = "The app could not save on this phone, so what is waiting to send stays where it was. " +
+            "If the phone's storage is full, free some space; it is tried again when you return to the app."
         val APP_VERSION = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) Android"
         val deviceName: String get() = listOf(Build.MANUFACTURER.replaceFirstChar { it.uppercase() }, Build.MODEL).distinct().joinToString(" ").take(60)
     }

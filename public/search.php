@@ -5,7 +5,8 @@ $user = require_login();
 require_perm('clients');
 
 $q = trim(is_string($_GET['q'] ?? null) ? $_GET['q'] : '');
-$like = '%' . $q . '%';
+// Percent, underscore and backslash are literal text, not wildcards (4.27.0), as on the Tasks page.
+$like = '%' . strtr($q, ['!' => '!!', '%' => '!%', '_' => '!_']) . '%';
 $results = [];
 $capped = [];   // categories with more matches than are shown
 
@@ -27,16 +28,16 @@ if (mb_strlen($q) >= 2) {
 
     $run('Clients',
         "SELECT id, name AS title, CONCAT_WS(' · ', status, counselor_name) AS sub, CONCAT('client.php?id=', id) AS url
-         FROM clients WHERE (name LIKE ? OR email LIKE ? OR phone LIKE ? OR counselor_name LIKE ?)" . $scopeClients . ' ORDER BY name',
+         FROM clients WHERE (name LIKE ? ESCAPE '!' OR email LIKE ? ESCAPE '!' OR phone LIKE ? ESCAPE '!' OR counselor_name LIKE ? ESCAPE '!')" . $scopeClients . ' ORDER BY name',
         array_merge([$like, $like, $like, $like], $scopeParam));
     $run('Client notes',
         "SELECT n.id, CONCAT(c.name, ': ', n.subject) AS title, n.note_type AS sub, CONCAT('client.php?id=', n.client_id, '&tab=notes') AS url
-         FROM client_notes n JOIN clients c ON c.id = n.client_id WHERE (n.subject LIKE ? OR n.body LIKE ?)" . $scopeJoined . " ORDER BY n.created_at DESC",
+         FROM client_notes n JOIN clients c ON c.id = n.client_id WHERE (n.subject LIKE ? ESCAPE '!' OR n.body LIKE ? ESCAPE '!')" . $scopeJoined . " ORDER BY n.created_at DESC",
         array_merge([$like, $like], $scopeParam));
     if (can('referrals')) {
         $run('Referrals',
             "SELECT id, CONCAT(client_name, ' — ', reason) AS title, CONCAT_WS(' · ', status, counselor_name) AS sub, CONCAT('referrals.php?view=', id) AS url
-             FROM referrals WHERE (client_name LIKE ? OR reason LIKE ? OR body LIKE ? OR counselor_name LIKE ?)"
+             FROM referrals WHERE (client_name LIKE ? ESCAPE '!' OR reason LIKE ? ESCAPE '!' OR body LIKE ? ESCAPE '!' OR counselor_name LIKE ? ESCAPE '!')"
              // Same rule as the Referrals page and the app: a converted referral shows
              // only to the client's current instructor, whoever it was assigned to.
              . ($scoped ? " AND ((referrals.status <> 'Converted' AND (referrals.assigned_to = ? OR referrals.assigned_to IS NULL))"
@@ -46,23 +47,23 @@ if (mb_strlen($q) >= 2) {
     }
     $run('Training tracks',
         "SELECT t.id, CONCAT(c.name, ': ', t.title) AS title, CONCAT('Auth ', t.auth_number, ' · ', t.status) AS sub, CONCAT('track.php?id=', t.id) AS url
-         FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE (t.title LIKE ? OR t.auth_number LIKE ?)" . $scopeJoined . ' ORDER BY t.created_at DESC',
+         FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE (t.title LIKE ? ESCAPE '!' OR t.auth_number LIKE ? ESCAPE '!')" . $scopeJoined . ' ORDER BY t.created_at DESC',
         array_merge([$like, $like], $scopeParam));
     $run('SMART goals',
         "SELECT g.id, CONCAT(c.name, ': ', SUBSTRING(g.specific_goal, 1, 80)) AS title, g.status AS sub, CONCAT('track.php?id=', g.track_id, '#goals') AS url
          FROM smart_goals g JOIN training_tracks t ON t.id = g.track_id JOIN clients c ON c.id = t.client_id
-         WHERE (g.specific_goal LIKE ? OR g.measurable_metric LIKE ?)" . $scopeJoined . ' ORDER BY g.created_at DESC',
+         WHERE (g.specific_goal LIKE ? ESCAPE '!' OR g.measurable_metric LIKE ? ESCAPE '!')" . $scopeJoined . ' ORDER BY g.created_at DESC',
         array_merge([$like, $like], $scopeParam));
     $run('Documents',
         "SELECT d.id, CONCAT(c.name, ': ', d.title) AS title, d.category AS sub, CONCAT('client.php?id=', d.client_id, '&tab=documents') AS url
-         FROM client_documents d JOIN clients c ON c.id = d.client_id WHERE (d.title LIKE ? OR d.orig_name LIKE ?)" . $scopeJoined . ' ORDER BY d.created_at DESC',
+         FROM client_documents d JOIN clients c ON c.id = d.client_id WHERE (d.title LIKE ? ESCAPE '!' OR d.orig_name LIKE ? ESCAPE '!')" . $scopeJoined . ' ORDER BY d.created_at DESC',
         array_merge([$like, $like], $scopeParam));
     if (can('billing')) {
         $run('Invoices',
             "SELECT i.id, CONCAT(i.invoice_number, ' — ', c.name) AS title, CONCAT(i.status, ' · $', FORMAT(i.total_amount, 2)) AS sub,
                     CONCAT('invoices.php?id=', i.id, '#inv-', i.id) AS url
              FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id
-             WHERE (i.invoice_number LIKE ? OR i.payment_ref LIKE ?)" . $scopeJoined . ' ORDER BY i.created_at DESC',
+             WHERE (i.invoice_number LIKE ? ESCAPE '!' OR i.payment_ref LIKE ? ESCAPE '!')" . $scopeJoined . ' ORDER BY i.created_at DESC',
             array_merge([$like, $like], $scopeParam));
     }
 }

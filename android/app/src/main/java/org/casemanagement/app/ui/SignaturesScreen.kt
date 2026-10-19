@@ -35,14 +35,14 @@ import org.casemanagement.app.ApiException
 import org.casemanagement.app.BodyBlock
 import org.casemanagement.app.SIGN_WINDOW_MS
 import org.casemanagement.app.SignatureItem
-import org.casemanagement.app.isoTime
 import org.casemanagement.app.parseReleaseChoices
 import org.casemanagement.app.parseSignatureDoc
 import org.casemanagement.app.parseSignatureReply
 import org.casemanagement.app.parseSignatures
+import org.casemanagement.app.retryKey
+import org.casemanagement.app.retryKeyId
 import org.casemanagement.app.signingStart
 import org.casemanagement.app.stillSignable
-import org.casemanagement.app.typedNameMatches
 import org.casemanagement.app.signatureBlocks
 import org.casemanagement.app.str
 import org.json.JSONArray
@@ -77,6 +77,11 @@ fun SignaturesScreen(api: Api, clientId: Int) {
     var loan by rememberSaveable { mutableStateOf("") }
     var title by rememberSaveable { mutableStateOf("") }
     var body by rememberSaveable { mutableStateOf("") }
+    // 4.27.0: one key per document being started or sent, kept until the server answers, so a
+    // retry after a lost reply is recognised rather than starting or emailing a second one.
+    // A changed field gives a new key (see retryKey).
+    var startKey by rememberSaveable { mutableStateOf("") }
+    var sendKey by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val prepared = api.preparedSignatures.filter { it.optInt("client_id") == clientId }
     val kept = api.keptSignatures.filter { it.optInt("client_id") == clientId }
@@ -142,6 +147,17 @@ fun SignaturesScreen(api: Api, clientId: Int) {
                 return b
             }
             fun clearForm() { title = ""; body = ""; loan = "" }
+            /** Sends with the retry key for exactly this request; a new key once the server has answered either way (a lost reply keeps it). */
+            suspend fun sendKeyed(action: String, b: JSONObject, saved: String, keep: (String) -> Unit): JSONObject {
+                val k = retryKey(saved, action + b.toString())
+                keep(k)
+                return try {
+                    api.call(action, body = b.put("idem_key", retryKeyId(k))).also { keep("") }
+                } catch (e: ApiException) {
+                    if (!e.network) keep("")
+                    throw e
+                }
+            }
             Heading("Documents to sign (${list.size})")
             if (list.isEmpty()) Text("Nothing has been sent to sign yet.")
             list.forEach { s ->
@@ -171,7 +187,7 @@ fun SignaturesScreen(api: Api, clientId: Int) {
                 val b = request() ?: return@PrimaryButton
                 scope.launchSave({ busy = it }, { error = it }) {
                     notice = null
-                    val res = api.call("start_signature", body = b)
+                    val res = sendKeyed("start_signature", b, startKey) { startKey = it }
                     clearForm()
                     api.beginInPerson(clientId, res)
                 }
@@ -181,7 +197,7 @@ fun SignaturesScreen(api: Api, clientId: Int) {
                 val b = request() ?: return@SecondaryButton
                 scope.launchSave({ busy = it }, { error = it }) {
                     notice = null
-                    val doc = parseSignatureDoc(api.call("start_signature", body = b)) ?: throw ApiException("The server's answer could not be read. Nothing was kept on this phone.")
+                    val doc = parseSignatureDoc(sendKeyed("start_signature", b, startKey) { startKey = it }) ?: throw ApiException("The server's answer could not be read. Nothing was kept on this phone.")
                     try { api.prepareToSign(clientId, c.str("name") ?: "", doc) } finally { state.reload() }
                     clearForm()
                     notice = "“${doc.title}” is ready to sign on this phone, even with no signal, for two days. It is listed above."
@@ -193,7 +209,7 @@ fun SignaturesScreen(api: Api, clientId: Int) {
                 val b = request() ?: return@SecondaryButton
                 scope.launchSave({ busy = it }, { error = it }) {
                     notice = null
-                    api.call("send_signature", body = b)
+                    sendKeyed("send_signature", b, sendKey) { sendKey = it }
                     clearForm()
                     notice = "Sent to ${email.trim()} to sign. It is listed above as Awaiting signature."
                     state.reload()
@@ -216,8 +232,10 @@ fun SignaturesScreen(api: Api, clientId: Int) {
                             scope.launch {
                                 try {
                                     val d = api.call("signature", mapOf("client_id" to clientId.toString(), "id" to s.id.toString())).optJSONObject("signature")
-                                    // Its start is the list's sent_at (the signature action does not send it).
-                                    if (d != null) api.beginInPerson(clientId, d, startedAt = signingStart(s.sentAt, serverZoneId, System.currentTimeMillis()))
+                                    // Its start is the list's sent_at (the signature action does not send it). Also kept
+                                    // on this phone to sign later (4.27.0): handing it back unsigned keeps it, not withdraws it.
+                                    if (d != null) api.beginInPerson(clientId, d, prepared = api.preparedSignatures.any { it.optInt("id") == s.id },
+                                        startedAt = signingStart(s.sentAt, serverZoneId, System.currentTimeMillis()))
                                 } catch (e: ApiException) { error = e.message }
                             }
                         }) { Text("Sign here now") }
@@ -256,7 +274,10 @@ fun SignaturesScreen(api: Api, clientId: Int) {
                     }) { Text("Sign here now") }
                     TextButton(onClick = {
                         chosenPrepared = null
-                        scope.launch { api.removePrepared(id); notice = "Removed from this phone. It is still waiting to be signed here on the website; withdraw it there or below if it is not needed." }
+                        scope.launch {
+                            try { api.removePrepared(id) } catch (e: ApiException) { error = e.message; return@launch }
+                            notice = "Removed from this phone. It is still waiting to be signed here on the website; withdraw it there or below if it is not needed."
+                        }
                     }) { Text("Remove from this phone") }
                 }
             },
@@ -274,7 +295,10 @@ fun SignaturesScreen(api: Api, clientId: Int) {
                         ?: "Signed with no signal and kept on this phone, encrypted. It is sent automatically when there is a connection.")
                     if (refused != null) TextButton(onClick = {
                         chosenKept = null
-                        scope.launch { api.discardKeptSignature(k.optInt("id")); notice = "The kept signature was removed from this phone." }
+                        scope.launch {
+                            try { api.discardKeptSignature(k.optInt("id")) } catch (e: ApiException) { error = e.message; return@launch }
+                            notice = "The kept signature was removed from this phone."
+                        }
                     }) { Text("Remove it from this phone") }
                 }
             },
@@ -344,7 +368,8 @@ fun InPersonSigningHost(api: Api) {
     val signed = d.optBoolean("_signed")
     val prepared = d.optBoolean("_prepared")
     var typed by rememberSaveable(d.optInt("id")) { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
+    // The Sign press runs in the app, not this screen (4.27.0): turning the phone keeps its answer.
+    val busy = api.inPersonSending
     var error by remember { mutableStateOf<String?>(null) }
     // Asking for the staff member's unlock (true), shown instead of the document.
     var locked by rememberSaveable(d.optInt("id")) { mutableStateOf(false) }
@@ -352,7 +377,6 @@ fun InPersonSigningHost(api: Api) {
     var noLock by remember { mutableStateOf(false) }
     val pad = remember(d.optInt("id")) { SignatureState() }
     val density = LocalDensity.current.density
-    val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
     val lang = d.str("lang")
     val w = SignWords(lang == "es", d.optString("org"), d.optString("signer_name"))
@@ -361,14 +385,17 @@ fun InPersonSigningHost(api: Api) {
         val now = api.inPersonSigning
         val wasSigned = now?.optBoolean("_signed") == true
         val offline = now?.optBoolean("_offline") == true
-        if (!wasSigned && !prepared) api.scope.launch {
-            try { api.call("withdraw_signature", body = JSONObject().put("client_id", clientId).put("id", d.optInt("id"))) } catch (e: Exception) { }
-        }
-        Flash.message = d.optString("title") + when {
+        // A Sign was sent and its answer is not known (the app was closed meanwhile): the server is asked first.
+        val unsure = now?.optBoolean("_sent") == true
+        val title = d.optString("title")
+        if (!wasSigned && !prepared) {
+            // What happened is said once the server has answered, so a failed withdrawal is never called withdrawn.
+            Flash.message = null
+            api.scope.launch { Flash.message = api.withdrawUnsigned(clientId, d.optInt("id"), title, checkFirst = unsure) }
+        } else Flash.message = title + when {
             wasSigned && offline -> " was signed in person with no signal. The signature is kept on this phone, encrypted, and sent automatically when there is a connection."
             wasSigned -> " was signed in person."
-            prepared -> " was not signed. It stays ready to sign on this phone."
-            else -> " was not signed, so the request was withdrawn."
+            else -> " was not signed. It stays ready to sign on this phone."
         }
         api.endInPerson()
     }
@@ -404,9 +431,10 @@ fun InPersonSigningHost(api: Api) {
                     NoticeText("Staff: this phone has no screen lock, so the app cannot check it is you. Sign out to leave the signing screen; then sign in again.")
                     PrimaryButton("Sign out of the app") {
                         // Withdrawn first while the session still works, then signed out (which also ends the signing view).
-                        val wasSigned = api.inPersonSigning?.optBoolean("_signed") == true
+                        val now = api.inPersonSigning
+                        val wasSigned = now?.optBoolean("_signed") == true
                         api.scope.launch {
-                            if (!wasSigned) try { api.call("withdraw_signature", body = JSONObject().put("client_id", clientId).put("id", d.optInt("id"))) } catch (e: Exception) { }
+                            if (!wasSigned && !prepared) try { api.withdrawUnsigned(clientId, d.optInt("id"), d.optString("title"), checkFirst = now?.optBoolean("_sent") == true) } catch (e: Exception) { }
                             api.signOut()
                         }
                     }
@@ -437,32 +465,14 @@ fun InPersonSigningHost(api: Api) {
                 }
                 Field(w.typeLabel, typed, { typed = it }, hint = w.typeHint)
                 SignaturePad(pad, caption = w.draw)
-                ErrorText(error)
+                ErrorText(error ?: api.inPersonError)
                 PrimaryButton(w.sign, busy = busy, enabled = typed.isNotBlank()) {
                     if (busy) return@PrimaryButton
                     // Checked as Sign is pressed: the server takes it only within two days of its start.
                     val started = d.optLong("_started")
                     if (started > 0 && !stillSignable(started, System.currentTimeMillis())) { error = w.tooLate; return@PrimaryButton }
-                    scope.launchSave({ busy = it }, { error = it }) {
-                        // The time it was signed here, sent with it if it has to wait for a signal.
-                        val signedAt = isoTime(System.currentTimeMillis())
-                        val name = typed.trim()
-                        val png = pad.png(density)
-                        val b = JSONObject().put("client_id", clientId).put("id", d.optInt("id")).put("typed_name", name)
-                        png?.let { b.put("signature_b64", it) }
-                        try {
-                            api.call("sign_in_person", body = b)
-                            api.removePrepared(d.optInt("id"))
-                            api.markInPersonSigned()
-                        } catch (e: ApiException) {
-                            // No connection (or no answer in time): kept here, encrypted, and sent later.
-                            // The name is checked here as the server checks it, so a kept signature is not refused for it.
-                            if (!e.network) throw e
-                            if (!typedNameMatches(d.optString("signer_name"), name)) throw ApiException(w.mismatch)
-                            api.keepSignature(clientId, d.optInt("id"), d.optString("title"), name, png, signedAt)
-                            api.markInPersonSigned(offline = true)
-                        }
-                    }
+                    error = null
+                    api.signInPerson(typed.trim(), pad.png(density), w.mismatch)
                 }
                 SecondaryButton(w.handBack) { leave() }
             }
@@ -494,6 +504,8 @@ fun ReleaseRequestScreen(api: Api, nav: NavHostController, clientId: Int) {
     var info by rememberSaveable { mutableStateOf(listOf<String>()) }
     var other by rememberSaveable { mutableStateOf("") }
     var purpose by rememberSaveable { mutableStateOf("") }
+    // 4.27.0: kept until the server answers, so a retry after a lost reply never emails it twice.
+    var requestKey by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -525,8 +537,16 @@ fun ReleaseRequestScreen(api: Api, nav: NavHostController, clientId: Int) {
                         .put("recipient_type", recipientType).put("recipient_name", recipientName.trim()).put("purpose", purpose.trim()).put("info", JSONArray(info))
                     if (recipientEmail.isNotBlank()) b.put("recipient_email", recipientEmail.trim())
                     if (other.isNotBlank()) b.put("info_other", other.trim())
-                    api.call("request_release", body = b)
-                    Flash.pending = "Release emailed to ${email.trim()} to sign."
+                    // The same key only while every field is unchanged (retryKey).
+                    requestKey = retryKey(requestKey, b.toString())
+                    b.put("idem_key", retryKeyId(requestKey))
+                    val r = try { api.call("request_release", body = b).also { requestKey = "" } } catch (e: ApiException) {
+                        if (!e.network) requestKey = ""
+                        throw e
+                    }
+                    // 4.27.0: the email's outcome not known; the server says what to do.
+                    Flash.pending = if (r.optBoolean("unknown")) r.str("message") ?: "The release request was kept, but it is not known whether the email was sent. Check with the client before sending it again."
+                        else "Release emailed to ${email.trim()} to sign."
                     nav.popBackStack()
                 }
             }

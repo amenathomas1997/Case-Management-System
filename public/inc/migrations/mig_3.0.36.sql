@@ -3,8 +3,9 @@
 
 -- Case notes lock 30 days after they are written (setting note_lock_days). A later change
 -- is an Addendum: a new note linked to the original (addendum_to).
+-- 4.27.0: varchar(60), as 4.5.0 makes it, so running this again keeps custom note types.
 ALTER TABLE `client_notes`
-  MODIFY COLUMN `note_type` enum('Case Note','Phone Call','Progress Report','Monthly Summary','Intake','Addendum') NOT NULL DEFAULT 'Case Note',
+  MODIFY COLUMN `note_type` varchar(60) NOT NULL DEFAULT 'Case Note',
   ADD COLUMN IF NOT EXISTS `addendum_to` int(10) unsigned DEFAULT NULL AFTER `track_id`,
   ADD KEY IF NOT EXISTS `addendum_to` (`addendum_to`);
 

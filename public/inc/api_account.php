@@ -32,7 +32,7 @@ function api_account_reauth(int $userId, $password, string $wrong): ?string {
     if ($r === 'locked') fail(API_REAUTH_LOCKED_MSG, 429);
     if ($r === 'lockout') {
         audit($userId, 'reauth.lockout', 'user', $userId, 'signed out after 5 wrong passwords in 15 minutes (mobile app)');
-        db()->prepare('DELETE FROM api_tokens WHERE user_id = ?')->execute([$userId]);
+        db()->prepare('DELETE FROM api_tokens WHERE user_id = ? AND wipe_requested_at IS NULL')->execute([$userId]);
         // 403, not 401: the app replays a request after a 401 sign-in, which would resend
         // the wrong password. Its tokens are gone, so the next request asks for sign-in.
         fail(API_REAUTH_SIGNED_OUT_MSG, 403);
@@ -76,7 +76,7 @@ switch ($action) {
     case 'account':
         $pk = db()->prepare('SELECT id, name, created_at, last_used_at FROM passkeys WHERE user_id = ? ORDER BY created_at');
         $pk->execute([$userId]);
-        $sessions = db()->prepare('SELECT COUNT(*) FROM api_tokens WHERE user_id = ? AND expires_at > NOW()');
+        $sessions = db()->prepare('SELECT COUNT(*) FROM api_tokens WHERE user_id = ? AND expires_at > NOW() AND wipe_requested_at IS NULL');
         $sessions->execute([$userId]);
         out(['ok' => true, 'name' => $acctUser['name'], 'email' => $acctUser['email'], 'role' => (string)$acct['role'],
              'group' => $acct['group_name'] !== null ? (string)$acct['group_name'] : null,
@@ -151,7 +151,7 @@ switch ($action) {
     case 'logout_all':
         $pwErr = api_account_reauth($userId, $input['password'] ?? '', 'Password incorrect — you are still signed in.');
         if ($pwErr !== null) api_account_refused(['errors' => ['password' => $pwErr]]);
-        $del = db()->prepare('DELETE FROM api_tokens WHERE user_id = ?');
+        $del = db()->prepare('DELETE FROM api_tokens WHERE user_id = ? AND wipe_requested_at IS NULL');
         $del->execute([$userId]);
         api_totp_pending_clear($userId);
         $ended = $del->rowCount();

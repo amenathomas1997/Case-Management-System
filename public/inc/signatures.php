@@ -201,7 +201,7 @@ function signature_sign(array $r, string $typed, string $how = '', ?string $at =
     $pdo->beginTransaction();
     try {
         $s = $pdo->prepare('UPDATE client_signatures SET signed_at = COALESCE(?, NOW()), signed_name = ?, sign_ip = ? WHERE id = ? AND signed_at IS NULL AND withdrawn_at IS NULL');
-        $s->execute([$at, $typed, $_SERVER['REMOTE_ADDR'] ?? '', (int)$r['id']]);
+        $s->execute([$at, $typed, client_ip(), (int)$r['id']]);
         $done = $s->rowCount() === 1;
         if ($done) {
             $pdo->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)')
@@ -220,9 +220,21 @@ function signature_sign(array $r, string $typed, string $how = '', ?string $at =
 
 /** Withdraw a request (signed or not). False when there was nothing to withdraw. */
 function signature_withdraw(int $id, int $clientId, int $actor): bool {
-    $w = db()->prepare('UPDATE client_signatures SET withdrawn_at = NOW(), withdrawn_by = ? WHERE id = ? AND client_id = ? AND withdrawn_at IS NULL');
+    return signature_withdraw_result($id, $clientId, $actor) === 'withdrawn';
+}
+
+/** Withdraw a document not yet signed (4.27.0: a signed one stays signed). Returns
+ *  'withdrawn', 'signed' (already signed, nothing changed) or 'gone' (already withdrawn
+ *  or not on this client's record). */
+function signature_withdraw_result(int $id, int $clientId, int $actor): string {
+    $w = db()->prepare('UPDATE client_signatures SET withdrawn_at = NOW(), withdrawn_by = ? WHERE id = ? AND client_id = ? AND withdrawn_at IS NULL AND signed_at IS NULL');
     $w->execute([$actor, $id, $clientId]);
-    if ($w->rowCount() !== 1) return false;
+    if ($w->rowCount() !== 1) {
+        $q = db()->prepare('SELECT signed_at, withdrawn_at FROM client_signatures WHERE id = ? AND client_id = ?');
+        $q->execute([$id, $clientId]);
+        $r = $q->fetch();
+        return $r && $r['signed_at'] !== null && $r['withdrawn_at'] === null ? 'signed' : 'gone';
+    }
     audit($actor, 'signature.withdraw', 'client', $clientId, 'signature #' . $id);
-    return true;
+    return 'withdrawn';
 }

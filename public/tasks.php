@@ -15,7 +15,8 @@ $returnUrl = 'tasks.php?' . http_build_query($filters);
 
 /* ---- Add a task ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_task'])) {
-    $title = trim($_POST['title'] ?? '');
+    // A crafted array posts nothing usable rather than failing (4.27.0).
+    $title = is_string($_POST['title'] ?? null) ? trim($_POST['title']) : '';
     // A due date that cannot be read is refused, never dropped: a partly filled
     // date input posts blank, so the page's script names it in date_bad[].
     $dueRaw = $_POST['due_date'] ?? '';
@@ -45,7 +46,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_task'])) {
             // Only an active account: a task given to a deactivated one would never be seen.
             $au = db()->prepare('SELECT id FROM users WHERE id = ? AND is_active = 1');
             $au->execute([$assignee]);
-            if (!$au->fetchColumn()) { keep_input(); keep_field_errors(['assigned_to' => 'Choose an active staff member to assign the task to.']); redirect('tasks.php#add-h'); }
+            if (!$au->fetchColumn()) { keep_input(); keep_field_errors(['assigned_to' => 'Choose an active staff member to assign the task to.']); redirect($returnUrl . '#add-h'); }
         }
         // The same form sent twice (Enter pressed again while it loads) adds the
         // task once; the second answer is the confirmation of the first.
@@ -54,7 +55,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_task'])) {
             flash('This task was already added (the form was sent twice), so it was saved once.', 'info');
             redirect($returnUrl);
         }
-        $saved = add_task($title, trim($_POST['details'] ?? '') ?: null, $clientId, null,
+        $saved = add_task($title, (is_string($_POST['details'] ?? null) ? trim($_POST['details']) : '') ?: null, $clientId, null,
             $due, $assignee, (int)$user['id']);
         if ($saved) {
             // Capture the id before audit() inserts its own row and replaces it.
@@ -163,7 +164,7 @@ function due_note(?int $daysLeft): string {
 </div>
 
 <?php // Collapsed so the list comes first; open after a refused or restored entry (or a #add-h link).
-$addOpen = array_intersect_key(form_errors(), ['title' => 1, 'due_date' => 1]) || old_in('title') !== '' || old_in('details') !== ''; ?>
+$addOpen = array_intersect_key(form_errors(), ['title' => 1, 'due_date' => 1, 'assigned_to' => 1]) || old_in('title') !== '' || old_in('details') !== ''; ?>
 <section class="card" aria-labelledby="add-h">
   <h2 class="visually-hidden">Add a task</h2>
   <details id="add-task"<?= $addOpen ? ' open' : '' ?>>
@@ -173,7 +174,7 @@ $addOpen = array_intersect_key(form_errors(), ['title' => 1, 'due_date' => 1]) |
     <input type="hidden" name="show" value="<?= h($show) ?>">
     <input type="hidden" name="q" value="<?= h($filters['q']) ?>">
     <input type="hidden" name="due" value="<?= h($filters['due']) ?>">
-    <?= form_error_summary(['title' => 'What needs doing?', 'due_date' => 'Due date']) ?>
+    <?= form_error_summary(['title' => 'What needs doing?', 'due_date' => 'Due date', 'assigned_to' => 'Assign to']) ?>
     <p class="hint">Fields marked * are required.</p>
     <div class="grid grid-2">
       <div class="field"><label for="title">What needs doing? <?= required_mark() ?></label>
@@ -190,9 +191,9 @@ $addOpen = array_intersect_key(form_errors(), ['title' => 1, 'due_date' => 1]) |
       <?php endif; ?>
       <?php if ($isAdmin): ?>
       <div class="field"><label for="assigned_to">Assign to</label>
-        <select id="assigned_to" name="assigned_to"><option value="">— Anyone —</option>
+        <select id="assigned_to" name="assigned_to" <?= field_aria('assigned_to') ?>><option value="">— Anyone —</option>
           <?php foreach ($staff as $s): ?><option value="<?= (int)$s['id'] ?>" <?= old_in('assigned_to', (string)$user['id']) === (string)$s['id'] ? 'selected' : '' ?>><?= h($s['name']) ?></option><?php endforeach; ?>
-        </select></div>
+        </select><?= field_error('assigned_to') ?></div>
       <?php endif; ?>
       <div class="field"><label for="details">Details</label>
         <input type="text" id="details" name="details" value="<?= h(old_in('details')) ?>"></div>

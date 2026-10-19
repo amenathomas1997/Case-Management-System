@@ -123,9 +123,11 @@ function authorization_email_tracks(string $authNumber): array {
 /**
  * Keep an authorization email for staff to act on. A mailbox message is kept once
  * ($messageKey); a pasted one that repeats a waiting row reuses it. The client is matched
- * when exactly one record fits. Returns the row id.
+ * when exactly one record fits. $sender (4.27.0) is the address Microsoft 365 authenticated
+ * for a mailbox message: a counselor address read from the email's text counts as
+ * confirmed only when it is that sender (authorization_counselor_confirmed()). Returns the row id.
  */
-function authorization_email_store(array $p, string $text, string $source, ?string $messageKey, ?int $actor): int {
+function authorization_email_store(array $p, string $text, string $source, ?string $messageKey, ?int $actor, ?string $sender = null): int {
     if ($source === 'Pasted') {
         $q = db()->prepare("SELECT id FROM incoming_authorizations WHERE auth_number = ? AND status = 'New' ORDER BY id DESC LIMIT 1");
         $q->execute([$p['auth_number']]);
@@ -133,11 +135,29 @@ function authorization_email_store(array $p, string $text, string $source, ?stri
     }
     $matches = array_values(array_filter(authorization_email_clients($p['client_name'], $p['counselor_email']), fn($c) => empty($c['archived_at'])));
     $clientId = count($matches) === 1 ? (int)$matches[0]['id'] : null;
-    db()->prepare('INSERT INTO incoming_authorizations (auth_number, client_name, service_category, amount, hours, approved_on, start_date, end_date, counselor_name, counselor_email,
-            agency, email_text, source, message_key, client_id, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)')
-        ->execute([$p['auth_number'], $p['client_name'] ?: null, $p['service_category'] ?: null, $p['amount'], $p['hours'], $p['approved_on'], $p['start_date'], $p['end_date'],
-            $p['counselor_name'] ?: null, $p['counselor_email'] ?: null, $p['agency'] ?: null, mb_substr($text, 0, 100000), $source, $messageKey, $clientId, $actor]);
+    $vals = [$p['auth_number'], $p['client_name'] ?: null, $p['service_category'] ?: null, $p['amount'], $p['hours'], $p['approved_on'], $p['start_date'], $p['end_date'],
+        $p['counselor_name'] ?: null, $p['counselor_email'] ?: null, $p['agency'] ?: null, mb_substr($text, 0, 100000), $source, $messageKey, $clientId, $actor];
+    $sender = $source === 'Mailbox' && $sender !== null && filter_var(trim($sender), FILTER_VALIDATE_EMAIL) ? mb_substr(strtolower(trim($sender)), 0, 190) : null;
+    try {
+        db()->prepare('INSERT INTO incoming_authorizations (auth_number, client_name, service_category, amount, hours, approved_on, start_date, end_date, counselor_name, counselor_email,
+                agency, email_text, source, message_key, client_id, created_by, sender_email) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)')
+            ->execute(array_merge($vals, [$sender]));
+    } catch (PDOException $e) {
+        if ((string)$e->getCode() !== '42S22') throw $e; // before migration 4.27.0 (no sender_email): never confirmed
+        db()->prepare('INSERT INTO incoming_authorizations (auth_number, client_name, service_category, amount, hours, approved_on, start_date, end_date, counselor_name, counselor_email,
+                agency, email_text, source, message_key, client_id, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)')
+            ->execute($vals);
+    }
     return (int)db()->lastInsertId();
+}
+
+/** Whether a waiting email's counselor address is confirmed (4.27.0): only when Microsoft 365
+ *  authenticated it as the sender (the counselor wrote to the mailbox). An address read from
+ *  the text of a pasted or forwarded email is anyone's to type. */
+function authorization_counselor_confirmed(array $a): bool {
+    $c = strtolower(trim((string)($a['counselor_email'] ?? '')));
+    $s = strtolower(trim((string)($a['sender_email'] ?? '')));
+    return ($a['source'] ?? '') === 'Mailbox' && $c !== '' && $s !== '' && $c === $s;
 }
 
 /** One waiting authorization email. */

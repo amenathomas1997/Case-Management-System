@@ -253,7 +253,7 @@ function workflow_homework_explain(int $homeworkId,array $client,string $questio
     db()->beginTransaction();try{
         $q=db()->prepare('SELECT id FROM clients WHERE id=? FOR UPDATE');$q->execute([(int)$client['id']]);$key='hw-ai-'.(int)$client['id'];
         $q=db()->prepare('SELECT COUNT(*) FROM login_attempts WHERE email=? AND attempted_at>=DATE_SUB(NOW(),INTERVAL 1 DAY)');$q->execute([$key]);if((int)$q->fetchColumn()>=10)throw new DomainException('Daily AI explanation limit reached. Ask your instructor for help.');
-        db()->prepare('INSERT INTO login_attempts(ip,email,success) VALUES(?,?,1)')->execute([$_SERVER['REMOTE_ADDR']??'',$key]);db()->commit();
+        db()->prepare('INSERT INTO login_attempts(ip,email,success) VALUES(?,?,1)')->execute([client_ip(),$key]);db()->commit();
     }catch(Throwable $e){if(db()->inTransaction())db()->rollBack();throw $e;}
     // Each text is redacted before JSON encoding: JSON escapes accented letters, slashes and line breaks, which would hide names and dates from ai_redact().
     $payload=array_map(fn(string $text):string=>ai_redact($text,$client),['homework'=>(string)$h['title'],'instructions'=>mb_substr((string)$h['instructions'],0,12000),'question'=>$question]);

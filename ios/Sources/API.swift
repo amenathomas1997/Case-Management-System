@@ -23,7 +23,10 @@ struct LoginStep: Decodable {
     /// Ties the verify step to this password step (3.0.12 servers): sent back with the code.
     /// nil from a server that does not issue one.
     let loginChallenge: String?
-    private enum CodingKeys: String, CodingKey { case ok, step, totpAvailable, emailSent, codeExpiresMinutes, loginChallenge }
+    /// True for an account with an authenticator app (4.27.0): only its code works, and no
+    /// code is emailed. False (or not reported) as before.
+    let totpRequired: Bool
+    private enum CodingKeys: String, CodingKey { case ok, step, totpAvailable, emailSent, codeExpiresMinutes, loginChallenge, totpRequired }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         ok = try c.decode(Bool.self, forKey: .ok)
@@ -33,6 +36,7 @@ struct LoginStep: Decodable {
         emailSent = try? c.decodeIfPresent(Bool.self, forKey: .emailSent)
         codeExpiresMinutes = try? c.decodeIfPresent(Int.self, forKey: .codeExpiresMinutes)
         loginChallenge = try? c.decodeIfPresent(String.self, forKey: .loginChallenge)
+        totpRequired = ((try? c.decodeIfPresent(Bool.self, forKey: .totpRequired)) ?? nil) ?? false
     }
 }
 
@@ -1007,6 +1011,17 @@ enum DraftStore {
         try? FileManager.default.removeItem(at: dir)
     }
 
+    /// How many drafts this phone keeps, of every account (4.27.0: said before a server change
+    /// removes them).
+    static func countAllAccounts() -> Int {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Drafts", isDirectory: true)
+        guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return 0 }
+        var count = 0
+        for case let url as URL in files where url.pathExtension == "json" { count += 1 }
+        return count
+    }
+
     /// At launch: a draft of any account that has not changed for `maxAge` is removed,
     /// so an abandoned case note or hours entry does not stay on the phone just because
     /// that client's sheet is never opened again (load() drops it only when it is).
@@ -1038,6 +1053,25 @@ enum APIError: LocalizedError {
         case .network: return "Could not reach the server. Check your connection."
         case .outcomeUnknown: return "The server's reply was lost, so it isn't known whether that was saved. Check before trying again."
         }
+    }
+}
+
+/// Refuses a redirect to another host, another port or a plain http address (4.27.0), so the
+/// Authorization header is never sent anywhere but the server the request was made to.
+final class RedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest) async -> URLRequest? {
+        guard let from = task.originalRequest?.url ?? response.url, let to = request.url,
+              to.scheme?.lowercased() == "https",
+              from.host?.lowercased() == to.host?.lowercased(),
+              RedirectGuard.port(of: from) == RedirectGuard.port(of: to) else { return nil }
+        return request
+    }
+
+    /// The port, with none written meaning the scheme's own (443 for https, 80 for http).
+    static func port(of url: URL) -> Int {
+        if let port = url.port { return port }
+        return url.scheme?.lowercased() == "http" ? 80 : 443
     }
 }
 
@@ -1101,6 +1135,24 @@ final class API: ObservableObject {
     /// an out-of-date install apart.
     nonisolated static func identifyApp(_ request: inout URLRequest) {
         request.setValue(appVersion, forHTTPHeaderField: "X-App-Version")
+    }
+
+    /// Every request to the server goes through this session (4.27.0): a redirect is followed
+    /// only to the same host over https, so the session token is never sent to another server
+    /// or over an unencrypted connection (a refused redirect comes back as the reply itself).
+    nonisolated static let session = URLSession(configuration: URLSession.shared.configuration,
+                                                     delegate: RedirectGuard(), delegateQueue: nil)
+
+    /// Where the offline entries, drafts and kept lists on this phone were saved for (4.27.0):
+    /// the API address of the server last signed in to. Signing in to a different one removes them.
+    nonisolated static let dataServerKey = "dataServer"
+
+    /// Said when the server's reply was a redirect the app refused (RedirectGuard), instead of
+    /// "Unexpected response from the server."
+    nonisolated static let redirectRefused = "The server answered by sending the app to another address, which the app does not follow, so nothing was sent there. Your organisation's server address may have changed: check it with your administrator."
+    nonisolated static func isRedirect(_ response: URLResponse) -> Bool {
+        guard let http = response as? HTTPURLResponse else { return false }
+        return (300..<400).contains(http.statusCode)
     }
 
     /// Session token lives in the iOS Keychain (hardware-encrypted, this-device-only).
@@ -1265,19 +1317,19 @@ final class API: ObservableObject {
             let data: Data
             let response: URLResponse
             do {
-                (data, response) = try await URLSession.shared.data(for: request)
+                (data, response) = try await API.session.data(for: request)
             } catch {
                 guard token == sessionToken else { throw APIError.server(accountChanged) }
                 if isAI, (error as? URLError)?.code == .timedOut { throw API.aiTimedOut }
                 throw APIError.network
             }
-            guard token == sessionToken else { throw APIError.server("Your account changed. Please reload this screen.") }
-            // A phone reported lost (3.0.39): remove what the app keeps here and sign out.
-            if let http = response as? HTTPURLResponse, http.statusCode == 401,
-               let refusal = try? JSONSerialization.jsonObject(with: data) as? [String: Any], refusal["wipe"] as? Bool == true {
-                wipeThisPhone()
-                throw APIError.server((refusal["error"] as? String) ?? "This phone was reported lost, so the app removed what it kept here and signed out.")
+            // A phone reported lost (3.0.39): remove what the app keeps here and sign out, even
+            // when the account changed meanwhile (the phone itself was reported).
+            if let refusal = wipeIfReportedLost(response, data: data, sessionToken: sessionToken) {
+                throw APIError.server(refusal)
             }
+            guard token == sessionToken else { throw APIError.server("Your account changed. Please reload this screen.") }
+            if API.isRedirect(response) { throw APIError.server(API.redirectRefused) }
             if let http = response as? HTTPURLResponse, http.statusCode == 401, action != "login", action != "verify",
                resent < 2, try await waitForSignIn() {
                 resent += 1
@@ -1326,16 +1378,28 @@ final class API: ObservableObject {
             return
         }
         clearIdentity()
+        // Signed in to a server other than the one what is kept here was saved for (4.27.0):
+        // only now, once the sign-in worked, does that go (the person was asked first when
+        // entries were waiting; see LoginView). The same server, however typed, keeps it all.
+        let here = API.base.absoluteString
+        if let previous = UserDefaults.standard.string(forKey: API.dataServerKey), previous != here {
+            removeEveryAccountsData()
+        }
+        UserDefaults.standard.set(here, forKey: API.dataServerKey)
         userId = newId ?? 0
         userName = name
         token = newToken   // flips RootView to the main tabs
     }
 
+    /// `refusal`, when given, is handed the whole refusal (ok false) before it is thrown, for a
+    /// screen that needs more than its message (4.27.0: schedule_session's authorization_hash).
     func call<T: Decodable>(_ action: String, method: String = "GET",
-                            query: [String: String] = [:], body: [String: Any]? = nil) async throws -> T {
+                            query: [String: String] = [:], body: [String: Any]? = nil,
+                            refusal: (([String: Any]) -> Void)? = nil) async throws -> T {
         let (data, _) = try await send(action, method: method, query: query, body: body,
                                        accountChanged: "Your account changed. Sign in again before saving this entry.")
         if let errorBody = try? decoder.decode(APIErrorResponse.self, from: data), !errorBody.ok {
+            if let refusal, let fields = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] { refusal(fields) }
             throw APIError.server(errorBody.error ?? "Something went wrong.")
         }
         do {
@@ -1491,7 +1555,18 @@ final class API: ObservableObject {
     }
     @Published var pendingSync: Int = 0
     @Published var syncError: String?
-    @Published var syncNoticeDismissed = false  // the person cleared the sync notice this session
+    @Published var syncNoticeDismissed = false {  // the person cleared the sync notice this session
+        didSet { if syncNoticeDismissed { expiredNotice = nil } }
+    }
+    /// Offline entries of this account removed for being too old (4.27.0), said in the sync
+    /// notice until the person dismisses it: told once, not on every return to the app.
+    private var expiredNotice: String?
+    /// An offline entry not sent within this long is removed, like an old draft: client text is
+    /// not kept on the phone indefinitely (4.27.0).
+    static let queueMaxAge: TimeInterval = 30 * 24 * 60 * 60
+    /// How many of an account's entries expired while another account was signed in, told at
+    /// its next upload (a count only: UserDefaults is not protected like the queue).
+    private static func expiredCountKey(_ owner: Int) -> String { "expiredOfflineEntries.\(owner)" }
     @AppStorage("userId") var userId: Int = 0
     private var isFlushing = false
     /// Callers that asked for an upload while one was already running (Retry now while the upload
@@ -1607,9 +1682,11 @@ final class API: ObservableObject {
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.httpBody = item.body
                 do {
-                    let (data, response) = try await URLSession.shared.data(for: request)
+                    let (data, response) = try await API.session.data(for: request)
                     guard let http = response as? HTTPURLResponse else { break }
                     if http.statusCode == 401 {
+                        // A phone reported lost (4.27.0: here too): everything goes, nothing more is sent.
+                        if wipeIfReportedLost(response, data: data, sessionToken: sessionToken) != nil { return }
                         // Sign-in is asked for above the open screens; the entries upload after it.
                         if token == sessionToken { expireSession() }
                         break
@@ -1621,6 +1698,10 @@ final class API: ObservableObject {
                         // Already checked in (from another phone, or an earlier try whose reply
                         // was lost): the check-in is recorded, so the entry is done.
                         done.insert(item.id)
+                    } else if API.isRedirect(response) {
+                        // Refused redirect: nothing reached the server; kept, and said why.
+                        transient = "“\(item.label)” could not sync yet and is still saved on this phone. " + API.redirectRefused
+                        break
                     } else if http.statusCode >= 500 || http.statusCode == 429 {
                         // Transient server/rate-limit error: keep the entry and stop; it retries later.
                         transient = "“\(item.label)” could not sync yet and is still saved on this phone. "
@@ -1648,6 +1729,9 @@ final class API: ObservableObject {
                 }
             }
             if changed { try saveQueue(current) } else { pendingSync = ownPending(current) }
+            // Only what is still here after sending is expired (4.27.0): an old entry that could
+            // be sent just now was sent, not dropped.
+            if token == sessionToken, userId == owner, expireQueue(owner: owner) { current = try loadQueue() }
             notice = syncNotice(current, transient: transient)
         } catch {
             notice = "Could not read or update offline entries. They have not been discarded."
@@ -1661,6 +1745,7 @@ final class API: ObservableObject {
     /// and says where to deal with it.
     private func syncNotice(_ q: [PendingCall], transient: String?) -> String? {
         var parts: [String] = []
+        if let expiredNotice { parts.append(expiredNotice) }
         if let transient { parts.append(transient) }
         let refused = userId > 0 ? q.filter { $0.owner == userId && $0.lastError != nil } : []
         if let first = refused.first {
@@ -1676,6 +1761,49 @@ final class API: ObservableObject {
             parts.append("\(legacy) older offline entr\(legacy == 1 ? "y has" : "ies have") no verified account owner and remain saved for recovery.")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// Removes offline entries older than `queueMaxAge` (every account's: client text is not kept
+    /// indefinitely for anyone) and says once what went for `owner`. An entry from a build that
+    /// did not record when it was saved is dated now, so it gets the full time from here.
+    @discardableResult
+    private func expireQueue(owner: Int) -> Bool {
+        guard var q = try? loadQueue(), !q.isEmpty else { return false }
+        let now = Date()
+        var changed = false
+        for i in q.indices where q[i].savedAt == nil {
+            q[i].savedAt = now
+            changed = true
+        }
+        let expired = q.filter { now.timeIntervalSince($0.savedAt ?? now) > API.queueMaxAge }
+        if !expired.isEmpty {
+            q.removeAll { now.timeIntervalSince($0.savedAt ?? now) > API.queueMaxAge }
+            changed = true
+            for (other, entries) in Dictionary(grouping: expired.filter { $0.owner > 0 && $0.owner != owner }, by: \.owner) {
+                let key = API.expiredCountKey(other)
+                UserDefaults.standard.set(UserDefaults.standard.integer(forKey: key) + entries.count, forKey: key)
+            }
+        }
+        if changed { try? saveQueue(q) }
+        let own = expired.filter { $0.owner == owner }.map(\.label)
+        let key = API.expiredCountKey(owner)
+        let earlier = UserDefaults.standard.integer(forKey: key)
+        UserDefaults.standard.removeObject(forKey: key)
+        let total = own.count + earlier
+        guard total > 0 else { return changed }
+        let days = Int(API.queueMaxAge / 86400)
+        let named = own.count == 1 && earlier == 0 ? "“\(own[0])” was" : "\(total) offline entries were"
+        expiredNotice = "\(named) not sent within \(days) days, so \(total == 1 ? "it was" : "they were") removed from this phone. Enter \(total == 1 ? "it" : "them") again if still needed."
+        syncNoticeDismissed = false
+        return changed
+    }
+
+    /// How many offline entries would be removed by signing in to the server at `next` (4.27.0):
+    /// none when it is the server they were saved for, however its address was typed.
+    func entriesLostBySigningIn(to next: URL) -> Int {
+        let dataServer = UserDefaults.standard.string(forKey: API.dataServerKey) ?? API.base.absoluteString
+        guard next.absoluteString != dataServer else { return 0 }
+        return (try? loadQueue().count) ?? 0
     }
 
     /// The signed-in account's offline entries, oldest first (the Offline entries screen).
@@ -1722,6 +1850,9 @@ final class API: ObservableObject {
         }
         protectedCopyChangeCount = nil
         #endif
+        // Nor the previous account's session reminders (4.27.0).
+        LocalNotifications.shared.clearScheduled()
+        expiredNotice = nil
         token = ""
         userName = ""
         userId = 0
@@ -1788,27 +1919,75 @@ final class API: ObservableObject {
         #endif
     }
 
-    /// The server reported this phone lost: every account's drafts, the offline queue and the
-    /// saved lists go, scheduled reminders are cleared, and the app signs out (3.0.39).
-    func wipeThisPhone() {
-        let owner = userId
-        DraftStore.removeAll(owner: owner)
-        OfflineCache.removeAll(owner: owner)
-        try? FileManager.default.removeItem(at: queueURL)
+    /// When a refusal (401) says this phone was reported lost, wipes it and returns what to say;
+    /// nil for any other reply. Every request path checks this (4.27.0: the offline queue and
+    /// document downloads too), so the wipe is never taken for an expired session.
+    @discardableResult
+    func wipeIfReportedLost(_ response: URLResponse, data: Data, sessionToken: String) -> String? {
+        guard let http = response as? HTTPURLResponse, http.statusCode == 401,
+              let refusal = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              refusal["wipe"] as? Bool == true else { return nil }
+        wipeThisPhone(confirming: sessionToken)
+        return (refusal["error"] as? String) ?? "This phone was reported lost, so the app removed what it kept here and signed out."
+    }
+
+    /// The server reported this phone lost: every account's drafts, prepared signatures, kept
+    /// lists and offline entries go (4.27.0: the whole Drafts and OfflineCache folders, not only
+    /// the signed-in account's), scheduled reminders are cleared, and the app signs out (3.0.39).
+    /// Once all of it is gone the server is told (wipe_done with the old session), so it stops
+    /// answering "wipe"; until then it keeps answering it, and the app wipes again.
+    func wipeThisPhone(confirming sessionToken: String) {
+        let wiped = removeEveryAccountsData()
         LocalNotifications.shared.clearScheduled()
         clearIdentity()
         sessionNotice = "This phone was reported lost, so the app removed everything it kept here and signed out. Sign in again only if this phone is back with you."
+        if wiped, !sessionToken.isEmpty { API.confirmWipe(sessionToken) }
+    }
+
+    /// Removes the offline entries, drafts and kept lists (prepared signatures among them) of
+    /// every account on this phone. True when none of it is left.
+    @discardableResult
+    private func removeEveryAccountsData() -> Bool {
+        let fm = FileManager.default
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let legacyQueue = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("pending_sync.json")
+        let paths = [support.appendingPathComponent("Drafts", isDirectory: true),
+                     support.appendingPathComponent("OfflineCache", isDirectory: true),
+                     queueURL, legacyQueue]
+        for url in paths { try? fm.removeItem(at: url) }
+        pendingSync = 0
+        PreviewStore.sweep()
+        return !paths.contains { fm.fileExists(atPath: $0.path) }
+    }
+
+    /// Tells the server the wipe is done (best effort, errors ignored), to the server the
+    /// session belongs to, taken now.
+    private static func confirmWipe(_ sessionToken: String) {
+        let doneURL = URL(string: API.base.absoluteString + "?action=wipe_done")!
+        Task {
+            var request = URLRequest(url: doneURL)
+            API.identifyApp(&request)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+            _ = try? await API.session.data(for: request)
+        }
     }
 
     /// Point the app at another organisation's server (4.6.0, builds that ask at sign-in). When
-    /// it changes, everything kept for the old one goes first: the session (ended at the old
-    /// server), drafts, the copies kept for reading offline and writes waiting to upload.
+    /// it changes, the session is ended at the old server. What is kept on the phone (offline
+    /// entries, drafts, kept lists) stays until a sign-in to a really different server works
+    /// (4.27.0: finishSignIn), so a mistyped address or a failed sign-in loses nothing.
     func switchServer(to address: String) {
         guard let next = API.apiURL(fromAddress: address) else { return }
-        if next != API.base {
-            signOut()
-            try? FileManager.default.removeItem(at: queueURL)
-            pendingSync = 0
+        if next.absoluteString != API.base.absoluteString {
+            // An install from before 4.27.0 never recorded it: what is here was saved for the
+            // server in use until now.
+            if UserDefaults.standard.string(forKey: API.dataServerKey) == nil {
+                UserDefaults.standard.set(API.base.absoluteString, forKey: API.dataServerKey)
+            }
+            let old = token
+            clearIdentity()
+            if !old.isEmpty { API.revoke(old) }   // to the old server: the address is taken now
         }
         UserDefaults.standard.set(address.trimmingCharacters(in: .whitespacesAndNewlines), forKey: API.serverKey)
     }
@@ -1835,10 +2014,11 @@ final class API: ObservableObject {
             API.identifyApp(&request)
             request.httpMethod = "POST"
             request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
-            _ = try? await URLSession.shared.data(for: request)
+            _ = try? await API.session.data(for: request)
         }
     }
 }
+
 
 extension Color {
     /// Brand colours come from the asset catalog with a light, a dark and an Increase Contrast

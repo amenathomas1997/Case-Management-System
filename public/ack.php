@@ -32,7 +32,7 @@ if (!$csrfStale && $ack && !$ack['acked_at'] && $_SERVER['REQUEST_METHOD'] === '
     try {
         // Confirmation and its case note commit together.
         $claim = db()->prepare('UPDATE report_acks SET acked_at = NOW(), ack_ip = ? WHERE id = ? AND acked_at IS NULL');
-        $claim->execute([$_SERVER['REMOTE_ADDR'] ?? '', $ack['id']]);
+        $claim->execute([client_ip(), $ack['id']]);
         if ($claim->rowCount() === 1) {
             db()->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)')
                 ->execute([(int)$ack['client_id'], 'Case Note',

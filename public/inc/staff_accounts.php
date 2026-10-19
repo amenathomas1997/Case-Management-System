@@ -127,7 +127,7 @@ function staff_m365_sync(): array {
         if ($data['accountEnabled'] !== false) continue;
         if (in_array('admin', resolve_perms($u)['perms'], true)) { $admins[] = $u['name']; continue; }
         db()->prepare('UPDATE users SET is_active = 0 WHERE id = ? AND is_active = 1')->execute([(int)$u['id']]);
-        db()->prepare('DELETE FROM api_tokens WHERE user_id = ?')->execute([(int)$u['id']]);
+        db()->prepare('DELETE FROM api_tokens WHERE user_id = ? AND wipe_requested_at IS NULL')->execute([(int)$u['id']]);
         db()->prepare('UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0')->execute([(int)$u['id']]);
         db()->prepare('UPDATE login_otps SET consumed = 1 WHERE user_id = ? AND consumed = 0')->execute([(int)$u['id']]);
         audit(null, 'user.deactivate', 'user', (int)$u['id'], 'disabled in Microsoft 365');

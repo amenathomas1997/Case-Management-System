@@ -10,7 +10,7 @@ $error = null;
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = strtolower(trim(is_string($_POST['email'] ?? null) ? $_POST['email'] : ''));
     $password = is_string($_POST['password'] ?? null) ? $_POST['password'] : '';
-    $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+    $ip = client_ip();
 
     // A blank or partial entry is named on its own field and is not counted as a
     // failed sign-in (saying a box is empty reveals nothing about accounts).
@@ -25,14 +25,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $fieldErrs) {
     set_form_errors($fieldErrs);
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Rate limit: max 8 failed attempts per email or IP in 15 minutes. A signed-in
-    // user's password re-check failures ('reauth:') and wrong counselor-portal codes
-    // ('vrc-fail-<id>'), each limited on their own, do not use up the sign-in budget
-    // of everyone sharing the address.
+    // Rate limits (4.27.0), on failed attempts in the last 15 minutes:
+    //  - this account from this address: 8. Guessing from one place stops here.
+    //  - this account from anywhere: 20. A hard cap that still stops guessing, set
+    //    high enough that a stranger cannot shut a named person out with a few tries.
+    //  - this address across accounts: 30, so an office sharing one address is not
+    //    shut out by a few mistyped passwords.
+    // A signed-in user's password re-check failures ('reauth:'), wrong codes at the
+    // second step ('verify:', limited per account in verify.php) and wrong
+    // counselor-portal codes ('vrc-fail-<id>') are each limited on their own and do
+    // not use up the sign-in budget of everyone sharing the address.
     // Attempts are recorded under 'login:<email>', so whatever is typed here can
     // never land in another limiter's bucket ('verify:<email>', 'portal-msg-7'…).
     // Rows under the bare email (earlier releases, and the app sign-in until it
-    // uses the same key) still count toward the same limit.
+    // uses the same key) still count toward the same limits.
     $lkey = 'login:' . $email;
     // Each attempt is recorded as a failure BEFORE it is counted or checked (and
     // the record removed if it is refused untested, or marked a success), as
@@ -40,8 +46,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $fieldErrs) {
     // cap during the slow password check and all be tested.
     db()->prepare('INSERT INTO login_attempts (ip, email, success) VALUES (?,?,0)')->execute([$ip, $lkey]);
     $attemptRow = (int)db()->lastInsertId();
-    $rl = db()->prepare("SELECT COUNT(*) FROM login_attempts WHERE success = 0 AND attempted_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE) AND (email IN (?, ?) OR (ip = ? AND email NOT LIKE 'reauth:%' AND email NOT LIKE 'vrc-fail-%'))");
-    $rl->execute([$lkey, $email, $ip]);
+    $rl = db()->prepare("SELECT COALESCE(SUM(email IN (?, ?) AND ip = ?), 0) AS here, COALESCE(SUM(email IN (?, ?)), 0) AS anywhere,
+        COALESCE(SUM(ip = ? AND email NOT LIKE 'reauth:%' AND email NOT LIKE 'verify:%' AND email NOT LIKE 'vrc-fail-%'), 0) AS by_ip
+        FROM login_attempts WHERE success = 0 AND attempted_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE) AND (email IN (?, ?) OR ip = ?)");
+    $rl->execute([$lkey, $email, $ip, $lkey, $email, $ip, $lkey, $email, $ip]);
+    $fails = $rl->fetch();
+    // Each count includes this attempt.
+    $tooMany = (int)$fails['here'] > 8 || (int)$fails['anywhere'] > 20 || (int)$fails['by_ip'] > 30;
     // A correct password emails a new code and cancels the one before, so the codes
     // sent are capped per account too (shared with the app sign-in, which uses the
     // same key): someone who knows the password but not the mailbox cannot flood it,
@@ -51,7 +62,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $fieldErrs) {
     $sentQ = db()->prepare('SELECT COUNT(*) FROM login_attempts WHERE email = ? AND success = 1 AND attempted_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE)');
     $sentQ->execute([$lkey]);
     $codesCapped = (int)$sentQ->fetchColumn() >= 5;
-    if ((int)$rl->fetchColumn() > 8) {   // 8 earlier failures plus this attempt
+    if ($tooMany) {
         db()->prepare('DELETE FROM login_attempts WHERE id = ?')->execute([$attemptRow]);
         $error = 'Too many sign-in attempts. Please wait 15 minutes and try again.';
     } elseif ($codesCapped) {
@@ -66,7 +77,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $fieldErrs) {
         $ok = $user
             ? password_verify($password, $user['password_hash'])
             : password_verify($password, dummy_password_hash()) && false;
-        if ($ok) {
+        if ($ok && !empty($user['totp_enabled']) && !empty($user['totp_secret'])) {
+            // No email goes to an account with an authenticator app (4.27.0), so a
+            // correct password is not a code sent and does not use up the 5-codes
+            // cap; verify.php's own failure limit protects the app code.
+            db()->prepare('DELETE FROM login_attempts WHERE id = ?')->execute([$attemptRow]);
+        } elseif ($ok) {
             db()->prepare('UPDATE login_attempts SET success = 1 WHERE id = ?')->execute([$attemptRow]);
             // Counted again with this one included: requests sent in parallel can
             // all pass the check above during the slow password check.
@@ -79,16 +95,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $fieldErrs) {
         }
 
         if ($ok) {
-            // Password verified — issue 6-digit OTP and email it (2FA step)
+            // Password verified: the second step. A code is emailed, except to an
+            // account with an authenticator app (4.27.0, owner decision): it must
+            // use the app (or a passkey), so the mailbox alone never gets anyone
+            // in. Its row is still made, unsent, to carry the 5 tries per sign-in
+            // that verify.php counts for both kinds of code.
+            $totpOnly = !empty($user['totp_enabled']) && !empty($user['totp_secret']);
             $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
             // Codes are bound to the channel that issued them: a web code is never
             // accepted by the app sign-in, nor an app code here.
             db()->prepare("UPDATE login_otps SET consumed = 1 WHERE user_id = ? AND channel = 'web' AND consumed = 0")->execute([$user['id']]);
             db()->prepare("INSERT INTO login_otps (user_id, code_hash, expires_at, channel) VALUES (?,?, DATE_ADD(NOW(), INTERVAL ? MINUTE), 'web')")
-                ->execute([$user['id'], password_hash($code, PASSWORD_DEFAULT), ((int)cfg('otp_expiry_minutes') ?: 10)]);
+                ->execute([$user['id'], password_hash($totpOnly ? bin2hex(random_bytes(16)) : $code, PASSWORD_DEFAULT), ((int)cfg('otp_expiry_minutes') ?: 10)]);
 
-            [$subj, $body] = email_template('otp', ['name' => $user['name'], 'code' => $code, 'minutes' => (string)((int)cfg('otp_expiry_minutes') ?: 10)]);
-            $sent = send_app_mail($user['email'], $subj, $body);
+            $sent = true;
+            if (!$totpOnly) {
+                [$subj, $body] = email_template('otp', ['name' => $user['name'], 'code' => $code, 'minutes' => (string)((int)cfg('otp_expiry_minutes') ?: 10)]);
+                $sent = send_app_mail($user['email'], $subj, $body);
+            }
 
             // A clean session for the new sign-in: nothing an earlier account
             // left in this browser carries over (see fresh_auth_session()).
@@ -111,7 +135,7 @@ $typedEmail = $email ?? '';
 ?>
 <div class="card auth-card">
   <h1>Sign in</h1>
-  <p class="muted">Two-step verification: after entering your password, a 6-digit code will be emailed to you.
+  <p class="muted">Two-step verification: after entering your password, a 6-digit code will be emailed to you, or, if you have set up an authenticator app, you enter the code it shows.
      Need more time? Choose "Send a new code" to get a new code with a full time limit.</p>
   <p class="muted">For privacy, you are signed out after <?= (int)cfg('session_timeout_minutes') ?> minutes without activity —
      a warning appears first. Keep your form open, sign in again in a new tab, then return to submit it. File uploads may need to be selected again.</p>

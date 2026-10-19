@@ -68,6 +68,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
         $t = $tgt->fetch();
         $fill = array_intersect_key(merge_fillable($t, $s), array_flip($chosenFills));
         $filledLabels = array_values(array_intersect_key(MERGE_FILL_FIELDS, $fill));
+        $fill = merge_fill_columns($fill, $s);
+        // A legal hold on the duplicate is never lost (4.27.0): the kept record takes it
+        // when it has none of its own (its own hold stays otherwise), read from the
+        // locked rows, so the records that move across stay protected from purging.
+        $holdCarried = merge_hold_carry($t, $s);
+        $fill += $holdCarried;
+        $dupeHeld = !empty($s['hold_at']);
         // A copied counselor email keeps the duplicate's confirmation state: an
         // address staff have not confirmed stays unconfirmed on the kept record.
         if (isset($fill['counselor_email']) && array_key_exists('counselor_verified', $t)) {
@@ -119,7 +126,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
             $movedSessionRows = $sq->fetchAll();
             if ($movedSessionRows) {
                 $ids = array_map(fn($r) => (int)$r['id'], $movedSessionRows);
-                $ms = $pdo->prepare('UPDATE scheduled_sessions SET user_id = ?, reminder_sent = 0 WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')');
+                $ms = $pdo->prepare('UPDATE scheduled_sessions SET user_id = ?, reminder_sent = 0, client_reminded_at = NULL, staff_reminded_at = NULL WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')');
                 $ms->execute([$finalAssignee, ...$ids]);
                 $movedSessions = count($ids);
             }
@@ -171,11 +178,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
             ->execute([$keepId, 'Case Note', 'Duplicate record merged',
                 "The duplicate client record \"{$s['name']}\" (#{$mergeId}) was merged into this record by {$user['name']} on " . date('F j, Y') . '.'
                 . ($filledLabels ? ' Blank fields filled from the duplicate: ' . implode(', ', $filledLabels) . '.' : '')
-                . ($unarchive ? ' This record was archived and was re-opened by the merge.' : ''),
+                . ($unarchive ? ' This record was archived and was re-opened by the merge.' : '')
+                . ($holdCarried ? ' The duplicate was on hold (' . (string)$holdCarried['hold_reason'] . '); the hold is kept on this record.' : '')
+                . ($dupeHeld && !$holdCarried ? ' The duplicate was also on hold (' . (string)$s['hold_reason'] . '); this record\'s own hold stays.' : ''),
                 (int)$user['id']]);
         $pdo->commit();
         audit($user['id'], 'client.merge', 'client', $keepId, "merged #{$mergeId} ({$s['name']}) into #{$keepId}"
-            . (($filledKeys = array_keys(array_diff_key($fill, ['archived_at' => 1]))) ? '; filled: ' . implode(', ', $filledKeys) : '')
+            . (($filledKeys = array_keys(array_diff_key($fill, ['archived_at' => 1, 'hold_at' => 1, 'hold_by' => 1, 'hold_reason' => 1]))) ? '; filled: ' . implode(', ', $filledKeys) : '')
+            . ($holdCarried ? "; the duplicate's hold was kept on this record" : '')
             . ($unarchive ? '; re-opened (was archived)' : '')
             . ($portalMoved ? '; portal link moved from the duplicate' : '')
             . ($portalDropped ? "; duplicate's portal link turned off" : ''));
@@ -203,7 +213,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
                 . ($told['to'] ? ' The new instructor was sent the list.' : '') . ($told['from'] ? ' The previous instructor was told they were moved.' : '') : '')
             . ($portalMoved ? ' The portal link the client had for the duplicate keeps working and now opens this record.' : '')
             . ($portalDropped ? ' The duplicate\'s portal link no longer works, because this record already had its own: if the client was using the duplicate\'s link, send them a new portal link.' : '')
-            . ($unarchive ? ' The kept record was archived; the merge re-opened it.' : ''));
+            . ($unarchive ? ' The kept record was archived; the merge re-opened it.' : '')
+            . ($holdCarried ? ' The duplicate was on hold, so this record is now on hold for the same reason.' : ''));
         redirect('client.php?id=' . $keepId);
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -275,6 +286,18 @@ page_header('Merge clients', $user, 'clients');
           ? 'Both records have a client portal link. The kept record\'s link stays; the duplicate\'s stops working, so if the client uses that one, send them a new portal link after the merge.'
           : 'The duplicate has a client portal link. It keeps working after the merge and opens the kept record.' ?></li>
       <?php endif; ?>
+      <?php // A legal hold on either record (4.27.0): said here, and never lost by the merge.
+      $hq = db()->prepare('SELECT id, hold_at, hold_reason FROM clients WHERE id IN (?, ?) AND hold_at IS NOT NULL');
+      $hq->execute([$keepId, $mergeId]);
+      $holds = [];
+      foreach ($hq->fetchAll() as $hr) $holds[(int)$hr['id']] = $hr;
+      if (isset($holds[$mergeId])): ?>
+      <li><?= isset($holds[$keepId])
+          ? 'Both records are on hold. The kept record\'s hold (' . h($holds[$keepId]['hold_reason']) . ') stays; the duplicate\'s reason (' . h($holds[$mergeId]['hold_reason']) . ') is written in the merge note.'
+          : 'The duplicate is on hold since ' . h(fmt_date($holds[$mergeId]['hold_at'])) . ' (' . h($holds[$mergeId]['hold_reason']) . '). The hold will be kept: the record you keep is placed on hold for the same reason, so nothing moved across can be purged.' ?></li>
+      <?php elseif (isset($holds[$keepId])): ?>
+      <li>The record you keep is on hold (<?= h($holds[$keepId]['hold_reason']) ?>). The hold stays after the merge.</li>
+      <?php endif; ?>
       <?php if ($keep['archived_at'] !== null && $dupe['archived_at'] === null): ?>
       <li>The record you keep is archived. The merge re-opens it, so the duplicate's current work stays in the client lists; its status is not changed.</li>
       <?php elseif ($keep['archived_at'] !== null): ?>
@@ -299,6 +322,11 @@ page_header('Merge clients', $user, 'clients');
           $un->execute([(int)$val]);
           $shown = (string)($un->fetchColumn() ?: 'user #' . (int)$val);
       } elseif ($f === 'office_id') $shown = (string)(office_get((int)$val)['name'] ?? 'office #' . (int)$val);
+      elseif (in_array($f, ['ipe_date', 'ipe_amended_on'], true)) $shown = fmt_date((string)$val);
+      elseif ($f === 'privacy_notice_at') $shown = fmt_date((string)$val) . (!empty($dupeRow['privacy_notice_how']) ? ', ' . strtolower((string)$dupeRow['privacy_notice_how']) : '');
+      elseif ($f === 'preferred_language') $shown = $val === 'es' ? 'Spanish' : (string)$val;
+      elseif ($f === 'time_zone') $shown = (string)(US_TIME_ZONES[$val] ?? $val);
+      elseif ($f === 'vision_onset_age') $shown = (int)$val . ' years';
       else $shown = (string)$val;
       // An unconfirmed counselor or client email is copied as unconfirmed, and says so here.
       $fieldLabel = MERGE_FILL_FIELDS[$f] . (($f === 'counselor_email' && array_key_exists('counselor_verified', $dupeRow) && (int)$dupeRow['counselor_verified'] !== 1)

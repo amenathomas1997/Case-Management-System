@@ -60,7 +60,16 @@ $sessions = db()->query("SELECT s.*, c.name AS client_name, c.email AS client_em
       AND s.start_at > NOW() AND s.start_at < DATE_ADD(CURDATE(), INTERVAL " . (cms_number('session_reminder_days') + 1) . " DAY)")->fetchAll();
 
 $sent = 0; $failed = []; $unconfirmed = [];
-$mark = db()->prepare('UPDATE scheduled_sessions SET reminder_sent = 1 WHERE id = ?');
+// Each recipient is recorded on its own (4.27.0, client_reminded_at and staff_reminded_at): a
+// failure for one is retried for that one only, so the other is not emailed again every run,
+// and a client address that cannot be emailed is reported once. Until the columns exist the
+// whole session is retried as before. Once both sides are done the session is marked and the
+// two times are cleared, so a later reassignment (reminder_sent back to 0) reminds both again.
+$perRecipient = true;
+try { db()->query('SELECT client_reminded_at, staff_reminded_at FROM scheduled_sessions LIMIT 0'); } catch (Throwable $e) { $perRecipient = false; }
+$mark = db()->prepare('UPDATE scheduled_sessions SET reminder_sent = 1' . ($perRecipient ? ', client_reminded_at = NULL, staff_reminded_at = NULL' : '') . ' WHERE id = ?');
+$markClient = $perRecipient ? db()->prepare('UPDATE scheduled_sessions SET client_reminded_at = NOW() WHERE id = ?') : null;
+$markStaff = $perRecipient ? db()->prepare('UPDATE scheduled_sessions SET staff_reminded_at = NOW() WHERE id = ?') : null;
 // An email template that does not use {day} says "tomorrow": a client must never
 // be told that a session today is tomorrow's.
 $sameDay = fn(string $text): string => (string)preg_replace_callback('/\btomorrow\b/i',
@@ -97,7 +106,11 @@ foreach ($sessions as $s) {
         : ($s['location'] ? "\nWhere: {$s['location']}" : '');
     $current = (bool)($s['client_current'] ?? true);
     $staffSees = !empty($s['staff_sees_client']);
-    $allSent = true; $anyAddress = false; $badAddress = false; $emailHeld = false;
+    $anyAddress = false; $badAddress = false; $emailHeld = false;
+    // null: nothing sent to that side this run; true or false: the send's outcome.
+    $clientSent = null; $staffSent = null;
+    $clientDone = $perRecipient && !empty($s['client_reminded_at']);
+    $staffDone = $perRecipient && !empty($s['staff_reminded_at']);
     $prefersOther = in_array($s['client_contact'] ?? '', ['Phone', 'Postal mail'], true);
     // Reached another way: no client email, an unusable one, or a preference for phone or post.
     $callClient = $current && ($prefersOther || !filter_var((string)($s['client_email'] ?? ''), FILTER_VALIDATE_EMAIL));
@@ -107,11 +120,14 @@ foreach ($sessions as $s) {
             // confirmed by staff: nothing is sent to it. The instructor's reminder
             // and the administrators' alert below ask for it to be confirmed.
             $emailHeld = true;
-        } elseif (!filter_var($s['client_email'], FILTER_VALIDATE_EMAIL)) {
-            // An address that cannot be emailed is skipped; the session is left
-            // unmarked and reported below so someone contacts the client directly.
+        } elseif ($clientDone) {
+            // Already reminded (or reported) on an earlier run: only the staff side is retried.
             $anyAddress = true;
-            $allSent = false; $badAddress = true;
+        } elseif (!filter_var($s['client_email'], FILTER_VALIDATE_EMAIL)) {
+            // An address that cannot be emailed is skipped and reported below so someone
+            // contacts the client directly: once, when per-recipient records exist.
+            $anyAddress = true;
+            $badAddress = true;
         } else {
             $anyAddress = true;
             // {when} and {where} keep their English labels for templates written
@@ -146,7 +162,7 @@ foreach ($sessions as $s) {
                 $later = fn(string $text): string => (string)preg_replace_callback('/\btomorrow\b/i', fn(array $m): string => ctype_upper($m[0][0]) ? ucfirst($clientDay) : $clientDay, $text);
                 $subj = $later($subj); $body = $later($body);
             }
-            $allSent = send_app_mail($s['client_email'], $subj, $body) && $allSent;
+            $clientSent = send_app_mail($s['client_email'], $subj, $body);
         }
     }
     $staffBody = "Session reminder.\n\nClient: {$s['client_name']}\nWhen: {$when}" . ($cz !== null ? "\nThe client's time: " . zone_date($cz, 'g:i A T', $startTs) : '') . "{$where}\n"
@@ -156,39 +172,50 @@ foreach ($sessions as $s) {
         . ($callClient && !$emailHeld ? "\nRemind the client yourself: " . ($prefersOther ? 'they prefer ' . strtolower((string)$s['client_contact']) : 'there is no email address to remind them at')
             . (trim((string)($s['client_phone'] ?? '')) !== '' ? '. Phone: ' . $s['client_phone'] : '') . ".\n" : '');
     $staffSubject = ucfirst($day) . ': training session — ' . date('g:i A T', $startTs);
-    if ($s['staff_email'] && $staffSees) {
+    if ($staffDone) {
         $anyAddress = true;
-        $allSent = send_app_mail($s['staff_email'], $staffSubject, $staffBody) && $allSent;
+    } elseif ($s['staff_email'] && $staffSees) {
+        $anyAddress = true;
+        $staffSent = send_app_mail($s['staff_email'], $staffSubject, $staffBody);
     } elseif ($s['active_staff_id'] && !$staffSees) {
         // Still booked with a staff member who no longer has this client on their
         // caseload (the client was reassigned): they are not sent client details.
         $anyAddress = true;
         $stranded = "This session is still booked with {$s['staff_name']}, who no longer has this client on their caseload. "
             . "Cancel it on the Schedule page and book it again with the right instructor if it should go ahead: " . cfg('base_url') . "/schedule.php\n";
-        $allSent = ($s['assignee_email']
+        $staffSent = ($s['assignee_email']
             ? send_app_mail($s['assignee_email'], $staffSubject, $staffBody . "\n" . $stranded)
             : notify_admins(ucfirst($dayNoun) . "'s session is booked with staff who no longer have this client",
-                $staffBody . "\n" . $stranded)) && $allSent;
+                $staffBody . "\n" . $stranded));
     } elseif ($s['user_id'] && !$s['active_staff_id']) {
         // The session still belongs to a deactivated (or removed) account, so no
         // staff member would hear about it: the administrators are asked to move it.
         // Any one administrator can act on it, so one successful email is enough.
         $anyAddress = true;
-        $allSent = notify_admins(ucfirst($dayNoun) . "'s session belongs to a deactivated account — reassign it",
+        $staffSent = notify_admins(ucfirst($dayNoun) . "'s session belongs to a deactivated account — reassign it",
             "A session {$day} is still assigned to a staff account that is no longer active, so no staff member was reminded about it.\n\n"
             . "Client: {$s['client_name']}\nWhen: {$when}{$where}\n\n"
             . "Transfer that account's caseload on its Users page (this moves its upcoming sessions too): " . cfg('base_url') . '/users.php?id=' . (int)$s['user_id'] . "\n"
-            . "Or cancel the session on the Schedule page and book it again with an active instructor: " . cfg('base_url') . "/schedule.php\n") && $allSent;
+            . "Or cancel the session on the Schedule page and book it again with an active instructor: " . cfg('base_url') . "/schedule.php\n");
     }
     // Mark only when every addressed recipient was sent a reminder. A failed
     // reminder is retried by each later run until the session starts, and the
     // failures are reported below instead of being left to look like a quiet success.
+    if ($perRecipient) {
+        // A client address that cannot be emailed is final for the client side.
+        if ($clientSent === true || $badAddress) $markClient->execute([(int)$s['id']]);
+        if ($staffSent === true) $markStaff->execute([(int)$s['id']]);
+        $allSent = $clientSent !== false && $staffSent !== false;
+    } else {
+        $allSent = $clientSent !== false && $staffSent !== false && !$badAddress;
+    }
     $label = $s['client_name'] . ' (' . $day . ' at ' . date('g:i A', $startTs);
     if ($allSent) {
         $mark->execute([(int)$s['id']]);
         if ($anyAddress) $sent++;
         if ($emailHeld) $unconfirmed[] = [(int)$s['client_id'], $label . ')'];
-    } else {
+    }
+    if (!$allSent || $badAddress) {
         $failed[] = [(int)$s['client_id'], $label . ($badAddress ? ', the client email address is not valid' : '')
             . ($emailHeld ? ', the client email address has not been confirmed' : '') . ')'];
     }

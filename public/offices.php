@@ -52,6 +52,8 @@ $form = function (?array $o): string {
     $zoneNow = $mine ? old_in('time_zone') : (string)($o['time_zone'] ?? '');
     ob_start(); ?>
   <form method="post" action="offices.php" class="stacked" novalidate><?= csrf_field() ?><input type="hidden" name="office_id" value="<?= $id ?>">
+    <?php // The refused form's own errors, listed once (4.27.0); each message already names its field. ?>
+    <?= $mine ? form_error_summary(['name' . $sfx => '', 'address' . $sfx => '', 'phone' . $sfx => '', 'time_zone' . $sfx => ''], ['name' . $sfx => 'on' . $sfx, 'address' . $sfx => 'oa' . $sfx, 'phone' . $sfx => 'op' . $sfx, 'time_zone' . $sfx => 'oz' . $sfx]) : '' ?>
     <div class="field"><label for="on<?= $sfx ?>">Name <?= required_mark() ?></label><input type="text" id="on<?= $sfx ?>" name="name" maxlength="120" value="<?= $v('name') ?>" <?= field_aria('name' . $sfx) ?>><?= field_error('name' . $sfx) ?></div>
     <div class="field"><label for="oa<?= $sfx ?>">Address</label><input type="text" id="oa<?= $sfx ?>" name="address" maxlength="255" value="<?= $v('address') ?>" <?= field_aria('address' . $sfx) ?>><?= field_error('address' . $sfx) ?></div>
     <div class="field"><label for="op<?= $sfx ?>">Phone</label><input type="tel" id="op<?= $sfx ?>" name="phone" maxlength="40" value="<?= $v('phone') ?>" <?= field_aria('phone' . $sfx) ?>><?= field_error('phone' . $sfx) ?></div>

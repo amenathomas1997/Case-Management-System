@@ -21,7 +21,8 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
     // need their permission-filtered navigation on those screens.
     if ($user === null && function_exists('current_user')) $user = current_user();
     // A page handed to someone signing in person (4.25.0) shows no staff menu, links or shortcuts.
-    if (!empty($GLOBALS['CMS_KIOSK'])) $user = null;
+    // While a device is handed over (4.27.0), no page shows the staff menu or counts, public ones included.
+    if (!empty($GLOBALS['CMS_KIOSK']) || !empty($_SESSION['kiosk_sign'])) $user = null;
     $GLOBALS['CMS_PAGE_SIGNED_IN'] = $user !== null; // page_footer shows staff shortcuts to the same audience
     $hideVision = $user && function_exists('setting') && setting('user_low_vision_hidden_' . (int)$user['id']) === '1';
     $app = cfg('name');

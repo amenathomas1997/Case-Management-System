@@ -318,6 +318,8 @@ struct SignatureRequestSheet: View {
     @State private var error: String?
     @State private var started = false
     @State private var askingDiscard = false
+    /// Sent as idem_key, so a retry after a lost reply is not started or emailed twice (4.27.0).
+    @State private var idem = IdemKey()
 
     private var kindChoices: [(key: String, label: String)] {
         var list: [(String, String)] = [("services", kinds["services"] ?? "Consent to services")]
@@ -432,13 +434,16 @@ struct SignatureRequestSheet: View {
             showFormError("This iPhone has no passcode, so the app keeps nothing on it to sign later. Use Sign here now when you are with the signer and have a signal, or set a passcode in Settings.", in: &error)
             return
         }
+        body["idem_key"] = idem.key(for: body.merging(["mode": "\(mode)"]) { a, _ in a })
         busy = true; error = nil
         do {
             if mode == .email {
                 let _: TaskSaveResult = try await api.call("send_signature", body: body)
+                idem.answered()   // a lost reply throws first, so a retry keeps the key
                 onDone("Signing link emailed to \(email).")
             } else if mode == .prepare {
                 let doc: SigningDocument = try await api.call("start_signature", body: body)
+                idem.answered()
                 let item = PreparedSignature(document: doc, clientId: clientId, clientName: client.name)
                 guard PreparedSignatures.add(item, owner: api.userId) else {
                     // Started on the server but not kept here: it is listed as waiting to be signed here.
@@ -449,11 +454,13 @@ struct SignatureRequestSheet: View {
                 onDone("Ready to sign here, even with no signal: \(doc.title). Sign it by \(item.expiresAt.formatted(date: .abbreviated, time: .shortened)).")
             } else {
                 let doc: SigningDocument = try await api.call("start_signature", body: body)
+                idem.answered()
                 onStarted(doc)
             }
             dismiss()
         } catch {
             busy = false
+            if case APIError.network = error {} else { idem.answered() }
             showFormError(error.localizedDescription, in: &self.error)
         }
     }
@@ -487,6 +494,9 @@ struct InPersonSigningView: View {
     @State private var askingCancel = false
     /// Signed with no signal (4.26.0): kept on this phone, and the signer is told so before handing the phone back.
     @State private var keptToSend = false
+    /// Sign was pressed and the server's answer did not confirm it (4.27.0): before withdrawing,
+    /// the document's status is checked, so a document that was signed is never withdrawn.
+    @State private var signOutcomeUncertain = false
     @AccessibilityFocusState private var errorFocused: Bool
     @AccessibilityFocusState private var keptFocused: Bool
 
@@ -658,12 +668,27 @@ struct InPersonSigningView: View {
         dismiss()
     }
 
-    /// Not signed: the request is withdrawn, so it is not left waiting to be signed here.
+    /// Not signed: the request is withdrawn, so it is not left waiting to be signed here. After a
+    /// Sign that failed or went unanswered, the server is asked first whether it was signed
+    /// (4.27.0, as Android): a signed one is reported as signed, never withdrawn. The server also
+    /// refuses to withdraw a signed document (409, "already signed"), reported the same way.
     private func stopWithoutSigning() {
         // One prepared to sign with no signal stays on this phone (and on the server) for later.
         if prepared { close(); return }
-        let api = api, clientId = clientId, id = document.id
-        Task { let _: SignatureListReply? = try? await api.call("withdraw_signature", body: ["client_id": clientId, "id": id]) }
+        let api = api, clientId = clientId, id = document.id, check = signOutcomeUncertain, onSigned = onSigned
+        Task {
+            if check {
+                guard let status: SignatureStatusReply = try? await api.call("signature", query: ["client_id": String(clientId), "id": String(id)]) else {
+                    return   // not known whether it was signed: left as it is, never withdrawn blind
+                }
+                if status.isSigned { onSigned(nil, false); return }
+            }
+            do {
+                let _: SignatureListReply = try await api.call("withdraw_signature", body: ["client_id": clientId, "id": id])
+            } catch APIError.server(let message) where message.lowercased().contains("already signed") {
+                onSigned(nil, false)
+            } catch {}
+        }
         close()
     }
 
@@ -687,9 +712,11 @@ struct InPersonSigningView: View {
             onSigned(r.signatures, false)
             close()
         } catch APIError.network {
+            signOutcomeUncertain = true   // the reply may have been lost after it was signed
             keepToSendLater(body, name: name, signedAt: signedAt)
         } catch {
             // The typed name and any drawing stay for another try.
+            signOutcomeUncertain = true
             busy = false
             fail(error.localizedDescription)
         }
@@ -792,6 +819,8 @@ struct ReleaseRequestSheet: View {
     @State private var started = false
     @State private var confirming = false
     @State private var askingDiscard = false
+    /// Sent as idem_key, so a retry after a lost reply is not started or emailed twice (4.27.0).
+    @State private var idem = IdemKey()
 
     private var hasChanges: Bool {
         !recipientType.isEmpty || !recipientName.isEmpty || !recipientEmail.isEmpty || !info.isEmpty
@@ -901,13 +930,54 @@ struct ReleaseRequestSheet: View {
         ]
         if !recipientEmail.trimmingCharacters(in: .whitespaces).isEmpty { body["recipient_email"] = recipientEmail.trimmingCharacters(in: .whitespaces) }
         if !infoOther.trimmingCharacters(in: .whitespaces).isEmpty { body["info_other"] = infoOther }
+        body["idem_key"] = idem.key(for: body)
         do {
-            let _: TaskSaveResult = try await api.call("request_release", body: body)
-            onSent("Release emailed to \(signerEmail.trimmingCharacters(in: .whitespaces)) to sign.")
+            let result: ReleaseResult = try await api.call("request_release", body: body)
+            idem.answered()
+            // Saved, but whether the email went is not known (4.27.0): the server says what to do.
+            if result.unknown == true, let message = result.message, !message.isEmpty {
+                onSent(message)
+            } else {
+                onSent("Release emailed to \(signerEmail.trimmingCharacters(in: .whitespaces)) to sign.")
+            }
             dismiss()
         } catch {
             busy = false
+            if case APIError.network = error {} else { idem.answered() }
             showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }
+
+/// The idem_key for a request that creates or emails something (4.27.0): the same key while
+/// what is sent stays the same and no answer has come, so a retry after a lost reply is
+/// recognised; a new one once the server answered or anything in the request changed.
+struct IdemKey {
+    private var value = UUID().uuidString
+    private var sentFor: Data?
+
+    mutating func key(for body: [String: Any]) -> String {
+        var fields = body
+        fields.removeValue(forKey: "idem_key")
+        let current = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
+        if let sentFor, sentFor != current { value = UUID().uuidString }
+        sentFor = current
+        return value
+    }
+
+    mutating func answered() {
+        value = UUID().uuidString
+        sentFor = nil
+    }
+}
+
+/// The `signature` reply, read only for whether the document is signed (4.27.0).
+struct SignatureStatusReply: Decodable {
+    struct Status: Decodable { let signedAt: String? }
+    let signature: Status
+    var isSigned: Bool { !(signature.signedAt ?? "").isEmpty }
+}
+
+/// request_release's reply: unknown when the request was saved but the email's outcome is not
+/// known, with the server's message saying so (4.27.0).
+struct ReleaseResult: Decodable { let ok: Bool; let id: Int?; let unknown: Bool?; let message: String? }

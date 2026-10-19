@@ -43,7 +43,7 @@ function session_move(int $sid, int $start, int $end, int $actor, bool $confirme
     }
     $warnings = session_move_warnings($sess, $start, $end);
     if ($warnings && !$confirmed) return ['error' => null, 'warnings' => $warnings, 'moved' => false];
-    $u = db()->prepare("UPDATE scheduled_sessions SET start_at = ?, end_at = ?, reminder_sent = 0, sms_reminder_sent = 0, client_reply = NULL, client_reply_at = NULL, ics_sequence = ics_sequence + 1 WHERE id = ? AND status = 'Scheduled'");
+    $u = db()->prepare("UPDATE scheduled_sessions SET start_at = ?, end_at = ?, reminder_sent = 0, client_reminded_at = NULL, staff_reminded_at = NULL, sms_reminder_sent = 0, client_reply = NULL, client_reply_at = NULL, ics_sequence = ics_sequence + 1 WHERE id = ? AND status = 'Scheduled'");
     $u->execute([date('Y-m-d H:i:s', $start), date('Y-m-d H:i:s', $end), $sid]);
     if ($u->rowCount() !== 1) return ['error' => 'That session changed meanwhile, so it was not moved.', 'warnings' => [], 'moved' => false];
     audit($actor, 'session.move', 'session', $sid, 'client #' . (int)$sess['client_id'] . ': ' . date('Y-m-d H:i', strtotime((string)$sess['start_at']))
@@ -64,8 +64,30 @@ function session_cancel_series(int $sid, int $actor): int {
     return session_cancel_many(array_map('intval', $ids->fetchAll(PDO::FETCH_COLUMN)), $actor, 'rest of a weekly series');
 }
 
+/**
+ * Why a caseload-limited user may not cancel this session's whole group (4.27.0): every
+ * Scheduled session of the group cancels together, and its clients and instructors are
+ * emailed, so a member on another caseload refuses the whole cancellation. Null when the
+ * user may cancel it (an unrestricted user, or every member is on their caseload).
+ */
+function session_group_scope_error(int $sid, int $actor): ?string {
+    if (!caseload_scoped()) return null;
+    $q = db()->prepare("SELECT COUNT(*) FROM scheduled_sessions g
+        JOIN scheduled_sessions s ON s.id = ? AND s.group_uid IS NOT NULL AND g.group_uid = s.group_uid
+        JOIN clients c ON c.id = g.client_id
+        WHERE g.status = 'Scheduled' AND (c.assigned_to IS NULL OR c.assigned_to <> ?)");
+    $q->execute([$sid, $actor]);
+    $n = (int)$q->fetchColumn();
+    if ($n === 0) return null;
+    return 'Nothing was cancelled: ' . ($n === 1 ? 'one client' : $n . ' clients') . ' in this group ' . ($n === 1 ? 'is' : 'are')
+        . ' not on your caseload. Cancel your own client\'s session on its own, or ask someone who can see the whole group to cancel it.';
+}
+
 /** Cancel every Scheduled session of this session's group. Returns how many. */
 function session_cancel_group(int $sid, int $actor): int {
+    // A caseload-limited user cannot cancel other caseloads' sessions (4.27.0); callers
+    // show session_group_scope_error() first, this is the backstop.
+    if (session_group_scope_error($sid, $actor) !== null) return 0;
     $q = db()->prepare("SELECT group_uid FROM scheduled_sessions WHERE id = ? AND status = 'Scheduled'");
     $q->execute([$sid]);
     $g = $q->fetchColumn();
