@@ -193,7 +193,7 @@ page_header('Federation', $user, 'admin', [['admin.php', 'Administration']]);
     <?php endforeach; ?>
   </ul>
 </section>
-<script>document.addEventListener('DOMContentLoaded',function(){var t=document.getElementById('test-heading');if(t)t.focus();});</script>
+<script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){var t=document.getElementById('test-heading');if(t)t.focus();});</script>
 <?php endif; ?>
 
 <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr));">

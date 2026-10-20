@@ -47,8 +47,12 @@
     shared(Date.now());
     armEnd(Date.now());
   }
+  // The dialog's title while it asks, and while it says the session has ended (4.30.0).
+  var title = document.getElementById('tw-title'), askTitle = title ? title.textContent : '';
+  var lead = document.getElementById('tw-expired-lead');
   function show() {
     if (!dialog.hidden) return;
+    if (title) title.textContent = askTitle;
     // A warning is armed only at page load or after a successful keepalive, so an
     // earlier failure or sign-out notice no longer applies: each one opens fresh.
     error.hidden = true;
@@ -73,10 +77,14 @@
     if (back) back.focus();
   }
   // The session has ended (the server refused a keepalive, or the configured time
-  // passed): the dialog switches to its signed-out message, spoken through the live
-  // region, and opens if it was closed, so nobody keeps typing believing they are
-  // still signed in. Once said, it is not repeated until the session is confirmed
-  // again, so the dialog can still be closed to copy unsaved text.
+  // passed): the dialog switches to its signed-out message and title, and opens if it
+  // was closed, so nobody keeps typing believing they are still signed in. The message
+  // is said once (4.30.0), by one channel: a dialog that opens now is read by its title
+  // ("You were signed out") and description as focus moves in, so the notice is not
+  // also put in the alert region; in a dialog that was already open, focus moving
+  // within it reads neither, so the notice goes to the alert region instead. Once
+  // said, it is not repeated until the session is confirmed again, so the dialog can
+  // still be closed to copy unsaved text.
   function expire() {
     if (ended) return;
     ended = true;
@@ -88,8 +96,17 @@
     stayButton.hidden = true;
     var expired = document.getElementById('tw-expired');
     dialog.setAttribute('aria-describedby', 'tw-expired');
-    if (dialog.hidden) { lastFocus = document.activeElement; dialog.hidden = false; }
-    announce(expired);
+    if (title) title.textContent = dialog.dataset.expiredTitle || 'You were signed out';
+    var opening = dialog.hidden;
+    if (opening) { lastFocus = document.activeElement; dialog.hidden = false; }
+    // The title says "You were signed out" already; the notice's own first sentence is
+    // kept only where the notice is announced without the title.
+    if (lead) lead.hidden = opening;
+    if (opening) {
+      // Out of the alert region if an earlier notice left it there, so showing it is not an alert.
+      if (live && expired.parentNode === live && live.parentNode) live.parentNode.insertBefore(expired, live.nextSibling);
+      expired.hidden = false;
+    } else announce(expired);
     expired.querySelector('a').focus();
   }
   // Activity keepalive: re-arms the warning once the server confirms the session,

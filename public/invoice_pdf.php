@@ -135,8 +135,9 @@ $totalLabel = !$invoice ? 'TOTAL (ALL WORK TO DATE, INCLUDING PREVIOUSLY INVOICE
     : ($closedNote !== '' ? 'INVOICE TOTAL (' . strtoupper((string)$invoice['status']) . ', NOTHING DUE)'
     : ($paidSoFar > 0 || $writtenOff > 0 ? 'INVOICE TOTAL' : 'TOTAL DUE'));
 
-// The same authorized data is available as a portable, semantic HTML report.
-if (($_GET['format'] ?? '') === 'html') {
+// The same authorized data is available as a portable, semantic HTML report. It is built for the
+// PDF too (4.30.0): the PDF links to a kept copy of it that outside readers open without a sign-in.
+{
     $doc = new AccessibleDocument(ucfirst(strtolower($docTitle)) . ' — ' . $t['client_name']);
     $doc->paragraph(implode("\n", array_filter(array_merge([brand('org'), brand('tagline')], $fromLines))));
     if ($closedNote !== '') $doc->paragraph($closedNote);
@@ -178,6 +179,8 @@ if (($_GET['format'] ?? '') === 'html') {
     $doc->properties($totals);
     if (!$private) $doc->heading('Authorization usage');
     if (!$private) $doc->paragraph('Authorization usage: ' . fmt_hours($authUsage['hours_worked']) . ' of ' . fmt_hours($authUsage['authorized_hours']) . ' authorized hours used (' . $authUsage['pct_used'] . '%). Remaining: ' . fmt_hours($authUsage['hours_remaining']) . ' / ' . fmt_money($authUsage['funds_remaining']) . '. Prepared by ' . $user['name'] . '.');
+}
+if (($_GET['format'] ?? '') === 'html') {
     // A download of the client's billing record is listed in their audit history.
     audit((int)$user['id'], 'invoice.download', $invoice ? 'invoice' : 'track', $invoice ? (int)$invoice['id'] : $trackId, ($invoice ? 'invoice ' . $invoice['invoice_number'] : 'statement') . ' (accessible HTML)');
     $doc->download('invoice_' . ($invoice['id'] ?? 'track_' . $trackId) . '.html');
@@ -185,7 +188,7 @@ if (($_GET['format'] ?? '') === 'html') {
 
 /** Core PDF fonts are Latin-1; transliterate UTF-8 punctuation. */
 function pdf_txt(?string $s): string {
-    return iconv('UTF-8', 'ISO-8859-1//TRANSLIT', $s ?? '') ?: '';
+    return doc_pdf_text($s);
 }
 
 class InvoicePdf extends AppPdf {
@@ -251,32 +254,34 @@ class InvoicePdf extends AppPdf {
 
 $pdf = new InvoicePdf('P', 'mm', 'Letter');
 $pdf->footerText = cfg('name') . ' - ' . ucfirst(strtolower($docTitle)) . ' ' . $authNo;
-$pdf->SetTitle(pdf_txt(ucfirst(strtolower($docTitle)) . ' — ' . $t['client_name'] . ' — ' . $authNo));
+$pdf->describe(ucfirst(strtolower($docTitle)) . ' — ' . $t['client_name'] . ' — ' . $authNo,
+    ($invoice ? 'Invoice ' . $invoice['invoice_number'] : 'Statement of all work to date') . ' from ' . brand('org') . ' for ' . $t['title'] . ($private ? ', private pay' : ', authorization ' . $authNo));
 $pdf->SetAutoPageBreak(true, 22);
 $pdf->AddPage();
-$pdf->SetFont('Helvetica', '', 9);
-$pdf->Cell(0, 6, 'Accessible HTML version (sign-in required)', 0, 1, 'L', false,
+// The accessible copy of exactly what this PDF holds, for readers without a staff sign-in (4.30.0).
+$pdf->accessibleCopyLine(doc_link_create($doc->html(false), $invoice ? 'invoice' : 'track', $invoice ? (int)$invoice['id'] : $trackId,
+        ($invoice ? 'invoice ' . $invoice['invoice_number'] : 'statement for track #' . $trackId), (int)$t['client_id']),
     cfg('base_url') . '/invoice_pdf.php?' . ($invoice ? 'invoice=' . (int)$invoice['id'] : 'track=' . $trackId) . '&format=html');
 
-// Letterhead
+// Letterhead, one column at a time (4.30.0), so it is read in order: the organisation and where to
+// send payment, then the document, its date, number, due date and vendor number.
+$xh = $pdf->GetX(); $y0 = $pdf->GetY();
 $pdf->SetFont('Helvetica', 'B', 18);
 $pdf->SetTextColor(...brand_rgb());
-$pdf->Cell(120, 9, pdf_txt(brand('org')), 0, 0);
-$pdf->SetFont('Helvetica', 'B', 16);
-$pdf->SetTextColor(60, 60, 60);
-$pdf->Cell(0, 9, $docTitle, 0, 1, 'R');
+$pdf->Cell(120, 9, pdf_txt(brand('org')), 0, 2);
 $pdf->SetFont('Helvetica', '', 10);
 $pdf->SetTextColor(60, 60, 60);
-$pdf->Cell(120, 5, pdf_txt(brand('tagline')), 0, 0);
-$pdf->Cell(0, 5, pdf_txt('Date: ' . $docDate), 0, 1, 'R');
-// The remit-to lines run down the left, beside the number, due date and vendor number.
-$rightHead = [($invoice ? 'Invoice #: ' : 'Statement #: ') . $docNumber];
+foreach (array_merge([brand('tagline')], $fromLines) as $line) $pdf->Cell(120, 5, pdf_txt($line), 0, 2);
+$yLeft = $pdf->GetY();
+$rightHead = ['Date: ' . $docDate, ($invoice ? 'Invoice #: ' : 'Statement #: ') . $docNumber];
 if ($invoice) $rightHead[] = 'Printed: ' . date('F j, Y');
 foreach ($payInfo as $k => $v) if ($k !== 'Memo') $rightHead[] = $k . ': ' . $v;
-for ($n = 0; $n < max(count($fromLines), count($rightHead)); $n++) {
-    $pdf->Cell(120, 5, pdf_txt($fromLines[$n] ?? ''), 0, 0);
-    $pdf->Cell(0, 5, pdf_txt($rightHead[$n] ?? ''), 0, 1, 'R');
-}
+$pdf->SetXY($xh + 120, $y0);
+$pdf->SetFont('Helvetica', 'B', 16);
+$pdf->Cell(0, 9, $docTitle, 0, 2, 'R');
+$pdf->SetFont('Helvetica', '', 10);
+foreach ($rightHead as $line) $pdf->Cell(0, 5, pdf_txt($line), 0, 2, 'R');
+$pdf->SetY(max($yLeft, $pdf->GetY()));
 if (isset($payInfo['Memo'])) $pdf->Cell(0, 5, pdf_txt('Memo: ' . $payInfo['Memo']), 0, 1, 'L');
 if ($closedNote !== '') { $pdf->SetFont('Helvetica', 'B', 10); $pdf->MultiCell(0, 5, pdf_txt($closedNote), 0, 'L'); $pdf->SetFont('Helvetica', '', 10); }
 $pdf->Ln(4);
@@ -285,13 +290,9 @@ $pdf->SetLineWidth(0.6);
 $pdf->Line(15, $pdf->GetY(), 200, $pdf->GetY());
 $pdf->Ln(5);
 
-// Bill-to / case info
+// Bill-to / case info: each column is read whole, its heading first (4.30.0).
 $pdf->SetTextColor(0, 0, 0);
 $half = 92;
-$pdf->SetFont('Helvetica', 'B', 10);
-$pdf->Cell($half, 5, 'BILL TO', 0, 0);
-$pdf->Cell(0, 5, $private ? 'SERVICE' : 'SERVICE AUTHORIZATION', 0, 1);
-$pdf->SetFont('Helvetica', '', 10);
 $leftLines = $billTo;
 $rightLines = [
     $private ? 'Private pay' : 'Authorization number: ' . $authNo,
@@ -306,9 +307,15 @@ $rightLines = [
 // agency name ran into the right column and a long title off the page); the next
 // part starts below the taller of the two.
 $x0 = $pdf->GetX(); $y0 = $pdf->GetY();
+$pdf->SetFont('Helvetica', 'B', 10);
+$pdf->Cell($half, 5, 'BILL TO', 0, 2);
+$pdf->SetFont('Helvetica', '', 10);
 $pdf->MultiCell($half, 5, pdf_txt(implode("\n", $leftLines)), 0, 'L');
 $yLeft = $pdf->GetY();
 $pdf->SetXY($x0 + $half, $y0);
+$pdf->SetFont('Helvetica', 'B', 10);
+$pdf->Cell(0, 5, $private ? 'SERVICE' : 'SERVICE AUTHORIZATION', 0, 2);
+$pdf->SetFont('Helvetica', '', 10);
 $pdf->MultiCell(0, 5, pdf_txt(implode("\n", $rightLines)), 0, 'L');
 $pdf->SetY(max($yLeft, $pdf->GetY()));
 // A standalone file has no glossary: expand RSA once, under the column that uses it.

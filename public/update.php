@@ -103,9 +103,9 @@ page_header('Software update', $user, 'admin', [['admin.php', 'Administration']]
   <p>Fix these (usually by letting the web server write its own files, in your hosting control panel), or update by hand from the release's install bundle.</p>
   <?php else: ?>
   <p>The newest database backup on the server was made <?= $newest ? h(date('F j, Y \a\t g:i a', $newest)) : 'never' ?>.<?= !$newest || $newest < time() - 86400 ? ' <strong>Make a fresh copy first (download the database from your hosting control panel).</strong>' : '' ?></p>
-  <form method="post" action="update.php" class="stacked"><?= csrf_field() ?>
+  <form method="post" action="update.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['have_backup' => 'Backup']) ?>
-    <div class="field"><label><input type="checkbox" id="have_backup" name="have_backup" value="1" <?= field_aria('have_backup') ?>> There is a backup of the database from today</label><?= field_error('have_backup') ?></div>
+    <div class="field"><label><input type="checkbox" id="have_backup" name="have_backup" value="1" required aria-required="true" <?= field_aria('have_backup') ?>> There is a backup of the database from today <?= required_mark() ?></label><?= field_error('have_backup') ?></div>
     <?php if ($plan['kept']): ?><p>Kept as your own (you changed them): <?= h(implode(', ', $plan['kept'])) ?>.</p><?php endif; ?>
     <button type="submit" name="install" value="1" class="btn btn-primary">Install version <?= h($plan['version']) ?></button>
   </form>

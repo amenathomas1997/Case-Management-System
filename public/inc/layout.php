@@ -36,6 +36,23 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<?php /* Focus that announces a result or error (4.30.0). After a redirect to a #fragment the
+         browser scrolls to it once the page has loaded and moves focus there or to the body,
+         so a message focused on DOMContentLoaded was never heard. cmsFocusAfterLoad(fn) runs
+         fn after the load event and one more task, when that is done, and marks focus as claimed;
+         a page script that focused something on DOMContentLoaded (and is not the fragment target
+         the browser focused itself) gets that focus back if the fragment took it, unless a
+         message has claimed focus.
+         Nothing is moved once the user has pressed a key or the pointer on the page. */ ?>
+<script>(function(){var acted=false;function mark(){acted=true;}
+document.addEventListener('keydown',mark,true);document.addEventListener('pointerdown',mark,true);
+function afterLoad(fn){var run=function(){setTimeout(function(){if(!acted)fn();},0);};if(document.readyState==='complete')run();else window.addEventListener('load',run,{once:true});}
+window.cmsFocusAfterLoad=function(fn){window.cmsFocusClaimed=true;afterLoad(fn);};
+document.addEventListener('DOMContentLoaded',function(){setTimeout(function(){var f=document.activeElement,t=null;
+if(location.hash.length<2||!f||f===document.body||f===document.documentElement||window.cmsFocusClaimed)return;
+try{t=document.getElementById(decodeURIComponent(location.hash.slice(1)));}catch(e){}
+if(t&&(f===t||t.contains(f)))return;
+afterLoad(function(){if(!window.cmsFocusClaimed&&document.activeElement!==f&&f.isConnected)f.focus();});},0);});})();</script>
 <script src="assets/low-vision.js?v=<?= h(APP_VERSION) ?>"></script>
 <script src="assets/date-entry.js?v=<?= h(APP_VERSION) ?>" defer></script>
 <script src="assets/select-display.js?v=<?= h(APP_VERSION) ?>" defer></script>
@@ -57,7 +74,7 @@ function page_header(string $title, ?array $user = null, string $active = '', ar
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="<?= h(brand('short')) ?>">
 </head>
-<body>
+<body data-cms-text="<?= h((string)json_encode(shared_script_text(), JSON_UNESCAPED_UNICODE)) ?>">
 <a class="skip-link" href="#main" accesskey="m"><?= t('Skip to main content') ?></a>
 <?php /* Staff shortcuts only: clients on the portal, referral or sign-in pages have no Dashboard or staff menu. */ ?>
 <?php
@@ -77,14 +94,14 @@ if ($staffEn) $GLOBALS['PUBLIC_TRANSLATION'] = false;
 </nav>
 <?php endif; ?>
 <?php if ($staffEn) $GLOBALS['PUBLIC_TRANSLATION'] = $pageTranslation; ?>
-<section id="low-vision-bar" class="vision-bar" aria-labelledby="vision-title" data-saved="<?= h(__('Display updated.')) ?>" data-account-hidden="<?= $hideVision ? 'true' : 'false' ?>" hidden>
+<section id="low-vision-bar" class="vision-bar" aria-labelledby="vision-title" data-saved="<?= h(__('Display updated.')) ?>" data-size-msg="<?= h(__('Text size {size}%')) ?>" data-on-msg="<?= h(__('{name} on')) ?>" data-off-msg="<?= h(__('{name} off')) ?>" data-account-hidden="<?= $hideVision ? 'true' : 'false' ?>" hidden>
   <div class="wrap">
     <?php /* The heading stays outside the summary: inside it, it becomes part of a button and drops out of the headings list. */ ?>
     <h2 class="vision-title" id="vision-title"><?= t('Low-vision controls') ?></h2>
     <details class="vision-panel"><summary><?= t('Show display options') ?></summary>
     <div class="vision-heading">
       <a href="#main"><?= t('Skip to main content') ?></a>
-      <?php if ($user): ?><button type="button" id="earcon-toggle" aria-pressed="true" hidden>Sound cues</button><?php endif; ?>
+      <?php if ($user): ?><button type="button" id="earcon-toggle" aria-pressed="true" hidden data-on-msg="<?= h(__('Sound cues on.')) ?>" data-off-msg="<?= h(__('Sound cues off.')) ?>"><?= t('Sound cues') ?></button><?php endif; ?>
       <button type="button" id="vision-reset"><?= t('Reset display') ?></button></div>
     <div class="vision-colors" role="group" aria-label="<?= h(__('Colors and contrast')) ?>">
       <?php foreach (['auto'=>'System colors', 'light'=>'Light', 'dark'=>'Dark', 'black'=>'White on black', 'white'=>'Black on white', 'yellow'=>'Yellow on black', 'cream'=>'Dark on cream'] as $value => $label): ?>
@@ -113,14 +130,16 @@ if ($staffEn) $GLOBALS['PUBLIC_TRANSLATION'] = false;
     <?php /* The Menu button sits inside the landmark, so a collapsed "Main" navigation
              still holds the control that opens it. */ ?>
     <nav aria-label="<?= h(__('Main')) ?>">
+      <?php /* The menu's own heading (4.30.0): its group h3s sit under it, not under "Low-vision
+               controls", and "Go to main menu" lands on a list named by it. */ ?>
+      <h2 class="visually-hidden" id="main-menu-h"><?= t('Main menu') ?></h2>
       <button type="button" class="nav-toggle" id="nav-toggle" aria-expanded="false" aria-controls="main-nav" hidden>
         <span class="nav-toggle-bars" aria-hidden="true"></span> <?= t('Menu') ?>
       </button>
-      <ul class="main-nav" id="main-nav" tabindex="-1">
+      <ul class="main-nav" id="main-nav" tabindex="-1" aria-labelledby="main-menu-h">
         <?php
         // Grouped under h3 headings (H or the heading list jumps between groups) below the
-        // page's one h2 before <main>, "Low-vision controls", so the page's h1 is preceded by
-        // a single h2, not seven; each link carries a one-sentence hint inside it as hidden text
+        // menu's own h2, "Main menu", so the page's h1 is preceded by two h2s, not seven; each link carries a one-sentence hint inside it as hidden text
         // (4.8.0: JAWS skipped it as a description; as part of the link it is read on Tab and
         // when arrowing, still never an extra line or stop), and a separate on-screen
         // copy, hidden from screen readers, appears on hover or keyboard focus. Groups with
@@ -218,7 +237,7 @@ if ($staffEn) $GLOBALS['PUBLIC_TRANSLATION'] = false;
         echo '<script>document.addEventListener("DOMContentLoaded",function(){var a=document.getElementById("flash-messages"),m=document.getElementById("main"),t=null;if(!a)return;'
             . 'try{t=location.hash.length>1?document.getElementById(decodeURIComponent(location.hash.slice(1))):null;}catch(e){}'
             . 'if(t&&m&&t!==m&&m.contains(t)&&!a.contains(t)&&!t.closest("[hidden],details:not([open])")){var w=t.closest("table");if(w){w=w.closest(".table-scroll")||w;w.parentNode.insertBefore(a,w);}else if(t.tagName==="LI"){t.insertBefore(a,t.firstChild);}else{t.parentNode.insertBefore(a,t);}}'
-            . 'var s=document.getElementById("form-error-summary")||document.getElementById("form-errors");if(s&&!s.contains(a)){s.insertBefore(a,s.firstChild);a.removeAttribute("tabindex");}else{a.focus();}if(window.Earcon)Earcon.play(' . ($flashErr ? "'error'" : "'success'") . ');});</script>';
+            . 'var s=document.getElementById("form-error-summary")||document.getElementById("form-errors");if(s&&!s.contains(a)){s.insertBefore(a,s.firstChild);a.removeAttribute("tabindex");}else{(window.cmsFocusAfterLoad||function(f){f();})(function(){a.focus();});}if(window.Earcon)Earcon.play(' . ($flashErr ? "'error'" : "'success'") . ');});</script>';
     }
     if ($user) {
         $totalSecs = max(120, (int)cfg('session_timeout_minutes') * 60);
@@ -227,11 +246,11 @@ if ($staffEn) $GLOBALS['PUBLIC_TRANSLATION'] = false;
         ?>
 <?php /* session-forms.js says "Checking your session…" here: a polite region already in
          the page, so it is announced; its failure messages are announced by focus instead. */ ?>
-<div id="session-check-live" class="visually-hidden" role="status"></div>
+<div id="session-check-live" class="visually-hidden" role="status"<?= $staffLangAttr ?>></div>
 <?php /* data-uid: session-forms.js refuses to resubmit under a different signed-in account.
          data-timeout-ms: the server's own limit (as ping.php applies it), after which
          session-timeout.js switches the dialog to "You were signed out". */ ?>
-<div id="timeout-warn" role="alertdialog" aria-modal="true" aria-labelledby="tw-title" aria-describedby="tw-desc" hidden class="timeout-dialog" data-warn-ms="<?= ($totalSecs - $leadSecs) * 1000 ?>" data-timeout-ms="<?= max(0, (int)cfg('session_timeout_minutes')) * 60000 ?>" data-uid="<?= (int)$user['id'] ?>">
+<div id="timeout-warn" role="alertdialog" aria-modal="true" aria-labelledby="tw-title" aria-describedby="tw-desc" hidden class="timeout-dialog" data-warn-ms="<?= ($totalSecs - $leadSecs) * 1000 ?>" data-timeout-ms="<?= max(0, (int)cfg('session_timeout_minutes')) * 60000 ?>" data-uid="<?= (int)$user['id'] ?>" data-expired-title="You were signed out"<?= $staffLangAttr ?>>
   <h2 id="tw-title">Are you still there?</h2>
   <p id="tw-desc">You've been inactive and will be signed out in about <?= (int)ceil($leadSecs / 60) ?> minute<?= $leadSecs > 90 ? 's' : '' ?>. Keep this page open to retain your work. File uploads may need to be selected again.</p>
   <button type="button" class="btn btn-primary" id="tw-stay">Stay signed in</button>
@@ -240,7 +259,9 @@ if ($staffEn) $GLOBALS['PUBLIC_TRANSLATION'] = false;
            moves the message below that applies into it, so it is announced. */ ?>
   <div id="tw-live" role="alert"></div>
   <p id="tw-error" class="field-error" hidden>We could not extend your session. Check your connection and try again, or return to your work to copy any unsaved text.</p>
-  <p id="tw-expired" hidden>You were signed out. <strong>What you typed is still on this page</strong> — copy it if needed, then
+  <?php /* The first sentence is left out when the dialog opens already signed out: its
+           title then says it (session-timeout.js), so it is not heard twice. */ ?>
+  <p id="tw-expired" hidden><span id="tw-expired-lead">You were signed out. </span><strong>What you typed is still on this page</strong> — copy it if needed, then
      <a href="login.php" target="_blank" rel="noopener">sign in again in a new tab <span class="visually-hidden">(opens in a new tab)</span></a>
      and come back to this page before submitting.</p>
 </div>
@@ -253,7 +274,7 @@ if ($staffEn) $GLOBALS['PUBLIC_TRANSLATION'] = false;
         if (function_exists('voice_available') && voice_available() && can('clients')) {
             $voiceTts = function_exists('ai_speak_capable') && ai_feature_enabled('readaloud') && ai_speak_capable();
             ?>
-<div id="voice-fab">
+<div id="voice-fab"<?= $staffLangAttr ?>>
   <div class="vfab-panel" id="vfab-panel" role="dialog" aria-label="Voice assistant" hidden>
     <div class="vfab-head"><strong>Voice assistant</strong>
       <button type="button" class="vfab-convo btn btn-secondary btn-sm">Start conversation</button>
@@ -271,11 +292,13 @@ if ($staffEn) $GLOBALS['PUBLIC_TRANSLATION'] = false;
     <div class="vfab-cues">
       <button type="button" class="vfab-mute">Sound cues: on</button>
       <button type="button" class="vfab-voice">Spoken replies: on</button>
-      <label class="vfab-vol">Loudness
+      <?php /* Plain option names (owner rule 2); what Max does is said in the label. The
+               choice is applied when it rests or the list is left (voice.js), not per arrow. */ ?>
+      <label class="vfab-vol">Loudness<span class="visually-hidden"> (Max is for deaf-blind users: replies are shown as text)</span>
         <select class="vfab-vol-sel">
           <option value="normal">Normal</option>
           <option value="loud">Loud</option>
-          <option value="max">Max (deaf-blind)</option>
+          <option value="max">Max</option>
         </select>
       </label>
     </div>
@@ -375,7 +398,7 @@ function page_footer(): void {
  *  alert role — a focused live region is read twice by some screen readers. */
 function error_notice(string $message): string {
     return '<div class="alert alert-error" id="form-errors" tabindex="-1"><strong class="alert-label">Error:</strong> ' . h($message) . '</div>'
-        . '<script>document.addEventListener("DOMContentLoaded",function(){var e=document.getElementById("form-errors");if(e)e.focus();});</script>';
+        . focus_after_load_script('document.getElementById("form-errors")');
 }
 
 /** The "Back to …" link at the top or foot of a page, worded and marked up the

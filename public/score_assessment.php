@@ -158,6 +158,7 @@ foreach ($items as $it) $errLabels['it-' . (int)$it['id']] = '';
   <form method="post" action="score_assessment.php?client=<?= $cid ?>&instrument=<?= $iid ?>" class="stacked" novalidate>
     <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary($errLabels) ?>
+    <p class="muted">Fields marked with an asterisk (<span aria-hidden="true">*</span><span class="visually-hidden">asterisk</span>) are required.</p>
     <div class="field"><label for="assessed_on">Assessment date <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
       <input type="date" id="assessed_on" name="assessed_on" required max="<?= date('Y-m-d') ?>" value="<?= h($saving ? (is_string($_POST['assessed_on'] ?? null) ? $_POST['assessed_on'] : '') : date('Y-m-d')) ?>" <?= field_aria('assessed_on') ?>>
       <?= field_error('assessed_on') ?></div>

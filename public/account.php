@@ -228,18 +228,18 @@ page_header('My Account', $user, 'account');
       <?= csrf_field() ?>
       <?= form_error_summary(['current_password' => 'Current password', 'new_password' => 'New password', 'confirm_password' => 'Confirm new password', 'ack_passkeys' => 'Passkeys']) ?>
       <div class="field">
-        <label for="current_password">Current password</label>
-        <input type="password" id="current_password" name="current_password" required autocomplete="current-password" <?= field_aria('current_password') ?>>
+        <label for="current_password">Current password <?= required_mark() ?></label>
+        <input type="password" id="current_password" name="current_password" required aria-required="true" autocomplete="current-password" <?= field_aria('current_password') ?>>
         <?= field_error('current_password') ?>
       </div>
       <div class="field">
-        <label for="new_password">New password <span class="hint">At least 10 characters</span></label>
-        <input type="password" id="new_password" name="new_password" required minlength="10" autocomplete="new-password" <?= field_aria('new_password') ?>>
+        <label for="new_password">New password <?= required_mark() ?> <span class="hint">At least 10 characters</span></label>
+        <input type="password" id="new_password" name="new_password" required aria-required="true" minlength="10" autocomplete="new-password" <?= field_aria('new_password') ?>>
         <?= field_error('new_password') ?>
       </div>
       <div class="field">
-        <label for="confirm_password">Confirm new password</label>
-        <input type="password" id="confirm_password" name="confirm_password" required autocomplete="new-password" <?= field_aria('confirm_password') ?>>
+        <label for="confirm_password">Confirm new password <?= required_mark() ?></label>
+        <input type="password" id="confirm_password" name="confirm_password" required aria-required="true" autocomplete="new-password" <?= field_aria('confirm_password') ?>>
         <?= field_error('confirm_password') ?>
       </div>
       <?php if ($myPasskeys): ?>
@@ -263,8 +263,8 @@ page_header('My Account', $user, 'account');
         <?= csrf_field() ?>
         <?= form_error_summary(['td_pw' => 'Password']) ?>
         <div class="field">
-          <label for="td_pw">Confirm your password to disable</label>
-          <input type="password" id="td_pw" name="password" autocomplete="current-password" <?= field_aria('td_pw') ?>>
+          <label for="td_pw">Confirm your password to disable <?= required_mark() ?></label>
+          <input type="password" id="td_pw" name="password" required aria-required="true" autocomplete="current-password" <?= field_aria('td_pw') ?>>
           <?= field_error('td_pw') ?>
         </div>
         <button type="submit" name="totp_disable" value="1" class="btn btn-danger">Disable authenticator app</button>
@@ -291,12 +291,12 @@ page_header('My Account', $user, 'account');
         <?= form_error_summary(['totp_pw' => 'Account password', 'totp_code' => 'Code from the app']) ?>
         <div class="field">
           <label for="totp_pw">Confirm your account password <?= required_mark() ?> <span class="hint">Adding a sign-in method is sensitive, so your password is checked first.</span></label>
-          <input type="password" id="totp_pw" name="password" required autocomplete="current-password" <?= field_aria('totp_pw') ?>>
+          <input type="password" id="totp_pw" name="password" required aria-required="true" autocomplete="current-password" <?= field_aria('totp_pw') ?>>
           <?= field_error('totp_pw') ?>
         </div>
         <div class="field">
-          <label for="totp_code">Enter the 6-digit code the app shows now, to confirm <span class="hint">Codes change every 30 seconds: enter the code shown right before you choose Confirm and enable.</span></label>
-          <input type="text" id="totp_code" name="totp_code" class="otp-input" inputmode="numeric" maxlength="20" required autocomplete="one-time-code" <?= field_aria('totp_code') ?>>
+          <label for="totp_code">Enter the 6-digit code the app shows now, to confirm <?= required_mark() ?> <span class="hint">Codes change every 30 seconds: enter the code shown right before you choose Confirm and enable.</span></label>
+          <input type="text" id="totp_code" name="totp_code" class="otp-input" inputmode="numeric" maxlength="20" required aria-required="true" autocomplete="one-time-code" <?= field_aria('totp_code') ?>>
           <?= field_error('totp_code') ?>
         </div>
         <button type="submit" name="totp_confirm" value="1" class="btn btn-primary">Confirm and enable</button>
@@ -312,6 +312,7 @@ page_header('My Account', $user, 'account');
     <h2 id="mobile-h">Your mobile number</h2>
     <?php $mq = db()->prepare('SELECT mobile, alert_sms FROM users WHERE id = ?'); $mq->execute([(int)$user['id']]); $mine = $mq->fetch() ?: []; ?>
     <form method="post" action="account.php" class="stacked" novalidate><?= csrf_field() ?>
+      <?= form_error_summary(['mobile' => 'Mobile number']) ?>
       <div class="field"><label for="mobile">Mobile number <span class="hint">optional; for urgent alerts by text and test texts</span></label>
         <input type="tel" id="mobile" name="mobile" maxlength="20" autocomplete="tel" value="<?= h(old_in('mobile', (string)($mine['mobile'] ?? ''))) ?>" <?= field_aria('mobile') ?>><?= field_error('mobile') ?></div>
       <?php if (sms_enabled()): ?><div class="field"><label><input type="checkbox" name="alert_sms" value="1" <?= !empty($mine['alert_sms']) ? 'checked' : '' ?>> Text me when an urgent alert comes in <span class="hint">at most one text every 15 minutes, never with client details</span></label></div><?php endif; ?>
@@ -440,24 +441,27 @@ page_header('My Account', $user, 'account');
       <input type="text" id="pk_name" maxlength="120" value="">
     </div>
     <div class="field">
-      <label for="pk_pw">Confirm your account password <?= required_mark() ?> <span class="hint">adding a sign-in method is sensitive</span></label>
-      <input type="password" id="pk_pw" autocomplete="current-password">
+      <?php // 4.30.0: a wrong password is said inside the label and focus moves to the field, so it is heard once. ?>
+      <label for="pk_pw">Confirm your account password <?= required_mark() ?> <span class="hint">adding a sign-in method is sensitive</span> <span class="field-error" id="pk_pw_err"></span></label>
+      <input type="password" id="pk_pw" required aria-required="true" autocomplete="current-password">
     </div>
     <button type="button" id="pk_add" class="btn btn-secondary">Add a passkey on this device</button>
     <?php // Always rendered (empty until needed): a live region unhidden at the moment it changes is often not announced. ?>
     <p class="field-error" id="pk_err" role="alert"></p>
     <script>
     (function(){
-      var btn = document.getElementById('pk_add'), err = document.getElementById('pk_err'), pw = document.getElementById('pk_pw');
+      var btn = document.getElementById('pk_add'), err = document.getElementById('pk_err'), pw = document.getElementById('pk_pw'), pwErr = document.getElementById('pk_pw_err');
       function b64uToBuf(s){s=s.replace(/-/g,'+').replace(/_/g,'/');var bin=atob(s),a=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i);return a.buffer;}
       function bufToB64u(b){var a=new Uint8Array(b),s='';for(var i=0;i<a.length;i++)s+=String.fromCharCode(a[i]);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
       function fail(m){err.textContent=m;}
       // A message the server wrote (wrong password, too many tries, already registered,
       // the device did not confirm it was you) is shown as it is (4.28.0), as on the sign-in page.
       function serverError(m, onPassword){var e=new Error(m);e.fromServer=true;e.onPassword=!!onPassword;return e;}
-      function markPassword(bad){
-        if (bad) { pw.setAttribute('aria-invalid','true'); pw.setAttribute('aria-describedby','pk_err'); }
-        else { pw.removeAttribute('aria-invalid'); pw.removeAttribute('aria-describedby'); }
+      // A password refusal is put inside the field's label and focus moves to the field (4.30.0):
+      // heard once, with the field, never also through the alert below.
+      function markPassword(bad, m){
+        if (bad) { pwErr.textContent = m || ''; pw.setAttribute('aria-invalid','true'); pw.focus(); }
+        else { pwErr.textContent = ''; pw.removeAttribute('aria-invalid'); }
       }
       if (!window.PublicKeyCredential) { btn.disabled = true; fail('This browser does not support passkeys.'); return; }
       btn.addEventListener('click', function(){
@@ -497,8 +501,8 @@ page_header('My Account', $user, 'account');
             location.reload();
           })
           .catch(function(e){
-            if (e && e.fromServer) { markPassword(e.onPassword); fail(e.message); return; }
-            fail(e && (e.name === 'NotAllowedError' || e.name === 'AbortError') ? 'The passkey was not added: the request was cancelled or timed out. Choose Add passkey to try again.' : (e && e.name === 'InvalidStateError' ? 'This passkey is already registered on this account.' : 'The passkey was not added. Try again, or use a different device or browser.')); });
+            if (e && e.fromServer) { if (e.onPassword) { markPassword(true, e.message); } else { fail(e.message); } return; }
+            fail(e && (e.name === 'NotAllowedError' || e.name === 'AbortError') ? 'The passkey was not added: the request was cancelled or timed out. Choose Add a passkey on this device to try again.' : (e && e.name === 'InvalidStateError' ? 'This passkey is already registered on this account.' : 'The passkey was not added. Try again, or use a different device or browser.')); });
       });
     })();
     </script>

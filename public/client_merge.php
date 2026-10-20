@@ -232,6 +232,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['do_merge'])) {
     }
 }
 
+// A Review with a record not chosen (4.30.0): the lists are marked aria-required rather than
+// required, so Chrome does not call them invalid before anything is sent; the server says so.
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && (isset($_GET['keep']) || isset($_GET['merge']))) {
+    $pickErrs = [];
+    if (!$keep) $pickErrs['keep'] = 'Choose the record to keep.';
+    if (!$dupe) $pickErrs['merge'] = 'Choose the duplicate to merge in.';
+    if ($pickErrs) set_form_errors(form_errors() + $pickErrs);
+}
 page_header('Merge clients', $user, 'clients');
 ?>
 <h1>Merge duplicate client records</h1>
@@ -241,7 +249,7 @@ page_header('Merge clients', $user, 'clients');
 <?php if ($keepId > 0 && $keepId === $mergeId): ?>
 <?= error_notice('The same record is chosen as both the record to keep and the duplicate. Choose two different client records.') ?>
 <?php endif; ?>
-<form method="<?= $confirming ? 'post' : 'get' ?>" action="client_merge.php" class="card stacked">
+<form method="<?= $confirming ? 'post' : 'get' ?>" action="client_merge.php" class="card stacked" novalidate>
   <?php if ($confirming): ?>
     <?= csrf_field() ?>
     <!-- The confirmed pair is locked in as hidden fields, so the merge can
@@ -251,32 +259,35 @@ page_header('Merge clients', $user, 'clients');
     <p>Keeping <strong><?= h($keep['name']) ?></strong> (#<?= $keepId ?>) and merging in <strong><?= h($dupe['name']) ?></strong> (#<?= $mergeId ?>).
        <a href="client_merge.php">Choose a different pair</a></p>
   <?php else: ?>
+  <?= form_error_summary(['keep' => 'Record to keep', 'merge' => 'Duplicate to merge in']) ?>
   <p class="hint">Fields marked * are required.</p>
   <div class="grid grid-2">
     <div class="field">
       <label for="keep">Record to KEEP <?= required_mark() ?></label>
-      <select id="keep" name="keep" required>
+      <select id="keep" name="keep" aria-required="true" <?= field_aria('keep') ?>>
         <option value="">— Choose —</option>
         <?php foreach ($clients as $c): ?>
         <option value="<?= (int)$c['id'] ?>" <?= $keepId === (int)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?> (#<?= (int)$c['id'] ?>, <?= h($c['status']) ?>)</option>
         <?php endforeach; ?>
-      </select>
+      </select><?= field_error('keep') ?>
     </div>
     <div class="field">
       <label for="merge">Duplicate to merge IN (will be removed) <?= required_mark() ?></label>
-      <select id="merge" name="merge" required>
+      <select id="merge" name="merge" aria-required="true" <?= field_aria('merge') ?>>
         <option value="">— Choose —</option>
         <?php foreach ($clients as $c): ?>
         <option value="<?= (int)$c['id'] ?>" <?= $mergeId === (int)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?> (#<?= (int)$c['id'] ?>, <?= h($c['status']) ?>)</option>
         <?php endforeach; ?>
-      </select>
+      </select><?= field_error('merge') ?>
     </div>
   </div>
   <?php endif; ?>
 
   <?php if ($confirming): ?>
-  <div class="alert alert-error" role="alert">
-    <p><strong>Check carefully — merging cannot be undone.</strong></p>
+  <?php // Part of the page, not an alert (4.30.0): read in order, under its own heading. ?>
+  <section class="alert alert-error" aria-labelledby="merge-check-h">
+    <h2 id="merge-check-h" style="margin-top:0">Check before merging</h2>
+    <p><strong>Merging cannot be undone.</strong></p>
     <ul>
       <?php // A missing date of birth is written out like the missing email and phone (a lone dash is skipped or misread by screen readers). ?>
       <li>Keeping: <strong><?= h($keep['name']) ?></strong> (#<?= $keepId ?>) — <?= h($keep['status']) ?><?= $keep['archived_at'] !== null ? ' (archived)' : '' ?>, <?= $keep['dob'] ? 'date of birth ' . fmt_date($keep['dob']) : 'no date of birth' ?>, <?= h($keep['email'] ?: 'no email') ?>, <?= h($keep['phone'] ?: 'no phone') ?></li>
@@ -307,7 +318,7 @@ page_header('Merge clients', $user, 'clients');
       <li>Both records are archived, so the merged record stays archived and hidden from day-to-day lists.</li>
       <?php endif; ?>
     </ul>
-  </div>
+  </section>
   <?php // Every blank field the duplicate would fill is shown with its value and
   // can be left out; the email addresses are copied only when ticked.
   $fr = db()->prepare('SELECT * FROM clients WHERE id = ?');
@@ -316,7 +327,9 @@ page_header('Merge clients', $user, 'clients');
   $fillable = merge_fillable($keepRow, $dupeRow); ?>
   <?php if ($fillable): ?>
   <fieldset>
-    <legend>Blank fields on <?= h($keep['name']) ?> (#<?= $keepId ?>) to fill from the duplicate <span class="hint">Untick any value that should not be copied; an unticked value is removed with the duplicate. The client, guardian and counselor email addresses start unticked and are copied only when you tick them, because session reminders, portal links, progress reports and messages are then sent there — check they are genuine first.<?= isset($fillable['counselor_email']) || isset($fillable['email']) ? ' An email marked not yet confirmed stays unconfirmed after the merge.' : '' ?></span></legend>
+    <?php // A short legend (4.30.0): it is read each time focus enters the group. The email
+    // explanation is in the email boxes' own labels. ?>
+    <legend>Blank fields on <?= h($keep['name']) ?> (#<?= $keepId ?>) to fill from the duplicate <span class="hint">untick a value to leave it out</span></legend>
     <?php foreach ($fillable as $f => $val):
       if ($f === 'dob') $shown = fmt_date($val);
       elseif ($f === 'assigned_to') {
@@ -333,14 +346,15 @@ page_header('Merge clients', $user, 'clients');
       // An unconfirmed counselor or client email is copied as unconfirmed, and says so here.
       $fieldLabel = MERGE_FILL_FIELDS[$f] . (($f === 'counselor_email' && array_key_exists('counselor_verified', $dupeRow) && (int)$dupeRow['counselor_verified'] !== 1)
           || ($f === 'email' && (int)$dupeRow['email_verified'] !== 1) ? ' (not yet confirmed)' : ''); ?>
-    <div class="field"><label><input type="checkbox" name="fill[]" value="<?= h($f) ?>"<?= in_array($f, MERGE_FILL_OPT_IN, true) ? '' : ' checked' ?>> <?= h($fieldLabel) ?>: <?= h($shown) ?></label></div>
+    <?php $optIn = in_array($f, MERGE_FILL_OPT_IN, true); ?>
+    <div class="field"><label><input type="checkbox" name="fill[]" value="<?= h($f) ?>"<?= $optIn ? '' : ' checked' ?>> <?= h($fieldLabel) ?>: <?= h($shown) ?><?php if ($optIn): ?> <span class="hint">copied only when ticked: reminders, portal links, reports and messages are then sent here, so check it is genuine<?= str_contains($fieldLabel, '(not yet confirmed)') ? '; it stays unconfirmed after the merge' : '' ?></span><?php endif; ?></label></div>
     <?php endforeach; ?>
   </fieldset>
   <?php else: ?>
   <p>No blank profile fields on the kept record will be filled from the duplicate.</p>
   <?php endif; ?>
   <button type="submit" name="do_merge" value="1" class="btn btn-danger"
-    onclick="return confirm('Merge and remove the duplicate record? This cannot be undone.');">Merge these records</button>
+    onclick="return confirm(<?= h(json_encode('Merge ' . $dupe['name'] . ' (#' . $mergeId . ') into ' . $keep['name'] . ' (#' . $keepId . ') and remove the duplicate? This cannot be undone.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">Merge these records</button>
   <?php else: ?>
   <button type="submit" class="btn btn-primary">Review merge</button>
   <?php endif; ?>

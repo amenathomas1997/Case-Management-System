@@ -81,6 +81,7 @@ struct TodayProvider: TimelineProvider {
 
 struct TodayWidgetView: View {
     @Environment(\.widgetFamily) private var family
+    @Environment(\.dynamicTypeSize) private var typeSize
     let entry: TodayEntry
 
     var body: some View {
@@ -99,26 +100,40 @@ struct TodayWidgetView: View {
         }
     }
 
+    /// Large text in the small widget (4.30.0): four lines did not fit and the last one, the
+    /// check-in, was dropped without a sign. There the "Today" heading goes, every line may
+    /// shrink a little, and the next time and check-in keep their room before the count.
+    private var cramped: Bool { family == .systemSmall && typeSize >= .xxLarge }
+
     private var layout: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Today", systemImage: "calendar")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(WidgetColors.secondaryText)
+        VStack(alignment: .leading, spacing: cramped ? 2 : 6) {
+            if !cramped {
+                Label("Today", systemImage: "calendar")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(WidgetColors.secondaryText)
+                    .minimumScaleFactor(0.7)
+            }
             if entry.snapshot == nil {
                 Text(entry.countText)
                     .font(.callout.weight(.medium))
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.7)
             } else {
                 Text(entry.countText)
                     .font(family == .systemSmall ? .headline : .title3.weight(.semibold))
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.7)
+                    .layoutPriority(1)
                 if let next = entry.nextText {
                     Text(next).font(.callout)
+                        .minimumScaleFactor(0.7)
+                        .layoutPriority(2)
                 }
                 if let checked = entry.checkedInText {
                     Label(checked, systemImage: entry.next?.checkedIn == true ? "checkmark.circle.fill" : "circle")
                         .font(.callout.weight(.medium))
                         .foregroundStyle(entry.next?.checkedIn == true ? WidgetColors.checkedIn : WidgetColors.secondaryText)
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(1)
+                        .layoutPriority(3)
                 }
             }
             Spacer(minLength: 0)

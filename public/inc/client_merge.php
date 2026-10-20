@@ -8,6 +8,10 @@ function move_client_records(PDO $pdo, int $keepId, int $mergeId): void {
     $lock = $pdo->prepare('SELECT id FROM clients WHERE id IN (?, ?) ORDER BY id FOR UPDATE');
     $lock->execute([$keepId, $mergeId]);
     if (count($lock->fetchAll()) !== 2) throw new DomainException('One of these clients no longer exists.');
+    // 4.30.0: the duplicate's accessible copies (invoices, statements) also belong to the kept
+    // client, so purging the kept client later removes them. The duplicate's id stays listed.
+    require_once __DIR__ . '/app_pdf.php';
+    doc_link_add_client($mergeId, $keepId);
 
     // Membership carries its dates only. Preserve the earlier join date; the merged
     // person is a current member if either record is, otherwise left at the later date.

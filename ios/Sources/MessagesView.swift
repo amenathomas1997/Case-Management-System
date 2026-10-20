@@ -252,7 +252,7 @@ struct MessageThreadView: View {
                 Text("Client").tag("client")
                 Text("Counselor").tag("counselor")
             }
-            .pickerStyle(.segmented).padding()
+            .modifier(SegmentedUnlessLargeText()).padding()   // a menu at the accessibility text sizes
             .onChange(of: channel) { _ in
                 // Never leave the other channel's messages under the new selection.
                 messages = []; loaded = false; notice = nil
@@ -312,6 +312,7 @@ struct MessageThreadView: View {
                         Image(systemName: "xmark.circle").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                     }
                     .accessibilityLabel("Remove attachment: \(attachment.name)")
+                    .accessibilityInputLabels(["Remove attachment", "Remove"])
                 }
                 .padding(.horizontal)
             }
@@ -328,6 +329,8 @@ struct MessageThreadView: View {
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Send message to \(recipient)")
+                // Short names for Voice Control ("Tap Send"), 4.30.0.
+                .accessibilityInputLabels(["Send", "Send message", "Send message to \(recipient)"])
                 .disabled(sending || (attachment == nil && draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
             }.padding()
             }
@@ -441,6 +444,7 @@ struct MessageThreadView: View {
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("Attach a file")
+        .accessibilityInputLabels(["Attach", "Attach a file", "Paperclip"])
         .disabled(sending)
     }
 

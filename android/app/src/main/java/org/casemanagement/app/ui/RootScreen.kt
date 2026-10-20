@@ -14,11 +14,37 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -72,51 +98,119 @@ private fun MainScreen(api: Api) {
     val route = entry?.destination?.route ?: "home"
     val isTab = tabs.any { it.route == route }
     val title = titles[route.substringBefore('/')] ?: ""
-    // A confirmation left by a form shows on the screen it returns to, until another one opens.
-    LaunchedEffect(route) {
+    // Each screen opened, by its back stack entry (two clients are two screens, though one route).
+    val entryKey = entry?.id ?: "home"
+    val titleFocus = remember { FocusRequester() }
+    val noticeFocus = remember { FocusRequester() }
+    // 4.30.0: the confirmation that takes focus on this screen (with the screen's name), if any.
+    var flashFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(entryKey) {
+        val opened = android.os.SystemClock.uptimeMillis()
+        // A confirmation left by a form shows on the screen it returns to, until another one opens.
         val p = Flash.pending
-        if (p != null) { Flash.message = p; Flash.pending = null; Flash.shownOn = route }
-        else if (Flash.shownOn != route) { Flash.message = null; Flash.shownOn = null }
+        if (p != null) { Flash.message = p; Flash.pending = null; Flash.shownOn = entryKey }
+        else if (Flash.shownOn != entryKey) { Flash.message = null; Flash.shownOn = null }
+        flashFocused = p != null
+        // 4.30.0: a new screen is said, and TalkBack starts on it: on the confirmation when a form
+        // just left one (read with the screen's name), otherwise on the title heading. An error
+        // that already took focus on this screen keeps it.
+        delay(300)
+        if (ScreenFocus.claimedSince(opened)) return@LaunchedEffect
+        try { if (p != null) noticeFocus.requestFocus() else titleFocus.requestFocus() } catch (e: IllegalStateException) { /* not placed yet */ }
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(title, modifier = Modifier.semantics { heading() }) },
-                navigationIcon = {
-                    if (!isTab) IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
-                },
-            )
-        },
+        topBar = { TitleBar(title, showBack = !isTab, focus = titleFocus) { nav.popBackStack() } },
         bottomBar = {
-            NavigationBar {
-                tabs.forEach { t ->
-                    NavigationBarItem(
-                        selected = route == t.route,
-                        onClick = {
-                            nav.navigate(t.route) {
-                                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                launchSingleTop = true; restoreState = true
-                            }
-                        },
-                        icon = { Icon(t.icon, contentDescription = null) },
-                        label = { Text(t.label) },
-                    )
+            TabBar(tabs, route) { t ->
+                nav.navigate(t.route) {
+                    popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                    launchSingleTop = true; restoreState = true
                 }
             }
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
+            // Status lines, not refusals of something just pressed: read once, without moving the person.
             api.syncNotice?.let { n ->
-                Box(Modifier.padding(horizontal = 16.dp)) { ErrorText(n) }
+                Box(Modifier.padding(horizontal = 16.dp)) { ErrorText(n, takeFocus = false) }
             }
             api.signingNotice?.let { n ->
-                Box(Modifier.padding(horizontal = 16.dp)) { ErrorText(n) }
+                Box(Modifier.padding(horizontal = 16.dp)) { ErrorText(n, takeFocus = false) }
             }
             Flash.message?.let { m ->
-                Box(Modifier.padding(horizontal = 16.dp)) { NoticeText(m) }
+                Box(Modifier.padding(horizontal = 16.dp)) {
+                    if (flashFocused) Surface(color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                        // Takes focus instead of the title, so it is read once and not cut off by the title.
+                        Text(m, color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(12.dp).focusRequester(noticeFocus).focusable()
+                                .semantics { contentDescription = if (title.isNotEmpty()) "$title. $m" else m })
+                    } else NoticeText(m)
+                }
             }
             Graph(api, nav)
+        }
+    }
+}
+
+/**
+ * The title bar (4.30.0): it grows with the title, so a long title at a large font size wraps
+ * instead of being cut off. The title is the screen's heading and takes focus on each new screen.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TitleBar(title: String, showBack: Boolean, focus: FocusRequester, onBack: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surface) {
+        Row(
+            Modifier.fillMaxWidth().windowInsetsPadding(TopAppBarDefaults.windowInsets).heightIn(min = 64.dp).padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (showBack) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+            else Spacer(Modifier.width(12.dp))
+            Text(
+                title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 8.dp)
+                    .focusRequester(focus).focusable().semantics { heading() },
+            )
+        }
+    }
+}
+
+/**
+ * The tabs (4.30.0): the bar grows with its labels, so at a large font size a label wraps onto a
+ * second line instead of being cut off. Each tab is one stop, read as its label.
+ */
+@Composable
+private fun TabBar(tabs: List<Tab>, route: String, onPick: (Tab) -> Unit) {
+    Surface(color = NavigationBarDefaults.containerColor, tonalElevation = NavigationBarDefaults.Elevation) {
+        Row(
+            Modifier.fillMaxWidth().windowInsetsPadding(NavigationBarDefaults.windowInsets).heightIn(min = 80.dp).selectableGroup(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            tabs.forEach { t ->
+                val selected = route == t.route
+                Column(
+                    Modifier.weight(1f).heightIn(min = 80.dp)
+                        .selectable(selected = selected, role = Role.Tab, onClick = { onPick(t) })
+                        .padding(horizontal = 2.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Box(
+                        Modifier.clip(RoundedCornerShape(16.dp))
+                            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                            .padding(horizontal = 20.dp, vertical = 4.dp),
+                    ) {
+                        Icon(t.icon, contentDescription = null, tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text(
+                        t.label, style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
         }
     }
 }

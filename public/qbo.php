@@ -15,7 +15,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['qbo_sync'])) {
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['qbo_since'])) {
     $since = valid_date(is_string($_POST['since'] ?? null) ? $_POST['since'] : '', 2000, (int)date('Y'));
-    if ($since === null) { flash('Enter the first date as a full date.', 'error'); redirect('qbo.php'); }
+    // 4.30.0: tied to the date field, with what was typed kept.
+    if ($since === null) { keep_input(); keep_field_errors(['since' => 'Enter the first date as a full date.']); redirect('qbo.php#since'); }
     set_setting('qbo_since', $since);
     audit((int)$user['id'], 'qbo.since', 'settings', null, $since);
     flash('Invoices submitted on or after ' . fmt_date($since) . ' go to QuickBooks.');
@@ -55,9 +56,10 @@ page_header('QuickBooks Online', $user, 'admin', [['admin.php', 'Administration'
 </form>
 <?php else: ?>
 <p>Connected<?= $c['company_name'] ? ' to <strong>' . h((string)$c['company_name']) . '</strong>' : '' ?><?= $app['sandbox'] ? ' (sandbox)' : '' ?>. <?= $waiting ?> submitted invoices are waiting to be sent. Last sent or checked: <?= setting('qbo_synced_at') ? h(fmt_datetime((string)setting('qbo_synced_at'))) : 'not yet' ?>.<?= $c['refresh_expires_at'] && strtotime((string)$c['refresh_expires_at']) < time() + 14 * 86400 ? ' <strong>The connection must be renewed by ' . h(fmt_date((string)$c['refresh_expires_at'])) . ': connect again before then.</strong>' : '' ?></p>
-<form method="post" action="qbo.php" class="inline-form"><?= csrf_field() ?>
-  <label for="since">Send invoices submitted on or after</label>
-  <input type="date" id="since" name="since" value="<?= h((string)(setting('qbo_since') ?? date('Y-m-d'))) ?>">
+<form method="post" action="qbo.php" class="inline-form" novalidate><?= csrf_field() ?>
+  <?= form_error_summary(['since' => 'Send invoices submitted on or after']) ?>
+  <label for="since">Send invoices submitted on or after <?= required_mark() ?></label>
+  <input type="date" id="since" name="since" required aria-required="true" value="<?= h(old_in('since', (string)(setting('qbo_since') ?? date('Y-m-d')))) ?>" <?= field_aria('since') ?>><?= field_error('since') ?>
   <button type="submit" name="qbo_since" value="1" class="btn btn-secondary btn-sm">Save the date</button>
 </form>
 <p>Older invoices are left out, so invoices already in your books (or already paid) are not added again. Invoices voided or denied here are voided there too, and payments go both ways.</p>

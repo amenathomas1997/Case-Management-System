@@ -42,7 +42,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     if (isset($_POST['save_graph_expiry'])) {
         $d = trim((string)($_POST['graph_expires'] ?? ''));
-        if ($d !== '' && !valid_date($d, (int)date('Y'), (int)date('Y') + 3)) { flash('Enter the expiry date as a date within the next three years, or leave it empty.', 'error'); redirect('system_health.php#email-h'); }
+        // 4.30.0: tied to the date field, with what was typed kept.
+        if ($d !== '' && !valid_date($d, (int)date('Y'), (int)date('Y') + 3)) { keep_input(); keep_field_errors(['graph_expires' => 'Enter the expiry date as a date within the next three years, or leave it empty.']); redirect('system_health.php#email-h'); }
         set_setting('graph_credential_expires', $d);
         audit($user['id'], 'settings.graph_expiry', 'settings', null, $d ?: 'cleared');
         flash($d === '' ? 'The secret expiry date was cleared.' : 'Saved. Administrators are reminded 30, 14 and 7 days before ' . fmt_date($d) . '.');
@@ -250,9 +251,10 @@ page_header((form_errors() ? 'Error — ' : '') . 'System health', $user, 'admin
   <form method="post" action="system_health.php" class="inline-form"><?= csrf_field() ?>
     <button type="submit" name="test_email" value="1" class="btn btn-secondary btn-sm">Send a test email to me</button>
   </form>
-  <form method="post" action="system_health.php" class="inline-form"><?= csrf_field() ?>
+  <form method="post" action="system_health.php" class="inline-form" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['graph_expires' => 'Graph secret expiry date']) ?>
     <label for="graph_expires">Graph secret expiry date</label>
-    <input type="date" id="graph_expires" name="graph_expires" value="<?= h((string)(setting('graph_credential_expires') ?? '')) ?>">
+    <input type="date" id="graph_expires" name="graph_expires" value="<?= h(old_in('graph_expires', (string)(setting('graph_credential_expires') ?? ''))) ?>" <?= field_aria('graph_expires') ?>><?= field_error('graph_expires') ?>
     <button type="submit" name="save_graph_expiry" value="1" class="btn btn-secondary btn-sm">Save expiry date</button>
   </form>
   <?php if ($mailRecent): ?>

@@ -4,8 +4,8 @@
 
 | | |
 |---|---|
-| **Product** | Case Management System (web application), version 4.25.0 |
-| **Report date** | October 18, 2026 |
+| **Product** | Case Management System (web application), version 4.30.0 |
+| **Report date** | October 20, 2026 |
 | **Contact** | The organisation running your installation (its support email is in every page footer). For the software itself: https://github.com/amenathomas1997/Case-Management-System/issues |
 | **Standard** | WCAG 2.2, Levels A and AA. Text contrast is held to the AAA level (7:1). |
 
@@ -15,7 +15,7 @@ Covered: the web application's staff pages and its public pages for clients, gua
 
 Not covered:
 - the iPhone and Android apps (reviewed separately, below)
-- documents the system generates (PDF invoices and downloaded letters)
+- documents the system generates as PDF (invoices, funder and outcome reports). They are not tagged. Since 4.30.0 they read in a sensible order, carry a title and language, and print a link to an accessible HTML copy that the receiving agency can open without signing in, for 90 days. Downloaded letters are HTML marked with the letter's language.
 - third-party pages it links to (Microsoft sign-in and Teams, QuickBooks, agency portals)
 
 ## How it was evaluated
@@ -23,6 +23,8 @@ Not covered:
 **This is a self-evaluation by the developers, not a third-party audit.** The evidence:
 
 **Daily use.** The system's owner is blind and uses it every day with JAWS on Windows and VoiceOver on iPhone. Many design rules come from that use: no extra tab stops for hints, quiet combo boxes, and errors tied to their fields.
+
+**A full accessibility audit on October 20, 2026** (ACCESSIBILITY-AUDIT-2026-10-20.md): eight reviewers covered the shared page parts, the public and client pages in English and Spanish, the staff pages, billing, reports and admin, keyboard-only task walkthroughs in a real browser, an axe-core scan of every rendered page in every colour palette, and both phone apps. Every finding was fixed in 4.30.0.
 
 **Automated checks on every release** (tests/run_all.sh and CI):
 - Text contrast in the light and dark themes is measured against the shipped stylesheet, held to 7:1, and the dark theme's focus ring to 3:1 (tests/accessibility.php).

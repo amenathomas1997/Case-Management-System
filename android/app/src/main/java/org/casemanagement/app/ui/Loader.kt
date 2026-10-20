@@ -46,13 +46,13 @@ fun <T> Show(state: Loaded<T>, what: String, content: @Composable (T) -> Unit) {
     when {
         data != null -> {
             // A reload that failed: say so, above what was read before.
-            state.error?.let { if (!state.loading) ErrorText("Could not refresh: $it What is shown may be out of date.") }
+            state.error?.let { if (!state.loading) ErrorText("Could not refresh: $it What is shown may be out of date.", takeFocus = false) }
             content(data)
         }
         state.loading -> Loading(what)
         // A plain column: Show is often inside a scrolling Page, and a scroller in a scroller fails.
         else -> androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-            ErrorText(state.error ?: "Could not load $what.")
+            ErrorText(state.error ?: "Could not load $what.", takeFocus = false)
             SecondaryButton("Try again") { state.reload() }
         }
     }

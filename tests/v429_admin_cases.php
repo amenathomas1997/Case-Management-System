@@ -82,7 +82,7 @@ check(in_array('V429-ADMIN New VR',$names429a,true) && !in_array('V429-ADMIN Old
 $heads429a=array_column(scheduled_report_sections('funder',$from429a,$today429a),'heading');
 check(in_array('V429-ADMIN New VR',$heads429a,true) && !in_array('V429-ADMIN Old VR',$heads429a,true),'The monthly funder email has one section for the renamed agency, not one per name');
 [$code,$html,$err]=$renderPage('funder_report',['agency'=>'V429-ADMIN Old VR']+$period429a);
-check($code===0 && $err==='' && substr_count($html,'>V429-ADMIN New VR — ')===1 && !str_contains($html,'>V429-ADMIN Old VR — '),'The funder report picker lists the renamed agency once'.($err?": $err":''));
+check($code===0 && $err==='' && substr_count($html,'>V429-ADMIN New VR</option>')===1 && !str_contains($html,'>V429-ADMIN Old VR</option>') /* 4.30.0: plain option names */,'The funder report picker lists the renamed agency once'.($err?": $err":''));
 [$code,$html,$err]=$renderPage('agency_report',$period429a);
 check($code===0 && $err==='' && str_contains($html,'<option value="V429-ADMIN New VR"') && !str_contains($html,'<option value="V429-ADMIN Old VR"'),'The agency billing summary picker lists the renamed agency once'.($err?": $err":''));
 [$code,$html,$err]=$renderPage('analytics',[]);

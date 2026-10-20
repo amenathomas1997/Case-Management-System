@@ -9,7 +9,8 @@
     document.querySelectorAll('select').forEach(function (select) {
       if (select.multiple || (!original.has(select) && select.size > 1)) return;
       // A required choice stays a dropdown: as a list its empty "Choose…" item would count as an answer.
-      if (select.required && !original.has(select)) return;
+      // aria-required counts too (4.30.0): some required lists use it so they are not "invalid" on arrival.
+      if ((select.required || (select.getAttribute && select.getAttribute('aria-required') === 'true')) && !original.has(select)) return;
       var index = select.selectedIndex;
       if (expanded) {
         if (!original.has(select)) original.set(select, select.getAttribute('size'));

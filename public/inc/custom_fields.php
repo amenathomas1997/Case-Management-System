@@ -131,13 +131,21 @@ function custom_copy_referral_to_client(int $referralId, int $clientId): void {
 /** The form controls for $fields with $values (posted or stored), labelled for a public page when $public. */
 function custom_fields_html(array $fields, array $values, bool $public = false): string {
     $tr = fn(string $s): string => $public && function_exists('t') ? t($s) : h($s);
+    // 4.30.0: on a Spanish page the administrator's English (a label with no Spanish version, the hint,
+    // a list's options) is marked lang="en", so the Spanish voice does not read it (3.1.2).
+    $es = $public && function_exists('page_lang') && page_lang() === 'es';
+    $en = fn(string $s): string => $es ? '<span lang="en">' . h($s) . '</span>' : h($s);
     $out = '';
     foreach ($fields as $f) {
         $id = 'cf_' . (int)$f['id'];
         $val = (string)($values[(int)$f['id']] ?? '');
-        $label = h(custom_field_label($f, $public)) . ((int)$f['required'] === 1 ? ' ' . ($public ? '<span aria-hidden="true">*</span><span class="visually-hidden"> (' . $tr('required') . ')</span>' : required_mark()) : '');
-        $hint = trim((string)$f['hint']) !== '' ? ' <span class="hint">' . h((string)$f['hint']) . '</span>' : '';
-        $aria = field_aria($id);
+        $required = (int)$f['required'] === 1;
+        $labelText = custom_field_label($f, $public);
+        $label = ($es && trim((string)$f['label_es']) === '' ? $en($labelText) : h($labelText)) . ($required ? ' ' . required_mark() : '');
+        $hint = trim((string)$f['hint']) !== '' ? ' <span class="hint">' . $en((string)$f['hint']) . '</span>' : '';
+        // Required is said by the control itself as well as the label (4.30.0). aria-required, not the native
+        // attribute: a native required select or box is exposed as invalid before anything is sent.
+        $aria = trim(field_aria($id) . ($required ? ' aria-required="true"' : ''));
         $out .= '<div class="field"><label for="' . $id . '">' . $label . $hint . '</label>';
         switch ($f['type']) {
             case 'textarea': $out .= '<textarea id="' . $id . '" name="' . $id . '" rows="3" ' . $aria . '>' . h($val) . '</textarea>'; break;
@@ -153,7 +161,8 @@ function custom_fields_html(array $fields, array $values, bool $public = false):
             case 'choice': case 'yesno':
                 $opts = $f['type'] === 'yesno' ? ['Yes', 'No'] : custom_field_options($f);
                 $out .= '<select id="' . $id . '" name="' . $id . '" ' . $aria . '><option value="">' . $tr('Not answered') . '</option>';
-                foreach ($opts as $o) $out .= '<option value="' . h($o) . '"' . ($o === $val ? ' selected' : '') . '>' . ($f['type'] === 'yesno' ? $tr($o) : h($o)) . '</option>';
+                // An option cannot hold a span, so an English option on a Spanish page carries lang="en" itself.
+                foreach ($opts as $o) $out .= '<option value="' . h($o) . '"' . ($f['type'] !== 'yesno' && $es ? ' lang="en"' : '') . ($o === $val ? ' selected' : '') . '>' . ($f['type'] === 'yesno' ? $tr($o) : h($o)) . '</option>';
                 // An answer whose option has since been renamed or removed is kept, and said so.
                 if ($val !== '' && !in_array($val, $opts, true)) $out .= '<option value="' . h($val) . '" selected>' . h($val) . ' ' . $tr('(no longer on the list)') . '</option>';
                 $out .= '</select>';

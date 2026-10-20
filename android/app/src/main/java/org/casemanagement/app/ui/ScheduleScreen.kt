@@ -164,7 +164,7 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, on
         // Each error on its field as well as in the summary (4.28.0).
         hoursError = if (h == null || h < 0 || h > 24) "Enter the hours as a number from 0 to 24." else null
         milesError = if (m == null || m < 0 || m > 1000) "Enter the miles as a number from 0 to 1000." else null
-        if (hoursError != null || milesError != null) { error = listOfNotNull(hoursError, milesError).joinToString(" "); return }
+        if (hoursError != null || milesError != null) { error = errorSummary(listOf(hoursError, milesError)); return }
         if (h == null || m == null) return
         // Busy at once (launchSave), so a second tap in the same moment does not send twice (4.28.0).
         scope.launchSave({ busy = it }, { }) {
@@ -191,7 +191,7 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, on
         title = { Text("Complete: " + s.optString("client"), modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal, error = hoursError)
+                Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal, error = hoursError, required = true)
                 Field("Miles driven", miles, { miles = it }, hint = "0 if none", keyboard = KeyboardType.Decimal, error = milesError)
                 Field("Session note", note, { note = it }, hint = "optional", singleLine = false, minLines = 3)
                 SignaturePad(signature)

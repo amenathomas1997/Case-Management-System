@@ -78,11 +78,16 @@ if (!$csrfStale && $_SERVER['REQUEST_METHOD'] === 'POST' && !$survey['completed_
         set_form_errors($errors);
         $error = true;
     } else {
+        // 4.30.0: the language the answers were given in is kept with them (surveys.answer_lang, from this
+        // release's migration); a database that does not have the column yet saves the answers without it.
+        try { db()->query('SELECT answer_lang FROM surveys LIMIT 0'); $hasAnswerLang = true; }
+        catch (PDOException $e) { $hasAnswerLang = false; }
         db()->beginTransaction();
         try {
             // The submitted answers and case note must commit together.
-            $save = db()->prepare('UPDATE surveys SET completed_at = NOW(), satisfaction = ?, goals_met = ?, comments = ? WHERE id = ? AND completed_at IS NULL');
-            $save->execute([$sat, $goals, $comments ?: null, $survey['id']]);
+            $save = db()->prepare('UPDATE surveys SET completed_at = NOW(), satisfaction = ?, goals_met = ?, comments = ?'
+                . ($hasAnswerLang ? ', answer_lang = ?' : '') . ' WHERE id = ? AND completed_at IS NULL');
+            $save->execute($hasAnswerLang ? [$sat, $goals, $comments ?: null, page_lang(), $survey['id']] : [$sat, $goals, $comments ?: null, $survey['id']]);
             if ($save->rowCount() === 1) {
                 db()->prepare('INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?,?,?,?,NULL)')
                     ->execute([(int)$survey['client_id'], 'Case Note', 'Outcome survey completed',
@@ -128,7 +133,7 @@ echo lang_toggle();
   <p><?= t('Questions 1 and 2 need an answer. Question 3 is optional.') ?></p>
   <?php if ($staleNotice): // Announced once, by moving focus to it (no alert role). ?>
   <div class="alert alert-error" id="form-errors" tabindex="-1"><span class="visually-hidden"><?= t('Error:') ?> </span><?= t('This page was open for a long time, so your answers were not sent yet. Everything you chose and typed is still here. Please check it and choose Submit feedback again.') ?></div>
-  <script>document.addEventListener("DOMContentLoaded",function(){var e=document.getElementById("form-errors");if(e)e.focus();});</script>
+  <script>(window.cmsFocusAfterLoad||function(f){document.addEventListener("DOMContentLoaded",f);})(function(){var e=document.getElementById("form-errors");if(e)e.focus();});</script>
   <?php endif; ?>
   <?php // The page language rides the form, so the reply keeps it even if the session lapsed. ?>
   <form method="post" action="survey.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>
@@ -136,14 +141,15 @@ echo lang_toggle();
     <?php // One focused summary names each unanswered question and links to it (announced once, by the focus move). ?>
     <?= form_error_summary(['satisfaction' => '1. Overall, how satisfied are you with your training?', 'goals_met' => '2. How well did the training meet your goals?',
         'comments' => "3. Anything else you'd like us to know?"], ['satisfaction' => 'sat-1', 'goals_met' => 'goals-1']) ?>
-    <?php // The scale's ends are in the legend (4.28.0: no separate hint line), and on 1 and 10. ?>
+    <?php // The scale's ends are in the legend (4.28.0: no separate hint line), and on 1 and 10. An unanswered
+    // question marks each of its choices invalid (4.30.0), so the state is heard on the radio itself. ?>
     <fieldset<?= has_field_error('satisfaction') ? ' aria-describedby="err-satisfaction"' : '' ?>>
       <legend><?= t('1. Overall, how satisfied are you with your training?') ?> <span class="hint"><?= t('(required)') ?> <?= t('1 = not satisfied · 10 = extremely satisfied') ?></span></legend>
       <?= field_error('satisfaction') ?>
       <?php // One choice to a line, top to bottom, with the ends of the scale named on 1 and 10. ?>
       <div class="field scale-list">
         <?php for ($i = 1; $i <= 10; $i++): ?>
-        <label><input type="radio" id="sat-<?= $i ?>" name="satisfaction" value="<?= $i ?>" <?= (int)($_POST['satisfaction'] ?? 0) === $i ? 'checked' : '' ?> required> <?= $i ?><?= $i === 1 ? ' <span class="hint">' . t('(not satisfied)') . '</span>' : ($i === 10 ? ' <span class="hint">' . t('(extremely satisfied)') . '</span>' : '') ?></label>
+        <label><input type="radio" id="sat-<?= $i ?>" name="satisfaction" value="<?= $i ?>" <?= (int)($_POST['satisfaction'] ?? 0) === $i ? 'checked' : '' ?> required<?= has_field_error('satisfaction') ? ' aria-invalid="true"' : '' ?>> <?= $i ?><?= $i === 1 ? ' <span class="hint">' . t('(not satisfied)') . '</span>' : ($i === 10 ? ' <span class="hint">' . t('(extremely satisfied)') . '</span>' : '') ?></label>
         <?php endfor; ?>
       </div>
     </fieldset>
@@ -152,7 +158,7 @@ echo lang_toggle();
       <?= field_error('goals_met') ?>
       <div class="field scale-list">
         <?php for ($i = 1; $i <= 10; $i++): ?>
-        <label><input type="radio" id="goals-<?= $i ?>" name="goals_met" value="<?= $i ?>" <?= (int)($_POST['goals_met'] ?? 0) === $i ? 'checked' : '' ?> required> <?= $i ?><?= $i === 1 ? ' <span class="hint">' . t('(not at all)') . '</span>' : ($i === 10 ? ' <span class="hint">' . t('(completely)') . '</span>' : '') ?></label>
+        <label><input type="radio" id="goals-<?= $i ?>" name="goals_met" value="<?= $i ?>" <?= (int)($_POST['goals_met'] ?? 0) === $i ? 'checked' : '' ?> required<?= has_field_error('goals_met') ? ' aria-invalid="true"' : '' ?>> <?= $i ?><?= $i === 1 ? ' <span class="hint">' . t('(not at all)') . '</span>' : ($i === 10 ? ' <span class="hint">' . t('(completely)') . '</span>' : '') ?></label>
         <?php endfor; ?>
       </div>
     </fieldset>

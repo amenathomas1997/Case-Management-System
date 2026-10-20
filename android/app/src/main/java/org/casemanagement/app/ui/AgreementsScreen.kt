@@ -50,9 +50,9 @@ fun AgreementScreen(api: Api, nav: NavHostController, id: Int) {
             } else {
                 Heading("Sign")
                 Tick("I have read this agreement and agree to it", agree, error = agreeError) { agree = it; if (it) agreeError = null }
-                Field("Type your full name to sign", name, { name = it }, hint = "as it is on your account: ${api.userName}")
+                Field("Type your full name to sign", name, { name = it }, hint = "as it is on your account: ${api.userName}", required = true)
                 ErrorText(error)
-                PrimaryButton("Sign the agreement", busy = busy, enabled = name.isNotBlank()) {
+                PrimaryButton("Sign the agreement", busy = busy, missing = stillNeeded(missingNames("your full name" to name.isBlank()))) {
                     agreeError = if (!agree) "Tick that you have read the agreement and agree to it." else null
                     if (!agree) { error = agreeError; return@PrimaryButton }
                     scope.launchSave({ busy = it }, { error = it }) {

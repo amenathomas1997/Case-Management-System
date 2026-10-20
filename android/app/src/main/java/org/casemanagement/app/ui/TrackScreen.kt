@@ -129,7 +129,7 @@ fun TrackScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
             val notes = t.notes
             Heading(if (notes == null) "Case notes for this track" else if (notes.total > notes.notes.size) "Case notes for this track (latest ${notes.notes.size} of ${notes.total})" else "Case notes for this track (${notes.notes.size})")
             when {
-                notes == null -> Text("The notes could not be loaded. Pull Refresh to try again.")
+                notes == null -> Text("The notes could not be loaded. Choose Refresh at the end of the page to try again.")
                 notes.notes.isEmpty() -> Text("No notes on this track yet.")
             }
             notes?.notes?.forEach { n ->
@@ -265,13 +265,13 @@ private fun CorrectLogDialog(api: Api, l: WorkLog, onDone: (String) -> Unit, onC
         // 4.29.0: each error on its own field, as well as in the summary.
         hoursError = if (h == null) "Enter the hours as a number, such as 1.5." else null
         milesError = if (m == null) "Enter the miles as a number, or leave it empty." else null
-        if (h == null || m == null) { error = hoursError ?: milesError; return@FormDialog }
+        if (h == null || m == null) { error = errorSummary(listOf(hoursError, milesError)); return@FormDialog }
         scope.launchSave({ busy = it }, { error = it }) {
             val r = api.call("correct_log", body = JSONObject().put("id", l.id).put("hours", h).put("mileage", m).put("reason", reason.trim()))
             onDone(r.optString("message").ifEmpty { "Entry corrected." })
         }
     }, onCancel = onCancel) {
-        Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal, error = hoursError)
+        Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal, error = hoursError, required = true)
         Field("Miles", miles, { miles = it }, keyboard = KeyboardType.Decimal, error = milesError)
         Field("Reason for the correction", reason, { reason = it })
         ErrorText(error)
@@ -290,7 +290,7 @@ private fun SendReportDialog(api: Api, trackId: Int, clientName: String, onDone:
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    FormDialog("Email the progress report", "Sign and send", busy, enabled = signature.isNotBlank(), onSave = {
+    FormDialog("Email the progress report", "Sign and send", busy, missing = stillNeeded(missingNames("Signature" to signature.isBlank())), onSave = {
         if (busy) return@FormDialog
         scope.launchSave({ busy = it }, { error = it }) {
             // 4.28.0: the server emails before it answers, so a retry after a lost reply carries the same key and emails once (see sendOnce).
@@ -302,7 +302,7 @@ private fun SendReportDialog(api: Api, trackId: Int, clientName: String, onDone:
     }, onCancel = onCancel) {
         Text("Sends the full progress report for $clientName (authorization, goals and session log) to the VR counselor on file, with a link to confirm they received it.")
         Field("Personal message", intro, { intro = it }, hint = "optional", singleLine = false, minLines = 3)
-        Field("Signature: type your full name", signature, { signature = it }, hint = api.userName)
+        Field("Signature: type your full name", signature, { signature = it }, hint = api.userName, required = true)
         Text("The signature and the time are included on the report and recorded on the client's file.")
         ErrorText(error)
     }
@@ -337,7 +337,7 @@ private fun AddGoalDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
         specificError = if (specific.isBlank()) "Specific objective: say what the client will be able to do." else null
         metricError = if (metric.isBlank()) "Measurable criteria: say how progress on this goal is measured." else null
         targetError = if (target.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(target.trim())) "Enter the target date as year-month-day, such as ${today()}, or leave it empty." else null
-        val first = specificError ?: metricError ?: targetError
+        val first = errorSummary(listOf(specificError, metricError, targetError))
         when {
             first != null -> error = first
             else -> scope.launchSave({ busy = it }, { error = it }) {
@@ -349,8 +349,8 @@ private fun AddGoalDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
     }, onCancel = onCancel) {
         NoticeText(notice)
         SecondaryButton("Start from a template") { picking = true }
-        Field("Specific objective", specific, { specific = it }, hint = "required", singleLine = false, minLines = 2, error = specificError)
-        Field("Measurable criteria", metric, { metric = it }, hint = "required", singleLine = false, minLines = 2, error = metricError)
+        Field("Specific objective", specific, { specific = it }, required = true, singleLine = false, minLines = 2, error = specificError)
+        Field("Measurable criteria", metric, { metric = it }, required = true, singleLine = false, minLines = 2, error = metricError)
         Field("Focus area", focus, { focus = it }, hint = "optional")
         Field("Target date", target, { target = it }, hint = "optional, year-month-day", error = targetError)
         ErrorText(error)
@@ -378,7 +378,7 @@ private fun GoalTemplatePicker(api: Api, onPick: (GoalTemplate) -> Unit, onCance
                 Field("Tool, task or keyword", q, { q = it })
                 SecondaryButton("Search") { search = q.trim() }
                 if (state.loading) Text("Loading templates…")
-                ErrorText(state.error)
+                ErrorText(state.error, takeFocus = false)
                 state.data?.let { r ->
                     Announce(if (r.templates.isEmpty()) "No templates match." else "${r.templates.size}${if (r.more) " or more" else ""} templates.", key = r)
                     Heading("Matching templates (${r.templates.size}${if (r.more) "+" else ""})")
@@ -447,7 +447,9 @@ private fun ExpenseDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
     var error by remember { mutableStateOf<String?>(null) }
     var dateError by remember { mutableStateOf<String?>(null) }
     var amountError by remember { mutableStateOf<String?>(null) }
+    var descriptionError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var presses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val idem = rememberSaveable { UUID.randomUUID().toString() }
     val scope = rememberCoroutineScope()
     AlertDialog(
@@ -455,18 +457,20 @@ private fun ExpenseDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
         title = { Text("Add an expense", modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field("Date", date, { date = it }, hint = "year-month-day", error = dateError)
-                Field("What it was for", description, { description = it })
-                Field("Amount in dollars", amount, { amount = it }, hint = "such as 24.50", keyboard = KeyboardType.Decimal, error = amountError)
-                ErrorText(error)
+                Field("Date", date, { date = it }, hint = "year-month-day", error = dateError, required = true)
+                Field("What it was for", description, { description = it }, required = true, error = descriptionError)
+                Field("Amount in dollars", amount, { amount = it }, hint = "such as 24.50", keyboard = KeyboardType.Decimal, error = amountError, required = true)
+                ErrorText(error, focusKey = presses)
             }
         },
         confirmButton = {
-            TextButton(enabled = !busy && description.isNotBlank(), onClick = {
+            TextButton(enabled = !busy, onClick = {
+                presses++
                 val a = amount.trim().removePrefix("$")
+                descriptionError = if (description.isBlank()) "Say what the expense was for." else null
                 dateError = if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim())) "Enter the date as year-month-day, such as ${today()}." else null
                 amountError = if (!Regex("^\\d{1,7}(\\.\\d{1,2})?$").matches(a) || (a.toDoubleOrNull() ?: 0.0) <= 0) "Enter the amount in dollars, such as 24.50." else null
-                if (dateError != null || amountError != null) { error = dateError ?: amountError; return@TextButton }
+                errorSummary(listOf(dateError, descriptionError, amountError))?.let { error = it; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
                     val b = JSONObject().put("track_id", trackId).put("date", date.trim()).put("description", description.trim()).put("amount", a).put("idem_key", idem)
                     onDone(saveOrQueue(api, "add_expense", b, "Expense: $" + a + " " + description.trim().take(30), "Expense added.").message)
@@ -536,7 +540,7 @@ fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: In
         Page {
             Heading(if (trackId > 0) "Edit the track" else "New track for " + f.optString("client_name"), large = true)
             NoticeText(notice)
-            Field("Title", v("title"), { set("title", it) }, error = fieldErrors["title"])
+            Field("Title", v("title"), { set("title", it) }, error = fieldErrors["title"], required = true)
             Choice("Service type", v("service_type"), f.optJSONArray("service_types").let { a -> List(a?.length() ?: 0) { a!!.optString(it) } }.map { it to it }, error = fieldErrors["service_type"]) { set("service_type", it) }
             Choice("Status", v("status"), f.optJSONArray("statuses").let { a -> List(a?.length() ?: 0) { a!!.optString(it) } }.map { it to it }, error = fieldErrors["status"]) { set("status", it) }
             Choice("Automatic progress reports", v("report_cadence"), cadences, error = fieldErrors["report_cadence"]) { set("report_cadence", it) }
@@ -552,7 +556,7 @@ fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: In
             if (trackId > 0) Field("Why it changed", reason, { reason = it }, hint = "kept as the amendment reason, optional", error = fieldErrors["amendment_reason"])
             ErrorText(error)
             if (conflict) SecondaryButton("Reload, keeping my changes") { if (!reloading) { reloading = true; notice = null; state.reload() } }
-            PrimaryButton("Save", busy = busy, enabled = v("title").isNotBlank()) {
+            PrimaryButton("Save", busy = busy, missing = stillNeeded(missingNames("Title" to v("title").isBlank()))) {
                 if (busy) return@PrimaryButton
                 notice = null
                 scope.launchSave({ busy = it }, { error = it }) {
@@ -581,10 +585,10 @@ fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: In
                                 " Press Reload, keeping my changes, to see them."
                             return@launchSave
                         }
-                        // Field errors come back by name: each on its field, the first said in the summary.
+                        // Field errors come back by name: each on its field, and all of them in the summary.
                         val errs = e.reply?.optJSONObject("errors")
                         fieldErrors = errs?.keys()?.asSequence()?.associateWith { errs.optString(it) } ?: emptyMap()
-                        error = fieldErrors.values.firstOrNull() ?: e.message
+                        error = errorSummary(fieldErrors.values) ?: e.message
                     }
                 }
             }

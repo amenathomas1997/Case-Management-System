@@ -634,17 +634,28 @@
   syncVoice();
   if (volSel) {
     if (window.Earcon) volSel.value = Earcon.volume;
-    volSel.addEventListener('change', function () {
+    // Quiet combo box (owner rule 2, 4.30.0): arrow keys on the closed list change it at
+    // once, so the loudness (its sample sound, and Max's switch to text replies) is applied
+    // only when the choice has rested for 700 ms, or at once when the list is left or
+    // Enter is pressed: never a sound or status message per arrow press.
+    var volApplied = volSel.value, volTimer = null;
+    function applyVolume() {
+      clearTimeout(volTimer); volTimer = null;
+      if (volSel.value === volApplied) return;
+      volApplied = volSel.value;
       if (window.Earcon) { Earcon.setVolume(volSel.value); Earcon.play('notify'); }
       // Max (deaf-blind) with no choice saved: replies switch to text a braille display can show.
-      // Passing Max on the way to another loudness (arrow keys change it at once) turns them back on.
+      // Leaving Max for another loudness turns them back on.
       if (volSel.value === 'max') {
         if (spoken && savedSpoken() === null) { setSpoken(false, false); autoMuted = true; }
       } else if (autoMuted) {
         autoMuted = false;
         if (!spoken && savedSpoken() === null) setSpoken(true, false);
       }
-    });
+    }
+    volSel.addEventListener('change', function () { clearTimeout(volTimer); volTimer = setTimeout(applyVolume, 700); });
+    volSel.addEventListener('blur', applyVolume);
+    volSel.addEventListener('keydown', function (e) { if (e.key === 'Enter') applyVolume(); });
   }
 
   // Resume a conversation that was running before the page navigated — only

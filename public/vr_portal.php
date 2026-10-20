@@ -91,7 +91,7 @@ page_header('VR portal', $user, 'invoices', [['invoices.php', 'Invoices']]);
     <details<?= $hasErr('note_t' . $tid) ? ' open' : '' ?>><summary>Returned by the agency<span class="visually-hidden">: <?= h($r['client_name']) ?>, authorization <?= h($r['auth_number']) ?></span></summary>
     <form method="post" action="<?= h($back) ?>" class="stacked" novalidate><?= csrf_field() ?><input type="hidden" name="track_id" value="<?= $tid ?>">
       <div class="field"><label for="note_t<?= $tid ?>">What the agency asked for <?= required_mark() ?></label>
-        <input type="text" id="note_t<?= $tid ?>" name="note" maxlength="255" value="<?= h(old_in('track_id') === (string)$tid ? old_in('note') : '') ?>" <?= field_aria('note_t' . $tid) ?>><?= field_error('note_t' . $tid) ?></div>
+        <input type="text" id="note_t<?= $tid ?>" name="note" maxlength="255" required aria-required="true" value="<?= h(old_in('track_id') === (string)$tid ? old_in('note') : '') ?>" <?= field_aria('note_t' . $tid) ?>><?= field_error('note_t' . $tid) ?></div>
       <button type="submit" name="track_state" value="returned" class="btn btn-secondary btn-sm">Save as returned</button></form></details></li>
 <?php endforeach; ?>
 </ul><?php endif; ?>
@@ -147,7 +147,7 @@ page_header('VR portal', $user, 'invoices', [['invoices.php', 'Invoices']]);
     <details<?= $hasErr('note_i' . $iid) ? ' open' : '' ?>><summary>Rejected by the agency<span class="visually-hidden">: invoice <?= h($r['invoice_number']) ?></span></summary>
     <form method="post" action="<?= h($back) ?>" class="stacked" novalidate><?= csrf_field() ?><input type="hidden" name="invoice_id" value="<?= $iid ?>">
       <div class="field"><label for="note_i<?= $iid ?>">The agency's reason <?= required_mark() ?></label>
-        <input type="text" id="note_i<?= $iid ?>" name="note" maxlength="255" value="<?= h(old_in('invoice_id') === (string)$iid ? old_in('note') : '') ?>" <?= field_aria('note_i' . $iid) ?>><?= field_error('note_i' . $iid) ?></div>
+        <input type="text" id="note_i<?= $iid ?>" name="note" maxlength="255" required aria-required="true" value="<?= h(old_in('invoice_id') === (string)$iid ? old_in('note') : '') ?>" <?= field_aria('note_i' . $iid) ?>><?= field_error('note_i' . $iid) ?></div>
       <button type="submit" name="invoice_state" value="rejected" class="btn btn-secondary btn-sm">Save as rejected</button></form></details></li>
 <?php endforeach; ?>
 </ul><?php endif; ?>

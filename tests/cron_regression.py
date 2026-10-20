@@ -118,6 +118,7 @@ function db() { return new FakeDB; }
 function cfg($key) { return 'https://example.invalid'; }
 // The built-in wording says "tomorrow"; {day} and the other placeholders are shown so the test can read them.
 function email_template($name,$args) { return ['Reminder: your session tomorrow', "Hello {$args['name']}, see you tomorrow.\nWhen: {$args['when']}{$args['where']}\nDay: {$args['day']}\nJoin: {$args['join_link']}\n"]; }
+function email_template_for_client($name,$client,$args) { return email_template($name,$args); }
 function brand($key) { return 'Test'; }
 function record_heartbeat($job) { $GLOBALS['heartbeats'][]=$job; }
 function client_zone($c) { return null; }

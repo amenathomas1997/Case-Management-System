@@ -310,7 +310,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
     <div class="field">
       <label for="gt-cat">Area</label>
       <select id="gt-cat" name="gt_cat">
-        <option value="">All areas (<?= $goalTplTotal ?>)</option>
+        <option value="">All areas</option>
         <?php foreach ($goalCats as $gc): ?><option value="<?= h($gc['category']) ?>" <?= $gtCat === $gc['category'] ? 'selected' : '' ?>><?= h($gc['category']) ?></option><?php endforeach; ?>
       </select>
     </div>
@@ -333,7 +333,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
     <?php endif; ?>
   </p>
   <?php if ($gtFiltered): ?>
-  <script>document.addEventListener('DOMContentLoaded',function(){if(document.getElementById('flash-messages')||document.getElementById('form-error-summary'))return;var c=document.getElementById('gt-count');if(c)c.focus();});</script>
+  <script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){if(document.getElementById('flash-messages')||document.getElementById('form-error-summary'))return;var c=document.getElementById('gt-count');if(c)c.focus();});</script>
   <div class="table-scroll" tabindex="0" role="region" aria-labelledby="goals-cap">
   <table id="goal-tpl-table">
     <caption class="visually-hidden" id="goals-cap">SMART goal templates by category</caption>
@@ -544,7 +544,7 @@ page_header($libs[$lib] . ' — Goal & assessment templates', $user, 'templates'
     <div class="field"><label for="scale_labels">Rating labels <span class="hint">optional; one per level as <code>value=label</code> separated by semicolons, e.g. <code>0=0 Not at all;4=4 Fully</code>. Levels without a label show the number.</span></label>
       <input type="text" id="scale_labels" name="scale_labels" maxlength="600" value="<?= h(old_in('scale_labels')) ?>" <?= field_aria('scale_labels') ?>><?= field_error('scale_labels') ?></div>
     <?php // Required, with no default: the funder report counts a gain in this direction. ?>
-    <fieldset <?= has_field_error('higher_is_better') ? 'aria-describedby="err-higher_is_better"' : '' ?>>
+    <fieldset role="radiogroup" aria-required="true" <?= has_field_error('higher_is_better') ? 'aria-invalid="true" aria-describedby="err-higher_is_better"' : '' ?>>
       <legend>Higher ratings mean <?= required_mark() ?></legend>
       <?= field_error('higher_is_better') ?>
       <?php foreach (['1' => 'Better (for example, more independent or more satisfied)', '0' => 'Worse (for example, more difficulty or more help needed)'] as $hv => $hl): ?>

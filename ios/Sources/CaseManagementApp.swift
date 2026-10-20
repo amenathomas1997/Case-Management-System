@@ -964,25 +964,87 @@ func speechString(_ text: AttributedString) -> NSAttributedString {
     }
 }
 
-/// The message showFormError has just announced, and when: the banner that then shows it does
-/// not say it a second time.
+/// The message showFormError has just announced (or a screen has just put VoiceOver on), and
+/// when: the banner that then shows it does not say it a second time.
 @MainActor private var formErrorAnnounced: (message: String, at: Date)?
+/// Counts showFormError calls; formErrorClaimed is the last one whose message a screen is
+/// reading out itself by moving VoiceOver onto its banner or field (claimFormErrorFocus).
+@MainActor private var formErrorSerial = 0
+@MainActor private var formErrorClaimed = 0
 
-/// Puts an error in a screen's error banner and announces it here, every time (an identical
-/// repeat too). The announcement does not wait for the banner: a banner that is a List or Form
-/// row is never drawn while the person is scrolled away from it, so its own announcement
-/// would never come.
-@MainActor func showFormError(_ message: String, in error: inout String?) {
-    announce(message)
+/// Puts an error in a screen's error banner and announces it, every time (an identical repeat
+/// too), unless the screen moves VoiceOver onto the banner or the field the error is about
+/// (ErrorFocusForm and the list screens with an error row call claimFormErrorFocus as the error
+/// arrives): that focus move reads the message, and an announcement as well said it twice
+/// (4.30.0). The announcement waits only a moment for that claim, not for the banner: a banner
+/// that is a List or Form row is never drawn while the person is scrolled away from it, so its
+/// own announcement would never come.
+@MainActor func showFormError(_ message: String, in error: inout String?, field: String? = nil) {
+    formErrorField = field.map { (message, $0) }
+    formErrorSerial += 1
+    let serial = formErrorSerial
     formErrorAnnounced = (message, Date())
     error = message
+    Task { @MainActor in
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        guard formErrorClaimed != serial else { return }
+        announce(message)
+    }
 }
 
 /// showFormError for a message marked with its language (shown with ErrorBanner's `spoken`).
 @MainActor func showFormError(_ message: AttributedString, in error: inout AttributedString?) {
-    announce(message)
+    formErrorSerial += 1
+    let serial = formErrorSerial
     formErrorAnnounced = (String(message.characters), Date())
     error = message
+    Task { @MainActor in
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        guard formErrorClaimed != serial else { return }
+        announce(message)
+    }
+}
+
+/// The field an error is about when its message does not start with the field's name (a
+/// custom field whose name is long, say): read by ErrorFocusing (formErrorField(for:)).
+@MainActor private var formErrorField: (message: String, field: String)?
+
+/// The field showFormError was told `message` is about, if it was.
+@MainActor func formErrorField(for message: String) -> String? {
+    guard let named = formErrorField, named.message == message else { return nil }
+    return named.field
+}
+
+/// Called by a screen as an error arrives when it is about to move VoiceOver onto the error's
+/// banner or field: the focus move reads the message, so neither showFormError nor the banner
+/// announces it as well.
+///
+/// If VoiceOver is not on the banner or field a moment later (a sheet covers the screen, or the
+/// banner could not be drawn), the message is announced after all, so an error is never silent.
+@MainActor func claimFormErrorFocus(_ message: String) {
+    formErrorClaimed = formErrorSerial
+    formErrorAnnounced = (message, Date())
+    guard UIAccessibility.isVoiceOverRunning else { return }
+    Task { @MainActor in
+        // After the screens' focus moves (400 ms, or 700 ms when ErrorFocusForm falls back
+        // from a field to its banner) and VoiceOver has settled on the element.
+        try? await Task.sleep(nanoseconds: 1_300_000_000)
+        if !voiceOverIsOnError(message) { announce(message) }
+    }
+}
+
+/// Whether VoiceOver's focused element reads `message`: the banner ("Error: <message>") or the
+/// field it is about (its label ends "Error: <the message after the field's name>").
+@MainActor private func voiceOverIsOnError(_ message: String) -> Bool {
+    guard let element = UIAccessibility.focusedElement(using: .notificationVoiceOver) as? NSObject else { return false }
+    let label = (element.accessibilityLabel ?? "").lowercased()
+    let text = message.lowercased()
+    if label.contains(text) { return true }
+    if let colon = text.range(of: ": ") {
+        let detail = text[colon.upperBound...].trimmingCharacters(in: .whitespaces)
+        if !detail.isEmpty, label.contains(detail) { return true }
+    }
+    return false
 }
 
 struct ErrorBanner: View {

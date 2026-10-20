@@ -124,7 +124,7 @@ $q=db()->prepare('SELECT t.id AS track_id,t.title,n.id AS note_id,n.subject,n.cr
 <?php endif;endif;?>
 <?php endif;?>
 <?php if($briefing):// The new draft is announced by moving focus to its heading, with the success earcon. ?><section class="card" aria-labelledby="draft-title"><h2 id="draft-title" tabindex="-1">AI draft — verify before use</h2><?php if($briefing['omitted']):?><p><?=(int)$briefing['omitted']?> older or lower-priority record<?= $briefing['omitted']===1?' was':'s were' ?> left out to fit the AI size limit, so this draft may be incomplete.</p><?php endif;?><?php foreach($briefing['items'] as $item):?><h3><?= $item['type']==='fact'?'Record summary':'Proposed next step' ?></h3><?=plain_text_html($item['text'])?><ul><?php foreach($item['sources'] as $source):?><li><a href="<?=h($source['url'])?>"><?=h($source['label'])?></a></li><?php endforeach;?></ul><?php endforeach;?><a href="workflows.php?view=quality">Rate this AI request<?= $briefing['usage_id']?' (#'.(int)$briefing['usage_id'].')':'' ?></a></section>
-<script>document.addEventListener("DOMContentLoaded",function(){var d=document.getElementById("draft-title");if(d){d.focus();if(window.Earcon)Earcon.play("success");}});</script><?php endif;?>
+<script>(window.cmsFocusAfterLoad||function(f){document.addEventListener("DOMContentLoaded",f);})(function(){var d=document.getElementById("draft-title");if(d){d.focus();if(window.Earcon)Earcon.play("success");}});</script><?php endif;?>
 <?php elseif($view==='waitlist'):
 $rid=(int)($_GET['referral_id']??$_POST['referral_id']??0);
 // Closed entries are listed after every open one.

@@ -308,7 +308,7 @@ struct DeviceActionSheet: View {
                 case .authorize:
                     CaptionedField(label: "Funding source", text: $text1)
                     CaptionedField(label: "Authorization #", text: $text2)
-                    KeyboardCaptionedField(label: "Authorized amount", text: $amount, keyboard: .decimalPad)
+                    KeyboardCaptionedField(label: "Authorized amount", text: $amount, keyboard: .decimalPad, errorName: "Authorized amount")
                     DatePicker("Authorized on", selection: $date, displayedComponents: .date)
                 case .order:
                     CaptionedField(label: "PO #", text: $text1)
@@ -379,12 +379,16 @@ struct KeyboardCaptionedField: View {
     let label: String
     @Binding var text: String
     var keyboard: UIKeyboardType = .default
+    /// The name errors about this field start with (see CaptionedField.errorName).
+    var errorName: String? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             // The field itself carries the same name for VoiceOver, so the caption is not repeated.
             Text(label).font(.caption.weight(.semibold)).foregroundStyle(Color.secondaryText).accessibilityHidden(true)
             TextField(label, text: $text).keyboardType(keyboard)
+                .modifier(OptionalErrorField(name: errorName))
         }
+        .modifier(RowID(id: errorName.map { FormFieldID(name: $0.lowercased()) }))
     }
 }
 
@@ -408,8 +412,8 @@ struct DeviceQuoteSheet: View {
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
             ErrorFocusForm(inNavigationStack: true, error: error) {
                 // Visible names that stay once a field is filled; the required ones say so.
-                CaptionedField(label: "Vendor (required)", text: $vendor)
-                KeyboardCaptionedField(label: "Amount (required, digits, like 1250.00)", text: $amount, keyboard: .decimalPad)
+                CaptionedField(label: "Vendor (required)", text: $vendor, errorName: "Vendor")
+                KeyboardCaptionedField(label: "Amount (required, digits, like 1250.00)", text: $amount, keyboard: .decimalPad, errorName: "Amount")
                 CaptionedField(label: "Quote #", text: $ref)
                 CaptionedField(label: "Notes", text: $notes)
             }
@@ -467,8 +471,8 @@ struct DeviceNewSheet: View {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
             ErrorFocusForm(inNavigationStack: true, error: error) {
-                NewRecordClientPicker(title: "Client (required)", selection: $selectedClient)
-                CaptionedField(label: "Device / technology (required)", text: $deviceName)
+                NewRecordClientPicker(title: "Client (required)", selection: $selectedClient, errorName: "Client")
+                CaptionedField(label: "Device / technology (required)", text: $deviceName, errorName: "Device / technology")
                 Picker("Category", selection: $category) { ForEach(deviceCategories, id: \.self) { Text($0) } }
                 Section("Justification") { TextEditor(text: $justification).frame(minHeight: 80).accessibilityLabel("Justification") }
             }

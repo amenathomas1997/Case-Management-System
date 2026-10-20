@@ -124,6 +124,8 @@ struct TrackDetailView: View {
     @State private var workLogs: [WorkLogEntry] = []
     @State private var workLogsLoaded = false
     @State private var correctingLog: WorkLogEntry?
+    /// Hours entries whose whole description is shown (4.30.0).
+    @State private var expandedLogs: Set<Int> = []
     @State private var deletingLog: WorkLogEntry?
     @State private var expenses: [TrackExpense] = []
     @State private var expensesLoaded = false
@@ -306,7 +308,8 @@ struct TrackDetailView: View {
             // further down would otherwise leave it off screen, where a List never draws it (or says
             // it). Scrolled into view once it exists, then VoiceOver is put on it.
             .onChange(of: error) { message in
-                guard message != nil else { return }
+                guard let message else { return }
+                claimFormErrorFocus(message)   // VoiceOver is put on the banner, which reads it
                 DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(Self.errorRow, anchor: .top) } }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)
@@ -562,7 +565,7 @@ struct TrackDetailView: View {
                     Picker("Status", selection: statusBinding(for: goal)) {
                         ForEach(goalStatuses, id: \.self) { Text($0) }
                     }
-                    .pickerStyle(.segmented)
+                    .modifier(SegmentedUnlessLargeText())
                     .disabled(savingGoals.contains(goal.id))
                     .accessibilityLabel("Status, \(short)")
                     .accessibilityHint("Asks before saving: a new status changes the recorded progress.")
@@ -662,13 +665,54 @@ struct TrackDetailView: View {
                 Text("Older entries are on the track's page on the website.").font(.callout).foregroundStyle(Color.secondaryText)
             }
             ForEach(workLogs) { log in
+                let open = expandedLogs.contains(log.id)
+                // Two lines of the description, or all of it at the accessibility text sizes or
+                // when opened with Show full description (4.30.0: the rest could not be seen).
+                let cut = !typeSize.isAccessibilitySize && mayTruncate(log.description, lines: 2, accessibilitySize: false)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(log.summary).font(.body)
-                    Text(log.description).font(.caption).foregroundStyle(Color.secondaryText).lineLimit(2)
+                    Text(log.description).font(.caption).foregroundStyle(Color.secondaryText)
+                        .lineLimit(cut && !open ? 2 : nil)
+                    if cut {
+                        let visible = open ? "Show less" : "Show full description"
+                        Button {
+                            if open { expandedLogs.remove(log.id) } else { expandedLogs.insert(log.id) }
+                        } label: {
+                            Text(visible).frame(minHeight: 44).contentShape(Rectangle())
+                        }
+                        .font(.callout).buttonStyle(.borderless)
+                        .accessibilityLabel(open ? "Show less of the entry \(log.summary)" : "Show full description: \(log.summary)")
+                        .accessibilityInputLabels([visible])
+                    }
+                    // Visible buttons (4.30.0): Correct and Delete were only in the long-press
+                    // menu and on the Actions rotor.
+                    if !log.isBilled {
+                        let layout = typeSize.isAccessibilitySize
+                            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                            : AnyLayout(HStackLayout(spacing: 8))
+                        layout {
+                            Button { correctingLog = log } label: {
+                                Label("Correct", systemImage: "pencil")
+                            }
+                            .accessibilityLabel("Correct hours or miles: \(log.summary)")
+                            .accessibilityInputLabels(["Correct", "Correct hours"])
+                            Button(role: .destructive) { deletingLog = log } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                            .tint(Color.alertRed)
+                            .accessibilityLabel("Delete entry: \(log.summary)")
+                            .accessibilityInputLabels(["Delete", "Delete entry"])
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        .padding(.top, 4)
+                    }
                 }
                 .padding(.vertical, 2)
-                // One stop per entry; Correct and Delete (each asking first) are on the Actions rotor.
-                .accessibilityElement(children: .combine)
+                // One stop per entry while VoiceOver runs (its whole description); Correct and
+                // Delete (each asking first) are then on the Actions rotor. Otherwise the row
+                // holds its buttons, for Voice Control, Switch Control and Full Keyboard Access.
+                .accessibilityElement(children: VoiceOverRows.children)
                 .accessibilityLabel(log.summary + ". " + log.description)
                 .accessibilityActions {
                     if !log.isBilled {
@@ -855,7 +899,8 @@ struct AmendmentView: View {
             // down, would otherwise leave it off screen, where a List never draws it (or says it).
             // Scrolled into view once it exists, then VoiceOver is put on it.
             .onChange(of: error) { message in
-                guard message != nil else { return }
+                guard let message else { return }
+                claimFormErrorFocus(message)   // VoiceOver is put on the banner, which reads it
                 DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(Self.errorRow, anchor: .top) } }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)
@@ -1121,8 +1166,8 @@ struct AddGoalSheet: View {
                     Label("Start from a template…", systemImage: "text.badge.plus")
                 }
                 // Each name stays visible once a template fills the fields in.
-                CaptionedField(label: "Specific objective (required)", text: $specific, prompt: "Specific objective", lines: 2...5)
-                CaptionedField(label: "Measurable criteria (required)", text: $metric, prompt: "Measurable criteria", lines: 2...5)
+                CaptionedField(label: "Specific objective (required)", text: $specific, prompt: "Specific objective", lines: 2...5, errorName: "Specific objective")
+                CaptionedField(label: "Measurable criteria (required)", text: $metric, prompt: "Measurable criteria", lines: 2...5, errorName: "Measurable criteria")
                 CaptionedField(label: "Focus area", text: $focus)
                 Toggle("Target date", isOn: $hasTarget)
                 if hasTarget {
@@ -1336,9 +1381,9 @@ struct ExpenseSheet: View {
                 }
                 // Up to today: the server refuses an expense dated in the future.
                 DatePicker("Date", selection: $date, in: ...Date(), displayedComponents: .date)
-                CaptionedField(label: "Description (required)", text: $descriptionText, prompt: "Description")
+                CaptionedField(label: "Description (required)", text: $descriptionText, prompt: "Description", errorName: "Description")
                 CaptionedField(label: "Amount in US dollars (required)", text: $amount, prompt: "12.50", keyboard: .decimalPad,
-                               hint: "Included on the next invoice generated for this authorization.")
+                               hint: "Included on the next invoice generated for this authorization.", errorName: "Amount")
             }
             .navigationTitle("Log expense")
             .navigationBarTitleDisplayMode(.inline)
@@ -1458,9 +1503,10 @@ struct SendReportSheet: View {
                 Section("Electronic signature") {
                     // The exact name the server requires stays visible above the field once
                     // typing starts (a placeholder alone disappeared).
-                    CaptionedField(label: "Signature: type your full name (\(api.userName))", text: $signature,
+                    CaptionedField(label: "Signature (required): type your full name (\(api.userName))", text: $signature,
                                    prompt: api.userName,
-                                   hint: "The signature and timestamp are included on the report and recorded on the client's file.")
+                                   hint: "The signature and timestamp are included on the report and recorded on the client's file.",
+                                   errorName: "Signature")
                         .autocorrectionDisabled()
                 }
             }
@@ -1472,8 +1518,10 @@ struct SendReportSheet: View {
                         .disabled(busy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
+                    // Not dimmed while the signature is empty (4.30.0): Send then says what is
+                    // missing, on the field.
                     Button("Send") { Task { await send() } }
-                        .disabled(busy || signature.isEmpty)
+                        .disabled(busy)
                 }
             }
             .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this report message and signature?",
@@ -1482,6 +1530,9 @@ struct SendReportSheet: View {
     }
 
     private func send() async {
+        guard !signature.trimmingCharacters(in: .whitespaces).isEmpty else {
+            showFormError("Signature: type your full name to sign the report.", in: &error); return
+        }
         busy = true; error = nil
         do {
             // Tolerant: the report has gone out once the server says ok; a missing address
@@ -1728,13 +1779,13 @@ struct TrackEditSheet: View {
         Section("Service authorization") {
             CaptionedField(label: "Authorization number (required)", text: $authNumber)
             CaptionedField(label: "Funding agency (required)", text: $fundingAgency)
-            CaptionedField(label: "Authorized hours, total granted (required)", text: $hours, keyboard: .decimalPad)
+            CaptionedField(label: "Authorized hours, total granted (required)", text: $hours, keyboard: .decimalPad, errorName: "Authorized hours")
             // 4.29.0: what a new rate does is part of the rate fields (their hint) and shown once,
             // under the amendment reason, never as a VoiceOver stop of its own.
             CaptionedField(label: "Hourly billing rate in dollars (required)", text: $rate, prompt: "For example, 85.00", keyboard: .decimalPad,
-                           spokenHint: trackId == nil ? nil : Self.newRateHelp)
+                           spokenHint: trackId == nil ? nil : Self.newRateHelp, errorName: "Hourly billing rate")
             CaptionedField(label: "Mileage rate in dollars per mile", text: $mileage, prompt: "0 when travel is not billable", keyboard: .decimalPad,
-                           spokenHint: trackId == nil ? nil : Self.newRateHelp)
+                           spokenHint: trackId == nil ? nil : Self.newRateHelp, errorName: "Mileage rate")
             if trackId != nil {
                 CaptionedField(label: "Amendment reason", text: $reason, prompt: "Why the authorization changed", lines: 1...3,
                                hint: Self.newRateHelp)
@@ -1963,8 +2014,8 @@ struct CorrectLogSheet: View {
         NavigationStack {
             ErrorFocusForm(inNavigationStack: true, error: error) {
                 Section("Entry of \(formatDate(entry.workDate))") {
-                    CaptionedField(label: "Hours, 0 to 24", text: $hours, keyboard: .decimalPad)
-                    CaptionedField(label: "Miles, 0 to 1000", text: $miles, keyboard: .decimalPad)
+                    CaptionedField(label: "Hours, 0 to 24", text: $hours, keyboard: .decimalPad, errorName: "Hours")
+                    CaptionedField(label: "Miles, 0 to 1000", text: $miles, keyboard: .decimalPad, errorName: "Miles")
                     CaptionedField(label: "Reason for the correction", text: $reason)
                 }
             }

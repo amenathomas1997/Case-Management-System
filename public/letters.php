@@ -45,7 +45,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $client && $key !== '' && (isset($_
         redirect('client.php?id=' . $cid . '&tab=documents');
     }
     $title = mb_substr($title, 0, 150);
-    $html = plain_document_html($title, $body);
+    // The page is marked with the letter's language (4.30.0), so a letter written in Spanish is
+    // read with a Spanish voice; the built-in wording is English.
+    $letterLang = ($_POST['letter_lang'] ?? '') === 'es' ? 'es' : 'en';
+    $html = plain_document_html($title, $body, $letterLang);
     if (isset($_POST['download'])) {
         audit($user['id'], 'letter.download', 'client', $cid, $title);
         header('Content-Type: text/html; charset=UTF-8');
@@ -98,11 +101,18 @@ page_header('Letters', $user, 'clients', $client ? [['client.php?id=' . $cid, $c
 <section class="card" aria-labelledby="draft-h">
   <h2 id="draft-h"><?= h(LETTER_TEMPLATES[$key][0]) ?></h2>
   <p>Filled in from the record. Check it and change anything before saving; "[not on file]" marks details the record does not have.</p>
-  <form method="post" action="letters.php" class="stacked"><?= csrf_field() ?><?= web_idem_field() ?>
+  <form method="post" action="letters.php" class="stacked" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['body' => 'Letter']) ?>
     <input type="hidden" name="client" value="<?= $cid ?>"><input type="hidden" name="letter" value="<?= h($key) ?>">
     <div class="field"><label for="title">Title</label><input type="text" id="title" name="title" maxlength="150" value="<?= h(old_in('title', LETTER_TEMPLATES[$key][0])) ?>"></div>
-    <div class="field"><label for="body">Letter</label><textarea id="body" name="body" rows="18" style="width:100%" <?= field_aria('body') ?>><?= h(has_field_error('body') ? old_in('body') : old_in('body', letter_render($key, $cid))) ?></textarea><?= field_error('body') ?></div>
+    <?php // The letter's language (4.30.0): the built-in wording is English. For a client who prefers
+    // Spanish, staff who write the letter in Spanish choose Spanish, and the saved letter is marked so.
+    $prefEs = client_lang($cid) === 'es';
+    $letterLang = old_in('letter_lang', 'en') === 'es' ? 'es' : 'en'; ?>
+    <div class="field"><label for="letter_lang">Language of the letter <span class="hint"><?= $prefEs ? 'this client prefers Spanish; the wording below is in English, so choose Spanish if you write it in Spanish' : 'the wording below is in English' ?></span></label>
+      <select id="letter_lang" name="letter_lang"><option value="en"<?= $letterLang === 'en' ? ' selected' : '' ?>>English</option><option value="es" lang="es"<?= $letterLang === 'es' ? ' selected' : '' ?>>Español</option></select></div>
+    <div class="field"><label for="body">Letter <?= required_mark() ?></label><textarea id="body" name="body" rows="18" style="width:100%" required lang="<?= $letterLang ?>" <?= field_aria('body') ?>><?= h(has_field_error('body') ? old_in('body') : old_in('body', letter_render($key, $cid))) ?></textarea><?= field_error('body') ?></div>
+    <script>(function(){var l=document.getElementById('letter_lang'),b=document.getElementById('body');if(l&&b)l.addEventListener('change',function(){b.lang=l.value;});})();</script>
     <div class="field"><label><input type="checkbox" name="to_portal" value="1"<?= old_in('to_portal') === '1' ? ' checked' : '' ?>> Let the client read it in their portal</label></div>
     <p><button type="submit" name="save_doc" value="1" class="btn btn-primary">Save to the client's documents</button>
       <button type="submit" name="save_note" value="1" class="btn btn-secondary">Keep as a case note</button>

@@ -52,7 +52,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['start_track']) || is
     $c->execute([$cid]);
     $client = $c->fetch();
     if (!$client || ($scoped && (int)$client['assigned_to'] !== (int)$user['id'])) {
-        flash('Choose the client this authorization is for.', 'error');
+        // 4.30.0: tied to the client choice (not a flash), and what was chosen is kept.
+        keep_input();
+        keep_field_errors(['client_id' => 'Choose the client this authorization is for.']);
         redirect('authorizations.php?id=' . (int)$a['id'] . '#client-choice');
     }
     db()->prepare('UPDATE incoming_authorizations SET client_id = ? WHERE id = ?')->execute([$cid, (int)$a['id']]);
@@ -90,7 +92,11 @@ $yn = fn($v) => $v === null || $v === '' ? 'not given' : $v;
     $matches = authorization_email_clients((string)$review['client_name'], (string)$review['counselor_email']);
     $already = array_values(array_filter(authorization_email_tracks((string)$review['auth_number']), fn($t) => !$scoped || (int)$t['assigned_to'] === (int)$user['id']));
     $matches = array_values(array_filter($matches, fn($m) => empty($m['archived_at']) && (!$scoped || (int)$m['assigned_to'] === (int)$user['id'])));
-    $preset = $review['client_id'] ? (int)$review['client_id'] : (count($matches) === 1 ? (int)$matches[0]['id'] : 0); ?>
+    $preset = $review['client_id'] ? (int)$review['client_id'] : (count($matches) === 1 ? (int)$matches[0]['id'] : 0);
+    // After a refused choice, what was chosen comes back (4.30.0).
+    $keptChoice = old_in('client_id'); $keptOther = (int)old_in('other_client');
+    if ($keptChoice === 'other') $preset = 0; elseif (ctype_digit($keptChoice)) $preset = (int)$keptChoice;
+    $firstChoice = $matches ? 'client-choice-' . (int)$matches[0]['id'] : 'client-choice-other'; ?>
 <section class="card" aria-labelledby="review-h">
   <h2 id="review-h">Authorization <?= h($review['auth_number']) ?></h2>
   <?php if ($review['status'] !== 'New'): ?><p><?= h($review['status']) ?><?= $review['track_id'] ? ': <a href="track.php?id=' . (int)$review['track_id'] . '">open the track</a>' : '' ?>.</p><?php endif; ?>
@@ -108,18 +114,20 @@ $yn = fn($v) => $v === null || $v === '' ? 'not given' : $v;
     <dt>Received</dt><dd><?= fmt_date($review['created_at']) ?>, <?= $review['source'] === 'Mailbox' ? 'forwarded to the CMS mailbox' : 'pasted' ?></dd>
   </dl>
   <?php if ($review['status'] === 'New'): ?>
-  <form method="post" action="authorizations.php?id=<?= (int)$review['id'] ?>"><?= csrf_field() ?>
+  <form method="post" action="authorizations.php?id=<?= (int)$review['id'] ?>" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['client_id' => 'Which client is this for?'], ['client_id' => $firstChoice]) ?>
     <input type="hidden" name="id" value="<?= (int)$review['id'] ?>">
-    <fieldset id="client-choice"><legend>Which client is this for?</legend>
+    <fieldset id="client-choice" role="radiogroup" aria-required="true" <?= field_aria('client_id') ?>><legend>Which client is this for? <?= required_mark() ?></legend>
+      <?= field_error('client_id') ?>
       <?php foreach ($matches as $m): ?>
-        <label><input type="radio" name="client_id" value="<?= (int)$m['id'] ?>"<?= $preset === (int)$m['id'] ? ' checked' : '' ?>> <?= h($m['name']) ?> (<?= h($m['status']) ?><?= $m['dob'] ? ', born ' . fmt_date($m['dob']) : '' ?><?= $m['instructor'] ? ', ' . h($m['instructor']) . '\'s caseload' : '' ?><?= $m['same_counselor'] ? ', same counselor' : '' ?>)</label>
+        <label><input type="radio" id="client-choice-<?= (int)$m['id'] ?>" name="client_id" value="<?= (int)$m['id'] ?>"<?= $preset === (int)$m['id'] ? ' checked' : '' ?>> <?= h($m['name']) ?> (<?= h($m['status']) ?><?= $m['dob'] ? ', born ' . fmt_date($m['dob']) : '' ?><?= $m['instructor'] ? ', ' . h($m['instructor']) . '\'s caseload' : '' ?><?= $m['same_counselor'] ? ', same counselor' : '' ?>)</label>
       <?php endforeach; ?>
-        <label><input type="radio" name="client_id" value="other"<?= $preset === 0 ? ' checked' : '' ?>> Another client, chosen below</label>
+        <label><input type="radio" id="client-choice-other" name="client_id" value="other"<?= $preset === 0 ? ' checked' : '' ?>> Another client, chosen below</label>
       <?php if (!$matches): ?><p>No client record is named <?= h((string)$review['client_name']) ?>. <a href="client_edit.php">Add the client</a> first, or choose another client below.</p><?php endif; ?>
       <?php $oq = db()->prepare('SELECT id, name FROM clients WHERE archived_at IS NULL' . ($scoped ? ' AND assigned_to = ?' : '') . ' ORDER BY name LIMIT 2000');
             $oq->execute($scoped ? [(int)$user['id']] : []); ?>
       <label for="other_client">Another client</label>
-      <select id="other_client" name="other_client"><option value="">None</option><?php foreach ($oq->fetchAll() as $o): ?><option value="<?= (int)$o['id'] ?>"><?= h($o['name']) ?></option><?php endforeach; ?></select>
+      <select id="other_client" name="other_client"><option value="">None</option><?php foreach ($oq->fetchAll() as $o): ?><option value="<?= (int)$o['id'] ?>"<?= $keptOther === (int)$o['id'] ? ' selected' : '' ?>><?= h($o['name']) ?></option><?php endforeach; ?></select>
     </fieldset>
     <?php if ($review['counselor_email']): ?>
     <?php $confirmedCounselor = authorization_counselor_confirmed($review); /* 4.27.0: pre-ticked only when the counselor sent it themselves */ ?>
@@ -147,8 +155,9 @@ $yn = fn($v) => $v === null || $v === '' ? 'not given' : $v;
 <section class="card" aria-labelledby="paste-h">
   <h2 id="paste-h">Paste an authorization email</h2>
   <form method="post" action="authorizations.php" novalidate><?= csrf_field() ?>
-    <div class="field"><label for="email_text">The authorization email, including the line Authorization Number</label>
-      <textarea id="email_text" name="email_text" rows="10" style="width:100%" <?= field_aria('email_text') ?>><?= h(old_in('email_text')) ?></textarea><?= field_error('email_text') ?></div>
+    <?= form_error_summary(['email_text' => 'The authorization email']) ?>
+    <div class="field"><label for="email_text">The authorization email, including the line Authorization Number <?= required_mark() ?></label>
+      <textarea id="email_text" name="email_text" rows="10" style="width:100%" required aria-required="true" <?= field_aria('email_text') ?>><?= h(old_in('email_text')) ?></textarea><?= field_error('email_text') ?></div>
     <button type="submit" name="read_email" value="1" class="btn btn-primary">Read the email</button>
   </form>
 </section>

@@ -56,11 +56,17 @@ struct AgreementDetailView: View {
     @State private var name = ""
     @State private var busy = false
     @State private var error: String?
+    @AccessibilityFocusState private var bannerFocused: Bool
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                if let error { ErrorBanner(message: error) }
+                if let error {
+                    ErrorBanner(message: error)
+                        .id("agreementError")
+                        .accessibilityFocused($bannerFocused)
+                }
                 if let a = agreement {
                     Text(a["title"] as? String ?? "Agreement").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
                     Text((a["why"] as? String ?? "") + ".")
@@ -71,8 +77,12 @@ struct AgreementDetailView: View {
                         }
                     } else {
                         Text("Sign").font(.headline).accessibilityAddTraits(.isHeader).padding(.top, 8)
-                        Toggle("I have read this agreement and agree to it", isOn: $agree)
-                        CaptionedField(label: "Type your full name to sign, as it is on your account: \(api.userName)", text: $name)
+                        // Both are needed to sign: said in their labels (4.30.0), and a Sign tap
+                        // with either missing says which, on that field, rather than a dimmed button.
+                        Toggle("I have read this agreement and agree to it (required)", isOn: $agree)
+                            .errorField("Agree")
+                        CaptionedField(label: "Type your full name to sign (required), as it is on your account: \(api.userName)", text: $name,
+                                       errorName: "Name")
                             .textContentType(.name)
                         Button {
                             Task { await sign(a) }
@@ -80,12 +90,15 @@ struct AgreementDetailView: View {
                             Text(busy ? "Signing…" : "Sign the agreement").frame(maxWidth: .infinity, minHeight: 44)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(busy || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .onBrandLabel()
+                        .disabled(busy)
                     }
                 } else if error == nil {
                     ProgressView("Loading the agreement…")
                 }
             }.padding()
+        }
+        .modifier(ErrorFocusing(error: error, proxy: proxy, bannerID: "agreementError", bannerFocused: $bannerFocused))
         }
         .navigationTitle("Agreement")
         .navigationBarTitleDisplayMode(.inline)
@@ -101,7 +114,10 @@ struct AgreementDetailView: View {
     }
 
     private func sign(_ a: [String: Any]) async {
-        guard agree else { error = "Turn on that you have read the agreement and agree to it."; announce(error!); return }
+        guard agree else { showFormError("Agree: turn on that you have read the agreement and agree to it.", in: &error); return }
+        guard !name.trimmingCharacters(in: .whitespaces).isEmpty else {
+            showFormError("Name: type your full name to sign, as it is on your account.", in: &error); return
+        }
         busy = true; error = nil
         do {
             // The fingerprint of the text shown here: a change since it loaded is refused.
@@ -109,12 +125,12 @@ struct AgreementDetailView: View {
                                                                  "signed_name": name.trimmingCharacters(in: .whitespaces),
                                                                  "text_hash": a["text_hash"] as? String ?? ""])
             onSigned()
-            announce(r["message"] as? String ?? "Signed.")
+            // Said once this screen has closed: the pop moves VoiceOver, which cut it off.
+            announceAfterDismiss(r["message"] as? String ?? "Signed.")
             dismiss()
         } catch {
             busy = false
-            self.error = error.localizedDescription
-            announce(error.localizedDescription)
+            showFormError(error.localizedDescription, in: &self.error)
             // Changed while open: load the new text, so it is read before signing.
             if error.localizedDescription.contains("changed while you had it open") { agree = false; await load() }
         }

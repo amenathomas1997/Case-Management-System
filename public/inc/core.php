@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.29.0';
+const APP_VERSION = '4.30.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -319,6 +319,10 @@ const EMAIL_TEMPLATES = [
     'referral_closed' => ['Referral outcome to the referrer', 'Your referral {ref} to {org_short}',
         "Hello,\n\nThank you for your referral {ref}, received on {date}.\n\nWe were not able to accept it: {reason}.\n\nNo client details are included in this email. If you have questions, reply to this email or contact {org}.\n",
         '{ref} {date} {reason} {org_short} {org}'],
+    // 4.30.0: a referral sent on the Spanish form is answered in Spanish (case_outcomes.php).
+    'referral_closed_es' => ['Referral outcome to the referrer (Spanish)', 'Su referido {ref} a {org_short}',
+        "Hola:\n\nGracias por su referido {ref}, recibido el {date}.\n\nNo pudimos aceptarlo: {reason}.\n\nEste correo no incluye datos del cliente. Si tiene preguntas, responda a este correo o comuníquese con {org}.\n",
+        '{ref} {date} {reason} {org_short} {org}'],
     'otp' => ['Sign-in codes', 'Your sign-in code: {code}',
         "Hello {name},\n\nYour one-time sign-in code for {app} is:\n\n{code}\n\nThis code expires in {minutes} minutes. If you did not try to sign in, you can ignore this email.\n",
         '{name} {code} {app} {minutes}'],
@@ -398,8 +402,9 @@ const EMAIL_TEMPLATES = [
         "Please confirm you received this report (one click):\n{ack}\n",
         '{ack}'],
     // Spanish versions of the emails a client or guardian receives, with the same
-    // placeholders. email_template_for_client() sends one when the client's
-    // preferred language is Spanish and the English wording was not customised.
+    // placeholders. email_template_for_client() sends one whenever the client's
+    // preferred language is Spanish (4.30.0: also when the English wording was customised;
+    // an administrator changes the Spanish wording on its own template).
     'portal_link_es' => ['Client portal invitation (Spanish)', 'Su portal de capacitación de {org_short}',
         "Hola, {name}:\n\nEste es su enlace personal para ver sus próximas sesiones de capacitación, sus metas y sus recursos:\n\n{link}\n\nMantenga este enlace en privado: cualquier persona que lo tenga puede ver su página de capacitación. Sigue funcionando mientras lo abra al menos una vez cada seis meses. Si lo pierde, su instructor puede enviarle uno nuevo (que reemplaza a este).\n",
         '{name} {link} {org_short} {org}'],
@@ -443,7 +448,7 @@ const EMAIL_TEMPLATE_REQUIRED = [
     'loan_due_client' => '{item}', 'loan_due_client_es' => '{item}', 'loan_overdue_client' => '{item}', 'loan_overdue_client_es' => '{item}',
     'session_booked_client' => '{sessions}', 'session_booked_client_es' => '{sessions}', 'session_cancelled_client' => '{sessions}', 'session_moved_client' => '{sessions}', 'session_moved_client_es' => '{sessions}', 'session_cancelled_client_es' => '{sessions}',
     'report_cover' => '{ack}',
-    'referral_closed' => '{ref}',
+    'referral_closed' => '{ref}', 'referral_closed_es' => '{ref}',
     'times_offered' => '{link}', 'times_offered_es' => '{link}',
 ];
 
@@ -484,16 +489,12 @@ function client_lang(array|int $client): string {
 }
 
 /** Render the email a client (or their guardian) receives, in the client's language:
- *  the Spanish template ({key}_es) when the client prefers Spanish and the
- *  administrator has not customised the English one (a customised English wording
- *  is theirs for every client, so it is never swapped away); otherwise the English
- *  one. Same placeholders either way. */
+ *  the Spanish template ({key}_es) when the client prefers Spanish, otherwise the English
+ *  one. Same placeholders either way. 4.30.0: an administrator's change to the English
+ *  wording no longer silently sends English to Spanish-speaking clients; the Spanish
+ *  template is used (the built-in Spanish, or the administrator's own Spanish wording). */
 function email_template_for_client(string $key, array|int $client, array $vars): array {
-    if (client_lang($client) === 'es' && isset(EMAIL_TEMPLATES[$key . '_es'])) {
-        $customSubject = trim((string)setting('tpl_' . $key . '_subject')) !== '';
-        $customBody = trim((string)setting('tpl_' . $key . '_body')) !== '';
-        if (!$customSubject && !$customBody) return email_template($key . '_es', $vars);
-    }
+    if (client_lang($client) === 'es' && isset(EMAIL_TEMPLATES[$key . '_es'])) return email_template($key . '_es', $vars);
     return email_template($key, $vars);
 }
 

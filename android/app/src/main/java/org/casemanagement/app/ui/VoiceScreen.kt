@@ -199,7 +199,7 @@ fun VoiceScreen(api: Api, nav: NavHostController, clientId: Int, clientName: Str
         link?.let { (cid, label) -> SecondaryButton(label) { nav.navigate("client/$cid") } }
         screen?.let { (route, name) -> SecondaryButton("Open " + name.replaceFirstChar { it.uppercase() }) { nav.navigate(route) } }
         Field("Say or type a request", input, { input = it }, singleLine = false)
-        PrimaryButton("Send", busy = busy, enabled = input.isNotBlank()) { send(input) }
+        PrimaryButton("Send", busy = busy, missing = if (input.isBlank()) "Still needed: a request. Say or type one first." else null) { send(input) }
         SecondaryButton("Speak") {
             val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 .putExtra(RecognizerIntent.EXTRA_PROMPT, "Say what you want to do")

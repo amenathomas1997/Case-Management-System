@@ -341,7 +341,11 @@ dl.props dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .grid > *, .header-inner > *, fieldset { min-width: 0; }
 button, input, select, textarea { max-width: 100%; }
 button, .btn, summary { min-width: 44px; min-height: 44px; }
-button, .btn, .brand { white-space: normal; overflow-wrap: anywhere; }
+/* break-word, not anywhere (4.30.0): a button's words wrap between words and split only
+   when one alone is wider than the line, so a squeezed row never shows "Sa / ve". */
+button, .btn { white-space: normal; overflow-wrap: break-word; }
+.btn { max-width: 100%; }
+.brand { white-space: normal; overflow-wrap: anywhere; }
 .brand { flex-wrap: wrap; gap: .3em; }
 summary { cursor: pointer; padding: .5rem; }
 /* Inline prose links retain the WCAG inline exception; row actions do not. */
@@ -383,6 +387,10 @@ body { overflow-wrap: anywhere; }
    so columns squeeze and words split mid-word instead of the region scrolling. */
 .table-scroll table { overflow-wrap: normal; }
 .table-scroll :is(th, td) { overflow-wrap: break-word; }
+/* Nor do the controls in those tables (4.30.0): a button word never splits ("Sa / ve")
+   and a select is never narrower than its choices, so the region scrolls instead. */
+.table-scroll :is(button, .btn) { overflow-wrap: normal; white-space: nowrap; }
+.table-scroll select { max-width: none; min-width: max-content; }
 .main-nav li { min-width: 0; max-width: 100%; }
 .main-nav a { max-width: 100%; }
 

@@ -780,6 +780,15 @@ unset($_SESSION['hw_explanation']);
 if (!$client && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['new_link'])) {
     csrf_check();
     $newLinkEmail = is_string($_POST['new_link_email'] ?? null) ? $_POST['new_link_email'] : '';
+    // 4.30.0: only a blank or mistyped address is refused, on the field (an address that is well formed
+    // still gets the same answer whether or not it is known, for privacy).
+    if (!filter_var(trim($newLinkEmail), FILTER_VALIDATE_EMAIL)) {
+        set_form_errors(['new_link_email' => trim($newLinkEmail) === ''
+            ? 'Enter your email address.'
+            : 'Enter your email address written like name@example.com.']);
+    }
+}
+if (!$client && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['new_link']) && !form_errors()) {
     flash_ui('If that address belongs to a client with a portal, a new link is on its way. Check your email in a few minutes.', 'info');
     // The answer goes first and the email after it (4.27.0), so how long the page takes
     // never shows whether the address is known.
@@ -806,9 +815,12 @@ if (!$client) {
             : t('This link has been replaced or no longer works. Ask your instructor and we will send you a new one.')))
         . '</p>'
         . '<h2>' . t('Email me a new link') . '</h2>'
+        . form_error_summary(['new_link_email' => 'Your email address'])
         . '<form method="post" action="portal.php?lang=' . h(page_lang()) . '" class="stacked" novalidate>' . csrf_field()
-        . '<div class="field"><label for="new_link_email">' . t('Your email address') . '</label>'
-        . '<input type="email" id="new_link_email" name="new_link_email" autocomplete="email" maxlength="190"></div>'
+        . '<div class="field"><label for="new_link_email">' . t('Your email address') . ' ' . required_mark() . '</label>'
+        . '<input type="email" id="new_link_email" name="new_link_email" autocomplete="email" maxlength="190" aria-required="true"'
+        . (form_errors() ? ' value="' . h(trim((string)($_POST['new_link_email'] ?? ''))) . '"' : '') . ' ' . field_aria('new_link_email') . '>'
+        . field_error('new_link_email') . '</div>'
         . '<button type="submit" name="new_link" value="1" class="btn btn-primary">' . t('Send me a new link') . '</button></form>'
         . '</div>';
     page_footer();
@@ -895,17 +907,31 @@ document.addEventListener('submit', function (e) {
   <?php else: ?>
   <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['book_slot' => 'Time with your instructor'], ['book_slot' => 'slot']) ?>
-    <div class="field"><label for="slot"><?= t('Time with your instructor') ?></label>
-      <select id="slot" name="slot" <?= field_aria('book_slot') ?>>
+    <?php // 4.30.0: required, said in the label and on the list (aria-required: a native required list is
+    // exposed as invalid before anything is sent); the times are grouped by day, each named by its short day and time. ?>
+    <div class="field"><label for="slot"><?= t('Time with your instructor') ?> <?= required_mark() ?></label>
+      <select id="slot" name="slot" aria-required="true" <?= field_aria('book_slot') ?>>
         <option value=""><?= t('Choose a time') ?></option>
-      <?php foreach ($bookSlots as $bs): ?>
+      <?php $bookDay = null; foreach ($bookSlots as $bs):
+          $bsDay = page_lang() === 'es' ? zone_when_es(portal_tz(), (int)$bs['start'], false) : portal_date('l, F j', (int)$bs['start']);
+          if ($bsDay !== $bookDay): ?>
+        <?= $bookDay !== null ? '</optgroup>' : '' ?><optgroup label="<?= h($bsDay) ?>">
+      <?php $bookDay = $bsDay; endif; ?>
         <?php // Plain text only (4.29.0): the parser drops a <span lang> inside an <option>. The label is
-        // in the page's language (the date and words translated; the place is a name), so it needs no lang. ?>
-        <option value="<?= (int)$bs['start'] ?>"><?= h((page_lang() === 'es' ? portal_when_es($bs['start']) : portal_date('l, F j \a\t g:i A' . (portal_tz() ? ' T' : ''), $bs['start']))
+        // in the page's language (the time and words translated; the place is a name), so it needs no lang. ?>
+        <?php // Each option also starts with a short day (review, 4.30.0): arrowing a closed list does not read
+        // the group's label, so Monday and Tuesday at 10:00 would otherwise sound the same. ?>
+        <option value="<?= (int)$bs['start'] ?>"><?= h((page_lang() === 'es'
+                ? (string)zone_format(portal_tz(), fn() => ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'][(int)date('w', (int)$bs['start'])] . ' ' . (int)date('j', (int)$bs['start']) . ' '
+                    . ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'][(int)date('n', (int)$bs['start']) - 1] . ', ' . time_es((int)$bs['start']))
+                : portal_date('D, M j, g:i A' . (portal_tz() ? ' T' : ''), (int)$bs['start']))
             . ', ' . (int)round(($bs['end'] - $bs['start']) / 60) . ' ' . __('minutes') . ', ' . ($bs['remote'] ? __('online') : __('in person at') . ' ' . (string)$bs['location'])) ?></option>
       <?php endforeach; ?>
+        <?= $bookDay !== null ? '</optgroup>' : '' ?>
       </select><?= field_error('book_slot') ?></div>
-    <button type="submit" name="self_book" value="1" class="btn btn-primary btn-sm" onclick="return confirm(<?= h(json_encode(__('Book this time?'))) ?>);"><?= t('Book this time') ?></button>
+    <?php // The question comes only once a time is chosen, and names it; with no time chosen the form is
+    // sent and refused on the field, with no dialog first (4.30.0). ?>
+    <button type="submit" name="self_book" value="1" class="btn btn-primary btn-sm" onclick="var s=document.getElementById('slot');if(!s||!s.value)return true;var o=s.options[s.selectedIndex];return confirm(<?= h(json_encode(__('Book this time?'), JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>+'\n'+(o.parentNode.label?o.parentNode.label+', ':'')+o.text);"><?= t('Book this time') ?></button>
   </form>
   <?php endif; ?>
 </section>
@@ -920,7 +946,10 @@ document.addEventListener('submit', function (e) {
       // Every session offers the same actions, so each control also names its
       // session (hidden text) — otherwise a list of them is indistinguishable.
       $when = portal_date('l, F j \a\t g:i A T', strtotime($s['start_at']));
-      $forSession = '<span class="visually-hidden"> — ' . en($when) . '</span>';
+      // 4.30.0: in Spanish the dates are Spanish, as in the other sections, not English marked lang="en".
+      $whenHtml = page_lang() === 'es' ? h(portal_when_es(strtotime($s['start_at']))) : en($when);
+      $endHtml = page_lang() === 'es' ? h((string)zone_format(portal_tz(), fn() => time_es(strtotime($s['end_at'])))) : en(portal_date('g:i A T', strtotime($s['end_at'])));
+      $forSession = '<span class="visually-hidden"> — ' . $whenHtml . '</span>';
       // Each request is confirmed first, naming the session; the question says what
       // OK and Cancel do, since "Cancel" would otherwise read as cancelling the session.
       $jsq = fn(string $q): string => h(json_encode($q, JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP));
@@ -929,13 +958,13 @@ document.addEventListener('submit', function (e) {
       $askNew = __('Send your instructor a request for a new time for this session?') . "\n" . $askWhen . "\n" . __('Choose OK to send the request, or Cancel to send nothing.');
       $askCancel = __('Send your instructor a request to cancel this session?') . "\n" . $askWhen . "\n" . __('Choose OK to send the request. Choose Cancel to keep the session and send nothing.'); ?>
     <li>
-      <strong><?= en($when) ?></strong> <?= h(__('to')) ?> <?= en(portal_date('g:i A T', strtotime($s['end_at']))) ?>
+      <strong><?= $whenHtml ?></strong> <?= h(__('to')) ?> <?= $endHtml ?>
       <?= !empty($s['is_remote']) ? ' · <span class="badge badge-active">' . h(__('Remote')) . '</span>' : ($s['location'] ? ' · ' . en($s['location']) : '') ?>
       <?= $s['staff_name'] ? ' · ' . t('with') . ' ' . h($s['staff_name']) : '' ?>
       <?php if (!empty($s['is_remote']) && !empty($s['meeting_url'])): ?>
         <div style="margin-top:.3rem"><a class="btn btn-primary btn-sm" href="<?= h($s['meeting_url']) ?>" target="_blank" rel="noopener"><?= t('Join online') ?><?= $forSession ?><span class="visually-hidden"> <?= h(__('(opens in a new tab)')) ?></span></a></div>
       <?php endif; ?>
-      <div style="margin-top:.3rem"><a href="portal.php?t=<?= h($token) ?>&amp;ics=<?= (int)$s['id'] ?>&amp;lang=<?= h(page_lang()) ?>"><?= t('Add to calendar') ?><?= $forSession ?></a></div>
+      <div style="margin-top:.3rem"><a href="portal.php?t=<?= h($token) ?>&amp;ics=<?= (int)$s['id'] ?>&amp;lang=<?= h(page_lang()) ?>"><?= t('Add to calendar') ?><?= $forSession ?><span class="visually-hidden"> <?= t('(downloads a file)') ?></span></a></div>
       <?php if (!$caseClosed): ?>
       <div style="margin-top:.3rem">
         <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="inline-form" onsubmit="return confirm(<?= $jsq($askNew) ?>);"><?= csrf_field() ?>
@@ -1023,7 +1052,7 @@ $homework = $hwStmt->fetchAll();
       // linked to its field; the form below comes back filled in and opened. ?>
       <?php if ($hwOwnError && !empty($hwError['system'])): // Not the client's mistake: no "Please fix the following". ?>
       <div class="alert alert-info" tabindex="-1" id="form-error-summary"><p><?= t($hwError['msg']) ?></p></div>
-      <script>document.addEventListener("DOMContentLoaded",function(){var s=document.getElementById("form-error-summary");if(s)s.focus();});</script>
+      <script>(window.cmsFocusAfterLoad||function(f){document.addEventListener("DOMContentLoaded",f);})(function(){var s=document.getElementById("form-error-summary");if(s)s.focus();});</script>
       <?php elseif ($hwOwnError): ?><?= form_error_summary(['hw_error' => ''], ['hw_error' => $hwError['field']]) ?><?php endif; ?>
       <?php if ($h_['client_reported_at']): ?>
         <br><span class="badge badge-active"><?= t('You marked this done') ?></span>
@@ -1138,8 +1167,9 @@ if ($devLoans || $devRepairs || $devChecks): ?>
     <input type="hidden" name="followup_id" value="<?= $fid ?>">
     <fieldset role="radiogroup" aria-required="true" <?= field_aria('in_use-' . $fid) ?>><legend><?= t('Are you still using it?') ?> <span class="hint"><?= t('(required)') ?></span></legend>
       <?= field_error('in_use-' . $fid) ?>
-      <label><input type="radio" id="use-yes-<?= $fid ?>" name="in_use" value="yes"> <?= t('Yes') ?></label>
-      <label><input type="radio" name="in_use" value="no"> <?= t('No') ?></label>
+      <?php // Each choice is marked invalid itself when the question was left unanswered (4.30.0). ?>
+      <label><input type="radio" id="use-yes-<?= $fid ?>" name="in_use" value="yes"<?= has_field_error('in_use-' . $fid) ? ' aria-invalid="true"' : '' ?>> <?= t('Yes') ?></label>
+      <label><input type="radio" name="in_use" value="no"<?= has_field_error('in_use-' . $fid) ? ' aria-invalid="true"' : '' ?>> <?= t('No') ?></label>
     </fieldset>
     <div class="field"><label for="sat-<?= $fid ?>"><?= t('How happy are you with it?') ?></label>
       <select id="sat-<?= $fid ?>" name="satisfaction"><option value=""><?= t('Choose') ?></option>
@@ -1213,7 +1243,9 @@ if ($devLoans || $devRepairs || $devChecks): ?>
     <?= csrf_field() ?>
     <?= form_error_summary(['doc_title' => 'What is this?', 'document' => 'Choose a file']) ?>
     <div class="field"><label for="doc_title"><?= t('What is this?') ?> <span class="hint"><?= t('(optional)') ?></span></label><input type="text" id="doc_title" name="doc_title" maxlength="190" value="<?= h(old_in('upload_doc') !== '' ? old_in('doc_title') : '') ?>" <?= field_aria('doc_title') ?>><?= field_error('doc_title') ?></div>
-    <div class="field"><label for="document"><?= t('Choose a file') ?> <span class="hint"><?= t('(required)') ?></span></label><input type="file" id="document" name="document" accept=".pdf,.docx,.xlsx,.txt,.rtf,.png,.jpg,.jpeg" required <?= field_aria('document') ?>><?= field_error('document') ?></div>
+    <div class="field"><?php // The kinds and size of file are in the label (4.30.0); aria-required, not the native attribute,
+    // which exposes an empty file box as invalid before anything is sent. ?>
+    <label for="document"><?= t('Choose a file') ?> <span class="hint"><?= t('(required; PDF, Office, text or image, up to 15 MB)') ?></span></label><input type="file" id="document" name="document" accept=".pdf,.docx,.xlsx,.txt,.rtf,.png,.jpg,.jpeg" aria-required="true" <?= field_aria('document') ?>><?= field_error('document') ?></div>
     <button type="submit" name="upload_doc" value="1" class="btn btn-primary"><?= t('Upload') ?></button>
   </form>
   <?php endif; ?>
@@ -1285,8 +1317,7 @@ if (!$caseClosed || $thread): ?>
   $pv = fn(string $k, $saved): string => $refill($k) ? old_in($k) : (string)($saved ?? '');
   // Closed until the client wants it; open again when a save came back with a problem.
   $infoOpen = $oldInfo || array_filter(['p_phone', 'p_address', 'p_tech', 'p_notes'], fn($k) => has_field_error($k)); ?>
-  <?php // A sub-heading of "My information" (the section's h2), so the outline nests. ?>
-  <h3 class="visually-hidden"><?= t('Update my details') ?></h3>
+  <?php // No hidden heading before the summary (4.30.0): it repeated the summary's words as an extra stop. ?>
   <details id="info-details"<?= $infoOpen ? ' open' : '' ?>>
   <summary><?= t('Update my details') ?></summary>
   <form method="post" action="portal.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>

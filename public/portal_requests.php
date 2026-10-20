@@ -70,7 +70,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_close'])) {
     $to = ($_POST['bulk_to'] ?? '') === 'Declined' ? 'Declined' : 'Done';
     $n = 0;
-    foreach (array_slice(array_values(array_unique(array_filter(array_map('intval', (array)($_POST['bulk_ids'] ?? []))))), 0, 200) as $bid) {
+    $bulkIds = array_slice(array_values(array_unique(array_filter(array_map('intval', (array)($_POST['bulk_ids'] ?? []))))), 0, 200);
+    // 4.30.0: nothing ticked is tied to the boxes (not a flash), and the choice of Done or Declined is kept.
+    if (!$bulkIds) { keep_input(); keep_field_errors(['bulk_ids' => 'Tick at least one open request.']); redirect('portal_requests.php#bulk-h'); }
+    foreach ($bulkIds as $bid) {
         $bq = db()->prepare("SELECT pr.id, pr.client_id, pr.type, pr.status, c.assigned_to FROM portal_requests pr JOIN clients c ON c.id = pr.client_id WHERE pr.id = ? AND pr.status IN ('New','In Progress')");
         $bq->execute([$bid]);
         $br = $bq->fetch();
@@ -84,7 +87,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_close'])) {
         request_closed_notice($bid);
         $n++;
     }
-    flash($n ? $n . ' request' . ($n === 1 ? '' : 's') . ' set to ' . $to . '.' : 'Nothing was changed: choose at least one open request.', $n ? 'success' : 'error');
+    flash($n ? $n . ' request' . ($n === 1 ? '' : 's') . ' set to ' . $to . '.' : 'Nothing was changed: the chosen requests are no longer open.', $n ? 'success' : 'error');
     redirect('portal_requests.php');
 }
 /* Times offered for an appointment or reschedule request (3.0.52): the client confirms one in the portal. */
@@ -266,14 +269,17 @@ page_header('Client requests', $user, 'portal_requests');
 </table>
 </div>
 <?php $bulkReq = array_values(array_filter($rows, fn($r) => in_array($r['status'], ['New', 'In Progress'], true) && !isset(RECORDS_REQUEST_TYPES[$r['type']]))); if (count($bulkReq) > 1): ?>
-<details><summary>Close several requests at once</summary>
-  <form method="post" action="portal_requests.php" class="stacked"><?= csrf_field() ?>
-    <fieldset><legend>Open requests</legend>
-    <?php foreach ($bulkReq as $r): ?><label><input type="checkbox" name="bulk_ids[]" value="<?= (int)$r['id'] ?>"> <?= h($r['client_name']) ?>, <?= h(PREQ_TYPES[$r['type']] ?? 'Request') ?>, <?= h(fmt_date($r['created_at'])) ?></label><?php endforeach; ?>
+<?php $bulkKept = old_in_list('bulk_ids'); ?>
+<details<?= has_field_error('bulk_ids') ? ' open' : '' ?>><summary id="bulk-h">Close several requests at once</summary>
+  <form method="post" action="portal_requests.php" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['bulk_ids' => 'Open requests'], ['bulk_ids' => 'bulk-' . (int)$bulkReq[0]['id']]) ?>
+    <fieldset <?= field_aria('bulk_ids') ?>><legend>Open requests</legend>
+    <?= field_error('bulk_ids') ?>
+    <?php foreach ($bulkReq as $r): ?><label><input type="checkbox" id="bulk-<?= (int)$r['id'] ?>" name="bulk_ids[]" value="<?= (int)$r['id'] ?>"<?= in_array((string)(int)$r['id'], $bulkKept, true) ? ' checked' : '' ?>> <?= h($r['client_name']) ?>, <?= h(PREQ_TYPES[$r['type']] ?? 'Request') ?>, <?= h(fmt_date($r['created_at'])) ?></label><?php endforeach; ?>
     </fieldset>
     <fieldset><legend>Set them to</legend>
-      <label><input type="radio" name="bulk_to" value="Done" checked> Done</label>
-      <label><input type="radio" name="bulk_to" value="Declined"> Declined</label>
+      <label><input type="radio" name="bulk_to" value="Done"<?= old_in('bulk_to') !== 'Declined' ? ' checked' : '' ?>> Done</label>
+      <label><input type="radio" name="bulk_to" value="Declined"<?= old_in('bulk_to') === 'Declined' ? ' checked' : '' ?>> Declined</label>
     </fieldset>
     <button type="submit" name="bulk_close" value="1" class="btn btn-secondary">Close the chosen requests</button>
   </form>

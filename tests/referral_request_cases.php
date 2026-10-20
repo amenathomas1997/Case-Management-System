@@ -94,12 +94,12 @@ check($code===0 && $err==='' && $esRef['preferred_language']==='es','A referral 
 $db->exec("INSERT INTO clients(name,status) VALUES('Language Synthetic','Pending Assessment')"); $langClient=(int)$db->lastInsertId();
 apply_referral_language($langClient,$esRef);
 check($db->query("SELECT preferred_language FROM clients WHERE id=$langClient")->fetchColumn()==='es' && client_lang($langClient)==='es','apply_referral_language() copies the referral language to the client');
-// The client's emails follow their language unless the English wording was customised.
+// The client's emails follow their language, also when the English wording was customised (4.30.0).
 [$esSubj]=email_template_for_client('portal_link',$langClient,['name'=>'X','link'=>'https://example.invalid/p']);
 check(str_starts_with($esSubj,'Su portal'),'A Spanish-speaking client gets the Spanish portal invitation');
 $db->exec("INSERT INTO settings(name,value) VALUES('tpl_portal_link_subject','Custom English subject') ON DUPLICATE KEY UPDATE value=VALUES(value)");
 [$customSubj]=email_template_for_client('portal_link',$langClient,['name'=>'X','link'=>'https://example.invalid/p']);
-check($customSubj==='Custom English subject','A customised English template is kept for every client');
+check(str_starts_with($customSubj,'Su portal'),'A customised English template does not replace the Spanish one for a Spanish-speaking client');
 $db->exec("DELETE FROM settings WHERE name='tpl_portal_link_subject'");
 [$enSubj]=email_template_for_client('portal_link',['id'=>$langClient,'preferred_language'=>'en'],['name'=>'X','link'=>'https://example.invalid/p']);
 check(str_starts_with($enSubj,'Your '),'An English-speaking client gets the English portal invitation');

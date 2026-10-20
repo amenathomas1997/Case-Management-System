@@ -499,8 +499,9 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
     <?= $lockedOut ? ' · <span class="field-error"><strong>Locked out by failed attempts: ' . h(implode(', ', $lockedOut)) . '</strong></span>' : '' ?>
   </p>
 
-  <?= form_error_summary(['name' => 'Full name', 'email' => 'Email address', 'weekly_hours' => 'Weekly available hours'],
-        ['name' => 'u_name', 'email' => 'u_email', 'weekly_hours' => 'u_hours']) ?>
+  <?= form_error_summary(['name' => 'Full name', 'email' => 'Email address', 'weekly_hours' => 'Weekly available hours',
+        'confidentiality_signed_on' => 'Confidentiality agreement signed on', 'privacy_training_on' => 'Privacy training completed on'],
+        ['name' => 'u_name', 'email' => 'u_email', 'weekly_hours' => 'u_hours', 'confidentiality_signed_on' => 'u_conf', 'privacy_training_on' => 'u_priv']) ?>
   <form method="post" action="users.php" class="stacked" novalidate>
     <?= csrf_field() ?>
     <input type="hidden" name="uid" value="<?= (int)$edit['id'] ?>">
@@ -596,11 +597,10 @@ page_header('Users', $user, 'admin', [['admin.php', 'Administration']]);
     <button type="submit" name="request_exit" value="1" class="btn btn-secondary">Ask <?= h($edit['name']) ?> to sign the exit acknowledgement</button></form>
   <?php endif; ?>
   <h3 id="transfer-h">Caseload transfer</h3>
-  <p class="hint">Open referrals go only to someone with access to referrals; otherwise they return to the unassigned referral queue. Someone limited to their own caseload receives only the sessions for clients they receive; any others stay here and are listed for you to rebook. Both people are emailed about the sessions that move. Times still offered with them on client requests are withdrawn, and each client's new instructor is told to offer new times.</p>
   <?= form_error_summary(['to_user' => 'Move the caseload to']) ?>
   <form method="post" action="users.php" class="inline-form"><?= csrf_field() ?>
     <input type="hidden" name="uid" value="<?= (int)$edit['id'] ?>">
-    <label for="to_user">Move their <?= (int)$edit['caseload'] ?> client(s), open referrals, open tasks, and upcoming sessions to</label>
+    <label for="to_user">Move their <?= (int)$edit['caseload'] ?> client(s), open referrals, open tasks, and upcoming sessions to <?= required_mark() ?> <span class="hint">Open referrals go only to someone with access to referrals; otherwise they return to the unassigned referral queue. Someone limited to their own caseload receives only the sessions for clients they receive; any others stay here and are listed for you to rebook. Both people are emailed about the sessions that move. Times still offered with them on client requests are withdrawn, and each client's new instructor is told to offer new times.</span></label>
     <select id="to_user" name="to_user" <?= field_aria('to_user') ?>>
       <option value="">— Choose a user —</option>
       <?php foreach ($rows as $r): if ((int)$r['id'] === (int)$edit['id'] || !$r['is_active']) continue;

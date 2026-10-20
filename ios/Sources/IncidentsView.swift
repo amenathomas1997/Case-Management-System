@@ -110,8 +110,9 @@ struct IncidentsView: View {
             // down would otherwise leave it off screen, where a List never draws it, so it was
             // neither seen nor heard. Scroll it into view once it exists, then put VoiceOver on it.
             .onChange(of: error) { message in
-                guard message != nil else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(errorRow, anchor: .top) } }
+                guard let message else { return }
+                claimFormErrorFocus(message)   // VoiceOver is put on the banner, which reads it
+                DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(errorRow, anchor: .top) } }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)
                     focusedIncident = errorFocus
@@ -269,6 +270,7 @@ struct AddIncidentSheet: View {
                     TextField("Description", text: $description, axis: .vertical).lineLimit(3...10)
                         .accessibilityLabel("What happened, required")
                         .accessibilityInputLabels(["Description", "What happened"])
+                        .errorField("What happened")
                 }
                 Section("Action taken") {
                     TextField("Action taken", text: $actionTaken, axis: .vertical).lineLimit(1...6)

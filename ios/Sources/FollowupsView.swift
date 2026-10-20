@@ -296,7 +296,7 @@ struct RecordFollowupSheet: View {
                         Text("Still in use? (required)").accessibilityHidden(true)
                         Picker("Still in use?", selection: $inUse) {
                             Text("Yes").tag("yes" as String?); Text("No").tag("no" as String?); Text("Unknown").tag("" as String?)
-                        }.pickerStyle(.segmented)
+                        }.modifier(SegmentedUnlessLargeText())
                     }
                     .accessibilityElement(children: .contain)
                     .accessibilityLabel("Still in use? (required)")
@@ -321,6 +321,7 @@ struct RecordFollowupSheet: View {
                 Button("Go back", role: .cancel) {}
             }
             .navigationTitle("Record follow-up")
+            .modifier(ReadablePickers(inNavigationStack: true))   // choices not cut short at large text sizes
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // Not while saving: the result (or a failure) must be shown on this sheet.

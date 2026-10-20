@@ -950,6 +950,7 @@ enum VoiceSection: Equatable {
 // MARK: - UI
 
 struct VoiceView: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     @EnvironmentObject var api: API
     @EnvironmentObject var navigation: AppNavigation
     @Environment(\.dismiss) private var dismiss
@@ -1205,8 +1206,21 @@ struct VoiceView: View {
             }
             .disabled(ctrl.phase == .thinking)
             .accessibilityLabel(micLabel)
+            // Names that stay the same whatever the phase, for Voice Control (4.30.0): the spoken
+            // name changes ("Start listening", "Stop listening and send"…).
+            .accessibilityInputLabels(["Microphone", "Mic", micLabel])
         }
         .padding(.bottom, 8).padding(.top, 6)
+    }
+
+    private var pauseChoices: [(label: String, value: Double)] {
+        [("1.8 seconds", 1.8), ("3 seconds", 3.0), ("5 seconds", 5.0), ("Until I tap the microphone", 0.0)]
+    }
+
+    private var pausePicker: some View {
+        Picker("Pause before sending", selection: $pauseSeconds) {
+            ForEach(pauseChoices, id: \.value) { Text($0.label).tag($0.value) }
+        }
     }
 
     /// Hands-free (with its name on screen), how long a pause ends what is being said, and
@@ -1216,16 +1230,28 @@ struct VoiceView: View {
             Toggle("Hands-free", isOn: $ctrl.conversation)
                 .accessibilityHint("Listens again after each reply, without tapping the microphone.")
             DisclosureGroup("Listening options") {
-                LabeledContent("Pause before sending") {
-                    Picker("Pause before sending", selection: $pauseSeconds) {
-                        Text("1.8 seconds").tag(1.8)
-                        Text("3 seconds").tag(3.0)
-                        Text("5 seconds").tag(5.0)
-                        Text("Until I tap the microphone").tag(0.0)
+                if typeSize.isAccessibilitySize {
+                    // At the accessibility text sizes a menu picker cut its choice short in the
+                    // middle ("Until I…microphone"), 4.30.0: the label above, and the whole choice
+                    // shown on a button that wraps, opening the same choices.
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Pause before sending").accessibilityHidden(true)
+                        Menu { pausePicker } label: {
+                            Text(pauseChoices.first { $0.value == pauseSeconds }?.label ?? "Choose")
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        }
+                        .accessibilityLabel("Pause before sending")
+                        .accessibilityValue(pauseChoices.first { $0.value == pauseSeconds }?.label ?? "")
+                        .accessibilityInputLabels(["Pause before sending", "Pause"])
                     }
-                    .labelsHidden()
+                } else {
+                    LabeledContent("Pause before sending") {
+                        pausePicker.labelsHidden()
+                    }
+                    .accessibilityHint("How long a pause in speech sends what was heard.")
                 }
-                .accessibilityHint("How long a pause in speech sends what was heard.")
                 Toggle("Read replies with VoiceOver", isOn: $repliesViaVoiceOver)
                     .accessibilityHint("When VoiceOver is on, replies are read by VoiceOver and shown on a braille display instead of in the assistant's own voice.")
                 Toggle("Start listening when opened", isOn: $autoListen)

@@ -119,7 +119,7 @@ $current = function (string $k) {
       <select id="<?= $field ?>" name="<?= $field ?>" <?= field_aria($field) ?>><option value="">Use config.php (<?= h(US_TIME_ZONES[$current($k)] ?? str_replace('_', ' ', $current($k))) ?>)</option><?php foreach (CONFIG_TIMEZONES as $tz): ?><option value="<?= h($tz) ?>"<?= old_in($field, $stored) === $tz ? ' selected' : '' ?>><?= h(US_TIME_ZONES[$tz] ?? str_replace('_', ' ', $tz)) ?></option><?php endforeach; ?></select><?= field_error($field) ?>
       <?php else: ?>
       <label for="<?= $field ?>"><?= h($label) ?></label>
-      <input type="<?= $kind === 'email' ? 'email' : (in_array($kind, ['minutes', 'otp'], true) ? 'number' : 'text') ?>" id="<?= $field ?>" name="<?= $field ?>" value="<?= h(old_in($field, $stored)) ?>" placeholder="<?= h($current($k)) ?>" <?= field_aria($field) ?>><?= field_error($field) ?>
+      <input type="<?= $kind === 'email' ? 'email' : (in_array($kind, ['minutes', 'otp'], true) ? 'number' : 'text') ?>" id="<?= $field ?>" name="<?= $field ?>" value="<?= h(old_in($field, $stored)) ?>" placeholder="<?= h($current($k)) ?>"<?= str_ends_with($k, '_es') ? ' lang="es"' : '' ?> <?= field_aria($field) ?>><?= field_error($field) ?>
       <?php endif; ?>
     </div>
     <?php endforeach; ?>

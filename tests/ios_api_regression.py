@@ -47,6 +47,54 @@ static_check("fail('Not found.', 404)" not in api_php,
              'api.php never answers a bare "Not found." 404 (the message names what was not found)')
 static_check('### ' not in api_case('ai_kb'),
              'ai_kb sends article context without markdown headings')
+
+# 4.30.0 accessibility rules for the iPhone app's SwiftUI (static, no simulator needed).
+swift_sources = {p.name: p.read_text() for p in sorted((root / 'ios/Sources').glob('*.swift'))}
+
+
+def modifier_chain(lines, i):
+    """The line at i and the modifier (or comment) lines that follow it."""
+    chain = [lines[i]]
+    for line in lines[i + 1:i + 14]:
+        stripped = line.strip()
+        if stripped.startswith('.') or stripped.startswith('//'):
+            chain.append(line)
+        else:
+            break
+    return chain
+
+
+missing_on_brand = []
+for name, text in swift_sources.items():
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        if '.buttonStyle(.borderedProminent)' in line and not any('.onBrandLabel()' in c for c in modifier_chain(lines, i)):
+            missing_on_brand.append('%s:%d' % (name, i + 1))
+static_check(not missing_on_brand,
+             'every .borderedProminent button sets .onBrandLabel() (dark text on the dark appearance\'s light-blue fill)'
+             + ('' if not missing_on_brand else ': missing at ' + ', '.join(missing_on_brand)))
+helpers = swift_sources['AccessibilityHelpers.swift']
+adjustable = helpers[helpers.index('func voiceOverAdjustable'):helpers.index('enum VoiceOverRows')]
+static_check('accessibilityElement(children: VoiceOverRows.children)' in adjustable and 'accessibilityHint' not in adjustable,
+             'a stepper is one adjustable element only while VoiceOver runs (Voice Control keeps + and -), with no hint repeating "adjustable"')
+static_check(not any(re.search(r'withAnimation \{ proxy\.scrollTo\((errorRow|[A-Za-z.]*[Ee]rror)', t) for t in swift_sources.values()),
+             'scrolling to an error honours Reduce Motion')
+static_check(not any('Swipe up or down for actions.' in t for t in swift_sources.values()),
+             'no row hint repeats the "Actions available" VoiceOver already says')
+static_check(not any('.pickerStyle(.segmented)' in t for n, t in swift_sources.items() if n != 'AccessibilityHelpers.swift'),
+             'segmented pickers become menus at the accessibility text sizes (SegmentedUnlessLargeText)')
+app_swift = swift_sources['CaseManagementApp.swift']
+show_error = app_swift[app_swift.index('@MainActor func showFormError(_ message: String'):app_swift.index('/// showFormError for a message marked')]
+static_check('formErrorClaimed != serial' in show_error,
+             'showFormError does not announce an error a screen reads out by focusing its banner or field')
+focusing = swift_sources['ClientEditSheet.swift']
+static_check('claimFormErrorFocus(message)' in focusing and 'FormFieldID(name: field.lowercased())' in focusing,
+             'ErrorFocusForm claims the error and moves VoiceOver to the field it is about')
+for name in ('TrainingView.swift', 'AgreementsView.swift'):
+    text = swift_sources[name]
+    static_check('announce(error' not in text and 'announce(self.error' not in text and re.search(r'announce\([^)]*\)\s*\n?\s*dismiss\(\)', text) is None,
+                 name + ' uses showFormError for errors and announceAfterDismiss for results said as it closes')
+
 source = (root / 'ios/Sources/API.swift').read_text()
 source = source.split('extension Color {')[0]
 source = source.replace('import SwiftUI', '').replace(': ObservableObject', '')

@@ -240,7 +240,7 @@ page_header('Progress review: ' . $client['name'], $user, 'clients');
     <p style="margin:0" class="muted"><?= h($g['track']) ?> · currently <?= (int)$g['progress_pct'] ?>% · <?= h($g['status']) ?></p>
     <?php if ($recorded && (int)$recorded['gid'] === $gid): ?>
     <p class="alert alert-success" id="goal-recorded" tabindex="-1"><?= h((string)$recorded['msg']) ?></p>
-    <script>document.addEventListener("DOMContentLoaded",function(){var e=document.getElementById("goal-recorded");if(e)e.focus();});</script>
+    <script>(window.cmsFocusAfterLoad||function(f){document.addEventListener("DOMContentLoaded",f);})(function(){var e=document.getElementById("goal-recorded");if(e)e.focus();});</script>
     <?php endif; ?>
     <?php // Every control names its goal (in hidden text), so repeated forms are told apart when tabbing. ?>
     <form method="post" action="progress_review.php?client=<?= $cid ?>" class="stacked" novalidate><?= csrf_field() ?><?= web_idem_field() ?>

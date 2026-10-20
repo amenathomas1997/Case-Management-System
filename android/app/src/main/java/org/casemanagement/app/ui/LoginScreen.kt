@@ -129,12 +129,13 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
             if (reauth) api.unsentSignaturesWarning?.let { NoticeText("$it Sign in as ${api.userName.ifEmpty { "yourself" }} to send them now.") }
             if (!awaitingCode) {
                 if (asksForServer) {
-                    Field("Your organisation's web address", server, { server = it }, hint = "for example cms.example.org", keyboard = KeyboardType.Uri)
+                    Field("Your organisation's web address", server, { server = it }, hint = "for example cms.example.org", keyboard = KeyboardType.Uri, required = true)
                 }
-                Field("Email", email, { email = it }, keyboard = KeyboardType.Email)
-                Field("Password", password, { password = it }, password = true)
+                // 4.30.0: a password manager or the autofill service can fill these in.
+                Field("Email", email, { email = it }, keyboard = KeyboardType.Email, required = true, autofill = Fill.Email)
+                Field("Password", password, { password = it }, password = true, required = true, autofill = Fill.Password)
                 ErrorText(error)
-                PrimaryButton("Continue", busy = busy, enabled = email.isNotBlank() && password.isNotEmpty()) { scope.launch { passwordStep(false) } }
+                PrimaryButton("Continue", busy = busy, missing = stillNeeded(missingNames("Your organisation's web address" to (asksForServer && server.isBlank()), "Email" to email.isBlank(), "Password" to password.isEmpty()))) { scope.launch { passwordStep(false) } }
                 if (!asksForServer) Text("Signing in to ${host()}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
                 if (reauth) SecondaryButton("Sign in as someone else instead") {
                     if (api.unsentSignaturesWarning != null && !leaving) leaving = true else api.abandonReauth()
@@ -154,10 +155,10 @@ fun LoginScreen(api: Api, reauth: Boolean = false) {
             } else {
                 NoticeText(notice)
                 // The instruction was just read in the notice above, so the field's own hint is short.
-                Field("Sign-in code", code, { code = it.filter { c -> c.isDigit() }.take(8) }, hint = "6 digits", keyboard = KeyboardType.NumberPassword,
+                Field("Sign-in code", code, { code = it.filter { c -> c.isDigit() }.take(8) }, hint = "6 digits", keyboard = KeyboardType.NumberPassword, required = true, autofill = Fill.Code,
                     modifier = Modifier.focusRequester(codeFocus))
                 ErrorText(error)
-                PrimaryButton("Sign in", busy = busy, enabled = code.length >= 6) { scope.launch { verify() } }
+                PrimaryButton("Sign in", busy = busy, missing = if (code.length >= 6) null else "Enter the 6-digit code first.") { scope.launch { verify() } }
                 if (!totpOnly) SecondaryButton("Send a new code") { scope.launch { passwordStep(true) } }
                 SecondaryButton("Start again") { api.clearTrialServer(); awaitingCode = false; code = ""; password = ""; error = null; notice = null }
             }

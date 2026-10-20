@@ -233,7 +233,7 @@ $addOpen = array_intersect_key(form_errors(), ['title' => 1, 'due_date' => 1, 'a
 <h2 id="list-h" tabindex="-1"><?= $show === 'all' ? 'All tasks' : 'Open tasks' ?> (<?= count($tasks) ?>)</h2>
 <?php if ($taskResult !== null): ?>
 <p id="task-result" role="status"></p>
-<script>document.addEventListener('DOMContentLoaded',function(){
+<script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){
   // Focus first (the next task's button, else the list heading), then the
   // confirmation fills the status region, so both are heard, once each.
   var f=document.getElementById('task-act-<?= $focusTask ?>')||document.getElementById('list-h');
@@ -281,7 +281,7 @@ $addOpen = array_intersect_key(form_errors(), ['title' => 1, 'due_date' => 1, 'a
           <input type="hidden" name="due" value="<?= h($filters['due']) ?>">
           <input type="hidden" name="focus_next" value="<?= (int)($nextTask[(int)$t['id']] ?? 0) ?>">
           <button type="submit" name="delete_task" value="1" class="btn btn-danger btn-sm"
-            onclick="return confirm('Delete this task permanently?');">Delete<span class="visually-hidden"> — <?= h($taskLabel) ?></span></button>
+            onclick="return confirm(<?= h(json_encode('Delete the task ' . $taskLabel . ' permanently?', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">Delete<span class="visually-hidden"> — <?= h($taskLabel) ?></span></button>
         </form>
         <?php endif; ?>
       </td>

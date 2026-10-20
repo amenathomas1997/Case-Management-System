@@ -148,7 +148,8 @@ struct CounselorsView: View {
             // As EquipmentView: scroll the banner into view once it exists (a List never draws
             // an off-screen row, so it would be neither seen nor heard), then put VoiceOver on it.
             .onChange(of: error) { message in
-                guard message != nil else { return }
+                guard let message else { return }
+                claimFormErrorFocus(message)   // VoiceOver is put on the banner, which reads it
                 DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo("counselorsError", anchor: .top) } }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)

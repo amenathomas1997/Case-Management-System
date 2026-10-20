@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.30.0' => [
+        'An accessibility review of the whole system, with every finding fixed. After you save, the result or the reason it was refused is now read out every time, instead of sometimes being skipped. Help for each date and time field is part of its label, so there is no extra stop after it, and the Text size and spoken-loudness lists no longer speak on every arrow press.',
+        'Clearer forms: required fields are marked for screen readers too, refused saves name every field that needs attention, and lists are plain names (the Schedule shows only the chosen client\'s tracks). Note links and headings include the date, so notes with the same subject are told apart.',
+        'For clients and agencies: Spanish speakers get the referral decline email and session reminders in Spanish, and the client portal reads dates and times in Spanish. Invoices and reports sent as PDF now carry a link to an accessible copy the agency can open without signing in. The phone apps announce each screen, take you to errors, and explain a button instead of leaving it dimmed.',
+    ],
     '4.29.0' => [
         'A third full code review was done and every finding fixed. Booking a session now warns when the instructor already has a session at that time, and you approve it before it is booked. Editing a track or a note, on the website or in the phone apps, can no longer overwrite a colleague\'s newer change.',
         'Reports that count work for a funding agency (the agency billing summary, funder report, RSA-911, agency scorecard and analytics) now count only work that agency pays for: private-pay and no-charge work is no longer counted as VR work. A renamed agency is listed once.',

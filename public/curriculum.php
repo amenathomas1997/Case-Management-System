@@ -328,6 +328,7 @@ page_header('Curricula', $user, 'templates');
   <form method="post" action="curriculum.php" class="stacked" novalidate>
     <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['name' => 'Name', 'tech' => 'Technology', 'description' => 'Description']) ?>
+    <p class="muted">Fields marked with an asterisk (<span aria-hidden="true">*</span><span class="visually-hidden">asterisk</span>) are required.</p>
     <div class="grid grid-4">
       <div class="field"><label for="name">Name <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label><input type="text" id="name" name="name" required maxlength="190" placeholder="e.g. JAWS Fundamentals" value="<?= h(old_in('name')) ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
       <div class="field"><label for="tech">Technology</label><input type="text" id="tech" name="tech" maxlength="120" placeholder="e.g. JAWS" value="<?= h(old_in('tech')) ?>" <?= field_aria('tech') ?>><?= field_error('tech') ?></div>

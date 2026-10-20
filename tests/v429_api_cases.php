@@ -82,7 +82,7 @@ try {
         && is_string($v429b1['authorization_hash'] ?? null)
         && (int)$db->query("SELECT COUNT(*) FROM scheduled_sessions WHERE client_id=$v429c")->fetchColumn() === 0,
         'Booking an instructor over their own session is held with the warning, and nothing is booked');
-    $call('schedule_session', ['client_id' => $v429c, 'staff_id' => 1, 'date' => $v429day, 'time' => '13:00', 'duration' => 1]);
+    $call('schedule_session', ['client_id' => $v429c, 'staff_id' => 1, 'date' => $v429day, 'time' => '02:00', 'duration' => 1]);
     check((int)$db->query("SELECT COUNT(*) FROM scheduled_sessions WHERE client_id=$v429c")->fetchColumn() === 1, 'A time the instructor is free books with no warning');
     $call('schedule_session', ['authorization_ack' => true, 'authorization_ack_hash' => $v429b1['authorization_hash']] + $v429book);
     check((int)$db->query("SELECT COUNT(*) FROM scheduled_sessions WHERE client_id=$v429c AND start_at='$v429day 05:30:00'")->fetchColumn() === 1,
@@ -178,7 +178,7 @@ try {
     $v429vday = date('Y-m-d', strtotime('+16 days'));
     $db->prepare("INSERT INTO scheduled_sessions(client_id,user_id,start_at,end_at) VALUES(?,1,?,?)")->execute([$v429other, "$v429vday 04:00:00", "$v429vday 05:30:00"]); // a quiet hour
     $v429v = $call('voice_command', ['do' => 'schedule_session', 'client_id' => $v429rc, 'start_at' => "$v429vday 04:30", 'duration' => 60], [], false, 'already has a session from 4:00 to 5:30 with another client');
-    $call('voice_command', ['do' => 'schedule_session', 'client_id' => $v429rc, 'start_at' => "$v429vday 13:00", 'duration' => 60]);
+    $call('voice_command', ['do' => 'schedule_session', 'client_id' => $v429rc, 'start_at' => "$v429vday 02:00", 'duration' => 60]);
     check((int)$db->query("SELECT COUNT(*) FROM scheduled_sessions WHERE client_id=$v429rc AND DATE(start_at)='$v429vday'")->fetchColumn() === 1
         && str_contains((string)$v429v['error'], 'Nothing was booked'),
         'Voice refuses to book over the speaker\'s own session and books a free time');

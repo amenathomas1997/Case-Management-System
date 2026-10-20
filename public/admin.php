@@ -322,14 +322,15 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
   <form method="post" action="admin.php" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['nu_name' => 'Full name', 'nu_email' => 'Email address', 'nu_password' => 'Temporary password', 'nu_group' => 'Permission group']) ?>
+    <p class="muted">Fields marked with an asterisk (<span aria-hidden="true">*</span><span class="visually-hidden">asterisk</span>) are required.</p>
     <div class="field">
-      <label for="nu_name">Full name *</label>
-      <input type="text" id="nu_name" name="name" required value="<?= h($nuRefill ? old_in('name') : '') ?>" <?= field_aria('nu_name') ?>>
+      <label for="nu_name">Full name <?= required_mark() ?></label>
+      <input type="text" id="nu_name" name="name" required aria-required="true" value="<?= h($nuRefill ? old_in('name') : '') ?>" <?= field_aria('nu_name') ?>>
       <?= field_error('nu_name') ?>
     </div>
     <div class="field">
-      <label for="nu_email">Email address *</label>
-      <input type="email" id="nu_email" name="email" required value="<?= h($nuRefill ? old_in('email') : '') ?>" <?= field_aria('nu_email') ?>>
+      <label for="nu_email">Email address <?= required_mark() ?></label>
+      <input type="email" id="nu_email" name="email" required aria-required="true" value="<?= h($nuRefill ? old_in('email') : '') ?>" <?= field_aria('nu_email') ?>>
       <?= field_error('nu_email') ?>
     </div>
     <div class="field">
@@ -338,8 +339,8 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
       <?= field_error('nu_password') ?>
     </div>
     <div class="field">
-      <label for="nu_group">Permission group * <span class="hint">Decides which areas this person can open. "Own caseload only" groups see just the clients assigned to them.</span></label>
-      <select id="nu_group" name="group_id" required <?= field_aria('nu_group') ?>>
+      <label for="nu_group">Permission group <?= required_mark() ?> <span class="hint">Decides which areas this person can open. "Own caseload only" groups see just the clients assigned to them.</span></label>
+      <select id="nu_group" name="group_id" required aria-required="true" <?= field_aria('nu_group') ?>>
         <option value="">— Choose a group —</option>
         <?php foreach ($allGroups as $g): ?>
         <option value="<?= (int)$g['id'] ?>" <?= $nuGroup === (string)(int)$g['id'] ? 'selected' : '' ?>><?= h($g['name']) ?><?= $g['own_caseload_only'] ? ' (own caseload only)' : '' ?></option>
@@ -551,7 +552,7 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
   </div>
   <h3 id="notelock-h">Case note lock</h3>
   <form method="post" action="admin.php" class="inline-form"><?= csrf_field() ?>
-    <label for="note_lock_days">Lock case notes for editing after</label>
+    <label for="note_lock_days">Lock case notes for editing after <span class="hint">A locked note is corrected with an addendum. Every earlier version of an edited note is kept.</span></label>
     <select id="note_lock_days" name="note_lock_days">
       <?php $curNl = note_lock_days();
       foreach ([0 => 'Off', 7 => '7 days', 14 => '14 days', 30 => '30 days', 60 => '60 days', 90 => '90 days'] as $nd => $nlab): ?>
@@ -560,10 +561,9 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
     </select>
     <button type="submit" name="save_note_lock" value="1" class="btn btn-secondary btn-sm">Save</button>
   </form>
-  <p class="hint">A locked note is corrected with an addendum. Every earlier version of an edited note is kept.</p>
   <h3 id="retention-h">Record retention</h3>
   <form method="post" action="admin.php" class="inline-form"><?= csrf_field() ?>
-    <label for="retention_years">Record retention: auto-archive clients closed for</label>
+    <label for="retention_years">Record retention: auto-archive clients closed for <span class="hint">Archived records are hidden from daily lists but kept intact until you export and purge them from the archived-clients page.</span></label>
     <select id="retention_years" name="retention_years">
       <?php $curRet = (int)(setting('retention_years') ?? '0');
       $retOpts = [0 => 'Off', 5 => '5 years', 6 => '6 years', 7 => '7 years', 10 => '10 years'];
@@ -575,7 +575,6 @@ $jobsBehind = array_values(array_filter(health_job_rows(true), fn($j) => !$j['ok
     </select>
     <button type="submit" name="save_retention" value="1" class="btn btn-secondary btn-sm">Save</button>
   </form>
-  <p class="hint">Archived records are hidden from daily lists but kept intact until you export and purge them from the archived-clients page.</p>
 </section>
 
 <section class="card" aria-labelledby="scheduled-h">

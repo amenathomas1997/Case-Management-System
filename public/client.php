@@ -343,6 +343,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['purge_client'])) {
     foreach ($purgeFiles as $purgePath) {
         if (!empty($purgePath)) @unlink(cfg('upload_dir') . '/' . basename((string)$purgePath));
     }
+    // 4.30.0: accessible copies of the client's invoices and statements, and so their links, go too.
+    require_once __DIR__ . '/inc/app_pdf.php';
+    doc_link_forget_client($id);
     foreach ($returnedEquipment as $eqId => $eqStatus) {
         audit($user['id'], 'equipment.return', 'equipment', (int)$eqId, 'returned on client purge (now ' . $eqStatus . ')');
     }
@@ -1338,10 +1341,13 @@ page_header($tabLabels[$tab] . ' — ' . $client['name'], $user, 'clients', $tab
 <nav aria-label="Client record sections">
   <ul class="tab-nav">
     <?php foreach ($tabLabels as $key => $label): ?>
-    <li><a href="<?= $tabUrl($key) ?>" <?= $tab === $key ? 'aria-current="page"' : '' ?>><?= $label ?></a></li>
+    <li><a href="<?= $tabUrl($key) ?>#tab-panel" <?= $tab === $key ? 'aria-current="page"' : '' ?>><?= $label ?></a></li>
     <?php endforeach; ?>
   </ul>
 </nav>
+<?php // The open section's heading (4.30.0): a tab link opens the page here, focused on it,
+// instead of at the top of the page behind the menu and the record's actions. ?>
+<h2 id="tab-panel" tabindex="-1" class="visually-hidden"><?= h($tabLabels[$tab]) ?></h2>
 
 <?php if ($tab === 'overview'): ?>
 <?php
@@ -1552,25 +1558,25 @@ $relDefaultSigner = !empty($client['guardian_name']) && !empty($client['dob']) &
       <div class="field"><label for="rel_role">Who signs</label>
         <select id="rel_role" name="signer_role"><?= select_options(['Client', 'Guardian'], $relRole) ?></select></div>
       <div class="field"><label for="rel_signer">Signer name <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-        <input type="text" id="rel_signer" name="signer_name" maxlength="120" value="<?= h(old_in('signer_name', $relRole === 'Guardian' ? (string)($client['guardian_name'] ?? '') : (string)$client['name'])) ?>" <?= field_aria('signer_name') ?>><?= field_error('signer_name') ?></div>
+        <input type="text" id="rel_signer" name="signer_name" maxlength="120" required value="<?= h(old_in('signer_name', $relRole === 'Guardian' ? (string)($client['guardian_name'] ?? '') : (string)$client['name'])) ?>" <?= field_aria('signer_name') ?>><?= field_error('signer_name') ?></div>
       <div class="field"><label for="rel_semail">Signer email (required to email it)</label>
         <input type="email" id="rel_semail" name="signer_email" maxlength="190" value="<?= h(old_in('signer_email', $relRole === 'Guardian' ? (string)($client['guardian_email'] ?? '') : (string)($client['email'] ?? ''))) ?>" <?= field_aria('signer_email') ?>><?= field_error('signer_email') ?></div>
       <div class="field"><label for="rel_rtype">Recipient type <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-        <select id="rel_rtype" name="recipient_type" <?= field_aria('recipient_type') ?>><?= select_options(cms_list_items('release_recipient_types'), old_in('recipient_type', 'VR counselor and agency')) ?></select><?= field_error('recipient_type') ?></div>
+        <select id="rel_rtype" name="recipient_type" aria-required="true" <?= field_aria('recipient_type') ?>><?= select_options(cms_list_items('release_recipient_types'), old_in('recipient_type', 'VR counselor and agency')) ?></select><?= field_error('recipient_type') ?></div>
       <div class="field"><label for="rel_rname">Recipient name and organisation <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-        <input type="text" id="rel_rname" name="recipient_name" maxlength="190" value="<?= h(old_in('recipient_name', trim(($client['counselor_name'] ?? '') . (!empty($client['counselor_agency']) ? ', ' . $client['counselor_agency'] : ''), ', '))) ?>" <?= field_aria('recipient_name') ?>><?= field_error('recipient_name') ?></div>
+        <input type="text" id="rel_rname" name="recipient_name" maxlength="190" required value="<?= h(old_in('recipient_name', trim(($client['counselor_name'] ?? '') . (!empty($client['counselor_agency']) ? ', ' . $client['counselor_agency'] : ''), ', '))) ?>" <?= field_aria('recipient_name') ?>><?= field_error('recipient_name') ?></div>
       <div class="field"><label for="rel_remail">Recipient email</label>
         <input type="email" id="rel_remail" name="recipient_email" maxlength="190" value="<?= h(old_in('recipient_email', (string)($client['counselor_email'] ?? ''))) ?>" <?= field_aria('recipient_email') ?>><?= field_error('recipient_email') ?></div>
       <fieldset <?= has_field_error('info') ? 'aria-describedby="err-info"' : '' ?>><legend>Information covered <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></legend>
         <?php foreach (cms_list_items('release_info_items') as $ii => $item): $checked = $relInfoKept !== null ? in_array($item, $relInfoKept, true) : $ii < 2; ?>
-        <label><input type="checkbox" id="rel_info<?= $ii ?>" name="info[]" value="<?= h($item) ?>"<?= $checked ? ' checked' : '' ?>> <?= h($item) ?></label>
+        <label><input type="checkbox" id="rel_info<?= $ii ?>" name="info[]" value="<?= h($item) ?>"<?= $checked ? ' checked' : '' ?><?= has_field_error('info') ? ' aria-invalid="true"' : '' ?>> <?= h($item) ?></label>
         <?php endforeach; ?>
         <?= field_error('info') ?>
       </fieldset>
       <div class="field"><label for="rel_other">Other information</label>
         <input type="text" id="rel_other" name="info_other" maxlength="200" value="<?= h(old_in('info_other')) ?>"></div>
       <div class="field"><label for="rel_purpose">Purpose <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-        <input type="text" id="rel_purpose" name="purpose" maxlength="255" value="<?= h(old_in('purpose', 'To plan and report on assistive technology services')) ?>" <?= field_aria('purpose') ?>><?= field_error('purpose') ?></div>
+        <input type="text" id="rel_purpose" name="purpose" maxlength="255" required value="<?= h(old_in('purpose', 'To plan and report on assistive technology services')) ?>" <?= field_aria('purpose') ?>><?= field_error('purpose') ?></div>
       <div class="field"><label for="rel_signed">Date signed (paper releases only)</label>
         <input type="date" id="rel_signed" name="signed_on" value="<?= h(old_in('signed_on')) ?>" <?= field_aria('signed_on') ?>><?= field_error('signed_on') ?></div>
       <button type="submit" name="send_release" value="1" class="btn btn-primary">Email release to sign</button>
@@ -1601,8 +1607,8 @@ $relDefaultSigner = !empty($client['guardian_name']) && !empty($client['dob']) &
   <?php else: ?>
   <form method="post" action="client.php?id=<?= $id ?>" class="inline-form" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['hold_reason' => 'Hold reason']) ?>
-    <label for="hold_reason">Hold reason</label>
-    <input type="text" id="hold_reason" name="hold_reason" maxlength="255" value="<?= h(old_in('hold_reason')) ?>" <?= field_aria('hold_reason') ?>><?= field_error('hold_reason') ?>
+    <label for="hold_reason">Hold reason <?= required_mark() ?></label>
+    <input type="text" id="hold_reason" name="hold_reason" maxlength="255" required value="<?= h(old_in('hold_reason')) ?>" <?= field_aria('hold_reason') ?>><?= field_error('hold_reason') ?>
     <button type="submit" name="place_hold" value="1" class="btn btn-secondary btn-sm">Place hold</button>
   </form>
   <?php endif; ?>
@@ -1678,11 +1684,12 @@ if (str_starts_with((string)$client['status'], 'Closed') || $closeFus || $survey
     <p><?= fmt_hours($r['hours_worked']) ?> used. No authorization entered. <a href="track_edit.php?id=<?= (int)$t['id'] ?>">Edit track<span class="visually-hidden">: <?= h($t['title']) ?></span></a></p>
     <?php else: ?>
     <div class="progress-wrap">
-      <label for="prog-<?= (int)$t['id'] ?>" class="progress-caption">
+      <?php // Read once (4.30.0): the figures are the text; the bar has a short name of its own. ?>
+      <p class="progress-caption">
         <?= fmt_hours($r['hours_worked']) ?> of <?= fmt_hours($r['authorized_hours']) ?> authorized used
         (<?= fmt_money($r['total_billed']) ?> logged work value<?= $r['mileage_amount'] > 0 ? ' incl. ' . fmt_money($r['mileage_amount']) . ' mileage' : '' ?>, <?= fmt_money($r['invoiced_amount']) ?> on invoices (incl. drafts), <?= fmt_money($r['submitted_amount'] ?? 0) ?> submitted to funder, <?= $r['authorized_funds'] > 0 ? fmt_money($r['funds_remaining']) . ' of authorized funds remaining' . ($r['expenses_amount'] > 0 ? ' after ' . fmt_money($r['expenses_amount']) . ' expenses' : '') : 'no authorized funds entered' ?>)
-      </label>
-      <progress id="prog-<?= (int)$t['id'] ?>" class="hours" max="100" value="<?= $r['pct_used'] ?>"><?= $r['pct_used'] ?>%</progress>
+      </p>
+      <progress id="prog-<?= (int)$t['id'] ?>" class="hours" max="100" aria-label="Hours used<?= h(', ' . $t['title']) ?>" value="<?= $r['pct_used'] ?>"><?= $r['pct_used'] ?>%</progress>
     </div>
     <?php endif; ?>
   <?php endforeach; endif; ?>
@@ -1876,7 +1883,9 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
 <?php endif; ?>
 <?php foreach ($notesShown as $n): // id: links (such as documentation review) can land on one note ?>
   <article class="card" id="note-<?= (int)$n['id'] ?>" tabindex="-1">
-    <h3><?= h($n['subject']) ?></h3>
+    <?php // The date is in the heading and in each link's name (4.30.0): notes often share a subject. ?>
+    <?php $nWhen = fmt_date($n['created_at']); ?>
+    <h3><?= h($n['subject']) ?><span class="muted">, <?= $nWhen ?></span></h3>
     <?php
     $nfmt = $n['note_format'] ?? 'free'; if (!isset(NOTE_FORMATS[$nfmt])) $nfmt = 'free';
     $nCols = [$n['birp_behavior'] ?? '', $n['birp_intervention'] ?? '', $n['birp_response'] ?? '', $n['birp_plan'] ?? ''];
@@ -1905,7 +1914,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
       <p>Addenda: <?php foreach ($noteAddenda[$nid] as $ai => $ad): ?><?= $ai ? ', ' : '' ?><a href="#note-<?= (int)$ad['id'] ?>"><?= h($ad['subject']) ?></a> (<?= fmt_date($ad['created_at']) ?>)<?php endforeach; ?>.</p>
     <?php endif; ?>
     <?php if (!empty($noteVersions[$nid])): $nv = $noteVersions[$nid]; ?>
-      <details><summary>Earlier versions (<?= count($nv) ?>)<span class="visually-hidden"> of note: <?= h($n['subject']) ?></span></summary>
+      <details><summary>Earlier versions (<?= count($nv) ?>)<span class="visually-hidden"> of the note from <?= $nWhen ?>: <?= h($n['subject']) ?></span></summary>
       <?php foreach ($nv as $v): ?>
         <h4><?= h($v['subject']) ?></h4>
         <p class="muted">Written <?= fmt_datetime($v['version_written_at']) ?><?= $v['written_by_name'] ? ' by ' . h($v['written_by_name']) : '' ?> <span aria-hidden="true">·</span> replaced <?= fmt_datetime($v['replaced_at']) ?><?= $v['replaced_by_name'] ? ' by ' . h($v['replaced_by_name']) : '' ?> <span aria-hidden="true">·</span> <?= h($v['note_type']) ?></p>
@@ -1914,9 +1923,9 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
       </details>
     <?php endif; ?>
     <?php if (can_edit_note($n, $user)): ?>
-      <p><a class="btn btn-secondary btn-sm" href="<?= $tabUrl('notes') ?>&amp;edit_note=<?= $nid ?>#addnote-h">Edit<span class="visually-hidden"> note: <?= h($n['subject']) ?></span></a></p>
+      <p><a class="btn btn-secondary btn-sm" href="<?= $tabUrl('notes') ?>&amp;edit_note=<?= $nid ?>#addnote-h">Edit<span class="visually-hidden"> note from <?= $nWhen ?>: <?= h($n['subject']) ?></span></a></p>
     <?php elseif (note_locked($n)): // past the edit window: corrections go in an addendum ?>
-      <p><a class="btn btn-secondary btn-sm" href="<?= $tabUrl('notes') ?>&amp;addendum_to=<?= $nid ?>#addnote-h">Add addendum<span class="visually-hidden"> to note: <?= h($n['subject']) ?></span></a></p>
+      <p><a class="btn btn-secondary btn-sm" href="<?= $tabUrl('notes') ?>&amp;addendum_to=<?= $nid ?>#addnote-h">Add addendum<span class="visually-hidden"> to the note from <?= $nWhen ?>: <?= h($n['subject']) ?></span></a></p>
     <?php endif; ?>
   </article>
 <?php endforeach; ?>
@@ -1944,8 +1953,9 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
   <?php if ($scored): ?>
   <?php // group by instrument to show a simple trend (oldest -> newest)
         $byInstr = []; foreach ($scored as $sc) $byInstr[$sc['instrument']][] = $sc; ?>
-  <div class="table-scroll" tabindex="0" role="region" aria-label="Scored assessments">
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Scored assessments table">
   <table>
+    <caption class="visually-hidden">Scored assessments, newest first</caption>
     <thead><tr><th scope="col">Instrument</th><th scope="col">Date</th><th scope="col">Score</th><th scope="col">Trend</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
     <tbody>
     <?php foreach ($scored as $sc): $pct = round((float)$sc['pct']);
@@ -1953,7 +1963,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
         $first = $series[0]; $firstPct = round((float)$first['pct']);
         $delta = $pct - $firstPct; ?>
       <tr>
-        <td><?= h($sc['instrument']) ?></td>
+        <th scope="row"><?= h($sc['instrument']) ?><span class="visually-hidden">, <?= fmt_date($sc['assessed_on']) ?></span></th>
         <td><?= fmt_date($sc['assessed_on']) ?><br><span class="muted"><?= h($sc['assessor'] ?? '') ?></span></td>
         <td><?php $lo = $scoreLow($sc); ?><?= (int)$sc['total_score'] ?> <?= $lo === 0 ? 'of ' . (int)$sc['max_score'] : 'on a range of ' . $lo . ' to ' . (int)$sc['max_score'] ?> (<?= $pct ?>%)
           <div class="progress-wrap"><progress class="hours" max="100" value="<?= $pct ?>" aria-label="Score percentage"><?= $pct ?>%</progress></div></td>
@@ -2069,7 +2079,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     </dl>
     <?php if (!$noAuth): ?>
     <div class="progress-wrap">
-      <label for="tprog-<?= (int)$t['id'] ?>" class="progress-caption">Authorized hours used: <?= $r['pct_used'] ?>%</label>
+      <label for="tprog-<?= (int)$t['id'] ?>" class="progress-caption">Authorized hours used</label>
       <progress id="tprog-<?= (int)$t['id'] ?>" class="hours" max="100" value="<?= $r['pct_used'] ?>"><?= $r['pct_used'] ?>%</progress>
     </div>
     <?php endif; ?>
@@ -2095,7 +2105,7 @@ $documents = $documents->fetchAll();
     <div class="field"><label><input type="checkbox" name="share_portal" value="1"<?= old_in('share_portal') !== '' ? ' checked' : '' ?>> Share it on the client's portal</label></div>
     <div class="field"><label><input type="checkbox" name="share_counselor" value="1"<?= old_in('share_counselor') !== '' ? ' checked' : '' ?>> Share it with their VR counselor on the counselor portal</label></div>
     <div class="field"><label for="document">File <?= required_mark() ?> <span class="hint">PDF, Office, text, or image · 25 MB max</span></label>
-      <input type="file" id="document" name="document" required accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.rtf,.csv,.png,.jpg,.jpeg" <?= field_aria('document') ?>><?= field_error('document') ?></div>
+      <input type="file" id="document" name="document" aria-required="true" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.rtf,.csv,.png,.jpg,.jpeg" <?= field_aria('document') ?>><?= field_error('document') ?></div>
     <button type="submit" name="add_document" value="1" class="btn btn-primary">Upload</button>
   </form>
 </section>
@@ -2123,7 +2133,7 @@ $documents = $documents->fetchAll();
         <form method="post" action="<?= $tabUrl('documents') ?>" class="inline-form"><?= csrf_field() ?>
           <input type="hidden" name="doc_id" value="<?= (int)$doc['id'] ?>">
           <button type="submit" name="del_document" value="1" class="btn btn-danger btn-sm"
-            onclick="return confirm('Move this document to the trash? An administrator can restore it for 30 days.');">Delete<span class="visually-hidden"> <?= h($doc['title']) ?> — document #<?= (int)$doc['id'] ?></span></button>
+            onclick="return confirm(<?= h(json_encode('Move the document "' . $doc['title'] . '" to the trash? An administrator can restore it for 30 days.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">Delete<span class="visually-hidden"> <?= h($doc['title']) ?> — document #<?= (int)$doc['id'] ?></span></button>
         </form>
         <?php endif; ?>
       </td>

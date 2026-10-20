@@ -107,7 +107,7 @@ check((int)$v429rem['reminder_sent']===0 && $v429rem['staff_reminded_at']!==null
 
 // ---- The closure reason is marked required ----
 [$code,$out,$err]=$renderPage('client_edit',['id'=>(string)$v429c1]);
-check($err==='' && str_contains($out,'name="closure_reason" required') && str_contains($out,' hidden disabled>'),'"Why is the case closing?" is marked required, and its hidden fieldset sends nothing'.($err?": $err":''));
+check($err==='' && (str_contains($out,'name="closure_reason" required') || str_contains($out,'name="closure_reason" aria-required="true"') /* 4.30.0 */) && str_contains($out,' hidden disabled>'),'"Why is the case closing?" is marked required, and its hidden fieldset sends nothing'.($err?": $err":''));
 
 // ---- Equipment: a past "needed until" and a client no longer on file are refused on the field ----
 $db->exec("INSERT INTO equipment(name,status) VALUES('V429-CASES Display','Available')"); $v429eq=(int)$db->lastInsertId();

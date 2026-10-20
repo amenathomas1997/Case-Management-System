@@ -37,15 +37,18 @@ function report_period_dates(string $preset): ?array {
 }
 
 /**
- * The period a report shows: ['from', 'to', 'preset', 'notes'].
+ * The period a report shows: ['from', 'to', 'preset', 'notes', 'errors'].
  * $defaultFrom / $defaultTo are the page's own default dates (used when nothing was
- * chosen on this request and nothing is remembered). 'notes' says in words when a
- * date could not be read or the two were swapped (as outcomes.php said them).
+ * chosen on this request and nothing is remembered). 'notes' says in words when the
+ * two dates were swapped (as outcomes.php said them). 'errors' (4.30.0) holds a date
+ * that could not be read, keyed by its field ('from', 'to'): report_period_form()
+ * shows it on that field with a summary that takes focus, so it is never a stray line.
  */
 function report_period(array $user, string $defaultFrom, string $defaultTo): array {
     $uid = (int)($user['id'] ?? 0);
     $key = 'report_period_' . $uid;
     $notes = [];
+    $errors = [];
     $rawPreset = is_string($_GET['period'] ?? null) ? $_GET['period'] : null;
     $preset = $rawPreset !== null && isset(REPORT_PERIOD_PRESETS[$rawPreset]) ? $rawPreset : null;
     $rawFrom = is_string($_GET['from'] ?? null) ? trim($_GET['from']) : '';
@@ -53,7 +56,7 @@ function report_period(array $user, string $defaultFrom, string $defaultTo): arr
     // A repeated parameter (from[]=…) arrives as an array: unreadable, so it is said.
     foreach (['from' => 'From', 'to' => 'To'] as $k => $label) {
         $raw = $_GET[$k] ?? '';
-        if (!is_string($raw) || (trim($raw) !== '' && valid_date($raw) === null)) $notes[] = 'The ' . $label . ' date could not be read.';
+        if (!is_string($raw) || (trim($raw) !== '' && valid_date($raw) === null)) $errors[$k] = 'The ' . $label . ' date could not be read, so the ' . $label . ' date now shown was used instead. Enter a full date, such as ' . date('Y-m-d') . '.';
     }
     $gotFrom = valid_date($rawFrom); $gotTo = valid_date($rawTo);
     $remember = null;
@@ -86,7 +89,7 @@ function report_period(array $user, string $defaultFrom, string $defaultTo): arr
         // Written only when the choice changed, and never a reason for a report to fail.
         try { if ($uid > 0 && setting($key) !== $json) set_setting($key, $json); } catch (Throwable $e) {}
     }
-    return ['from' => $from, 'to' => $to, 'preset' => $preset, 'notes' => $notes];
+    return ['from' => $from, 'to' => $to, 'preset' => $preset, 'notes' => $notes, 'errors' => $errors];
 }
 
 /** The remembered choice, or [] when none (or unreadable). */
@@ -104,15 +107,28 @@ function report_period_saved(string $key): array {
  * Choosing a preset sets the dates; editing a date switches the preset to Custom.
  */
 function report_period_form(string $action, array $period, string $before = '', string $after = '', string $runLabel = 'Run'): string {
-    $out = '<form method="get" action="' . h($action) . '" class="page-actions" aria-label="Report period">' . $before;
+    $out = '<form method="get" action="' . h($action) . '" class="page-actions" aria-label="Report period" novalidate>';
+    // 4.30.0: a date that could not be read is said once, on its field, in a summary that takes focus.
+    // The errors are shown through the shared helpers, then taken back out so no other form sees them.
+    $periodErrors = array_intersect_key((array)($period['errors'] ?? []), ['from' => 1, 'to' => 1]);
+    $keptErrors = [];
+    if ($periodErrors) {
+        $keptErrors = form_errors();
+        set_form_errors(array_merge($keptErrors, $periodErrors));
+        $out .= form_error_summary(['from' => '', 'to' => '']);
+    }
+    $out .= $before;
     // 4.28.0: the hint is inside the label (read with it, no extra line or stop for a screen reader).
     $out .= '<label for="period">Period <span class="hint">A preset sets the dates itself; to use the From and To dates, choose Custom dates. The period you choose is remembered on every report.</span></label><select id="period" name="period">';
     foreach (REPORT_PERIOD_PRESETS as $k => $label) {
         $out .= '<option value="' . $k . '"' . ($period['preset'] === $k ? ' selected' : '') . '>' . h($label) . '</option>';
     }
     $out .= '</select>';
-    $out .= '<label for="from">From</label><input type="date" id="from" name="from" value="' . h($period['from']) . '">';
-    $out .= '<label for="to">To</label><input type="date" id="to" name="to" value="' . h($period['to']) . '">';
+    foreach (['from' => 'From', 'to' => 'To'] as $k => $label) {
+        $out .= '<label for="' . $k . '">' . $label . '</label><input type="date" id="' . $k . '" name="' . $k . '" value="' . h($period[$k]) . '"'
+            . (isset($periodErrors[$k]) ? ' ' . field_aria($k) : '') . '>' . (isset($periodErrors[$k]) ? field_error($k) : '');
+    }
+    if ($periodErrors) set_form_errors($keptErrors);
     $out .= '<button type="submit" class="btn btn-secondary btn-sm">' . h($runLabel) . '<span class="visually-hidden"> the report for this period</span></button>' . $after;
     $out .= '<script>document.addEventListener("DOMContentLoaded",function(){var p=document.getElementById("period");["from","to"].forEach(function(id){var e=document.getElementById(id);if(e&&p)e.addEventListener("change",function(){p.value="custom";});});});</script>';
     return $out . '</form>';

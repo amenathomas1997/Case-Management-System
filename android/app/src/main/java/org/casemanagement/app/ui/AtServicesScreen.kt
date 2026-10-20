@@ -30,7 +30,7 @@ fun AtServicesScreen(api: Api, nav: NavHostController) {
     val state = rememberLoaded(api.userId) { api.call("at_catalog").optJSONArray("modules").objects() }
     Show(state, "AT services") { modules ->
         Page {
-            Heading("AT services")
+            // 4.30.0: no heading repeating the title bar's "AT services".
             modules.filter { it.optString("id") !in CHILD_KIND.values }.forEach { m -> ListRow(listOf(m.optString("label"), m.optString("description")), action = "open the list", onClick = { nav.navigate("at/${m.optString("id")}") }) }
         }
     }
@@ -119,17 +119,17 @@ private fun AtIssueDialog(api: Api, id: Int, onDone: (String) -> Unit, onCancel:
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val c = choices.data
-    FormDialog("Lend equipment", "Lend", busy, client.isNotEmpty() && item.isNotEmpty(), onSave = {
+    FormDialog("Lend equipment", "Lend", busy, missing = stillNeeded(missingNames("Client" to client.isEmpty(), "Equipment" to item.isEmpty())), onSave = {
         scope.launchSave({ busy = it }, { error = it }) {
             // 4.28.0: a retry after a lost reply lends it once (see sendOnce).
             api.callOnce("at_issue", JSONObject().put("id", id).put("client_id", client.toInt()).put("equipment_id", item.toInt()).put("due_date", due.trim()), idem, { idem = it }, "the loan")
             onDone("Equipment lent.")
         }
     }, onCancel = onCancel) {
-        ErrorText(choices.error)
+        ErrorText(choices.error, takeFocus = false)
         if (c != null) {
-            Choice("Client", client, listOf("" to "Choose a client") + c.optJSONArray("clients").objects().map { it.optString("value") to it.optString("label") }) { client = it }
-            Choice("Equipment", item, listOf("" to "Choose the item") + c.optJSONArray("equipment").objects().map { it.optString("value") to it.optString("label") }) { item = it }
+            Choice("Client", client, listOf("" to "Choose a client") + c.optJSONArray("clients").objects().map { it.optString("value") to it.optString("label") }, required = true) { client = it }
+            Choice("Equipment", item, listOf("" to "Choose the item") + c.optJSONArray("equipment").objects().map { it.optString("value") to it.optString("label") }, required = true) { item = it }
         }
         Field("Due back", due, { due = it }, hint = "year-month-day, optional")
         ErrorText(error)
@@ -159,13 +159,15 @@ fun AtEditScreen(api: Api, nav: NavHostController, kind: String, id: Int, parent
         // 4.29.0: a new record is added once even when a reply was lost (see sendOnce).
         var newKey by rememberSaveable { mutableStateOf("") }
         var busy by remember { mutableStateOf(false) }
+        // The AI is drafting (part of busy), so its wait is said only for the AI (4.30.0).
+        var drafting by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         val map = values.value.toMap()
         // Fixed once the record exists (which client, parent or item it belongs to).
         val locked = if (id > 0) setOf("client_id", "parent_id") + (if (kind == "repair" || kind == "reuse") setOf("equipment_id") else emptySet()) else emptySet()
         Page {
             Heading(if (id > 0) "Edit" else "Add", large = true)
-            Field("Title", title, { title = it }, error = fieldErrors["title"])
+            Field("Title", title, { title = it }, error = fieldErrors["title"], required = true)
             if (statuses.isNotEmpty()) Choice("Status", status, statuses.map { it to it }, error = fieldErrors["status"]) { status = it }
             fields.forEach { f ->
                 val key = f.optString("key"); val label = f.optString("label") + if (f.optBoolean("required")) "" else " (optional)"
@@ -185,14 +187,17 @@ fun AtEditScreen(api: Api, nav: NavHostController, kind: String, id: Int, parent
                 if (draftFor == key) {
                     var instruction by remember(key) { mutableStateOf("") }
                     Field("What should the AI do", instruction, { instruction = it }, hint = "draft, simplify, translate or revise")
-                    SecondaryButton(if (busy) "Drafting… up to a minute" else "Ask the AI") {
+                    // 4.30.0: the wait is said once when it starts.
+                    Announce(if (drafting) "Drafting… This can take up to a minute." else null, key = drafting)
+                    SecondaryButton(if (drafting) "Drafting… This can take up to a minute." else "Ask the AI") {
+                        if (busy) return@SecondaryButton
                         scope.launch {
-                            busy = true; error = null
+                            busy = true; drafting = true; error = null
                             try {
                                 val vals = JSONObject(); map.forEach { (k, x) -> vals.put(k, x) }; vals.put("title", title)
                                 val res = api.call("at_ai_draft", body = JSONObject().put("kind", kind).put("field", key).put("values", vals).put("instruction", instruction).put("id", id))
                                 draft = res.optString("text")
-                            } catch (e: ApiException) { error = e.message } finally { busy = false }
+                            } catch (e: ApiException) { error = e.message } finally { busy = false; drafting = false }
                         }
                     }
                     if (draft.isNotEmpty()) {
@@ -203,7 +208,7 @@ fun AtEditScreen(api: Api, nav: NavHostController, kind: String, id: Int, parent
                 before?.takeIf { it.first == key }?.let { (_, old) -> SecondaryButton("Restore my previous ${f.optString("label").lowercase()}") { set(old); before = null } }
             }
             ErrorText(error)
-            PrimaryButton("Save", busy = busy, enabled = title.isNotBlank()) {
+            PrimaryButton("Save", busy = busy, missing = stillNeeded(missingNames("Title" to title.isBlank()))) {
                 if (busy) return@PrimaryButton
                 scope.launchSave({ busy = it }, { error = it }) {
                     fieldErrors = emptyMap()

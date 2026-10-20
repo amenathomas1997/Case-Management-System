@@ -106,9 +106,9 @@ page_header('Vendor agreements', $user, 'admin', [['admin.php', 'Administration'
     <?php $new = old_in('vendor_id') === '' || old_in('vendor_id') === '0'; $o = fn(string $k): string => $new ? old_in($k) : ''; ?>
     <p class="hint">Fields marked * are required.</p>
     <div class="field"><label for="nv_vendor">Vendor <?= required_mark() ?></label>
-      <input type="text" id="nv_vendor" name="vendor" maxlength="120" value="<?= h($o('vendor')) ?>" <?= field_aria('vendor') ?>><?= field_error('vendor') ?></div>
+      <input type="text" id="nv_vendor" name="vendor" maxlength="120" required aria-required="true" value="<?= h($o('vendor')) ?>" <?= field_aria('vendor') ?>><?= field_error('vendor') ?></div>
     <div class="field"><label for="nv_service">What they do for you <?= required_mark() ?></label>
-      <input type="text" id="nv_service" name="service" maxlength="255" value="<?= h($o('service')) ?>" <?= field_aria('service') ?>><?= field_error('service') ?></div>
+      <input type="text" id="nv_service" name="service" maxlength="255" required aria-required="true" value="<?= h($o('service')) ?>" <?= field_aria('service') ?>><?= field_error('service') ?></div>
     <div class="field"><label for="nv_info">Client information they handle</label>
       <input type="text" id="nv_info" name="client_info" maxlength="255" value="<?= h($o('client_info')) ?>" <?= field_aria('client_info') ?>><?= field_error('client_info') ?></div>
     <div class="field"><label for="nv_status">Agreement status</label>

@@ -446,14 +446,22 @@ struct ReferralDetailView: View {
                 // Not becoming a client: closed with a reason; the referrer is emailed the outcome.
                 if (detail.status == "New" || detail.status == "Reviewed") && !closeReasons.isEmpty {
                     Section("Close without creating a client") {
-                        Picker("Reason", selection: $closeReason) {
+                        Picker("Reason (required)", selection: $closeReason) {
                             Text("Choose a reason").tag("")
                             ForEach(closeReasons, id: \.self) { Text($0).tag($0) }
                         }
                         CaptionedField(label: "Note for the record (required for Other; never emailed)", text: $closeNote)
                         Button("Close referral") { Task { await closeReferral() } }
                             .disabled(busy || closeReason.isEmpty)
-                            .accessibilityHint("The referrer is emailed the outcome with the reference number and a general reason, and no client details.")
+                            // A dimmed button says why (4.30.0).
+                            .accessibilityHint(closeReason.isEmpty && !busy
+                                ? "Choose a reason above first."
+                                : "The referrer is emailed the outcome with the reference number and a general reason, and no client details.")
+                        if closeReason.isEmpty {
+                            Text("Close referral is turned on once a reason is chosen.")
+                                .font(.caption).foregroundStyle(Color.secondaryText)
+                                .accessibilityHidden(true)      // the button's hint says it
+                        }
                     }
                 }
                 if detail.status == "Closed" {
@@ -464,6 +472,7 @@ struct ReferralDetailView: View {
             }
         }
         .navigationTitle(detail?.clientName ?? "Referral")
+        .modifier(ReadablePickers(inNavigationStack: true))   // choices not cut short at large text sizes
         // Picking a name only proposes it: a stray double-tap while browsing the list must not
         // reassign the referral (for a caseload-only account, out of reach for good).
         .confirmationDialog(assignQuestion,

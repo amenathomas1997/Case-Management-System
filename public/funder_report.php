@@ -48,7 +48,9 @@ if ($m && isset($_GET['export'])) {
 }
 
 /* ---- Accessible HTML ---- */
-if ($m && isset($_GET['html'])) {
+// Built for the letterhead PDF too (4.30.0): the PDF links to a kept copy of it that the funder
+// opens without a staff sign-in.
+if ($m && (isset($_GET['html']) || isset($_GET['pdf']))) {
     // Every section has a heading (as on the page), and an empty section says so.
     $doc = new AccessibleDocument('Funder Outcome Report — ' . $agency);
     $doc->paragraph(brand('org') . ' — ' . brand('tagline'));
@@ -67,28 +69,35 @@ if ($m && isset($_GET['html'])) {
     if ($m['closures']) $doc->properties(array_column(array_map(fn($c) => [$c['new_status'], (string)$c['n']], $m['closures']), 1, 0));
     else $doc->paragraph('No cases closed in this period.');
     $doc->paragraph('Prepared ' . date('F j, Y') . ' by ' . $user['name'] . ' — ' . cfg('name'));
-    $doc->download('funder_report_' . $from . '_' . $to . '.html');
+    if (isset($_GET['html'])) $doc->download('funder_report_' . $from . '_' . $to . '.html');
 }
 
 /* ---- Letterhead PDF ---- */
 if ($m && isset($_GET['pdf'])) {
     require __DIR__ . '/inc/app_pdf.php';
     // Strict false check: the string "0" is falsy, and a count of 0 must still print.
-    $tx = function (?string $s): string { $r = iconv('UTF-8', 'ISO-8859-1//TRANSLIT', $s ?? ''); return $r === false ? '' : $r; };
+    $tx = fn(?string $s): string => doc_pdf_text($s);
     $pdf = new AppPdf('P', 'mm', 'Letter');
-    $pdf->SetTitle($tx('Funder Outcome Report — ' . $agency));
+    $pdf->describe('Funder Outcome Report — ' . $agency, 'Funder outcome report from ' . brand('org') . ' for ' . $agency . ', ' . fmt_date($from) . ' to ' . fmt_date($to));
     $pdf->SetAutoPageBreak(true, 18);
     $pdf->AddPage();
-    // The PDF is untagged: its first line links to the accessible HTML version.
-    $pdf->SetFont('Helvetica', '', 9);
-    $pdf->Cell(0, 6, 'Accessible HTML version (sign-in required)', 0, 1, 'L', false, cfg('base_url') . '/funder_report.php?agency=' . urlencode($agency) . '&from=' . $from . '&to=' . $to . '&html=1');
+    // The PDF is untagged: its first line links to the accessible HTML copy, which the funder
+    // can open without a staff sign-in (4.30.0).
+    $pdf->accessibleCopyLine(doc_link_create($doc->html(false), 'report', null, 'funder report ' . $agency . ' ' . $from . ' to ' . $to),
+        cfg('base_url') . '/funder_report.php?agency=' . urlencode($agency) . '&from=' . $from . '&to=' . $to . '&html=1');
+    // Letterhead, one column at a time (4.30.0), so it is read in order.
+    $xh = $pdf->GetX(); $y0 = $pdf->GetY();
     $pdf->SetFont('Helvetica', 'B', 18); $pdf->SetTextColor(...brand_rgb());
-    $pdf->Cell(120, 9, $tx(brand('org')), 0, 0);
-    $pdf->SetFont('Helvetica', 'B', 14); $pdf->SetTextColor(60, 60, 60);
-    $pdf->Cell(0, 9, 'FUNDER OUTCOME REPORT', 0, 1, 'R');
+    $pdf->Cell(120, 9, $tx(brand('org')), 0, 2);
+    $pdf->SetFont('Helvetica', '', 10); $pdf->SetTextColor(60, 60, 60);
+    $pdf->Cell(120, 5, $tx($agency), 0, 2);
+    $yLeft = $pdf->GetY();
+    $pdf->SetXY($xh + 120, $y0);
+    $pdf->SetFont('Helvetica', 'B', 14);
+    $pdf->Cell(0, 9, 'FUNDER OUTCOME REPORT', 0, 2, 'R');
     $pdf->SetFont('Helvetica', '', 10);
-    $pdf->Cell(120, 5, $tx($agency), 0, 0);
-    $pdf->Cell(0, 5, $tx('Period: ' . fmt_date($from) . ' to ' . fmt_date($to)), 0, 1, 'R');
+    $pdf->Cell(0, 5, $tx('Period: ' . fmt_date($from) . ' to ' . fmt_date($to)), 0, 2, 'R');
+    $pdf->SetY(max($yLeft, $pdf->GetY()));
     $pdf->SetDrawColor(...brand_rgb()); $pdf->SetLineWidth(0.6); $pdf->Ln(2);
     $pdf->Line(15, $pdf->GetY(), 200, $pdf->GetY()); $pdf->Ln(5); $pdf->SetTextColor(0, 0, 0);
     foreach (funder_stat_rows($agency, $from, $to, $m, $retentionPct, $goalPct) as $r) {
@@ -135,14 +144,18 @@ page_header('Funder report', $user, 'analytics');
 <p class="muted">One renewal-ready report per funding agency: clients served, hours by category, goal achievement, device retention, assessment gains, and closures. Only VR work counts; private-pay and no-charge tracks are left out.</p>
 
 <?php
-// The count is spelled out: agencies known only from invoices have no current tracks.
-$agencySelect = '<label for="agency">Funding agency</label><select id="agency" name="agency">';
-foreach ($agencies as $a) {
-    $n = (int)$a['n'];
-    $agencySelect .= '<option value="' . h($a['funding_agency']) . '"' . ($a['funding_agency'] === $agency ? ' selected' : '') . '>' . h($a['funding_agency']) . ' — '
-        . ($n === 0 ? 'no current tracks, billed work only' : $n . ' training track' . ($n === 1 ? '' : 's')) . '</option>';
-}
-$agencySelect .= '</select>';
+// 4.30.0: plain agency names (no counts read on every arrow press). Agencies known only from
+// invoices, with no current tracks, are grouped under "Billed work only"; the track count is
+// said on the page after Run.
+$agencyOpt = fn(array $a) => '<option value="' . h($a['funding_agency']) . '"' . ($a['funding_agency'] === $agency ? ' selected' : '') . '>' . h($a['funding_agency']) . '</option>';
+$withTracks = array_values(array_filter($agencies, fn($a) => (int)$a['n'] > 0));
+$billedOnly = array_values(array_filter($agencies, fn($a) => (int)$a['n'] === 0));
+$agencySelect = '<label for="agency">Funding agency</label><select id="agency" name="agency">'
+    . implode('', array_map($agencyOpt, $withTracks))
+    . ($billedOnly ? '<optgroup label="Billed work only">' . implode('', array_map($agencyOpt, $billedOnly)) . '</optgroup>' : '')
+    . '</select>';
+$agencyTracks = null;
+foreach ($agencies as $a) if ($a['funding_agency'] === $agency) $agencyTracks = (int)$a['n'];
 // The downloads are buttons of this form, so they always use the agency and period
 // currently chosen, even when those were changed without pressing Run.
 $downloads = $agency === '' ? '' :
@@ -166,6 +179,7 @@ if ($period['notes']) echo '<p>' . h(implode(' ', $period['notes'])) . '</p>';
 <?= report_ai_narrative_card('funder_report.php?agency=' . rawurlencode($agency) . '&from=' . rawurlencode($from) . '&to=' . rawurlencode($to), $aiNarrative, 'this funder report') ?>
 <section class="card" aria-labelledby="fr-sum">
   <h2 id="fr-sum">Summary — <?= h($agency) ?></h2>
+  <?php if ($agencyTracks !== null): ?><p><?= $agencyTracks === 0 ? 'No current training tracks: billed work only.' : $agencyTracks . ' current training track' . ($agencyTracks === 1 ? '' : 's') . '.' ?></p><?php endif; ?>
   <dl class="kv">
     <?php foreach (funder_stat_rows($agency, $from, $to, $m, $retentionPct, $goalPct) as $r): ?>
       <dt><?= h($r[0]) ?></dt><dd><?= h($r[1]) ?></dd>

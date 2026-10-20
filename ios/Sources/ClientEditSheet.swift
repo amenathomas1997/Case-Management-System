@@ -276,7 +276,7 @@ struct ClientEditSheet: View {
                 }
                 // Each name stays visible above its field (a filled-in edit form showed bare values).
                 Section("Client") {
-                    CaptionedField(label: "Full name (required)", text: $name, prompt: "Full name")
+                    CaptionedField(label: "Full name (required)", text: $name, prompt: "Full name", errorName: "Full name")
                     CaptionedField(label: "Phone", text: $phone, keyboard: .phonePad)
                         // A new number needs the client's agreement again (the server clears it too).
                         // 4.29.0: compared with the record as last loaded (Reload's after a conflict), and
@@ -322,6 +322,7 @@ struct ClientEditSheet: View {
                         Text("Choose a state").tag("")
                         ForEach(usStates, id: \.code) { Text($0.name).tag($0.code) }
                     }
+                    .errorField("State")
                 }
                 Section("Case status") {
                     Picker("Status", selection: $status) {
@@ -342,6 +343,7 @@ struct ClientEditSheet: View {
                                 Text("Choose a reason").tag("")
                                 ForEach(Self.closureReasons, id: \.self) { Text($0).tag($0) }
                             }
+                            .errorField("Closing reason")
                             Picker("Employed at closure?", selection: $closureEmployed) {
                                 Text("Not recorded").tag("")
                                 Text("Yes").tag("yes")
@@ -362,8 +364,10 @@ struct ClientEditSheet: View {
                             }
                             CaptionedField(label: "Independence outcome (for a goal without a job, such as reading mail or using a phone on their own)",
                                            text: $closureIndependence, lines: 1...4)
-                            CaptionedField(label: "Devices recommended", text: $closureAtRecommended, keyboard: .numberPad)
-                            CaptionedField(label: "Devices the client got", text: $closureAtAcquired, keyboard: .numberPad)
+                            CaptionedField(label: "Devices recommended", text: $closureAtRecommended, keyboard: .numberPad,
+                                           errorName: "Devices recommended")
+                            CaptionedField(label: "Devices the client got", text: $closureAtAcquired, keyboard: .numberPad,
+                                           errorName: "Devices the client got")
                             Picker("Using their devices at closure?", selection: $closureAtInUse) {
                                 Text("Not recorded").tag("")
                                 Text("Yes").tag("yes")
@@ -521,16 +525,16 @@ struct ClientEditSheet: View {
                 }
             }
             if usState.isEmpty && stateRequired {
-                showFormError("Choose the state the client lives in. It sets their time zone for reminders and texts.", in: &error)
+                showFormError("State: choose the state the client lives in. It sets their time zone for reminders and texts.", in: &error)
                 return
             }
             // A new client's required fields are checked here, by name (an existing record sends only what changed).
             if existing == nil, let missing = customFields.first(where: { $0.required && (customValues[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
-                showFormError("\(missing.label): this is required.", in: &error)
+                showFormError("\(missing.label): this is required.", in: &error, field: missing.label)
                 return
             }
             if status.hasPrefix("Closed") && (base?.status ?? "") != status && closureReason.isEmpty {
-                showFormError("Choose why the case is closing.", in: &error)
+                showFormError("Closing reason: choose why the case is closing.", in: &error)
                 return
             }
             if status.hasPrefix("Closed") && (base?.status ?? "") != status {
@@ -943,6 +947,9 @@ struct CaptionedField: View {
     var hint: String? = nil
     /// Spoken as the field's hint only, for help shown elsewhere on the form.
     var spokenHint: String? = nil
+    /// The name errors about this field start with ("Full name: …"), when the form ties its
+    /// errors to fields (errorField): the error is then shown under the field and said with it.
+    var errorName: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -953,6 +960,7 @@ struct CaptionedField: View {
                     .keyboardType(keyboard)
                     .accessibilityLabel(label)
                     .accessibilityHint(hint ?? spokenHint ?? "")
+                    .modifier(OptionalErrorField(name: errorName))
             } else {
                 TextField(label, text: $text, prompt: Text(prompt ?? label))
                     .keyboardType(keyboard)
@@ -960,21 +968,146 @@ struct CaptionedField: View {
                     // 4.26.0 audit found these fields with no label of their own).
                     .accessibilityLabel(label)
                     .accessibilityHint(hint ?? spokenHint ?? "")
+                    .modifier(OptionalErrorField(name: errorName))
             }
             if let hint {
                 Text(hint).font(.caption).foregroundStyle(Color.secondaryText)
                     .accessibilityHidden(true)
             }
         }
+        // The row's id, so the form can scroll to the field (the marker inside is not the row).
+        .modifier(RowID(id: errorName.map { FormFieldID(name: $0.lowercased()) }))
+    }
+}
+
+/// errorField for a name that may be nil, with the row id left to the caller.
+struct OptionalErrorField: ViewModifier {
+    let name: String?
+    func body(content: Content) -> some View {
+        if let name { content.modifier(ErrorFieldMarker(name: name, setsID: false)) } else { content }
     }
 }
 
 private enum FormErrorRow: Hashable { case banner }
 
+/// The row id of a field marked with `errorField`, so a form can scroll to it.
+struct FormFieldID: Hashable { let name: String }
+
+/// The field an error message is about: messages name it first, as "State: choose the state…".
+/// Nil for a message that does not start with a short field name.
+func errorFieldName(_ message: String) -> String? {
+    guard let colon = message.range(of: ": ") else { return nil }
+    let name = message[..<colon.lowerBound]
+    guard !name.isEmpty, name.count <= 40, !name.contains("."), !name.contains("\n") else { return nil }
+    return String(name)
+}
+
+/// The error a form shows, and the field it is about, for the fields marked with `errorField`.
+struct FormErrorTarget: Equatable {
+    var message: String?
+    var field: String?
+    var token = 0
+    /// Set once the banner would have been focused: the field then takes VoiceOver instead.
+    var focus = false
+}
+
+/// Which error (FormErrorTarget.token) a drawn field has said is its own.
+final class FormErrorClaim { var token = 0 }
+
+private struct FormErrorTargetKey: EnvironmentKey { static let defaultValue = FormErrorTarget() }
+private struct FormErrorClaimKey: EnvironmentKey { static let defaultValue: FormErrorClaim? = nil }
+
+extension EnvironmentValues {
+    var formErrorTarget: FormErrorTarget {
+        get { self[FormErrorTargetKey.self] }
+        set { self[FormErrorTargetKey.self] = newValue }
+    }
+    var formErrorClaim: FormErrorClaim? {
+        get { self[FormErrorClaimKey.self] }
+        set { self[FormErrorClaimKey.self] = newValue }
+    }
+}
+
+/// Ties a form's error to the field it is about (4.30.0): when the form's error names this field
+/// ("Full name: enter…"), the field shows the error under it in words ("Error: …"), the error
+/// is part of the field's spoken label, and VoiceOver is moved onto the field instead of the
+/// banner, so the message is read once, with the field to correct.
+struct ErrorFieldMarker: ViewModifier {
+    let name: String
+    /// False where the field is inside a row that carries the id itself (CaptionedField).
+    var setsID = true
+    @Environment(\.formErrorTarget) private var target
+    @Environment(\.formErrorClaim) private var claim
+    @AccessibilityFocusState private var focused: Bool
+
+    private var message: String? {
+        guard let field = target.field, field.caseInsensitiveCompare(name) == .orderedSame,
+              let message = target.message else { return nil }
+        return message
+    }
+
+    /// The message without the field's name, which the field's label already says.
+    private func detail(_ message: String) -> String {
+        guard let colon = message.range(of: ": ") else { return message }
+        let rest = message[colon.upperBound...]
+        return rest.prefix(1).uppercased() + rest.dropFirst()
+    }
+
+    func body(content: Content) -> some View {
+        Group {
+            if let message {
+                VStack(alignment: .leading, spacing: 4) {
+                    labelled(content, error: "Error: " + detail(message))
+                        .accessibilityFocused($focused)
+                    Text("Error: " + detail(message))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.alertRed)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityHidden(true)      // said with the field
+                }
+                .onAppear { claim?.token = target.token }
+                .onChange(of: target.token) { token in claim?.token = token }
+                .onChange(of: target.focus) { now in if now { focused = true } }
+            } else {
+                content
+            }
+        }
+        .modifier(RowID(id: setsID ? FormFieldID(name: name.lowercased()) : nil))
+    }
+
+    @ViewBuilder private func labelled(_ content: Content, error: String) -> some View {
+        if #available(iOS 18.0, *) {
+            content.accessibilityLabel { label in
+                label
+                Text(error)
+            }
+        } else {
+            content.accessibilityLabel("\(name), \(error)")
+        }
+    }
+}
+
+/// The row id `errorField` scrolls to, for a field inside the row (OptionalErrorField); none for nil.
+struct RowID: ViewModifier {
+    let id: FormFieldID?
+    func body(content: Content) -> some View {
+        if let id { content.id(id) } else { content }
+    }
+}
+
+extension View {
+    /// Marks a form field as the one errors starting "<name>: " are about (see ErrorFieldMarker).
+    /// `setsID` false: the row around it carries `.id(FormFieldID(name:))` (a Section, say).
+    func errorField(_ name: String, setsID: Bool = true) -> some View {
+        modifier(ErrorFieldMarker(name: name, setsID: setsID))
+    }
+}
+
 /// A Form whose first row is its error banner. A Form is a lazy list: a banner inserted above
 /// rows the person has scrolled past is never drawn, so it was never heard (a failed Save just
-/// went quiet). When an error arrives this scrolls the banner into view, where ErrorBanner
-/// announces itself, and moves VoiceOver onto it.
+/// went quiet). When an error arrives this scrolls the banner into view, where it is shown, and
+/// moves VoiceOver onto it. An error about a field marked with `errorField` is shown under that
+/// field too, and VoiceOver goes to the field instead (4.30.0): the message is read once, there.
 struct ErrorFocusForm<Content: View>: View {
     /// Whether the form is shown inside a NavigationStack (a sheet's own, or the screen it is
     /// pushed on): its pickers may then open their choices on a screen of their own at the
@@ -996,18 +1129,58 @@ struct ErrorFocusForm<Content: View>: View {
                 content
             }
             .modifier(ReadablePickers(inNavigationStack: inNavigationStack))
+            .modifier(ErrorFocusing(error: error, proxy: proxy, bannerID: FormErrorRow.banner, bannerFocused: $bannerFocused))
+        }
+    }
+}
+
+/// What ErrorFocusForm does when an error arrives, for any scrolling screen whose error banner
+/// has the id `bannerID` and the focus `bannerFocused`: the banner (or the field marked with
+/// `errorField` that the error is about) is scrolled into view and VoiceOver is put on it, which
+/// reads the message once.
+struct ErrorFocusing<ID: Hashable>: ViewModifier {
+    let error: String?
+    let proxy: ScrollViewProxy
+    let bannerID: ID
+    var bannerFocused: AccessibilityFocusState<Bool>.Binding
+    @State private var target = FormErrorTarget()
+    @State private var claim = FormErrorClaim()
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.formErrorTarget, target)
+            .environment(\.formErrorClaim, claim)
             .onChange(of: error) { message in
-                guard message != nil else { return }
-                // After this update's layout, so the banner row exists to scroll to.
+                guard let message else { target = FormErrorTarget(token: target.token); return }
+                // VoiceOver is put on the banner or the field below, which reads the message.
+                claimFormErrorFocus(message)
+                let field = formErrorField(for: message) ?? errorFieldName(message)
+                target = FormErrorTarget(message: message, field: field, token: target.token + 1)
+                let token = target.token
+                let animation: Animation? = UIAccessibility.isReduceMotionEnabled ? nil : .default
+                // After this update's layout, so the banner row exists to scroll to. Scrolling to
+                // the field draws it, and a drawn field that the error is about claims it.
                 DispatchQueue.main.async {
-                    withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(FormErrorRow.banner, anchor: .top) }
+                    withAnimation(animation) {
+                        if let field { proxy.scrollTo(FormFieldID(name: field.lowercased()), anchor: .center) }
+                        else { proxy.scrollTo(bannerID, anchor: .top) }
+                    }
                 }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)
-                    bannerFocused = true
+                    guard target.token == token else { return }
+                    if field != nil, claim.token == token {
+                        target.focus = true
+                        return
+                    }
+                    if field != nil {
+                        // No field here is marked with that name: the banner, as before.
+                        withAnimation(animation) { proxy.scrollTo(bannerID, anchor: .top) }
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                    }
+                    bannerFocused.wrappedValue = true
                 }
             }
-        }
     }
 }
 
@@ -1053,6 +1226,7 @@ struct CustomFieldEditor: View {
                 Text("Choose a date").tag(true)
             }
             .accessibilityHint(hint ?? "")
+            .errorField(field.label)    // a required one left empty: the error is shown and said here
             if !value.isEmpty {
                 DatePicker(field.label, selection: Binding(
                     get: { APIDate.parseDay(value) ?? Date() },
@@ -1065,6 +1239,7 @@ struct CustomFieldEditor: View {
                 ForEach(field.options.contains(value) || value.isEmpty ? field.options : field.options + [value], id: \.self) { Text($0).tag($0) }
             }
             .accessibilityHint(hint ?? "")
+            .errorField(field.label)
         default:
             captioned { TextField(label, text: $value, prompt: Text(field.label)) }
         }
@@ -1077,9 +1252,11 @@ struct CustomFieldEditor: View {
             Text(label).font(.caption.weight(.semibold)).foregroundStyle(Color.secondaryText)
                 .accessibilityHidden(true)
             field().accessibilityHint(hint ?? "")
+                .errorField(self.field.label, setsID: false)
             if let hint {
                 Text(hint).font(.caption).foregroundStyle(Color.secondaryText).accessibilityHidden(true)
             }
         }
+        .id(FormFieldID(name: self.field.label.lowercased()))
     }
 }

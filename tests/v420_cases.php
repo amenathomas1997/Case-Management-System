@@ -126,9 +126,12 @@ $pt=bin2hex(random_bytes(24));
 $db->prepare("INSERT INTO portal_tokens(client_id,token,expires_at) VALUES(?,?,DATE_ADD(NOW(),INTERVAL 30 DAY))")->execute([$cc,$pt]);
 putenv('CMS_TEST_ANON=1'); putenv('CMS_TEST_SESSION');
 [$code,$out,$err]=$renderPage('portal',['t'=>$pt]);
-check(str_contains($out,'Book a session') && str_contains($out,'<label for="slot">Time with your instructor</label>') && str_contains($out,'minutes, online'),'The portal offers the open times'.($err?": $err":''));
+check(str_contains($out,'Book a session') && str_contains($out,'<label for="slot">Time with your instructor <span aria-hidden="true">*</span>') && str_contains($out,'minutes, online'),'The portal offers the open times'.($err?": $err":''));
+check(preg_match('~<optgroup label="[A-Z][a-z]+day, [A-Z][a-z]+ \d+">\s*<option value="\d+">(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [A-Z][a-z]{2} \d+, \d+:\d\d [AP]M[^<]*, 60 minutes, online</option>~',$out)===1,'Booking times are grouped by day, and each option names its short day too (4.30.0)');
 [$code,$out,$err]=$renderPage('portal',['t'=>$pt,'lang'=>'es']);
 check(str_contains($out,'Reservar una sesión') && str_contains($out,'en línea'),'In Spanish too'.($err?": $err":''));
+// 4.30.0 review: each option starts with a short day, as arrowing a closed list does not read the day's group label.
+check(preg_match('~<optgroup label="(lunes|martes|miércoles|jueves|viernes|sábado|domingo), \d+ de [a-z]+">\s*<option value="\d+">(lun|mar|mié|jue|vie|sáb|dom) \d+ (ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic), \d+:\d\d [ap]\. m\.~u',$out)===1,'Spanish booking times are grouped by day, each naming a short day');
 self_booking_tracks($cc,true);
 $nextSlot=self_booking_slots($client)[0]['start'];
 [$code,,$err]=$renderPage('portal',['t'=>$pt],['self_book'=>'1','slot'=>(string)$nextSlot]);

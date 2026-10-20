@@ -89,16 +89,16 @@ fun BriefingScreen(api: Api, clientId: Int) {
         if (!api.aiHas("briefing")) { Text("The AI case briefing is not switched on for your account."); return@Page }
         if (clientId == 0) {
             if (clients.loading) Text("Loading clients…")
-            ErrorText(clients.error)
+            ErrorText(clients.error, takeFocus = false)
             val list = clients.data ?: emptyList()
             // Closed clients too, as on the website.
-            if (list.isNotEmpty()) Choice("Client", chosen, listOf("" to "Choose a client") + list.map { it.id.toString() to it.name + if (it.closed) " (closed)" else "" }) { chosen = it; items = null }
+            if (list.isNotEmpty()) Choice("Client", chosen, listOf("" to "Choose a client") + list.map { it.id.toString() to it.name + if (it.closed) " (closed)" else "" }, required = true) { chosen = it; items = null }
         }
         Tick("Suggest homework adaptations", adapt) { adapt = it; items = null }
         Text("AI output is a draft. Verify each claim using the linked records. Nothing is saved or assigned by generating a briefing.")
         ErrorText(error)
         NoticeText(notice)
-        PrimaryButton(if (busy) "Drafting… this can take up to a minute" else "Generate briefing", busy = busy, enabled = chosen.isNotEmpty()) {
+        PrimaryButton("Generate briefing", busy = busy, busyText = "Drafting… This can take up to a minute.", announceBusy = true, missing = stillNeeded(missingNames("Client" to chosen.isEmpty()))) {
             if (busy) return@PrimaryButton
             error = null; items = null; notice = null
             busy = true

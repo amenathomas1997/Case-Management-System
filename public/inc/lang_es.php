@@ -637,4 +637,10 @@ return [
     'That file could not be checked for viruses just now, so it was not accepted. Please try again later.' => 'No se pudo revisar ese archivo en busca de virus en este momento, así que no se aceptó. Inténtelo más tarde.',
     // 4.28.0: an unanswered survey link expires.
     'This survey link is invalid, has expired, or has been removed.' => 'Este enlace de encuesta no es válido, venció o fue eliminado.',
+    // 4.30.0 (accessibility release)
+    '(required)' => '(obligatorio)',
+    'Accessibility' => 'Accesibilidad',
+    'Enter your email address.' => 'Escriba su correo electrónico.',
+    'Enter your email address written like name@example.com.' => 'Escriba su correo electrónico así: nombre@ejemplo.com.',
+    '(required; PDF, Office, text or image, up to 15 MB)' => '(obligatorio; PDF, Office, texto o imagen, hasta 15 MB)',
 ];

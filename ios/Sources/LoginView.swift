@@ -190,7 +190,8 @@ struct LoginView: View {
                                 .font(.title2.monospaced())
                                 .focused($codeFieldFocused)
                                 .accessibilityFocused($codeFieldVoiceOverFocused)
-                                .accessibilityHint(codeInstruction)
+                                // No hint (4.30.0): the instruction is said once, after focus
+                                // lands here (focusCodeField), and is the text above the field.
                         }
                         Button(action: { Task { await verify() } }) {
                             BusyLabel(title: "Verify and sign in", busy: busy)

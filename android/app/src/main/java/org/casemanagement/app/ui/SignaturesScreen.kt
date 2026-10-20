@@ -13,6 +13,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -63,6 +64,9 @@ fun SignaturesScreen(api: Api, clientId: Int) {
     }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    // The form's own problems, shown next to its buttons (4.30.0).
+    var formError by remember { mutableStateOf<String?>(null) }
+    var formPresses by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var chosen by remember { mutableStateOf<SignatureItem?>(null) }
     var chosenPrepared by remember { mutableStateOf<JSONObject?>(null) }
@@ -134,14 +138,20 @@ fun SignaturesScreen(api: Api, clientId: Int) {
             val email = signerEmail ?: emailFor(role)
             fun request(): JSONObject? {
                 val b = JSONObject().put("client_id", clientId).put("kind", kind).put("signer_role", role).put("signer_name", name.trim()).put("signer_email", email.trim())
+                // 4.30.0: every problem at once, next to the buttons that were pressed.
+                val problems = listOfNotNull(
+                    if (kind == "loan" && loan.isEmpty()) "Choose the device on loan." else null,
+                    if (kind == "document" && title.isBlank()) "Give the document a title." else null,
+                    if (kind == "document" && body.isBlank()) "Write what they agree to." else null,
+                    if (name.isBlank()) "Enter the full name of the person who signs." else null,
+                )
+                formError = errorSummary(problems)
+                formPresses++
+                if (problems.isNotEmpty()) return null
                 when (kind) {
-                    "loan" -> { if (loan.isEmpty()) { error = "Choose the device on loan."; return null }; b.put("loan_id", loan.toInt()) }
-                    "document" -> {
-                        if (title.isBlank() || body.isBlank()) { error = "Give the document a title and write what they agree to."; return null }
-                        b.put("title", title.trim()).put("body", body.trim())
-                    }
+                    "loan" -> b.put("loan_id", loan.toInt())
+                    "document" -> b.put("title", title.trim()).put("body", body.trim())
                 }
-                if (name.isBlank()) { error = "Enter the full name of the person who signs."; return null }
                 return b
             }
             fun clearForm() { title = ""; body = ""; loan = "" }
@@ -169,22 +179,24 @@ fun SignaturesScreen(api: Api, clientId: Int) {
             }
 
             Heading("Prepare a document to sign")
-            Choice("What to sign", kind, r.kinds) { kind = it; error = null }
+            Choice("What to sign", kind, r.kinds) { kind = it; error = null; formError = null }
             if (kind == "loan") {
                 if (r.openLoans.isEmpty()) Text("This client has no equipment on loan.")
-                else Choice("Device on loan", loan, listOf("" to "Choose a device") + r.openLoans.map { it.id.toString() to (it.name + (it.serial?.let { s -> ", serial $s" } ?: "")) }) { loan = it }
+                else Choice("Device on loan", loan, listOf("" to "Choose a device") + r.openLoans.map { it.id.toString() to (it.name + (it.serial?.let { s -> ", serial $s" } ?: "")) }, required = true) { loan = it }
             }
             if (kind == "document") {
-                Field("Title", title, { title = it })
-                Field("What they agree to", body, { body = it }, hint = "a blank line starts a new paragraph", singleLine = false, minLines = 5)
+                Field("Title", title, { title = it }, required = true)
+                Field("What they agree to", body, { body = it }, hint = "a blank line starts a new paragraph", singleLine = false, minLines = 5, required = true)
             }
             Choice("Who signs", role, listOf("Client" to "The client", "Guardian" to "Their guardian")) { role = it; signerName = null; signerEmail = null }
-            Field("Their full name", name, { signerName = it })
+            Field("Their full name", name, { signerName = it }, required = true)
             Field("Their email", email, { signerEmail = it }, hint = "needed to send by email", keyboard = KeyboardType.Email)
+            // 4.30.0: what goes wrong with these buttons is said here, next to them, and takes focus.
+            ErrorText(formError, focusKey = formPresses)
             PrimaryButton("Sign here now", busy = busy) {
                 if (busy) return@PrimaryButton
                 val b = request() ?: return@PrimaryButton
-                scope.launchSave({ busy = it }, { error = it }) {
+                scope.launchSave({ busy = it }, { formError = it; formPresses++ }) {
                     notice = null
                     val res = sendKeyed("start_signature", b, startKey) { startKey = it }
                     clearForm()
@@ -194,7 +206,7 @@ fun SignaturesScreen(api: Api, clientId: Int) {
             SecondaryButton("Prepare to sign later, even with no signal") {
                 if (busy) return@SecondaryButton
                 val b = request() ?: return@SecondaryButton
-                scope.launchSave({ busy = it }, { error = it }) {
+                scope.launchSave({ busy = it }, { formError = it; formPresses++ }) {
                     notice = null
                     val doc = parseSignatureDoc(sendKeyed("start_signature", b, startKey) { startKey = it }) ?: throw ApiException("The server's answer could not be read. Nothing was kept on this phone.")
                     try { api.prepareToSign(clientId, c.str("name") ?: "", doc) } finally { state.reload() }
@@ -204,9 +216,9 @@ fun SignaturesScreen(api: Api, clientId: Int) {
             }
             SecondaryButton("Send by email") {
                 if (busy) return@SecondaryButton
-                if (email.isBlank()) { error = "Enter their email address to send it by email, or choose Sign here now."; return@SecondaryButton }
+                if (email.isBlank()) { formError = "Enter their email address to send it by email, or choose Sign here now."; formPresses++; return@SecondaryButton }
                 val b = request() ?: return@SecondaryButton
-                scope.launchSave({ busy = it }, { error = it }) {
+                scope.launchSave({ busy = it }, { formError = it; formPresses++ }) {
                     notice = null
                     sendKeyed("send_signature", b, sendKey) { sendKey = it }
                     clearForm()
@@ -334,6 +346,10 @@ private class SignWords(es: Boolean, org: String, name: String) {
     val typeHint = if (es) "No importa si las mayúsculas, los acentos o la puntuación son diferentes." else "Capital letters, accents and punctuation do not need to match."
     val draw = if (es) "Opcional: también puede firmar con el dedo abajo. Su nombre escrito es suficiente." else "Optional: you may also sign with a finger below. Your typed name is enough."
     val sign = if (es) "Firmar" else "Sign"
+    /** Said when Sign is pressed with no name typed (4.30.0). */
+    val needName = if (es) "Escriba su nombre completo primero." else "Type your full name first."
+    /** The label's "(required)" (4.30.0, owner rule 4). */
+    val required = if (es) "obligatorio" else "required"
     val thanks = if (es) "Gracias. Quedó firmado. Devuelva el teléfono, por favor." else "Thank you. It is signed. Please hand the phone back."
     val thanksOffline = if (es) "Gracias. Quedó firmado. No hay señal ahora, así que se enviará cuando el teléfono tenga conexión. Devuelva el teléfono, por favor."
         else "Thank you. It is signed. There is no signal now, so it will be sent when the phone has a connection. Please hand the phone back."
@@ -460,12 +476,12 @@ fun InPersonSigningHost(api: Api) {
                     }
                 }
                 // 4.28.0: the label, buttons and messages carry the document's language too (WCAG 3.1.2).
-                Field(w.typeLabel, typed, { typed = it }, hint = w.typeHint, lang = lang)
+                Field(w.typeLabel + " (" + w.required + ")", typed, { typed = it }, hint = w.typeHint, lang = lang)
                 SignaturePad(pad, caption = w.draw, lang = lang)
                 val shownError = error ?: api.inPersonError
                 // The app's own words in the document's language; anything else (a connection problem) is English.
                 ErrorText(shownError, lang.takeIf { shownError == w.mismatch || shownError == w.tooLate })
-                PrimaryButton(w.sign, busy = busy, enabled = typed.isNotBlank(), lang = lang, busyText = w.wait) {
+                PrimaryButton(w.sign, busy = busy, lang = lang, busyText = w.wait, missing = if (typed.isBlank()) w.needName else null) {
                     if (busy) return@PrimaryButton
                     // Checked as Sign is pressed: the server takes it only within two days of its start.
                     val started = d.optLong("_started")
@@ -507,30 +523,41 @@ fun ReleaseRequestScreen(api: Api, nav: NavHostController, clientId: Int) {
     var requestKey by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // 4.30.0: each problem on its own field, and all of them in the summary.
+    var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val scope = rememberCoroutineScope()
     Show(state, "the release form") { (ch, c) ->
         val name = signerName ?: ((if (role == "Guardian") c.str("guardian_name") else c.str("name")) ?: "")
         val email = signerEmail ?: ((if (role == "Guardian") c.str("guardian_email") else c.str("email")) ?: "")
         Page {
-            Heading("Request a release of information", large = true)
+            // 4.30.0: no heading here, as the title bar already says "Release of information".
             val days = ch.validityDays
             if (days > 0) Text("It is emailed to the person who signs, and lasts $days days once signed.")
             Choice("Who signs", role, listOf("Client" to "The client", "Guardian" to "Their guardian")) { role = it; signerName = null; signerEmail = null }
-            Field("Their full name", name, { signerName = it })
-            Field("Their email", email, { signerEmail = it }, keyboard = KeyboardType.Email)
+            Field("Their full name", name, { signerName = it }, required = true, error = fieldErrors["name"])
+            Field("Their email", email, { signerEmail = it }, keyboard = KeyboardType.Email, required = true, error = fieldErrors["email"])
             Heading("Who receives the information")
-            Choice("Kind of recipient", recipientType, listOf("" to "Choose one") + ch.recipientTypes.map { it to it }) { recipientType = it }
-            Field("Recipient name", recipientName, { recipientName = it }, hint = "person or organisation")
+            Choice("Kind of recipient", recipientType, listOf("" to "Choose one") + ch.recipientTypes.map { it to it }, error = fieldErrors["type"], required = true) { recipientType = it }
+            Field("Recipient name", recipientName, { recipientName = it }, hint = "person or organisation", required = true, error = fieldErrors["recipient"])
             Field("Recipient email", recipientEmail, { recipientEmail = it }, hint = "optional", keyboard = KeyboardType.Email)
-            Heading("Information to share")
+            Heading("Information to share (at least one)")
             ch.infoItems.forEach { item ->
                 Tick(item, item in info) { on -> info = if (on) info + item else info - item }
             }
-            Field("Other information", other, { other = it }, hint = "optional")
-            Field("Why it is shared", purpose, { purpose = it })
+            Field("Other information", other, { other = it }, hint = "optional", error = fieldErrors["info"])
+            Field("Why it is shared", purpose, { purpose = it }, required = true, error = fieldErrors["purpose"])
             ErrorText(error)
-            PrimaryButton("Email the release to sign", busy = busy, enabled = name.isNotBlank() && email.isNotBlank() && recipientType.isNotEmpty() && recipientName.isNotBlank() && purpose.isNotBlank()) {
-                if (info.isEmpty() && other.isBlank()) { error = "Tick at least one kind of information, or describe it under Other information."; return@PrimaryButton }
+            PrimaryButton("Email the release to sign", busy = busy) {
+                if (busy) return@PrimaryButton
+                fieldErrors = listOfNotNull(
+                    if (name.isBlank()) "name" to "Enter the full name of the person who signs." else null,
+                    if (email.isBlank()) "email" to "Enter the email address of the person who signs." else null,
+                    if (recipientType.isEmpty()) "type" to "Choose the kind of recipient." else null,
+                    if (recipientName.isBlank()) "recipient" to "Enter the recipient's name." else null,
+                    if (info.isEmpty() && other.isBlank()) "info" to "Tick at least one kind of information, or describe it under Other information." else null,
+                    if (purpose.isBlank()) "purpose" to "Say why the information is shared." else null,
+                ).toMap()
+                if (fieldErrors.isNotEmpty()) { error = errorSummary(fieldErrors.values); return@PrimaryButton }
                 scope.launchSave({ busy = it }, { error = it }) {
                     val b = JSONObject().put("client_id", clientId).put("signer_role", role).put("signer_name", name.trim()).put("signer_email", email.trim())
                         .put("recipient_type", recipientType).put("recipient_name", recipientName.trim()).put("purpose", purpose.trim()).put("info", JSONArray(info))

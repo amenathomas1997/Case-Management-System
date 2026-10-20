@@ -260,27 +260,31 @@ private fun IncidentDialog(api: Api, r: JSONObject, onDone: (String) -> Unit, on
     var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var dateError by remember { mutableStateOf<String?>(null) }
+    var descriptionError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var presses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text("Report an incident", modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field("Date", date, { date = it }, hint = "year-month-day", error = dateError)
+                Field("Date", date, { date = it }, hint = "year-month-day", error = dateError, required = true)
                 Choice("Type", type, types.map { it to it }) { type = it }
                 Choice("Severity", severity, listOf("Low", "Medium", "High", "Critical").map { it to it }) { severity = it }
-                Field("What happened", description, { description = it }, singleLine = false, minLines = 3)
+                Field("What happened", description, { description = it }, singleLine = false, minLines = 3, required = true, error = descriptionError)
                 Field("Where", location, { location = it }, hint = "optional")
                 Field("What was done", action, { action = it }, hint = "optional", singleLine = false)
-                ErrorText(error)
+                ErrorText(error, focusKey = presses)
             }
         },
         confirmButton = {
-            TextButton(enabled = !busy && description.isNotBlank(), onClick = {
+            TextButton(enabled = !busy, onClick = {
                 if (busy) return@TextButton
+                presses++
                 dateError = if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim())) "Enter the date as year-month-day, such as ${today()}." else null
-                if (dateError != null) { error = dateError; return@TextButton }
+                descriptionError = if (description.isBlank()) "Say what happened." else null
+                errorSummary(listOf(dateError, descriptionError))?.let { error = it; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
                     // 4.28.0: a retry after a lost reply reports it once (see sendOnce).
                     api.callOnce("add_incident", JSONObject().put("incident_date", date.trim()).put("type", type).put("severity", severity)

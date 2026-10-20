@@ -172,22 +172,40 @@ struct DocumentsSection: View {
                 Text("No documents on file.").foregroundStyle(Color.secondaryText)
             }
             ForEach(documents) { document in
-                Button {
-                    downloader.open(document, api: api)
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(document.title).font(.body.weight(.medium)).foregroundStyle(.primary)
-                        Text("\(document.category) · \(formatDateTime(document.createdAt))")
-                            .font(.caption).foregroundStyle(Color.secondaryText)
-                        // Who can see it, in words (4.25.0).
-                        if sharing {
-                            Text(document.sharingText).font(.caption).foregroundStyle(Color.secondaryText)
+                VStack(alignment: .leading, spacing: 6) {
+                    Button {
+                        downloader.open(document, api: api)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(document.title).font(.body.weight(.medium)).foregroundStyle(.primary)
+                            Text("\(document.category) · \(formatDateTime(document.createdAt))")
+                                .font(.caption).foregroundStyle(Color.secondaryText)
+                            // Who can see it, in words (4.25.0).
+                            if sharing {
+                                Text(document.sharingText).font(.caption).foregroundStyle(Color.secondaryText)
+                            }
                         }
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    // Plain, so only this part of the row opens it: the row has a second control.
+                    .buttonStyle(.plain)
+                    // Sharing is on the Actions rotor and the long-press menu; double-tap still opens it.
+                    .contextMenu { shareButtons(document) }
+                    .accessibilityActions { shareButtons(document) }
+                    // A visible way to change who sees it (4.30.0): the long-press menu was the
+                    // only one outside VoiceOver, which has the choices on the Actions rotor.
+                    if sharing {
+                        Menu { shareChoices(document) } label: {
+                            Label("Sharing", systemImage: "person.2")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        .accessibilityLabel("Sharing: \(document.title)")
+                        .accessibilityInputLabels(["Sharing", "Sharing \(document.title)"])
+                        .accessibilityHidden(UIAccessibility.isVoiceOverRunning)
                     }
                 }
-                // Sharing is on the Actions rotor and the long-press menu; double-tap still opens it.
-                .contextMenu { shareButtons(document) }
-                .accessibilityActions { shareButtons(document) }
             }
         }
         .task(id: reloadToken) { await load() }
@@ -518,9 +536,10 @@ struct AssignHomeworkSheet: View {
                     }
                 }
                 .disabled(item != nil)
+                    .errorField("Training track")
                 // Each name stays visible above its field once it holds text (a placeholder alone
                 // disappears); the field carries the same name for VoiceOver, so the caption is hidden.
-                CaptionedField(label: "Assignment title (required)", text: $title, prompt: "Assignment title")
+                CaptionedField(label: "Assignment title (required)", text: $title, prompt: "Assignment title", errorName: "Assignment title")
                 CaptionedField(label: "Instructions", text: $instructions, lines: 3...8)
                 if api.aiHas("draft") {
                     ATAIDraftPanel(kind: "homework", targets: [ATDraftTarget(key: "instructions", label: "Instructions"), ATDraftTarget(key: "title", label: "Title")], context: ["track_id": selectedTrack.map(String.init) ?? "", "title": title, "instructions": instructions]) { key, text in

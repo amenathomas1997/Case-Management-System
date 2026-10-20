@@ -1444,6 +1444,7 @@ CREATE TABLE `surveys` (
   `goals_met` tinyint(4) DEFAULT NULL,
   `comments` text DEFAULT NULL,
   `channel` varchar(20) NOT NULL DEFAULT 'Email',
+  `answer_lang` varchar(5) DEFAULT NULL,
   `recorded_by` int(10) unsigned DEFAULT NULL,
   `reminded_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),

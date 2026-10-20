@@ -158,7 +158,10 @@ private fun AssignHomeworkDialog(api: Api, clientId: Int, onDone: (String) -> Un
     var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var dueError by remember { mutableStateOf<String?>(null) }
+    var trackError by remember { mutableStateOf<String?>(null) }
+    var titleError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var presses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = onCancel,
@@ -167,18 +170,22 @@ private fun AssignHomeworkDialog(api: Api, clientId: Int, onDone: (String) -> Un
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 val list = tracks.data ?: emptyList()
                 if (!tracks.loading && list.isEmpty()) Text("This client has no active training track, so homework cannot be assigned yet.")
-                if (list.isNotEmpty()) Choice("Training track", track, listOf("" to "Choose a track") + list.map { it.id.toString() to it.title }) { track = it }
-                Field("Title", title, { title = it })
+                if (list.isNotEmpty()) Choice("Training track", track, listOf("" to "Choose a track") + list.map { it.id.toString() to it.title }, error = trackError, required = true) { track = it }
+                Field("Title", title, { title = it }, required = true, error = titleError)
                 Field("Instructions", instructions, { instructions = it }, hint = "optional", singleLine = false, minLines = 3)
                 Field("Due date", due, { due = it }, hint = "year-month-day, optional", error = dueError)
-                ErrorText(error)
+                ErrorText(error, focusKey = presses)
             }
         },
         confirmButton = {
-            TextButton(enabled = !busy && track.isNotEmpty() && title.isNotBlank(), onClick = {
+            TextButton(enabled = !busy && (tracks.data ?: emptyList()).isNotEmpty(), onClick = {
                 if (busy) return@TextButton
+                presses++
+                // 4.30.0: every problem at once, each on its field and all in the summary.
+                trackError = if (track.isEmpty()) "Choose a training track." else null
+                titleError = if (title.isBlank()) "Give the homework a title." else null
                 dueError = if (due.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(due.trim())) "Enter the due date as year-month-day, such as ${today()}, or leave it empty." else null
-                if (dueError != null) { error = dueError; return@TextButton }
+                errorSummary(listOf(trackError, titleError, dueError))?.let { error = it; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
                     // 4.28.0: a retry after a lost reply assigns it once (see sendOnce).
                     api.callOnce("assign_homework", JSONObject().put("track_id", track.toInt()).put("title", title.trim()).put("instructions", instructions.trim()).put("due_date", due.trim()),

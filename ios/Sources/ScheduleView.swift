@@ -131,7 +131,8 @@ struct ScheduleView: View {
                 // from a row further down would otherwise leave it off screen, where a List never
                 // draws it (or says it). Scrolled into view once it exists, then VoiceOver is put on it.
                 .onChange(of: error) { message in
-                    guard message != nil else { return }
+                    guard let message else { return }
+                    claimFormErrorFocus(message)   // VoiceOver is put on the banner, which reads it
                     DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(Self.errorRow, anchor: .top) } }
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 400_000_000)
@@ -393,6 +394,7 @@ struct ScheduleView: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                     .padding(.top, 4)
+                    .onBrandLabel()     // dark text on the dark appearance's light-blue fill
                     .disabled(checkingIn.contains(session.id))
                     .accessibilityLabel("Check in to \(name)")
                     .accessibilityInputLabels(["Check in", "Check in to \(name)"])
@@ -408,6 +410,8 @@ struct ScheduleView: View {
                             .background(Color.brandTeal.opacity(0.15)).clipShape(Capsule())
                         if let url = joinURL(session) {
                             Link("Join online", destination: url).font(.callout)
+                                .frame(minHeight: 44, alignment: .leading)   // the row's 44-point standard
+                                .contentShape(Rectangle())
                                 .accessibilityLabel("Join \(name) online")
                                 .accessibilityInputLabels(["Join online", "Join \(name) online"])
                         }
@@ -416,6 +420,8 @@ struct ScheduleView: View {
                     // Directions to the session's location (4.0.0).
                     if let url = mapsURL(location) {
                         Link(destination: url) { Text("\(location), directions").font(.callout) }
+                            .frame(minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
                             .accessibilityLabel("Directions to \(location)")
                     } else {
                         Text(location).font(.callout).foregroundStyle(Color.secondaryText)
@@ -424,6 +430,8 @@ struct ScheduleView: View {
                 if let cid = session.clientId, api.can("clients") {
                     NavigationLink("Open \(session.client)'s record", destination: ClientDetailView(clientId: cid))
                         .font(.callout)
+                        .frame(minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
                 if session.trackId != nil {
                     Text("Completing logs hours automatically")
@@ -480,7 +488,6 @@ struct ScheduleView: View {
             // Cancel locks the app — a stray double-tap locked the person out.
             .accessibilityElement(children: VoiceOverRows.children)
             .accessibilityLabel(sessionSummary(session, started: started))
-            .accessibilityHint("Swipe up or down for actions.")
             .accessibilityFocused($focusedSession, equals: session.id)
             .accessibilityAction { announceRowActions() }
             .accessibilityActions {
@@ -830,6 +837,7 @@ struct NewSessionSheet: View {
                         Text(client.name).tag(client.id as Int?)
                     }
                 }
+                .errorField("Client")
                 if !clientTracks.isEmpty {
                     Picker("Training track", selection: $selectedTrack) {
                         Text("None").tag(nil as Int?)
@@ -845,6 +853,7 @@ struct NewSessionSheet: View {
                         Text(member.name).tag(member.id as Int?)
                     }
                 }
+                .errorField("Instructor")
                 DatePicker("Starts", selection: $date)
                 Stepper(value: $duration, in: 0.25...12, step: 0.25) {
                     Text(String(format: "Duration: %.2f hours", duration))
@@ -858,7 +867,7 @@ struct NewSessionSheet: View {
                 Toggle("Remote session", isOn: $isRemote)
                 // Each name (and the link's format) stays visible above its field once it holds text.
                 if isRemote {
-                    CaptionedField(label: "Meeting link (optional, starts with https://)", text: $meetingUrl, prompt: "https://…", keyboard: .URL)
+                    CaptionedField(label: "Meeting link (optional, starts with https://)", text: $meetingUrl, prompt: "https://…", keyboard: .URL, errorName: "Meeting link")
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } else {
@@ -1102,7 +1111,7 @@ struct CompleteSessionSheet: View {
             showFormError("Miles: enter the miles driven, from 0 to 1000, like 12.5.", in: &error); return nil
         }
         guard miles == 0 || hours > 0 else {
-            showFormError("Miles are logged with hours: enter the hours worked, or clear the miles.", in: &error); return nil
+            showFormError("Hours: miles are logged with hours, so enter the hours worked, or clear the miles.", in: &error); return nil
         }
         return CompletionDetails(hours: hours, miles: miles, note: note.trimmingCharacters(in: .whitespacesAndNewlines))
     }
@@ -1122,8 +1131,8 @@ struct CompleteSessionSheet: View {
     var body: some View {
         NavigationStack {
             ErrorFocusForm(inNavigationStack: true, error: error) {
-                CaptionedField(label: "Hours worked", text: $hoursText, keyboard: .decimalPad)
-                CaptionedField(label: "Miles driven (optional)", text: $milesText, keyboard: .decimalPad)
+                CaptionedField(label: "Hours worked", text: $hoursText, keyboard: .decimalPad, errorName: "Hours")
+                CaptionedField(label: "Miles driven (optional)", text: $milesText, keyboard: .decimalPad, errorName: "Miles")
                 CaptionedField(label: "Session note (optional)", text: $note,
                                prompt: "Progress, concerns, plan for next time", lines: 3...12)
                 Button("Get the client's signature") {
@@ -1202,6 +1211,8 @@ struct MoveSessionSheet: View {
                 Section("Session with \(session.client)") {
                     DatePicker("New start", selection: $start)
                     Stepper("Length: \(hours.formatted()) hours", value: $hours, in: 0.25...12, step: 0.25)
+                        // One adjustable stop, as the New session form's Duration (4.30.0).
+                        .voiceOverAdjustable("Length", value: hoursSpoken(hours), binding: $hours, in: 0.25...12, step: 0.25)
                 }
                 if !warnings.isEmpty {
                     Section("Check before moving") {

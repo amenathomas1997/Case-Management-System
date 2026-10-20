@@ -119,13 +119,14 @@ $form = function (array $m, string $sfx) {
     ob_start(); ?>
   <form method="post" action="staff_training.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['title' . $sfx => 'Title', 'body' . $sfx => 'Reading', 'questions' . $sfx => 'Quiz', 'pass_pct' . $sfx => 'Pass mark'], ['title' . $sfx => 'tt' . $sfx, 'body' . $sfx => 'tb' . $sfx, 'questions' . $sfx => 'tq' . $sfx, 'pass_pct' . $sfx => 'tp' . $sfx]) ?>
+    <p class="muted">Fields marked with an asterisk (<span aria-hidden="true">*</span><span class="visually-hidden">asterisk</span>) are required.</p>
     <input type="hidden" name="module_id" value="<?= (int)($m['id'] ?? 0) ?>">
-    <div class="field"><label for="tt<?= $sfx ?>">Title</label>
-      <input type="text" id="tt<?= $sfx ?>" name="title" maxlength="190" value="<?= h($v('title', (string)($m['title'] ?? ''))) ?>" <?= field_aria('title' . $sfx) ?>><?= field_error('title' . $sfx) ?></div>
-    <div class="field"><label for="tb<?= $sfx ?>">What staff read <span class="hint">a line starting with # is a heading, a line starting with - is a list item</span></label>
-      <textarea id="tb<?= $sfx ?>" name="body" rows="14" <?= field_aria('body' . $sfx) ?>><?= h($v('body', (string)($m['body'] ?? ''))) ?></textarea><?= field_error('body' . $sfx) ?></div>
-    <div class="field"><label for="tq<?= $sfx ?>">The quiz <span class="hint">start each question with ?, the right answer with *, and each wrong answer with -</span></label>
-      <textarea id="tq<?= $sfx ?>" name="questions" rows="12" <?= field_aria('questions' . $sfx) ?>><?= h($v('questions', (string)($m['questions'] ?? ''))) ?></textarea><?= field_error('questions' . $sfx) ?></div>
+    <div class="field"><label for="tt<?= $sfx ?>">Title <?= required_mark() ?></label>
+      <input type="text" id="tt<?= $sfx ?>" name="title" maxlength="190" required aria-required="true" value="<?= h($v('title', (string)($m['title'] ?? ''))) ?>" <?= field_aria('title' . $sfx) ?>><?= field_error('title' . $sfx) ?></div>
+    <div class="field"><label for="tb<?= $sfx ?>">What staff read <?= required_mark() ?> <span class="hint">a line starting with # is a heading, a line starting with - is a list item</span></label>
+      <textarea id="tb<?= $sfx ?>" name="body" rows="14" required aria-required="true" <?= field_aria('body' . $sfx) ?>><?= h($v('body', (string)($m['body'] ?? ''))) ?></textarea><?= field_error('body' . $sfx) ?></div>
+    <div class="field"><label for="tq<?= $sfx ?>">The quiz <?= required_mark() ?> <span class="hint">start each question with ?, the right answer with *, and each wrong answer with -</span></label>
+      <textarea id="tq<?= $sfx ?>" name="questions" rows="12" required aria-required="true" <?= field_aria('questions' . $sfx) ?>><?= h($v('questions', (string)($m['questions'] ?? ''))) ?></textarea><?= field_error('questions' . $sfx) ?></div>
     <div class="field"><label for="tp<?= $sfx ?>">Pass mark, percent</label>
       <input type="number" id="tp<?= $sfx ?>" name="pass_pct" min="50" max="100" value="<?= h($v('pass_pct', (string)($m['pass_pct'] ?? 80))) ?>" <?= field_aria('pass_pct' . $sfx) ?>><?= field_error('pass_pct' . $sfx) ?></div>
     <?php if (!empty($m['id'])): ?><div class="field"><label><input type="checkbox" name="small_correction" value="1" <?= $tick('small_correction', false) ?>> This change is only a small correction to the reading, such as a typo, so nobody takes it again <span class="hint">the same quiz and pass mark, and at most 40 characters different</span></label></div><?php endif; ?>

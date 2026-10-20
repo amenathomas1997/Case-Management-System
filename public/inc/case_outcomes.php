@@ -19,6 +19,29 @@ const REFERRAL_CLOSE_REASONS = [
     'Other' => 'we are not able to provide this service at this time',
 ];
 
+/** The Spanish words for the built-in close reasons (4.30.0), for a referral sent on the Spanish form.
+ *  Words an administrator changed are looked up in the Spanish dictionary, and are sent as written
+ *  when there is no translation. */
+const REFERRAL_CLOSE_REASONS_ES = [
+    'the person decided not to go ahead with services' => 'la persona decidió no seguir adelante con los servicios',
+    'the request is outside the services we can provide' => 'lo que se pide está fuera de los servicios que podemos ofrecer',
+    'the referral was withdrawn' => 'el referido fue retirado',
+    'we were not able to reach the person after several attempts' => 'no pudimos comunicarnos con la persona después de varios intentos',
+    'it repeats a referral we have already received' => 'repite un referido que ya recibimos',
+    'the person was referred to another provider' => 'la persona fue referida a otro proveedor',
+    'we are not able to provide this service at this time' => 'no podemos ofrecer este servicio en este momento',
+];
+
+/** The words the referrer's email gives for $reason, in Spanish when $es. */
+function referral_close_words(string $reason, bool $es): string {
+    $words = (string)(cms_list('referral_close_reasons')[$reason] ?? '');
+    if (!$es) return $words;
+    if (isset(REFERRAL_CLOSE_REASONS_ES[$words])) return REFERRAL_CLOSE_REASONS_ES[$words];
+    static $dict = null;
+    if ($dict === null) { $dict = @include __DIR__ . '/lang_es.php'; if (!is_array($dict)) $dict = []; }
+    return isset($dict[$words]) && is_string($dict[$words]) ? $dict[$words] : $words;
+}
+
 /** Case closure reasons (owner's list, 2026-10-16). 'Not recorded' is only written for a
  *  closure from an older app build or voice, which do not ask. */
 const CLOSURE_REASONS = ['Employed', 'Goals met', 'Declined further services', 'Unable to contact', 'Moved away',
@@ -62,7 +85,11 @@ function referral_close(int $id, string $reason, string $note, int $actor): arra
     $emailed = false;
     $to = trim((string)$ref['counselor_email']);
     if (filter_var($to, FILTER_VALIDATE_EMAIL)) {
-        [$subj, $body] = email_template('referral_closed', ['ref' => referral_ref($id), 'date' => fmt_date($ref['created_at']), 'reason' => cms_list('referral_close_reasons')[$reason]]);
+        // 4.30.0: a referral sent on the Spanish form is answered in Spanish, with a Spanish date and reason.
+        $es = ($ref['preferred_language'] ?? 'en') === 'es';
+        [$subj, $body] = email_template($es ? 'referral_closed_es' : 'referral_closed', ['ref' => referral_ref($id),
+            'date' => $es ? when_es($createdTs = (int)strtotime((string)$ref['created_at']), false) . ' de ' . date('Y', $createdTs) : fmt_date($ref['created_at']),
+            'reason' => referral_close_words($reason, $es)]);
         if (send_app_mail($to, $subj, $body)) {
             $emailed = true;
             db()->prepare('UPDATE referrals SET outcome_emailed_at = NOW() WHERE id = ?')->execute([$id]);

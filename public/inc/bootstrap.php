@@ -354,7 +354,19 @@ function take_flashes(): array {
 /** The required-field marker for a label: a visual asterisk plus "(required)"
  *  for screen readers, so every form marks required fields the same way (3.3.2). */
 function required_mark(): string {
-    return '<span aria-hidden="true">*</span><span class="visually-hidden">(required)</span>';
+    // In the page language (4.30.0): a Spanish label no longer ends in an English "(required)".
+    return '<span aria-hidden="true">*</span><span class="visually-hidden">' . h(__('(required)')) . '</span>';
+}
+
+/** A script that moves focus to a page's result or error message once the page has
+ *  loaded (4.30.0). Focus moved on DOMContentLoaded is taken away again when the browser
+ *  then scrolls to the #fragment of a redirect (save, then back to #logs), so the message
+ *  was never heard; after the load event and one more task the fragment has been handled.
+ *  $find is a JavaScript expression giving the element (or null). It is focused only if
+ *  the user has not already started using the keyboard or pointer on the page. */
+function focus_after_load_script(string $find): string {
+    return '<script>(function(){function f(){var e=' . $find . ';if(e)e.focus();}'
+        . 'if(window.cmsFocusAfterLoad)window.cmsFocusAfterLoad(f);else document.addEventListener("DOMContentLoaded",f);})();</script>';
 }
 
 /** Stash per-field errors before an error redirect (post/redirect/get forms). */
@@ -410,7 +422,7 @@ function form_error_summary(array $labels = [], array $anchors = []): string {
     return '<div class="alert alert-error" tabindex="-1" id="form-error-summary">'
         . '<p class="legend-h">' . t('Please fix the following:') . '</p>'
         . '<ul>' . $items . '</ul></div>'
-        . '<script>document.addEventListener("DOMContentLoaded",function(){var s=document.getElementById("form-error-summary");if(s)s.focus();});</script>';
+        . focus_after_load_script('document.getElementById("form-error-summary")');
 }
 
 /* ---------- CSRF ---------- */

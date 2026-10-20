@@ -218,9 +218,10 @@ private fun AccountSecurity(api: Api, a: JSONObject, reload: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var confirmEverywhere by remember { mutableStateOf(false) }
+    var pwErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    fun fieldError(e: org.casemanagement.app.ApiException) = e.reply?.optJSONObject("errors")?.let { o -> o.keys().asSequence().firstOrNull()?.let { o.optString(it) } } ?: e.message
+    fun fieldError(e: org.casemanagement.app.ApiException) = e.reply?.optJSONObject("errors")?.let { o -> errorSummary(o.keys().asSequence().map { o.optString(it) }.toList()) } ?: e.message
     fun act(block: suspend () -> String) {
         error = null
         scope.launch {
@@ -237,16 +238,21 @@ private fun AccountSecurity(api: Api, a: JSONObject, reload: () -> Unit) {
         "password" -> {
             // Changing the password signs this phone out: said first when signatures are waiting to send.
             api.unsentSignaturesWarning?.let { NoticeText(it) }
-            Field("Current password", current, { current = it }, password = true)
-            Field("New password", new1, { new1 = it }, hint = "at least 10 characters", password = true)
-            Field("New password again", new2, { new2 = it }, password = true)
+            Field("Current password", current, { current = it }, password = true, required = true, autofill = Fill.Password, error = pwErrors["current"])
+            Field("New password", new1, { new1 = it }, hint = "at least 10 characters", password = true, required = true, autofill = Fill.NewPassword, error = pwErrors["new"])
+            Field("New password again", new2, { new2 = it }, password = true, required = true, autofill = Fill.NewPassword, error = pwErrors["again"])
             val passkeys = a.optJSONArray("passkeys")?.length() ?: 0
-            if (passkeys > 0) Tick("I understand my $passkeys passkeys are removed", ackPasskeys) { ackPasskeys = it }
+            if (passkeys > 0) Tick("I understand my $passkeys passkeys are removed", ackPasskeys, error = pwErrors["ack"]) { ackPasskeys = it }
             PrimaryButton("Change password", busy = busy) {
+                // 4.30.0: every problem at once, each on its own field and all in the summary.
+                pwErrors = listOfNotNull(
+                    if (current.isEmpty()) "current" to "Enter your current password." else null,
+                    if (new1.length < 10) "new" to "The new password needs at least 10 characters." else null,
+                    if (new1 != new2) "again" to "The two new passwords are not the same." else null,
+                    if (passkeys > 0 && !ackPasskeys) "ack" to "Tick that you understand your passkeys are removed." else null,
+                ).toMap()
                 when {
-                    new1.length < 10 -> error = "The new password needs at least 10 characters."
-                    new1 != new2 -> error = "The two new passwords are not the same."
-                    passkeys > 0 && !ackPasskeys -> error = "Tick that you understand your passkeys are removed."
+                    pwErrors.isNotEmpty() -> error = errorSummary(pwErrors.values)
                     else -> act {
                         val r = api.call("change_password", body = JSONObject().put("current_password", current).put("new_password", new1).put("confirm_password", new2).put("ack_passkeys", ackPasskeys))
                         api.signOut()
@@ -257,7 +263,7 @@ private fun AccountSecurity(api: Api, a: JSONObject, reload: () -> Unit) {
             }
         }
         "totp" -> if (a.optBoolean("totp_enabled")) {
-            Field("Your password", password, { password = it }, password = true)
+            Field("Your password", password, { password = it }, password = true, required = true, autofill = Fill.Password)
             PrimaryButton("Turn off the authenticator app", busy = busy) { act { api.call("totp_disable", body = JSONObject().put("password", password)).optString("message").ifEmpty { "Authenticator app turned off." } } }
         } else {
             val s = setup
@@ -271,14 +277,14 @@ private fun AccountSecurity(api: Api, a: JSONObject, reload: () -> Unit) {
                     modifier = androidx.compose.ui.Modifier.semantics { contentDescription = "In your authenticator app, add an account with this key, spelled: " + secret.toList().joinToString(", ") + ". Account name: " + s.optString("account_name") + "." })
                 SecondaryButton("Copy the key") { copyProtected(context, secret); notice = "Key copied. Paste it into your authenticator app." }
                 SecondaryButton("Open in my authenticator app") { if (!openLink(context, android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(s.optString("otpauth_uri"))))) error = "No authenticator app on this phone opens setup links; type the key instead." }
-                Field("The 6-digit code it shows", code, { code = it.filter { c -> c.isDigit() }.take(6) }, keyboard = androidx.compose.ui.text.input.KeyboardType.NumberPassword)
-                Field("Your password", password, { password = it }, password = true)
+                Field("The 6-digit code it shows", code, { code = it.filter { c -> c.isDigit() }.take(6) }, keyboard = androidx.compose.ui.text.input.KeyboardType.NumberPassword, required = true)
+                Field("Your password", password, { password = it }, password = true, required = true, autofill = Fill.Password)
                 // The setup is kept until the code is accepted, so a mistyped code can be tried again with the same key.
-                PrimaryButton("Turn on", busy = busy, enabled = code.length == 6) { act { val m = api.call("totp_confirm", body = JSONObject().put("password", password).put("code", code)).optString("message").ifEmpty { "Authenticator app turned on." }; setup = null; m } }
+                PrimaryButton("Turn on", busy = busy, missing = stillNeeded(missingNames("the 6-digit code" to (code.length != 6), "Your password" to password.isEmpty()))) { act { val m = api.call("totp_confirm", body = JSONObject().put("password", password).put("code", code)).optString("message").ifEmpty { "Authenticator app turned on." }; setup = null; m } }
             }
         }
         "cal" -> {
-            Field("Your password", password, { password = it }, password = true)
+            Field("Your password", password, { password = it }, password = true, required = true, autofill = Fill.Password)
             SecondaryButton("Show my calendar address") { act { val r = api.call("cal_feed_show", body = JSONObject().put("password", password)); calAddress = r.str("address"); r.optString("message").ifEmpty { if (calAddress == null) "You have no calendar address yet." else "Your calendar address is below." } } }
             SecondaryButton("Make a new calendar address") { act { val r = api.call("cal_feed_regen", body = JSONObject().put("password", password)); calAddress = r.str("address"); r.optString("message").ifEmpty { "New calendar address made. The old one no longer works." } } }
             calAddress?.let { addr ->
@@ -288,7 +294,7 @@ private fun AccountSecurity(api: Api, a: JSONObject, reload: () -> Unit) {
         }
         "everywhere" -> {
             api.unsentSignaturesWarning?.let { NoticeText(it) }
-            Field("Your password", password, { password = it }, password = true)
+            Field("Your password", password, { password = it }, password = true, required = true, autofill = Fill.Password)
             PrimaryButton("Sign out everywhere", busy = busy) { confirmEverywhere = true }
         }
     }

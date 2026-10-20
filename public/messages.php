@@ -100,6 +100,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reply'])) {
 }
 
 $openCid = (int)($_GET['client'] ?? 0);
+// Open conversation with no client chosen (4.30.0): the list is aria-required, not required (Chrome
+// calls a required list invalid before anything is sent), so the page says what is missing.
+if (isset($_GET['client']) && $openCid === 0) set_form_errors(form_errors() + ['open_client' => 'Choose a client, then choose Open conversation.']);
 $openChannel = in_array($_GET['channel'] ?? '', ['client', 'counselor'], true) ? $_GET['channel'] : 'client';
 
 /* ---- Thread view ---- */
@@ -230,12 +233,13 @@ page_header('Messages', $user, 'messages');
 <p class="muted">Secure two-way conversations with clients and counselors<?= $scoped ? ' on your caseload' : '' ?>. <?= $totalUnread ?> unread.</p>
 
 <?php if ($pickClients): ?>
-<form method="get" action="messages.php" class="page-actions" aria-label="Open a conversation">
+<?= form_error_summary(['open_client' => 'Client']) ?>
+<form method="get" action="messages.php" class="page-actions" aria-label="Open a conversation" novalidate>
   <label for="open_client">Client <?= required_mark() ?></label>
-  <select id="open_client" name="client" required>
+  <select id="open_client" name="client" aria-required="true" <?= field_aria('open_client') ?>>
     <option value="">— Choose a client —</option>
     <?php foreach ($pickClients as $pc): ?><option value="<?= (int)$pc['id'] ?>"><?= h($pc['name']) ?></option><?php endforeach; ?>
-  </select>
+  </select><?= field_error('open_client') ?>
   <label for="open_channel">Conversation</label>
   <select id="open_channel" name="channel"><option value="client">Client</option><option value="counselor">Counselor</option></select>
   <button type="submit" class="btn btn-secondary btn-sm">Open conversation</button>

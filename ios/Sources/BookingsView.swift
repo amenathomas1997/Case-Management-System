@@ -244,7 +244,7 @@ struct BookingEditSheet: View {
             // The error banner is the form's first row; it is scrolled into view and given
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
             ErrorFocusForm(inNavigationStack: true, error: error) {
-                NewRecordClientPicker(title: "Client (required)", selection: $selectedClient)
+                NewRecordClientPicker(title: "Client (required)", selection: $selectedClient, errorName: "Client")
                 Picker("Service", selection: $serviceType) { ForEach(bookingTypes, id: \.self) { Text($0) } }
                 DatePicker("When", selection: $neededAt)
                 // Up to a full day, as the server and the website allow.
@@ -253,7 +253,7 @@ struct BookingEditSheet: View {
                 // Captions that stay visible once the fields hold text (a placeholder alone disappears).
                 CaptionedField(label: "Provider / agency", text: $provider)
                 CaptionedField(label: "Location", text: $location)
-                CaptionedField(label: "Estimated cost", text: $cost, prompt: "Estimated cost, like 125.00", keyboard: .decimalPad)
+                CaptionedField(label: "Estimated cost", text: $cost, prompt: "Estimated cost, like 125.00", keyboard: .decimalPad, errorName: "Estimated cost")
                 CaptionedField(label: "Notes", text: $notes, lines: 1...5)
             }
             .navigationTitle("New booking")
@@ -319,6 +319,8 @@ struct NewRecordClientPicker: View {
     var linkedId: Int? = nil
     var linkedName: String? = nil
     @Binding var selection: Int?
+    /// The name errors about this choice start with ("Client: …"), shown and said with it.
+    var errorName: String? = nil
     @State private var clients: [ClientRow] = []
     @State private var started = false
     @State private var loading = false
@@ -345,6 +347,8 @@ struct NewRecordClientPicker: View {
             LabeledContent(title, value: chosenName)
         }
         .disabled(!loaded)
+        .modifier(OptionalErrorField(name: errorName))
+        .modifier(RowID(id: errorName.map { FormFieldID(name: $0.lowercased()) }))
         .accessibilityHint(loaded ? "" : loadError != nil
                            ? "Unavailable: the client list could not be loaded. Use Try loading clients again, below."
                            : "Unavailable until the client list has loaded.")

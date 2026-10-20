@@ -38,7 +38,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['save_credential']) |
     $name = $type === 'Other' || $type === '' ? $str('other_name') : $type;
     $sfx = $cid > 0 ? '_' . $cid : '';
     $errs = [];
-    if ($name === '' || mb_strlen($name) > 120) $errs['type' . $sfx] = 'Choose the credential, or name it under Other (120 characters or fewer).';
+    // 4.30.0: a missing or too long name under Other is on the name field, not on the Credential list.
+    if ($type === 'Other' && $name === '') $errs['other_name' . $sfx] = 'Name the credential, since Other is chosen.';
+    elseif ($name === '') $errs['type' . $sfx] = 'Choose the credential, or choose Other and name it.';
+    elseif (mb_strlen($name) > 120) $errs['other_name' . $sfx] = 'Keep the name to 120 characters or fewer.';
     $issued = $str('issued_on') === '' ? null : valid_date($str('issued_on'), 1950, (int)date('Y'));
     if ($str('issued_on') !== '' && $issued === null) $errs['issued_on' . $sfx] = 'Enter the date issued as a real date, not in the future.';
     $expires = $str('expires_on') === '' ? null : valid_date($str('expires_on'), 1950, (int)date('Y') + 20);
@@ -70,14 +73,14 @@ $form = function (?array $c) use ($who): string {
     ob_start(); ?>
   <form method="post" action="credentials.php" class="stacked" novalidate><?= csrf_field() ?>
     <?php // 4.29.0: a focused summary of this form's errors, each linked to its field. ?>
-    <?= form_error_summary(['type' . $sfx => 'Credential', 'number' . $sfx => 'Number', 'issuer' . $sfx => 'Issued by', 'issued_on' . $sfx => 'Date issued', 'expires_on' . $sfx => 'Expires on', 'notes' . $sfx => 'Notes'],
-        ['type' . $sfx => 'ty' . $sfx, 'number' . $sfx => 'nu' . $sfx, 'issuer' . $sfx => 'is' . $sfx, 'issued_on' . $sfx => 'io' . $sfx, 'expires_on' . $sfx => 'eo' . $sfx, 'notes' . $sfx => 'no' . $sfx]) ?>
+    <?= form_error_summary(['type' . $sfx => 'Credential', 'other_name' . $sfx => 'Its name, when Other is chosen', 'number' . $sfx => 'Number', 'issuer' . $sfx => 'Issued by', 'issued_on' . $sfx => 'Date issued', 'expires_on' . $sfx => 'Expires on', 'notes' . $sfx => 'Notes'],
+        ['type' . $sfx => 'ty' . $sfx, 'other_name' . $sfx => 'on' . $sfx, 'number' . $sfx => 'nu' . $sfx, 'issuer' . $sfx => 'is' . $sfx, 'issued_on' . $sfx => 'io' . $sfx, 'expires_on' . $sfx => 'eo' . $sfx, 'notes' . $sfx => 'no' . $sfx]) ?>
     <input type="hidden" name="credential_id" value="<?= (int)($c['id'] ?? 0) ?>">
     <input type="hidden" name="user_id" value="<?= $who ?>">
     <div class="field"><label for="ty<?= $sfx ?>">Credential</label>
       <select id="ty<?= $sfx ?>" name="type" <?= field_aria('type' . $sfx) ?>><?= select_options(array_merge([''], $types), $v('type', $type)) ?></select><?= field_error('type' . $sfx) ?></div>
     <div class="field"><label for="on<?= $sfx ?>">Its name, when Other is chosen</label>
-      <input type="text" id="on<?= $sfx ?>" name="other_name" maxlength="120" value="<?= h($v('other_name', $type === 'Other' ? (string)$c['name'] : '')) ?>"></div>
+      <input type="text" id="on<?= $sfx ?>" name="other_name" maxlength="120" value="<?= h($v('other_name', $type === 'Other' ? (string)$c['name'] : '')) ?>" <?= field_aria('other_name' . $sfx) ?>><?= field_error('other_name' . $sfx) ?></div>
     <div class="field"><label for="nu<?= $sfx ?>">Number <span class="hint">optional</span></label>
       <input type="text" id="nu<?= $sfx ?>" name="number" maxlength="80" value="<?= h($v('number', (string)($c['number'] ?? ''))) ?>" <?= field_aria('number' . $sfx) ?>><?= field_error('number' . $sfx) ?></div>
     <div class="field"><label for="is<?= $sfx ?>">Issued by <span class="hint">optional</span></label>

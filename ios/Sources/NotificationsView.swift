@@ -73,13 +73,17 @@ struct NotificationsView: View {
     @State private var destination: AlertDestination?
     @State private var webPage: WebPage?
     @AccessibilityFocusState private var errorFocused: Bool
+    /// Counts failed Mark as read taps: each scrolls to the error banner and focuses it.
+    @State private var revealError = 0
 
     private var shownUnread: [AlertItem] { items.filter(\.unread) }
 
     var body: some View {
+        ScrollViewReader { proxy in
         List {
             if let error {
                 ErrorBanner(message: error).listRowSeparator(.hidden).accessibilityFocused($errorFocused)
+                    .id("alertsError")
             }
             if loaded {
                 Section {
@@ -110,6 +114,18 @@ struct NotificationsView: View {
                 ProgressView("Loading alerts…")
             }
         }
+        // A failed Mark as read from further down: the banner is scrolled into view (a List never
+        // draws an off-screen row, which then can't take focus), then VoiceOver is put on it.
+        .onChange(of: revealError) { _ in
+            DispatchQueue.main.async {
+                withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo("alertsError", anchor: .top) }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                errorFocused = true
+            }
+        }
+        }
         .navigationTitle("Alerts")
         .navigationDestination(isPresented: Binding(get: { destination != nil }, set: { if !$0 { destination = nil } })) {
             if let destination { destination.screen }
@@ -124,24 +140,30 @@ struct NotificationsView: View {
     @ViewBuilder private func row(_ item: AlertItem) -> some View {
         let target = item.link.flatMap { AlertDestination.from($0, api: api) }
         let webURL = target == nil ? item.link.flatMap(workflowURL) : nil
-        Button { open(item, target: target, webURL: webURL) } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(item.message).font(item.unread ? .body.weight(.semibold) : .body)
-                    Spacer()
-                    if item.unread {
-                        Text("New").font(.caption2.weight(.semibold)).foregroundStyle(.white)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.brandFill).clipShape(Capsule())
-                    }
+        let content = VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(item.message).font(item.unread ? .body.weight(.semibold) : .body)
+                Spacer()
+                if item.unread {
+                    Text("New").font(.caption2.weight(.semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.brandFill).clipShape(Capsule())
                 }
-                Text(formatDateTime(item.createdAt)).font(.caption).foregroundStyle(Color.secondaryText)
             }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .contentShape(Rectangle())
+            Text(formatDateTime(item.createdAt)).font(.caption).foregroundStyle(Color.secondaryText)
         }
-        .buttonStyle(.plain)
-        .disabled(target == nil && webURL == nil)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
+        Group {
+            if target != nil || webURL != nil {
+                Button { open(item, target: target, webURL: webURL) } label: { content }
+                    .buttonStyle(.plain)
+            } else {
+                // An alert that opens nothing is a plain row (4.30.0), not a disabled button:
+                // that dimmed its text below the app's contrast and VoiceOver called it "dimmed".
+                content
+            }
+        }
         // One stop: new or read, the message and when; opening and marking read are its actions.
         .accessibilityElement(children: VoiceOverRows.children)
         .accessibilityLabel("\(item.unread ? "New. " : "")\(item.message). \(formatDateTime(item.createdAt))")
@@ -168,7 +190,12 @@ struct NotificationsView: View {
             await load()
             if !quietly { announce(r.message ?? "Marked as read.") }
         } catch {
-            if !quietly { showFormError(error.localizedDescription, in: &self.error); errorFocused = true }
+            if !quietly {
+                showFormError(error.localizedDescription, in: &self.error)
+                // VoiceOver is put on the banner, which reads it: not announced as well (4.30.0).
+                claimFormErrorFocus(error.localizedDescription)
+                revealError += 1
+            }
         }
     }
 

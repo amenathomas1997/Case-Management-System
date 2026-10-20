@@ -68,17 +68,19 @@ page_header(!$ack ? 'Confirmation link not recognized' : ($ack['acked_at'] ? 'Re
   <p><?= $justConfirmed ? 'Your confirmation has been recorded on the client\'s file. No further action is needed.'
                         : 'This report was already confirmed. No further action is needed.' ?></p>
   <?php // A fresh confirmation is announced by moving focus to its heading once. ?>
-  <?php if ($justConfirmed): ?><script>document.addEventListener("DOMContentLoaded",function(){var e=document.getElementById("ack-done");if(e)e.focus();});</script><?php endif; ?>
+  <?php if ($justConfirmed): ?><script>(window.cmsFocusAfterLoad||function(f){document.addEventListener("DOMContentLoaded",f);})(function(){var e=document.getElementById("ack-done");if(e)e.focus();});</script><?php endif; ?>
 <?php else: ?>
   <h1>Confirm report receipt</h1>
   <?php if ($staleNotice): // Announced once, by moving focus to it (no alert role). ?>
   <div class="alert alert-error" id="form-errors" tabindex="-1"><span class="visually-hidden">Error: </span>This page was open for a long time, so your confirmation was not recorded yet. Choose Confirm receipt again.</div>
-  <script>document.addEventListener("DOMContentLoaded",function(){var e=document.getElementById("form-errors");if(e)e.focus();});</script>
+  <script>(window.cmsFocusAfterLoad||function(f){document.addEventListener("DOMContentLoaded",f);})(function(){var e=document.getElementById("form-errors");if(e)e.focus();});</script>
   <?php endif; ?>
-  <?php // The address is masked: the link travels by email and may be forwarded.
+  <?php // The address is masked: the link travels by email and may be forwarded. The stars are hidden from
+        // screen readers, which say "hidden letters" once instead of "star" for each one (4.30.0).
         $sentTo = (string)$ack['sent_to']; $at = strpos($sentTo, '@');
-        $maskedTo = $at > 0 ? substr($sentTo, 0, 1) . str_repeat('*', max(1, $at - 1)) . substr($sentTo, $at) : $sentTo; ?>
-  <p>A training report was emailed to <strong><?= h($maskedTo) ?></strong> on <?= fmt_datetime($ack['sent_at']) ?>.
+        $maskedTo = $at > 0 ? h(substr($sentTo, 0, 1)) . '<span aria-hidden="true">' . str_repeat('*', max(1, $at - 1)) . '</span>'
+            . '<span class="visually-hidden">, hidden letters, </span>' . h(substr($sentTo, $at)) : h($sentTo); ?>
+  <p>A training report was emailed to <strong><?= $maskedTo ?></strong> on <?= fmt_datetime($ack['sent_at']) ?>.
      Choose Confirm receipt to tell us you received it. The confirmation is recorded on the client's file.</p>
   <form method="post" action="ack.php?t=<?= h($token) ?>">
     <?= csrf_field() ?>

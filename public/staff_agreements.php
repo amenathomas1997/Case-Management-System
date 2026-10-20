@@ -144,12 +144,13 @@ page_header('Staff agreements', $user, 'admin', [['admin.php', 'Administration']
   <h3>Edit</h3>
   <form method="post" action="staff_agreements.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['title' . $sfx => 'Title', 'body' . $sfx => 'Agreement text'], ['title' . $sfx => 't' . $sfx, 'body' . $sfx => 'b' . $sfx]) ?>
+    <p class="muted">Fields marked with an asterisk (<span aria-hidden="true">*</span><span class="visually-hidden">asterisk</span>) are required.</p>
     <input type="hidden" name="agreement_id" value="<?= $aid ?>">
     <input type="hidden" name="kind" value="<?= h($a['kind'] ?? 'staff') ?>">
-    <div class="field"><label for="t<?= $sfx ?>">Title</label>
-      <input type="text" id="t<?= $sfx ?>" name="title" maxlength="190" value="<?= h($mine ? old_in('title') : $a['title']) ?>" <?= field_aria('title' . $sfx) ?>><?= field_error('title' . $sfx) ?></div>
-    <div class="field"><label for="b<?= $sfx ?>">Agreement text <span class="hint">a line starting with # is a heading, a line starting with - is a list item</span></label>
-      <textarea id="b<?= $sfx ?>" name="body" rows="18" <?= field_aria('body' . $sfx) ?>><?= h($mine ? old_in('body') : $a['body']) ?></textarea><?= field_error('body' . $sfx) ?></div>
+    <div class="field"><label for="t<?= $sfx ?>">Title <?= required_mark() ?></label>
+      <input type="text" id="t<?= $sfx ?>" name="title" maxlength="190" required aria-required="true" value="<?= h($mine ? old_in('title') : $a['title']) ?>" <?= field_aria('title' . $sfx) ?>><?= field_error('title' . $sfx) ?></div>
+    <div class="field"><label for="b<?= $sfx ?>">Agreement text <?= required_mark() ?> <span class="hint">a line starting with # is a heading, a line starting with - is a list item</span></label>
+      <textarea id="b<?= $sfx ?>" name="body" rows="18" required aria-required="true" <?= field_aria('body' . $sfx) ?>><?= h($mine ? old_in('body') : $a['body']) ?></textarea><?= field_error('body' . $sfx) ?></div>
     <div class="field"><label><input type="checkbox" name="small_correction" value="1" <?= $tick('small_correction', false) ? 'checked' : '' ?>> This change is only a small correction, such as a typo, so nobody is asked to sign again <span class="hint">the same lines, and at most 40 characters different; the change is kept in the history</span></label></div>
     <div class="field"><label><input type="checkbox" name="counts_as_confidentiality" value="1" <?= $tick('counts_as_confidentiality', (bool)$a['counts_as_confidentiality']) ? 'checked' : '' ?>> This is the confidentiality agreement (signing it records the date Compliance follows)</label></div>
     <div class="field"><label><input type="checkbox" name="active" value="1" <?= $tick('active', (bool)$a['active']) ? 'checked' : '' ?>> On: ask staff to sign it</label></div>
@@ -167,11 +168,12 @@ page_header('Staff agreements', $user, 'admin', [['admin.php', 'Administration']
   $newKind = $again && old_in('kind') === 'exit' ? 'exit' : 'staff'; ?>
   <form method="post" action="staff_agreements.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['title' => 'Title', 'body' => 'Agreement text'], ['title' => 'nt', 'body' => 'nb']) ?>
+    <p class="muted">Fields marked with an asterisk (<span aria-hidden="true">*</span><span class="visually-hidden">asterisk</span>) are required.</p>
     <input type="hidden" name="agreement_id" value="0">
-    <div class="field"><label for="nt">Title</label>
-      <input type="text" id="nt" name="title" maxlength="190" value="<?= h(old_in('title')) ?>" <?= field_aria('title') ?>><?= field_error('title') ?></div>
-    <div class="field"><label for="nb">Agreement text <span class="hint">a line starting with # is a heading, a line starting with - is a list item</span></label>
-      <textarea id="nb" name="body" rows="18" <?= field_aria('body') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?></div>
+    <div class="field"><label for="nt">Title <?= required_mark() ?></label>
+      <input type="text" id="nt" name="title" maxlength="190" required aria-required="true" value="<?= h(old_in('title')) ?>" <?= field_aria('title') ?>><?= field_error('title') ?></div>
+    <div class="field"><label for="nb">Agreement text <?= required_mark() ?> <span class="hint">a line starting with # is a heading, a line starting with - is a list item</span></label>
+      <textarea id="nb" name="body" rows="18" required aria-required="true" <?= field_aria('body') ?>><?= h(old_in('body')) ?></textarea><?= field_error('body') ?></div>
     <fieldset><legend>Who signs it</legend>
       <div class="field"><label><input type="radio" name="kind" value="staff" <?= $newKind === 'staff' ? 'checked' : '' ?>> All staff</label></div>
       <div class="field"><label><input type="radio" name="kind" value="exit" <?= $newKind === 'exit' ? 'checked' : '' ?>> Someone leaving (an exit acknowledgement)</label></div>

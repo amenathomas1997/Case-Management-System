@@ -124,7 +124,7 @@ function agency_fields(array $a, string $sfx, bool $mine): string {
     $id = fn(string $k): string => $k . $sfx;
     ob_start(); ?>
     <div class="field"><label for="<?= $id('name') ?>">Agency name <?= required_mark() ?></label>
-      <input type="text" id="<?= $id('name') ?>" name="name" maxlength="190" value="<?= h($val('name')) ?>" <?= field_aria('name' . $sfx) ?>><?= field_error('name' . $sfx) ?></div>
+      <input type="text" id="<?= $id('name') ?>" name="name" maxlength="190" required aria-required="true" value="<?= h($val('name')) ?>" <?= field_aria('name' . $sfx) ?>><?= field_error('name' . $sfx) ?></div>
     <div class="field"><label for="<?= $id('state') ?>">State</label>
       <select id="<?= $id('state') ?>" name="state" <?= field_aria('state' . $sfx) ?>><?= kv_options(US_STATES, $val('state'), 'Not set') ?></select><?= field_error('state' . $sfx) ?></div>
     <div class="field"><label for="<?= $id('time_zone') ?>">Usual time zone of its clients</label>

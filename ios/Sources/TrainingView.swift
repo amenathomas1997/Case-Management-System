@@ -56,8 +56,8 @@ struct TrainingTakeView: View {
     private var questions: [[String: Any]] { module?["questions"] as? [[String: Any]] ?? [] }
 
     var body: some View {
-        Form {
-            if let error { ErrorBanner(message: error) }
+        // The error banner is scrolled to and focused, or the question an error is about (4.30.0).
+        ErrorFocusForm(inNavigationStack: true, error: error) {
             if let m = module {
                 Section {
                     Text((m["why"] as? String ?? "") + ". Read it, then answer the \(questions.count) questions; \(m["pass_pct"] as? Int ?? 80)% passes.")
@@ -77,7 +77,11 @@ struct TrainingTakeView: View {
                         .labelsHidden()
                     } header: {
                         Text("\(i + 1). \(q["q"] as? String ?? "")" + (wrong.contains(i + 1) ? " (answered wrongly last time)" : "")).accessibilityAddTraits(.isHeader)
+                            // A question left unanswered: the error is shown under it and
+                            // VoiceOver is put on it.
+                            .errorField("Question \(i + 1)", setsID: false)
                     }
+                    .id(FormFieldID(name: "question \(i + 1)"))
                 }
                 Section {
                     Button(busy ? "Checking…" : "Check my answers") { Task { await submit(m) } }.disabled(busy)
@@ -100,7 +104,9 @@ struct TrainingTakeView: View {
     }
 
     private func submit(_ m: [String: Any]) async {
-        if let missing = answers.firstIndex(of: -1) { error = "Answer every question (question \(missing + 1) has no answer)."; announce(error!); return }
+        if let missing = answers.firstIndex(of: -1) {
+            showFormError("Question \(missing + 1): choose an answer. Every question needs one.", in: &error); return
+        }
         busy = true; error = nil
         do {
             let r = try await api.callDict("submit_training", body: ["id": id, "version": m["version"] as? Int ?? 0, "text_hash": m["text_hash"] as? String ?? "", "answers": answers])
@@ -108,7 +114,8 @@ struct TrainingTakeView: View {
             if (r["passed"] as? Bool) == true {
                 onPassed()
                 await api.refreshMe()
-                announce(r["message"] as? String ?? "Passed.")
+                // Said once this screen has closed: the pop moves VoiceOver, which cut it off.
+                announceAfterDismiss(r["message"] as? String ?? "Passed.")
                 dismiss()
             } else {
                 wrong = r["wrong"] as? [Int] ?? []
@@ -117,8 +124,7 @@ struct TrainingTakeView: View {
             }
         } catch {
             busy = false
-            self.error = error.localizedDescription
-            announce(error.localizedDescription)
+            showFormError(error.localizedDescription, in: &self.error)
             if error.localizedDescription.contains("changed while you had it open") { wrong = []; await load() }
         }
     }
@@ -185,18 +191,21 @@ struct CredentialEditView: View {
     private var id: Int { credential["id"] as? Int ?? 0 }
 
     var body: some View {
-        Form {
-            if let error { ErrorBanner(message: error) }
-            Picker("Credential", selection: $type) {
+        // Errors are scrolled to and focused, on the field they are about (4.30.0); the pickers
+        // open a screen of their own at the accessibility text sizes (ReadablePickers).
+        ErrorFocusForm(inNavigationStack: true, error: error) {
+            Picker("Credential (required)", selection: $type) {
                 Text("Choose one").tag("")
                 ForEach(types, id: \.self) { Text($0).tag($0) }
             }
-            if type == "Other" { CaptionedField(label: "Its name", text: $other) }
+            .errorField("Credential")
+            if type == "Other" { CaptionedField(label: "Its name (required)", text: $other, errorName: "Its name") }
             CaptionedField(label: "Number, optional", text: $number)
             CaptionedField(label: "Issued by, optional", text: $issuer)
             CaptionedField(label: "Date issued, year-month-day, optional", text: $issued)
             CaptionedField(label: "Expires on, year-month-day; empty if it does not expire", text: $expires)
-            Button(busy ? "Saving…" : "Save") { Task { await save() } }.disabled(busy || type.isEmpty)
+            // Not dimmed while the credential is unchosen: Save then says what is missing, on the field.
+            Button(busy ? "Saving…" : "Save") { Task { await save() } }.disabled(busy)
             if id > 0 { Button("Remove this credential", role: .destructive) { confirmRemove = true } }
         }
         .navigationTitle(id > 0 ? (credential["name"] as? String ?? "Credential") : "Add a credential")
@@ -215,16 +224,18 @@ struct CredentialEditView: View {
 
     private func save() async {
         let name = type == "Other" ? other.trimmingCharacters(in: .whitespaces) : type
-        guard !name.isEmpty else { error = "Name the credential."; return }
+        guard !type.isEmpty else { showFormError("Credential: choose the credential.", in: &error); return }
+        guard !name.isEmpty else { showFormError("Its name: enter the credential's name.", in: &error); return }
         busy = true; error = nil
         do {
             _ = try await api.callDict("save_credential", body: ["id": id, "name": name, "number": number, "issuer": issuer, "issued_on": issued, "expires_on": expires])
-            await onDone(); announce("Saved \(name)."); dismiss()
-        } catch { busy = false; self.error = error.localizedDescription; announce(error.localizedDescription) }
+            // Said once the sheet has gone: closing it moves VoiceOver, which cut it off.
+            await onDone(); announceAfterDismiss("Saved \(name)."); dismiss()
+        } catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 
     private func remove() async {
-        do { _ = try await api.callDict("delete_credential", body: ["id": id]); await onDone(); announce("Removed."); dismiss() }
-        catch { self.error = error.localizedDescription }
+        do { _ = try await api.callDict("delete_credential", body: ["id": id]); await onDone(); announceAfterDismiss("Removed."); dismiss() }
+        catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }

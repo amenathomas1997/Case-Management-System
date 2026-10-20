@@ -78,19 +78,20 @@ fun NewSessionScreen(api: Api, nav: NavHostController) {
         var busy by remember { mutableStateOf(false) }
         // 4.28.0: a retry after a lost reply books the series once (see sendOnce).
         var idem by rememberSaveable { mutableStateOf("") }
+        var presses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
         val scope = rememberCoroutineScope()
         // A change to what is booked clears an approval given for the old one.
         fun changed() { approved = false; warnings = emptyList() }
         Page {
-            Heading("Schedule a session", large = true)
-            Choice("Client", client, listOf("" to "Choose a client") + clients.map { it.optInt("id").toString() to it.optString("name") }) { client = it; track = "0"; changed() }
+            // 4.30.0: no heading repeating the title bar's "Schedule a session".
+            Choice("Client", client, listOf("" to "Choose a client") + clients.map { it.optInt("id").toString() to it.optString("name") }, error = fieldErrors["client"], required = true) { client = it; track = "0"; changed() }
             val own = tracks.filter { it.optInt("client_id").toString() == client }
             if (own.isNotEmpty()) Choice("Training track", track, listOf("0" to "None") + own.map { it.optInt("id").toString() to it.optString("title") }) { track = it; changed() }
             if (staff.isNotEmpty()) Choice("Instructor", who, staff.map { it.optInt("id").toString() to it.optString("name") }) { who = it }
-            Field("Date", date, { date = it; changed() }, hint = "year-month-day", error = fieldErrors["date"])
-            Field("Start time", time, { time = it }, hint = "such as 2:30 PM", error = fieldErrors["time"])
-            Field("Length in hours", duration, { duration = it; changed() }, hint = "such as 1.5", keyboard = KeyboardType.Decimal, error = fieldErrors["duration"])
-            Field("Repeat weekly for this many weeks", weeks, { weeks = it; changed() }, hint = "1 for a single session", keyboard = KeyboardType.Number, error = fieldErrors["weeks"])
+            Field("Date", date, { date = it; changed() }, hint = "year-month-day", error = fieldErrors["date"], required = true)
+            Field("Start time", time, { time = it }, hint = "such as 2:30 PM", error = fieldErrors["time"], required = true)
+            Field("Length in hours", duration, { duration = it; changed() }, hint = "such as 1.5", keyboard = KeyboardType.Decimal, error = fieldErrors["duration"], required = true)
+            Field("Repeat weekly for this many weeks", weeks, { weeks = it; changed() }, hint = "1 for a single session", keyboard = KeyboardType.Number, error = fieldErrors["weeks"], required = true)
             Tick("Remote or telepractice session", remote) { remote = it }
             if (remote) Field("Meeting link", link, { link = it }, hint = "https://…, optional", keyboard = KeyboardType.Uri, error = fieldErrors["link"])
             else Field("Location", location, { location = it }, hint = "optional")
@@ -100,18 +101,20 @@ fun NewSessionScreen(api: Api, nav: NavHostController) {
                 warnings.forEach { ListRow(listOf(it)) }
                 Tick("I reviewed these authorization warnings and approve booking despite them", approved) { approved = it }
             }
-            ErrorText(error)
-            PrimaryButton("Schedule and send the invite", busy = busy, enabled = client.isNotEmpty()) {
+            ErrorText(error, focusKey = presses)
+            PrimaryButton("Schedule and send the invite", busy = busy) {
                 if (busy) return@PrimaryButton
+                presses++
                 val t = time24(time); val d = number(duration); val w = weeks.trim().toIntOrNull()
                 fieldErrors = listOfNotNull(
+                    if (client.isEmpty()) "client" to "Choose a client." else null,
                     if (!DAY.matches(date.trim())) "date" to "Enter the date as year-month-day, such as ${today()}." else null,
                     if (t == null) "time" to "Enter the start time, such as 2:30 PM." else null,
                     if (d == null || d < 0.25 || d > 12) "duration" to "Enter a length from 0.25 to 12 hours." else null,
                     if (w == null || w !in 1..26) "weeks" to "Repeat for 1 to 26 weeks." else null,
                     if (remote && link.isNotBlank() && !link.trim().startsWith("https://")) "link" to "The meeting link must start with https://." else null,
                 ).toMap()
-                error = fieldErrors.values.firstOrNull()
+                error = errorSummary(fieldErrors.values)
                 if (error != null) return@PrimaryButton
                 // Busy at once (launchSave), so a double tap never books the series twice (4.28.0).
                 scope.launchSave({ busy = it }, { }) {
@@ -161,6 +164,7 @@ fun MoveDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, onCancel: () -
     // 4.28.0: the server's hash of the warnings shown; Move anyway sends it back, so it covers exactly those.
     var warningsHash by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var presses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     fun clearWarnings() { warnings = emptyList(); warningsHash = null }
@@ -170,11 +174,12 @@ fun MoveDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, onCancel: () -
     }
     fun send(confirm: Boolean) {
         if (busy) return
+        presses++
         val t = time24(time); val d = number(duration)
         dateError = if (!DAY.matches(date.trim())) "Enter the date as year-month-day, such as ${today()}." else null
         timeError = if (t == null) "Enter a time such as 2:30 PM." else null
         lengthError = if (d == null || d < 0.25 || d > 12) "Enter a length from 0.25 to 12 hours." else null
-        (dateError ?: timeError ?: lengthError)?.let { error = it; return }
+        errorSummary(listOf(dateError, timeError, lengthError))?.let { error = it; return }
         scope.launchSave({ busy = it }, { error = it }) {
             val b = JSONObject().put("session_id", s.optInt("id")).put("start_at", "${date.trim()} $t").put("duration", d).put("confirm", confirm)
             if (confirm) warningsHash?.let { b.put("confirm_hash", it) }
@@ -196,7 +201,7 @@ fun MoveDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, onCancel: () -
                 Field("Date", date, { date = it; clearWarnings() }, hint = "year-month-day", error = dateError)
                 Field("Start time", time, { time = it; clearWarnings() }, hint = "such as 2:30 PM", error = timeError)
                 Field("Length in hours", duration, { duration = it; clearWarnings() }, keyboard = KeyboardType.Decimal, error = lengthError)
-                ErrorText(error)
+                ErrorText(error, focusKey = presses)
                 warnings.forEach { Text(it) }
             }
         },

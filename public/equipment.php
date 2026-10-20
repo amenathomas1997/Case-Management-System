@@ -115,7 +115,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['loan_out'])) {
     // A partly typed date reaches us blank (4.29.0): refused, never taken as "no return date".
     if (input_was_unreadable('due_date') || ($dueRaw !== '' && $due === null)) $loanErrors['loan_due_date'] = 'Return due: enter the full date (month, day and year) with a year from 2000 to ' . ((int)date('Y') + 5) . ', or leave it blank for no return date.';
     elseif ($due !== null && $due < date('Y-m-d')) $loanErrors['loan_due_date'] = 'Return due cannot be before today.';
-    if ($loanErrors) { keep_input(); keep_field_errors($loanErrors); redirect('equipment.php'); }
+    // 4.30.0: a loan from an item's own (scanned) page goes back there, with the errors on its fields.
+    $loanBack = isset($_POST['from_scan']) && $eid > 0 ? 'equipment.php?scan=' . $eid . '#sc-loan-h' : 'equipment.php';
+    if ($loanErrors) { keep_input(); keep_field_errors($loanErrors); redirect($loanBack); }
     scope_check_client_id($cid, $user);
     try {
         // loan_equipment() also settles reservations in the same transaction: this
@@ -127,7 +129,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['loan_out'])) {
             is_string($_POST['purpose'] ?? null) && isset(LOAN_PURPOSES[$_POST['purpose']]) ? $_POST['purpose'] : null, is_string($_POST['borrower_type'] ?? null) && isset(BORROWER_TYPES[$_POST['borrower_type']]) ? $_POST['borrower_type'] : null, $newLoan]);
         loan_handoff_out($newLoan, is_string($_POST['condition_out'] ?? null) ? $_POST['condition_out'] : null, is_string($_POST['accepted_name'] ?? null) ? $_POST['accepted_name'] : null);
     } catch (DomainException $e) {
-        keep_input(); keep_field_errors(['loan_equipment_id' => 'Item: ' . lcfirst($e->getMessage())]); redirect('equipment.php');
+        keep_input(); keep_field_errors(['loan_equipment_id' => 'Item: ' . lcfirst($e->getMessage())]); redirect($loanBack);
     }
     web_once_set($loanKey, (int)$newLoan);
     audit($user['id'], 'equipment.loan', 'equipment', $eid, 'to client #' . $cid);
@@ -169,7 +171,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_reservation'])) {
     elseif ($until !== null && $until < date('Y-m-d')) $dateErrors['needed_until'] = 'Needed until cannot be in the past. Enter today or a later date, or leave it blank.';
     $resNotes = is_string($_POST['notes'] ?? null) ? trim($_POST['notes']) : '';
     if (mb_strlen($resNotes) > 500) $dateErrors['res_notes'] = 'Notes must be 500 characters or fewer.';
-    if ($dateErrors) { keep_input(); keep_field_errors($dateErrors); redirect('equipment.php'); }
+    if ($dateErrors) { keep_input(); keep_field_errors($dateErrors); redirect('equipment.php#res-form'); }
     $pdo = db();
     $pdo->beginTransaction();
     try {
@@ -181,8 +183,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_reservation'])) {
         // had its holds cancelled, so no new hold or waitlist entry may join it.
         if ($estatus === false || $estatus === 'Retired') {
             $pdo->rollBack();
-            flash('That item is retired and cannot be reserved.', 'error');
-            redirect('equipment.php');
+            // 4.30.0: on the item field, with the client, dates and notes kept (not a flash).
+            keep_input();
+            keep_field_errors(['res_equipment_id' => 'Item: that item is retired and cannot be reserved; choose another.']);
+            redirect('equipment.php#res-form');
         }
         // One active hold per client and item: a double submit, or re-adding a client
         // who is already listed, would count them twice in the queue.
@@ -557,6 +561,10 @@ if (isset($_GET['scan'])) {
       <p>Maintenance: <span class="<?= $mClass ?>"><?= h($mLabel) ?></span></p>
       <?php // The return action follows the open loan, whatever the status: an item on
       // loan can also be in an AT repair. ?>
+      <?php // 4.30.0: a loan refused from this page comes back here. When the loan form is no longer
+      // shown (the item was lent or changed meanwhile), the refusal is said here instead, never lost.
+      $scanLoanErr = array_intersect_key(form_errors(), ['loan_equipment_id' => 1, 'loan_client_id' => 1, 'loan_due_date' => 1]);
+      if ($scanLoanErr && ($it['loan_id'] || $it['status'] !== 'Available')) echo error_notice('The item was not lent. ' . implode(' ', $scanLoanErr)); ?>
       <?php if ($it['loan_id'] && $scanOutside): ?>
         <p>On loan (managed by the assigned staff — not your caseload).</p>
       <?php elseif ($it['loan_id']): ?>
@@ -569,10 +577,14 @@ if (isset($_GET['scan'])) {
         </form>
       <?php elseif ($it['status'] === 'Available'): ?>
         <?php if ($scanHeld): ?><p>This item is held by a reservation. Lending it to that client fulfils the hold; lending it to anyone else moves the hold to the waitlist and notifies that client's instructor and the staff member who made it.</p><?php endif; ?>
-        <form method="post" action="equipment.php" class="stacked"><?= csrf_field() ?><?= web_idem_field() ?>
+        <h2 id="sc-loan-h">Loan it out</h2>
+        <form method="post" action="equipment.php" class="stacked" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
+          <?= form_error_summary(['loan_equipment_id' => '', 'loan_client_id' => '', 'loan_due_date' => ''], ['loan_equipment_id' => 'sc_client', 'loan_client_id' => 'sc_client', 'loan_due_date' => 'sc_due']) ?>
           <input type="hidden" name="equipment_id" value="<?= (int)$it['id'] ?>">
-          <div class="field"><label for="sc_client">Loan to client</label>
-            <select id="sc_client" name="client_id" required>
+          <input type="hidden" name="from_scan" value="1">
+          <?= field_error('loan_equipment_id') ?>
+          <div class="field"><label for="sc_client">Loan to client <?= required_mark() ?></label>
+            <select id="sc_client" name="client_id" required aria-required="true" <?= field_aria('loan_client_id') ?>>
               <option value="">— Choose —</option>
               <?php
               // Scope the roster to the user's caseload, matching the main list's loan form.
@@ -580,10 +592,10 @@ if (isset($_GET['scan'])) {
                   . (caseload_scoped() ? ' AND assigned_to = ?' : '') . ' ORDER BY name');
               $scq->execute(caseload_scoped() ? [(int)$user['id']] : []);
               foreach ($scq->fetchAll() as $c): ?>
-              <option value="<?= (int)$c['id'] ?>"><?= h($c['name']) ?></option><?php endforeach; ?>
-            </select></div>
+              <option value="<?= (int)$c['id'] ?>"<?= old_in('loan_out') !== '' && old_in('client_id') === (string)(int)$c['id'] ? ' selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
+            </select><?= field_error('loan_client_id') ?></div>
           <div class="field"><label for="sc_due">Return due</label>
-            <input type="date" id="sc_due" name="due_date" value="<?= date('Y-m-d', strtotime('+' . cms_number('loan_due_days') . ' days')) ?>"></div>
+            <input type="date" id="sc_due" name="due_date" value="<?= h(old_in('loan_out') !== '' ? old_in('due_date') : date('Y-m-d', strtotime('+' . cms_number('loan_due_days') . ' days'))) ?>" <?= field_aria('loan_due_date') ?>><?= field_error('loan_due_date') ?></div>
           <button type="submit" name="loan_out" value="1" class="btn btn-primary">Loan out</button>
         </form>
       <?php endif; ?>
@@ -728,7 +740,7 @@ page_header('Equipment & loans', $user, 'equipment');
 <h2 class="visually-hidden">Loan an item out</h2>
 <details class="card" id="loan"<?= $loanFailed ? ' open' : '' ?>>
   <summary accesskey="n" id="loan-h">Loan an item out</summary>
-  <p class="muted">Items marked “held by a reservation” are reserved for a client. Lending one to someone else moves that hold to the waitlist and notifies that client's instructor and the staff member who made it.</p>
+  <p class="muted">Items under “Held by a reservation” are reserved for a client. Lending one to someone else moves that hold to the waitlist and notifies that client's instructor and the staff member who made it.</p>
   <?php // After a refused loan the form comes back as it was filled in, with each error on its field.
   $oldLoan = fn(string $k, string $default = ''): string => old_in('loan_out') !== '' ? old_in($k, $default) : $default; ?>
   <form method="post" action="equipment.php" class="stacked" novalidate>
@@ -740,9 +752,12 @@ page_header('Equipment & loans', $user, 'equipment');
         <label for="equipment_id">Loan: item <?= required_mark() ?></label>
         <select id="equipment_id" name="equipment_id" required <?= field_aria('loan_equipment_id') ?>>
           <option value="">— Available items —</option>
-          <?php foreach ($items as $i): if ($i['status'] !== 'Available') continue; ?>
-          <option value="<?= (int)$i['id'] ?>" <?= $oldLoan('equipment_id') === (string)$i['id'] ? 'selected' : '' ?>><?= h($i['name'] . ($i['serial'] ? ' (serial number ' . $i['serial'] . ')' : '') . (isset($heldIds[(int)$i['id']]) ? ' — held by a reservation' : '')) ?></option>
-          <?php endforeach; ?>
+          <?php // 4.30.0: plain names; items held by a reservation are grouped, not marked on each option.
+          $loanOpt = fn(array $i) => '<option value="' . (int)$i['id'] . '"' . ($oldLoan('equipment_id') === (string)$i['id'] ? ' selected' : '') . '>' . h($i['name'] . ($i['serial'] ? ' (serial number ' . $i['serial'] . ')' : '')) . '</option>';
+          $loanFree = array_filter($items, fn($i) => $i['status'] === 'Available' && !isset($heldIds[(int)$i['id']]));
+          $loanHeld = array_filter($items, fn($i) => $i['status'] === 'Available' && isset($heldIds[(int)$i['id']]));
+          if ($loanHeld): ?><optgroup label="Not held"><?php endif; foreach ($loanFree as $i) echo $loanOpt($i); if ($loanHeld): ?></optgroup>
+          <optgroup label="Held by a reservation"><?php foreach ($loanHeld as $i) echo $loanOpt($i); ?></optgroup><?php endif; ?>
         </select><?= field_error('loan_equipment_id') ?>
       </div>
       <div class="field">
@@ -963,7 +978,7 @@ page_header('Equipment & loans', $user, 'equipment');
   <?php else: ?><p class="muted">No active reservations.</p><?php endif; ?>
   <?php // After a rejected date the form comes back filled in, with the error on its field.
   $oldRes = fn(string $k): string => old_in('add_reservation') !== '' ? old_in($k) : ''; ?>
-  <form method="post" action="equipment.php" class="stacked" style="margin-top:1rem" id="res-form"><?= csrf_field() ?><?= web_idem_field() ?>
+  <form method="post" action="equipment.php" class="stacked" style="margin-top:1rem" id="res-form" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
     <h3>Reserve or waitlist an item</h3>
     <?= form_error_summary(['res_equipment_id' => '', 'res_client_id' => '', 'needed_from' => '', 'needed_until' => '', 'res_notes' => ''], ['res_equipment_id' => 'res_item', 'res_client_id' => 'res_client', 'needed_from' => 'res_from', 'needed_until' => 'res_until', 'res_notes' => 'res_notes']) ?>
     <?= $requiredNote ?>
@@ -971,9 +986,12 @@ page_header('Equipment & loans', $user, 'equipment');
       <div class="field"><label for="res_item">Reserve: item <?= required_mark() ?></label>
         <select id="res_item" name="equipment_id" required <?= field_aria('res_equipment_id') ?>>
           <option value="">— Choose —</option>
-          <?php foreach ($items as $i): if ($i['status'] === 'Retired') continue; ?>
-          <option value="<?= (int)$i['id'] ?>" <?= $oldRes('equipment_id') === (string)$i['id'] ? 'selected' : '' ?>><?= h($i['name']) ?> (<?= h($i['status']) ?>)</option>
-          <?php endforeach; ?>
+          <?php // 4.30.0: grouped by status (Available, On Loan, ...), the option itself just the name and serial number.
+          $resByStatus = [];
+          foreach ($items as $i) if ($i['status'] !== 'Retired') $resByStatus[(string)$i['status']][] = $i;
+          foreach ($resByStatus as $rs => $rItems): ?><optgroup label="<?= h($rs) ?>"><?php foreach ($rItems as $i): ?>
+          <option value="<?= (int)$i['id'] ?>" <?= $oldRes('equipment_id') === (string)$i['id'] ? 'selected' : '' ?>><?= h($i['name'] . ($i['serial'] ? ' (serial number ' . $i['serial'] . ')' : '')) ?></option>
+          <?php endforeach; ?></optgroup><?php endforeach; ?>
         </select><?= field_error('res_equipment_id') ?></div>
       <div class="field"><label for="res_client">Reserve: client <?= required_mark() ?></label>
         <select id="res_client" name="client_id" required <?= field_aria('res_client_id') ?>>

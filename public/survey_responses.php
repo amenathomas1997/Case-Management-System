@@ -12,12 +12,20 @@ $period = report_period($user, date('Y') . '-01-01', date('Y') . '-12-31');
 $from = $period['from']; $to = $period['to'];
 $channel = in_array($_GET['channel'] ?? '', ['Email', 'Phone'], true) ? $_GET['channel'] : '';
 
-$q = db()->prepare("SELECT s.*, c.name AS client_name, COALESCE(u.name, '') AS instructor FROM {$rs} s JOIN clients c ON c.id = s.client_id
+$q = db()->prepare("SELECT s.*, c.name AS client_name, c.preferred_language, COALESCE(u.name, '') AS instructor FROM {$rs} s JOIN clients c ON c.id = s.client_id
     LEFT JOIN users u ON u.id = c.assigned_to
     WHERE s.completed_at IS NOT NULL AND DATE(s.completed_at) BETWEEN ? AND ?" . ($channel !== '' ? ' AND s.channel = ?' : '') . ' ORDER BY s.completed_at DESC');
 $q->execute($channel !== '' ? [$from, $to, $channel] : [$from, $to]);
 $rows = $q->fetchAll();
 $n = count($rows);
+/** The language a survey was answered in (4.30.0): the language of the page the client answered
+ *  on, kept since 4.30.0 (surveys.answer_lang); for an older emailed survey, the client's
+ *  preferred language. A phone survey typed by staff without a recorded language is the page's. */
+$answerLang = function (array $r): string {
+    $kept = $r['answer_lang'] ?? null;
+    if ($kept === 'es' || $kept === 'en') return $kept;
+    return ($r['channel'] ?? 'Email') === 'Email' ? ((($r['preferred_language'] ?? '') === 'es') ? 'es' : 'en') : 'en';
+};
 $avg = fn(string $k) => $n ? round(array_sum(array_map(fn($r) => (int)$r[$k], $rows)) / $n, 1) : null;
 $pending = db()->prepare("SELECT COUNT(*) FROM {$rs} s WHERE s.completed_at IS NULL AND DATE(s.sent_at) BETWEEN ? AND ?");
 $pending->execute([$from, $to]);
@@ -56,7 +64,7 @@ $download = '<button type="submit" name="export" value="1" class="btn btn-second
   <?php foreach ($rows as $r): ?>
     <tr><th scope="row"><a href="client.php?id=<?= (int)$r['client_id'] ?>#after-h"><?= h($r['client_name']) ?></a></th>
       <td><?= fmt_date($r['completed_at']) ?></td><td><?= h($r['channel'] ?? 'Email') ?></td>
-      <td class="num"><?= (int)$r['satisfaction'] ?></td><td class="num"><?= (int)$r['goals_met'] ?></td><td><?= h((string)$r['comments']) ?></td></tr>
+      <td class="num"><?= (int)$r['satisfaction'] ?></td><td class="num"><?= (int)$r['goals_met'] ?></td><td><?php $cm = (string)$r['comments']; echo $cm !== '' && $answerLang($r) === 'es' ? '<span lang="es">' . h($cm) . '</span>' : h($cm); ?></td></tr>
   <?php endforeach; ?>
   </tbody>
 </table>

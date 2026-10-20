@@ -88,7 +88,9 @@ fun ScoredNewScreen(api: Api, nav: NavHostController, clientId: Int) {
     val scope = rememberCoroutineScope()
     Page {
         Show(instruments, "instruments") { list ->
-            Choice("Instrument", chosen, listOf("" to "Choose an instrument") + list.map { it.optInt("id").toString() to (it.optString("name") + ", ${it.optInt("items")} items") }) { chosen = it }
+            // 4.30.0: plain names in the list (owner rule 2); the number of items is said once one is chosen.
+            Choice("Instrument", chosen, listOf("" to "Choose an instrument") + list.map { it.optInt("id").toString() to it.optString("name") }, required = true) { chosen = it }
+            list.firstOrNull { it.optInt("id").toString() == chosen }?.let { i -> Text(if (i.optInt("items") == 1) "1 item." else "${i.optInt("items")} items.") }
         }
         val r = items.data
         if (chosen.isNotEmpty() && r != null) {
@@ -99,7 +101,7 @@ fun ScoredNewScreen(api: Api, nav: NavHostController, clientId: Int) {
             Field("Date given", date, { date = it }, hint = "year-month-day")
             its.forEachIndexed { n, item ->
                 val id = item.optInt("id")
-                Choice("${n + 1}. " + item.optString("label"), scores[id]?.toString() ?: "", listOf("" to "Choose a rating") + scale.map { (v, l) -> v.toString() to "$v, $l" }) { v ->
+                Choice("${n + 1}. " + item.optString("label"), scores[id]?.toString() ?: "", listOf("" to "Choose a rating") + scale.map { (v, l) -> v.toString() to "$v, $l" }, required = true) { v ->
                     scoresText = ratingsToText(if (v.isEmpty()) scores - id else scores + (id to v.toInt()))
                 }
             }
@@ -107,7 +109,7 @@ fun ScoredNewScreen(api: Api, nav: NavHostController, clientId: Int) {
             val missing = its.size - scores.size
             if (missing > 0) Text("$missing of ${its.size} items are not rated yet. Rate every item to save.")
             ErrorText(error)
-            PrimaryButton("Save the assessment", busy = busy, enabled = missing == 0 && its.isNotEmpty()) { confirming = true }
+            PrimaryButton("Save the assessment", busy = busy, enabled = its.isNotEmpty(), missing = if (missing > 0) "Not saved yet: rate every item first." else null) { confirming = true }
             if (confirming) Confirm("Save this assessment?", "All ${its.size} items rated, total score ${scores.values.sum()}. A saved assessment cannot be changed.", "Save assessment", {
                 scope.launchSave({ busy = it }, { error = it }) {
                     val s = JSONObject(); scores.forEach { (k, v) -> s.put(k.toString(), v) }

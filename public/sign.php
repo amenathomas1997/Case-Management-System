@@ -134,13 +134,13 @@ $paras = array_values(array_filter(array_map('trim', preg_split('/\n\s*\n/', str
   <?php $typedSig = $staleSig ?? (is_string($_SESSION[$sigKey] ?? null) ? $_SESSION[$sigKey] : ''); unset($_SESSION[$sigKey]); ?>
   <?php if ($staleSig !== null): ?>
   <div class="alert alert-error" id="form-errors" tabindex="-1"><span class="visually-hidden"><?= t('Error:') ?> </span><?= t('This page was open for a long time, so your signature was not sent yet. Your typed name is still in the box. Please check it and choose Sign and submit again.') ?></div>
-  <script>document.addEventListener("DOMContentLoaded",function(){var e=document.getElementById("form-errors");if(e)e.focus();});</script>
+  <script>(window.cmsFocusAfterLoad||function(f){document.addEventListener("DOMContentLoaded",f);})(function(){var e=document.getElementById("form-errors");if(e)e.focus();});</script>
   <?php endif; ?>
   <form method="post" action="sign.php?t=<?= h($token) ?>&amp;lang=<?= h(page_lang()) ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['signature' => '']) ?>
     <div class="field">
-      <label for="signature"><?= t('Electronic signature') ?> <span aria-hidden="true">*</span><span class="visually-hidden"> (<?= t('required') ?>)</span> <span class="hint"><?= t('Type your full name (') ?><?= h($doc['signer_name']) ?><?= t(') to sign') ?>. <?= t('Capital letters, accents and punctuation do not need to match.') ?></span></label>
+      <label for="signature"><?= t('Electronic signature') ?> <?= required_mark() ?> <span class="hint"><?= t('Type your full name (') ?><?= h($doc['signer_name']) ?><?= t(') to sign') ?>. <?= t('Capital letters, accents and punctuation do not need to match.') ?></span></label>
       <input type="text" id="signature" name="signature" required autocomplete="name" value="<?= h($typedSig) ?>" <?= field_aria('signature') ?>>
       <?php if (has_field_error('signature')): ?><p class="field-error" id="err-signature"><?= t(form_errors()['signature']) ?> <?= t('To sign, type:') ?> <strong><?= h($doc['signer_name']) ?></strong></p><?php endif; ?>
     </div>

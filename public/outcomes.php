@@ -91,7 +91,9 @@ if (isset($_GET['export'])) {
     exit;
 }
 
-if (isset($_GET['html'])) {
+// Built for the letterhead PDF too (4.30.0): the PDF links to a kept copy of it that outside
+// readers open without a staff sign-in.
+if (isset($_GET['html']) || isset($_GET['pdf'])) {
     // Every section has a heading (as on the page), and an empty section says so.
     $doc = new AccessibleDocument('Outcome Report — ' . brand('org'));
     $doc->paragraph(brand('tagline'));
@@ -124,7 +126,7 @@ if (isset($_GET['html'])) {
         else $doc->paragraph('No logged services in this period.');
     }
     $doc->paragraph('Prepared ' . date('F j, Y') . ' by ' . $user['name'] . ' — ' . cfg('name'));
-    $doc->download('outcome_report_' . $from . '_' . $to . '.html');
+    if (isset($_GET['html'])) $doc->download('outcome_report_' . $from . '_' . $to . '.html');
 }
 
 /* ---- Letterhead PDF ---- */
@@ -132,23 +134,30 @@ if (isset($_GET['pdf'])) {
     audit((int)$user['id'], 'report.export', 'client', null, 'Outcome report PDF ' . $from . ' to ' . $to);
     require __DIR__ . '/inc/app_pdf.php';
     // Strict false check: the string "0" is falsy, and a count of 0 must still print.
-    $tx = function (?string $s): string { $r = iconv('UTF-8', 'ISO-8859-1//TRANSLIT', $s ?? ''); return $r === false ? '' : $r; };
+    $tx = fn(?string $s): string => doc_pdf_text($s);
     $pdf = new AppPdf('P', 'mm', 'Letter');
-    $pdf->SetTitle($tx('Outcome Report — ' . brand('org')));
+    $pdf->describe('Outcome Report — ' . brand('org'), 'Outcome report from ' . brand('org') . ', ' . fmt_date($from) . ' to ' . fmt_date($to));
     $pdf->SetAutoPageBreak(true, 18);
     $pdf->AddPage();
-    $pdf->SetFont('Helvetica', '', 9);
-    $pdf->Cell(0, 6, 'Accessible HTML version (sign-in required)', 0, 1, 'L', false, cfg('base_url') . '/outcomes.php?from=' . $from . '&to=' . $to . '&html=1');
-    // Letterhead
+    // The PDF is untagged: its first line links to the accessible HTML copy, which outside
+    // readers can open without a staff sign-in (4.30.0).
+    $pdf->accessibleCopyLine(doc_link_create($doc->html(false), 'report', null, 'outcome report ' . $from . ' to ' . $to),
+        cfg('base_url') . '/outcomes.php?from=' . $from . '&to=' . $to . '&html=1');
+    // Letterhead, one column at a time (4.30.0), so it is read in order.
+    $xh = $pdf->GetX(); $y0 = $pdf->GetY();
     $pdf->SetFont('Helvetica', 'B', 18);
     $pdf->SetTextColor(...brand_rgb());
-    $pdf->Cell(120, 9, $tx(brand('org')), 0, 0);
-    $pdf->SetFont('Helvetica', 'B', 15);
-    $pdf->SetTextColor(60, 60, 60);
-    $pdf->Cell(0, 9, 'OUTCOME REPORT', 0, 1, 'R');
+    $pdf->Cell(120, 9, $tx(brand('org')), 0, 2);
     $pdf->SetFont('Helvetica', '', 10);
-    $pdf->Cell(120, 5, $tx(brand('tagline')), 0, 0);
-    $pdf->Cell(0, 5, $tx('Period: ' . fmt_date($from) . ' to ' . fmt_date($to)), 0, 1, 'R');
+    $pdf->SetTextColor(60, 60, 60);
+    $pdf->Cell(120, 5, $tx(brand('tagline')), 0, 2);
+    $yLeft = $pdf->GetY();
+    $pdf->SetXY($xh + 120, $y0);
+    $pdf->SetFont('Helvetica', 'B', 15);
+    $pdf->Cell(0, 9, 'OUTCOME REPORT', 0, 2, 'R');
+    $pdf->SetFont('Helvetica', '', 10);
+    $pdf->Cell(0, 5, $tx('Period: ' . fmt_date($from) . ' to ' . fmt_date($to)), 0, 2, 'R');
+    $pdf->SetY(max($yLeft, $pdf->GetY()));
     $pdf->SetDrawColor(...brand_rgb());
     $pdf->SetLineWidth(0.6);
     $pdf->Ln(2);

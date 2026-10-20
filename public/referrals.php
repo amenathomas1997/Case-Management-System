@@ -403,7 +403,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
   <p>This referral follows the assigned instructor on the client record.</p>
   <?php else: ?>
   <p>Currently assigned to: <strong><?= h($view['assigned_name'] ?? 'Unassigned') ?></strong></p>
-  <form method="post" action="referrals.php" class="inline-form" onsubmit="return confirm('Assign this referral? Its details are emailed to the chosen instructor straight away.');">
+  <form method="post" action="referrals.php" class="inline-form" onsubmit="return confirm(<?= h(json_encode('Assign the referral for ' . $view['client_name'] . '? Its details are emailed to the chosen instructor straight away.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">
     <?= csrf_field() ?>
     <input type="hidden" name="id" value="<?= (int)$view['id'] ?>">
     <label for="assigned_to" class="visually-hidden">Assign this referral to</label>
@@ -420,7 +420,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
 
   <div class="page-actions">
     <?php if ($view['status'] === 'New'): ?>
-    <form method="post" action="referrals.php" class="inline-form" onsubmit="return confirm('Mark this referral as reviewed? This cannot be undone.');"><?= csrf_field() ?>
+    <form method="post" action="referrals.php" class="inline-form" onsubmit="return confirm(<?= h(json_encode('Mark the referral for ' . $view['client_name'] . ' as reviewed? This cannot be undone.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);"><?= csrf_field() ?>
       <input type="hidden" name="id" value="<?= (int)$view['id'] ?>">
       <button type="submit" name="mark_reviewed" value="1" class="btn btn-secondary">Mark as reviewed</button>
     </form>
@@ -467,6 +467,8 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
 </section>
 <?php endif; ?>
 
+<?php // The list has its own heading (4.30.0), so it is not filed under an open referral's last section. ?>
+<h2 id="ref-list-h"><?= ['open' => 'Open referrals', 'converted' => 'Converted referrals', 'closed' => 'Closed referrals', 'all' => 'All referrals'][$statusShow] ?> (<?= number_format($matchCount) ?>)</h2>
 <form method="get" action="referrals.php" class="page-actions" role="search" aria-label="Filter referrals">
   <label for="ref-status">Status</label>
   <select id="ref-status" name="status">
@@ -487,7 +489,7 @@ page_header($view ? 'Referral #' . (int)$view['id'] . ': ' . $view['client_name'
 <?php if ($matchCount > count($referrals)): ?>
 <p class="alert alert-error">Showing the newest <?= count($referrals) ?> of <?= number_format($matchCount) ?> matching referrals. Narrow the filters to find older ones.</p>
 <?php endif; ?>
-<div class="table-scroll" tabindex="0" role="region" aria-labelledby="referrals-cap">
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="ref-list-h">
 <table>
   <caption class="visually-hidden" id="referrals-cap"><?= ['open' => 'Open referrals', 'converted' => 'Converted referrals', 'closed' => 'Closed referrals', 'all' => 'Referrals'][$statusShow] ?>, newest first<?= $matchCount > count($referrals) ? ' (newest ' . count($referrals) . ' of ' . number_format($matchCount) . ')' : '' ?></caption>
   <thead><tr>

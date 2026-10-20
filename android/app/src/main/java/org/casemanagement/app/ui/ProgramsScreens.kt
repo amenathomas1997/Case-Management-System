@@ -45,14 +45,26 @@ suspend fun clientChoices(api: Api, includeClosed: Boolean = false): List<JSONOb
     return if (includeClosed) list else list.filter { !it.optString("status").startsWith("Closed") }
 }
 
-/** A dialog with a heading title, scrolling content, and Save / Cancel. */
+/**
+ * A dialog with a heading title, scrolling content, and Save / Cancel. 4.30.0: Save stays enabled
+ * while something is [missing]; a press says what (at the end of the dialog, taking focus).
+ */
 @Composable
-fun FormDialog(title: String, saveLabel: String, busy: Boolean, enabled: Boolean = true, onSave: () -> Unit, onCancel: () -> Unit, content: @Composable () -> Unit) {
+fun FormDialog(title: String, saveLabel: String, busy: Boolean, enabled: Boolean = true, onSave: () -> Unit, onCancel: () -> Unit,
+               missing: String? = null, content: @Composable () -> Unit) {
+    val gate = rememberGate(missing)
+    // Each Save press: the dialog's error takes focus again even when its words are the same (4.30.0).
+    var presses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     AlertDialog(
         onDismissRequest = { if (!busy) onCancel() },
         title = { Text(title, modifier = Modifier.semantics { heading() }) },
-        text = { Column(Modifier.verticalScroll(rememberScrollState())) { content() } },
-        confirmButton = { TextButton(enabled = enabled && !busy, onClick = onSave) { Text(if (busy) "Saving…" else saveLabel) } },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                androidx.compose.runtime.CompositionLocalProvider(LocalSavePresses provides presses) { content() }
+                GateError(gate)
+            }
+        },
+        confirmButton = { TextButton(enabled = enabled && !busy, onClick = { presses++; if (gate.check(missing)) onSave() }) { Text(if (busy) "Saving…" else saveLabel) } },
         dismissButton = { TextButton(enabled = !busy, onClick = onCancel) { Text("Cancel") } },
     )
 }
@@ -79,14 +91,14 @@ fun ProgramsScreen(api: Api, nav: NavHostController) {
             list.forEach { c -> ListRow(listOf(c.optString("name"), listOfNotNull(c.str("school"), "${c.optInt("members")} students", "${c.optInt("sessions")} sessions").joinToString(", ")), action = "open it", onClick = { nav.navigate("cohort/${c.optInt("id")}") }) }
         }
     }
-    if (adding) FormDialog("Add a cohort", "Add", busy, name.isNotBlank(), onSave = {
+    if (adding) FormDialog("Add a cohort", "Add", busy, missing = stillNeeded(missingNames("Cohort name" to name.isBlank())), onSave = {
         scope.launchSave({ busy = it }, { error = it }) {
             // 4.28.0: a retry after a lost reply adds it once (see sendOnce).
             val r = api.callOnce("add_cohort", JSONObject().put("name", name.trim()).put("school", school.trim()), idem, { idem = it }, "the cohort")
             adding = false; name = ""; school = ""; nav.navigate("cohort/${r.optInt("id")}")
         }
     }, onCancel = { adding = false }) {
-        Field("Cohort name", name, { name = it })
+        Field("Cohort name", name, { name = it }, required = true)
         Field("School", school, { school = it }, hint = "optional")
         ErrorText(error)
     }
@@ -112,7 +124,7 @@ fun CohortScreen(api: Api, id: Int) {
             NoticeText(notice)
             ErrorText(error)
             c.str("school")?.let { ListRow(listOf("School: $it")) }
-            PrimaryButton("Log a group session", enabled = members.isNotEmpty()) { logging = true }
+            PrimaryButton("Log a group session", missing = if (members.isEmpty()) "Add a student to the cohort first." else null) { logging = true }
             Heading("Students (${members.size})")
             members.forEach { m -> ListRow(listOf(m.optString("name")), action = "remove from the cohort", onClick = { removing = m }) }
             val available = r.optJSONArray("available").objects()
@@ -166,7 +178,7 @@ private fun CohortSessionDialog(api: Api, cohortId: Int, members: List<JSONObjec
     }, onCancel = onCancel) {
         Choice("Activity", activity, PRE_ETS_ACTIVITIES.map { it to it }) { activity = it }
         Field("Date", date, { date = it }, hint = "year-month-day")
-        Field("Length in minutes", minutes, { minutes = it }, keyboard = KeyboardType.Number, error = minutesError)
+        Field("Length in minutes", minutes, { minutes = it }, keyboard = KeyboardType.Number, error = minutesError, required = true)
         Field("Topic", topic, { topic = it }, hint = "optional")
         Field("Notes", notes, { notes = it }, hint = "optional", singleLine = false)
         Heading("Who was there")
@@ -217,7 +229,7 @@ private fun AddContractDialog(api: Api, onDone: (Int) -> Unit, onCancel: () -> U
     var amountError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    FormDialog("Add a contract", "Add", busy, name.isNotBlank(), onSave = {
+    FormDialog("Add a contract", "Add", busy, missing = stillNeeded(missingNames("Name" to name.isBlank())), onSave = {
         val a = if (amount.isBlank()) "0" else moneyText(amount)
         amountError = if (a == null) "Enter the budget in dollars, such as 12500." else null
         if (a == null) { error = amountError; return@FormDialog }
@@ -226,7 +238,7 @@ private fun AddContractDialog(api: Api, onDone: (Int) -> Unit, onCancel: () -> U
                 .put("amount", a).put("start_date", start.trim()).put("end_date", end.trim()), idem, { idem = it }, "the contract").optInt("id"))
         }
     }, onCancel = onCancel) {
-        Field("Name", name, { name = it })
+        Field("Name", name, { name = it }, required = true)
         Field("Funder", funder, { funder = it }, hint = "optional")
         Field("Contract number", number, { number = it }, hint = "optional")
         Field("Budget in dollars", amount, { amount = it }, keyboard = KeyboardType.Decimal, error = amountError)
@@ -292,14 +304,14 @@ fun ContractScreen(api: Api, id: Int) {
                     if (m == null || m.toDouble() <= 0) "amount" to "Enter the amount in dollars, such as 120.50." else null,
                     if (!day.matches(b.trim())) "date" to "Enter the date as year-month-day, such as ${today()}." else null,
                 ).toMap()
-                if (fieldErrors.isNotEmpty() || m == null) { err = fieldErrors.values.firstOrNull(); return@FormDialog }
+                if (fieldErrors.isNotEmpty() || m == null) { err = errorSummary(fieldErrors.values); return@FormDialog }
                 body = JSONObject().put("op", "add_spend").put("amount", m).put("spent_on", b.trim()).put("memo", t.trim()); done = "Spending added."
             } else {
                 fieldErrors = listOfNotNull(
                     if (t.isBlank()) "title" to "Give the deliverable a title." else null,
                     if (b.isNotBlank() && !day.matches(b.trim())) "date" to "Enter the due date as year-month-day, or leave it empty." else null,
                 ).toMap()
-                if (fieldErrors.isNotEmpty()) { err = fieldErrors.values.first(); return@FormDialog }
+                if (fieldErrors.isNotEmpty()) { err = errorSummary(fieldErrors.values); return@FormDialog }
                 body = JSONObject().put("op", "add_deliverable").put("title", t.trim()).put("due_date", b.trim()); done = "Deliverable added."
             }
             scope.launchSave({ busy = it }, { err = it }) {
@@ -315,11 +327,11 @@ fun ContractScreen(api: Api, id: Int) {
             }
         }, onCancel = { form = "" }) {
             if (form == "spend") {
-                Field("Amount in dollars", a, { a = it }, keyboard = KeyboardType.Decimal, error = fieldErrors["amount"])
-                Field("Date", b, { b = it }, hint = "year-month-day", error = fieldErrors["date"])
+                Field("Amount in dollars", a, { a = it }, keyboard = KeyboardType.Decimal, error = fieldErrors["amount"], required = true)
+                Field("Date", b, { b = it }, hint = "year-month-day", error = fieldErrors["date"], required = true)
                 Field("What it was for", t, { t = it }, hint = "optional", error = fieldErrors["memo"])
             } else {
-                Field("Title", t, { t = it }, error = fieldErrors["title"])
+                Field("Title", t, { t = it }, error = fieldErrors["title"], required = true)
                 Field("Due date", b, { b = it }, hint = "year-month-day, optional", error = fieldErrors["date"])
             }
             ErrorText(err)
@@ -383,18 +395,18 @@ private fun AddBookingDialog(api: Api, onDone: (String) -> Unit, onCancel: () ->
     var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    FormDialog("Add a booking", "Add", busy, client.isNotEmpty(), onSave = {
+    FormDialog("Add a booking", "Add", busy, missing = stillNeeded(missingNames("Client" to client.isEmpty())), onSave = {
         val t = if (time.isBlank()) null else time24(time)
         val m = minutes.trim().toIntOrNull()
         val c = if (cost.isBlank()) "" else moneyText(cost)
-        // 4.28.0: each problem on its own field, and the first in the summary.
+        // Each problem on its own field, and all of them in the summary (4.30.0).
         fieldErrors = listOfNotNull(
             if (date.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim())) "date" to "Enter the date as year-month-day, or leave it empty." else null,
             if (time.isNotBlank() && t == null) "time" to "Enter the time such as 2:30 PM." else null,
             if (m == null || m !in 0..1440) "minutes" to "Enter the length in whole minutes, 0 to 1440." else null,
             if (c == null) "cost" to "Enter the cost in dollars, such as 85.00, or leave it empty." else null,
         ).toMap()
-        error = fieldErrors.values.firstOrNull()
+        error = errorSummary(fieldErrors.values)
         if (error != null) return@FormDialog
         scope.launchSave({ busy = it }, { error = it }) {
             api.callOnce("add_booking", JSONObject().put("client_id", client.toInt()).put("service_type", type)
@@ -403,12 +415,12 @@ private fun AddBookingDialog(api: Api, onDone: (String) -> Unit, onCancel: () ->
             onDone("Booking added as Requested.")
         }
     }, onCancel = onCancel) {
-        ErrorText(clients.error)
+        ErrorText(clients.error, takeFocus = false)
         Choice("Client", client, listOf("" to "Choose a client") + (clients.data ?: emptyList()).map { it.optInt("id").toString() to it.optString("name") }) { client = it }
         Choice("Service", type, types.map { it to it }) { type = it }
         Field("Date needed", date, { date = it }, hint = "year-month-day, optional", error = fieldErrors["date"])
         Field("Time", time, { time = it }, hint = "such as 2:30 PM, optional", error = fieldErrors["time"])
-        Field("Length in minutes", minutes, { minutes = it }, keyboard = KeyboardType.Number, error = fieldErrors["minutes"])
+        Field("Length in minutes", minutes, { minutes = it }, keyboard = KeyboardType.Number, error = fieldErrors["minutes"], required = true)
         Field("Provider", provider, { provider = it }, hint = "optional")
         Field("Location", location, { location = it }, hint = "optional")
         Field("Cost in dollars", cost, { cost = it }, hint = "optional", keyboard = KeyboardType.Decimal, error = fieldErrors["cost"])

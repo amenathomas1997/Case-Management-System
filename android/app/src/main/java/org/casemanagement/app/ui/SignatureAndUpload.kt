@@ -194,7 +194,7 @@ fun UploadDocumentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCa
             fileUri = uri; fileName = pickedName(context, uri)
         }
     }
-    FormDialog("Upload a document", "Upload", busy, file != null, onSave = {
+    FormDialog("Upload a document", "Upload", busy, missing = if (file == null) "Still needed: a file. Choose a file first." else null, onSave = {
         val (uri, name) = file ?: return@FormDialog
         val ext = name.substringAfterLast('.', "").lowercase()
         if (ext !in UPLOAD_TYPES) { error = "That file type is not allowed. Choose a PDF, Word, Excel, PowerPoint, text, CSV or picture file."; return@FormDialog }

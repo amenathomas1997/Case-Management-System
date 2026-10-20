@@ -69,7 +69,6 @@ struct CompetencyView: View {
                                     Picker("Level", selection: Binding(get: { levels[s.id] ?? 0 }, set: { levels[s.id] = $0; statusLine = nil })) {
                                         ForEach(0..<5, id: \.self) { Text(competencyLevels[$0]).tag($0) }
                                     }
-                                    .pickerStyle(.menu)
                                     .accessibilityLabel("Level for \(s.skill)" + (s.assessedAt.map { ", last rated \(formatDate($0))" } ?? ""))
                                     // Locked while saving: the reload after the save would quietly put
                                     // back a level changed in the meantime.
@@ -99,6 +98,7 @@ struct CompetencyView: View {
             }
         }
         .navigationTitle("Competency")
+        .modifier(ReadablePickers(inNavigationStack: true))   // choices not cut short at large text sizes
         .navigationBarTitleDisplayMode(.inline)
         // With unsaved levels, Back (and the VoiceOver escape gesture) asks first.
         .navigationBarBackButtonHidden(unsavedCount > 0)

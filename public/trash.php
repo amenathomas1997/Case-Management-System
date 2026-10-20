@@ -123,7 +123,7 @@ page_header('Trash' . ($pages > 1 ? ' (page ' . $page . ' of ' . $pages . ')' : 
           <input type="hidden" name="page" value="<?= $page ?>">
           <button type="submit" name="restore" value="1" class="btn btn-secondary btn-sm">Restore<span class="visually-hidden"> <?= h($itemName) ?></span></button>
           <button type="submit" name="purge" value="1" class="btn btn-danger btn-sm"
-            onclick="return confirm('Permanently delete this item? This cannot be undone.');">Delete forever<span class="visually-hidden"> <?= h($itemName) ?></span></button>
+            onclick="return confirm(<?= h(json_encode('Permanently delete ' . $itemName . '? This cannot be undone.', JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_TAG | JSON_HEX_AMP)) ?>);">Delete forever<span class="visually-hidden"> <?= h($itemName) ?></span></button>
         </form>
       </td>
     </tr>

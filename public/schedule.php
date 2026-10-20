@@ -111,6 +111,14 @@ function schedule_auth_approved(string $p, array $warnings): bool {
     $posted = $_POST[$p . 'authorization_hash'] ?? null;
     return ($_POST[$p . 'authorization_ack'] ?? '') === '1' && is_string($posted) && hash_equals(schedule_auth_hash($warnings), $posted);
 }
+/** The approval message beside the booking warnings (4.30.0). It is called an authorization
+ *  review only when a track's authorization raised one; a double booking or a busy Outlook
+ *  calendar alone is a plain check. It names the box without saying where it is, because the
+ *  same words are read in the error summary at the top and beside the box. */
+function schedule_review_message(bool $authorization, array $lines, bool $group = false): string {
+    return ($authorization ? 'Authorization review: ' : 'Check before booking: ') . implode(' ', $lines)
+        . ' Review the ' . ($group ? 'tracks' : 'track') . ' and the calendar, then tick "I reviewed these warnings" if this booking is still appropriate.';
+}
 
 /**
  * Tell each session's instructor when someone else cancels it or records a No Show:
@@ -226,6 +234,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
         $warnings = workflow_authorization($tid, $f['start'], $f['end']);
         if ($warnings) $authLines[] = $members[$cid]['name'] . ': ' . implode(' ', $warnings);
     }
+    $gAuthorization = (bool)$authLines;
     // The instructor's Outlook calendar (4.20.0), approved with the rest.
     if (!$errors && $f['staff'] && function_exists('calendar_busy_overlaps') && calendar_busy_overlaps((int)$f['staff']['id'], $f['start'], $f['end'])) {
         $authLines[] = $f['staff']['name'] . '\'s Outlook calendar shows them busy then.';
@@ -235,8 +244,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
     $baseLines = $authLines;
     if (!$errors && $f['staff']) $authLines = array_merge($baseLines, session_instructor_overlaps((int)$f['staff']['id'], (string)$f['staff']['name'], [[$f['start'], $f['end']]], $clientIds));
     if ($authLines && !schedule_auth_approved('g_', $authLines)) {
-        $errors['g_authorization_ack'] = 'Authorization review. ' . implode(' ', $authLines)
-            . ' Review the tracks, then tick the approval box below if this booking is still appropriate.';
+        $errors['g_authorization_ack'] = schedule_review_message($gAuthorization, $authLines, true);
     }
     if ($errors) {
         keep_input();
@@ -297,8 +305,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
             $_SESSION['old_input']['g_clients'] = implode(',', $clientIds);
             $_SESSION['old_input']['g_authorization_hash'] = schedule_auth_hash($lockedLines);
             unset($_SESSION['old_input']['g_authorization_ack']);
-            keep_field_errors(['g_authorization_ack' => 'Authorization review. ' . implode(' ', $lockedLines)
-                . ' Review the tracks, then tick the approval box below if this booking is still appropriate.']);
+            keep_field_errors(['g_authorization_ack' => schedule_review_message($gAuthorization, $lockedLines, true)]);
             redirect('schedule.php');
         }
         $authLines = $lockedLines;
@@ -501,6 +508,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
     }
     $authWarnings = [];
     if (!$errors && $trackId) $authWarnings = workflow_authorization($trackId, $f['start'], $f['end'], $repeatWeeks, $occurrences);
+    $authorizationRaised = (bool)$authWarnings;
     // The instructor's Outlook calendar (4.20.0): a time it shows busy is approved like an authorization question.
     if (!$errors && $f['staff'] && function_exists('calendar_busy_overlaps')) {
         $busyDays = [];
@@ -513,8 +521,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
     if (!$errors && $f['staff']) $authWarnings = array_merge($baseWarnings, session_instructor_overlaps((int)$f['staff']['id'], (string)$f['staff']['name'], $occurrences, [$clientId]));
     if (!$errors && $authWarnings) {
         if (!schedule_auth_approved('', $authWarnings)) {
-            $errors['authorization_ack'] = 'Authorization review: ' . implode(' ', $authWarnings)
-                . ' Review the track and the calendar, then tick the approval box below if this booking is still appropriate.';
+            $errors['authorization_ack'] = schedule_review_message($authorizationRaised, $authWarnings);
         }
     }
     // A plan of several days, dates or the whole authorization is shown first, and booked only
@@ -592,8 +599,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
             keep_input();
             unset($_SESSION['old_input']['plan_ok'], $_SESSION['old_input']['authorization_ack'], $_SESSION['plan_preview']);
             $_SESSION['old_input']['authorization_hash'] = schedule_auth_hash($lockedWarnings);
-            keep_field_errors(['authorization_ack' => 'Authorization review: ' . implode(' ', $lockedWarnings)
-                . ' Review the track and the calendar, then tick the approval box below if this booking is still appropriate.']);
+            keep_field_errors(['authorization_ack' => schedule_review_message($authorizationRaised, $lockedWarnings)]);
             redirect('schedule.php');
         }
         $authWarnings = $lockedWarnings;
@@ -982,17 +988,19 @@ function session_row(array $s, string $csrf): void {
         <form method="post" action="schedule.php" class="inline-form">
           <?= csrf_field() ?>
           <input type="hidden" name="session_id" value="<?= (int)$s['id'] ?>">
-          <label class="visually-hidden" for="st-<?= (int)$s['id'] ?>">Update status for <?= $which ?></label>
           <?php // A session that has not started yet can only be cancelled, and nothing is
           // preselected for it (or when hours for that day are already logged), so Save
-          // never records an outcome by default. ?>
+          // never records an outcome by default.
+          // Plain, distinct outcome names (4.30.0): the hours already logged that day are in the
+          // list's own label (shown as a hint), numbered, and each option names its number. ?>
+          <label for="st-<?= (int)$s['id'] ?>"><span class="visually-hidden">Update status for <?= $which ?></span><?php if ($started && $cands): ?><span class="hint" id="sl-<?= (int)$s['id'] ?>"><span class="visually-hidden">. </span>Hours already logged on the track that day: <?php foreach ($cands as $ci => $w): ?><?= $ci ? '; ' : '' ?>entry <?= $ci + 1 ?>, <?= h(fmt_hours((float)$w['hours']) . (trim((string)$w['description']) !== '' ? ', ' . mb_strimwidth(trim((string)$w['description']), 0, 60, '…') : '')) ?><?php endforeach; ?>.</span><?php endif; ?></label>
           <select id="st-<?= (int)$s['id'] ?>" name="to">
             <?php if (!$started || $cands): ?><option value="">— Choose an outcome —</option><?php endif; ?>
-            <?php if ($started && $cands): foreach ($cands as $w): ?>
-            <option value="Completed_logged_<?= (int)$w['id'] ?>">Completed — hours already logged (<?= h(fmt_hours((float)$w['hours']) . (trim((string)$w['description']) !== '' ? ': ' . mb_strimwidth(trim((string)$w['description']), 0, 60, '…') : '')) ?>)</option>
+            <?php if ($started && $cands): foreach ($cands as $ci => $w): ?>
+            <option value="Completed_logged_<?= (int)$w['id'] ?>">Completed, hours already logged<?= count($cands) > 1 ? ' as entry ' . ($ci + 1) : '' ?></option>
             <?php endforeach; ?>
-            <option value="Completed_separate">Completed — log hours as well (a separate visit)</option>
-            <?php elseif ($started): ?><option value="Completed">Completed<?= $s['track_id'] ? ' (log hours)' : '' ?></option><?php endif; ?>
+            <option value="Completed_separate">Completed, log new hours</option>
+            <?php elseif ($started): ?><option value="Completed">Completed</option><?php endif; ?>
             <option value="Cancelled">Cancelled</option>
             <?php if ($started): ?><option value="No Show">No Show</option><?php endif; ?>
           </select>
@@ -1037,17 +1045,24 @@ function session_row(array $s, string $csrf): void {
           <summary>Move or cancel more<span class="visually-hidden"> for the <?= $which ?></span></summary>
           <form method="post" action="schedule.php" class="stacked" novalidate>
             <?= csrf_field() ?><input type="hidden" name="session_id" value="<?= $sidM ?>">
-            <?= form_error_summary([$mKey => ''], [$mKey => 'md-' . $sidM]) ?>
-            <?= field_error($mKey) ?>
+            <?php // One error, shown once (4.30.0): a refusal for warnings belongs to the "Move anyway"
+            // box, which the summary links to; a time that could not be read belongs to the group
+            // of date, time and length. The date, time and length are never each marked invalid.
+            $mWarn = has_field_error($mKey) && str_starts_with(form_errors()[$mKey] ?? '', 'Not moved yet');
+            $mBad = has_field_error($mKey) && !$mWarn; ?>
+            <?= form_error_summary([$mKey => ''], [$mKey => ($mWarn ? 'mc-' : 'mf-') . $sidM]) ?>
+            <fieldset id="mf-<?= $sidM ?>"<?= $mBad ? ' aria-describedby="err-' . h($mKey) . '"' : '' ?>><legend>New time<span class="visually-hidden"> for the <?= $which ?></span></legend>
+            <?= $mBad ? field_error($mKey) : '' ?>
             <div class="field"><label for="md-<?= $sidM ?>">New date<span class="visually-hidden"> for the <?= $which ?></span></label>
-              <input type="date" id="md-<?= $sidM ?>" name="move_date" value="<?= h($mMine ? old_in('move_date') : date('Y-m-d', strtotime($s['start_at']))) ?>" <?= field_aria($mKey) ?>></div>
+              <input type="date" id="md-<?= $sidM ?>" name="move_date" value="<?= h($mMine ? old_in('move_date') : date('Y-m-d', strtotime($s['start_at']))) ?>"></div>
             <div class="field"><label for="mt-<?= $sidM ?>">New start time</label>
-              <input type="time" id="mt-<?= $sidM ?>" name="move_time" value="<?= h($mMine ? old_in('move_time') : date('H:i', strtotime($s['start_at']))) ?>" <?= field_aria($mKey) ?>></div>
+              <input type="time" id="mt-<?= $sidM ?>" name="move_time" value="<?= h($mMine ? old_in('move_time') : date('H:i', strtotime($s['start_at']))) ?>"></div>
             <div class="field"><label for="ml-<?= $sidM ?>">Length in hours</label>
-              <input type="text" inputmode="decimal" id="ml-<?= $sidM ?>" name="move_duration" value="<?= h($mMine ? old_in('move_duration') : rtrim(rtrim(number_format((strtotime($s['end_at']) - strtotime($s['start_at'])) / 3600, 2, '.', ''), '0'), '.')) ?>" <?= field_aria($mKey) ?>></div>
-            <?php if (has_field_error($mKey) && str_starts_with(form_errors()[$mKey] ?? '', 'Not moved yet')): ?>
+              <input type="text" inputmode="decimal" id="ml-<?= $sidM ?>" name="move_duration" value="<?= h($mMine ? old_in('move_duration') : rtrim(rtrim(number_format((strtotime($s['end_at']) - strtotime($s['start_at'])) / 3600, 2, '.', ''), '0'), '.')) ?>"></div>
+            </fieldset>
+            <?php if ($mWarn): ?>
             <input type="hidden" name="move_hash" value="<?= h($mMine ? old_in('move_hash') : '') ?>">
-            <div class="field"><label><input type="checkbox" name="move_confirm" value="1"> Move anyway <span class="hint">approves only the warnings above, for this date and time</span></label></div>
+            <div class="field"><label><input type="checkbox" id="mc-<?= $sidM ?>" name="move_confirm" value="1" <?= field_aria($mKey) ?>> Move anyway <span class="hint">approves only these warnings, for this date and time</span></label><?= field_error($mKey) ?></div>
             <?php endif; ?>
             <button type="submit" name="move_session" value="1" class="btn btn-secondary btn-sm">Move<span class="visually-hidden"> the <?= $which ?></span></button>
           </form>
@@ -1087,23 +1102,46 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
     <?= csrf_field() ?>
     <?= form_error_summary(['client_id' => 'Client', 'track_id' => 'Training track', 'staff_id' => 'Instructor', 'date' => 'Date',
         'time' => 'Start time', 'duration' => 'Duration (hours)', 'repeat_weeks' => 'Repeat weekly', 'location' => 'Location',
-        'notes' => 'Notes', 'meeting_url' => 'Meeting link', 'meeting_make' => 'Make the meeting link', 'authorization_ack' => 'Authorization approval',
+        'notes' => 'Notes', 'meeting_url' => 'Meeting link', 'meeting_make' => 'Make the meeting link', 'authorization_ack' => '',
         'plan_days' => 'Days of the week', 'plan_until' => 'Last date', 'plan_dates' => 'Dates', 'plan_ok' => 'Book these sessions'],
         ['plan_days' => 'plan-day-1', 'plan_ok' => 'plan-preview-h']) ?>
     <div class="grid grid-2">
       <div class="field">
         <label for="client_id">Client <?= required_mark() ?></label>
-        <select id="client_id" name="client_id" required <?= field_aria('client_id') ?>>
+        <select id="client_id" name="client_id" aria-required="true" <?= field_aria('client_id') ?>>
           <option value="">— Choose a client —</option>
           <?php foreach ($clients as $c): ?><option value="<?= (int)$c['id'] ?>" <?= old_in('client_id') === (string)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?></option><?php endforeach; ?>
         </select><?= field_error('client_id') ?>
       </div>
       <div class="field">
-        <label for="track_id">Training track <span class="hint">Link a track so completed sessions auto-log hours</span></label>
+        <label for="track_id">Training track <span class="hint">Link a track so completed sessions auto-log hours; only the chosen client's tracks are listed</span></label>
+        <?php // Plain track names (4.30.0), grouped by client. Once a client is chosen, only that
+        // client's group is listed (schedule_track_filter below); nothing is announced. ?>
         <select id="track_id" name="track_id" <?= field_aria('track_id') ?>>
           <option value="">— None —</option>
-          <?php foreach ($tracks as $t): ?><option value="<?= (int)$t['id'] ?>" <?= old_in('track_id') === (string)$t['id'] ? 'selected' : '' ?>><?= h($t['client_name'] . ' — ' . $t['title']) ?></option><?php endforeach; ?>
+          <?php $keptClient = old_in('client_id');
+          foreach ($tracksByClient as $tcid => $tlist): if ($keptClient !== '' && $keptClient !== (string)$tcid) continue; ?>
+          <optgroup label="<?= h($tlist[0]['client_name']) ?>" data-client="<?= (int)$tcid ?>">
+            <?php foreach ($tlist as $t): ?><option value="<?= (int)$t['id'] ?>" <?= old_in('track_id') === (string)$t['id'] ? 'selected' : '' ?>><?= h($t['title']) ?></option><?php endforeach; ?>
+          </optgroup>
+          <?php endforeach; ?>
         </select><?= field_error('track_id') ?>
+        <?php // Every client's tracks, kept for the filter; never shown or read. ?>
+        <template id="track_id_all"><?php foreach ($tracksByClient as $tcid => $tlist): ?><optgroup label="<?= h($tlist[0]['client_name']) ?>" data-client="<?= (int)$tcid ?>"><?php foreach ($tlist as $t): ?><option value="<?= (int)$t['id'] ?>"><?= h($t['title']) ?></option><?php endforeach; ?></optgroup><?php endforeach; ?></template>
+        <script>(function(){
+          // The track list follows the chosen client: applied when the choice settles (700 ms after
+          // the last change, or when focus leaves the client list), so arrowing through clients
+          // neither rebuilds the list on each press nor announces anything.
+          var c=document.getElementById('client_id'),t=document.getElementById('track_id'),all=document.getElementById('track_id_all'),timer=null,last=null;
+          if(!c||!t||!all||!all.content)return;
+          function apply(){timer=null;if(c.value===last)return;last=c.value;var keep=t.value;
+            t.querySelectorAll('optgroup').forEach(function(g){g.remove();});
+            all.content.querySelectorAll('optgroup').forEach(function(g){if(c.value===''||g.getAttribute('data-client')===c.value)t.appendChild(g.cloneNode(true));});
+            t.value=keep;if(t.value!==keep)t.value='';}
+          c.addEventListener('change',function(){if(timer)clearTimeout(timer);timer=setTimeout(apply,700);});
+          c.addEventListener('blur',function(){if(timer){clearTimeout(timer);apply();}});
+          apply();
+        })();</script>
       </div>
       <div class="field">
         <label for="staff_id">Instructor</label>
@@ -1160,7 +1198,7 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
     // (their fingerprint goes with it), never before any warning has been shown. ?>
     <?php if (old_in('add_session') !== '' && old_in('authorization_hash') !== '' && (has_field_error('authorization_ack') || has_field_error('plan_ok'))): ?>
     <input type="hidden" name="authorization_hash" value="<?= h(old_in('authorization_hash')) ?>">
-    <div class="field"><label><input type="checkbox" id="authorization_ack" name="authorization_ack" value="1"<?= old_in('authorization_ack') !== '' ? ' checked' : '' ?> <?= field_aria('authorization_ack') ?>> I reviewed these authorization warnings and approve this booking despite them.</label><?= field_error('authorization_ack') ?></div>
+    <div class="field"><label><input type="checkbox" id="authorization_ack" name="authorization_ack" value="1"<?= old_in('authorization_ack') !== '' ? ' checked' : '' ?> <?= field_aria('authorization_ack') ?>> I reviewed these warnings and approve this booking despite them.</label><?= field_error('authorization_ack') ?></div>
     <?php endif; ?>
     <button type="submit" name="add_session" value="1" class="btn btn-primary"
       onclick="var w=parseInt(document.getElementById('repeat_weeks').value||'1',10),p=document.getElementById('plan_pattern');return (p&&p.value!=='weekly')||w<=1||confirm('Schedule '+w+' weekly sessions? Each must be cancelled individually if plans change.');">Schedule &amp; send calendar invite</button>
@@ -1179,7 +1217,7 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
   // session and sign-in (the posted group_clients[] list).
   $keptGroup = array_map('intval', array_filter(array_merge(explode(',', old_in('g_clients')), old_in_list('group_clients'))));
   $gLabels = ['g_clients' => 'Clients', 'g_staff_id' => 'Instructor', 'g_date' => 'Date', 'g_time' => 'Start', 'g_duration' => 'Duration (hours)',
-      'g_location' => 'Location', 'g_notes' => 'Notes', 'g_meeting_url' => 'Meeting link', 'g_authorization_ack' => 'Authorization approval'];
+      'g_location' => 'Location', 'g_notes' => 'Notes', 'g_meeting_url' => 'Meeting link', 'g_authorization_ack' => ''];
   foreach ($clients as $c) if (count($tracksByClient[(int)$c['id']] ?? []) > 1) $gLabels['g_track_' . (int)$c['id']] = 'Training track for ' . $c['name'];
   // A track error for a client no longer listed here is still reported.
   foreach (array_keys(form_errors()) as $k) if (str_starts_with($k, 'g_track_') && !isset($gLabels[$k])) $gLabels[$k] = 'Training track'; ?>
@@ -1220,7 +1258,7 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
       <input type="url" id="g_meeting_url" name="g_meeting_url" maxlength="500" placeholder="https://" value="<?= h(old_in('g_meeting_url')) ?>" <?= field_aria('g_meeting_url') ?>><?= field_error('g_meeting_url') ?></div>
     <?php if (old_in('add_group_session') !== '' && old_in('g_authorization_hash') !== '' && has_field_error('g_authorization_ack')): ?>
     <input type="hidden" name="g_authorization_hash" value="<?= h(old_in('g_authorization_hash')) ?>">
-    <div class="field"><label><input type="checkbox" id="g_authorization_ack" name="g_authorization_ack" value="1" <?= field_aria('g_authorization_ack') ?>> I reviewed these authorization warnings and approve this group booking despite them.</label><?= field_error('g_authorization_ack') ?></div>
+    <div class="field"><label><input type="checkbox" id="g_authorization_ack" name="g_authorization_ack" value="1" <?= field_aria('g_authorization_ack') ?>> I reviewed these warnings and approve this group booking despite them.</label><?= field_error('g_authorization_ack') ?></div>
     <?php endif; ?>
     <button type="submit" name="add_group_session" value="1" class="btn btn-primary">Schedule group session</button>
   </form>

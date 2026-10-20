@@ -119,7 +119,7 @@ page_header('Ask the knowledge base', $user, 'kb');
     <li>Or tick “answer from general knowledge” above and ask again.</li>
   </ul>
 </section>
-<script>document.addEventListener("DOMContentLoaded",function(){var s=document.getElementById("nomatch-h");if(s){s.setAttribute("tabindex","-1");s.focus();}});</script>
+<script>(window.cmsFocusAfterLoad||function(f){document.addEventListener("DOMContentLoaded",f);})(function(){var s=document.getElementById("nomatch-h");if(s){s.setAttribute("tabindex","-1");s.focus();}});</script>
 <?php endif; ?>
 
 <?php if ($answer !== null): ?>

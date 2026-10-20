@@ -3,13 +3,15 @@ import UIKit
 
 extension View {
     /// A stepper as one VoiceOver element: swipe up or down to change it, instead of
-    /// flicking past its label to separate Decrement and Increment buttons.
+    /// flicking past its label to separate Decrement and Increment buttons. Only while VoiceOver
+    /// is running (4.30.0): Voice Control, Switch Control and Full Keyboard Access need the
+    /// stepper's own + and − buttons, which one element hid ("Tap Increment" did nothing).
+    /// No hint: VoiceOver already says "adjustable".
     func voiceOverAdjustable<V: Strideable>(_ label: String, value: String, binding: Binding<V>,
                                             in range: ClosedRange<V>, step: V.Stride) -> some View {
-        accessibilityElement(children: .ignore)
+        accessibilityElement(children: VoiceOverRows.children)
             .accessibilityLabel(label)
             .accessibilityValue(value)
-            .accessibilityHint("Swipe up or down to change.")
             .accessibilityAdjustableAction { direction in
                 switch direction {
                 case .increment: binding.wrappedValue = Swift.min(range.upperBound, binding.wrappedValue.advanced(by: step))
@@ -86,5 +88,20 @@ struct ReadablePickers: ViewModifier {
             }
         }
         .onAppear { if decided == nil { decided = push } }
+    }
+}
+
+/// A segmented picker that grows with the text (4.30.0): segment titles stay at one fixed size
+/// whatever the text size, so at the accessibility sizes the picker is a menu button instead,
+/// whose text is the person's size. Its label stays hidden, as a segmented picker's is.
+struct SegmentedUnlessLargeText: ViewModifier {
+    @Environment(\.dynamicTypeSize) private var typeSize
+    func body(content: Content) -> some View {
+        if typeSize.isAccessibilitySize {
+            content.pickerStyle(.menu).labelsHidden()
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        } else {
+            content.pickerStyle(.segmented)
+        }
     }
 }

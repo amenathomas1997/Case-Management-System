@@ -131,7 +131,7 @@ putenv('CMS_TEST_SESSION_ADD=' . json_encode(['totp_pending_secret' => totp_gene
 [$code, $html, $err] = $renderPage('account', []);
 putenv('CMS_TEST_SESSION_ADD');
 check(!str_contains($html, 'totp_pw-hint') && !str_contains($html, 'totp_code-hint') && !str_contains($html, 'admin-link-hint')
-    && preg_match('~<label for="totp_code">[^<]+<span class="hint">~', $html) === 1 && str_contains($html, 'e.fromServer'),
+    && preg_match('~<label for="totp_code">[^<]+(?:<span[^>]*>.*?</span>\s*)*<span class="hint">~s', $html) === 1 /* 4.30.0: a required mark may come first */ && str_contains($html, 'e.fromServer'),
     'My Account: the authenticator hints are inside their labels, and the passkey script shows the server\'s message' . ($err ? ": $err" : ''));
 
 // ---- cron/reset_2fa.php: the sole administrator's way back in ----

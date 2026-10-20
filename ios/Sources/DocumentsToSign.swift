@@ -32,6 +32,7 @@ struct SigningSession: Identifiable {
 /// A client's documents to sign: consent to services, equipment loan agreements and any other
 /// document, sent by email or signed here, in person, with the phone handed to the signer.
 struct SignaturesView: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     @EnvironmentObject var api: API
     let clientId: Int
     let client: ClientInfo
@@ -79,24 +80,41 @@ struct SignaturesView: View {
             if !prepared.isEmpty {
                 Section("Ready to sign here, even with no signal") {
                     ForEach(prepared) { item in
-                        Button { confirmation = nil; signing = SigningSession(document: item.document, prepared: true, signBy: item.expiresAt) } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(item.title).font(.body.weight(.semibold))
-                                Text(preparedDetails(item)).font(.callout).foregroundStyle(Color.secondaryText)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button { confirmation = nil; signing = SigningSession(document: item.document, prepared: true, signBy: item.expiresAt) } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(item.title).font(.body.weight(.semibold))
+                                    Text(preparedDetails(item)).font(.callout).foregroundStyle(Color.secondaryText)
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .contentShape(Rectangle())
+                            // Plain, so only this part of the row signs: the row has a second button.
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.primary)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Sign \(item.title). \(preparedDetails(item))")
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityInputLabels(["Sign \(item.title)", "Sign"])
+                            .accessibilityActions {
+                                Button("Remove from this phone", role: .destructive) { removingPrepared = item }
+                            }
+                            .contextMenu {
+                                Button("Remove from this phone", role: .destructive) { removingPrepared = item }
+                            }
+                            // A visible single-tap way (4.30.0): the long-press menu was the only one
+                            // outside VoiceOver, which has it on the Actions rotor (not a second stop).
+                            Button(role: .destructive) { removingPrepared = item } label: {
+                                Label("Remove from this phone", systemImage: "trash")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                            .tint(Color.alertRed)
+                            .accessibilityLabel("Remove \(item.title) from this phone")
+                            .accessibilityInputLabels(["Remove from this phone", "Remove \(item.title)"])
+                            .accessibilityHidden(UIAccessibility.isVoiceOverRunning)
                         }
-                        .foregroundStyle(.primary)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Sign \(item.title). \(preparedDetails(item))")
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityActions {
-                            Button("Remove from this phone", role: .destructive) { removingPrepared = item }
-                        }
-                        .contextMenu {
-                            Button("Remove from this phone", role: .destructive) { removingPrepared = item }
-                        }
+                        .padding(.vertical, 2)
                     }
                 }
             }
@@ -123,10 +141,39 @@ struct SignaturesView: View {
                         Text(row.title).font(.body.weight(.semibold))
                         Text("\(row.status) · \(row.method)").font(.callout)
                         Text(details(row)).font(.caption).foregroundStyle(Color.secondaryText)
+                        // Visible buttons (4.30.0): Withdraw and Sign here now were only in the
+                        // long-press menu and on the Actions rotor.
+                        if row.status == "Waiting to be signed here" || row.isOpen {
+                            let layout = typeSize.isAccessibilitySize
+                                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                                : AnyLayout(HStackLayout(spacing: 8))
+                            layout {
+                                if row.status == "Waiting to be signed here" {
+                                    Button { Task { await resume(row) } } label: {
+                                        Label("Sign here now", systemImage: "hand.draw")
+                                    }
+                                    .accessibilityLabel("Sign \(row.title) here now")
+                                    .accessibilityInputLabels(["Sign here now", "Sign \(row.title)"])
+                                }
+                                if row.isOpen {
+                                    Button(role: .destructive) { withdrawing = row } label: {
+                                        Label("Withdraw", systemImage: "xmark.circle")
+                                    }
+                                    .tint(Color.alertRed)
+                                    .accessibilityLabel("Withdraw \(row.title)")
+                                    .accessibilityInputLabels(["Withdraw", "Withdraw \(row.title)"])
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                            .padding(.top, 4)
+                        }
                     }
                     .padding(.vertical, 2)
-                    // One stop per document; Withdraw and Sign here now are on the Actions rotor.
-                    .accessibilityElement(children: .ignore)
+                    // One stop per document while VoiceOver runs; Withdraw and Sign here now are
+                    // then on the Actions rotor. Otherwise the row holds its buttons, for Voice
+                    // Control, Switch Control and Full Keyboard Access.
+                    .accessibilityElement(children: VoiceOverRows.children)
                     .accessibilityLabel("\(row.title). \(row.status), \(row.method). \(details(row))")
                     .accessibilityActions { rowActions(row) }
                     .contextMenu { rowActions(row) }
@@ -352,10 +399,11 @@ struct SignatureRequestSheet: View {
                                 Text(loan.name + ((loan.serial ?? "").isEmpty ? "" : ", serial \(loan.serial!)")).tag(loan.id)
                             }
                         }
+                        .errorField("Equipment on loan")
                     }
                     if kind == "document" {
-                        CaptionedField(label: "Title (required)", text: $title)
-                        CaptionedField(label: "Text to sign (required). Leave a blank line between paragraphs.", text: $text, lines: 4...12)
+                        CaptionedField(label: "Title (required)", text: $title, errorName: "Title")
+                        CaptionedField(label: "Text to sign (required). Leave a blank line between paragraphs.", text: $text, lines: 4...12, errorName: "Text to sign")
                     }
                 }
                 Section("Who signs") {
@@ -363,7 +411,7 @@ struct SignatureRequestSheet: View {
                         Text("The client").tag("Client")
                         Text("Parent or guardian").tag("Guardian")
                     }
-                    CaptionedField(label: "Signer's name (required)", text: $signerName)
+                    CaptionedField(label: "Signer's name (required)", text: $signerName, errorName: "Signer's name")
                         .autocorrectionDisabled()
                     CaptionedField(label: mode == .email ? "Signer's email (required)" : "Signer's email (optional)",
                                    text: $signerEmail, keyboard: .emailAddress)
@@ -829,6 +877,7 @@ struct InPersonSigningView: View {
 
     private func fail(_ message: AttributedString) {
         showFormError(message, in: &error)
+        claimFormErrorFocus(String(message.characters))   // VoiceOver is put on the banner below
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 400_000_000)
             errorFocused = true
@@ -908,8 +957,8 @@ struct ReleaseRequestSheet: View {
                             Text("The client").tag("Client")
                             Text("Parent or guardian").tag("Guardian")
                         }
-                        CaptionedField(label: "Signer's name (required)", text: $signerName).autocorrectionDisabled()
-                        CaptionedField(label: "Signer's email (required)", text: $signerEmail, keyboard: .emailAddress)
+                        CaptionedField(label: "Signer's name (required)", text: $signerName, errorName: "Signer's name").autocorrectionDisabled()
+                        CaptionedField(label: "Signer's email (required)", text: $signerEmail, keyboard: .emailAddress, errorName: "Signer's email")
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
                     Section("Who may receive the information") {
@@ -917,7 +966,8 @@ struct ReleaseRequestSheet: View {
                             Text("Choose a type").tag("")
                             ForEach(choices.recipientTypes, id: \.self) { Text($0).tag($0) }
                         }
-                        CaptionedField(label: "Recipient's name or organisation (required)", text: $recipientName)
+                        .errorField("Recipient type")
+                        CaptionedField(label: "Recipient's name or organisation (required)", text: $recipientName, errorName: "Recipient's name")
                         CaptionedField(label: "Recipient's email (optional)", text: $recipientEmail, keyboard: .emailAddress)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
@@ -926,10 +976,10 @@ struct ReleaseRequestSheet: View {
                             Toggle(item, isOn: Binding(get: { info.contains(item) },
                                                        set: { if $0 { info.insert(item) } else { info.remove(item) } }))
                         }
-                        CaptionedField(label: "Other information (optional)", text: $infoOther)
+                        CaptionedField(label: "Other information (optional)", text: $infoOther, errorName: "Information to share")
                     }
                     Section("Purpose") {
-                        CaptionedField(label: "Why the information is shared (required)", text: $purpose, lines: 2...6)
+                        CaptionedField(label: "Why the information is shared (required)", text: $purpose, lines: 2...6, errorName: "Purpose")
                     }
                 } else if error == nil {
                     ProgressView("Loading the release form…")

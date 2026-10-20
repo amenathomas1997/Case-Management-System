@@ -125,8 +125,7 @@ fun HoldBackWhileSaving(busy: Boolean) {
     val view = androidx.compose.ui.platform.LocalView.current
     androidx.activity.compose.BackHandler(enabled = busy && !warned) {
         warned = true
-        @Suppress("DEPRECATION")
-        view.announceForAccessibility("Still saving; it will finish even if you leave. Press Back again to leave.")
+        // 4.30.0: said once: TalkBack reads the toast, so there is no announcement as well.
         android.widget.Toast.makeText(view.context, "Still saving; it will finish even if you leave. Press Back again to leave.", android.widget.Toast.LENGTH_LONG).show()
     }
 }

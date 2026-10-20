@@ -61,6 +61,7 @@
       var key = field.id || field.name || String(index);
       var note = document.createElement('p');
       note.className = 'field-error';
+      note.lang = 'en';
       note.id = 'err-' + key + '-partial';
       note.setAttribute('data-partial-for', '');
       note.textContent = PARTIAL[field.type] || PARTIAL.date;
@@ -98,6 +99,8 @@
     if (!message) {
       message = document.createElement('div');
       message.className = 'session-form-message alert';
+      // Its messages are English, also inside a translated public page (3.1.2).
+      message.lang = 'en';
       message.tabIndex = -1;
       form.prepend(message);
     }

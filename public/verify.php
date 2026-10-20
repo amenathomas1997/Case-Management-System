@@ -204,26 +204,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $totpUnreadable) {
 }
 
 // A refused code puts 'Error — ' in the title too, so it is the first thing heard.
+// 4.30.0: the error is the focused error summary (it links to the field), and it is said
+// again inside the field's own label, so JAWS hears it without aria-describedby.
+if ($error) set_form_errors(['code' => $error]);
 page_header(($error ? 'Error — ' : '') . 'Enter verification code');
+$codeExpiry = (int)cfg('otp_expiry_minutes') ?: 10;
 ?>
 <div class="card auth-card">
   <h1>Enter your verification code</h1>
   <?php if ($totpOnly): ?>
-  <p id="code-intro">Enter the 6-digit code your authenticator app shows now. No code is emailed to an account with an authenticator app. Lost the app? Ask an administrator to reset your two-step verification.</p>
+  <p>Enter the 6-digit code your authenticator app shows now. No code is emailed to an account with an authenticator app. Lost the app? Ask an administrator to reset your two-step verification.</p>
   <?php else: ?>
-  <p id="code-intro">We emailed a 6-digit code to your registered address. Enter it below — or, if you've set up an authenticator app, you can enter the current code from the app instead.</p>
+  <p>We emailed a 6-digit code to your registered address. Enter it below — or, if you've set up an authenticator app, you can enter the current code from the app instead.</p>
   <?php endif; ?>
-  <?php // Read once, as the description of the code field that takes focus on load (aria-describedby below).
-  if ($error): ?><div class="alert alert-error" id="code-error"><?= h($error) ?></div><?php endif; ?>
+  <?= form_error_summary(['code' => '6-digit code']) ?>
   <form method="post" action="verify.php" class="stacked" novalidate>
     <?= csrf_field() ?>
     <div class="field">
       <?php // 10 minutes is the installer's default (dist/install.php) when the setting is missing. ?>
-      <label for="code">6-digit code <span class="hint"><?= $totpOnly ? 'This sign-in expires ' . ((int)cfg('otp_expiry_minutes') ?: 10) . ' minutes after you entered your password.' : 'The code expires ' . ((int)cfg('otp_expiry_minutes') ?: 10) . ' minutes after it was sent.' ?></span></label>
+      <label for="code">6-digit code <span class="hint"><?= $totpOnly
+          ? 'From your authenticator app. This sign-in expires ' . $codeExpiry . ' minutes after you entered your password.'
+          : 'From the newest email, or your authenticator app. The code expires ' . $codeExpiry . ' minutes after it was sent.' ?></span><?php
+          if ($error): ?> <span class="field-error" id="err-code" style="display:block"><?= h($error) ?></span><?php endif; ?></label>
       <input type="text" id="code" name="code" class="otp-input" inputmode="numeric"
-             maxlength="20" required autocomplete="one-time-code" autofocus
-             <?= $error ? 'aria-invalid="true"' : '' ?>
-             aria-describedby="<?= $error ? 'code-error ' : '' ?>code-intro">
+             maxlength="20" required autocomplete="one-time-code"<?= $error ? ' aria-invalid="true"' : ' autofocus' ?>>
     </div>
     <button type="submit" class="btn btn-primary">Verify and sign in</button>
   </form>

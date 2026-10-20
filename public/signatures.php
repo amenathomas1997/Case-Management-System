@@ -97,12 +97,12 @@ if (!$isPost && isset($_GET['sign']) && ($s = client_signature((int)$_GET['sign'
     <?php if ($es && isset(form_errors()['signature'])): // the summary in Spanish too (4.29.0): its words come from the document's language, not the staff page's ?>
     <div class="alert alert-error" tabindex="-1" id="form-error-summary"><p class="legend-h">Corrija lo siguiente:</p>
       <ul><li><a href="#signature" style="display:inline-flex; align-items:center; min-height:2.75rem;">Firma electrónica: <?= h(form_errors()['signature']) ?></a></li></ul></div>
-    <script>document.addEventListener("DOMContentLoaded",function(){var s=document.getElementById("form-error-summary");if(s)s.focus();});</script>
+    <script>(window.cmsFocusAfterLoad||function(f){document.addEventListener("DOMContentLoaded",f);})(function(){var s=document.getElementById("form-error-summary");if(s)s.focus();});</script>
     <?php else: ?>
     <?= form_error_summary(['signature' => 'Electronic signature']) ?>
     <?php endif; ?>
-    <div class="field"><label for="signature"><?= $es ? 'Firma electrónica' : 'Electronic signature' ?> <?= required_mark() ?> <span class="hint"><?= $es ? 'Escriba su nombre completo (' . h($s['signer_name']) . ') para firmar. No importa si las mayúsculas, los acentos o la puntuación son diferentes.' : 'Type your full name (' . h($s['signer_name']) . ') to sign. Capital letters, accents and punctuation do not need to match.' ?></span></label>
-      <input type="text" id="signature" name="signature" autocomplete="off" value="<?= h(old_in('signature')) ?>" <?= field_aria('signature') ?>><?= field_error('signature') ?></div>
+    <div class="field"><label for="signature"><?= $es ? 'Firma electrónica' : 'Electronic signature' ?> <?= $es ? '<span aria-hidden="true">*</span><span class="visually-hidden">(obligatorio)</span>' : required_mark() ?> <span class="hint"><?= $es ? 'Escriba su nombre completo (' . h($s['signer_name']) . ') para firmar. No importa si las mayúsculas, los acentos o la puntuación son diferentes.' : 'Type your full name (' . h($s['signer_name']) . ') to sign. Capital letters, accents and punctuation do not need to match.' ?></span></label>
+      <input type="text" id="signature" name="signature" autocomplete="off" required value="<?= h(old_in('signature')) ?>" <?= field_aria('signature') ?>><?= field_error('signature') ?></div>
     <button type="submit" name="sign_now" value="<?= (int)$s['id'] ?>" class="btn btn-primary"><?= $es ? 'Firmar' : 'Sign' ?></button>
   </form>
   <form method="post" action="<?= h($here) ?>" class="inline-form"><?= csrf_field() ?><input type="hidden" name="stop" value="1">
@@ -150,11 +150,11 @@ page_header('Documents to sign: ' . $client['name'], $user, 'clients', [['client
   <form method="post" action="<?= h($here) ?>" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['kind' => 'What to send', 'signer_name' => 'Who signs', 'signer_email' => 'Their email', 'loan_id' => 'Device on loan', 'title' => 'Title', 'body' => 'What they agree to'], $loans ? [] : ['loan_id' => 'err-loan_id']) ?>
     <div class="field"><label for="kind">What to send <?= required_mark() ?></label>
-      <select id="kind" name="kind" <?= field_aria('kind') ?>><?= kv_options(SIGN_KINDS, $old('kind', 'services'), 'Choose') ?></select><?= field_error('kind') ?></div>
+      <select id="kind" name="kind" aria-required="true" <?= field_aria('kind') ?>><?= kv_options(SIGN_KINDS, $old('kind', 'services'), 'Choose') ?></select><?= field_error('kind') ?></div>
     <div class="field"><label for="signer_role">Who signs</label>
       <select id="signer_role" name="signer_role"><?= kv_options(['Client' => 'The client', 'Guardian' => 'Their parent or guardian'], $old('signer_role', $minor ? 'Guardian' : 'Client'), 'Choose') ?></select></div>
     <div class="field"><label for="signer_name">Their full name <?= required_mark() ?></label>
-      <input type="text" id="signer_name" name="signer_name" maxlength="120" autocomplete="off" value="<?= h($old('signer_name', (string)($minor ? $client['guardian_name'] : $client['name']))) ?>" <?= field_aria('signer_name') ?>><?= field_error('signer_name') ?></div>
+      <input type="text" id="signer_name" name="signer_name" maxlength="120" autocomplete="off" required value="<?= h($old('signer_name', (string)($minor ? $client['guardian_name'] : $client['name']))) ?>" <?= field_aria('signer_name') ?>><?= field_error('signer_name') ?></div>
     <div class="field"><label for="signer_email">Their email (needed to send it by email)</label>
       <input type="email" id="signer_email" name="signer_email" maxlength="190" autocomplete="off" value="<?= h($old('signer_email', (string)($minor ? ($client['guardian_email'] ?? '') : ($client['email'] ?? '')))) ?>" <?= field_aria('signer_email') ?>><?= field_error('signer_email') ?></div>
     <?php if ($loans): ?>

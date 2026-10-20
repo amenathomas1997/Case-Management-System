@@ -144,7 +144,8 @@ struct TasksView: View {
                 }
             }
             .onChange(of: error) { message in
-                guard message != nil else { return }
+                guard let message else { return }
+                claimFormErrorFocus(message)   // VoiceOver is put on the banner, which reads it
                 DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(errorRow, anchor: .top) } }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)
@@ -325,6 +326,7 @@ struct TaskEditSheet: View {
                 Section("What needs doing? (required)") {
                     TextField("Task title", text: $title, axis: .vertical).lineLimit(1...3)
                         .accessibilityLabel("What needs doing, required")
+                        .errorField("What needs doing")
                 }
                 Section("Details") {
                     TextField("Details", text: $details, axis: .vertical).lineLimit(2...6)

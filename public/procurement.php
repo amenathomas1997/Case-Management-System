@@ -282,7 +282,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
             audit($user['id'], 'device.status', 'device_request', $rid, ($isReopen ? 'reopened as ' : '') . $to);
             flash(($isReopen ? 'Request reopened. ' : '') . 'Status updated to ' . $to . '.');
         } else {
-            flash('Choose whether the request was denied or cancelled. Nothing was changed.', 'error');
+            // 4.30.0: tied to the choice (not a flash), with the reason kept.
+            keep_input();
+            keep_field_errors(['close_to' => 'Choose whether the request was denied or cancelled. Nothing was changed.']);
         }
     }
     redirect($back);
@@ -367,7 +369,7 @@ if (isset($_GET['id'])) {
       </div>
       <?php else: ?><p class="muted">No quotes yet.</p><?php endif; ?>
       <?php if (!$done): ?>
-      <form method="post" action="procurement.php" class="stacked" style="margin-top:1rem"><?= csrf_field() ?><?= web_idem_field() ?>
+      <form method="post" action="procurement.php" class="stacked" style="margin-top:1rem" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
         <input type="hidden" name="rid" value="<?= $rid ?>">
         <?php // After a rejected submission the form comes back filled in, with the error on its field.
         $oldQuote = fn(string $k): string => old_in('add_quote') !== '' ? h(old_in($k)) : ''; ?>
@@ -439,7 +441,7 @@ if (isset($_GET['id'])) {
           <button type="submit" name="record_delivery" value="1" class="btn btn-primary">Save delivery</button>
         </form>
       <?php $lifeForms['delivery'] = ob_get_clean(); ob_start(); ?>
-        <form method="post" action="procurement.php" class="stacked card"><?= csrf_field() ?>
+        <form method="post" action="procurement.php" class="stacked card" novalidate><?= csrf_field() ?>
           <input type="hidden" name="rid" value="<?= $rid ?>">
           <h3>Complete training</h3>
           <?php // Closing as Trained is final, so it needs the confirmation box ticked; a
@@ -458,7 +460,8 @@ if (isset($_GET['id'])) {
       $moreFailed = false;
       foreach ($stepFields as $stepKey => $fields) {
           if ($stepKey !== $nextStep && array_intersect_key(form_errors(), array_flip($fields)) !== []) $moreFailed = true;
-      } ?>
+      }
+      if (has_field_error('close_to')) $moreFailed = true; ?>
       <?= $lifeForms[$nextStep] ?>
       <details class="mt-1"<?= $moreFailed ? ' open' : '' ?>>
       <summary>More actions<span class="visually-hidden"> for this request: other lifecycle steps, deny or cancel</span></summary>
@@ -468,15 +471,17 @@ if (isset($_GET['id'])) {
 
       <?php // The outcome is an explicit choice, so pressing Enter in the reason field
       // can never pick one by default, and the form works without scripting. ?>
-      <form method="post" action="procurement.php" class="stacked" style="margin-top:1rem"><?= csrf_field() ?>
+      <form method="post" action="procurement.php" class="stacked" style="margin-top:1rem" novalidate><?= csrf_field() ?>
         <input type="hidden" name="rid" value="<?= $rid ?>"><input type="hidden" name="set_state" value="1">
         <h3>Deny or cancel</h3>
-        <fieldset>
-          <legend>Close this request as</legend>
-          <label><input type="radio" name="to" value="Denied" required> Denied (funding was refused)</label>
+        <?= form_error_summary(['close_to' => ''], ['close_to' => 'close-denied']) ?>
+        <fieldset role="radiogroup" aria-required="true" <?= field_aria('close_to') ?>>
+          <legend>Close this request as <?= required_mark() ?></legend>
+          <?= field_error('close_to') ?>
+          <label><input type="radio" id="close-denied" name="to" value="Denied" required> Denied (funding was refused)</label>
           <label><input type="radio" name="to" value="Cancelled"> Cancelled (no longer needed)</label>
         </fieldset>
-        <div class="field"><label for="notes">Reason (optional)</label><input type="text" id="notes" name="notes" maxlength="500" value="<?= h($r['notes'] ?? '') ?>"></div>
+        <div class="field"><label for="notes">Reason (optional)</label><input type="text" id="notes" name="notes" maxlength="500" value="<?= h(has_field_error('close_to') ? old_in('notes') : ($r['notes'] ?? '')) ?>"></div>
         <button type="submit" class="btn btn-danger">Close request</button>
       </form>
       </details>

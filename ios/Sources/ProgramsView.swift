@@ -156,8 +156,9 @@ struct CohortDetail: View {
             // otherwise leave it off screen, where a List never draws it, so it was neither seen
             // nor heard. Scroll it into view once it exists, then put VoiceOver on it.
             .onChange(of: error) { message in
-                guard message != nil else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(errorRow, anchor: .top) } }
+                guard let message else { return }
+                claimFormErrorFocus(message)   // VoiceOver is put on the banner, which reads it
+                DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(errorRow, anchor: .top) } }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)
                     focusedMember = errorFocus
@@ -165,6 +166,7 @@ struct CohortDetail: View {
             }
         }
         .navigationTitle(data?.cohort.name ?? "Cohort")
+        .modifier(ReadablePickers(inNavigationStack: true))   // choices not cut short at large text sizes
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
         .sheet(isPresented: $logSession, onDismiss: announceSheetResult) {
@@ -315,7 +317,7 @@ struct CohortNewSheet: View {
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
             ErrorFocusForm(inNavigationStack: true, error: error) {
                 // Visible names that stay once the fields are filled; the required one says so.
-                CaptionedField(label: "Cohort name (required)", text: $name)
+                CaptionedField(label: "Cohort name (required)", text: $name, errorName: "Cohort name")
                 CaptionedField(label: "School / district", text: $school)
             }
             .navigationTitle("New cohort").navigationBarTitleDisplayMode(.inline)

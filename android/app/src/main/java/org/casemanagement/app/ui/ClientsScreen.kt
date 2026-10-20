@@ -173,7 +173,7 @@ private fun ConsentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onC
         if (r != null) { if (name == null) name = r.optString("guardian_name"); if (email == null) email = r.optString("guardian_email") }
     }
     FormDialog("Guardian consent", consent?.str("request_label")?.let { if (it.contains("Resend")) "Resend" else "Send" } ?: "Send", busy,
-        enabled = r != null && canRequest && !name.isNullOrBlank() && !email.isNullOrBlank(), onSave = {
+        enabled = r != null && canRequest, missing = stillNeeded(missingNames("Guardian name" to name.isNullOrBlank(), "Guardian email" to email.isNullOrBlank())), onSave = {
             scope.launchSave({ busy = it }, { error = it }) {
                 // 4.28.0: the consent form is emailed once even when a reply was lost (see sendOnce).
                 val res = api.callOnce("request_consent", org.json.JSONObject().put("client_id", clientId).put("guardian_name", name!!.trim()).put("guardian_email", email!!.trim()),
@@ -182,7 +182,7 @@ private fun ConsentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onC
             }
         }, onCancel = onCancel) {
         if (loaded.loading && r == null) Text("Loading the consent…")
-        ErrorText(loaded.error)
+        ErrorText(loaded.error, takeFocus = false)
         if (r != null) {
             val st = consent?.optString("state") ?: "None"
             Text(when (st) {
@@ -194,8 +194,8 @@ private fun ConsentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onC
             })
             if (!canRequest) Text("A new request is offered 30 days before the consent ends.")
             else {
-                Field("Guardian name", name ?: "", { name = it })
-                Field("Guardian email", email ?: "", { email = it }, keyboard = KeyboardType.Email)
+                Field("Guardian name", name ?: "", { name = it }, required = true)
+                Field("Guardian email", email ?: "", { email = it }, keyboard = KeyboardType.Email, required = true)
             }
         }
         ErrorText(error)
@@ -265,10 +265,10 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
     Page {
         Choice("Note type", type, types.map { it to it }) { type = it }
         Choice("Format", format, listOf("free" to "Free text", "BIRP" to "BIRP", "PAIP" to "PAIP", "SOAP" to "SOAP")) { format = it }
-        Field("Subject", subject, { subject = it })
+        Field("Subject", subject, { subject = it }, required = true)
         NoticeText(notice)
         if (!structured) {
-            Field("Note", body, { body = it }, singleLine = false, minLines = 6)
+            Field("Note", body, { body = it }, singleLine = false, minLines = 6, required = true)
             if (api.aiHas("draft") && body.isNotBlank()) SecondaryButton(if (aiBusy) "Cleaning up… this can take up to a minute" else "Clean up with AI") {
                 if (aiBusy) return@SecondaryButton
                 val sent = body
@@ -322,9 +322,13 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
             }
             Field("Narrative", body, { body = it }, hint = "optional", singleLine = false, minLines = 3)
         }
+        // 4.30.0: the AI's wait is said once when it starts.
+        Announce(if (aiBusy) "Working… This can take up to a minute." else null, key = aiBusy)
         ErrorText(error)
-        val ready = subject.isNotBlank() && (if (structured) sections.any { it.isNotBlank() } else body.isNotBlank())
-        PrimaryButton("Save note", busy = busy, enabled = ready) {
+        // 4.30.0: Save stays enabled; a press says what is still needed.
+        val missing = stillNeeded(missingNames("Subject" to subject.isBlank(),
+            (if (structured) "at least one section" else "Note") to (if (structured) sections.none { it.isNotBlank() } else body.isBlank())))
+        PrimaryButton("Save note", busy = busy, missing = missing) {
             if (structured && include.isNotEmpty() && homework.isNotEmpty() && hwTrack.isEmpty() && (tracks.data ?: emptyList()).isNotEmpty()) {
                 error = "Choose a track for the homework, or untick it."; return@PrimaryButton
             }
@@ -366,6 +370,7 @@ fun LogHoursScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int
     var error by remember { mutableStateOf<String?>(null) }
     // 4.28.0: each problem on its own field as well as in the summary.
     var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var presses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     HoldBackWhileSaving(busy)
     Page {
@@ -373,24 +378,26 @@ fun LogHoursScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int
         Heading(t?.let { it.client + ": " + it.title } ?: "Training track")
         val cats = t?.visitCategories ?: emptyList()
         if (cats.isNotEmpty()) Choice("Kind of visit", category, listOf("" to "Not chosen") + cats.map { it to it }) { category = it }
-        Field("Date", date, { date = it }, hint = "year-month-day, such as ${today()}", error = fieldErrors["date"])
-        Field("Hours", hours, { hours = it }, hint = "such as 1.5", keyboard = KeyboardType.Decimal, error = fieldErrors["hours"])
+        Field("Date", date, { date = it }, hint = "year-month-day, such as ${today()}", error = fieldErrors["date"], required = true)
+        Field("Hours", hours, { hours = it }, hint = "such as 1.5", keyboard = KeyboardType.Decimal, error = fieldErrors["hours"], required = true)
         Field("Miles driven", miles, { miles = it }, hint = "0 if none", keyboard = KeyboardType.Decimal, error = fieldErrors["miles"])
-        Field("What was done", description, { description = it }, singleLine = false, minLines = 4)
+        Field("What was done", description, { description = it }, singleLine = false, minLines = 4, error = fieldErrors["description"], required = true)
         SignaturePad(signature)
         Field("Client's typed name", signedName, { signedName = it }, hint = "optional; counts as their acknowledgement")
-        ErrorText(error)
-        PrimaryButton("Log hours", busy = busy, enabled = hours.isNotBlank() && description.isNotBlank()) {
+        ErrorText(error, focusKey = presses)
+        PrimaryButton("Log hours", busy = busy) {
+            presses++
             val h = number(hours)
             val m = number(miles.ifBlank { "0" })
             fieldErrors = listOfNotNull(
                 if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim())) "date" to "Enter the date as year-month-day, such as ${today()}." else null,
                 if (h == null || h <= 0 || h > 24) "hours" to "Enter the hours as a number from 0.25 to 24, such as 1.5." else null,
                 if (m == null || m < 0 || m > 1000) "miles" to "Enter the miles as a number from 0 to 1000." else null,
+                if (description.isBlank()) "description" to "Say what was done." else null,
             ).toMap()
             when {
                 busy -> {}
-                h == null || m == null || fieldErrors.isNotEmpty() -> error = fieldErrors.values.firstOrNull()
+                h == null || m == null || fieldErrors.isNotEmpty() -> error = errorSummary(fieldErrors.values)
                 else -> scope.launchSave({ busy = it }, { error = it }) {
                     val payload = org.json.JSONObject().put("track_id", trackId).put("hours", h).put("date", date.trim())
                         .put("mileage", m).put("description", description.trim()).put("idem_key", idem)

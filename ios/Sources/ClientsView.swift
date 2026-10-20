@@ -973,7 +973,7 @@ struct AddNoteSheet: View {
                             ForEach(activeTracks) { Text($0.title).tag($0.id) }
                         }
                     }
-                    CaptionedField(label: "Subject (required)", text: $subject, prompt: "Subject")
+                    CaptionedField(label: "Subject (required)", text: $subject, prompt: "Subject", errorName: "Subject")
                 }
 
                 if structured {
@@ -1001,6 +1001,7 @@ struct AddNoteSheet: View {
                 } else {
                     Section("Note (required)") {
                         TextField("Note", text: $body_, axis: .vertical).lineLimit(5...12)
+                            .errorField("Note")
                         if api.aiHas("draft") && !body_.isEmpty {
                             Button { Task { await cleanup() } } label: {
                                 Label(aiBusy ? "Drafting…" : "Clean up with AI", systemImage: "sparkles")
@@ -1588,8 +1589,8 @@ struct ConsentRequestSheet: View {
                 }
                 Section("Guardian") {
                     // No name content type (4.27.0): AutoFill would offer the staff member's own name.
-                    CaptionedField(label: "Guardian name (required)", text: $name)
-                    CaptionedField(label: "Guardian email (required)", text: $email, keyboard: .emailAddress)
+                    CaptionedField(label: "Guardian name (required)", text: $name, errorName: "Guardian name")
+                    CaptionedField(label: "Guardian email (required)", text: $email, keyboard: .emailAddress, errorName: "Guardian email")
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 }

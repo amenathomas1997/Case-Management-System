@@ -118,7 +118,8 @@ struct EquipmentView: View {
                 // would otherwise leave it off screen, where a List never draws it, so it was
                 // neither seen nor heard. Scroll it into view once it exists, then put VoiceOver on it.
                 .onChange(of: error) { message in
-                    guard message != nil else { return }
+                    guard let message else { return }
+                    claimFormErrorFocus(message)   // VoiceOver is put on the banner, which reads it
                     DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(errorRow, anchor: .top) } }
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 400_000_000)
@@ -272,7 +273,7 @@ struct EquipmentView: View {
         // included) and Service & details are on the Actions rotor.
         .accessibilityElement(children: VoiceOverRows.children)
         .accessibilityLabel(itemSpokenLabel(item))
-        .accessibilityHint("Double-tap for service and details. Swipe up or down for actions.")
+        .accessibilityHint("Double-tap for service and details.")   // "Actions available" is said by VoiceOver
         .accessibilityAction { detailItem = item }
         .accessibilityActions {
             if let loanId = item.loanId, item.borrowerId != nil {
@@ -721,7 +722,7 @@ struct LogServiceSheet: View {
                 DatePicker("Date", selection: $date, in: ...Date(), displayedComponents: .date)
                 // Visible names that stay once a field holds text.
                 CaptionedField(label: "Notes", text: $notes)
-                KeyboardCaptionedField(label: "Cost (digits, like 12.50)", text: $cost, keyboard: .decimalPad)
+                KeyboardCaptionedField(label: "Cost (digits, like 12.50)", text: $cost, keyboard: .decimalPad, errorName: "Cost")
             }
             .navigationTitle("Log service").navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -826,7 +827,8 @@ struct ReservationsView: View {
             // would otherwise leave it off screen, where a List never draws it, so it was neither
             // seen nor heard. Scroll it into view once it exists, then put VoiceOver on it.
             .onChange(of: error) { message in
-                guard message != nil else { return }
+                guard let message else { return }
+                claimFormErrorFocus(message)   // VoiceOver is put on the banner, which reads it
                 DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(errorRow, anchor: .top) } }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 400_000_000)
@@ -1010,13 +1012,13 @@ struct AddEquipmentSheet: View {
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
             ErrorFocusForm(inNavigationStack: true, error: error) {
                 // Visible names that stay once a field holds text.
-                CaptionedField(label: "Item name (required)", text: $name)
+                CaptionedField(label: "Item name (required)", text: $name, errorName: "Item name")
                 Picker("Category", selection: $category) { ForEach(equipmentCategoriesApp, id: \.self) { Text($0) } }
                 CaptionedField(label: "Serial #", text: $serial)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 Picker("Condition", selection: $condition) { ForEach(equipmentConditions, id: \.self) { Text($0) } }
-                KeyboardCaptionedField(label: "Value in USD (digits, like 12.50)", text: $value, keyboard: .decimalPad)
+                KeyboardCaptionedField(label: "Value in USD (digits, like 12.50)", text: $value, keyboard: .decimalPad, errorName: "Value")
                 // Any whole number of days, as on the website; left empty (or 0) for no schedule.
                 KeyboardCaptionedField(label: "Service interval in days (optional)", text: $interval, keyboard: .numberPad)
                     .accessibilityHint("Whole days from 0 to 3650. Leave empty or enter 0 for no service schedule.")

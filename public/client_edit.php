@@ -538,7 +538,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       <select id="office_id" name="office_id" <?= field_aria('office_id') ?>><?= office_options($officeNow ?: null) ?></select><?= field_error('office_id') ?></div>
     <?php endif; ?>
     <div class="field"><label for="state">State<?= $stateRequired ? ' <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span>' : ' <span class="hint">not recorded yet: choose it, so reminders and texts follow their time zone</span>' ?></label>
-      <select id="state" name="state" <?= $stateRequired ? 'required ' : '' ?><?= field_aria('state') ?>><?= kv_options(US_STATES, html_entity_decode($v('state'), ENT_QUOTES), 'Choose a state') ?></select><?= field_error('state') ?></div>
+      <select id="state" name="state" <?= $stateRequired ? 'aria-required="true" ' : '' ?><?= field_aria('state') ?>><?= kv_options(US_STATES, html_entity_decode($v('state'), ENT_QUOTES), 'Choose a state') ?></select><?= field_error('state') ?></div>
     <div class="field"><label for="time_zone">Time zone for the client's emails and portal</label>
       <select id="time_zone" name="time_zone"><?= kv_options(US_TIME_ZONES, html_entity_decode($v('time_zone'), ENT_QUOTES), 'The state\'s usual zone, or the office\'s') ?></select></div>
   </fieldset>
@@ -572,7 +572,7 @@ page_header(($errors ? 'Error — ' : '') . ($client ? 'Edit ' . $client['name']
       <ul><?php foreach ($loose as [$txt, $href]): ?><li><a href="<?= h($href) ?>"><?= h($txt) ?></a></li><?php endforeach; ?></ul>
       <?php endif; ?>
       <div class="field"><label for="closure_reason">Why is the case closing? <?= required_mark() ?></label>
-        <select id="closure_reason" name="closure_reason" required <?= field_aria('closure_reason') ?>><option value="">Choose a reason</option>
+        <select id="closure_reason" name="closure_reason" aria-required="true" <?= field_aria('closure_reason') ?>><option value="">Choose a reason</option>
           <?php foreach (cms_list_items('closure_reasons') as $cr): ?><option value="<?= h($cr) ?>"<?= ($raw('closure_reason') ?? '') === $cr ? ' selected' : '' ?>><?= h($cr) ?></option><?php endforeach; ?>
         </select><?= field_error('closure_reason') ?></div>
       <div class="field"><label for="closure_note">Note (required for Other)</label>

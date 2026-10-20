@@ -129,8 +129,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_shown'])) {
 /* Several Draft invoices marked submitted at once (4.0.0), each with the same date. */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_submit'])) {
     $raw = is_string($_POST['bulk_submitted_on'] ?? null) ? trim($_POST['bulk_submitted_on']) : '';
+    $bulkIds = array_slice(array_values(array_unique(array_filter(array_map('intval', (array)($_POST['bulk_ids'] ?? []))))), 0, 200);
+    // 4.30.0: a refusal is tied to the boxes or the date (not a flash), and what was chosen is kept.
+    $bulkErrors = [];
+    if (!$bulkIds) $bulkErrors['bulk_ids'] = 'Tick at least one draft invoice.';
+    $rawDate = $raw === '' ? null : valid_date($raw, 2000, (int)date('Y'));
+    if ($raw !== '' && ($rawDate === null || $rawDate > date('Y-m-d'))) $bulkErrors['bulk_submitted_on'] = 'Enter the date they were sent as a full date, not after today.';
+    if ($bulkErrors) { keep_input(); keep_field_errors($bulkErrors); redirect('invoices.php#bulk-h'); }
     $n = 0; $refused = [];
-    foreach (array_slice(array_values(array_unique(array_filter(array_map('intval', (array)($_POST['bulk_ids'] ?? []))))), 0, 200) as $bid) {
+    foreach ($bulkIds as $bid) {
         $bq = db()->prepare("SELECT i.id, i.invoice_number, i.created_at FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id WHERE i.id = ? AND i.status = 'Draft'" . $scopeCond);
         $bq->execute(array_merge([$bid], $scopeArg));
         $bi = $bq->fetch();
@@ -138,6 +145,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_submit'])) {
         $on = $raw === '' ? date('Y-m-d') : billing_date_in($raw, (string)$bi['created_at']);
         if ($on === null) { $refused[] = $bi['invoice_number']; continue; }
         if (invoice_submit((int)$bi['id'], $on)) { audit($user['id'], 'invoice.submit', 'invoice', (int)$bi['id'], 'submitted ' . $on . ' (several at once)'); $n++; }
+    }
+    if (!$n && $refused) {
+        keep_input();
+        keep_field_errors(['bulk_submitted_on' => 'The date is before these invoices were created: ' . implode(', ', $refused) . '. Choose a later date.']);
+        redirect('invoices.php#bulk-h');
     }
     flash(($n ? $n . ' invoice' . ($n === 1 ? '' : 's') . ' marked submitted.' : 'No invoice was marked submitted.') . ($refused ? ' Not changed, because the date is before they were created: ' . implode(', ', $refused) . '.' : ''), $n ? 'success' : 'error');
     redirect('invoices.php#inv-list-h');
@@ -634,12 +646,15 @@ $pageNote = $invTotal > $perPage && $onlyId === 0
 </div>
 <?php $bq = db()->prepare("SELECT i.id, i.invoice_number, i.total_amount, c.name AS client_name FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id WHERE i.status = 'Draft'" . $scopeCond . ' ORDER BY i.created_at LIMIT 200');
 $bq->execute($scopeArg); $drafts = $bq->fetchAll(); if (count($drafts) > 1): ?>
-<details><summary>Mark several drafts submitted</summary>
-  <form method="post" action="invoices.php" class="stacked"><?= csrf_field() ?>
-    <fieldset><legend>Draft invoices</legend>
-    <?php foreach ($drafts as $d): ?><label><input type="checkbox" name="bulk_ids[]" value="<?= (int)$d['id'] ?>"> <?= h($d['invoice_number']) ?>, <?= h($d['client_name']) ?>, <?= h(fmt_money((float)$d['total_amount'])) ?></label><?php endforeach; ?>
+<?php $bulkKept = old_in_list('bulk_ids'); $bulkErr = has_field_error('bulk_ids') || has_field_error('bulk_submitted_on'); ?>
+<details<?= $bulkErr ? ' open' : '' ?>><summary id="bulk-h">Mark several drafts submitted</summary>
+  <form method="post" action="invoices.php" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['bulk_ids' => 'Draft invoices', 'bulk_submitted_on' => 'Date they were sent'], ['bulk_ids' => 'bulk-' . (int)$drafts[0]['id']]) ?>
+    <fieldset <?= field_aria('bulk_ids') ?>><legend>Draft invoices</legend>
+    <?= field_error('bulk_ids') ?>
+    <?php foreach ($drafts as $d): ?><label><input type="checkbox" id="bulk-<?= (int)$d['id'] ?>" name="bulk_ids[]" value="<?= (int)$d['id'] ?>"<?= in_array((string)(int)$d['id'], $bulkKept, true) ? ' checked' : '' ?>> <?= h($d['invoice_number']) ?>, <?= h($d['client_name']) ?>, <?= h(fmt_money((float)$d['total_amount'])) ?></label><?php endforeach; ?>
     </fieldset>
-    <div class="field"><label for="bulk_submitted_on">Date they were sent</label><input type="date" id="bulk_submitted_on" name="bulk_submitted_on" max="<?= date('Y-m-d') ?>" value="<?= date('Y-m-d') ?>"></div>
+    <div class="field"><label for="bulk_submitted_on">Date they were sent</label><input type="date" id="bulk_submitted_on" name="bulk_submitted_on" max="<?= date('Y-m-d') ?>" value="<?= h(old_in('bulk_submitted_on', date('Y-m-d'))) ?>" <?= field_aria('bulk_submitted_on') ?>><?= field_error('bulk_submitted_on') ?></div>
     <button type="submit" name="bulk_submit" value="1" class="btn btn-secondary">Mark the chosen invoices submitted</button>
   </form>
 </details>

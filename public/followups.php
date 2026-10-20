@@ -171,7 +171,7 @@ function fu_when(array $r): string {
       <p class="fu-when muted"><?= fu_when($r) ?></p>
       <fieldset class="fu-fields">
         <legend class="visually-hidden">Record the <?= (int)$r['interval_days'] ?>-day follow-up for <?= h($fuName) ?></legend>
-        <fieldset class="fu-use"><legend>Still in use? <span class="visually-hidden">(required)</span></legend>
+        <fieldset class="fu-use"><legend>Still in use? <?= required_mark() ?></legend>
           <label><input type="radio" id="fu-<?= $fid ?>" name="in_use" value="yes" required <?= field_aria($useKey) ?>> Yes</label>
           <label><input type="radio" name="in_use" value="no" <?= field_aria($useKey) ?>> No</label>
           <label><input type="radio" name="in_use" value="unknown" <?= field_aria($useKey) ?>> Unknown</label>

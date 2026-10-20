@@ -89,7 +89,7 @@ page_header($q !== '' ? 'Search results' : 'Search', $user, '');
       . ' for “' . $q . '” in ' . count($results) . ' ' . (count($results) === 1 ? 'category' : 'categories')
       . ': ' . implode(', ', array_keys($results)) . '.'; ?>
   <p id="search-summary" tabindex="-1"><strong><?= h($summary) ?></strong></p>
-  <script>document.addEventListener('DOMContentLoaded',function(){var s=document.getElementById('search-summary');if(s)s.focus();});</script>
+  <script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){var s=document.getElementById('search-summary');if(s)s.focus();});</script>
 <?php endif; ?>
 
 <?php foreach ($results as $label => $rows): ?>

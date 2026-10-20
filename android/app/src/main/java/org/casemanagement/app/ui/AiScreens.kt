@@ -29,16 +29,22 @@ import java.util.UUID
  */
 
 private const val AI_WAIT = "This can take up to a minute."
+/** What a busy AI button says, and what is said once when it is pressed (4.30.0). */
+private const val AI_WORKING = "Working… $AI_WAIT"
 
-/** An AI result: its blocks (headings, list items), a note, and Copy. Read out once when it arrives. */
+/**
+ * An AI result: its blocks (headings, list items), a note, and Copy. Read out once when it arrives.
+ * [lang]: the language the result is written in (a translation), so TalkBack reads it with that
+ * language's voice (4.30.0).
+ */
 @Composable
-fun AiResult(title: String, text: String?, footer: String? = null) {
+fun AiResult(title: String, text: String?, footer: String? = null, lang: String? = null) {
     if (text.isNullOrBlank()) return
     val context = LocalContext.current
     var copied by remember(text) { mutableStateOf(false) }
     Heading(title)
     Announce("Result ready.", key = text)
-    MarkdownBlocks(text)
+    MarkdownBlocks(text, lang)
     footer?.let { Text(it) }
     SecondaryButton("Copy the result") { copyText(context, text); copied = true }
     if (copied) NoticeText("Result copied.")
@@ -80,23 +86,24 @@ fun AiToolsScreen(api: Api) {
         when (tool) {
             "remediate" -> {
                 Choice("Make it", mode, listOf("plain" to "Plain language", "simplify" to "Simplify", "summary" to "Summarize", "largeprint" to "Large print format", "alt" to "Alt text")) { mode = it; resultText = null }
-                Field("Your text", input, { input = it; resultText = null }, hint = "sent to the AI provider as it is", singleLine = false, minLines = 5)
+                Field("Your text", input, { input = it; resultText = null }, hint = "sent to the AI provider as it is", singleLine = false, minLines = 5, required = true)
             }
             "translate" -> {
                 Choice("Into", lang, listOf("es" to "Spanish", "ar" to "Arabic", "zh-Hans" to "Chinese (Simplified)", "vi" to "Vietnamese", "ru" to "Russian", "fr" to "French", "ht" to "Haitian Creole", "so" to "Somali", "ne" to "Nepali", "ko" to "Korean", "tl" to "Tagalog")) { lang = it; resultText = null }
-                Field("Text to translate", input, { input = it; resultText = null }, hint = "up to 6,000 characters", singleLine = false, minLines = 5)
+                Field("Text to translate", input, { input = it; resultText = null }, hint = "up to 6,000 characters", singleLine = false, minLines = 5, required = true)
             }
-            "ask" -> Field("Your question", input, { input = it; resultText = null }, hint = "client names are never sent to the AI", singleLine = false)
-            "kb" -> Field("Your question", input, { input = it; resultText = null }, singleLine = false)
+            "ask" -> Field("Your question", input, { input = it; resultText = null }, hint = "client names are never sent to the AI", singleLine = false, required = true)
+            "kb" -> Field("Your question", input, { input = it; resultText = null }, singleLine = false, required = true)
             "curriculum" -> {
-                Field("Technology", input, { input = it; resultText = null }, hint = "such as JAWS")
+                Field("Technology", input, { input = it; resultText = null }, hint = "such as JAWS", required = true)
                 Choice("Level", level, listOf("Beginner", "Intermediate", "Advanced").map { it to it }) { level = it; resultText = null }
                 Field("Focus", focus, { focus = it; resultText = null }, hint = "optional", singleLine = false)
             }
             "risk" -> Text("Reviews your active clients who have gone longest without a session.")
         }
         ErrorText(error)
-        PrimaryButton(if (busy) "Working… $AI_WAIT" else "Ask the AI", busy = busy, enabled = tool == "risk" || input.isNotBlank()) {
+        val needed = when (tool) { "risk" -> null; "translate" -> "Text to translate"; "curriculum" -> "Technology"; "remediate" -> "Your text"; else -> "Your question" }
+        PrimaryButton("Ask the AI", busy = busy, busyText = AI_WORKING, announceBusy = true, missing = if (needed != null && input.isBlank()) stillNeeded(listOf(needed)) else null) {
             if (tool == "translate" && input.length > 6000) { error = "The content is too long to translate at once (maximum 6,000 characters; it has ${input.length}). Split it into parts and translate each one."; return@PrimaryButton }
             error = null; resultText = null
             scope.launch {
@@ -122,7 +129,8 @@ fun AiToolsScreen(api: Api) {
                 "ask" -> "Read-only; check before acting."
                 else -> null
             }
-            AiResult("Result", r.optString("text"), footer)
+            // A translation is read in the language it was put into (owner rule 5).
+            AiResult("Result", r.optString("text"), footer, lang = if (tool == "translate") lang else null)
             Text("Staff review every AI draft.")
         }
     }
@@ -172,7 +180,8 @@ fun ClientAiScreen(api: Api, nav: NavHostController, clientId: Int) {
         }
         ErrorText(error)
         // 4.29.0: asking has its own busy state, so Back is never held while the AI works.
-        PrimaryButton(if (asking) "Working… $AI_WAIT" else "Ask the AI", busy = asking || busy, enabled = tool != "intake" || listOf(goals, limits, tried).any { it.isNotBlank() }) {
+        PrimaryButton("Ask the AI", busy = asking || busy, busyText = if (asking) AI_WORKING else "Please wait…", announceBusy = asking,
+            missing = if (tool == "intake" && listOf(goals, limits, tried).all { it.isBlank() }) "Still needed: Goals, Limitations or What they have tried." else null) {
             if (asking) return@PrimaryButton
             error = null; resultText = null; saved = false
             scope.launch {
@@ -217,8 +226,8 @@ fun ClientAiScreen(api: Api, nav: NavHostController, clientId: Int) {
                 Heading("Case summary: review and edit before saving")
                 Announce("Result ready. The AI never saves on its own.", key = resultText)
                 if (r.optBoolean("truncated")) ErrorText("This summary is incomplete: the AI stopped before the end. Review it closely and add what is missing, or draft it again.")
-                Field("Summary", draft, { draft = it }, singleLine = false, minLines = 8)
-                PrimaryButton("Save as a case note", busy = busy, enabled = draft.isNotBlank()) {
+                Field("Summary", draft, { draft = it }, singleLine = false, minLines = 8, required = true)
+                PrimaryButton("Save as a case note", busy = busy, missing = if (draft.isBlank()) stillNeeded(listOf("Summary")) else null) {
                     scope.launchSave({ busy = it }, { error = it }) {
                         val s = saveOrQueue(api, "add_note", JSONObject().put("client_id", clientId).put("note_type", "Case Note").put("note_format", "free")
                             .put("subject", "Case summary (AI draft, reviewed)").put("body", draft).put("idem_key", idem), "Case note: case summary", "Case summary saved as a note.")

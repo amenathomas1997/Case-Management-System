@@ -1,6 +1,15 @@
 package org.casemanagement.app.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -77,20 +86,35 @@ fun inLanguage(text: String, lang: String?): AnnotatedString =
     if (lang.isNullOrBlank()) AnnotatedString(text)
     else AnnotatedString(text, listOf(AnnotatedString.Range(SpanStyle(localeList = LocaleList(lang)), 0, text.length)))
 
-/** An error, read out once when it appears (a polite live region does not cut off speech). [lang]: see [inLanguage]. */
+/**
+ * An error. 4.30.0: it takes focus when it appears (owner rule 3), so TalkBack lands on it and it
+ * scrolls into view, read once from there (no live region as well, which would read it twice).
+ * [focusKey] changes when the same message should take focus again (Save pressed a second time).
+ * [takeFocus] = false for a status line that must not move the person (a sync notice): read once
+ * as a polite live region instead. [lang]: see [inLanguage].
+ */
 @Composable
-fun ErrorText(message: String?, lang: String? = null) {
+fun ErrorText(message: String?, lang: String? = null, takeFocus: Boolean = true, focusKey: Any? = null) {
     if (message.isNullOrBlank()) return
+    val focus = remember { FocusRequester() }
+    val pressKey = focusKey ?: LocalSavePresses.current
+    if (takeFocus) LaunchedEffect(message, pressKey) {
+        // A moment for the pressed button's own feedback, then the summary.
+        delay(150)
+        try { focus.requestFocus(); ScreenFocus.claim() } catch (e: IllegalStateException) { /* not placed yet */ }
+    }
+    val spoken = Modifier.padding(12.dp)
+        .let { if (takeFocus) it.focusRequester(focus).focusable() else it }
     Surface(color = MaterialTheme.colorScheme.error.copy(alpha = 0.08f), modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         if (lang.isNullOrBlank()) Text(
             message,
             color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite; contentDescription = "Error: $message" },
+            modifier = spoken.semantics { if (!takeFocus) liveRegion = LiveRegionMode.Polite; contentDescription = "Error: $message" },
         ) else Text(
             inLanguage(message, lang),
             color = MaterialTheme.colorScheme.error,
             // Read as text (a description would lose the language); "Error" is the same word in Spanish.
-            modifier = Modifier.padding(12.dp).clearAndSetSemantics { liveRegion = LiveRegionMode.Polite; text = inLanguage("Error: $message", lang) },
+            modifier = spoken.clearAndSetSemantics { if (!takeFocus) liveRegion = LiveRegionMode.Polite; text = inLanguage("Error: $message", lang) },
         )
     }
 }
@@ -150,52 +174,103 @@ fun ListRow(lines: List<String>, spoken: String? = null, action: String? = null,
     HorizontalDivider()
 }
 
-/** A text field whose label carries its hint, so the hint is read with it and adds no stop. */
+/**
+ * A text field whose label carries its hint, so the hint is read with it and adds no stop.
+ * 4.30.0: [required] says "(required)" in the label, seen and heard (owner rule 4). The floated
+ * label shows on one line (a long one no longer overlaps the typed text at large font sizes); the
+ * hint shows in full under the field, and is still read as part of the label (owner rule 1). The
+ * error under the field is read once, through error() (not a second time as supporting text).
+ * [autofill]: what the phone's autofill service may fill in (email, password, code).
+ */
 @Composable
 fun Field(
     label: String, value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier,
     hint: String? = null, error: String? = null, singleLine: Boolean = true, minLines: Int = 1,
     keyboard: KeyboardType = KeyboardType.Text, password: Boolean = false, lang: String? = null,
+    required: Boolean = false, autofill: Fill? = null,
 ) {
+    val spokenLabel = fieldLabelText(label, hint, required)
+    val shownLabel = if (required) "$label (required)" else label
+    val shownHint = hint?.takeIf { it.isNotBlank() }
+    // At a large font size a long label is shown in full above the field, wrapping as it needs
+    // (seen only: the field's own label says it), as the floated label is kept to one line.
+    val largeFont = androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.3f
+    if (largeFont && shownLabel.length > 20) Text(
+        inLanguage(shownLabel, lang), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).clearAndSetSemantics { },
+    )
     OutlinedTextField(
         value = value, onValueChange = onChange,
-        label = { Text(inLanguage(if (hint != null) "$label ($hint)" else label, lang)) },
+        label = {
+            Text(inLanguage(shownLabel, lang), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.clearAndSetSemantics { text = inLanguage(spokenLabel, lang) })
+        },
         singleLine = singleLine, minLines = minLines,
         isError = error != null,
-        supportingText = error?.let { { Text(inLanguage(it, lang)) } },
+        supportingText = if (error == null && shownHint == null) null else {
+            {
+                // Seen only: the hint is in the label, and the error is said by error() below.
+                Column(Modifier.clearAndSetSemantics { }) {
+                    if (shownHint != null) Text(inLanguage(shownHint, lang))
+                    if (error != null) Text(inLanguage(error, lang), color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
         keyboardOptions = KeyboardOptions(keyboardType = if (password) KeyboardType.Password else keyboard),
         visualTransformation = if (password) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-        modifier = modifier.fillMaxWidth().padding(vertical = 4.dp).let { m -> if (error != null) m.semantics { error(error) } else m },
+        modifier = modifier.fillMaxWidth().padding(vertical = 4.dp)
+            .let { m -> if (autofill != null) m.autofillAs(autofill, onChange) else m }
+            .let { m -> if (error != null) m.semantics { error(error) } else m },
     )
 }
 
 /**
  * A choice from a list: a button that says the label and the current choice, opening a list of
  * plainly named options (no announcement on each move, as the website's quiet combo boxes).
+ * 4.30.0: a long list (more than [FILTER_FROM]) has a Filter field at the top that filters quietly
+ * (nothing is announced while typing), and the list opens at the current choice, which has focus.
+ * [required] says "(required)" with the label.
  */
 @Composable
-fun Choice(label: String, value: String, options: List<Pair<String, String>>, error: String? = null, onChange: (String) -> Unit) {
+fun Choice(label: String, value: String, options: List<Pair<String, String>>, error: String? = null, required: Boolean = false, onChange: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
+    val shownLabel = if (required) "$label (required)" else label
     val shown = options.firstOrNull { it.first == value }?.second ?: value.ifEmpty { "None" }
     OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
         // 4.28.0: an error belongs to the choice itself (read with it), not to a line of its own.
-        .semantics { contentDescription = "$label: $shown"; if (error != null) error(error) }) {
-        Text("$label: $shown", modifier = Modifier.fillMaxWidth())
+        .semantics { contentDescription = "$shownLabel: $shown"; if (error != null) error(error) }) {
+        Text("$shownLabel: $shown", modifier = Modifier.fillMaxWidth())
     }
     if (error != null) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.padding(start = 16.dp, bottom = 4.dp).clearAndSetSemantics { })
     if (open) {
+        var query by remember { mutableStateOf("") }
+        val long = options.size > FILTER_FROM
+        val list = if (long) filterOptions(options, query, keep = value) else options
+        val start = remember { indexOfChoice(options, value) }
+        val listState = rememberLazyListState(initialFirstVisibleItemIndex = start)
+        val current = remember { FocusRequester() }
+        LaunchedEffect(Unit) {
+            delay(200)
+            try { current.requestFocus() } catch (e: IllegalStateException) { /* the chosen row is not shown */ }
+        }
         AlertDialog(
             onDismissRequest = { open = false },
             title = { Text(label, modifier = Modifier.semantics { heading() }) },
             text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    options.forEach { (v, l) ->
-                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                            .selectable(selected = v == value, role = Role.RadioButton, onClick = { onChange(v); open = false }),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = v == value, onClick = null)
-                            Text(l, modifier = Modifier.padding(start = 8.dp))
+                Column {
+                    if (long) OutlinedTextField(value = query, onValueChange = { query = it }, singleLine = true,
+                        label = { Text("Filter the list") }, modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp))
+                    if (list.isEmpty()) Text("Nothing matches. Change the filter.", modifier = Modifier.padding(vertical = 8.dp))
+                    LazyColumn(state = listState, modifier = Modifier.heightIn(max = 420.dp).selectableGroup()) {
+                        items(list) { (v, l) ->
+                            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                .let { if (v == value) it.focusRequester(current) else it }
+                                .selectable(selected = v == value, role = Role.RadioButton, onClick = { onChange(v); open = false }),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = v == value, onClick = null)
+                                Text(l, modifier = Modifier.padding(start = 8.dp))
+                            }
                         }
                     }
                 }
@@ -205,11 +280,22 @@ fun Choice(label: String, value: String, options: List<Pair<String, String>>, er
     }
 }
 
+/**
+ * The main button of a form. 4.30.0: a form that is not complete keeps its button enabled (a
+ * disabled button says nothing about why, and Switch Access and Voice Access cannot reach it):
+ * [missing] says what is still needed, and a press shows it under the button and moves focus there.
+ * [enabled] = false is kept for a button that truly cannot act. While [busy], [busyText] shows and
+ * is said once.
+ */
 @Composable
-fun PrimaryButton(text: String, busy: Boolean = false, enabled: Boolean = true, lang: String? = null, busyText: String = "Please wait…", onClick: () -> Unit) {
-    Button(onClick = onClick, enabled = enabled && !busy, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).heightIn(min = 48.dp)) {
+fun PrimaryButton(text: String, busy: Boolean = false, enabled: Boolean = true, lang: String? = null, busyText: String = "Please wait…",
+                  missing: String? = null, announceBusy: Boolean = false, onClick: () -> Unit) {
+    val gate = rememberGate(missing)
+    Button(onClick = { if (gate.check(missing)) onClick() }, enabled = enabled && !busy, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).heightIn(min = 48.dp)) {
         Text(inLanguage(if (busy) busyText else text, lang))
     }
+    if (announceBusy) Announce(if (busy) busyText else null, key = busy)
+    if (missing != null) ErrorText(gate.shown, lang = lang, focusKey = gate.presses)
 }
 
 @Composable

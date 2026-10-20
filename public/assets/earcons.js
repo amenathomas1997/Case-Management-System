@@ -89,7 +89,8 @@
     btn.hidden = false;
     btn.addEventListener('click', function () {
       window.Earcon.toggle();
-      if (live) live.textContent = muted ? 'Sound cues off.' : 'Sound cues on.';
+      // In the page language: layout.php puts the two messages on the button.
+      if (live) live.textContent = (muted ? btn.getAttribute('data-off-msg') : btn.getAttribute('data-on-msg')) || (muted ? 'Sound cues off.' : 'Sound cues on.');
     });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireToggle);

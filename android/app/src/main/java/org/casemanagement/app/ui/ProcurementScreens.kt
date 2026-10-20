@@ -57,16 +57,16 @@ private fun AddDeviceRequestDialog(api: Api, onDone: (Int) -> Unit, onCancel: ()
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    FormDialog("Request a device", "Add", busy, client.isNotEmpty() && device.isNotBlank(), onSave = {
+    FormDialog("Request a device", "Add", busy, missing = stillNeeded(missingNames("Client" to client.isEmpty(), "Device" to device.isBlank())), onSave = {
         scope.launchSave({ busy = it }, { error = it }) {
             // 4.28.0: a retry after a lost reply adds it once (see sendOnce).
             onDone(api.callOnce("add_device_request", JSONObject().put("client_id", client.toInt()).put("device_name", device.trim()).put("category", cat).put("justification", why.trim()),
                 idem, { idem = it }, "the device request").optInt("id"))
         }
     }, onCancel = onCancel) {
-        ErrorText(clients.error)
-        Choice("Client", client, listOf("" to "Choose a client") + (clients.data ?: emptyList()).map { it.optInt("id").toString() to it.optString("name") }) { client = it }
-        Field("Device", device, { device = it })
+        ErrorText(clients.error, takeFocus = false)
+        Choice("Client", client, listOf("" to "Choose a client") + (clients.data ?: emptyList()).map { it.optInt("id").toString() to it.optString("name") }, required = true) { client = it }
+        Field("Device", device, { device = it }, required = true)
         Choice("Category", cat, cats.map { it to it }) { cat = it }
         Field("Why it is needed", why, { why = it }, hint = "optional", singleLine = false)
         ErrorText(error)
@@ -171,7 +171,7 @@ private fun StepDialog(step: String, q: JSONObject, send: suspend (JSONObject) -
         }
         if (step == "add_quote" && map["vendor"].isNullOrBlank()) problems["vendor"] = "Enter the vendor."
         fieldErrors = problems
-        if (problems.isNotEmpty()) { error = problems.values.first(); return@FormDialog }
+        if (problems.isNotEmpty()) { error = errorSummary(problems.values); return@FormDialog }
         scope.launchSave({ busy = it }, { error = it }) {
             try { send(b) } catch (e: ApiException) {
                 // A refusal naming a field (a delivery before the order, say) is shown on that field.
@@ -226,14 +226,14 @@ fun AccommodationsScreen(api: Api, nav: NavHostController) {
         var error by remember { mutableStateOf<String?>(null) }
         var busy by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
-        FormDialog("Add a worksite assessment", "Add", busy, c.isNotEmpty(), onSave = {
+        FormDialog("Add a worksite assessment", "Add", busy, missing = stillNeeded(missingNames("Client" to c.isEmpty())), onSave = {
             scope.launchSave({ busy = it }, { error = it }) {
                 val id = api.callOnce("add_worksite", JSONObject().put("client_id", c.toInt()).put("employer", employer.trim()).put("job_title", job.trim()).put("assessment_date", date.trim()),
                     idem, { idem = it }, "the worksite assessment").optInt("id")
                 adding = false; nav.navigate("worksite/$id")
             }
         }, onCancel = { adding = false }) {
-            Choice("Client", c, listOf("" to "Choose a client") + (clients.data ?: emptyList()).filter { !it.optString("status").startsWith("Closed") }.map { it.optInt("id").toString() to it.optString("name") }) { c = it }
+            Choice("Client", c, listOf("" to "Choose a client") + (clients.data ?: emptyList()).filter { !it.optString("status").startsWith("Closed") }.map { it.optInt("id").toString() to it.optString("name") }, required = true) { c = it }
             Field("Employer", employer, { employer = it }, hint = "optional")
             Field("Job title", job, { job = it }, hint = "optional")
             Field("Assessment date", date, { date = it }, hint = "year-month-day, optional")

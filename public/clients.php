@@ -65,7 +65,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['filter_clients'])) {
     foreach (['q', 'status', 'type', 'agency', 'school', 'office', 'archived', 'export'] as $fk) {
         if (is_string($_POST[$fk] ?? null) && trim($_POST[$fk]) !== '') $keep[$fk] = trim($_POST[$fk]);
     }
-    redirect('clients.php?' . http_build_query($keep));
+    // The results heading is the target (4.30.0): the page opens on it, so the match count is
+    // read once, when the filters have been applied.
+    redirect('clients.php?' . http_build_query($keep) . (isset($keep['export']) ? '' : '#clients-h'));
 }
 if (is_string($_GET['who'] ?? null)) {
     $who = in_array($_GET['who'], $whoChoices, true) ? $_GET['who'] : '';
@@ -172,10 +174,11 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
   <button type="submit" name="export" value="1" class="btn btn-secondary">Download these clients (CSV)</button>
 </form>
 
+<h2 id="clients-h" tabindex="-1"><?= $showArchived ? 'Archived clients' : 'Clients' ?> (<?= number_format($matchCount) ?>)</h2>
 <?php if ($matchCount > count($clients)): ?>
 <p class="alert alert-info">Showing the first <?= count($clients) ?> of <?= number_format($matchCount) ?> matching clients, in name order. Search by name or narrow the filters to find the rest.</p>
 <?php endif; ?>
-<div class="table-scroll" tabindex="0" role="region" aria-labelledby="clients-cap">
+<div class="table-scroll" tabindex="0" role="region" aria-labelledby="clients-h">
 <table>
   <caption class="visually-hidden" id="clients-cap"><?= $showArchived ? 'Archived client records' : 'Client list' ?><?= $matchCount > count($clients) ? ' (first ' . count($clients) . ' of ' . number_format($matchCount) . ')' : '' ?></caption>
   <thead><tr>

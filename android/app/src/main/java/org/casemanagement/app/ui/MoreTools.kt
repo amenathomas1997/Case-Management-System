@@ -1,6 +1,8 @@
 package org.casemanagement.app.ui
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -71,15 +73,24 @@ fun KnowledgeArticleScreen(api: Api, nav: NavHostController, id: Int) {
     }, { deleting = false })
 }
 
-/** Markdown as screen-reader friendly blocks: # lines are headings, -, * and • lines list items. */
+/**
+ * Markdown as screen-reader friendly blocks: # lines are headings, -, * and • lines list items.
+ * [lang]: the language the text is written in (a translation), marked on every block so TalkBack
+ * reads it with that language's voice (4.30.0, owner rule 5).
+ */
 @Composable
-fun MarkdownBlocks(text: String) {
+fun MarkdownBlocks(text: String, lang: String? = null) {
     text.replace("\r", "").split("\n").map { it.trim() }.filter { it.isNotEmpty() && it != "---" }.forEach { line ->
         val h = Regex("^(#{1,6})\\s+(.*)$").find(line)
         when {
-            h != null -> Heading(h.groupValues[2].replace("**", ""))
-            Regex("^[-*•]\\s+").containsMatchIn(line) -> Text("• " + line.replaceFirst(Regex("^[-*•]\\s+"), "").replace("**", ""))
-            else -> Text(line.replace("**", ""), modifier = androidx.compose.ui.Modifier.semantics { })
+            h != null -> Text(
+                inLanguage(h.groupValues[2].replace("**", ""), lang),
+                style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                modifier = androidx.compose.ui.Modifier.padding(top = 12.dp, bottom = 4.dp).semantics { heading() },
+            )
+            Regex("^[-*•]\\s+").containsMatchIn(line) -> Text(inLanguage("• " + line.replaceFirst(Regex("^[-*•]\\s+"), "").replace("**", ""), lang))
+            else -> Text(inLanguage(line.replace("**", ""), lang), modifier = androidx.compose.ui.Modifier.semantics { })
         }
     }
 }
@@ -97,12 +108,12 @@ fun KnowledgeEditScreen(api: Api, nav: NavHostController, id: Int) {
         var busy by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         Page {
-            Field("Title", title, { title = it })
+            Field("Title", title, { title = it }, required = true)
             Field("Category", category, { category = it }, hint = "optional")
             Field("Article", body, { body = it }, hint = "# starts a heading, - a list item", singleLine = false, minLines = 8)
             Tick("Shown to clients in their portal", public) { public = it }
             ErrorText(error)
-            PrimaryButton("Save", busy = busy, enabled = title.isNotBlank()) {
+            PrimaryButton("Save", busy = busy, missing = if (title.isBlank()) stillNeeded(listOf("Title")) else null) {
                 scope.launchSave({ busy = it }, { error = it }) {
                     val b = JSONObject().put("title", title.trim()).put("category", category.trim()).put("body", body).put("is_public", if (public) 1 else 0)
                     if (id > 0) b.put("id", id)
@@ -220,7 +231,7 @@ fun PortalRequestsScreen(api: Api, nav: NavHostController) {
             var text by rememberSaveable { mutableStateOf(q.str("outcome") ?: "") }
             var busy by remember { mutableStateOf(false) }
             var fieldError by remember { mutableStateOf<String?>(null) }
-            FormDialog(if (to == "Declined") "Why is the request refused?" else "How was it handled?", "Save", busy, text.isNotBlank(), onSave = {
+            FormDialog(if (to == "Declined") "Why is the request refused?" else "How was it handled?", "Save", busy, missing = if (text.isBlank()) stillNeeded(listOf("Outcome the client sees")) else null, onSave = {
                 if (busy) return@FormDialog
                 fieldError = null
                 scope.launchSave({ busy = it }, { fieldError = it }) {
@@ -229,7 +240,7 @@ fun PortalRequestsScreen(api: Api, nav: NavHostController) {
                     error = null; outcomeId = 0; state.reload()
                 }
             }, onCancel = { outcomeId = 0 }) {
-                Field("Outcome the client sees", text, { text = it }, hint = "the client sees this in their portal", singleLine = false, error = fieldError)
+                Field("Outcome the client sees", text, { text = it }, hint = "the client sees this in their portal", singleLine = false, error = fieldError, required = true)
                 ErrorText(fieldError)
             }
         }

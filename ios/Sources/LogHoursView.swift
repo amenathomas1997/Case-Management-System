@@ -133,14 +133,14 @@ struct LogHoursView: View {
                 CaptionedField(label: "Hours, typed (0.25 to 24, in quarter hours)", text: $hoursText,
                                prompt: "Hours, like 1.5", keyboard: .decimalPad,
                                spokenHint: (hoursTextProblem ? Self.hoursFormatHelp + " " : "")
-                                   + "Type the hours instead of using the stepper. Logged as the stepper shows them.")
+                                   + "Type the hours instead of using the stepper. Logged as the stepper shows them.", errorName: "Hours")
                 if hoursTextProblem {
                     Text(Self.hoursFormatHelp)
                         .font(.caption).foregroundStyle(Color.secondaryText)
                         .accessibilityHidden(true)
                 }
                 // Each name stays visible above its field once it holds text.
-                CaptionedField(label: "Mileage (optional, 0 to 1000 miles)", text: $mileage, keyboard: .decimalPad)
+                CaptionedField(label: "Mileage (optional, 0 to 1000 miles)", text: $mileage, keyboard: .decimalPad, errorName: "Mileage")
                 CaptionedField(label: "What did you work on? (required)", text: $descriptionText,
                                prompt: "What did you work on?", lines: 3...8)
                 // The session's case note, saved with the hours in one step (as on the website).

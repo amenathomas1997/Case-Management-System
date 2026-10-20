@@ -129,14 +129,14 @@ if($errorKey!==null){set_form_errors([$errorKey=>$error]);echo form_error_summar
 elseif($conflict&&!$mayEdit){
 // The record can no longer be edited here (a reuse record that was just redeployed),
 // so no form is drawn: what this user typed is shown read-only for copying instead.?><div class="alert alert-error" id="form-errors" tabindex="-1"><strong class="alert-label">Error:</strong> Someone else changed this record after you opened it, and it can no longer be edited here, so your changes were not saved. What you typed is shown below, read-only, so you can copy it. <a href="at_services.php?id=<?=$id?>">Open the current version</a>.</div>
-<script>document.addEventListener('DOMContentLoaded',function(){var e=document.getElementById('form-errors');if(e)e.focus();});</script>
+<script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){var e=document.getElementById('form-errors');if(e)e.focus();});</script>
 <section class="card" aria-labelledby="at-typed-h"><h3 id="at-typed-h">What you typed (not saved)</h3>
 <?php foreach(array_merge([['key'=>'title','label'=>'Title','type'=>'text','options'=>[]],['key'=>'status','label'=>'Status','type'=>'text','options'=>[]]],$fields) as $f):$raw=$_POST[$f['key']]??'';$v=is_scalar($raw)?trim((string)$raw):'';if($v==='')continue;foreach($f['options'] as $o)if($o['value']===$v){$v=$o['label'];break;}?>
 <label for="at-typed-<?=h($f['key'])?>"><?=h($f['label'])?></label><textarea id="at-typed-<?=h($f['key'])?>" rows="<?=$f['type']==='textarea'?4:1?>" readonly><?=h($v)?></textarea>
 <?php endforeach;?></section>
 <?php }
 elseif($conflict){?><div class="alert alert-error" id="form-errors" tabindex="-1"><strong class="alert-label">Error:</strong> Someone else saved this record after you opened it, so your changes were not saved. What you typed is still in the form below so you can copy it; saving this form again will be refused. <a href="at_services.php?id=<?=$id?>&amp;edit=1">Reload the current version</a> and enter your changes there.</div>
-<script>document.addEventListener('DOMContentLoaded',function(){var e=document.getElementById('form-errors');if(e)e.focus();});</script>
+<script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){var e=document.getElementById('form-errors');if(e)e.focus();});</script>
 <?php }
 elseif($error)echo error_notice($error);
 ?>
@@ -160,10 +160,10 @@ $badDate=$matchError==='Choose a valid matching date.';?>
 <label for="need-modality">Delivery mode</label><select id="need-modality" name="modality"><option value="">Any</option><?php foreach(['In person','Remote'] as $m):?><option <?=($_GET['modality']??'')===$m?'selected':''?>><?=h($m)?></option><?php endforeach;?></select><button name="match" value="1">Find matches</button></form>
 <?php // The outcome of a search is announced by moving focus to it once: to the date
 // field when the date was the problem, otherwise to the result count.
-if($badDate):?><script>document.addEventListener('DOMContentLoaded',function(){var e=document.getElementById('need-date');if(e)e.focus();});</script>
+if($badDate):?><script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){var e=document.getElementById('need-date');if(e)e.focus();});</script>
 <?php elseif($matchError!==null):echo error_notice($matchError);
 elseif($matches!==null):?><p id="match-results" tabindex="-1"><strong><?=$matches?count($matches).' matching instructor'.(count($matches)===1?'':'s'):'No available instructor profiles.'?></strong></p>
-<script>document.addEventListener('DOMContentLoaded',function(){var e=document.getElementById('match-results');if(e)e.focus();});</script>
+<script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){var e=document.getElementById('match-results');if(e)e.focus();});</script>
 <?php foreach($matches as $m):?><article><h4><?=h($m['name'])?></h4><p>Matched: <?=h($m['matched']?:'None specified')?>. Missing: <?=h($m['missing']?:'None')?>.</p><p><?=h((string)$m['available_hours'])?> estimated hours available of <?=h((string)$m['capacity_hours'])?> this week. <?=h($m['availability'])?></p><a href="schedule.php">Open scheduling<span class="visually-hidden"> to book <?=h($m['name'])?></span></a></article><?php endforeach;endif;?></section>
 <?php endif;?>
 <?php if($kind==='cost'): $profit=at_profitability($actor);?>
@@ -207,7 +207,7 @@ $retQ=db()->prepare('SELECT name FROM clients WHERE id=?');$retQ->execute([(int)
 <form method="post" class="page-actions"><?=csrf_field()?><input type="hidden" name="loan_client_id" value="<?=(int)$issueReview['client']?>"><input type="hidden" name="loan_equipment_id" value="<?=(int)$issueReview['equipment']?>"><input type="hidden" name="loan_due" value="<?=h($issueReview['due'])?>"><input type="hidden" name="confirm_issue" value="1">
 <button class="btn btn-primary" name="issue" value="1">Confirm: issue <?=h($issueReview['equipment_name'])?> to <?=h($issueReview['client_name'])?></button>
 <button class="btn btn-secondary" name="issue_change" value="1">Change the client, equipment or date</button></form></div>
-<script>document.addEventListener('DOMContentLoaded',function(){var e=document.getElementById('issue-review');if(e)e.focus();});</script>
+<script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){var e=document.getElementById('issue-review');if(e)e.focus();});</script>
 <?php else:
 // Nothing is preselected that the user has not chosen, even the one choice the record
 // allows, so each choice is made on purpose and "required" and the server catch an
@@ -219,15 +219,20 @@ $pickEquipment=$issueIn['equipment']??0;
 $issueHeld=array_flip(array_map('intval',db()->query("SELECT DISTINCT er.equipment_id FROM equipment_reservations er WHERE er.status='Reserved' AND ".equipment_hold_live_sql('er'))->fetchAll(PDO::FETCH_COLUMN)));
 $issueAvailable=$kind==='repair'?array_flip(array_map('intval',db()->query("SELECT id FROM equipment WHERE status='Available'")->fetchAll(PDO::FETCH_COLUMN))):null;
 if($issueErrors){set_form_errors($issueErrors);echo form_error_summary(['loan_client_id'=>'','loan_equipment_id'=>'','loan_due'=>''],['loan_client_id'=>'loan-client','loan_equipment_id'=>'loan-equipment','loan_due'=>'loan-due']);}?>
-<form method="post" class="stacked"><?=csrf_field()?>
-<label for="loan-client">Client</label><select id="loan-client" name="loan_client_id" required <?=field_aria('loan_client_id')?>><option value="">Choose a client…</option><?php foreach(at_issue_clients($record,$actor) as $o):?><option value="<?=h($o['value'])?>" <?=(int)$o['value']===$pickClient?'selected':''?>><?=h($o['label'])?></option><?php endforeach;?></select><?=field_error('loan_client_id')?>
-<label for="loan-equipment">Equipment</label><select id="loan-equipment" name="loan_equipment_id" required <?=field_aria('loan_equipment_id')?>><option value="">Choose equipment…</option><?php foreach(at_choices('equipment',$actor) as $o):if($kind==='reuse'&&(int)$o['value']!==(int)$record['equipment_id'])continue;if($kind==='repair'&&((int)$o['value']===(int)$record['equipment_id']||!isset($issueAvailable[(int)$o['value']])))continue;?><option value="<?=h($o['value'])?>" <?=(int)$o['value']===$pickEquipment?'selected':''?>><?=h($o['label'].(isset($issueHeld[(int)$o['value']])?' — held by a reservation':''))?></option><?php endforeach;?></select><?=field_error('loan_equipment_id')?>
+<form method="post" class="stacked" novalidate><?=csrf_field()?>
+<p class="muted">Fields marked with an asterisk (<span aria-hidden="true">*</span><span class="visually-hidden">asterisk</span>) are required.</p>
+<label for="loan-client">Client <?=required_mark()?></label><select id="loan-client" name="loan_client_id" required aria-required="true" <?=field_aria('loan_client_id')?>><option value="">Choose a client…</option><?php foreach(at_issue_clients($record,$actor) as $o):?><option value="<?=h($o['value'])?>" <?=(int)$o['value']===$pickClient?'selected':''?>><?=h($o['label'])?></option><?php endforeach;?></select><?=field_error('loan_client_id')?>
+<label for="loan-equipment">Equipment <?=required_mark()?></label><select id="loan-equipment" name="loan_equipment_id" required aria-required="true" <?=field_aria('loan_equipment_id')?>><option value="">Choose equipment…</option><?php
+// 4.30.0: plain option labels; equipment held by a reservation is grouped, not marked on each option.
+$issueOpts=['free'=>'','held'=>''];foreach(at_choices('equipment',$actor) as $o){if($kind==='reuse'&&(int)$o['value']!==(int)$record['equipment_id'])continue;if($kind==='repair'&&((int)$o['value']===(int)$record['equipment_id']||!isset($issueAvailable[(int)$o['value']])))continue;
+$issueOpts[isset($issueHeld[(int)$o['value']])?'held':'free'].='<option value="'.h($o['value']).'" '.((int)$o['value']===$pickEquipment?'selected':'').'>'.h($o['label']).'</option>';}
+echo $issueOpts['held']===''?$issueOpts['free']:($issueOpts['free']!==''?'<optgroup label="Not held">'.$issueOpts['free'].'</optgroup>':'').'<optgroup label="Held by a reservation">'.$issueOpts['held'].'</optgroup>';?></select><?=field_error('loan_equipment_id')?>
 <label for="loan-due">Return date (optional)</label><input type="date" id="loan-due" name="loan_due" value="<?=h($issueIn['due']??'')?>" <?=field_aria('loan_due')?>><?=field_error('loan_due')?><button name="issue" value="1">Review and issue equipment</button></form><?php endif;endif;?></section>
 <?php endif;?>
 <?php endif;?>
 <?php if($edit&&$mayEdit):?>
 <h3><?=$record?'Edit record: '.h($record['title']):'New record'?></h3>
-<form method="post" class="stacked"><?=csrf_field()?><?=web_idem_field()?><input type="hidden" name="id" value="<?=$id?>"><input type="hidden" name="version" value="<?=$formVersion?>">
+<form method="post" class="stacked" novalidate><?=csrf_field()?><?=web_idem_field()?><input type="hidden" name="id" value="<?=$id?>"><input type="hidden" name="version" value="<?=$formVersion?>">
 <label for="at-title">Title (required)</label><input type="text" id="at-title" name="title" maxlength="190" required value="<?=h((string)($values['title']??$record['title']??''))?>" <?=field_aria('title')?>><?=field_error('title')?>
 <label for="at-status">Status</label><select id="at-status" name="status" <?=field_aria('status')?>><?php foreach($def['statuses'] as $s):?><option <?=($values['status']??$record['status']??$def['statuses'][0])===$s?'selected':''?>><?=h($s)?></option><?php endforeach;?></select><?=field_error('status')?>
 <?php foreach($fields as $f):$v=(string)($values[$f['key']]??'');$key=$f['key'];

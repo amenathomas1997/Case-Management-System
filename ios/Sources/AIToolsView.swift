@@ -426,6 +426,7 @@ struct CurriculumGenView: View {
         .onChange(of: level) { _ in if !busy { result = nil } }
         .onChange(of: focus) { _ in if !busy { result = nil } }
         .navigationTitle("Curriculum").navigationBarTitleDisplayMode(.inline)
+        .modifier(ReadablePickers(inNavigationStack: true))   // choices not cut short at large text sizes
     }
     private func run() async {
         busy = true; error = nil; result = nil

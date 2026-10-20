@@ -269,9 +269,14 @@ page_header('Audit log', $user, 'admin', [['admin.php', 'Administration']]);
     <label for="client">Client record <span class="hint">Views of their documents, signatures and reports, and changes to their file and to its linked records: tracks, hours, goals, homework, invoices, sessions, AT services, referrals, tasks, incidents, device requests, bookings and documentation reviews of their notes. Entries made under a duplicate record later merged into this one are included. Entries for a linked record that has since been deleted (such as a voided draft invoice) are not matched.</span></label>
     <select id="client" name="client">
       <option value="0">Any record</option>
-      <?php foreach ($clientList as $c): ?>
-      <option value="<?= (int)$c['id'] ?>" <?= $clientFilter === (int)$c['id'] ? 'selected' : '' ?>><?= h($c['name']) ?><?= $c['archived_at'] ? ' (archived)' : '' ?> — #<?= (int)$c['id'] ?></option>
-      <?php endforeach; ?>
+      <?php // 4.30.0: plain names; the record number only where two clients share a name, and
+            // archived clients in a group of their own rather than "(archived)" on each option.
+      $nameCount = array_count_values(array_map(fn($c) => mb_strtolower(trim((string)$c['name'])), $clientList));
+      $clientOpt = fn(array $c) => '<option value="' . (int)$c['id'] . '"' . ($clientFilter === (int)$c['id'] ? ' selected' : '') . '>' . h($c['name'])
+          . (($nameCount[mb_strtolower(trim((string)$c['name']))] ?? 0) > 1 ? ' #' . (int)$c['id'] : '') . '</option>';
+      $archivedClients = array_filter($clientList, fn($c) => !empty($c['archived_at']));
+      foreach ($clientList as $c) if (empty($c['archived_at'])) echo $clientOpt($c);
+      if ($archivedClients): ?><optgroup label="Archived"><?php foreach ($archivedClients as $c) echo $clientOpt($c); ?></optgroup><?php endif; ?>
     </select>
   </div>
   <div class="field">

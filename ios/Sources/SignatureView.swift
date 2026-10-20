@@ -150,6 +150,7 @@ struct SignatureSheet: View {
                         TextField("Name as signed (optional)", text: $signedName,
                                   prompt: Text("The client's name"))
                             .textFieldStyle(.roundedBorder)
+                            .errorField("Name as signed")
                             // No name content type and no suggestions: AutoFill would offer the
                             // phone owner's (the staff member's) own name as the client's.
                             .autocorrectionDisabled()

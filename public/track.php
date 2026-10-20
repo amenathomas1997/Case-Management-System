@@ -797,10 +797,11 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
 <p class="card"><strong>Authorization usage:</strong> No authorization entered. <a href="track_edit.php?id=<?= $id ?>">Edit track<span class="visually-hidden"> to enter the authorized hours</span></a></p>
 <?php else: ?>
 <div class="progress-wrap card">
-  <label for="prog-main" class="progress-caption">
+  <?php // Read once (4.30.0): the figures are the text; the bar has a short name of its own. ?>
+  <p class="progress-caption">
     <strong>Authorization usage:</strong> <?= fmt_hours($r['hours_worked']) ?> of <?= fmt_hours($r['authorized_hours']) ?> (<?= $r['pct_used'] ?>%)
-  </label>
-  <progress id="prog-main" class="hours" max="100" value="<?= $r['pct_used'] ?>"><?= $r['pct_used'] ?>%</progress>
+  </p>
+  <progress id="prog-main" class="hours" max="100" aria-label="Hours used" value="<?= $r['pct_used'] ?>"><?= $r['pct_used'] ?>%</progress>
 </div>
 <?php endif; ?>
 
@@ -968,14 +969,16 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
               Move to trash<span class="visually-hidden"> — log entry from <?= fmt_date($l['work_date']) ?>, <?= fmt_hours((float)$l['hours']) ?>: <?= h(mb_strimwidth($l['description'], 0, 50, '…')) ?></span></button>
           </form>
           <?php $fk = 'fix_' . (int)$l['id']; $fmk = 'fixm_' . (int)$l['id']; $frk = 'fixr_' . (int)$l['id']; $fMine = old_in('log_id') === (string)(int)$l['id'] && old_in('correct_log') !== ''; ?>
-          <details id="log-<?= (int)$l['id'] ?>"<?= has_field_error($fk) || has_field_error($fmk) || has_field_error($frk) ? ' open' : '' ?>><summary>Correct<span class="visually-hidden"> the log entry from <?= fmt_date($l['work_date']) ?></span></summary>
+          <?php // The same words as Move to trash (4.30.0): two entries on one day differ by hours and activity.
+          $logWhat = fmt_date($l['work_date']) . ', ' . fmt_hours((float)$l['hours']) . ': ' . h(mb_strimwidth((string)$l['description'], 0, 50, '…')); ?>
+          <details id="log-<?= (int)$l['id'] ?>"<?= has_field_error($fk) || has_field_error($fmk) || has_field_error($frk) ? ' open' : '' ?>><summary>Correct<span class="visually-hidden"> the log entry from <?= $logWhat ?></span></summary>
             <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate><?= csrf_field() ?>
               <input type="hidden" name="log_id" value="<?= (int)$l['id'] ?>">
               <?= form_error_summary([$fk => 'Hours', $fmk => 'Miles', $frk => 'Reason'], [$fk => 'fh-' . (int)$l['id'], $fmk => 'fm-' . (int)$l['id'], $frk => 'fr-' . (int)$l['id']]) ?>
               <div class="field"><label for="fh-<?= (int)$l['id'] ?>">Hours</label><input type="text" inputmode="decimal" id="fh-<?= (int)$l['id'] ?>" name="fix_hours" value="<?= h($fMine ? old_in('fix_hours') : (string)(float)$l['hours']) ?>" <?= field_aria($fk) ?>><?= field_error($fk) ?></div>
               <div class="field"><label for="fm-<?= (int)$l['id'] ?>">Miles</label><input type="text" inputmode="decimal" id="fm-<?= (int)$l['id'] ?>" name="fix_miles" value="<?= h($fMine ? old_in('fix_miles') : (string)(float)$l['mileage']) ?>" <?= field_aria($fmk) ?>><?= field_error($fmk) ?></div>
               <div class="field"><label for="fr-<?= (int)$l['id'] ?>">Reason</label><input type="text" id="fr-<?= (int)$l['id'] ?>" name="fix_reason" maxlength="255" value="<?= $fMine ? h(old_in('fix_reason')) : '' ?>" <?= field_aria($frk) ?>><?= field_error($frk) ?></div>
-              <button type="submit" name="correct_log" value="1" class="btn btn-secondary btn-sm">Save correction<span class="visually-hidden"> for <?= fmt_date($l['work_date']) ?></span></button>
+              <button type="submit" name="correct_log" value="1" class="btn btn-secondary btn-sm">Save correction<span class="visually-hidden"> for the log entry from <?= $logWhat ?></span></button>
             </form>
           </details>
           <?php else: ?><span class="muted">Invoiced</span><?php endif; ?>
@@ -997,7 +1000,8 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
     $nCols = [$tn['birp_behavior'] ?? '', $tn['birp_intervention'] ?? '', $tn['birp_response'] ?? '', $tn['birp_plan'] ?? ''];
     $isStruct = $nfmt !== 'free' && implode('', $nCols) !== ''; ?>
     <article class="card">
-      <h3><?= h($tn['subject']) ?></h3>
+      <?php $tnWhen = fmt_date($tn['created_at']); // the date names the note (4.30.0) ?>
+      <h3><?= h($tn['subject']) ?><span class="muted">, <?= $tnWhen ?></span></h3>
       <p class="muted"><?= h($tn['note_type']) ?> <span aria-hidden="true">·</span> <?= fmt_datetime($tn['created_at']) ?> <span aria-hidden="true">·</span> by <?= h($tn['author'] ?? 'System') ?>
         <?= $isStruct ? ' <span aria-hidden="true">·</span> <span class="badge badge-active">' . h($nfmt) . '</span>' : '' ?>
         <?= $tn['updated_at'] ? ' <span aria-hidden="true">·</span> edited ' . fmt_datetime($tn['updated_at']) : '' ?></p>
@@ -1009,14 +1013,14 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
         <p style="white-space:pre-wrap"><?= h($tn['body']) ?></p>
       <?php endif; ?>
       <?php if (note_editable($tn, (int)$user['id'])): ?>
-        <p><a class="btn btn-secondary btn-sm" href="client.php?id=<?= (int)$track['client_id'] ?>&amp;tab=notes&amp;edit_note=<?= (int)$tn['id'] ?>#addnote-h">Edit<span class="visually-hidden"> note: <?= h($tn['subject']) ?></span></a></p>
+        <p><a class="btn btn-secondary btn-sm" href="client.php?id=<?= (int)$track['client_id'] ?>&amp;tab=notes&amp;edit_note=<?= (int)$tn['id'] ?>#addnote-h">Edit<span class="visually-hidden"> note from <?= $tnWhen ?>: <?= h($tn['subject']) ?></span></a></p>
       <?php elseif (note_locked($tn)): // past the edit window: corrections go in an addendum (earlier versions are on the client page) ?>
-        <p><a class="btn btn-secondary btn-sm" href="client.php?id=<?= (int)$track['client_id'] ?>&amp;tab=notes&amp;addendum_to=<?= (int)$tn['id'] ?>#addnote-h">Add addendum<span class="visually-hidden"> to note: <?= h($tn['subject']) ?></span></a></p>
+        <p><a class="btn btn-secondary btn-sm" href="client.php?id=<?= (int)$track['client_id'] ?>&amp;tab=notes&amp;addendum_to=<?= (int)$tn['id'] ?>#addnote-h">Add addendum<span class="visually-hidden"> to the note from <?= $tnWhen ?>: <?= h($tn['subject']) ?></span></a></p>
       <?php endif; ?>
       <?php if ($hwDraftOn): // Drafts homework from this note into the Assign homework form; nothing is saved until Assign. ?>
       <form method="post" action="track.php?id=<?= $id ?>#assign-hw-h" class="inline-form"><?= csrf_field() ?>
         <input type="hidden" name="note_id" value="<?= (int)$tn['id'] ?>">
-        <button type="submit" name="draft_homework" value="1" class="btn btn-secondary btn-sm">Draft homework from this note<span class="visually-hidden">: <?= h($tn['subject']) ?></span></button>
+        <button type="submit" name="draft_homework" value="1" class="btn btn-secondary btn-sm">Draft homework from this note<span class="visually-hidden">: <?= h($tn['subject']) ?>, <?= $tnWhen ?></span></button>
       </form>
       <?php endif; ?>
     </article>
@@ -1055,7 +1059,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
           <div class="progress-wrap">
             <label class="visually-hidden" for="gp-<?= (int)$g['id'] ?>">Progress<?= $gName ?></label>
             <progress id="gp-<?= (int)$g['id'] ?>" class="hours" max="100" value="<?= $gpct ?>"><?= $gpct ?>%</progress>
-            <span class="muted"><?= $gpct ?>%</span>
+            <span class="muted" aria-hidden="true"><?= $gpct ?>%</span>
           </div>
           <?php if ($hist): ?>
           <details class="goal-history">
@@ -1126,7 +1130,7 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
       <div class="field">
         <label for="tpl-cat">Area</label>
         <select id="tpl-cat" name="tpl_cat">
-          <option value="">All areas (<?= $goalTplTotal ?>)</option>
+          <option value="">All areas</option>
           <?php foreach ($goalCats as $gc): ?>
           <option value="<?= h($gc['category']) ?>" <?= $tplCat === $gc['category'] ? 'selected' : '' ?>><?= h($gc['category']) ?></option>
           <?php endforeach; ?>
@@ -1199,13 +1203,20 @@ page_header((form_errors() ? 'Error — ' : '') . $track['title'] . ' — ' . $t
         .then(function(list){if(mine!==seq)return;if(!Array.isArray(list))throw new Error('shape');render(list);})
         .catch(function(){if(mine!==seq)return;count.textContent='Search failed — check your connection or reload the page, then try again.';});
     }
-    function schedule(){clearTimeout(timer);timer=setTimeout(query,250);}
+    // Typing and arrowing are left alone (4.30.0): the search runs, and its count is announced
+    // once, only after 700 ms without a key press (or at once on Enter, or when focus leaves a
+    // control with a search still waiting). The timer is cleared when it fires, so leaving a
+    // control afterwards does not search and announce a second time.
+    function settled(){timer=null;query();}
+    function schedule(){clearTimeout(timer);timer=setTimeout(settled,700);}
+    function now(){if(timer){clearTimeout(timer);settled();}}
     search.addEventListener('input',schedule);
     // A native select fires a change for every arrow press: search (and announce the
     // count) only once the choice has settled, not 334 times on the way through the areas.
-    cat.addEventListener('change',function(){clearTimeout(timer);timer=setTimeout(query,700);});
-    cat.addEventListener('blur',function(){if(timer){clearTimeout(timer);timer=null;query();}});
-    search.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();query();}});
+    cat.addEventListener('change',schedule);
+    cat.addEventListener('blur',now);
+    search.addEventListener('blur',now);
+    search.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();clearTimeout(timer);timer=null;query();}});
     // No query on load: the server already listed the first matches.
   })();
   </script>
@@ -1269,7 +1280,7 @@ $expenses->execute([$id]); $expenses = $expenses->fetchAll();
   <h3 id="assign-hw-h">Assign homework</h3>
   <?php if ($hwDraft): // The new draft is announced by moving focus to the notice, as the generated note is. ?>
   <div class="alert alert-success" role="note" id="hw-draft-note" tabindex="-1">Draft from the note "<?= h($hwDraft['subject']) ?>": review and change it before assigning.<?= $hwDraft['due_days'] > 0 ? ' The AI suggests it is due in ' . (int)$hwDraft['due_days'] . ' day' . ($hwDraft['due_days'] === 1 ? '' : 's') . '.' : '' ?> Nothing is saved until you choose Assign.</div>
-  <script>document.addEventListener("DOMContentLoaded",function(){var d=document.getElementById("hw-draft-note");if(d){d.focus();if(window.Earcon)Earcon.play("success");}});</script>
+  <script>(window.cmsFocusAfterLoad||function(f){document.addEventListener("DOMContentLoaded",f);})(function(){var d=document.getElementById("hw-draft-note");if(d){d.focus();if(window.Earcon)Earcon.play("success");}});</script>
   <?php endif; ?>
   <form method="post" action="track.php?id=<?= $id ?>" class="stacked" novalidate>
     <?= csrf_field() ?><?= web_idem_field() ?>

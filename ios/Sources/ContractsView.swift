@@ -261,7 +261,7 @@ struct ContractSpendSheet: View {
         }
     }
     private func submit() async {
-        guard !amount.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { showFormError("Amount is required.", in: &error); return }
+        guard !amount.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { showFormError("Amount: enter the contract amount; it is required.", in: &error); return }
         guard let amountText = checkedAmount(amount), !amountText.isEmpty else { showFormError(amountFormatMessage("Amount"), in: &error); return }
         busy = true; error = nil
         var b: [String: Any] = ["contract_id": contractId, "op": "add_spend", "amount": amountText, "spent_on": APIDate.day(date), "memo": memo]
@@ -342,6 +342,9 @@ private struct ContractCaptionedField: View {
             Text(label).font(.caption).accessibilityHidden(true)
             TextField(label, text: $text).keyboardType(keyboard).accessibilityLabel(label)
                 .accessibilityInputLabels(shortName.map { [$0, label] } ?? [label])
+                // Errors start with the short name ("Budget: …"): shown and said with the field.
+                .modifier(OptionalErrorField(name: shortName))
         }
+        .modifier(RowID(id: shortName.map { FormFieldID(name: $0.lowercased()) }))
     }
 }

@@ -2,7 +2,9 @@ import XCTest
 import CryptoKit
 
 /// Accessibility audits (XCUIApplication.performAccessibilityAudit) of the screens added in
-/// 4.24.0 to 4.26.0, at the default text size and at the largest accessibility size.
+/// 4.24.0 to 4.26.0 and, since 4.30.0, the everyday screens (Dashboard, Schedule, Referrals,
+/// Tasks, Alerts, agreements, training, credentials, Invoices, Account), at the default text
+/// size and at the largest accessibility size.
 ///
 /// LOCAL RUNS ONLY. The app is built for a local test server (made-up data) and signs in with a
 /// local test account given through the environment, never stored in the repository:
@@ -163,9 +165,103 @@ final class AccessibilityAuditTests: XCTestCase {
             record("Equipment: no item to loan out")
         }
 
+        auditEverydayScreens()
+
         if !issues.isEmpty {
             XCTFail("\(issues.count) accessibility issue(s) at \(sizeName):\n" + issues.joined(separator: "\n"))
         }
+    }
+
+    /// 4.30.0: the screens staff use every day, which the audits had never visited (the
+    /// 2026-10-20 accessibility audit found most of its issues there): the Dashboard, Schedule,
+    /// Referrals, Tasks, Alerts, My agreements, My training, My credentials (and its form),
+    /// Invoices and Account settings. Each is audited at the top and once scrolled down.
+    private func auditEverydayScreens() {
+        openTab("Dashboard")
+        popToRoot()
+        sleep(2)
+        audit("Dashboard")
+        app.swipeUp(); app.swipeUp()
+        audit("Dashboard, more tools")
+        scrollToTop()
+
+        openTab("Schedule")
+        popToRoot()
+        if app.navigationBars["Schedule"].waitForExistence(timeout: 10) {
+            sleep(2)
+            audit("Schedule")
+            app.swipeUp()
+            audit("Schedule, scrolled")
+        } else {
+            record("Schedule: the tab did not open")
+        }
+
+        openTab("Referrals")
+        popToRoot()
+        if app.navigationBars["Referrals"].waitForExistence(timeout: 10) {
+            sleep(2)
+            audit("Referrals")
+        } else {
+            record("Referrals: the tab did not open")
+        }
+
+        openDashboardTool("Tasks", title: "Tasks")
+        openDashboardTool("Invoices", title: "Invoices", optional: true)
+        openDashboardTool("My agreements", title: "My agreements")
+        openDashboardTool("My training", title: "My training")
+        if openDashboardTool("My credentials", title: "My credentials") {
+            let add = app.buttons["Add a credential"].firstMatch
+            if add.waitForExistence(timeout: 5) {
+                tap(add)
+                if app.navigationBars["Add a credential"].waitForExistence(timeout: 10) {
+                    sleep(1)
+                    audit("My credentials, add a credential")
+                    describeControls(["Credential (required)"])
+                }
+                cancelSheet()
+            }
+        }
+
+        // Alerts and Account settings are the Dashboard's toolbar buttons.
+        for (button, title) in [("Alerts", "Alerts"), ("Account", "Account settings")] {
+            openTab("Dashboard")
+            popToRoot()
+            let link = app.navigationBars.buttons[button].firstMatch
+            guard link.waitForExistence(timeout: 10) else { record("\(title): no \(button) button on the Dashboard"); continue }
+            link.tap()
+            if app.navigationBars[title].waitForExistence(timeout: 10) {
+                sleep(2)
+                audit(title)
+                app.swipeUp()
+                audit("\(title), scrolled")
+            } else {
+                record("\(title): did not open")
+            }
+        }
+        openTab("Dashboard")
+        popToRoot()
+    }
+
+    /// Opens one of the Dashboard's More tools links (its label starts with `name`) and audits
+    /// the screen titled `title`. `optional`: only some accounts have it (billing), so its
+    /// absence is not an issue. True when the screen opened.
+    @discardableResult
+    private func openDashboardTool(_ name: String, title: String, optional: Bool = false) -> Bool {
+        openTab("Dashboard")
+        popToRoot()
+        let link = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        guard scrollTo(link) else {
+            if !optional { record("\(title): no \(name) link on the Dashboard") }
+            return false
+        }
+        link.tap()
+        guard app.navigationBars[title].waitForExistence(timeout: 10) else {
+            record("\(title): did not open")
+            return false
+        }
+        sleep(2)
+        audit(title)
+        return true
     }
 
     // MARK: - Auditing

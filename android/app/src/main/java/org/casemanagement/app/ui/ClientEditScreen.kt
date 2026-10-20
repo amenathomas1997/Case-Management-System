@@ -124,7 +124,7 @@ private fun CustomFieldInput(f: CustomField, value: String, error: String? = nul
     val label = f.label + if (f.required) " (required)" else ""
     val hint = f.hint.ifBlank { null }
     when (f.type) {
-        "choice", "yesno" -> Choice(label, value, listOf("" to "Not answered") + (f.options + listOfNotNull(value.takeIf { it.isNotEmpty() && it !in f.options })).map { it to it }, error, onChange)
+        "choice", "yesno" -> Choice(label, value, listOf("" to "Not answered") + (f.options + listOfNotNull(value.takeIf { it.isNotEmpty() && it !in f.options })).map { it to it }, error, onChange = onChange)
         "textarea" -> Field(label, value, onChange, hint = hint, singleLine = false, minLines = 3, error = error)
         "number" -> Field(label, value, onChange, hint = hint, keyboard = KeyboardType.Decimal, error = error)
         "date" -> Field(label, value, onChange, hint = listOfNotNull(hint, "year-month-day, empty for Not answered").joinToString(", "), error = error)
@@ -216,6 +216,7 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
     var smsConsent by rememberSaveable { mutableStateOf(texting?.optBoolean("agreed") ?: false) }
     var smsSource by rememberSaveable { mutableStateOf(texting?.str("source") ?: "In person") }
     var busy by remember { mutableStateOf(false) }
+    var presses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     // 4.28.0: each problem on its own field as well as in the summary above Save.
@@ -263,11 +264,11 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
     Page {
         Heading(if (id == 0) "Add a client" else "Edit " + (c.str("name") ?: "client"), large = true)
         NoticeText(notice)
-        Field("Full name", name, { name = it })
+        Field("Full name", name, { name = it }, required = true, error = fieldErrors["name"])
         Choice("Status", status, statuses.map { it to it }) { status = it }
         if (statusChanged) Field("Reason for the status change", statusNote, { statusNote = it }, hint = if (status == "On Hold") "required for On Hold" else "kept in the history")
         if (closing) {
-            Choice("Why the case is closed", reason, listOf("" to "Choose a reason") + reasons.map { it to it }, fieldErrors["reason"]) { reason = it }
+            Choice("Why the case is closed", reason, listOf("" to "Choose a reason") + reasons.map { it to it }, fieldErrors["reason"], required = true) { reason = it }
             if (reason == "Other") Field("Say why", reasonNote, { reasonNote = it })
             Choice("Employed at closure", employed, listOf("" to "Not recorded", "yes" to "Yes", "no" to "No")) { employed = it }
             if (employed == "yes") {
@@ -300,7 +301,7 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         if (email.isNotBlank() && (c.optBoolean("email_verified").not() || email.trim() != (c.str("email") ?: ""))) Tick("I confirmed this email address with the client", emailConfirmed) { emailConfirmed = it }
         Field("Address", address, { address = it }, singleLine = false)
         // Required (4.19.0): it sets the client's time zone for reminders and texts.
-        Choice(if (stateRequired) "State (required)" else "State, not recorded yet", usState, listOf("" to "Choose a state") + US_STATES, fieldErrors["state"]) { usState = it }
+        Choice(if (stateRequired) "State" else "State, not recorded yet", usState, listOf("" to "Choose a state") + US_STATES, fieldErrors["state"], required = stateRequired) { usState = it }
         if (offices.isNotEmpty()) Choice("Office", office, listOf("" to if (id == 0) "Your own office" else "No office") + offices.map { it.id.toString() to it.name }) { office = it }
         if (api.scoped) Text("Assigned instructor: you. Your account works only its own caseload, so clients you add or edit stay assigned to you.")
         else Choice("Assigned instructor", assigned.toString(), listOf("0" to "Unassigned") + staff.map { it.optInt("id").toString() to it.optString("name") }) { assigned = it.toInt() }
@@ -326,20 +327,22 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
             Heading("More details")
             customFields.forEach { f -> CustomFieldInput(f, customValue(f), customErrors[f.id]) { setCustom(f, it) } }
         }
-        ErrorText(error)
+        ErrorText(error, focusKey = presses)
         // 4.28.0: someone else saved this client since it was opened: read it again, keeping what was typed here.
         if (conflict) SecondaryButton("Reload, keeping my changes") { if (!reloading) { reloading = true; notice = null; onReload() } }
-        PrimaryButton(if (id == 0) "Add client" else "Save changes", busy = busy, enabled = name.isNotBlank()) {
+        PrimaryButton(if (id == 0) "Add client" else "Save changes", busy = busy) {
+            presses++
             if (busy) return@PrimaryButton
             notice = null
             fieldErrors = listOfNotNull(
+                if (name.isBlank()) "name" to "Enter the client's full name." else null,
                 if (closing && reason.isEmpty()) "reason" to "Choose why the case is closed." else null,
                 if (usState.isEmpty() && stateRequired) "state" to "Choose the state the client lives in. It sets their time zone for reminders and texts." else null,
             ).toMap()
             customErrors = customProblemsByField(customFields, custom, requireAnswers = id == 0)
-            // The summary names the first problem, in the form's order.
-            val first = fieldErrors["reason"] ?: fieldErrors["state"] ?: customErrors.values.firstOrNull()
-            if (first != null) { error = first; return@PrimaryButton }
+            // 4.30.0: the summary lists every problem, in the form's order.
+            val all = errorSummary(listOf(fieldErrors["name"], fieldErrors["reason"], fieldErrors["state"]) + customErrors.values)
+            if (all != null) { error = all; return@PrimaryButton }
             scope.launchSave({ busy = it }, { error = it }) {
                 val b = JSONObject().put("id", id).put("name", name.trim()).put("status", status).put("client_type", type)
                     .put("dob", dob.trim()).put("phone", phone.trim()).put("email", email.trim()).put("address", address.trim())

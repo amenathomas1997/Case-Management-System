@@ -57,8 +57,26 @@
       later(function () { live.textContent = (what ? what + '. ' : '') + bar.dataset.saved; }, 50);
     }
     bar.querySelectorAll('[data-palette]').forEach(function (b) { b.addEventListener('click', function () { prefs.palette = b.dataset.palette; update((b.textContent || '').trim()); }); });
-    bar.querySelectorAll('[data-vision-toggle]').forEach(function (b) { b.addEventListener('click', function () { var k = b.dataset.visionToggle; prefs[k] = !prefs[k]; update((b.textContent || '').trim() + (prefs[k] ? ' on' : ' off')); }); });
-    size.addEventListener('change', function () { if (sizes.includes(size.value)) { prefs.size = size.value; update('Text size ' + size.value + '%'); } });
+    // Messages in the page language (layout.php renders them with __()); English otherwise.
+    function say(template, fill, fallback) { return String(template || fallback).replace(/\{(\w+)\}/g, function (m, k) { return k in fill ? fill[k] : m; }); }
+    bar.querySelectorAll('[data-vision-toggle]').forEach(function (b) { b.addEventListener('click', function () { var k = b.dataset.visionToggle; prefs[k] = !prefs[k]; update(say(prefs[k] ? bar.dataset.onMsg : bar.dataset.offMsg, {name: (b.textContent || '').trim()}, prefs[k] ? '{name} on' : '{name} off')); }); });
+    // Quiet combo box (owner rule 2): in Chrome on Windows every arrow press on the closed
+    // list is a change. The size is applied and announced once, when the choice has rested
+    // for 700 ms, or at once when the list is left or Enter is pressed.
+    var sizeTimer = null;
+    function commitSize() {
+      if (sizeTimer !== null && typeof clearTimeout === 'function') clearTimeout(sizeTimer);
+      sizeTimer = null;
+      if (!sizes.includes(size.value) || size.value === prefs.size) return;
+      prefs.size = size.value; update(say(bar.dataset.sizeMsg, {size: size.value}, 'Text size {size}%'));
+    }
+    size.addEventListener('change', function () {
+      if (typeof setTimeout !== 'function') { commitSize(); return; }
+      if (sizeTimer !== null) clearTimeout(sizeTimer);
+      sizeTimer = setTimeout(commitSize, 700);
+    });
+    size.addEventListener('blur', commitSize);
+    size.addEventListener('keydown', function (e) { if (e.key === 'Enter') commitSize(); });
     document.getElementById('vision-reset').addEventListener('click', function () { prefs = Object.assign({}, defaults); update(); });
     paint();
   });

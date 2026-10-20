@@ -45,7 +45,7 @@ if ((int)db()->query("SELECT GET_LOCK(CONCAT('cms_session_reminders_', MD5(DATAB
 // A client who prefers Phone or Postal mail (a11y_contact) is not emailed (3.0.40): the
 // instructor's reminder says to call them, with their number.
 $sessions = db()->query("SELECT s.*, c.name AS client_name, c.email AS client_email, c.email_verified AS client_email_verified,
-        c.a11y_contact AS client_contact, c.phone AS client_phone, c.time_zone AS client_time_zone, c.state AS client_state, c.office_id AS client_office_id,
+        c.a11y_contact AS client_contact, c.preferred_language AS client_preferred_language, c.phone AS client_phone, c.time_zone AS client_time_zone, c.state AS client_state, c.office_id AS client_office_id,
         (c.archived_at IS NULL AND c.status NOT LIKE 'Closed%') AS client_current,
         u.id AS active_staff_id, u.name AS staff_name, u.email AS staff_email,
         (u.id IS NOT NULL AND (g.id IS NULL OR g.own_caseload_only = 0 OR c.assigned_to = u.id)) AS staff_sees_client,
@@ -146,26 +146,42 @@ foreach ($sessions as $s) {
             $instructor = $staffSees ? trim((string)($s['staff_name'] ?? '')) : '';
             $portalToken = (string)($s['portal_token'] ?? '');
             $portalLink = preg_match('/^[a-f0-9]{48}$/D', $portalToken) ? cfg('base_url') . '/portal.php?t=' . $portalToken : '';
-            [$subj, $body] = email_template('session_reminder_client', [
-                'name' => $s['client_name'], 'when' => zone_date($cz, 'l, F j \a\t g:i A T', $startTs), 'where' => $where,
+            // 4.30.0: a Spanish-speaking client gets the Spanish reminder (session_reminder_client_es),
+            // with the date, time, place and day in Spanish; an English date read by a Spanish voice is mangled.
+            $es = ($s['client_preferred_language'] ?? 'en') === 'es';
+            $whereEs = !empty($s['is_remote'])
+                ? "\nDónde: en línea" . ($joinLink !== '' ? "\nEnlace para unirse: {$joinLink}" : '')
+                : ($s['location'] ? "\nDónde: {$s['location']}" : '');
+            $dayEs = $clientDays <= 0 ? 'hoy' : ($clientDays === 1 ? 'mañana' : 'el ' . zone_when_es($cz, $startTs, false));
+            [$subj, $body] = email_template_for_client('session_reminder_client', ['id' => (int)$s['client_id'], 'preferred_language' => $es ? 'es' : 'en'], [
+                'name' => $s['client_name'], 'when' => $es ? zone_when_es($cz, $startTs) : zone_date($cz, 'l, F j \a\t g:i A T', $startTs), 'where' => $es ? $whereEs : $where,
                 // A marker for now: the line is dropped below, and prose elsewhere in an
                 // administrator's own wording reads "your instructor" rather than a gap.
                 'instructor' => $instructor !== '' ? $instructor : "\u{1F}instructor\u{1F}",
-                'day' => $clientDay, 'date' => zone_date($cz, 'l, F j', $startTs), 'time' => zone_date($cz, 'g:i A T', $startTs),
+                'day' => $es ? $dayEs : $clientDay, 'date' => $es ? zone_when_es($cz, $startTs, false) : zone_date($cz, 'l, F j', $startTs),
+                'time' => $es ? (string)zone_format($cz, fn() => time_es($startTs)) : zone_date($cz, 'g:i A T', $startTs),
                 'location' => empty($s['is_remote']) ? (string)($s['location'] ?? '') : '', 'join_link' => $joinLink,
                 'portal_link' => $portalLink, 'contact' => $contact,
             ]);
             // No instructor to name: the "Instructor:" line is left out, not left blank.
             if ($instructor === '') {
                 $body = (string)preg_replace("/^[ \t]*Instructor:[ \t]*\x{1F}instructor\x{1F}[ \t]*\R/mu", '', $body);
-                $body = str_replace("\u{1F}instructor\u{1F}", 'your instructor', $body);
-                $subj = str_replace("\u{1F}instructor\u{1F}", 'your instructor', $subj);
+                $body = str_replace("\u{1F}instructor\u{1F}", $es ? 'su instructor' : 'your instructor', $body);
+                $subj = str_replace("\u{1F}instructor\u{1F}", $es ? 'su instructor' : 'your instructor', $subj);
+            }
+            if ($es) {
+                // The built-in Spanish line also told the client to call without a number.
+                $body = str_replace('Si necesita cambiar la fecha u hora, responda a este correo o llame a su instructor.', $portalLink !== ''
+                    ? '¿Necesita otra hora? Use su portal: ' . $portalLink . ($contact !== '' ? "\nO escríbanos a " . $contact . '.' : '')
+                    : '¿Necesita otra hora? Responda a este correo' . ($contact !== '' ? ' o escríbanos a ' . $contact : '') . '.', $body);
             }
             $reschedule = $portalLink !== ''
                 ? 'Need a different time? Use your portal: ' . $portalLink . ($contact !== '' ? "\nOr email us at " . $contact . '.' : '')
                 : 'Need a different time? Reply to this email' . ($contact !== '' ? ' or email us at ' . $contact : '') . '.';
             $body = str_replace($rescheduleOld, $reschedule, $body);
-            if ($clientDay === 'today') { $subj = $sameDay($subj); $body = $sameDay($body); }
+            // The English "tomorrow" fixes do not apply to Spanish wording, which names the day with {day}.
+            if ($es) { /* nothing to adjust */ }
+            elseif ($clientDay === 'today') { $subj = $sameDay($subj); $body = $sameDay($body); }
             elseif ($clientDay !== 'tomorrow') {
                 $later = fn(string $text): string => (string)preg_replace_callback('/\btomorrow\b/i', fn(array $m): string => ctype_upper($m[0][0]) ? ucfirst($clientDay) : $clientDay, $text);
                 $subj = $later($subj); $body = $later($body);

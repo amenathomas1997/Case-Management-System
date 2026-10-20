@@ -3,6 +3,7 @@ import SafariServices
 
 struct DashboardView: View {
     @EnvironmentObject var api: API
+    @Environment(\.dynamicTypeSize) private var typeSize
     @EnvironmentObject var navigation: AppNavigation
     @State private var data: DashboardData?
     @State private var error: String?
@@ -45,7 +46,11 @@ struct DashboardView: View {
                     if let data {
                         // As on the website, a figure the account has no permission for is left
                         // out (the server sends 0 for it, which would read as a fact).
-                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                        // One column at the accessibility text sizes (4.30.0), as Utilization's
+                        // tiles: in two, the figures and captions broke mid-number and mid-word.
+                        LazyVGrid(columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())]
+                                                                        : [GridItem(.flexible()), GridItem(.flexible())],
+                                  spacing: 12) {
                             if api.can("clients") {
                                 StatTile(number: "\(data.activeClients)", label: "Active training")
                                 StatTile(number: "\(data.pendingClients)", label: "Pending assessment")

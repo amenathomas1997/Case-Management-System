@@ -2,7 +2,22 @@
 (function () {
   'use strict';
   var forms = Array.from(document.querySelectorAll('main form[method="post"], main form[method="POST"]'));
-  var initial = new Map(), restored = new Set(), leaving = false, submitting = null, lastHintItem = null;
+  var initial = new Map(), initialTyped = new Map(), restored = new Set(), leaving = false, submitting = null, lastHintItem = null;
+  // Words in the page language (layout.php puts them on <body data-cms-text>); English otherwise.
+  var T = {lang: 'en', unsavedTitle: 'Unsaved changes',
+    leaveSave: 'You have changes on this page that have not been saved. Save them, keep editing, or leave this page without saving them.',
+    leaveNoSave: 'You have changes on this page that have not been saved. Keep editing, or leave this page without saving them.',
+    sendSave: 'Another form on this page has changes that have not been saved. Save them first, keep editing, or send this form anyway and lose them.',
+    sendNoSave: 'Another form on this page has changes that have not been saved. Keep editing, or send this form anyway and lose them.',
+    save: 'Save changes', stay: 'Keep editing', leave: 'Leave without saving', send: 'Send this form anyway',
+    confirmLeave: 'Leave this page without saving your changes? Choose Cancel to keep editing.',
+    confirmSend: 'Send this form anyway? Changes in another form on this page have not been saved and will be lost. Choose Cancel to keep editing.'};
+  try {
+    var given = JSON.parse((document.body && document.body.getAttribute && document.body.getAttribute('data-cms-text')) || 'null');
+    if (given && typeof given === 'object') Object.keys(T).forEach(function (k) { if (typeof given[k] === 'string' && given[k] !== '') T[k] = given[k]; });
+  } catch (e) {}
+  // What was typed (text, numbers, files), not choices made in lists, boxes or buttons.
+  var typedTypes = /^(text|textarea|search|email|tel|url|number|password|file|date|time|datetime-local|month|week)$/i;
   function values(form) {
     return JSON.stringify(Array.from(form.elements).filter(function (e) {
       return e.name && !e.disabled && !/^(hidden|submit|button|reset|image)$/i.test(e.type);
@@ -13,14 +28,31 @@
       return [e.name, e.value];
     }));
   }
+  function typed(form) {
+    return JSON.stringify(Array.from(form.elements).filter(function (e) {
+      return e.name && !e.disabled && typedTypes.test(e.type || '');
+    }).map(function (e) { return e.type === 'file' ? [e.name, Array.from(e.files || []).map(function (f) { return f.name; })] : [e.name, e.value]; }));
+  }
   forms.forEach(function (f) {
     initial.set(f, values(f));
+    initialTyped.set(f, typed(f));
     if (Array.from(f.elements).some(function (e) {
       return e.name && /^(submit|hidden)$/.test(e.type) && (window.cmsRestoredFields || []).indexOf(e.name) >= 0
         && /^(add_note|add_track_note|add_log|save_assessment|save_note|gen_track_note|generate_note|ai_do|generate)$/.test(e.name);
     })) restored.add(f);
   });
+  function langKeepsAll() {
+    try { var k = '__cms_probe'; sessionStorage.setItem(k, '1'); sessionStorage.removeItem(k); } catch (e) { return false; }
+    return !forms.some(function (f) {
+      return Array.from(f.elements).some(function (e) {
+        return (e.type === 'file' && e.files && e.files.length) || (e.type === 'password' && e.value);
+      });
+    });
+  }
   function changed(except) { return forms.find(function (f) { return f !== except && (restored.has(f) || values(f) !== initial.get(f)); }); }
+  // Sending one form (4.30.0) asks only when another form holds typed work: a time picked
+  // in a list to hear what is offered, or a ticked box, is not work the sender would lose.
+  function typedElsewhere(except) { return forms.find(function (f) { return f !== except && (restored.has(f) || typed(f) !== initialTyped.get(f)); }); }
   function menu() {
     var list = document.getElementById('main-nav'), toggle = document.getElementById('nav-toggle');
     if (!list) return;
@@ -69,17 +101,21 @@
           && !/\/(login|logout|verify|reset|sso|passkey)\.php$/.test(previous.pathname)) a.href = previous.href;
     } catch (e) {}
   });
+  // In the page language, and worded for what each button does (4.30.0): no "Save" when
+  // there is no Save button, and "Send this form anyway" when the action is a send.
   var dialog = document.createElement('dialog');
   dialog.className = 'unsaved-dialog';
-  dialog.lang = 'en';
+  dialog.lang = T.lang;
   dialog.setAttribute('aria-labelledby', 'unsaved-title');
   dialog.setAttribute('aria-describedby', 'unsaved-description');
-  dialog.innerHTML = '<h2 id="unsaved-title">Unsaved changes</h2><p id="unsaved-description">You have changes that have not been saved. Save the form, keep editing, or leave without saving.</p><div class="page-actions"><button type="button" data-save>Save changes</button><button type="button" data-stay autofocus>Keep editing</button><button type="button" data-leave>Leave without saving</button></div>';
+  dialog.innerHTML = '<h2 id="unsaved-title"></h2><p id="unsaved-description"></p><div class="page-actions"><button type="button" data-save></button><button type="button" data-stay autofocus></button><button type="button" data-leave></button></div>';
   document.body.appendChild(dialog);
   var save = dialog.querySelector('[data-save]'), stay = dialog.querySelector('[data-stay]'), leave = dialog.querySelector('[data-leave]');
+  var title = dialog.querySelector('#unsaved-title'), description = dialog.querySelector('#unsaved-description');
+  title.textContent = T.unsavedTitle; save.textContent = T.save; stay.textContent = T.stay; leave.textContent = T.leave;
   var destination = null, dirtyForm = null, saveButton = null, priorFocus = null;
   function close() { dialog.close(); if (priorFocus && priorFocus.focus) priorFocus.focus(); }
-  function ask(action, form) {
+  function ask(action, form, sending) {
     dirtyForm = form; destination = action; priorFocus = document.activeElement;
     // Prefer known note saves; otherwise offer only a single explicitly labelled Save action.
     // Do not guess between multiple actions or submit AI generation/deletion buttons.
@@ -91,8 +127,10 @@
       if (saves.length === 1) saveButton = saves[0];
     }
     save.hidden = !saveButton || saveButton.disabled || typeof form.requestSubmit !== 'function';
+    description.textContent = sending ? (save.hidden ? T.sendNoSave : T.sendSave) : (save.hidden ? T.leaveNoSave : T.leaveSave);
+    leave.textContent = sending ? T.send : T.leave;
     if (typeof dialog.showModal !== 'function') {
-      if (window.confirm('Leave without saving your changes? Choose Cancel to return to the form and save.')) { leaving = true; action(); }
+      if (window.confirm(sending ? T.confirmSend : T.confirmLeave)) { leaving = true; action(); }
       return;
     }
     if (!dialog.open) dialog.showModal();
@@ -113,13 +151,16 @@
     if (!a || e.defaultPrevented || e.button > 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || a.hasAttribute('download') || (a.target && a.target !== '_self')) return;
     var url = new URL(a.href, location.href);
     if (a.hasAttribute('data-cms-menu') && document.getElementById('main-nav')) { e.preventDefault(); menu(); return; }
+    // The Español/English switch carries every field across (lang_toggle()), so nothing is lost.
+    // It cannot carry chosen files or passwords, nor anything without sessionStorage: then it asks as any link does.
+    if (a.closest && a.closest('.lang-toggle') && langKeepsAll()) { leaving = true; return; }
     if (!/^https?:$/.test(url.protocol) || (url.pathname === location.pathname && url.search === location.search && url.hash)) return;
     var form = changed();
     if (form) { e.preventDefault(); ask(function () { location.assign(url.href); }, form); }
   });
   document.addEventListener('submit', function (e) {
     if (e.defaultPrevented) return;
-    var other = changed(e.target);
+    var other = typedElsewhere(e.target);
     if (other && !leaving) {
       e.preventDefault();
       var form = e.target, button = e.submitter;
@@ -127,7 +168,7 @@
         form.requestSubmit(button || undefined);
         // Invalid forms do not emit submit; keep the abandoned draft protected.
         if (!submitting) leaving = false;
-      }, other);
+      }, other, true);
       return;
     }
     submitting = e.target;
@@ -137,7 +178,8 @@
     setTimeout(function () { if (e.defaultPrevented && submitting === e.target) { submitting = null; leaving = false; } }, 0);
   });
   window.addEventListener('beforeunload', function (e) {
-    if (!leaving && changed(submitting)) { e.preventDefault(); e.returnValue = ''; }
+    // While a form is being sent, only typed work elsewhere is worth the browser's own warning.
+    if (!leaving && (submitting ? typedElsewhere(submitting) : changed())) { e.preventDefault(); e.returnValue = ''; }
   });
   document.addEventListener('input', function () { leaving = false; submitting = null; });
   document.addEventListener('change', function () { leaving = false; submitting = null; });

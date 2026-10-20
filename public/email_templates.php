@@ -76,7 +76,7 @@ page_header('Email templates', $user, 'admin', [['admin.php', 'Administration']]
       $curBody = setting('tpl_' . $key . '_body') ?? ''; ?>
   <section class="card" aria-label="Edit template <?= h($def[0]) ?>">
     <h2>Edit: <?= h($def[0]) ?></h2>
-    <p class="hint">Available placeholders: <code><?= h(implode(' ', array_unique(array_merge(preg_split('/\s+/', trim($def[3])) ?: [], ['{app}', '{org}', '{org_short}'])))) ?></code></p>
+    <?php $tplPlaceholders = implode(' ', array_unique(array_merge(preg_split('/\s+/', trim($def[3])) ?: [], ['{app}', '{org}', '{org_short}']))); ?>
     <?= form_error_summary(['body' => 'Body'], ['body' => 'tpl_body']) ?>
     <form method="post" action="email_templates.php?key=<?= h($key) ?>" class="stacked" novalidate>
       <?= csrf_field() ?>
@@ -84,7 +84,7 @@ page_header('Email templates', $user, 'admin', [['admin.php', 'Administration']]
       <div class="field"><label for="tpl_subject">Subject <span class="hint">blank = default: “<?= h($def[1]) ?>”</span></label>
         <input type="text" id="tpl_subject" name="subject" maxlength="190" value="<?= h(old_in('subject', $curSubject)) ?>"></div>
       <?php else: ?><input type="hidden" name="subject" value=""><?php endif; ?>
-      <div class="field"><label for="tpl_body">Body <span class="hint">blank = the default shown below<?php if (tpl_required($key)): ?>; required: must include <?= h(implode(' and ', array_keys(tpl_required($key)))) ?><?php endif; ?></span></label>
+      <div class="field"><label for="tpl_body">Body <span class="hint">blank = the default shown below<?php if (tpl_required($key)): ?>; required: must include <?= h(implode(' and ', array_keys(tpl_required($key)))) ?><?php endif; ?>. Available placeholders: <code><?= h($tplPlaceholders) ?></code></span></label>
         <textarea id="tpl_body" name="body" rows="9" <?= field_aria('body') ?>><?= h(old_in('body', $curBody)) ?></textarea><?= field_error('body') ?></div>
       <button type="submit" name="save_tpl" value="1" class="btn btn-primary">Save template</button>
     </form>

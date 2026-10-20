@@ -162,6 +162,7 @@ page_header('Accommodation bookings', $user, 'schedule');
   <form method="post" action="access_bookings.php" class="stacked" novalidate><?= csrf_field() ?>
     <?= form_error_summary(['client_id' => 'Client', 'needed_at' => 'When', 'duration_min' => 'Duration (minutes)', 'provider' => 'Provider / agency',
         'location' => 'Location', 'cost' => 'Estimated cost', 'notes' => 'Notes']) ?>
+    <p class="muted">Fields marked with an asterisk (<span aria-hidden="true">*</span><span class="visually-hidden">asterisk</span>) are required.</p>
     <div class="grid grid-4">
       <div class="field"><label for="client_id">Client <span aria-hidden="true">*</span><span class="visually-hidden">(required)</span></label>
         <select id="client_id" name="client_id" required <?= field_aria('client_id') ?>>

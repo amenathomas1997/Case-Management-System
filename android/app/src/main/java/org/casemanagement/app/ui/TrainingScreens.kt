@@ -68,7 +68,6 @@ fun TrainingTakeScreen(api: Api, nav: NavHostController, id: Int) {
             Heading("Read")
             MarkdownBlocks(m.optString("body"))
             Heading("Questions")
-            NoticeText(notice)
             qs.forEachIndexed { i, q ->
                 Text("${i + 1}. " + q.optString("q") + if ((i + 1) in wrong) " (answered wrongly last time)" else "",
                     modifier = Modifier.padding(top = 12.dp).semantics { heading() })
@@ -83,10 +82,16 @@ fun TrainingTakeScreen(api: Api, nav: NavHostController, id: Int) {
                     }
                 }
             }
+            // 4.30.0: the result of Check my answers is said here, next to the button, not above question 1.
+            NoticeText(notice)
             ErrorText(error)
             PrimaryButton("Check my answers", busy = busy) {
-                val missing = answers.indexOfFirst { it < 0 }
-                if (missing >= 0) { error = "Answer every question (question ${missing + 1} has no answer)."; return@PrimaryButton }
+                val missing = answers.indices.filter { answers[it] < 0 }.map { it + 1 }
+                if (missing.isNotEmpty()) {
+                    error = if (missing.size == 1) "Answer every question (question ${missing[0]} has no answer)."
+                        else "Answer every question (questions " + missing.dropLast(1).joinToString(", ") + " and " + missing.last() + " have no answer)."
+                    return@PrimaryButton
+                }
                 scope.launch {
                     busy = true; error = null
                     try {
@@ -146,7 +151,7 @@ private fun CredentialDialog(api: Api, c: JSONObject, types: List<String>, onDon
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val day = Regex("^\\d{4}-\\d{2}-\\d{2}$")
-    FormDialog(if (existing) c.optString("name") else "Add a credential", "Save", busy, type.isNotEmpty(), onSave = {
+    FormDialog(if (existing) c.optString("name") else "Add a credential", "Save", busy, onSave = {
         if (busy) return@FormDialog
         val name = if (type == "Other") other.trim() else type
         fieldErrors = listOfNotNull(
@@ -154,7 +159,7 @@ private fun CredentialDialog(api: Api, c: JSONObject, types: List<String>, onDon
             if (issued.isNotBlank() && !day.matches(issued.trim())) "issued_on" to "Enter the date issued as year-month-day, or leave it empty." else null,
             if (expires.isNotBlank() && !day.matches(expires.trim())) "expires_on" to "Enter the expiry date as year-month-day, or leave it empty." else null,
         ).toMap()
-        if (fieldErrors.isNotEmpty()) { error = fieldErrors.values.first(); return@FormDialog }
+        if (fieldErrors.isNotEmpty()) { error = errorSummary(fieldErrors.values); return@FormDialog }
         scope.launchSave({ busy = it }, { error = it }) {
             val b = JSONObject().put("id", c.optInt("id")).put("name", name).put("number", number.trim()).put("issuer", issuer.trim())
                 .put("issued_on", issued.trim()).put("expires_on", expires.trim())
@@ -167,8 +172,8 @@ private fun CredentialDialog(api: Api, c: JSONObject, types: List<String>, onDon
             onDone("Saved $name.")
         }
     }, onCancel = onCancel) {
-        Choice("Credential", type, listOf("" to "Choose one") + types.map { it to it }, error = if (type != "Other") fieldErrors["name"] else null) { type = it }
-        if (type == "Other") Field("Its name", other, { other = it }, error = fieldErrors["name"])
+        Choice("Credential", type, listOf("" to "Choose one") + types.map { it to it }, error = if (type != "Other") fieldErrors["name"] else null, required = true) { type = it }
+        if (type == "Other") Field("Its name", other, { other = it }, error = fieldErrors["name"], required = true)
         Field("Number", number, { number = it }, hint = "optional", error = fieldErrors["number"])
         Field("Issued by", issuer, { issuer = it }, hint = "optional", error = fieldErrors["issuer"])
         Field("Date issued", issued, { issued = it }, hint = "year-month-day, optional", keyboard = KeyboardType.Text, error = fieldErrors["issued_on"])

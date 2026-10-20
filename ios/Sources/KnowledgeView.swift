@@ -231,7 +231,7 @@ struct KBEditSheet: View {
             // VoiceOver focus when a problem is reported (see ErrorFocusForm).
             ErrorFocusForm(inNavigationStack: true, error: error) {
                 // Visible names that stay once the fields are filled (as they are when editing).
-                CaptionedField(label: "Title (required)", text: $title)
+                CaptionedField(label: "Title (required)", text: $title, errorName: "Title")
                 CaptionedField(label: "Category", text: $category)
                 Toggle("Publish to client portals", isOn: $isPublic)
                 Section("Content") {

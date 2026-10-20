@@ -153,7 +153,7 @@ $typedEmail = $email ?? '';
      a warning appears first. Keep your form open, sign in again in a new tab, then return to submit it. File uploads may need to be selected again.</p>
   <?php // Announced by the focus move below; no alert role, which would make some screen readers read it twice.
   if ($error): ?><div class="alert alert-error" id="login-error" tabindex="-1"><?= h($error) ?></div>
-  <script>document.addEventListener('DOMContentLoaded',function(){var e=document.getElementById('login-error');if(e)e.focus();});</script><?php endif; ?>
+  <script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){var e=document.getElementById('login-error');if(e)e.focus();});</script><?php endif; ?>
   <form method="post" action="login.php" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?= form_error_summary(['email' => 'Email address', 'password' => 'Password']) ?>

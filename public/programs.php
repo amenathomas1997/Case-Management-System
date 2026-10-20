@@ -323,11 +323,11 @@ if (isset($_GET['id'])) {
         <?php endforeach; ?>
       </ul>
       <?php else: ?><p class="muted">No students yet.</p><?php endif; ?>
-      <form method="post" action="programs.php" class="inline-form" style="margin-top:.5rem"><?= csrf_field() ?>
+      <form method="post" action="programs.php" class="inline-form" style="margin-top:.5rem" novalidate><?= csrf_field() ?>
         <input type="hidden" name="cohort_id" value="<?= $cid ?>">
         <?= form_error_summary(['add_client' => '']) ?>
-        <label for="add_client" class="visually-hidden">Add a Pre-ETS student</label>
-        <select id="add_client" name="client_id" required <?= field_aria('add_client') ?>>
+        <label for="add_client" class="visually-hidden">Add a Pre-ETS student <?= required_mark() ?></label>
+        <select id="add_client" name="client_id" required aria-required="true" <?= field_aria('add_client') ?>>
           <option value="">— Add a Pre-ETS student —</option>
           <?php foreach ($avail as $a): ?><option value="<?= (int)$a['id'] ?>"><?= h($a['name']) ?></option><?php endforeach; ?>
         </select>
@@ -347,11 +347,12 @@ if (isset($_GET['id'])) {
       <form method="post" action="programs.php" class="stacked" novalidate><?= csrf_field() ?>
         <input type="hidden" name="cohort_id" value="<?= $cid ?>">
         <?= form_error_summary(['activity' => 'Pre-ETS activity', 'session_date' => 'Date', 'duration_min' => 'Duration (minutes)']) ?>
+        <p class="muted">Fields marked with an asterisk (<span aria-hidden="true">*</span><span class="visually-hidden">asterisk</span>) are required.</p>
         <div class="grid grid-4">
           <div class="field"><label for="activity">Pre-ETS activity</label>
             <select id="activity" name="activity" <?= field_aria('activity') ?>><?= select_options(PREETS_ACTIVITIES, $oldLog ? old_in('activity') : 'Job Exploration Counseling') ?></select><?= field_error('activity') ?></div>
-          <div class="field"><label for="session_date">Date</label><input type="date" id="session_date" name="session_date" required min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h($oldLog ? old_in('session_date') : date('Y-m-d')) ?>" <?= field_aria('session_date') ?>><?= field_error('session_date') ?></div>
-          <div class="field"><label for="duration_min">Duration (minutes)</label><input type="number" id="duration_min" name="duration_min" min="1" max="1440" required value="<?= h($oldLog ? old_in('duration_min') : '60') ?>" <?= field_aria('duration_min') ?>><?= field_error('duration_min') ?></div>
+          <div class="field"><label for="session_date">Date <?= required_mark() ?></label><input type="date" id="session_date" name="session_date" required min="2000-01-01" max="<?= date('Y-m-d') ?>" value="<?= h($oldLog ? old_in('session_date') : date('Y-m-d')) ?>" <?= field_aria('session_date') ?>><?= field_error('session_date') ?></div>
+          <div class="field"><label for="duration_min">Duration (minutes) <?= required_mark() ?></label><input type="number" id="duration_min" name="duration_min" min="1" max="1440" required value="<?= h($oldLog ? old_in('duration_min') : '60') ?>" <?= field_aria('duration_min') ?>><?= field_error('duration_min') ?></div>
           <div class="field"><label for="topic">Topic</label><input type="text" id="topic" name="topic" maxlength="190" value="<?= h($oldLog ? old_in('topic') : '') ?>"></div>
         </div>
         <fieldset>
@@ -441,6 +442,7 @@ page_header((form_errors() ? 'Error — ' : '') . ($showArchived ? 'Programs (ar
   <form method="post" action="programs.php" class="stacked" novalidate>
     <?= csrf_field() ?><?= web_idem_field() ?>
     <?= form_error_summary(['name' => '', 'start_date' => '', 'end_date' => '', 'coordinator_id' => 'Coordinator']) ?>
+    <p class="muted">Fields marked with an asterisk (<span aria-hidden="true">*</span><span class="visually-hidden">asterisk</span>) are required.</p>
     <div class="grid grid-4">
       <div class="field"><label for="name">Cohort name <?= required_mark() ?></label><input type="text" id="name" name="name" required maxlength="190" placeholder="e.g. Central HS Fall 2026" value="<?= h($oldCohort ? old_in('name') : '') ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
       <div class="field"><label for="school">School / district</label><input type="text" id="school" name="school" maxlength="190" value="<?= h($oldCohort ? old_in('school') : '') ?>"></div>

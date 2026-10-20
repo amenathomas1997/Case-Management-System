@@ -118,7 +118,7 @@ struct InvoicesView: View {
                     Text("Denied").tag("Denied")
                     Text("Void").tag("Void")
                 }
-                Text("A draft can be marked submitted here (swipe, or the Actions rotor). Recording payments and write-offs, and closing denied invoices, are on the website.")
+                Text("A draft can be marked submitted here (its Mark submitted button, a swipe, or the Actions rotor). Recording payments and write-offs, and closing denied invoices, are on the website.")
                     .font(.callout).foregroundStyle(Color.secondaryText)
             }
             if let d = data {
@@ -156,6 +156,8 @@ struct InvoicesView: View {
             }
         }
         .navigationTitle("Invoices")
+        // The Show picker's choice is not cut short at the accessibility text sizes.
+        .modifier(ReadablePickers(inNavigationStack: true))
         .confirmationDialog("Mark invoice \(pendingSubmit?.invoiceNumber ?? "") submitted today?",
                             isPresented: Binding(get: { pendingSubmit != nil }, set: { if !$0 { pendingSubmit = nil } }),
                             titleVisibility: .visible) {
@@ -194,6 +196,19 @@ struct InvoicesView: View {
             }
         }
         .modifier(DraftSubmitActions(isDraft: inv.status == "Draft") { pendingSubmit = inv })
+        // A visible single-tap way (4.30.0), as well as the swipe: Switch Control, Voice Control
+        // and anyone who never finds the swipe had none. VoiceOver has it on the row's Actions
+        // rotor, so it is not a second stop there.
+        if inv.status == "Draft" {
+            Button { pendingSubmit = inv } label: {
+                Label("Mark submitted", systemImage: "paperplane").frame(minHeight: 44)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .accessibilityLabel("Mark invoice \(inv.invoiceNumber) submitted")
+            .accessibilityInputLabels(["Mark submitted", "Mark invoice \(inv.invoiceNumber) submitted"])
+            .accessibilityHidden(UIAccessibility.isVoiceOverRunning)
+        }
     }
 
     private func markSubmitted(_ inv: InvoiceItem) async {

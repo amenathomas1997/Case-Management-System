@@ -55,7 +55,7 @@ elseif($conflict){
 <li>Status: <?=h($homework['status'])?></li>
 <li>Client reported it done: <?=$homework['client_reported_at']?h(fmt_datetime($homework['client_reported_at'])):'no'?></li></ul>
 To keep your version, tick “Save my version over the saved one” at the end of the form and save again. Or <a href="homework_edit.php?id=<?=$id?>">discard your changes and load the saved version</a>.</div>
-<script>document.addEventListener('DOMContentLoaded',function(){var e=document.getElementById('form-errors');if(e)e.focus();});</script>
+<script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){var e=document.getElementById('form-errors');if(e)e.focus();});</script>
 <?php }
 elseif($error)echo error_notice($error);?>
 <form method="post" class="stacked"><?=csrf_field()?>

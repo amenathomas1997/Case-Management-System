@@ -699,6 +699,7 @@ struct ATMatchingView: View {
                 }
             }
         }.navigationTitle("Instructor matching")
+        .modifier(ReadablePickers(inNavigationStack: true))   // choices not cut short at large text sizes
     }
     private func search() async {
         busy = true; error = nil; defer { busy = false }
@@ -753,7 +754,9 @@ struct ATProfitabilityView: View {
                     .accessibilityElement(children: .combine)
                 }
             } }
-        }.navigationTitle("Profitability").task { await load() }.refreshable { await load() }
+        }.navigationTitle("Profitability")
+        .modifier(ReadablePickers(inNavigationStack: true))   // choices not cut short at large text sizes
+        .task { await load() }.refreshable { await load() }
     }
     private var groupLabels: [String] { Array(Set(rows.map { grouping == "Service" ? $0.service : $0.contract })).sorted() }
     private func load() async {

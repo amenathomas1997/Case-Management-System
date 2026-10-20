@@ -112,23 +112,27 @@ private fun AddTaskDialog(api: Api, onDone: (String) -> Unit, onCancel: () -> Un
     var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var dueError by remember { mutableStateOf<String?>(null) }
+    var titleError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var presses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text("Add a task", modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field("Task", title, { title = it })
+                Field("Task", title, { title = it }, required = true, error = titleError)
                 Field("Due date", due, { due = it }, hint = "optional, year-month-day such as ${today()}", error = dueError)
                 Field("Details", details, { details = it }, hint = "optional", singleLine = false, minLines = 3)
-                ErrorText(error)
+                ErrorText(error, focusKey = presses)
             }
         },
         confirmButton = {
-            TextButton(enabled = !busy && title.isNotBlank(), onClick = {
+            TextButton(enabled = !busy, onClick = {
+                presses++
+                titleError = if (title.isBlank()) "Name the task." else null
                 dueError = if (due.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(due.trim())) "Enter the due date as year-month-day, such as ${today()}, or leave it empty." else null
-                if (dueError != null) { error = dueError; return@TextButton }
+                errorSummary(listOf(titleError, dueError))?.let { error = it; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
                     val r = api.callOnce("save_task", JSONObject().put("title", title.trim()).put("due_date", due.trim()).put("details", details.trim()), idem, { idem = it }, "the task")
                     onDone(r.optString("message").ifEmpty { "Task added." })
@@ -257,7 +261,7 @@ fun ThreadScreen(api: Api, clientId: Int) {
                     }))
             }
             NoticeText(notice)
-            Field("Your message", text, { text = it }, hint = if (attach != null) "optional with a file" else null, singleLine = false, minLines = 3)
+            Field("Your message", text, { text = it }, hint = if (attach != null) "optional with a file" else null, singleLine = false, minLines = 3, required = attach == null)
             val a = attach
             // Files with messages need a 4.25.0 server (an older one would drop the file unsaid).
             if (a == null && api.server425 == true) {
@@ -272,7 +276,7 @@ fun ThreadScreen(api: Api, clientId: Int) {
             if (textable && r.textBlocked == null) Tick("Also send it as a text message", byText) { byText = it }
             else if (textable) Text("Not by text: " + r.textBlocked)
             ErrorText(error)
-            PrimaryButton("Send", busy = busy, enabled = text.isNotBlank() || attach != null) {
+            PrimaryButton("Send", busy = busy, missing = if (text.isBlank() && attach == null) "Still needed: a message or a file." else null) {
                 if (busy) return@PrimaryButton
                 scope.launchSave({ busy = it }, { error = it }) {
                     val body = JSONObject().put("client_id", clientId).put("channel", channel).put("body", text.trim())
@@ -316,7 +320,7 @@ fun ThreadScreen(api: Api, clientId: Int) {
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     if (docs.loading) Text("Loading documents…")
-                    ErrorText(docs.error)
+                    ErrorText(docs.error, takeFocus = false)
                     val list = docs.data ?: emptyList()
                     if (!docs.loading && list.isEmpty() && docs.error == null) Text("This client has no documents yet. Use Add a new file instead.")
                     list.forEach { d ->

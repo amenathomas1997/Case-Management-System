@@ -129,8 +129,8 @@ page_header('Custom reports', $user, 'analytics', [['analytics.php', 'Business a
   <?php if (count($result['rows']) >= 500 && ($result['grouped'] || $result['total'] > count($result['rows']))): ?><p>The first <?= count($result['rows']) ?> are shown; the download has up to 10,000.</p><?php endif; ?>
   <p><a href="custom_reports.php?<?= h($q) ?>&amp;export=1">Download as a spreadsheet (CSV)</a></p>
   <?php if (!$result['rows']): ?><p>Nothing matches these filters.</p><?php else: ?>
-  <div class="table-wrap"><table class="table">
-    <caption class="visually-hidden"><?= h($subjectLabel) ?> report</caption>
+  <div class="table-scroll" tabindex="0" role="region" aria-labelledby="result-cap"><table class="table">
+    <caption class="visually-hidden" id="result-cap"><?= h($subjectLabel) ?> report</caption>
     <thead><tr><?php foreach ($result['head'] as $i => $hd): ?><th scope="col"<?= in_array($result['kinds'][$i], ['number', 'money'], true) ? ' class="num"' : '' ?>><?= h($hd) ?></th><?php endforeach; ?></tr></thead>
     <tbody>
     <?php foreach ($result['rows'] as $r): ?><tr><?php foreach ($r as $i => $v): ?><?= $i === 0 ? '<th scope="row">' : '<td' . (in_array($result['kinds'][$i], ['number', 'money'], true) ? ' class="num"' : '') . '>' ?><?= h(($cellText = custom_report_cell($v, $result['kinds'][$i])) === '' && $i === 0 ? '(blank)' : $cellText) ?><?= $i === 0 ? '</th>' : '</td>' ?><?php endforeach; ?></tr>
@@ -141,10 +141,11 @@ page_header('Custom reports', $user, 'analytics', [['analytics.php', 'Business a
   <?php if (!$savedRow): ?>
   <h3 id="save-h">Save this report</h3>
   <form method="post" action="custom_reports.php" class="stacked" novalidate><?= csrf_field() ?>
+    <?= form_error_summary(['report_name' => 'Name']) ?>
     <?php foreach ($def as $k => $v): if ($k === 'cols') { foreach ($v as $c): ?><input type="hidden" name="cols[]" value="<?= h($c) ?>"><?php endforeach; continue; } ?>
     <input type="hidden" name="<?= h($k) ?>" value="<?= h(is_bool($v) ? ($v ? '1' : '') : (string)$v) ?>">
     <?php endforeach; ?>
-    <div class="field"><label for="report_name">Name</label><input type="text" id="report_name" name="report_name" maxlength="120" value="<?= h(old_in('report_name')) ?>" <?= field_aria('report_name') ?>><?= field_error('report_name') ?></div>
+    <div class="field"><label for="report_name">Name <?= required_mark() ?></label><input type="text" id="report_name" name="report_name" maxlength="120" required aria-required="true" value="<?= h(old_in('report_name')) ?>" <?= field_aria('report_name') ?>><?= field_error('report_name') ?></div>
     <div class="field"><label><input type="checkbox" name="shared" value="1"> Share with everyone who can see reports</label></div>
     <button type="submit" name="save_report" value="1" class="btn btn-secondary">Save report</button>
   </form>

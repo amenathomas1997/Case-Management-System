@@ -67,6 +67,9 @@ $hintInline = function (string $x): string {
 $err = function (string $k) use (&$errors): string {
     return isset($errors[$k]) ? '<p class="field-error" id="err-' . $k . '">' . t($errors[$k]) . '</p>' : '';
 };
+// A radio or check box group in error (4.30.0): every choice in it is marked invalid itself, and the
+// error is printed right after the group's legend, so it is not reached only through the fieldset.
+$inv = function (string $k) use (&$errors): string { return isset($errors[$k]) ? ' aria-invalid="true"' : ''; };
 $aria = function (string $k, string $describe = '') use (&$errors): string {
     $ids = [];
     if (isset($errors[$k])) $ids[] = 'err-' . $k;
@@ -426,7 +429,7 @@ echo lang_toggle();
       <?php elseif ($helpContact !== ''): ?><?= t('If you have not heard from us by then, email') ?> <a href="mailto:<?= h($helpContact) ?>"><?= h($helpContact) ?></a>.<?php endif; ?></p>
     <?php endif; ?>
   </div>
-  <script>document.addEventListener('DOMContentLoaded',function(){var s=document.getElementById('referral-sent');if(s)s.focus();if(window.Earcon)Earcon.play('success');});</script>
+  <script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){var s=document.getElementById('referral-sent');if(s)s.focus();if(window.Earcon)Earcon.play('success');});</script>
   <?php if (($feeResult = is_string($sentDone['fee'] ?? null) ? $sentDone['fee'] : '') !== ''): ?>
   <div class="card">
     <h2><?= t('Your cost') ?></h2>
@@ -475,7 +478,7 @@ if ($errors): ?>
   <?php endif; ?>
 </div>
 <?php endif; ?>
-<?php if ($errors): ?><script>document.addEventListener('DOMContentLoaded',function(){var a=document.getElementById('form-errors');if(a)a.focus();});</script><?php endif; ?>
+<?php if ($errors): ?><script>(window.cmsFocusAfterLoad||function(f){document.addEventListener('DOMContentLoaded',f);})(function(){var a=document.getElementById('form-errors');if(a)a.focus();});</script><?php endif; ?>
 
 <?php // The page language rides on the form address: if the session lapses while the
 // form is open, the page that comes back (and its notice) is still in that language. ?>
@@ -491,17 +494,17 @@ if ($errors): ?>
 
   <fieldset id="role-group" <?= isset($errors['role']) ? 'aria-describedby="err-role"' : '' ?>>
     <legend><h2 class="legend-h"><?= t('I am referring as a…') ?> <span aria-hidden="true">*</span></h2></legend>
+    <?= $err('role') ?>
     <?php $roleNum = 0; foreach (REFERRER_ROLES as $value => $label): if (!in_array($value, referral_form_config()['roles'], true)) continue; ?>
     <div class="field">
-      <label><input type="radio" name="role" id="role-<?= $roleNum++ ?>" value="<?= h($value) ?>" <?= $source === $value ? 'checked' : '' ?> required data-role-radio> <?= t($label) ?></label>
+      <label><input type="radio" name="role" id="role-<?= $roleNum++ ?>" value="<?= h($value) ?>" <?= $source === $value ? 'checked' : '' ?> required<?= $inv('role') ?> data-role-radio> <?= t($label) ?></label>
     </div>
     <?php endforeach; ?>
     <?php foreach ($extraSources as $value): // added on Lists and time limits (4.11.0) ?>
     <div class="field">
-      <label><input type="radio" name="role" id="role-<?= $roleNum++ ?>" value="<?= h($value) ?>" <?= $source === $value ? 'checked' : '' ?> required data-role-radio data-acts-as="other"> <?= page_lang() === 'es' ? '<span lang="en">' . h($value) . '</span>' : h($value) ?></label>
+      <label><input type="radio" name="role" id="role-<?= $roleNum++ ?>" value="<?= h($value) ?>" <?= $source === $value ? 'checked' : '' ?> required<?= $inv('role') ?> data-role-radio data-acts-as="other"> <?= page_lang() === 'es' ? '<span lang="en">' . h($value) . '</span>' : h($value) ?></label>
     </div>
     <?php endforeach; ?>
-    <?= $err('role') ?>
   </fieldset>
   <?php // Filled by the page script when a role is chosen, so a screen reader
   // hears that the questions below changed (WCAG 4.1.3). ?>
@@ -557,20 +560,20 @@ if ($errors): ?>
     </div>
     <fieldset class="field" id="requested-services-group"<?= isset($errors['requested_services']) ? ' aria-describedby="err-requested_services"' : '' ?>>
       <legend><?= t('Assistive technology services requested') ?><?= referral_form_config()['min_services'] > 0 ? ' <span aria-hidden="true">*</span><span class="visually-hidden"> (' . t('required: choose at least one') . ')</span>' : '' ?><?= $hintInline(referral_form_config()['hints']['services']['en']) ?></legend>
+      <?= $err('requested_services') ?>
       <?php $pickedServices = $request['service'] !== '' ? explode('; ', $request['service']) : []; ?>
       <?php foreach (referral_options('services') as $svcNum => $svc): $svcHint = referral_service_hint($svc); ?>
-      <label class="check"><input type="checkbox" name="requested_services[]" id="svc-<?= (int)$svcNum ?>" value="<?= h($svc) ?>" <?= in_array($svc, $pickedServices, true) ? 'checked' : '' ?>> <?= $whole($svc) ?>
+      <label class="check"><input type="checkbox" name="requested_services[]" id="svc-<?= (int)$svcNum ?>" value="<?= h($svc) ?>" <?= in_array($svc, $pickedServices, true) ? 'checked' : '' ?><?= $inv('requested_services') ?>> <?= $whole($svc) ?>
         <?php if ($svcHint !== ''): ?><span class="hint">(<?= $whole($svcHint) ?>)</span><?php endif; ?></label>
       <?php endforeach; ?>
-      <?= $err('requested_services') ?>
     </fieldset>
     <?php if (referral_options('needs')): ?>
     <fieldset<?= isset($errors['specific_needs']) ? ' aria-describedby="err-specific_needs"' : '' ?>>
       <legend><?= t('Specific needs (optional)') ?><?= $hintInline(referral_form_config()['hints']['needs']['en']) ?></legend>
-      <?php foreach (referral_options('needs') as $needNum => $need): ?>
-      <label class="check"><input type="checkbox" name="specific_needs[]" id="need-<?= (int)$needNum ?>" value="<?= h($need) ?>" <?= in_array($need, $request['needs'], true) ? 'checked' : '' ?>> <?= $whole($need) ?></label>
-      <?php endforeach; ?>
       <?= $err('specific_needs') ?>
+      <?php foreach (referral_options('needs') as $needNum => $need): ?>
+      <label class="check"><input type="checkbox" name="specific_needs[]" id="need-<?= (int)$needNum ?>" value="<?= h($need) ?>" <?= in_array($need, $request['needs'], true) ? 'checked' : '' ?><?= $inv('specific_needs') ?>> <?= $whole($need) ?></label>
+      <?php endforeach; ?>
     </fieldset>
     <?php endif; ?>
   </fieldset>
@@ -582,10 +585,10 @@ if ($errors): ?>
   <?php if ($pr['vr_first']): ?>
   <fieldset data-role="<?= h($askRoles) ?>" id="vrcase-group" <?= isset($errors['vr_case']) ? 'aria-describedby="err-vr_case"' : '' ?>>
     <legend><h2 class="legend-h"><?php if ($asksOthers): // worded for whoever is filling it in, as the request box is ?><span data-self-text<?= $role === 'self' ? '' : ' hidden' ?>><?= t('Do you have an open case with a vocational rehabilitation (VR) agency?') ?></span><span data-other-text<?= $role === 'self' ? ' hidden' : '' ?>><?= t('Does the person have an open case with a vocational rehabilitation (VR) agency?') ?></span><?php else: ?><?= t('Do you have an open case with a vocational rehabilitation (VR) agency?') ?><?php endif; ?> <span aria-hidden="true">*</span></h2></legend>
-    <?php $vrNum = 0; foreach (VR_CASE_ANSWERS as $value => $label): ?>
-    <div class="field"><label><input type="radio" name="vr_case" id="vrcase-<?= $vrNum++ ?>" value="<?= h($value) ?>" <?= ($_POST['vr_case'] ?? '') === $value ? 'checked' : '' ?> data-req-roles="<?= h($askRoles) ?>"> <?= t($label) ?></label></div>
-    <?php endforeach; ?>
     <?= $err('vr_case') ?>
+    <?php $vrNum = 0; foreach (VR_CASE_ANSWERS as $value => $label): ?>
+    <div class="field"><label><input type="radio" name="vr_case" id="vrcase-<?= $vrNum++ ?>" value="<?= h($value) ?>" <?= ($_POST['vr_case'] ?? '') === $value ? 'checked' : '' ?><?= $inv('vr_case') ?> data-req-roles="<?= h($askRoles) ?>"> <?= t($label) ?></label></div>
+    <?php endforeach; ?>
   </fieldset>
   <?php endif; ?>
   <?php if ($pr['sliding_on']): ?>
@@ -593,20 +596,20 @@ if ($errors): ?>
     <legend><h2 class="legend-h"><?= t('Monthly income') ?> <span aria-hidden="true">*</span></h2> <span class="hint"><?= fee_copy(t($asksOthers
         ? ($pr['youth_age'] > 0 ? 'The person\'s monthly income, including benefits, or their parents\' income if they are under {age}. This only decides whether training is free. We will confirm with you; nothing is charged now.' : 'The person\'s monthly income, including benefits. This only decides whether training is free. We will confirm with you; nothing is charged now.')
         : ($pr['youth_age'] > 0 ? 'Your monthly income, including benefits. If you are under {age}, give your parents\' income instead. This only decides whether training is free. We will confirm with you; nothing is charged now.' : 'Your monthly income, including benefits. This only decides whether training is free. We will confirm with you; nothing is charged now.'))) ?></span></legend>
+    <?= $err('income') ?>
     <?php $incomeNum = 0; foreach (INCOME_BRACKETS as $value => $label): ?>
     <div class="field">
-      <label><input type="radio" name="income" id="income-<?= $incomeNum++ ?>" value="<?= h($value) ?>" <?= ($_POST['income'] ?? '') === $value ? 'checked' : '' ?> data-req-roles="<?= h($askRoles) ?>">
+      <label><input type="radio" name="income" id="income-<?= $incomeNum++ ?>" value="<?= h($value) ?>" <?= ($_POST['income'] ?? '') === $value ? 'checked' : '' ?><?= $inv('income') ?> data-req-roles="<?= h($askRoles) ?>">
         <?= fee_copy(t($label)) ?> — <strong><?= fee_copy(t($value === 'below_2000' ? 'free' : '{rate} per hour')) ?></strong></label>
     </div>
     <?php endforeach; ?>
-    <?= $err('income') ?>
   </fieldset>
   <?php endif; ?>
 
   <?php // Asked of every referrer, self-referrers included (4.19.0): it sets the person's time zone for reminders and texts. ?>
   <div class="field">
     <label for="client_state"><span data-self-text<?= $role === 'self' ? '' : ' hidden' ?>><?= t('Your state') ?></span><span data-other-text<?= $role === 'self' ? ' hidden' : '' ?>><?= t('Their state') ?></span> <span aria-hidden="true">*</span></label>
-    <select id="client_state" name="client_state" required <?= $aria('client_state') ?>><?= kv_options(US_STATES, html_entity_decode($old('client_state'), ENT_QUOTES), __('Choose a state'), true) ?></select>
+    <select id="client_state" name="client_state" required autocomplete="<?= $role === 'self' ? 'address-level1' : 'off' ?>" <?= $aria('client_state') ?>><?= kv_options(US_STATES, html_entity_decode($old('client_state'), ENT_QUOTES), __('Choose a state'), true) ?></select>
     <?= $err('client_state') ?>
   </div>
 
@@ -674,9 +677,9 @@ if ($errors): ?>
     <legend><h2 class="legend-h"><?= t('Contact and consent') ?></h2></legend>
     <fieldset class="field" data-role="family" id="contact-first-group" <?= isset($errors['contact_first']) ? 'aria-describedby="err-contact_first"' : '' ?>>
       <legend><h3 class="legend-h"><?= t('Who should we contact first?') ?> <span aria-hidden="true">*</span></h3></legend>
-      <label><input type="radio" name="contact_first" id="cf-0" value="client" <?= ($_POST['contact_first'] ?? '') === 'client' ? 'checked' : '' ?> data-req-roles="family"> <?= t('The person themselves') ?></label>
-      <label><input type="radio" name="contact_first" value="referrer" <?= ($_POST['contact_first'] ?? '') === 'referrer' ? 'checked' : '' ?> data-req-roles="family"> <?= t('Me first') ?></label>
       <?= $err('contact_first') ?>
+      <label><input type="radio" name="contact_first" id="cf-0" value="client" <?= ($_POST['contact_first'] ?? '') === 'client' ? 'checked' : '' ?><?= $inv('contact_first') ?> data-req-roles="family"> <?= t('The person themselves') ?></label>
+      <label><input type="radio" name="contact_first" value="referrer" <?= ($_POST['contact_first'] ?? '') === 'referrer' ? 'checked' : '' ?><?= $inv('contact_first') ?> data-req-roles="family"> <?= t('Me first') ?></label>
     </fieldset>
     <div class="field" data-role="medical family agency other">
       <label><input type="checkbox" id="consent-box" name="consent" value="1" <?= !empty($_POST['consent']) ? 'checked' : '' ?>
@@ -728,16 +731,29 @@ if ($errors): ?>
     }
     // After a switch, say which role's questions are now shown (the status
     // region is polite, so it does not interrupt the radio's own announcement).
+    // 4.30.0: arrowing through the roles changes the choice on every press, so the page waits until
+    // the choice has rested for 700 ms and then says it once (owner rule: nothing speaks per arrow).
     var status = document.getElementById('role-status');
+    var announceTimer = null, lastSaid = '';
     function announce() {
-        var chosen = document.querySelector('[data-role-radio]:checked');
-        var label = chosen && chosen.closest('label');
-        if (!status || !label) return;
-        var name = label.textContent.replace(/\s+/g, ' ').trim();
-        status.textContent = '';
-        setTimeout(function () { status.textContent = status.getAttribute('data-text') + ' ' + name + '.'; }, 50);
+        clearTimeout(announceTimer);
+        announceTimer = setTimeout(function () {
+            var chosen = document.querySelector('[data-role-radio]:checked');
+            var label = chosen && chosen.closest('label');
+            if (!status || !label) return;
+            var name = label.textContent.replace(/\s+/g, ' ').trim();
+            if (name === lastSaid) return;
+            lastSaid = name;
+            status.textContent = status.getAttribute('data-text') + ' ' + name + '.';
+        }, 700);
     }
-    radios.forEach(function (r) { r.addEventListener('change', update); r.addEventListener('change', wording); r.addEventListener('change', announce); });
+    // The state is the referrer's own address only for someone referring themselves (1.3.5).
+    var stateBox = document.getElementById('client_state');
+    function stateAutofill() {
+        var chosen = document.querySelector('[data-role-radio]:checked');
+        if (stateBox) stateBox.setAttribute('autocomplete', chosen && chosen.value === 'self' ? 'address-level1' : 'off');
+    }
+    radios.forEach(function (r) { r.addEventListener('change', update); r.addEventListener('change', wording); r.addEventListener('change', stateAutofill); r.addEventListener('change', announce); });
     update();
     wording();
 })();
