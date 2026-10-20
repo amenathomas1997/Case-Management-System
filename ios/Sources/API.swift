@@ -666,7 +666,10 @@ struct Session: Decodable, Identifiable {
     /// The client and the instructor (4.0.0): for the client record link and "My sessions".
     var clientId: Int?
     var userId: Int?
-    private enum CodingKeys: String, CodingKey { case id, startAt, endAt, location, notes, status, trackId, client, instructor, isRemote, meetingUrl, overdue, checkedInAt, inSeries, groupUid, clientId, userId }
+    /// A Completed session whose case note is not written yet (4.31.0); nil from a server that
+    /// does not report it.
+    var notePending: Bool?
+    private enum CodingKeys: String, CodingKey { case id, startAt, endAt, location, notes, status, trackId, client, instructor, isRemote, meetingUrl, overdue, checkedInAt, inSeries, groupUid, clientId, userId, notePending }
     // Tolerant decode: endAt is never displayed, so a null on any row must not blank the
     // whole Schedule tab. Only id is required.
     init(from d: Decoder) throws {
@@ -689,6 +692,156 @@ struct Session: Decodable, Identifiable {
         groupUid = try? c.decodeIfPresent(String.self, forKey: .groupUid)
         clientId = try? c.decodeIfPresent(Int.self, forKey: .clientId)
         userId = try? c.decodeIfPresent(Int.self, forKey: .userId)
+        notePending = SessionNoteTarget.flag(c, .notePending)
+    }
+}
+
+/// A completed session whose case note is to be written (4.31.0): what notes_to_write lists,
+/// and what the case-note editor opens with after a completion. Tolerant: only the session
+/// and the client are required.
+struct SessionNoteTarget: Decodable, Identifiable, Hashable {
+    let sessionId: Int
+    let clientId: Int
+    let clientName: String
+    let trackId: Int?
+    /// The session's day, yyyy-MM-dd ("" when not known).
+    let sessionDate: String
+    let startAt: String?
+    /// "Session on Oct 20", in the organisation's date format (the server's), or the app's own.
+    let noteSubject: String
+    var id: Int { sessionId }
+
+    private enum CodingKeys: String, CodingKey { case sessionId, clientId, clientName, trackId, sessionDate, startAt, noteSubject }
+
+    init(sessionId: Int, clientId: Int, clientName: String, trackId: Int?, sessionDate: String, startAt: String? = nil, noteSubject: String?) {
+        self.sessionId = sessionId
+        self.clientId = clientId
+        self.clientName = clientName
+        self.trackId = (trackId ?? 0) > 0 ? trackId : nil
+        self.sessionDate = sessionDate
+        self.startAt = startAt
+        let subject = (noteSubject ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        self.noteSubject = subject.isEmpty ? Self.fallbackSubject(day: sessionDate) : subject
+    }
+
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        guard let sid = Self.int(c, .sessionId), let cid = Self.int(c, .clientId) else {
+            throw DecodingError.dataCorruptedError(forKey: .sessionId, in: c, debugDescription: "no session or client")
+        }
+        let start = (try? c.decodeIfPresent(String.self, forKey: .startAt)) ?? nil
+        let day = (try? c.decodeIfPresent(String.self, forKey: .sessionDate)) ?? nil
+        self.init(sessionId: sid, clientId: cid,
+                  clientName: ((try? c.decodeIfPresent(String.self, forKey: .clientName)) ?? nil) ?? "",
+                  trackId: Self.int(c, .trackId),
+                  sessionDate: String((day ?? start ?? "").prefix(10)),
+                  startAt: start,
+                  noteSubject: (try? c.decodeIfPresent(String.self, forKey: .noteSubject)) ?? nil)
+    }
+
+    /// An id sent as a number or as text.
+    static func int<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) -> Int? {
+        if let n = try? c.decodeIfPresent(Int.self, forKey: key) { return n }
+        if let t = try? c.decodeIfPresent(String.self, forKey: key) { return Int(t) }
+        return nil
+    }
+
+    /// A flag sent as true/false, 1/0 or "1"/"0".
+    static func flag<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) -> Bool? {
+        if let b = try? c.decodeIfPresent(Bool.self, forKey: key) { return b }
+        if let n = try? c.decodeIfPresent(Int.self, forKey: key) { return n != 0 }
+        if let t = try? c.decodeIfPresent(String.self, forKey: key) { return t == "1" || t.lowercased() == "true" }
+        return nil
+    }
+
+    /// "Session on Oct 20" for a server older than 4.31.0, which sends no note_subject; "Session"
+    /// for a day that cannot be read.
+    static func fallbackSubject(day: String) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        guard day.count >= 10, let date = f.date(from: String(day.prefix(10))) else { return "Session" }
+        f.dateFormat = "MMM d"
+        return "Session on " + f.string(from: date)
+    }
+
+    /// Where the editor is, said and shown at its top: "Case note for Jane Doe, session on Oct 20".
+    var contextLine: String {
+        let name = clientName.isEmpty ? "this client" : clientName
+        let what = noteSubject.hasPrefix("Session") ? "s" + noteSubject.dropFirst() : noteSubject
+        return "Case note for \(name), \(what)"
+    }
+
+    /// The editor's target after complete_session: the reply's fields (4.31.0), else the
+    /// session's own (an older server). nil when the client is not known.
+    static func afterCompletion(_ reply: CompleteSessionReply, session: Session) -> SessionNoteTarget? {
+        guard let clientId = reply.clientId ?? session.clientId, clientId > 0 else { return nil }
+        let day = reply.sessionDate ?? String(session.startAt.prefix(10))
+        return SessionNoteTarget(sessionId: reply.sessionId ?? session.id, clientId: clientId,
+                                 clientName: reply.clientName ?? session.client,
+                                 trackId: reply.trackId ?? session.trackId, sessionDate: day,
+                                 startAt: session.startAt, noteSubject: reply.noteSubject)
+    }
+}
+
+/// notes_to_write (4.31.0): the signed-in person's completed sessions still without a case
+/// note, newest first. The list is read from "notes" (or "sessions" / "items"); a row that
+/// cannot be read is left out.
+struct NotesToWriteResponse: Decodable {
+    let notes: [SessionNoteTarget]
+    let total: Int
+    private enum CodingKeys: String, CodingKey { case notes, sessions, items, total }
+    private struct Lenient: Decodable {
+        let value: SessionNoteTarget?
+        init(from d: Decoder) throws { value = try? SessionNoteTarget(from: d) }
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        var rows: [SessionNoteTarget] = []
+        for key in [CodingKeys.notes, .sessions, .items] {
+            if let list = try? c.decodeIfPresent([Lenient].self, forKey: key) { rows = list.compactMap(\.value); break }
+        }
+        notes = rows
+        total = SessionNoteTarget.int(c, .total) ?? rows.count
+    }
+}
+
+/// complete_session's reply. Tolerant: once the server says ok, a missing detail must not turn
+/// a completed (and billed) session into an error the user would retry. The note fields
+/// (4.31.0) are nil from an older server.
+struct CompleteSessionReply: Decodable {
+    let hoursLogged: Double
+    /// The hours were logged outside the track's authorization (expired, not yet started, or
+    /// the track not Active): the server's sentence saying so (3.0.21).
+    let warning: String?
+    let clientId: Int?
+    let clientName: String?
+    let trackId: Int?
+    let sessionId: Int?
+    let sessionDate: String?
+    let noteSubject: String?
+    let notePending: Bool?
+    private enum CodingKeys: String, CodingKey { case ok, hoursLogged, warning, clientId, clientName, trackId, sessionId, sessionDate, noteSubject, notePending }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
+            throw DecodingError.dataCorruptedError(forKey: .ok, in: c, debugDescription: "not ok")
+        }
+        hoursLogged = (try? c.decode(Double.self, forKey: .hoursLogged)) ?? 0
+        let text = (try? c.decodeIfPresent(String.self, forKey: .warning))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        warning = (text?.isEmpty ?? true) ? nil : text
+        clientId = SessionNoteTarget.int(c, .clientId)
+        let name = (try? c.decodeIfPresent(String.self, forKey: .clientName)) ?? nil
+        clientName = (name?.isEmpty ?? true) ? nil : name
+        trackId = SessionNoteTarget.int(c, .trackId)
+        sessionId = SessionNoteTarget.int(c, .sessionId)
+        let day = (try? c.decodeIfPresent(String.self, forKey: .sessionDate)) ?? nil
+        sessionDate = (day?.count ?? 0) >= 10 ? day.map { String($0.prefix(10)) } : nil
+        noteSubject = (try? c.decodeIfPresent(String.self, forKey: .noteSubject)) ?? nil
+        notePending = SessionNoteTarget.flag(c, .notePending)
     }
 }
 

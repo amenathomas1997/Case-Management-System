@@ -61,6 +61,23 @@ struct ScheduleView: View {
     /// A signed completion's result: the signature sheet locks the app as it closes, so this is
     /// said once the device owner has unlocked (said under the lock screen, it was lost).
     @State private var resultAfterUnlock: String?
+    /// 4.31.0: the case-note editor open for a completed session.
+    @State private var noteRequest: SessionNoteRequest?
+    /// The note to open once the Complete session sheet has closed, or once the device owner has
+    /// unlocked after the client signed.
+    @State private var noteAfterSheet: SessionNoteRequest?
+    @State private var noteAfterUnlock: SessionNoteRequest?
+    /// The editor's result: set when the note was saved (or kept offline).
+    @State private var noteSavedMessage: String?
+    /// complete_session's retry key per session (4.31.0, sent as idem_key): one for the life of
+    /// the Complete session sheet, kept after no answer (or "still being processed"), so trying
+    /// again is recognised by the server instead of completing the session twice.
+    @State private var completionKeys: [Int: String] = [:]
+    /// Completed sessions whose case note is not written yet (notes_to_write); nil from an older
+    /// server, which hides the section.
+    @State private var notesToWrite: NotesToWriteResponse?
+    /// The Notes to write row VoiceOver is put on when the editor is left without saving.
+    @AccessibilityFocusState private var focusedNote: Int?
     /// The row VoiceOver moves to after an outcome removes the row it was on.
     @AccessibilityFocusState private var focusedSession: Int?
     /// After a failure, VoiceOver is put on the error banner (see the list's onChange).
@@ -98,6 +115,18 @@ struct ScheduleView: View {
                     // Sessions that have ended but are still Scheduled come first (the server sends
                     // every one of them): each needs an outcome, so its hours are logged or it is closed.
                     Toggle("My sessions only", isOn: $mineOnly)
+                    // 4.31.0: completed sessions whose case note is not written yet.
+                    let unwritten = notesShown
+                    if !unwritten.isEmpty {
+                        Section {
+                            ForEach(unwritten) { item in
+                                NoteToWriteRow(item: item) { openNote(SessionNoteRequest(target: item, arrival: item.contextLine + ".")) }
+                                    .accessibilityFocused($focusedNote, equals: item.sessionId)
+                            }
+                        } header: {
+                            Text("Notes to write (\(max(unwritten.count, notesToWrite?.total ?? 0)))")
+                        }
+                    }
                     let ended = shownSessions.filter { $0.overdue == true }
                     let upcoming = shownSessions.filter { $0.overdue != true }
                     let groups = dayGroups(upcoming)
@@ -199,18 +228,32 @@ struct ScheduleView: View {
             } message: {
                 Text("Each client with a confirmed email is sent a calendar cancellation.")
             }
-            .sheet(item: $signingSession, onDismiss: announceSheetResult) { session in
+            .sheet(item: $signingSession, onDismiss: afterCompletionSheet) { session in
                 // The sheet stays open until the completion is saved, so a failure keeps the
                 // client's signature for a retry instead of asking them to sign again.
-                // Hours, miles and the session note first (staff only), then the client's
-                // signature or none: one step records the whole session, as on the website.
+                // Hours and miles first (staff only), then the client's signature or none: one
+                // step records the session, then its case note opens (4.31.0).
                 CompleteSessionSheet(session: session) { details, sig, name in
                     try await complete(session, signature: sig, signedName: name, details: details)
                 }
             }
+            .sheet(item: $noteRequest, onDismiss: afterNoteSheet) { request in
+                SessionNoteSheet(request: request) { message in noteSavedMessage = message }
+            }
             .refreshable { await load() }
             .task { await load() }
             .onChange(of: lock.locked) { locked in
+                if !locked, let request = noteAfterUnlock {
+                    // The client signed and handed the phone back: once the device owner has
+                    // unlocked and VoiceOver has settled, the session's case note opens.
+                    noteAfterUnlock = nil
+                    resultAfterUnlock = nil
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        openNote(request)
+                    }
+                    return
+                }
                 guard !locked, let message = resultAfterUnlock else { return }
                 resultAfterUnlock = nil
                 // After the lock screen has gone and VoiceOver has settled on the schedule.
@@ -234,9 +277,77 @@ struct ScheduleView: View {
         let name = sessionName(outcome.session)
         switch outcome.to {
         case "Completed": return "Mark the \(name) completed? No hours are logged, because no training track is linked. It can't be reopened in the app."
+            + (api.can("clients") ? " Its case note opens next." : "")
         case "Cancelled": return "Cancel the \(name)? It is closed without logging any hours."
         default: return "Mark the \(name) as a no-show? It is closed without logging any hours."
         }
+    }
+
+    /// Completed sessions with no case note yet: notes_to_write's list, and any Completed
+    /// session the schedule itself reports as note_pending (newest first, one row each).
+    private var notesShown: [SessionNoteTarget] {
+        var rows = notesToWrite?.notes ?? []
+        for session in sessions where session.status == "Completed" && session.notePending == true
+            && !rows.contains(where: { $0.sessionId == session.id }) {
+            if let cid = session.clientId {
+                rows.append(SessionNoteTarget(sessionId: session.id, clientId: cid, clientName: session.client,
+                                              trackId: session.trackId, sessionDate: String(session.startAt.prefix(10)),
+                                              startAt: session.startAt, noteSubject: nil))
+            }
+        }
+        return rows
+    }
+
+    /// Opens the case-note editor for a completed session (4.31.0).
+    private func openNote(_ request: SessionNoteRequest) {
+        noteSavedMessage = nil
+        noteRequest = request
+    }
+
+    /// The Complete session sheet has closed: the session's case note opens (after the device
+    /// owner unlocks, when the client signed), else the result is said as before.
+    private func afterCompletionSheet() {
+        guard let request = noteAfterSheet else { announceSheetResult(); return }
+        noteAfterSheet = nil
+        sheetResult = nil
+        if lock.locked { noteAfterUnlock = request; return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            openNote(request)
+        }
+    }
+
+    /// The case-note editor has closed: saved, the result is said; left without saving, the
+    /// Schedule says so and VoiceOver is put on the session's row under Notes to write.
+    private func afterNoteSheet() {
+        let closed = noteRequest
+        if let message = noteSavedMessage {
+            noteSavedMessage = nil
+            confirmation = message
+            Task { @MainActor in
+                await loadNotes()
+                announceAfterDismiss(message)
+            }
+            return
+        }
+        Task { @MainActor in
+            await loadNotes()
+            let target = closed?.target
+            let listed = target.map { t in notesShown.contains(where: { $0.sessionId == t.sessionId }) } ?? false
+            let who = target?.clientName ?? "this client"
+            let message = listed
+                ? "Case note not written yet. It is listed under Notes to write, with Write it now."
+                : "Case note not written yet. Write it from \(who)'s record."
+            confirmation = message
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if listed, let t = target { focusedNote = t.sessionId }
+            announceAfterDismiss(message)
+        }
+    }
+
+    /// notes_to_write (4.31.0); an older server leaves the section out without a word.
+    private func loadNotes() async {
+        notesToWrite = await loadNotesToWrite(api)
     }
 
     private func announceSheetResult() {
@@ -351,13 +462,18 @@ struct ScheduleView: View {
     /// (it can be completed without one, or cancelled). Without a track, completing closes the
     /// session for good, so it asks first, as the other outcomes do.
     private func markCompleted(_ session: Session) {
-        if session.trackId != nil { signingSession = session }
+        if session.trackId != nil {
+            completionKeys[session.id] = UUID().uuidString   // a new sheet, a new key
+            signingSession = session
+        }
         else { pendingOutcome = SessionOutcome(session: session, to: "Completed") }
     }
 
     /// Every session, or only this person's (4.0.0, remembered on the phone).
     private var shownSessions: [Session] {
-        mineOnly ? sessions.filter { $0.userId == nil || $0.userId == api.userId } : sessions
+        // A Completed session (a server that lists those with a note to write) is under Notes to write.
+        let open = sessions.filter { $0.status != "Completed" }
+        return mineOnly ? open.filter { $0.userId == nil || $0.userId == api.userId } : open
     }
 
     @ViewBuilder
@@ -659,6 +775,7 @@ struct ScheduleView: View {
             loaded = true
             offlineSince = savedAt
             // Reminders follow the schedule as last loaded from the server (not the saved copy).
+            await loadNotes()
             if savedAt == nil {
                 LocalNotifications.shared.scheduleSessions(ownSessions)
                 // Check-ins the server now reports no longer need this phone's own record.
@@ -675,17 +792,25 @@ struct ScheduleView: View {
     private func completeFromList(_ session: Session) async {
         let next = neighbour(of: session)
         do {
-            try await complete(session)
-            refocus(after: session, next: next, saying: confirmation)
+            if let request = try await complete(session) {
+                // 4.31.0: straight on to the session's case note.
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                openNote(request)
+            } else {
+                refocus(after: session, next: next, saying: confirmation)
+            }
         } catch {
             showFormError(error.localizedDescription, in: &self.error)
         }
     }
 
     /// Throws on failure, after refreshing the list: the session may have been completed even
-    /// though the reply was lost, and the list then shows what is true now.
+    /// though the reply was lost, and the list then shows what is true now. Returns the session's
+    /// case note to open (4.31.0), nil when this account cannot write notes; from the Complete
+    /// session sheet it is opened once that sheet has closed.
+    @discardableResult
     private func complete(_ session: Session, signature: String? = nil, signedName: String? = nil,
-                          details: CompletionDetails? = nil) async throws {
+                          details: CompletionDetails? = nil) async throws -> SessionNoteRequest? {
         guard !completing.contains(session.id) else {
             throw APIError.server("This session is already being marked completed.")
         }
@@ -694,58 +819,56 @@ struct ScheduleView: View {
         confirmation = nil
         do {
             error = nil
-            // Tolerant: once the server says ok, a missing detail must not turn a completed
-            // (and billed) session into an error the user would retry.
-            struct CompleteResult: Decodable {
-                let hoursLogged: Double
-                /// The hours were logged outside the track's authorization (expired, not yet
-                /// started, or the track not Active): the server's sentence saying so (3.0.21).
-                let warning: String?
-                /// The session note was saved with the completion (3.0.32 servers; false from older ones, which ignore it).
-                let noteSaved: Bool
-                private enum CodingKeys: String, CodingKey { case ok, hoursLogged, warning, noteSaved }
-                init(from decoder: Decoder) throws {
-                    let c = try decoder.container(keyedBy: CodingKeys.self)
-                    guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
-                        throw DecodingError.dataCorruptedError(forKey: .ok, in: c, debugDescription: "not ok")
-                    }
-                    hoursLogged = (try? c.decode(Double.self, forKey: .hoursLogged)) ?? 0
-                    noteSaved = (try? c.decode(Bool.self, forKey: .noteSaved)) ?? false
-                    let text = (try? c.decodeIfPresent(String.self, forKey: .warning))?
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    warning = (text?.isEmpty ?? true) ? nil : text
-                }
-            }
             var body: [String: Any] = ["session_id": session.id]
+            let key = completionKeys[session.id] ?? UUID().uuidString
+            completionKeys[session.id] = key
+            body["idem_key"] = key
             if let signature { body["signature_b64"] = signature }
             if let signedName { body["signed_name"] = signedName }
             // What the Complete session step recorded (3.0.32 servers; older ones ignore it).
+            // 4.31.0: no session note here any more; the full case note opens next.
             if let details {
                 body["hours"] = details.hours
                 if details.miles > 0 { body["mileage"] = details.miles }
-                if !details.note.isEmpty { body["session_note"] = details.note }
             }
-            let result: CompleteResult = try await api.call("complete_session", body: body)
-            // Said from the server's answer: a server before 3.0.32 drops the note (and the miles).
-            let noteTyped = details?.note.isEmpty == false
-            let noteSaid = result.noteSaved ? " The session note was saved."
-                : (noteTyped ? " The session note was not saved: this server is older than the app. Add it on the website." : "")
-            let done: String = (result.hoursLogged > 0
-                ? String(format: "Completed — %.2f hours logged for %@.", result.hoursLogged, session.client)
-                : "Session marked completed.") + noteSaid
+            let result: CompleteSessionReply = try await api.call("complete_session", body: body)
+            completionKeys[session.id] = nil
+            let done: String = result.hoursLogged > 0
+                ? String(format: "Session completed — %.2f hours logged for %@.", result.hoursLogged, session.client)
+                : "Session completed."
             // Logged outside the authorization: said with it (the hours are logged either way).
             let warning: String = result.warning.map { " " + $0 } ?? ""
             confirmation = done + warning
-            if let c = confirmation {
-                // From the signature sheet, said once it has closed; from the list, said by
-                // completeFromList after the reload. Either way it would be cut off now.
-                if signingSession?.id == session.id { sheetResult = c }
+            // The case note for this session (writing notes needs the clients permission).
+            let request: SessionNoteRequest? = api.can("clients")
+                ? SessionNoteTarget.afterCompletion(result, session: session).map {
+                    SessionNoteRequest(target: $0, arrival: done + warning + " " + $0.contextLine + ".")
+                }
+                : nil
+            if let c = confirmation, signingSession?.id == session.id {
+                // From the signature sheet: the note opens (or the result is said) once it has
+                // closed; from the list, completeFromList does either. Said now it would be cut off.
+                if let request { noteAfterSheet = request } else { sheetResult = c }
             }
             await load()
+            return request
         } catch {
+            if !IdemKey.keeps(error) { completionKeys[session.id] = nil }
             // Quietly: the failure is said with the completion's own message.
             await load(reportsFailure: false)
             if loaded && self.error == nil && !sessions.contains(where: { $0.id == session.id }) {
+                // A retry answered "already closed" (the first try completed it, its reply lost):
+                // when the session is under Notes to write, its case note opens as after a
+                // completion instead of only an error.
+                if case APIError.server = error, api.can("clients"),
+                   let item = notesShown.first(where: { $0.sessionId == session.id }) {
+                    completionKeys[session.id] = nil
+                    let said = "This session was already completed."
+                    confirmation = said
+                    let request = SessionNoteRequest(target: item, arrival: said + " " + item.contextLine + ".")
+                    if signingSession?.id == session.id { noteAfterSheet = request }
+                    return request
+                }
                 // The reply was lost but the session is no longer scheduled: say so, so a retry
                 // ("Session not found or already closed") doesn't look like a second failure.
                 throw APIError.server(error.localizedDescription + " The session is no longer listed as scheduled, so it may already have been completed. Check before trying again.")
@@ -1069,19 +1192,17 @@ struct NewSessionSheet: View {
 struct CompletionDetails {
     let hours: Double
     let miles: Double
-    let note: String
 }
 
-/// Completing a session on a track: the hours (the scheduled length unless changed), miles and
-/// the session note, then the client's signature or none. Staff fill this in; only the
-/// signature step is handed to the client, so the note never is.
+/// Completing a session on a track: the hours (the scheduled length unless changed) and miles,
+/// then the client's signature or none. Staff fill this in; only the signature step is handed
+/// to the client. 4.31.0: no session note here; the full case note opens once it is completed.
 struct CompleteSessionSheet: View {
     let session: Session
     let onDone: (_ details: CompletionDetails, _ signatureB64: String?, _ signedName: String?) async throws -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var hoursText = ""
     @State private var milesText = ""
-    @State private var note = ""
     @State private var busy = false
     @State private var error: String?
     @State private var signing: SigningStep?
@@ -1113,7 +1234,7 @@ struct CompleteSessionSheet: View {
         guard miles == 0 || hours > 0 else {
             showFormError("Hours: miles are logged with hours, so enter the hours worked, or clear the miles.", in: &error); return nil
         }
-        return CompletionDetails(hours: hours, miles: miles, note: note.trimmingCharacters(in: .whitespacesAndNewlines))
+        return CompletionDetails(hours: hours, miles: miles)
     }
 
     private func completeWithoutSignature() async {
@@ -1133,8 +1254,6 @@ struct CompleteSessionSheet: View {
             ErrorFocusForm(inNavigationStack: true, error: error) {
                 CaptionedField(label: "Hours worked", text: $hoursText, keyboard: .decimalPad, errorName: "Hours")
                 CaptionedField(label: "Miles driven (optional)", text: $milesText, keyboard: .decimalPad, errorName: "Miles")
-                CaptionedField(label: "Session note (optional)", text: $note,
-                               prompt: "Progress, concerns, plan for next time", lines: 3...12)
                 Button("Get the client's signature") {
                     if let details = checked() { error = nil; signing = SigningStep(details: details) }
                 }
@@ -1152,7 +1271,7 @@ struct CompleteSessionSheet: View {
             }
             .navigationTitle("Complete session")
             // Nothing typed is lost to a swipe down: Cancel is the way out.
-            .interactiveDismissDisabled(busy || !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !milesText.isEmpty)
+            .interactiveDismissDisabled(busy || !milesText.isEmpty)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }.disabled(busy)

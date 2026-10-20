@@ -28,6 +28,7 @@ import org.casemanagement.app.Api
 import org.casemanagement.app.ApiException
 import org.json.JSONArray
 import org.json.JSONObject
+import org.casemanagement.app.parseNoteToWrite
 import java.util.Locale
 import java.util.UUID
 import org.casemanagement.app.stillProcessing
@@ -90,7 +91,7 @@ fun VoiceScreen(api: Api, nav: NavHostController, clientId: Int, clientName: Str
     var busy by remember { mutableStateOf(false) }
     var pending by rememberSaveable(stateSaver = pendingSaver) { mutableStateOf(null) }
     var unclear by remember { mutableStateOf(0) }
-    var link by remember { mutableStateOf<Pair<Int, String>?>(null) }
+    var link by remember { mutableStateOf<Pair<String, String>?>(null) }  // route and label
     var screen by remember { mutableStateOf<Pair<String, String>?>(null) }
     var retry by remember { mutableStateOf<Triple<String, JSONObject, String>?>(null) }
     // A write whose reply was lost: if the same request comes back, its key is used again, so it is never saved twice.
@@ -113,7 +114,16 @@ fun VoiceScreen(api: Api, nav: NavHostController, clientId: Int, clientName: Str
             val r = api.call("voice_command", body = body)
             say(r.optString("speak").ifEmpty { "Done." })
             retry = null; uncertain = null
-            if (r.optString("url").startsWith("client.php")) Regex("id=(\\d+)").find(r.optString("url"))?.let { link = it.groupValues[1].toInt() to r.optString("url_label").ifEmpty { "Open the record" } }
+            val url = r.optString("url")
+            if (url.startsWith("client.php")) Regex("[?&]id=(\\d+)").find(url)?.let { m ->
+                val cid = m.groupValues[1].toInt()
+                val sid = Regex("[?&]session=(\\d+)").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                // 4.31.0: a completed session's link opens its case note in the full editor; any other is the record.
+                link = if (sid > 0) {
+                    val n = parseNoteToWrite(JSONObject(r.toString()).put("client_id", cid).put("session_id", sid))
+                    (n?.route ?: "client/$cid") to r.optString("url_label").ifEmpty { "Write the case note for this session" }
+                } else "client/$cid" to "Open the record"
+            }
         } catch (e: ApiException) {
             // 4.29.0: "still being processed" is not an answer either: the retry keeps its key.
             val lost = e.network || e.status >= 500 || stillProcessing(e)
@@ -167,7 +177,7 @@ fun VoiceScreen(api: Api, nav: NavHostController, clientId: Int, clientName: Str
                         val cid = r.optInt("client_id")
                         val route = SECTION_ROUTES[r.optString("section").lowercase()]
                         when {
-                            cid > 0 -> { link = cid to "Open ${r.optString("client_name").ifEmpty { "the client" }}'s record"; say(r.optString("speak").replace(Regex("^Opening[^.]*\\.?\\s*"), "").ifEmpty { "Here is the record." }) }
+                            cid > 0 -> { link = "client/$cid" to "Open ${r.optString("client_name").ifEmpty { "the client" }}'s record"; say(r.optString("speak").replace(Regex("^Opening[^.]*\\.?\\s*"), "").ifEmpty { "Here is the record." }) }
                             route != null -> { screen = route to r.optString("section"); say(r.optString("speak").replace(Regex("^Opening[^.]*\\.?\\s*"), "").ifEmpty { "It's ready to open." }) }
                             r.optString("query").isNotEmpty() -> { screen = "search" to "search"; say("Use Search to look for " + r.optString("query") + ".") }
                             else -> say("I can't open that from the assistant: that page is on the website.")
@@ -175,7 +185,7 @@ fun VoiceScreen(api: Api, nav: NavHostController, clientId: Int, clientName: Str
                     }
                     else -> {
                         say(r.optString("speak").ifEmpty { "Sorry, I didn't understand." })
-                        if (r.optInt("client_id") > 0) link = r.optInt("client_id") to "Open ${r.optString("client_name").ifEmpty { "the client" }}'s record"
+                        if (r.optInt("client_id") > 0) link = "client/${r.optInt("client_id")}" to "Open ${r.optString("client_name").ifEmpty { "the client" }}'s record"
                     }
                 }
             } catch (e: ApiException) { say(e.message ?: "Something went wrong.") } finally { busy = false }
@@ -196,7 +206,7 @@ fun VoiceScreen(api: Api, nav: NavHostController, clientId: Int, clientName: Str
             PrimaryButton(if (retry != null) "Yes, try again" else "Yes, save") { send("yes") }
             SecondaryButton(if (retry != null) "No, stop" else "No, cancel") { send("no") }
         }
-        link?.let { (cid, label) -> SecondaryButton(label) { nav.navigate("client/$cid") } }
+        link?.let { (route, label) -> SecondaryButton(label) { nav.navigate(route) } }
         screen?.let { (route, name) -> SecondaryButton("Open " + name.replaceFirstChar { it.uppercase() }) { nav.navigate(route) } }
         Field("Say or type a request", input, { input = it }, singleLine = false)
         PrimaryButton("Send", busy = busy, missing = if (input.isBlank()) "Still needed: a request. Say or type one first." else null) { send(input) }

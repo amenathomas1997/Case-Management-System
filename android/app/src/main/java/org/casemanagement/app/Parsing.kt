@@ -99,7 +99,10 @@ data class SessionItem(
     val id: Int, val startAt: String?, val endAt: String?, val client: String, val clientId: Int, val status: String,
     val location: String?, val isRemote: Boolean, val instructor: String?, val checkedInAt: String?, val groupSize: Int,
     val overdue: Boolean, val meetingUrl: String?, val raw: JSONObject,
-)
+) {
+    /** 4.31.0: completed, and its case note not written yet (note_pending). */
+    val notePending: Boolean get() = status == "Completed" && raw.optBoolean("note_pending")
+}
 
 fun parseSchedule(r: JSONObject): List<SessionItem> = r.optJSONArray("sessions").objects().map { s ->
     SessionItem(s.optInt("id"), s.str("start_at"), s.str("end_at"), s.text("client"), s.optInt("client_id"), s.text("status"),

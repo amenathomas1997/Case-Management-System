@@ -128,6 +128,10 @@ if (can('billing')) {
     $unbilled = unbilled_totals($scoped ? (int)$user['id'] : null);
 }
 
+// Case notes still to write for completed sessions (4.31.0): the user's own sessions and
+// caseload's, newest first; each opens the full note editor for that session.
+[$notesToWrite, $notesToWriteTotal] = can('clients') ? sessnote_list((int)$user['id'], $scoped, 20) : [[], 0];
+
 page_header('Dashboard', $user, 'dashboard');
 ?>
 <h1>Caseload Dashboard</h1>
@@ -186,6 +190,17 @@ page_header('Dashboard', $user, 'dashboard');
   </ul>
   <?php endif; ?>
 </section>
+
+<?php if ($notesToWrite): ?>
+<section class="card" aria-labelledby="notes-to-write-h">
+  <h2 id="notes-to-write-h" tabindex="-1">Notes to write (<?= $notesToWriteTotal ?><?= $notesToWriteTotal > count($notesToWrite) ? ', newest ' . count($notesToWrite) . ' shown' : '' ?>)</h2>
+  <ul>
+  <?php foreach ($notesToWrite as $nw): ?>
+    <li><a href="<?= h(sessnote_editor_url($nw['client_id'], $nw['session_id'], 'dashboard')) ?>"><?= h($nw['client_name']) ?>, session on <?= h(fmt_date($nw['start_at'])) ?></a></li>
+  <?php endforeach; ?>
+  </ul>
+</section>
+<?php endif; ?>
 
 <?php // Your week (3.0.46): hours logged and still booked, against the weekly target. ?>
 <p id="my-week"><?= h(staff_week_text(staff_week((int)$user['id']))) ?></p>

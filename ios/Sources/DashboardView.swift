@@ -18,6 +18,12 @@ struct DashboardView: View {
     @State private var webPage: WebPage?
     /// Referral deadlines over 90 days (4.25.0); nil when not allowed or not available.
     @State private var referralDeadlines: ReferralDeadlines?
+    /// Completed sessions whose case note is not written yet (notes_to_write, 4.31.0); nil from
+    /// an older server or without the clients permission, which hides the section.
+    @State private var notesToWrite: NotesToWriteResponse?
+    /// The case-note editor opened from Notes to write, and its result once saved.
+    @State private var noteRequest: SessionNoteRequest?
+    @State private var noteSavedMessage: String?
 
     private func openQuickAction() {
         guard let action = navigation.quickAction else { return }
@@ -64,6 +70,25 @@ struct DashboardView: View {
                                 StatTile(number: String(format: "%.2f", data.unbilledHours),
                                          label: String(format: "Unbilled hours %@ ($%.2f with mileage and expenses)",
                                                        api.scoped ? "on your caseload" : "across all tracks", data.unbilledAmount))
+                            }
+                        }
+                        // 4.31.0: sessions completed without their case note, each with Write it now.
+                        if let notes = notesToWrite, !notes.notes.isEmpty {
+                            Text("Notes to write (\(max(notes.total, notes.notes.count)))")
+                                .font(.headline)
+                                .padding(.top, 8)
+                                .accessibilityAddTraits(.isHeader)
+                            ForEach(notes.notes.prefix(10)) { item in
+                                NoteToWriteRow(item: item) {
+                                    noteSavedMessage = nil
+                                    noteRequest = SessionNoteRequest(target: item, arrival: item.contextLine + ".")
+                                }
+                                .padding(12)
+                                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                            }
+                            if max(notes.total, notes.notes.count) > 10 {
+                                Text("Showing the 10 newest. The Schedule lists them all.")
+                                    .font(.callout).foregroundStyle(Color.secondaryText)
                             }
                         }
                         if api.can("referrals"), let deadlines = referralDeadlines {
@@ -242,6 +267,13 @@ struct DashboardView: View {
             }
             .sheet(isPresented: $showingVoice) { VoiceView() }
             .sheet(isPresented: $showingLogHours) { LogHoursView() }
+            .sheet(item: $noteRequest, onDismiss: {
+                let message = noteSavedMessage ?? "Case note not written yet. It stays under Notes to write."
+                noteSavedMessage = nil
+                Task { notesToWrite = await loadNotesToWrite(api); announceAfterDismiss(message) }
+            }) { request in
+                SessionNoteSheet(request: request) { message in noteSavedMessage = message }
+            }
             .sheet(item: $webPage) { page in
                 InAppWebView(url: page.url) { webPage = nil }.ignoresSafeArea()
             }
@@ -280,6 +312,7 @@ struct DashboardView: View {
             self.error = error.localizedDescription
         }
         // Optional: an older server, or no access, leaves it out without a word.
+        notesToWrite = await loadNotesToWrite(api)
         if api.can("referrals") {
             referralDeadlines = try? await api.call("referral_deadlines")
         }

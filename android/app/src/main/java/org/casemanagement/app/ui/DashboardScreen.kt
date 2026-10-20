@@ -4,6 +4,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import org.casemanagement.app.Api
+import org.casemanagement.app.ApiException
+import org.casemanagement.app.parseNotesToWrite
 import org.casemanagement.app.parseDashboard
 import org.casemanagement.app.parseReferralDeadlines
 import java.util.Locale
@@ -19,6 +21,9 @@ fun DashboardScreen(api: Api, nav: NavHostController) {
     val deadlines = rememberLoaded(api.userId, api.can("referrals")) {
         if (api.can("referrals")) try { parseReferralDeadlines(api.call("referral_deadlines")) } catch (e: Exception) { null } else null
     }
+    // 4.31.0: completed sessions whose case note is not written yet; hidden on an older server
+    // (Unknown action) or when it cannot be read.
+    val toWrite = rememberLoaded(api.userId) { try { parseNotesToWrite(api.call("notes_to_write")) } catch (e: ApiException) { null } }
     Show(state, "the dashboard") { (d, unread, toSign) ->
         Page {
             Heading("Hello, ${api.userName.substringBefore(' ')}", large = true)
@@ -29,6 +34,14 @@ fun DashboardScreen(api: Api, nav: NavHostController) {
             if (sign > 0) ListRow(listOf(if (sign == 1) "An agreement to sign" else "$sign agreements to sign"), action = "read and sign", onClick = { nav.navigate("agreements") })
             if (train > 0) ListRow(listOf(if (train == 1) "Training to take" else "$train trainings to take"), action = "open My training", onClick = { nav.navigate("training") })
             if (unread > 0) ListRow(listOf("$unread unread ${if (unread == 1) "alert" else "alerts"}"), onClick = { nav.navigate("alerts") })
+
+            toWrite.data?.takeIf { it.items.isNotEmpty() && api.can("clients") }?.let { w ->
+                Heading("Notes to write (${w.total})")
+                w.items.take(10).forEach { n ->
+                    ListRow(listOf(n.clientName, n.subject), action = "write the note", onClick = { nav.navigate(n.route) })
+                }
+                if (w.total > 10 && api.can("schedule")) ListRow(listOf("All ${w.total} notes to write are on the Schedule"), action = "open the Schedule", onClick = { nav.navigate("schedule") { launchSingleTop = true } })
+            }
 
             Heading("At a glance")
             ListRow(listOf("Active clients: ${d.activeClients}"))
@@ -57,7 +70,7 @@ fun DashboardScreen(api: Api, nav: NavHostController) {
                 Heading("Newest case notes")
                 d.recentNotes.forEach { n -> ListRow(listOf(n.subject, n.clientName + ", " + n.noteType, whenText(n.createdAt)), onClick = { nav.navigate("client/${n.clientId}") }) }
             }
-            SecondaryButton("Refresh") { state.reload() }
+            SecondaryButton("Refresh") { state.reload(); toWrite.reload() }
             Text("")
         }
     }

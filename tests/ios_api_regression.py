@@ -95,6 +95,46 @@ for name in ('TrainingView.swift', 'AgreementsView.swift'):
     static_check('announce(error' not in text and 'announce(self.error' not in text and re.search(r'announce\([^)]*\)\s*\n?\s*dismiss\(\)', text) is None,
                  name + ' uses showFormError for errors and announceAfterDismiss for results said as it closes')
 
+# 4.31.0: confirming a session leads straight to its case note (static, no simulator needed).
+schedule_swift = swift_sources['ScheduleView.swift']
+complete_sheet = schedule_swift[schedule_swift.index('struct CompleteSessionSheet: View {'):schedule_swift.index('private struct SigningStep')]
+static_check('Session note' not in complete_sheet and '$note' not in complete_sheet,
+             'the Complete session sheet has no session note box (the full case note opens next)')
+static_check('session_note' not in schedule_swift,
+             'the Schedule never sends session_note with complete_session')
+static_check('noteAfterSheet = request' in schedule_swift and 'noteAfterUnlock = request' in schedule_swift
+             and re.search(r'if let request = try await complete\(session\) \{.*?openNote\(request\)', schedule_swift, re.S),
+             'after Complete without signature, a signed completion (once unlocked) and the no-track confirmation, the case note opens')
+static_check('SessionNoteSheet(request: request)' in schedule_swift and 'Notes to write' in schedule_swift
+             and 'focusedNote = t.sessionId' in schedule_swift,
+             'the Schedule lists Notes to write and, when the editor is left unsaved, puts VoiceOver on that session\'s row')
+clients_swift = swift_sources['ClientsView.swift']
+add_note = clients_swift[clients_swift.index('struct AddNoteSheet: View {'):clients_swift.index('// MARK: - Parity helpers')]
+static_check(re.search(r'var initialSubject: String\? = nil\s*\n\s*var sessionId: Int\? = nil', add_note)
+             and 'if let sessionId { payload["session_id"] = sessionId }' in add_note,
+             'AddNoteSheet takes initialSubject and sessionId (defaulted, so existing callers are unchanged) and sends session_id with add_note')
+static_check(add_note.index('payload["session_id"]') < add_note.index('try api.enqueue("add_note", body: payload'),
+             'a session\'s note kept offline is queued with its session_id')
+static_check('.accessibilityFocused($focusedField, equals: 0)' in add_note and '.accessibilityFocused($focusedField, equals: 100 + i)' in add_note
+             and '.accessibilitySpeechQueueAnnouncement: true' in add_note,
+             'a session\'s note puts VoiceOver on the first field to write, then says where it is (queued, not cutting off the field)')
+session_notes = swift_sources['SessionNotes.swift']
+static_check('try? await api.callCached("notes_to_write"' in session_notes and 'guard api.can("clients")' in session_notes,
+             'notes_to_write is optional: an older server (Unknown action) or no clients permission hides Notes to write')
+static_check('body["idem_key"] = key' in schedule_swift and 'if !IdemKey.keeps(error) { completionKeys[session.id] = nil }' in schedule_swift
+             and 'completionKeys[session.id] = UUID().uuidString' in schedule_swift,
+             'complete_session sends one retry key per Complete session sheet, kept after no answer or "still being processed"')
+static_check(re.search(r'if case APIError\.server = error, api\.can\("clients"\),\s*let item = notesShown\.first\(where: \{ \$0\.sessionId == session\.id \}\).*?return request', schedule_swift, re.S),
+             'a retry answered "already closed" opens that session\'s case note from Notes to write instead of only an error')
+static_check('Button("Cancel") { dismiss() }' in session_notes and 'tracksTimeout' in session_notes and 'if tracks == nil && !Task.isCancelled { tracks = [] }' in session_notes,
+             'opening a session\'s case note can be cancelled and opens without the track list after a short timeout')
+dashboard_swift = swift_sources['DashboardView.swift']
+static_check('notesToWrite = await loadNotesToWrite(api)' in dashboard_swift and 'NoteToWriteRow(item: item)' in dashboard_swift,
+             'the Dashboard shows Notes to write with Write it now')
+project_yml = (root / 'ios/project.yml').read_text()
+static_check(project_yml.count('MARKETING_VERSION: "4.31.0"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "62"') == 2,
+             'the app and widget are version 4.31.0 (62)')
+
 source = (root / 'ios/Sources/API.swift').read_text()
 source = source.split('extension Color {')[0]
 source = source.replace('import SwiftUI', '').replace(': ObservableObject', '')
@@ -211,6 +251,31 @@ suffix = r'''
         for said in ["No, don't save it", "That's not correct"] {
             check(SpeechController.confirmAnswer(said) == .no, "\"\(said)\" cancels the save")
         }
+        // 4.31.0: the case note opened after a completion, from a 4.31.0 server's reply or an older one's.
+        let snake = JSONDecoder(); snake.keyDecodingStrategy = .convertFromSnakeCase
+        let sessionJSON = #"{"id":41,"start_at":"2026-10-20 14:00:00","end_at":"2026-10-20 15:30:00","status":"Scheduled","track_id":7,"client":"Jane Doe","client_id":9}"#
+        let scheduled = try snake.decode(Session.self, from: Data(sessionJSON.utf8))
+        let newReply = try snake.decode(CompleteSessionReply.self, from: Data(#"{"ok":true,"hours_logged":1.5,"client_id":9,"client_name":"Jane Doe","track_id":7,"session_id":41,"session_date":"2026-10-20","note_subject":"Session on 10/20/2026","note_pending":true}"#.utf8))
+        let fromNew = SessionNoteTarget.afterCompletion(newReply, session: scheduled)
+        check(fromNew?.sessionId == 41 && fromNew?.clientId == 9 && fromNew?.trackId == 7 && fromNew?.noteSubject == "Session on 10/20/2026"
+              && newReply.notePending == true && fromNew?.contextLine == "Case note for Jane Doe, session on 10/20/2026",
+              "complete_session's 4.31.0 reply opens the note with its subject (the organisation's date format), track and session")
+        let oldReply = try snake.decode(CompleteSessionReply.self, from: Data(#"{"ok":true,"hours_logged":1.5}"#.utf8))
+        let fromOld = SessionNoteTarget.afterCompletion(oldReply, session: scheduled)
+        check(fromOld?.noteSubject == "Session on Oct 20" && fromOld?.trackId == 7 && fromOld?.sessionId == 41 && fromOld?.clientName == "Jane Doe"
+              && fromOld?.contextLine == "Case note for Jane Doe, session on Oct 20",
+              "an older server's complete_session reply still opens the note, with \"Session on Oct 20\" worked out on the phone")
+        let noClient = try snake.decode(Session.self, from: Data(#"{"id":42,"start_at":"2026-10-20 14:00:00","client":"X"}"#.utf8))
+        check(SessionNoteTarget.afterCompletion(oldReply, session: noClient) == nil && SessionNoteTarget.fallbackSubject(day: "not a day") == "Session",
+              "no note opens when the client is not known, and an unreadable day gives the subject \"Session\"")
+        let noTrack = try snake.decode(CompleteSessionReply.self, from: Data(#"{"ok":true,"hours_logged":0,"client_id":9,"track_id":null,"session_id":"43"}"#.utf8))
+        check(SessionNoteTarget.afterCompletion(noTrack, session: noClient)?.trackId == nil && noTrack.sessionId == 43,
+              "a session with no track opens its note with no track chosen")
+        let toWrite = try snake.decode(NotesToWriteResponse.self, from: Data(#"{"ok":true,"total":3,"notes":[{"session_id":41,"client_id":9,"client_name":"Jane Doe","track_id":7,"session_date":"2026-10-20","start_at":"2026-10-20 14:00:00","note_subject":"Session on Oct 20"},{"client_id":2},{"session_id":40,"client_id":"8","client_name":"Sam Lee","start_at":"2026-10-19 09:00:00"}]}"#.utf8))
+        check(toWrite.notes.map(\.sessionId) == [41, 40] && toWrite.total == 3 && toWrite.notes[1].noteSubject == "Session on Oct 19" && toWrite.notes[1].clientId == 8,
+              "notes_to_write is read row by row (an unreadable row is left out) with its total")
+        let pending = try snake.decode(Session.self, from: Data(#"{"id":44,"status":"Completed","client":"J","note_pending":1}"#.utf8))
+        check(pending.notePending == true && scheduled.notePending == nil, "a schedule session's note_pending is read when the server sends it")
         let api = API()
         let body: [String: Any] = ["idem_key": UUID().uuidString, "client_id": 1, "subject": "Synthetic test"]
         do { try api.enqueue("add_note", body: body, label: "Test"); fatalError("Unverified enqueue accepted") }

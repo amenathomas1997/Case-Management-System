@@ -381,6 +381,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_group'])) {
     $noShowIds = [];
     $authNotes = []; // logged, but outside the track's authorization (named per client)
     $notStarted = 0; // a session that has not begun cannot be completed (or billed)
+    $doneSess = []; // completed (attended): each one's case note is to be written (4.31.0)
     $startAt = null;
     $claim = db()->prepare('UPDATE scheduled_sessions SET status = "Completed" WHERE id = ? AND status = "Scheduled"');
     $claimNoShow = db()->prepare('UPDATE scheduled_sessions SET status = "No Show" WHERE id = ? AND status = "Scheduled"');
@@ -429,6 +430,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_group'])) {
             throw $e;
         }
         $done++;
+        $doneSess[] = $sess;
         if ($hours > 0) $logged++;
         else $notLogged[] = $sess['client_name'] . ($sess['track_id'] ? ' (session too short to log hours)' : ' (no training track linked)');
         if ($authIssue) $authNotes[] = $sess['client_name'] . ': ' . $authIssue;
@@ -451,11 +453,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_group'])) {
         . ($noShows ? ', No Show: client #' . implode(', #', array_map(fn($s) => (int)$s['client_id'], $noShows)) : '')
         . ($refused ? ', ' . count($refused) . ' left Scheduled (track has no hourly rate)' : '')
         . ($alreadyLogged ? ', ' . count($alreadyLogged) . ' left Scheduled (hours already logged that day)' : ''));
-    flash('Group session of ' . fmt_datetime($startAt) . ': '
+    $groupMsg = 'Group session of ' . fmt_datetime($startAt) . ': '
         . ($done > 0 ? "completed for {$done} client(s) — hours logged for {$logged}." : 'nobody was recorded as attending.')
         . ($noShows ? ' Recorded as No Show, with no hours logged: ' . implode(', ', array_column($noShows, 'client_name')) . '.' : '')
         . ($notLogged ? ' No hours were logged for ' . implode(', ', $notLogged) . '.' : '')
-        . ($authNotes ? ' ' . implode(' ', $authNotes) : '') . $refusedMsg . $loggedMsg, ($refused || $alreadyLogged) ? 'error' : 'success');
+        . ($authNotes ? ' ' . implode(' ', $authNotes) : '') . $refusedMsg . $loggedMsg;
+    // One case note per client who attended (4.31.0): each is marked as waiting for its note,
+    // and staff who write notes go straight to the first client's note; saving it goes on to
+    // the next. When some sessions were refused, the Schedule says so first.
+    foreach ($doneSess as $ds) sessnote_mark_pending((int)$ds['id'], (int)$user['id']);
+    if ($doneSess && can('clients') && !$refused && !$alreadyLogged) {
+        $_SESSION['sessnote_msg'] = ['sid' => (int)$doneSess[0]['id'], 'msg' => $groupMsg . ' Next: the case note for each client who attended, one at a time.'];
+        redirect(sessnote_editor_url((int)$doneSess[0]['client_id'], (int)$doneSess[0]['id']));
+    }
+    flash($groupMsg, ($refused || $alreadyLogged) ? 'error' : 'success');
     redirect(schedule_outcome_back($user));
 }
 
@@ -744,22 +755,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
                 . ' Nothing was changed.', 'error');
             redirect('schedule.php#s-' . $sid);
         }
-        // The session note typed in the row (optional): saved as a free-text case note
-        // on the session's track, in the same transaction as the completion. It is
-        // never dropped: typed with another outcome, or for a session with no track,
-        // the outcome is refused with the note kept in the row.
-        $sNote = is_string($_POST['session_note'] ?? null) ? trim($_POST['session_note']) : '';
-        if ($sNote !== '') {
-            $sNoteErr = $to !== 'Completed' ? 'A session note is saved only when the session is marked Completed. Choose Completed, or clear the note to record it as ' . $to . '.'
-                : (!$sess['track_id'] ? 'No training track is linked to this session, so its note cannot be saved from here. Clear the note and record the outcome, then write the note on the client\'s Notes tab.'
-                : (strlen($sNote) > 65535 ? 'The session note is too long to save. A note can hold 65,535 bytes, and accented letters and symbols count as 2 to 4 bytes each. Shorten it, or add the rest on the training track.' : null));
-            if ($sNoteErr !== null) {
-                keep_input();
-                keep_field_errors(['session_note_' . $sid => $sNoteErr]);
-                flash('Nothing was changed for the ' . $which . ': ' . $sNoteErr, 'error');
-                redirect('schedule.php#s-' . $sid);
-            }
-        }
+        // The case note is no longer typed in the row (4.31.0): once the session is marked
+        // Completed, the full note editor opens for it (below). A session_note still posted
+        // by a Schedule page loaded before the update is carried into that editor, never lost.
+        $sNoteOld = is_string($_POST['session_note'] ?? null) ? trim($_POST['session_note']) : '';
         // Hours and miles typed in the row (prefilled with the scheduled length) are
         // what gets logged; left blank, the scheduled length is. Checked as the track
         // page checks them; miles typed for an outcome that logs no hours are refused
@@ -837,13 +836,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
                     if (($trow = $tq2->fetch()) && in_array($sCat, track_visit_categories($trow), true)) db()->prepare('UPDATE work_logs SET rsa_category = ? WHERE id = ?')->execute([$sCat, $logId]);
                 }
             }
-            // The note is by the person recording the outcome, as on the track page.
-            $noteSaved = false;
-            if ($claimed && $sNote !== '') {
-                track_note_create((int)$sess['client_id'], (int)$sess['track_id'], 'Session on ' . fmt_date($sess['start_at']),
-                    assemble_note(['note_type' => 'Case Note', 'body' => $sNote]), (int)$user['id']);
-                $noteSaved = true;
-            }
             db()->commit();
         } catch (DomainException $e) {
             // auto_log_session() refuses a track with no hourly rate: nothing is saved,
@@ -862,21 +854,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
             if ($to === 'Cancelled' && strtotime((string)$sess['start_at']) > time()) client_session_notice([$sid], 'cancelled');
             audit($user['id'], $act, 'session', $sid, 'client #' . (int)$sess['client_id']
                 . ($hours > 0 ? ', ' . fmt_hours($hours) . ' logged' . ($miles > 0 ? ' and ' . $miles . ' mi' : '') : '') . ($linkLogId ? ', linked to work log #' . $linkLogId . ' (hours already logged)' : ''));
-            // Flash text is escaped, so the "write the session note" link is drawn by
-            // the page — when the note was not written in the row.
-            if ($to === 'Completed' && $sess['track_id'] && !$noteSaved) {
-                $_SESSION['session_note_link'] = ['track' => (int)$sess['track_id'], 'title' => (string)($sess['track_title'] ?? '')];
-            }
-            $noteMsg = $noteSaved ? ' The session note was saved' . ($onTrack ?: ' on the training track') . '.' : '';
             if ($linkLogId) {
-                flash('Completed: the ' . $which . ', linked to the ' . fmt_hours((float)$linked['hours']) . ' already logged' . $onTrack . '. No more hours were logged.' . $noteMsg);
+                $doneMsg = 'Completed: the ' . $which . ', linked to the ' . fmt_hours((float)$linked['hours']) . ' already logged' . $onTrack . '. No more hours were logged.';
             } elseif ($hours > 0) {
-                flash('Completed: the ' . $which . ' — ' . fmt_hours($hours) . ($miles > 0 ? ' and ' . rtrim(rtrim(number_format($miles, 1), '0'), '.') . ' miles' : '') . ' logged' . ($onTrack ?: ' to the training track') . '.' . ($authIssue ? ' ' . $authIssue : '') . $noteMsg);
+                $doneMsg = 'Completed: the ' . $which . ' — ' . fmt_hours($hours) . ($miles > 0 ? ' and ' . rtrim(rtrim(number_format($miles, 1), '0'), '.') . ' miles' : '') . ' logged' . ($onTrack ?: ' to the training track') . '.' . ($authIssue ? ' ' . $authIssue : '');
             } elseif ($to === 'Completed') {
-                flash('Completed: the ' . $which . ($sess['track_id'] ? ' (it was too short to log any hours).' : ' (no track linked, so no hours were logged).') . $noteMsg);
+                $doneMsg = 'Completed: the ' . $which . ($sess['track_id'] ? ' (it was too short to log any hours).' : ' (no track linked, so no hours were logged).');
             } else {
                 flash('Recorded as ' . $to . ': the ' . $which . '.');
                 schedule_tell_instructors([$sess], $to, $user);
+            }
+            if ($to === 'Completed') {
+                // Its case note is to be written (4.31.0): marked on the session, with a task for
+                // its instructor. Staff who write notes go straight to the full note editor for
+                // it, which says what was completed; the Schedule says so for anyone else.
+                sessnote_mark_pending($sid, (int)$user['id']);
+                if (can('clients')) {
+                    $_SESSION['sessnote_msg'] = ['sid' => $sid, 'msg' => $doneMsg];
+                    if ($sNoteOld !== '') $_SESSION['sessnote_body'] = ['sid' => $sid, 'body' => $sNoteOld];
+                    redirect(sessnote_editor_url((int)$sess['client_id'], $sid));
+                }
+                flash($doneMsg);
             }
         } else {
             flash('That session was already closed, so nothing changed.', 'error');
@@ -952,6 +950,20 @@ $rq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_ti
     WHERE s.status <> 'Scheduled'" . $scopeAnd . " ORDER BY s.start_at DESC LIMIT 30");
 $rq->execute($scopeParams);
 $recent = $rq->fetchAll();
+// Every completed session still waiting for its case note is listed too (4.31.0), however
+// old, so its "Write it now" link never falls off the end of the latest 30: the user's own
+// sessions and their caseload's, as the dashboard's Notes to write (caseload only when scoped).
+if (sessnote_ready()) {
+    $pq = db()->prepare("SELECT s.*, c.name AS client_name, c.time_zone AS client_time_zone, c.state AS client_state, c.office_id AS client_office_id, u.name AS staff_name, t.title AS track_title
+        FROM scheduled_sessions s JOIN clients c ON c.id = s.client_id
+        LEFT JOIN users u ON u.id = s.user_id LEFT JOIN training_tracks t ON t.id = s.track_id
+        WHERE s.status = 'Completed' AND s.note_pending = 1 AND " . ($scoped ? 'c.assigned_to = ?' : '(s.user_id = ? OR c.assigned_to = ?)') . " ORDER BY s.start_at DESC LIMIT 200");
+    $pq->execute($scoped ? [(int)$user['id']] : [(int)$user['id'], (int)$user['id']]);
+    $shownIds = array_flip(array_map('intval', array_column($recent, 'id')));
+    $notesWaiting = 0;
+    foreach ($pq->fetchAll() as $pr) { $notesWaiting++; if (!isset($shownIds[(int)$pr['id']])) $recent[] = $pr; }
+    usort($recent, fn($a, $b) => [$b['start_at'], (int)$b['id']] <=> [$a['start_at'], (int)$a['id']]);
+}
 
 page_header('Schedule', $user, 'schedule');
 
@@ -982,7 +994,9 @@ function session_row(array $s, string $csrf): void {
       <td><?= h($s['staff_name'] ?? '—') ?></td>
       <td><?php if (!empty($s['is_remote'])): ?><span class="badge badge-active">Remote</span><?= !empty($s['meeting_url']) ? ' <a href="' . h($s['meeting_url']) . '" target="_blank" rel="noopener">Join<span class="visually-hidden"> ' . $which . ' (opens in a new tab)</span></a>' : '' ?><?php else: ?><?= trim((string)$s['location']) !== '' ? h($s['location']) . ' <a href="https://maps.apple.com/?daddr=' . rawurlencode((string)$s['location']) . '" target="_blank" rel="noopener">Directions<span class="visually-hidden"> ' . $which . ' (opens maps in a new tab)</span></a>' : '—' ?><?php endif; ?></td>
       <td><?= status_badge($s['status']) ?><?php // Checked in from the app (API check_in_session): the time the client arrived.
-          if (!empty($s['checked_in_at'])): ?><br><span class="muted">Arrived <?= date('H:i', strtotime($s['checked_in_at'])) ?><span class="visually-hidden"> for the <?= $which ?></span></span><?php endif; ?></td>
+          if (!empty($s['checked_in_at'])): ?><br><span class="muted">Arrived <?= date('H:i', strtotime($s['checked_in_at'])) ?><span class="visually-hidden"> for the <?= $which ?></span></span><?php endif;
+          // Completed without its case note (4.31.0): said here, with the way to write it.
+          if ($s['status'] === 'Completed' && !empty($s['note_pending'])): ?><br><strong>Note not written yet</strong><?php if (can('clients')): ?> <a href="<?= h(sessnote_editor_url((int)$s['client_id'], (int)$s['id'])) ?>">Write it now<span class="visually-hidden">: the case note for the <?= $which ?></span></a><?php endif; endif; ?></td>
       <td>
         <?php if ($s['status'] === 'Scheduled'): ?>
         <form method="post" action="schedule.php" class="inline-form">
@@ -1005,17 +1019,18 @@ function session_row(array $s, string $csrf): void {
             <?php if ($started): ?><option value="No Show">No Show</option><?php endif; ?>
           </select>
           <button type="submit" name="set_status" value="1" class="btn btn-secondary btn-sm"
-            onclick="var s=document.getElementById('st-<?= (int)$s['id'] ?>').value,t=document.getElementById('sn-<?= (int)$s['id'] ?>'),hf=document.getElementById('sh-<?= (int)$s['id'] ?>'),hv=hf&&hf.value.trim()!==''?hf.value.trim():'<?= h(rtrim(rtrim(number_format($hrs, 2, '.', ''), '0'), '.')) ?>',hs=hv+(Number(hv)===1?' hour':' hours'),n=(t&&t.value.trim()!=='')?' The session note is saved with it.':'';return s===''||confirm(s==='Completed'?(<?= $s['track_id'] ? '1' : '0' ?>&&!(Number(hv)>0)?'Mark completed? No hours are logged.':<?= $js($completeMsg) ?>.replace('%H%',hs))+n:(s==='Completed_separate'?<?= $js($separateMsg) ?>.replace('%H%',hs)+n:(s.indexOf('Completed_logged_')===0?<?= $js($linkedMsg) ?>+n:'Record this session as '+s+'? This cannot be changed back. Choose OK to record it, or Cancel to leave the session as it is.')));">Save<span class="visually-hidden"> status for <?= $which ?></span></button>
-          <?php // Hours, miles and the session note, recorded with the outcome (the hours
-          // prefilled with the scheduled length; all saved on the track when the session
-          // is marked Completed). Collapsed to keep the row short; open when something
-          // was refused or holds what was typed. No track: nowhere to save them.
-          if ($started && $s['track_id']): $sidS = (string)(int)$s['id']; $snErr = 'session_note_' . $sidS;
+            onclick="var s=document.getElementById('st-<?= (int)$s['id'] ?>').value,hf=document.getElementById('sh-<?= (int)$s['id'] ?>'),hv=hf&&hf.value.trim()!==''?hf.value.trim():'<?= h(rtrim(rtrim(number_format($hrs, 2, '.', ''), '0'), '.')) ?>',hs=hv+(Number(hv)===1?' hour':' hours');return s===''||confirm(s==='Completed'?(<?= $s['track_id'] ? '1' : '0' ?>&&!(Number(hv)>0)?'Mark completed? No hours are logged.':<?= $js($completeMsg) ?>.replace('%H%',hs)):(s==='Completed_separate'?<?= $js($separateMsg) ?>.replace('%H%',hs):(s.indexOf('Completed_logged_')===0?<?= $js($linkedMsg) ?>:'Record this session as '+s+'? This cannot be changed back. Choose OK to record it, or Cancel to leave the session as it is.')));">Save<span class="visually-hidden"> status for <?= $which ?></span></button>
+          <?php // Hours, miles and the goal, recorded with the outcome (the hours prefilled with
+          // the scheduled length; all saved on the track when the session is marked Completed).
+          // The case note is written in the full note editor that opens after Save (4.31.0).
+          // Collapsed to keep the row short; open when something was refused or holds what
+          // was typed. No track: nowhere to save them.
+          if ($started && $s['track_id']): $sidS = (string)(int)$s['id'];
             $snMine = old_in('session_id') === $sidS;
-            $snOpen = has_field_error($snErr) || has_field_error('session_hours_' . $sidS) || has_field_error('session_miles_' . $sidS)
-                || ($snMine && (trim(old_in('session_note')) !== '' || trim(old_in('session_miles')) !== '')); ?>
+            $snOpen = has_field_error('session_hours_' . $sidS) || has_field_error('session_miles_' . $sidS)
+                || ($snMine && trim(old_in('session_miles')) !== ''); ?>
           <details<?= $snOpen ? ' open' : '' ?>>
-            <summary>Hours, miles, goal and session note<span class="visually-hidden"> for the <?= $which ?></span></summary>
+            <summary>Hours, miles and goal<span class="visually-hidden"> for the <?= $which ?></span></summary>
             <div class="field"><label for="sh-<?= $sidS ?>">Hours worked<span class="visually-hidden"> for the <?= $which ?></span></label>
               <input type="text" inputmode="decimal" autocomplete="off" id="sh-<?= $sidS ?>" name="session_hours" value="<?= h($snMine && old_in('session_hours') !== '' ? old_in('session_hours') : rtrim(rtrim(number_format($hrs, 2, '.', ''), '0'), '.')) ?>" <?= field_aria('session_hours_' . $sidS) ?>><?= field_error('session_hours_' . $sidS) ?></div>
             <div class="field"><label for="sm-<?= $sidS ?>">Miles driven<span class="visually-hidden"> for the <?= $which ?></span></label>
@@ -1034,8 +1049,6 @@ function session_row(array $s, string $csrf): void {
             <div class="field"><label for="sc-<?= $sidS ?>">Service delivered<span class="visually-hidden"> for the <?= $which ?></span></label>
               <select id="sc-<?= $sidS ?>" name="session_category"><?= select_options($sCats, $sCats[0]) ?></select></div>
             <?php endif; ?>
-            <div class="field"><label for="sn-<?= $sidS ?>">Session note<span class="visually-hidden"> for the <?= $which ?></span></label>
-              <textarea id="sn-<?= $sidS ?>" name="session_note" rows="4" <?= field_aria($snErr) ?>><?= $snMine ? h(old_in('session_note')) : '' ?></textarea><?= field_error($snErr) ?></div>
           </details>
           <?php endif; ?>
         </form>
@@ -1079,13 +1092,6 @@ function session_row(array $s, string $csrf): void {
 <?php }
 ?>
 <h1>Session schedule</h1>
-<?php // After a session on a track is completed: the next step, writing its note. It
-// joins the flash confirmation (moved and focused with it); without scripts it stays here.
-$noteLink = $_SESSION['session_note_link'] ?? null; unset($_SESSION['session_note_link']);
-if (is_array($noteLink) && can('clients')): ?>
-<div class="alert alert-info" id="session-note-next"><a href="track.php?id=<?= (int)$noteLink['track'] ?>#log-session-h">Write the session note<?= $noteLink['title'] !== '' ? ' on the training track "' . h($noteLink['title']) . '"' : ' on its training track' ?></a></div>
-<script>(function(){var a=document.getElementById('flash-messages'),p=document.getElementById('session-note-next');if(a&&p)a.appendChild(p);})();</script>
-<?php endif; ?>
 <div class="page-actions"><a class="btn btn-secondary" href="capacity.php">Capacity planning</a>
   <a class="btn btn-secondary" href="access_bookings.php">Interpreter, CART (real-time captioning) and transport bookings</a></div>
 
@@ -1367,7 +1373,7 @@ foreach ($groupsPending as $uid => $members): if (count($members) < 2) continue;
 </table>
 </div>
 
-<h2 id="past-h">Closed sessions (latest 30)</h2>
+<h2 id="past-h">Closed sessions (latest 30<?= !empty($notesWaiting) ? ', and every one of yours with a case note still to write: ' . (int)$notesWaiting : '' ?>)</h2>
 <div class="table-scroll" tabindex="0" role="region" aria-labelledby="past-h">
 <table>
   <caption class="visually-hidden">Closed sessions: completed, cancelled, or no show</caption>

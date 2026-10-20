@@ -480,6 +480,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
             $noteErrs['hw_due_' . $k] = 'Homework item ' . ($k + 1) . ': enter a valid due date with a four-digit year from 2000 to ' . $hwMaxYear . ', or clear it.';
         }
     }
+    // The training track the note is about (4.31.0: the editor has a track picker, preselected
+    // to the session's track in session mode). Only this client's own tracks; none is a
+    // general note. An edit that sends no track keeps the one it has.
+    $noteTrackSent = array_key_exists('track_id', $_POST);
+    $noteTrack = $noteTrackSent && is_string($_POST['track_id']) && ctype_digit($_POST['track_id']) ? (int)$_POST['track_id'] : 0;
+    if ($noteTrack > 0) {
+        $ntq = db()->prepare('SELECT id FROM training_tracks WHERE id = ? AND client_id = ?');
+        $ntq->execute([$noteTrack, $id]);
+        if (!$ntq->fetchColumn()) $noteErrs['track_id'] = 'Choose one of this client\'s training tracks, or none for a general note.';
+    } elseif ($noteTrackSent && $_POST['track_id'] !== '' && $_POST['track_id'] !== '0') {
+        $noteErrs['track_id'] = 'Choose one of this client\'s training tracks, or none for a general note.';
+    }
+    $noteTrack = $noteTrack > 0 ? $noteTrack : null;
     if ($noteErrs) {
         keep_input();
         // Generated homework rows are arrays, which keep_input() leaves out: hold
@@ -546,8 +559,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
                 }
                 // A note type since removed from the list is kept when it is sent back unchanged (4.5.0).
                 if (($_POST['note_type'] ?? '') === (string)$note['note_type']) $type = (string)$note['note_type'];
-                $pdo->prepare('UPDATE client_notes SET note_type = ?, note_format = ?, subject = ?, body = ?, birp_behavior = ?, birp_intervention = ?, birp_response = ?, birp_plan = ?, updated_at = NOW(), updated_by = ? WHERE id = ?')
-                    ->execute([$type, $noteFormat, $subject, $body, $birpCols[0], $birpCols[1], $birpCols[2], $birpCols[3], $user['id'], $noteId]);
+                $pdo->prepare('UPDATE client_notes SET note_type = ?, note_format = ?, subject = ?, body = ?, birp_behavior = ?, birp_intervention = ?, birp_response = ?, birp_plan = ?, updated_at = NOW(), updated_by = ?' . ($noteTrackSent ? ', track_id = ?' : '') . ' WHERE id = ?')
+                    ->execute(array_merge([$type, $noteFormat, $subject, $body, $birpCols[0], $birpCols[1], $birpCols[2], $birpCols[3], $user['id']], $noteTrackSent ? [$noteTrack] : [], [$noteId]));
                 // The generator can run on a note being edited too: its checked
                 // homework is created the same way as for a new note.
                 $added = save_note_homework($id, (int)($_POST['hw_track'] ?? 0), $_POST, (int)$user['id']);
@@ -580,15 +593,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
             redirect("client.php?id=$id&tab=notes");
         }
         if ($addendumTo !== null) $type = 'Addendum';
+        // The completed session this note was opened for (4.31.0, session mode): the note is
+        // linked to it, and the session no longer waits for its note. One that is not this
+        // client's completed session (changed meanwhile) is not linked; the note still saves.
+        $noteSess = $addendumTo === null ? sessnote_session((int)(is_string($_POST['session_id'] ?? null) ? $_POST['session_id'] : 0), $id) : null;
+        $linkSess = $noteSess !== null && sessnote_ready();
         // Homework captured by the note generator: create each checked item on the
         // chosen training track so it appears in the client's portal automatically.
         // The note and its homework are saved together, or not at all.
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $pdo->prepare('INSERT INTO client_notes (client_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key, addendum_to) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-                ->execute([$id, $type, $noteFormat, $subject, $body, $birpCols[0], $birpCols[1], $birpCols[2], $birpCols[3], $user['id'], $idem, $addendumTo]);
+            $pdo->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key, addendum_to' . ($linkSess ? ', session_id' : '') . ') VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?' . ($linkSess ? ',?' : '') . ')')
+                ->execute(array_merge([$id, $noteTrack, $type, $noteFormat, $subject, $body, $birpCols[0], $birpCols[1], $birpCols[2], $birpCols[3], $user['id'], $idem, $addendumTo], $linkSess ? [(int)$noteSess['id']] : []));
             $added = save_note_homework($id, (int)($_POST['hw_track'] ?? 0), $_POST, (int)$user['id']);
+            if ($linkSess) sessnote_written((int)$noteSess['id'], (int)$user['id']);
             $pdo->commit();
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
@@ -599,8 +618,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_note'])) {
             }
             $noteSaveFailed($e, 0);
         }
-        audit($user['id'], $addendumTo !== null ? 'note.addendum' : 'note.add', 'client', $id, $subject . ($addendumTo !== null ? ' (addendum to note #' . $addendumTo . ')' : ''));
-        flash(($addendumTo !== null ? 'Addendum added.' : 'Note added.') . ($added ? ' ' . $added . ' homework item' . ($added === 1 ? '' : 's') . ' added to the client portal.' : ''));
+        audit($user['id'], $addendumTo !== null ? 'note.addendum' : 'note.add', 'client', $id, $subject . ($addendumTo !== null ? ' (addendum to note #' . $addendumTo . ')' : '')
+            . ($noteSess !== null ? ' (session #' . (int)$noteSess['id'] . ')' : ''));
+        $hwMsg = $added ? ' ' . $added . ' homework item' . ($added === 1 ? '' : 's') . ' added to the client portal.' : '';
+        if ($noteSess !== null) {
+            // Session mode: a group goes on to the next client who attended still without a
+            // note; otherwise back to where the note was opened from (the Schedule or the dashboard).
+            $sessBack = ($_POST['session_back'] ?? '') === 'dashboard' ? 'dashboard' : 'schedule';
+            $savedMsg = 'Case note saved for ' . $client['name'] . "'s session on " . fmt_date((string)$noteSess['start_at']) . '.' . $hwMsg;
+            $members = !empty($noteSess['group_uid']) ? sessnote_group_members((string)$noteSess['group_uid'], (int)$user['id'], caseload_scoped()) : [];
+            if ($next = sessnote_group_next($members, (int)$noteSess['id'])) {
+                [$nm, $npos, $ntotal] = $next;
+                $_SESSION['sessnote_msg'] = ['sid' => (int)$nm['id'], 'msg' => $savedMsg . ' Next: ' . $nm['client_name'] . ', ' . $npos . ' of ' . $ntotal . '.'];
+                redirect(sessnote_editor_url((int)$nm['client_id'], (int)$nm['id'], $sessBack));
+            }
+            $left = array_values(array_filter($members, fn($m) => (int)$m['note_pending'] === 1 && (int)$m['id'] !== (int)$noteSess['id']));
+            flash($savedMsg . ($members ? ($left ? ' Still to write for this group: ' . implode(', ', array_column($left, 'client_name')) . '.' : ' Every case note for this group session is written.') : ''));
+            redirect($sessBack === 'dashboard' ? 'index.php#notes-to-write-h' : 'schedule.php#s-' . (int)$noteSess['id']);
+        }
+        flash(($addendumTo !== null ? 'Addendum added.' : 'Note added.') . $hwMsg);
     }
     redirect("client.php?id=$id&tab=notes");
 }
@@ -1120,6 +1156,28 @@ if ($editNote === null) {
         $addendumParent = $ap->fetch() ?: null;
     }
 }
+
+// Session mode (4.31.0): the note for a completed session, opened right after confirming it
+// (schedule.php), from "Write it now" on the Schedule, or from Notes to write on the
+// dashboard: ?session=N, or the form's own session_id after a refused save or an AI button.
+$sessNote = null; $sessBack = 'schedule'; $sessMsg = null; $sessPos = null; $sessNext = null; $sessBody = null;
+if ($editNote === null && $addendumParent === null) {
+    $sessIn = is_scalar($_GET['session'] ?? null) && ctype_digit((string)$_GET['session']) ? (int)$_GET['session'] : (int)$noteIn('session_id');
+    $sessNote = sessnote_session($sessIn, $id);
+    if ($sessNote !== null) {
+        $sessBack = (($_GET['back'] ?? '') === 'dashboard' || $noteIn('session_back') === 'dashboard') ? 'dashboard' : 'schedule';
+        // What was just completed or saved, said once, on the note it led to.
+        if (is_array($_SESSION['sessnote_msg'] ?? null) && (int)($_SESSION['sessnote_msg']['sid'] ?? 0) === (int)$sessNote['id']) $sessMsg = (string)$_SESSION['sessnote_msg']['msg'];
+        // A note typed in a Schedule page loaded before 4.31.0, carried here so it is not lost.
+        if (is_array($_SESSION['sessnote_body'] ?? null) && (int)($_SESSION['sessnote_body']['sid'] ?? 0) === (int)$sessNote['id']) $sessBody = (string)$_SESSION['sessnote_body']['body'];
+        if (!empty($sessNote['group_uid'])) {
+            $sessMembers = sessnote_group_members((string)$sessNote['group_uid'], (int)$user['id'], caseload_scoped());
+            $sessPos = sessnote_group_position($sessMembers, (int)$sessNote['id']);
+            $sessNext = sessnote_group_next($sessMembers, (int)$sessNote['id']);
+        }
+    }
+}
+unset($_SESSION['sessnote_msg'], $_SESSION['sessnote_body']);
 
 $assessments = db()->prepare('SELECT a.*, u.name AS author FROM tech_assessments a LEFT JOIN users u ON u.id = a.created_by WHERE a.client_id = ? ORDER BY a.assessment_date DESC');
 $assessments->execute([$id]); $assessments = $assessments->fetchAll();
@@ -1699,7 +1757,7 @@ if (str_starts_with((string)$client['status'], 'Closed') || $closeFus || $survey
 // The notes are what people read first; the note form stays collapsed unless a
 // note is being edited, was refused or restored, or an AI button just filled it.
 $noteFormOpen = $editNote || $addendumParent || $noteSrc !== null || $aiSections !== null || $aiNoteDraft !== null || $aiHomework !== null
-    || isset($_GET['new_note'])
+    || isset($_GET['new_note']) || $sessNote !== null
     || array_filter(array_keys(form_errors()), fn($k) => in_array($k, ['subject', 'note_content'], true) || str_starts_with((string)$k, 'hw_due_'));
 // The newest 20 notes, unless all were asked for or one is being edited.
 $notesTotal = count($notes);
@@ -1708,7 +1766,10 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
 ?>
 <h2 id="notes-h">Notes (<?= $notesTotal ?>)</h2>
 <section class="card" aria-labelledby="addnote-h">
-  <?php $noteFormTitle = $editNote ? 'Edit note' : ($addendumParent ? 'Add an addendum' : 'Add a note'); ?>
+  <?php // Session mode names the client and the session (4.31.0), and a group says which client of how many.
+  $sessWhen = $sessNote !== null ? fmt_date((string)$sessNote['start_at']) : '';
+  $noteFormTitle = $editNote ? 'Edit note' : ($addendumParent ? 'Add an addendum'
+      : ($sessNote !== null ? h('Case note for ' . $client['name'] . ', session on ' . $sessWhen . ($sessPos ? ' (' . $sessPos[0] . ' of ' . $sessPos[1] . ' in the group)' : '')) : 'Add a note')); ?>
   <h3 class="visually-hidden"><?= $noteFormTitle ?></h3>
   <details id="addnote"<?= $noteFormOpen ? ' open' : '' ?>>
   <summary accesskey="n" id="addnote-h"><?= $noteFormTitle ?></summary>
@@ -1716,20 +1777,24 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     <p class="muted">Editing “<?= h($editNote['subject']) ?>” — the note will be marked as edited, and the current text is kept as an earlier version. <a href="<?= $tabUrl('notes') ?>">Cancel and write a new note instead</a>.</p>
   <?php elseif ($addendumParent): ?>
     <p class="muted">An addendum to “<?= h($addendumParent['subject']) ?>” (<?= fmt_date($addendumParent['created_at']) ?>). The original note stays as it is. <a href="<?= $tabUrl('notes') ?>">Cancel and write a new note instead</a>.</p>
+  <?php elseif ($sessNote !== null): ?>
+    <?php if ($sessMsg !== null): ?><p class="alert alert-success" id="sessnote-result"><?= h($sessMsg) ?></p><?php endif; ?>
+    <p class="muted">The note is linked to the session <?= h(date('g:i A', strtotime((string)$sessNote['start_at']))) ?> on <?= h($sessWhen) ?><?= $sessNote['track_title'] ? ' on the training track "' . h($sessNote['track_title']) . '"' : '' ?>. Its hours are already recorded.</p>
   <?php else: ?>
     <p class="muted">General progress notes live here at the client level — training-session logs belong on the specific training track.</p>
   <?php endif; ?>
   <form method="post" action="<?= $tabUrl('notes') ?>" class="stacked" novalidate>
     <?= csrf_field() ?>
     <?php // A refused homework due date links to that row's date field.
-    $noteSumLabels = ['subject' => 'Subject', 'note_content' => 'Note'];
+    $noteSumLabels = ['subject' => 'Subject', 'track_id' => 'Training track', 'note_content' => 'Note'];
     $noteSumAnchors = ['note_content' => 'body'];
     foreach (array_keys($aiHomework ?? []) as $k) { $noteSumLabels['hw_due_' . $k] = 'Homework due date'; $noteSumAnchors['hw_due_' . $k] = 'hwd' . (int)$k; }
     echo form_error_summary($noteSumLabels, $noteSumAnchors); ?>
     <p class="hint">Fields marked * are required.</p>
     <?php if ($editNote): ?><input type="hidden" name="note_id" value="<?= (int)$editNote['id'] ?>">
     <input type="hidden" name="note_version" value="<?= h(preg_match('/^[0-9a-f]{64}$/D', $noteIn('note_version')) ? $noteIn('note_version') : client_note_version($editNote)) ?>">
-    <?php elseif ($addendumParent): ?><input type="hidden" name="addendum_to" value="<?= (int)$addendumParent['id'] ?>"><?php endif; // The same key while this note is being written (a refused save, an AI button), a new one after it is saved; an edit carries one too (4.28.0), so sending it twice adds its homework once. ?>
+    <?php elseif ($addendumParent): ?><input type="hidden" name="addendum_to" value="<?= (int)$addendumParent['id'] ?>">
+    <?php elseif ($sessNote !== null): ?><input type="hidden" name="session_id" value="<?= (int)$sessNote['id'] ?>"><input type="hidden" name="session_back" value="<?= h($sessBack) ?>"><?php endif; // The same key while this note is being written (a refused save, an AI button), a new one after it is saved; an edit carries one too (4.28.0), so sending it twice adds its homework once. ?>
     <input type="hidden" name="idem_key" value="<?= h(preg_match('/^[0-9a-fA-F-]{36}$/D', $noteIn('idem_key')) ? $noteIn('idem_key') : new_note_key()) ?>">
     <div class="field">
       <label for="note_type">Note type</label>
@@ -1737,8 +1802,18 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     </div>
     <div class="field">
       <label for="subject">Subject <span aria-hidden="true">*</span><span class="visually-hidden"> (required)</span></label>
-      <input type="text" id="subject" name="subject" required maxlength="255" value="<?= h($noteSrc !== null ? $noteIn('subject') : ($editNote['subject'] ?? ($addendumParent ? mb_substr('Addendum: ' . $addendumParent['subject'], 0, 255) : ''))) ?>" <?= field_aria('subject') ?>>
+      <input type="text" id="subject" name="subject" required maxlength="255" value="<?= h($noteSrc !== null ? $noteIn('subject') : ($editNote['subject'] ?? ($addendumParent ? mb_substr('Addendum: ' . $addendumParent['subject'], 0, 255) : ($sessNote !== null ? sessnote_subject((string)$sessNote['start_at']) : '')))) ?>" <?= field_aria('subject') ?>>
       <?= field_error('subject') ?>
+    </div>
+    <?php // The training track the note is about (4.31.0); in session mode, the session's track.
+    $noteTrackSel = $noteSrc !== null ? (int)$noteIn('track_id') : (int)($editNote['track_id'] ?? ($sessNote['track_id'] ?? 0)); ?>
+    <div class="field">
+      <label for="note_track">Training track</label>
+      <select id="note_track" name="track_id" <?= field_aria('track_id') ?>>
+        <option value="0">None, a general note</option>
+        <?php foreach ($tracks as $t): ?><option value="<?= (int)$t['id'] ?>"<?= (int)$t['id'] === $noteTrackSel ? ' selected' : '' ?>><?= h($t['title']) ?><?= $t['status'] !== 'Active' ? ' (' . h($t['status']) . ')' : '' ?></option><?php endforeach; ?>
+      </select>
+      <?= field_error('track_id') ?>
     </div>
     <?php
     // Precedence: what the AI drafted, then what was just typed, then the saved note.
@@ -1762,8 +1837,15 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
         }
     }
     elseif ($editNote) $bodyVal = (string)$editNote['body'];
-    else $bodyVal = '';
+    else $bodyVal = $sessBody ?? '';
     $initLabels = NOTE_FORMATS[$curFormat === 'free' ? 'BIRP' : $curFormat];
+    // Session mode, on arrival (4.31.0): focus goes to the first thing to write (the note,
+    // or the first section of a structured format). What was just done and where the user is
+    // are read once with it: added to that field's label for the arrival only and taken out
+    // when focus first leaves, so the label is its own short name every time after.
+    $sessFocus = ($sessNote !== null && $noteSrc === null && !form_errors()) ? ($curFormat === 'free' ? 'body' : 'sec1') : null;
+    $sessSay = $sessFocus === null ? '' : ($sessMsg !== null ? $sessMsg . ' ' : '') . 'Case note for ' . $client['name'] . ', session on ' . $sessWhen
+        . ($sessPos ? ', ' . $sessPos[0] . ' of ' . $sessPos[1] . ' in the group' : '') . '. ';
     ?>
     <div class="field">
       <label for="note_format">Note format</label>
@@ -1777,7 +1859,7 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     <fieldset id="struct-fields" <?= $curFormat === 'free' && trim(implode('', $secVals)) === '' ? 'hidden' : '' ?>>
       <legend class="legend-h"><span id="fmt-name"><?= h($curFormat === 'free' ? 'BIRP' : $curFormat) ?></span> <span class="hint">structured case-note sections</span></legend>
       <?php for ($i = 0; $i < 4; $i++): $n = $i + 1; ?>
-      <div class="field"><label for="sec<?= $n ?>" id="lbl-sec<?= $n ?>"><?= h($initLabels[$i]) ?></label>
+      <div class="field"><label for="sec<?= $n ?>"><span id="lbl-sec<?= $n ?>"><?= h($initLabels[$i]) ?></span></label>
         <textarea id="sec<?= $n ?>" name="sec<?= $n ?>" rows="2"><?= h($secVals[$i]) ?></textarea></div>
       <?php endfor; ?>
       <?php
@@ -1842,6 +1924,9 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
     </fieldset>
     <?php endif; ?>
     <button type="submit" name="add_note" value="1" class="btn btn-primary"><?= $editNote ? 'Save changes' : ($addendumParent ? 'Save addendum' : 'Save note') ?></button>
+    <?php if ($sessNote !== null && $sessPos !== null): // A group: move on without writing this one (it stays on Notes to write). ?>
+    <a class="btn btn-secondary" href="<?= h($sessNext ? sessnote_editor_url((int)$sessNext[0]['client_id'], (int)$sessNext[0]['id'], $sessBack) : ($sessBack === 'dashboard' ? 'index.php#notes-to-write-h' : 'schedule.php#s-' . (int)$sessNote['id'])) ?>">Skip for now<span class="visually-hidden">: <?= h($sessNext ? 'go to ' . $sessNext[0]['client_name'] . ', ' . $sessNext[1] . ' of ' . $sessNext[2] : 'back to the ' . ($sessBack === 'dashboard' ? 'dashboard' : 'Schedule')) ?>; this note stays on Notes to write</span></a>
+    <?php endif; ?>
     <?php if (ai_feature_enabled('draft')): ?>
     <button type="submit" name="ai_do" value="generate" class="btn btn-secondary" formnovalidate>Generate structured note<span class="visually-hidden">: from the session notes pasted in the box, in the chosen format. It drafts the sections, flags anything missing, and pulls out homework for you to review before saving</span></button>
     <button type="submit" name="ai_do" value="format" class="btn btn-secondary" formnovalidate>Format with AI</button>
@@ -1870,6 +1955,9 @@ $notesShown = $showAllNotes ? $notes : array_slice($notes, 0, 20);
   </script>
   </details>
   <?= details_open_on_hash('addnote') ?>
+  <?= $sessFocus !== null ? focus_after_load_script('(function(){var f=document.getElementById(' . json_encode($sessFocus) . '),l=f&&document.querySelector(\'label[for="\'+f.id+\'"]\');'
+      . 'if(f&&l){var s=document.createElement("span");s.className="visually-hidden";s.id="sessnote-say";s.textContent=' . json_encode($sessSay, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';'
+      . 'l.insertBefore(s,l.firstChild);f.addEventListener("blur",function(){s.remove();},{once:true});}return f;})()') : '' ?>
 </section>
 <?php if ($trackNoteCount > 0): ?>
 <div class="page-actions" role="group" aria-label="Filter notes">

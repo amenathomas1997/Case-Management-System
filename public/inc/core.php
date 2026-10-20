@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.30.0';
+const APP_VERSION = '4.31.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1826,3 +1826,4 @@ require_once __DIR__ . '/staff_training.php';
 require_once __DIR__ . '/staff_credentials.php';
 // Text messages: reminders, replies, two-way messages, staff alerts (4.17.0).
 require_once __DIR__ . '/sms.php';
+require_once __DIR__ . '/session_notes.php'; // Case notes for completed sessions (4.31.0).

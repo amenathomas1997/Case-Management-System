@@ -97,7 +97,10 @@ private fun MainScreen(api: Api) {
     val entry by nav.currentBackStackEntryAsState()
     val route = entry?.destination?.route ?: "home"
     val isTab = tabs.any { it.route == route }
-    val title = titles[route.substringBefore('/')] ?: ""
+    // 4.31.0: a session's note says where you are: "Case note for Jane Doe, session on Oct 20".
+    val sessionNote = (entry?.arguments?.getString("session")?.toIntOrNull() ?: 0) > 0
+    val title = if (sessionNote) org.casemanagement.app.sessionNoteTitle(entry?.arguments?.getString("client"), entry?.arguments?.getString("subject"))
+        else titles[route.substringBefore('/')] ?: ""
     // Each screen opened, by its back stack entry (two clients are two screens, though one route).
     val entryKey = entry?.id ?: "home"
     val titleFocus = remember { FocusRequester() }
@@ -232,13 +235,23 @@ private val titles = mapOf(
     "actions" to "Action center", "briefing" to "AI case briefing", "help" to "Help and glossary",
 )
 
+/** The optional arguments of a session's note (4.31.0): text, so a missing one reads as empty. */
+private val noteArgs = listOf("subject", "session", "client").map { name ->
+    androidx.navigation.navArgument(name) { type = androidx.navigation.NavType.StringType; nullable = true; defaultValue = null }
+}
+
 @Composable
 private fun Graph(api: Api, nav: NavHostController) {
     NavHost(nav, startDestination = "home") {
         composable("home") { DashboardScreen(api, nav) }
         composable("clients") { ClientsScreen(api, nav) }
         composable("client/{id}") { ClientScreen(api, nav, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
-        composable("note/{clientId}") { AddNoteScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0) }
+        // 4.31.0: a session's note (from Complete, Write it now or Notes to write) carries its subject,
+        // session and client's name; a plain "note/5" still opens an empty note.
+        composable(org.casemanagement.app.NOTE_ROUTE, arguments = noteArgs) {
+            AddNoteScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, 0,
+                it.arguments?.getString("session")?.toIntOrNull() ?: 0, it.arguments?.getString("subject") ?: "")
+        }
         composable("hours/{clientId}/{trackId}") {
             LogHoursScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0)
         }
@@ -255,8 +268,9 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("equipment") { EquipmentScreen(api, nav) }
         composable("equipmentItem/{id}") { EquipmentDetailScreen(api, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
         composable("reservations") { ReservationsScreen(api) }
-        composable("trackNote/{clientId}/{trackId}") {
-            AddNoteScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0)
+        composable(org.casemanagement.app.TRACK_NOTE_ROUTE, arguments = noteArgs) {
+            AddNoteScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0,
+                it.arguments?.getString("session")?.toIntOrNull() ?: 0, it.arguments?.getString("subject") ?: "")
         }
         composable("goal/{id}/{text}") { GoalHistoryScreen(api, it.arguments?.getString("id")?.toIntOrNull() ?: 0, it.arguments?.getString("text") ?: "") }
         composable("actions") { ActionCenterScreen(api, nav) }

@@ -199,6 +199,7 @@ CREATE TABLE `client_notes` (
   `client_id` int(10) unsigned NOT NULL,
   `track_id` int(10) unsigned DEFAULT NULL,
   `addendum_to` int(10) unsigned DEFAULT NULL,
+  `session_id` int(10) unsigned DEFAULT NULL,
   `note_type` varchar(60) NOT NULL DEFAULT 'Case Note',
   `note_format` varchar(10) NOT NULL DEFAULT 'free',
   `subject` varchar(255) NOT NULL,
@@ -217,7 +218,9 @@ CREATE TABLE `client_notes` (
   KEY `client_id` (`client_id`),
   KEY `idx_note_track` (`track_id`),
   KEY `addendum_to` (`addendum_to`),
+  KEY `idx_note_session` (`session_id`),
   CONSTRAINT `fk_note_track` FOREIGN KEY (`track_id`) REFERENCES `training_tracks` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_note_session` FOREIGN KEY (`session_id`) REFERENCES `scheduled_sessions` (`id`) ON DELETE SET NULL,
   CONSTRAINT `client_notes_ibfk_1` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
@@ -1251,6 +1254,8 @@ CREATE TABLE `scheduled_sessions` (
   `notes` varchar(255) DEFAULT NULL,
   `status` enum('Scheduled','Completed','Cancelled','No Show') NOT NULL DEFAULT 'Scheduled',
   `work_log_id` int(10) unsigned DEFAULT NULL,
+  `note_pending` tinyint(1) NOT NULL DEFAULT 0,
+  `note_pending_since` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `reminder_sent` tinyint(1) NOT NULL DEFAULT 0,
   `group_uid` char(12) DEFAULT NULL,
@@ -1270,6 +1275,7 @@ CREATE TABLE `scheduled_sessions` (
   KEY `idx_track` (`track_id`),
   KEY `idx_group_uid` (`group_uid`),
   KEY `series_uid` (`series_uid`),
+  KEY `idx_note_pending` (`note_pending`,`user_id`),
   CONSTRAINT `scheduled_sessions_ibfk_1` FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;

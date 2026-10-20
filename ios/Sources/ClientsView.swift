@@ -773,6 +773,14 @@ struct AddNoteSheet: View {
     let existing: Note?
     /// A new note written as an addendum to this (locked) note.
     var addendumTo: Note? = nil
+    /// 4.31.0: the case note for a completed session, opened straight after the completion. The
+    /// subject it starts with ("Session on Oct 20"), the session it is linked to (sent with
+    /// add_note as session_id), the line saying where the person is ("Case note for Jane Doe,
+    /// session on Oct 20", shown at the top), and what is said as it opens.
+    var initialSubject: String? = nil
+    var sessionId: Int? = nil
+    var sessionContext: String? = nil
+    var arrivalAnnouncement: String? = nil
     /// The result to tell the person. The presenter shows it and says it once the sheet has
     /// gone: closing the sheet moves VoiceOver focus, which cut off a message said from here.
     let onSaved: (String) -> Void
@@ -818,14 +826,19 @@ struct AddNoteSheet: View {
     /// A new note's unsaved text is kept on this phone as it is typed (DraftStore), so a forced
     /// sign-in or the app being closed does not lose it. Cleared once it is saved, queued
     /// offline or discarded.
-    private var draftKey: String { addendumTo.map { "note-\(clientId)-addendum-\($0.id)" } ?? "note-\(clientId)" }
+    private var draftKey: String {
+        if let sessionId { return "note-\(clientId)-session-\(sessionId)" }
+        return addendumTo.map { "note-\(clientId)-addendum-\($0.id)" } ?? "note-\(clientId)"
+    }
 
     private func saveDraft() {
         guard existing == nil else { return }
         var fields = ["subject": subject, "body": body_,
                       "sec1": sections[0], "sec2": sections[1], "sec3": sections[2], "sec4": sections[3]]
         // The type and format travel only with text: a draft with nothing typed is removed.
-        if fields.values.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+        // A session note's own subject is not something typed: alone it keeps no draft.
+        if fields.contains(where: { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                     && !($0.key == "subject" && $0.value == initialSubject) }) {
             fields["note_type"] = noteType
             fields["note_format"] = noteFormat
         }
@@ -850,6 +863,12 @@ struct AddNoteSheet: View {
     }
 
     private var activeTracks: [Track] { tracks.filter { $0.status == "Active" } }
+    /// The tracks the note can be attached to: the active ones, and the one it opened with (a
+    /// session's track that has since ended is still offered, already chosen).
+    private var attachableTracks: [Track] { tracks.filter { $0.status == "Active" || ($0.id == initialTrackId && initialTrackId > 0) } }
+    /// VoiceOver is put here as a session's note opens: the note, or its first section.
+    /// (0 the note, 100 + n section n.)
+    @AccessibilityFocusState private var focusedField: Int?
     private var labels: [String] { noteFormatLabels[noteFormat] ?? [] }
     private var structured: Bool { noteFormat != "free" }
 
@@ -863,7 +882,7 @@ struct AddNoteSheet: View {
                 || noteType != existing.noteType || noteFormat != (existing.noteFormat ?? "free")
                 || attachTrackId != (existing.trackId ?? 0)
         }
-        return (!subject.isEmpty && subject != addendumSubject) || !body_.isEmpty || sections.contains { !$0.isEmpty } || !messy.isEmpty || !homework.isEmpty
+        return (!subject.isEmpty && subject != addendumSubject && subject != initialSubject) || !body_.isEmpty || sections.contains { !$0.isEmpty } || !messy.isEmpty || !homework.isEmpty
     }
 
     /// The subject an addendum starts with.
@@ -960,6 +979,12 @@ struct AddNoteSheet: View {
                     Text("Your unsaved note from earlier was restored. Cancel, then Discard, removes it.")
                         .font(.callout)
                 }
+                if let sessionContext, existing == nil {
+                    // Where the person is, as the first thing on the screen (4.31.0).
+                    Text(sessionContext)
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                }
                 Section {
                     Picker("Type", selection: $noteType) { ForEach(noteTypes, id: \.self) { Text($0) } }
                     // Each format with its sections spelled out, as on the website.
@@ -967,10 +992,10 @@ struct AddNoteSheet: View {
                         Text("Free text").tag("free")
                         ForEach(["BIRP", "PAIP", "SOAP"], id: \.self) { Text(noteFormatDescription($0)).tag($0) }
                     }
-                    if !activeTracks.isEmpty {
+                    if !attachableTracks.isEmpty {
                         Picker("Attach to track", selection: $attachTrackId) {
                             Text("None").tag(0)
-                            ForEach(activeTracks) { Text($0.title).tag($0.id) }
+                            ForEach(attachableTracks) { Text($0.title).tag($0.id) }
                         }
                     }
                     CaptionedField(label: "Subject (required)", text: $subject, prompt: "Subject", errorName: "Subject")
@@ -984,6 +1009,7 @@ struct AddNoteSheet: View {
                                     .font(.caption.weight(.semibold)).foregroundStyle(Color.secondaryText)
                                 TextField(i < labels.count ? labels[i] : "", text: $sections[i], axis: .vertical)
                                     .lineLimit(2...8)
+                                    .accessibilityFocused($focusedField, equals: 100 + i)
                             }
                         }
                     }
@@ -1002,6 +1028,7 @@ struct AddNoteSheet: View {
                     Section("Note (required)") {
                         TextField("Note", text: $body_, axis: .vertical).lineLimit(5...12)
                             .errorField("Note")
+                            .accessibilityFocused($focusedField, equals: 0)
                         if api.aiHas("draft") && !body_.isEmpty {
                             Button { Task { await cleanup() } } label: {
                                 Label(aiBusy ? "Drafting…" : "Clean up with AI", systemImage: "sparkles")
@@ -1093,7 +1120,7 @@ struct AddNoteSheet: View {
                     } header: { Text("Homework → client portal") }
                 }
             }
-            .navigationTitle(existing != nil ? "Edit note" : (addendumTo != nil ? "Add addendum" : "Add note"))
+            .navigationTitle(existing != nil ? "Edit note" : (addendumTo != nil ? "Add addendum" : (sessionId != nil ? "Case note" : "Add note")))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1134,7 +1161,22 @@ struct AddNoteSheet: View {
                     if activeTracks.contains(where: { $0.id == initialTrackId }) { hwTrackId = initialTrackId }
                 }
                 if hwTrackId == 0 { hwTrackId = activeTracks.first?.id ?? 0 }
+                if existing == nil, let initialSubject, subject.isEmpty { subject = String(initialSubject.prefix(255)) }
+                if existing == nil, sessionId != nil { landOnFirstField() }
             }
+        }
+    }
+
+    /// A session's note (4.31.0): once the sheet has settled, VoiceOver is put on the first
+    /// thing to write, then told where it is (queued, so the field's own name is not cut off).
+    private func landOnFirstField() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            focusedField = structured ? 100 : 0
+            guard let message = arrivalAnnouncement ?? sessionContext, !message.isEmpty else { return }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            UIAccessibility.post(notification: .announcement,
+                                 argument: NSAttributedString(string: message, attributes: [.accessibilitySpeechQueueAnnouncement: true]))
         }
     }
 
@@ -1183,6 +1225,8 @@ struct AddNoteSheet: View {
             } else {
                 payload["client_id"] = clientId
                 payload["idem_key"] = idemKey
+                // 4.31.0: the completed session this note is for (kept with an offline save too).
+                if let sessionId { payload["session_id"] = sessionId }
                 if let addendumTo { payload["addendum_to"] = addendumTo.id }
                 let kept = homework.filter { $0.include && !$0.title.isEmpty }
                 // Only to an active track the picker offers: the sheet says homework is not

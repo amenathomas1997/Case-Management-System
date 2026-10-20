@@ -23,7 +23,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import kotlinx.coroutines.launch
 import org.casemanagement.app.Api
 import org.casemanagement.app.ApiException
+import org.casemanagement.app.NoteToWrite
 import org.casemanagement.app.SessionItem
+import org.casemanagement.app.parseNoteToWrite
+import org.casemanagement.app.parseNotesToWrite
 import org.casemanagement.app.parseSchedule
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
@@ -36,6 +39,9 @@ import org.json.JSONObject
 @Composable
 fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
     val state = rememberLoaded(api.userId) { api.callCached("schedule", cacheKey = "schedule") }
+    // 4.31.0: completed sessions whose case note is not written yet; left out by an older server
+    // (Unknown action) or when it cannot be read.
+    val toWrite = rememberLoaded(api.userId) { try { parseNotesToWrite(api.call("notes_to_write")) } catch (e: ApiException) { null } }
     var chosen by remember { mutableStateOf<JSONObject?>(null) }
     // The session being completed, kept as text so rotation and process death keep the dialog open (4.28.0).
     var completingJson by rememberSaveable { mutableStateOf<String?>(null) }
@@ -56,6 +62,12 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
             NoticeText(notice)
             PrimaryButton("Schedule a session") { nav.navigate("newSession") }
             ErrorText(error)
+            toWrite.data?.takeIf { it.items.isNotEmpty() && api.can("clients") }?.let { w ->
+                Heading("Notes not written yet (${w.total})")
+                w.items.forEach { n ->
+                    ListRow(listOf(n.clientName, n.subject, "Note not written yet"), action = "write it now", onClick = { nav.navigate(n.route) })
+                }
+            }
             val overdue = sessions.filter { it.overdue }
             if (overdue.isNotEmpty()) {
                 Heading("Ended, waiting for an outcome (${overdue.size})")
@@ -67,7 +79,7 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
                 Heading(dayText(day))
                 list.forEach { s -> SessionRow(s) { chosen = s.raw } }
             }
-            SecondaryButton("Refresh") { state.reload() }
+            SecondaryButton("Refresh") { state.reload(); toWrite.reload() }
         }
     }
 
@@ -95,6 +107,10 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
                         }
                     }) { Text("Check in now") }
                     if (scheduled) TextButton(onClick = { chosen = null; completingJson = s.toString() }) { Text("Complete the session") }
+                    // 4.31.0: a completed session whose note is not written yet.
+                    if (s.optString("status") == "Completed" && s.optBoolean("note_pending")) parseNoteToWrite(JSONObject(), s)?.takeIf { api.can("clients") }?.let { n ->
+                        TextButton(onClick = { chosen = null; nav.navigate(n.route) }) { Text("Write it now") }
+                    }
                     if (scheduled && !s.optBoolean("overdue")) TextButton(onClick = { chosen = null; movingJson = s.toString() }) { Text("Move to another time") }
                     if (scheduled) TextButton(onClick = {
                         act { api.call("set_session_status", body = JSONObject().put("session_id", id).put("to", "No Show")); "Recorded as a no-show." }
@@ -117,7 +133,13 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
     moving?.let { s -> MoveDialog(api, s, onDone = { m -> movingJson = null; notice = m; state.reload() }, onCancel = { movingJson = null }) }
 
     completing?.let { s ->
-        CompleteDialog(api, s, onDone = { msg -> completingJson = null; notice = msg; state.reload() }, onCancel = { completingJson = null })
+        // 4.31.0: completed (or kept offline to send), straight to the full case-note editor for that
+        // session, which says what happened as it opens; saving the note comes back here with "Case note saved".
+        CompleteDialog(api, s, onDone = { msg, note ->
+            completingJson = null; state.reload(); toWrite.reload()
+            // The editor only for those who may write case notes; others stay here with the notice.
+            if (note != null && api.can("clients")) { Flash.pending = msg; nav.navigate(note.route) } else notice = msg
+        }, onCancel = { completingJson = null })
     }
 }
 
@@ -131,14 +153,19 @@ private fun SessionRow(s: SessionItem, onClick: () -> Unit) {
             s.instructor?.let { "with $it" },
             s.checkedInAt?.let { "checked in at " + timeText(it) },
             s.groupSize.takeIf { it > 1 }?.let { "group of $it" },
+            if (s.notePending) "note not written yet" else null,
         ).joinToString(", "),
     )
     ListRow(lines, action = "see what you can do", onClick = onClick)
 }
 
-/** Complete a session: hours (its length to start with), miles and a note, as on the website. */
+/**
+ * Complete a session: hours (its length to start with), miles and the client's signature, as on
+ * the website. 4.31.0: no note here: [onDone] gets the session's note to write next (the full editor).
+ * With no signal the completion is kept on the phone and sent later, and the note can still be written.
+ */
 @Composable
-private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, onCancel: () -> Unit) {
+private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String, NoteToWrite?) -> Unit, onCancel: () -> Unit) {
     val start = parseServer(s.str("start_at"))?.time ?: 0L
     val end = parseServer(s.str("end_at"))?.time ?: 0L
     val length = if (end > start) Math.round((end - start) / 900_000.0) / 4.0 else 1.0
@@ -146,7 +173,7 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, on
     val id = s.optInt("id")
     var hours by rememberSaveable(id) { mutableStateOf(hoursText(length)) }
     var miles by rememberSaveable(id) { mutableStateOf("") }
-    var note by rememberSaveable(id) { mutableStateOf("") }
+    val idem = rememberSaveable(id) { java.util.UUID.randomUUID().toString() }
     var error by remember { mutableStateOf<String?>(null) }
     var hoursError by remember { mutableStateOf<String?>(null) }
     var milesError by remember { mutableStateOf<String?>(null) }
@@ -171,12 +198,16 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, on
             try {
                 val body = JSONObject().put("session_id", s.optInt("id")).put("outcome", outcome).put("hours", h)
                 if (m > 0) body.put("mileage", m)
-                if (note.isNotBlank()) body.put("session_note", note.trim())
                 signature.png(density)?.let { body.put("signature_b64", it) }
                 if (signedName.isNotBlank()) body.put("signed_name", signedName.trim().take(120))
                 workLogId?.let { body.put("work_log_id", it) }
-                val r = api.call("complete_session", body = body)
-                onDone("Session completed. " + (r.str("warning") ?: ""))
+                body.put("idem_key", idem)
+                // Sent now, or with no signal kept to send later (in order, before the note written next).
+                val saved = saveOrQueue(api, "complete_session", body, "Session completed: " + s.optString("client"), "Session completed.")
+                val r = saved.reply
+                val msg = if (r != null) ("Session completed. " + (r.str("warning") ?: "")).trim() else saved.message
+                // The reply's client, track and subject; an older server's (or none, offline) from the schedule's row.
+                onDone(msg, parseNoteToWrite(r ?: JSONObject(), s))
             } catch (e: ApiException) {
                 // Hours are already logged for that day: say which, and ask whether they are these.
                 logged = e.reply?.optJSONArray("logged_hours").objects()
@@ -193,7 +224,6 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String) -> Unit, on
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal, error = hoursError, required = true)
                 Field("Miles driven", miles, { miles = it }, hint = "0 if none", keyboard = KeyboardType.Decimal, error = milesError)
-                Field("Session note", note, { note = it }, hint = "optional", singleLine = false, minLines = 3)
                 SignaturePad(signature)
                 Field("Client's typed name", signedName, { signedName = it }, hint = "optional; counts as their acknowledgement")
                 ErrorText(error)

@@ -122,6 +122,8 @@ file_put_contents($stateFile, json_encode($state), LOCK_EX);
 // completed and the database answered (an unreachable database leaves it stale,
 // which is the point). Never a reason for the watchdog itself to fail.
 try { if (!isset($problems['db'])) set_setting('heartbeat_watchdog', date('c')); } catch (Throwable $e) {}
+// A completed session still without its case note an hour later gets a task to write it (4.31.0).
+try { if (!isset($problems['db']) && function_exists('sessnote_add_due_tasks')) sessnote_add_due_tasks(); } catch (Throwable $e) { error_log('watchdog: session note tasks (' . get_class($e) . ')'); }
 // Texts held for the client's 8 a.m. go out within ten minutes of it (4.17.0): this job runs every ten minutes.
 try { if (!isset($problems['db']) && function_exists('sms_enabled') && sms_enabled()) sms_flush_held(); } catch (Throwable $e) {}
 // Each staff member's Outlook calendar and their sessions are brought together every ten minutes (4.20.0):

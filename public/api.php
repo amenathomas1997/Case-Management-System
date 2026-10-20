@@ -580,6 +580,7 @@ $API_ACTION_PERMS = [
     'review_referral' => 'referrals', 'convert_referral' => 'referrals',
     'close_referral' => 'referrals', 'reopen_referral' => 'referrals', 'attach_referral' => 'referrals',
     'schedule' => 'schedule', 'schedule_session' => 'schedule', 'complete_session' => 'schedule', 'set_session_status' => 'schedule',
+    'notes_to_write' => 'clients',   // 4.31.0: completed sessions whose case note is still to write
     'check_in_session' => 'schedule',   // 3.0.28, handled in inc/api_parity.php
     'move_session' => 'schedule', 'cancel_series' => 'schedule', 'cancel_group' => 'schedule',   // 3.0.43
     'work_logs' => 'clients', 'correct_log' => 'clients', 'delete_log' => 'clients',   // 3.0.46 ('my_week' is open to every signed-in user)
@@ -695,7 +696,8 @@ const API_IDEM_ACTIONS = ['send_report', 'schedule_session', 'add_incident', 'up
     'add_assessment', 'add_booking', 'add_worksite', 'add_device_request', 'add_contract', 'add_cohort', 'log_cohort_session', 'add_equipment',
     'add_reservation', 'loan_equipment', 'equipment_service', 'convert_referral', 'send_portal_link', 'send_vrc_portal', 'request_consent',
     'at_issue', 'save_client', 'save_kb', 'save_task', 'save_track', 'save_credential', 'at_save', 'device_request_update', 'cohort_member',
-    'contract_update'];   // contract_update (4.29.0): its add_spend and add_deliverable
+    'contract_update',   // contract_update (4.29.0): its add_spend and add_deliverable
+    'complete_session'];   // 4.31.0: the apps queue completions offline with a kept key
 // The retry guard (api_idem_begin / api_idem_end) is opened inside inc/api_parity.php
 // before any action runs, the parity actions included (4.29.0: save_task, save_track and
 // request_consent are parity actions, and before this they ran before the guard).
@@ -1070,8 +1072,31 @@ switch ($action) {
         // have moved with its client (a merge or reassignment), and its replay must still
         // be acknowledged rather than reported as refused.
         $idem = preg_match('/^[0-9a-fA-F-]{36}$/', (string)($input['idem_key'] ?? '')) ? strtoupper($input['idem_key']) : null;
-        if ($idem !== null && api_idem_saved('client_notes', $idem, $userId)) out(['ok' => true, 'deduplicated' => true]);
+        // session_id (4.31.0): the completed session this note was written for.
+        $noteSid = (int)($input['session_id'] ?? 0) ?: null;
+        if ($idem !== null && api_idem_saved('client_notes', $idem, $userId)) {
+            // The session the saved note is linked to (null when it was saved unlinked).
+            $savedSid = null;
+            if (sessnote_ready()) { $ss = db()->prepare('SELECT session_id FROM client_notes WHERE idem_key = ?'); $ss->execute([$idem]); $savedSid = ($v = $ss->fetchColumn()) ? (int)$v : null; }
+            out(['ok' => true, 'deduplicated' => true, 'session_id' => $savedSid]);
+        }
         api_require_client($cid, $userId);
+        // One of this client's completed sessions: the note is linked to it, the session no
+        // longer waits for its note, and its task is completed. A session of another client is
+        // refused. One that is not completed (its queued completion was refused, say) or no
+        // longer exists: the note is still saved, unlinked, and the reply says so, as the website does.
+        $noteWarning = null;
+        if ($noteSid !== null) {
+            $sOwner = db()->prepare('SELECT client_id FROM scheduled_sessions WHERE id = ?');
+            $sOwner->execute([$noteSid]);
+            $sOwnerId = $sOwner->fetchColumn();
+            if ($sOwnerId !== false && (int)$sOwnerId !== $cid) fail('That session belongs to a different client, so the note cannot be linked to it. Nothing was saved.', 422);
+            if (sessnote_session($noteSid, $cid) === null) {
+                $noteWarning = 'The note was saved, but not linked to the session, because that session is not marked Completed. Complete the session on the Schedule; its note can then be written from Notes to write.';
+                $noteSid = null;
+            }
+        }
+        $linkSid = $noteSid !== null && sessnote_ready();
         // addendum_to (3.0.36): a note added to an earlier one of the same client (how a
         // locked note is corrected). Its type is always Addendum.
         $addendumTo = note_addendum_parent($input['addendum_to'] ?? null, $cid);
@@ -1116,8 +1141,9 @@ switch ($action) {
         }
         db()->beginTransaction();
         try {
-        db()->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key, addendum_to, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(?, NOW()))')
-            ->execute([$cid, $trackId, $na['type'], $na['format'], $subject, $body, $na['cols'][0], $na['cols'][1], $na['cols'][2], $na['cols'][3], $userId, $idem, $addendumTo, $writtenAt]);
+        db()->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key, addendum_to, created_at' . ($linkSid ? ', session_id' : '') . ') VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(?, NOW())' . ($linkSid ? ',?' : '') . ')')
+            ->execute(array_merge([$cid, $trackId, $na['type'], $na['format'], $subject, $body, $na['cols'][0], $na['cols'][1], $na['cols'][2], $na['cols'][3], $userId, $idem, $addendumTo, $writtenAt], $linkSid ? [$noteSid] : []));
+        if ($linkSid) sessnote_written($noteSid, $userId);
         audit($userId, $addendumTo !== null ? 'note.addendum' : 'note.add', 'client', $cid, $subject . ($addendumTo !== null ? ' (addendum to note #' . $addendumTo . ')' : '') . ' (mobile' . (isset($lateLine) ? '; ' . $lateLine : '') . ')');
         // Homework captured by the generator: create on the chosen track so it
         // appears in the client's portal (mirrors save_note_homework).
@@ -1159,7 +1185,7 @@ switch ($action) {
             // data the database refuses answers 4xx, only a real fault answers 500.
             api_exception_out($e, 'Could not save the note and homework. Please try again.');
         }
-        out(['ok' => true, 'homework_created' => $hwCreated]);
+        out(['ok' => true, 'homework_created' => $hwCreated, 'session_id' => $noteSid, 'warning' => $noteWarning]);
     }
 
     case 'update_note': {
@@ -1339,6 +1365,8 @@ switch ($action) {
         $miles = round(api_number($input, 'mileage', 'Mileage') ?? 0.0, 1);
         if ($miles < 0 || $miles > 1000) fail('Mileage must be between 0 and 1000 miles. Nothing was changed.', 422);
         if ($miles > 0 && $hours <= 0) fail('Miles are logged with the session\'s hours: enter the hours worked, or clear the miles. Nothing was changed.', 422);
+        // session_note: sent only by app builds before 4.31.0, which still save it with the
+        // completion (linked to the session). Newer builds open the full note editor instead.
         $sNote = api_text($input, 'session_note', API_TEXT_BYTES, 'The session note', true);
         if ($sNote !== '' && !$sess['track_id']) {
             fail('No training track is linked to this session, so its note cannot be saved with it. Nothing was changed. Clear the note and complete the session, then add the note on the client\'s record.', 422);
@@ -1441,8 +1469,8 @@ switch ($action) {
             }
             if ($sNote !== '') {
                 require_once __DIR__ . '/inc/workflows.php'; // track_note_create()
-                track_note_create((int)$sess['client_id'], (int)$sess['track_id'], 'Session on ' . fmt_date($sessDate),
-                    assemble_note(['note_type' => 'Case Note', 'body' => $sNote]), $userId);
+                track_note_create((int)$sess['client_id'], (int)$sess['track_id'], sessnote_subject((string)$sess['start_at']),
+                    assemble_note(['note_type' => 'Case Note', 'body' => $sNote]), $userId, null, $sid);
             }
             db()->commit();
         } catch (Throwable $e) {
@@ -1460,7 +1488,22 @@ switch ($action) {
         // 'note_saved': the session note was saved with the completion (3.0.32).
         // 'warning': the sentence for the app to add to its "hours logged" message (null when none).
         // 'hours_linked': the hours already logged that the session was linked to (null when none).
-        out(['ok' => true, 'hours_logged' => $hours, 'warning' => $authIssue, 'hours_linked' => $linkedHours, 'note_saved' => $sNote !== '']);
+        // 4.31.0: the session's case note is to be written (unless an old build sent it here):
+        // marked on the session, with a task for its instructor. The reply carries what the
+        // app's note editor is filled in with.
+        if ($sNote === '') sessnote_mark_pending($sid, $userId);
+        $cn = db()->prepare('SELECT name FROM clients WHERE id = ?');
+        $cn->execute([(int)$sess['client_id']]);
+        out(['ok' => true, 'hours_logged' => $hours, 'warning' => $authIssue, 'hours_linked' => $linkedHours, 'note_saved' => $sNote !== '',
+            'session_id' => $sid, 'client_id' => (int)$sess['client_id'], 'client_name' => (string)$cn->fetchColumn(),
+            'track_id' => $sess['track_id'] !== null ? (int)$sess['track_id'] : null, 'session_date' => $sessDate,
+            'note_subject' => sessnote_subject((string)$sess['start_at']), 'note_pending' => $sNote === '']);
+
+    case 'notes_to_write':
+        // 4.31.0: the signed-in user's completed sessions whose case note is still to write
+        // (their own and their caseload's; caseload-scoped staff, their caseload's), newest first.
+        [$ntwRows, $ntwTotal] = sessnote_list($userId, caseload_scoped(), 100);
+        out(['ok' => true, 'sessions' => $ntwRows, 'total' => $ntwTotal]);
 
     case 'tracks':
         $sql = "SELECT t.* , c.name AS client FROM training_tracks t JOIN clients c ON c.id = t.client_id WHERE t.status = 'Active'";

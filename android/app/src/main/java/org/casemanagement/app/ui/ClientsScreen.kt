@@ -238,11 +238,13 @@ val NOTE_LABELS = mapOf(
  * mention; staff review everything before saving. With no signal it is kept and sent later.
  */
 @Composable
-fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int = 0) {
+fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int = 0, sessionId: Int = 0, presetSubject: String = "") {
     val types = api.formList("note_types", listOf("Case Note", "Progress Report", "Monthly Summary", "Intake", "Addendum"))
     var type by rememberSaveable { mutableStateOf(types.first()) }
     var format by rememberSaveable { mutableStateOf("free") }
-    var subject by rememberSaveable { mutableStateOf("") }
+    // 4.31.0: a session's note starts with its subject ("Session on Oct 20") and is linked to the session.
+    var subject by rememberSaveable { mutableStateOf(presetSubject) }
+    val forSession = sessionId > 0
     var body by rememberSaveable { mutableStateOf("") }
     var original by rememberSaveable { mutableStateOf<String?>(null) }
     var sections by rememberSaveable { mutableStateOf(listOf("", "", "", "")) }
@@ -263,9 +265,15 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
     // 4.29.0: Back waits while the note is saving (it is sent or kept on the phone either way).
     HoldBackWhileSaving(busy)
     Page {
-        Choice("Note type", type, types.map { it to it }) { type = it }
-        Choice("Format", format, listOf("free" to "Free text", "BIRP" to "BIRP", "PAIP" to "PAIP", "SOAP" to "SOAP")) { format = it }
-        Field("Subject", subject, { subject = it }, required = true)
+        val about: @Composable () -> Unit = {
+            Choice("Note type", type, types.map { it to it }) { type = it }
+            Choice("Format", format, listOf("free" to "Free text", "BIRP" to "BIRP", "PAIP" to "PAIP", "SOAP" to "SOAP")) { format = it }
+            Field("Subject", subject, { subject = it }, required = true)
+        }
+        // 4.31.0: opened from a completed session, the title ("Case note for Jane Doe, session on
+        // Oct 20") is followed by the first thing to write; the type, format and the subject already
+        // filled in come after it. Otherwise as before: type, format and subject first.
+        if (!forSession) about()
         NoticeText(notice)
         if (!structured) {
             Field("Note", body, { body = it }, singleLine = false, minLines = 6, required = true)
@@ -322,6 +330,7 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
             }
             Field("Narrative", body, { body = it }, hint = "optional", singleLine = false, minLines = 3)
         }
+        if (forSession) about()
         // 4.30.0: the AI's wait is said once when it starts.
         Announce(if (aiBusy) "Working… This can take up to a minute." else null, key = aiBusy)
         ErrorText(error)
@@ -337,6 +346,9 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
                     .put("subject", subject.trim()).put("idem_key", idem)
                 // Written from a training track (4.26.0): the note is filed on that track.
                 if (trackId > 0) payload.put("track_id", trackId)
+                // 4.31.0: the session it is the note for (kept with it when saved offline); the server
+                // marks the session's note written and completes its reminder task.
+                if (forSession) payload.put("session_id", sessionId)
                 if (structured) {
                     sections.forEachIndexed { i, v -> payload.put("sec${i + 1}", v.trim()) }
                     if (body.isNotBlank()) payload.put("body", body.trim())

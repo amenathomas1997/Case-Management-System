@@ -16,9 +16,13 @@ function workflow_client(int $id,int $actor): array {
  *  $note is assemble_note()'s result. The track page's session record and the
  *  schedule's completion form call this inside their own transaction, so the
  *  note is saved with the hours or not at all. Returns the note's id. */
-function track_note_create(int $clientId,int $trackId,string $subject,array $note,int $userId,?string $idemKey=null): int {
-    db()->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-        ->execute([$clientId,$trackId,$note['type'],$note['format'],$subject,$note['body'],$note['cols'][0],$note['cols'][1],$note['cols'][2],$note['cols'][3],$userId,$idemKey]);
+/** A case note on a training track. $sessionId (4.31.0) links it to the completed session it
+ *  was written for; the session then no longer waits for its note (sessnote_written(), called
+ *  by the caller once the transaction it runs in has committed). */
+function track_note_create(int $clientId,int $trackId,string $subject,array $note,int $userId,?string $idemKey=null,?int $sessionId=null): int {
+    $linked=$sessionId!==null && function_exists('sessnote_ready') && sessnote_ready();
+    db()->prepare('INSERT INTO client_notes (client_id, track_id, note_type, note_format, subject, body, birp_behavior, birp_intervention, birp_response, birp_plan, author_id, idem_key'.($linked?', session_id':'').') VALUES (?,?,?,?,?,?,?,?,?,?,?,?'.($linked?',?':'').')')
+        ->execute(array_merge([$clientId,$trackId,$note['type'],$note['format'],$subject,$note['body'],$note['cols'][0],$note['cols'][1],$note['cols'][2],$note['cols'][3],$userId,$idemKey],$linked?[$sessionId]:[]));
     $noteId=(int)db()->lastInsertId();
     audit($userId,'note.add','client',$clientId,'track #'.$trackId.': '.$subject);
     return $noteId;

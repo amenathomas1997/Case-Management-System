@@ -61,8 +61,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(CMS_BUNDLE_ID)
-        MARKETING_VERSION: "4.30.0"
-        CURRENT_PROJECT_VERSION: "61"
+        MARKETING_VERSION: "4.31.0"
+        CURRENT_PROJECT_VERSION: "62"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: $(CMS_TEAM)
@@ -110,8 +110,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(CMS_BUNDLE_ID).widget
-        MARKETING_VERSION: "4.30.0"
-        CURRENT_PROJECT_VERSION: "61"
+        MARKETING_VERSION: "4.31.0"
+        CURRENT_PROJECT_VERSION: "62"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: $(CMS_TEAM)

@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.31.0' => [
+        'Confirm a session, then write its note: once you mark a session completed (on the website or in the phone apps), you land straight in the case note for that client, with the training track and the subject "Session on" its date already filled in. The small session-note box on the completion step is gone, so there is one place to write the note.',
+        'Group sessions: after completing a group, you write one note per client who attended, moving to the next client each time you save ("Next: Jane Doe, 2 of 4"), with Skip for now.',
+        'If you leave without writing the note, the session says "Note not written yet" with Write it now, it is listed under Notes to write on your dashboard and in the apps, and a task reminds you the next business day. Saving the note clears both.',
+    ],
     '4.30.0' => [
         'An accessibility review of the whole system, with every finding fixed. After you save, the result or the reason it was refused is now read out every time, instead of sometimes being skipped. Help for each date and time field is part of its label, so there is no extra stop after it, and the Text size and spoken-loudness lists no longer speak on every arrow press.',
         'Clearer forms: required fields are marked for screen readers too, refused saves name every field that needs attention, and lists are plain names (the Schedule shows only the chosen client\'s tracks). Note links and headings include the date, so notes with the same subject are told apart.',

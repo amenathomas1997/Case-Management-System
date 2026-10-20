@@ -43,16 +43,19 @@ check($code===0 && $err==='' && str_contains($out,'Record a session') && str_con
 $past=date('Y-m-d H:i:s',strtotime('-3 hours')); $pastEnd=date('Y-m-d H:i:s',strtotime('-2 hours'));
 $db->prepare("INSERT INTO scheduled_sessions(client_id,track_id,user_id,start_at,end_at) VALUES(?,?,1,?,?)")->execute([$srClient,$srTrack,date('Y-m-d 08:00:00',strtotime('-1 day')),date('Y-m-d 09:00:00',strtotime('-1 day'))]); $srSess=(int)$db->lastInsertId();
 [$code,$out,$err]=$renderPage('schedule',[]);
-check($code===0 && $err==='' && str_contains($out,'id="sh-'.$srSess.'"') && str_contains($out,'id="sm-'.$srSess.'"'),
-    'A started session on the schedule offers hours (prefilled), miles and the note' . ($err ? ": $err" : ''));
+check($code===0 && $err==='' && str_contains($out,'id="sh-'.$srSess.'"') && str_contains($out,'id="sm-'.$srSess.'"') && !str_contains($out,'id="sn-'.$srSess.'"'),
+    'A started session on the schedule offers hours (prefilled) and miles, and no session note box (4.31.0)' . ($err ? ": $err" : ''));
 [$code,,$err]=$renderPage('schedule',[],['set_status'=>'1','session_id'=>(string)$srSess,'to'=>'Cancelled','session_hours'=>'1','session_miles'=>'5']);
 check($code===0 && $err==='' && $db->query("SELECT status FROM scheduled_sessions WHERE id=$srSess")->fetchColumn()==='Scheduled',
     'Miles typed for a cancelled session are refused with nothing changed' . ($err ? ": $err" : ''));
+// 4.31.0: the row no longer has a session note box; the case note is written in the full
+// note editor that opens after Save (tests/v431_sessnote_cases.php). A note still posted
+// by an old page is not saved from the row.
 [$code,,$err]=$renderPage('schedule',[],['set_status'=>'1','session_id'=>(string)$srSess,'to'=>'Completed','session_hours'=>'1.75','session_miles'=>'12','session_note'=>'Completed with changed hours']);
 $srWl=$db->query("SELECT w.hours,w.mileage FROM scheduled_sessions s JOIN work_logs w ON w.id=s.work_log_id WHERE s.id=$srSess")->fetch();
 check($code===0 && $err==='' && $srWl && (float)$srWl['hours']===1.75 && (float)$srWl['mileage']===12.0
-    && (int)$db->query("SELECT COUNT(*) FROM client_notes WHERE track_id=$srTrack AND body LIKE '%Completed with changed hours%'")->fetchColumn()===1,
-    'Mark completed logs the hours and miles typed in the row, with the note' . ($err ? ": $err" : ''));
+    && (int)$db->query("SELECT COUNT(*) FROM client_notes WHERE track_id=$srTrack AND body LIKE '%Completed with changed hours%'")->fetchColumn()===0,
+    'Mark completed logs the hours and miles typed in the row; the note is written in the note editor afterwards' . ($err ? ": $err" : ''));
 
 // The app: log_hours takes the session note, saved with the hours; a replay is one entry.
 $apiKey='5E55A0A1-0000-4000-8000-000000000032';

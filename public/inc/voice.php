@@ -852,8 +852,13 @@ function voice_execute(string $do, array $in, array $user): array {
                 return voice_write_failed($e);
             }
             audit($uid, 'session.complete', 'client', (int)$sess['client_id'], 'voice');
+            // Its case note is to be written (4.31.0): marked, with a task for the instructor, and
+            // the link goes to the full note editor for it when the user writes notes.
+            sessnote_mark_pending($sid, $uid);
+            $noteLink = can('clients');
             return ['ok' => true, 'speak' => ($hours > 0 ? 'Session completed and ' . voice_say_hours((float)$hours) . ' hours logged.' : ($sess['track_id'] ? 'Session marked complete. It was too short to log any hours.' : 'Session marked complete.'))
-                . ($authIssue !== null ? ' ' . $authIssue : ''), 'url' => 'schedule.php', 'url_label' => 'Go to the schedule'];
+                . ($authIssue !== null ? ' ' . $authIssue : '') . ' Its case note is still to write.',
+                'url' => $noteLink ? sessnote_editor_url((int)$sess['client_id'], $sid) : 'schedule.php', 'url_label' => $noteLink ? 'Write the case note for this session' : 'Go to the schedule'];
         case 'add_homework':
             if ($cid <= 0) return ['ok' => false, 'error' => 'Missing client.'];
             $track = voice_single_track($cid);
