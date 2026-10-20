@@ -84,3 +84,17 @@ Web 4.31.0, iPhone app 4.31.0 (build 62), Android app 4.31.0 (version code 15). 
 **On a device (not yet checked):** after a signed completion on the iPhone, the note should open once you unlock with Face ID.
 
 **Owner's own Android Studio change:** the uncommitted build-tool upgrade (Gradle 9.4.1, Android plugin 9.2.1, Kotlin 2.2.10) was kept set aside in a git stash for 4.30.0 and 4.31.0, and is put back after this release, uncommitted, for the owner to decide on.
+
+## Published (not deployed)
+
+2026-10-20, after CI passed all three jobs on 9e4bec9. The GitHub release v4.31.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 335 files, verified
+
+**Rehearsed:** installed with the 4.30.0 updater onto a copy of a 4.30.0 site.
+- The signature verified, the plan showed no problems, and the backup was made first.
+- The database changes ran (8 statements; database version 4.31.0, client_notes.session_id and scheduled_sessions.note_pending/note_pending_since present).
+- 13 files were replaced, including the scheduled jobs, and the new session_notes.php was added.
+- The sign-in, signing and survey pages then served at 4.31.0.
+
+The live site stays as it is until the owner installs it with Software update. The 4.31.0 phone apps are built from this tag.
