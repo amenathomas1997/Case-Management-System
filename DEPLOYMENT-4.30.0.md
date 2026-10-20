@@ -99,3 +99,17 @@ Web 4.30.0, iPhone app 4.30.0 (build 61), Android app 4.30.0 (version code 14). 
   - long labels were cut at large font
 
 **Owner's own Android Studio change:** the build-tool upgrade found uncommitted in android/ (Gradle 9.4.1, Android plugin 9.2.1, Kotlin 2.2.10) was set aside in a git stash during this release, so 4.30.0 builds with the same tools as CI. It was put back afterwards, uncommitted, for the owner to decide on.
+
+## Published (not deployed)
+
+2026-10-20, after CI passed all three jobs on 445ae79. The GitHub release v4.30.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 333 files, verified
+
+**Rehearsed:** installed with the 4.29.0 updater onto a copy of a 4.29.0 site.
+- The signature verified, the plan showed no problems, and the backup was made first.
+- The database change ran (2 statements; database version 4.30.0, surveys.answer_lang present).
+- 86 files were replaced, including the scheduled jobs and the new accessible_copy.php.
+- The sign-in, signing and survey pages then served at 4.30.0.
+
+The live site stays as it is until the owner installs it with Software update. The 4.30.0 phone apps are built from this tag.
