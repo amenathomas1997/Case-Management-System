@@ -79,3 +79,17 @@ Web 4.32.0, iPhone app 4.32.0 (build 64), Android app 4.32.0 (version code 17). 
 - whether staff on other Zoom accounts can connect to an unpublished app (expect admin pre-approval)
 - the Teams lobby and anonymous-join policy for clients
 - Conditional Access policies that end Microsoft connections early
+
+## Published (not deployed)
+
+2026-10-20, after CI passed all three jobs on 0f0578c. The GitHub release v4.32.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 336 files, verified
+
+**Rehearsed:** installed with the 4.31.1 updater onto a copy of a 4.31.1 site.
+- The signature verified, the plan showed no problems, and the backup was made first.
+- The database changes ran (3 statements; database version 4.32.0, meeting_accounts.refused_at and scheduled_sessions.meeting_made_for present).
+- 14 files were replaced, including the scheduled jobs.
+- The sign-in page then served 4.32.0.
+
+The live site stays as it is until an administrator installs it with Software update. The 4.32.0 phone apps are built from this tag.
