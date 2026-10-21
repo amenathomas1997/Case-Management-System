@@ -134,11 +134,11 @@ backup.sh refuses to run and says so.
    The installer creates that folder and writes cron_config.php and backup.conf
    into it — keep those two files; the scripts read them and need no editing.
    Create db.cnf and add the cron jobs exactly as the installer's success page shows.
-6. Optional but recommended: Microsoft Graph mail (Azure app registration with
-   Mail.Send application permission) — put tenant/client/secret in config.php's
-   'graph' block for reliable email delivery. Without it, mail() is used.
-   Email filing (cron/ingest_email.php) and weekly off-site backups larger than
-   2 MB also need the Mail.ReadWrite application permission.
+6. Optional but recommended: Microsoft 365 email (an Entra app registration with
+   the Mail.Send and Mail.ReadWrite application permissions), entered under
+   Administration, Settings, Microsoft Graph email. Without it, mail() is used.
+   Step by step, with Microsoft sign-in, Teams and Outlook calendar too:
+   MICROSOFT-SETUP.md in the source repository.
 
 Backups leave out the stored AI provider API key and the Microsoft Entra client
 secret, so after restoring a backup, enter them again on the AI assistant and
