@@ -43,3 +43,22 @@ Web 4.31.1, iPhone app 4.31.1 (build 63), Android app 4.31.1 (version code 16). 
 - **Hand-over marker:** a browser handed over for signing just before the update lost its marker with the cookie rename. A marker under the earlier name now still holds until it expires, and a full sign-in removes it.
 - **iPhone:** document previews kept in the folder under the former app name are now removed too.
 - **Android:** a version number in private.properties would have frozen the app's version; the version now always comes from gradle.properties.
+
+## Published (not deployed)
+
+2026-10-20, after CI passed all three jobs on the rewritten main (including the Android job on Java 21). Before publishing:
+- **History rewritten** with git-filter-repo: names, domains, the street address, app IDs and the Apple team ID replaced, and every commit credited to the GitHub private address.
+- **Removed from history:** the old icons, store graphics, earlier app-kit archives, .audit_work/ and .claude/. The final files are identical to the commit before the rewrite.
+- **Removed from GitHub:** the 15 earlier releases, all old tags and a stale branch. A private backup of the old history is kept off GitHub by the maintainer.
+- **Checked:** a search of every commit, message and file version, binaries included, finds no trace of the former name.
+
+The GitHub release v4.31.1 (latest, the only release) carries:
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 335 files, verified
+
+**Rehearsed:** installed with the 4.31.0 updater onto a copy of a 4.31.0 site.
+- The signature verified, the plan showed no problems, and the backup was made first.
+- 7 files were replaced. The database stayed at 4.31.0, as expected.
+- The sign-in page then served 4.31.1, with no former name.
+
+The live site stays as it is until an administrator installs it with Software update. The 4.31.1 phone apps are built from this tag.
