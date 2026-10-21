@@ -2,7 +2,7 @@
 
 Web and cron 3.0.44; migration **mig_3.0.44.sql** (new table amendment_requests; clients gain on_hold_reason and on_hold_until). The iPhone app is unchanged (3.0.43, build 43).
 
-Owner decisions (2026-10-16):
+Maintainer decisions (2026-10-16):
 - No client sign-off per session.
 - No separate Awaiting Authorization status: On Hold with a reason is the waiting stage.
 - Emailed authorizations arrive as forwarded plain-text emails with a dead link. Reading them needs a sample email first.
@@ -28,4 +28,4 @@ Verified before commit:
 - Not checked in a browser or with a screen reader.
 
 ## Deployed 2026-10-16 12:34 CT
-From 3.0.43 with .audit_work/deploy-3.0.44. 2 migration statements ran. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.44). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.44-20261016-123430. Clients already On Hold have no reason recorded; their first check-in task comes on the next daily run when they have been On Hold three weeks or more.
+From 3.0.43 with .audit_work/deploy-3.0.44. 2 migration statements ran. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.44). Backup: <private dir>/deploy-3.0.44-20261016-123430. Clients already On Hold have no reason recorded; their first check-in task comes on the next daily run when they have been On Hold three weeks or more.

@@ -11,14 +11,18 @@ options:
 #   CMS_SIGNIN_TITLE    the line on the sign-in screen
 #   CMS_DEFAULT_SERVER  its server's address without https:// (for example cms.example.org or
 #                       example.org/cms). Leave it empty and the sign-in screen asks for it.
+#   CMS_APP_ICON        the icon set in Sources/Assets.xcassets (AppIcon is the built-in one)
+# A build of your own can instead keep these in ios/Private.xcconfig (git-ignored; read through
+# Overrides.xcconfig, so its values win over the ones below): see "Building your own apps" in README.md.
 settings:
   base:
     CMS_BUNDLE_ID: org.example.cms
-    CMS_TEAM: 
+    CMS_TEAM: ""
     CMS_DISPLAY_NAME: CMS
-    CMS_SPOKEN_NAME: Case Management System
-    CMS_SIGNIN_TITLE: Case Management System
-    CMS_DEFAULT_SERVER: cms.example.org
+    CMS_SPOKEN_NAME: Case Management
+    CMS_SIGNIN_TITLE: Case Management
+    CMS_DEFAULT_SERVER: ""
+    CMS_APP_ICON: AppIcon
 # Shared schemes: CaseManagement builds the app (and its widget) only, as CI and testflight.sh use it;
 # CaseManagementUITests runs the accessibility audits (UITests/), for local runs against a local test
 # server only (how to run them: the notes at the top of UITests/AccessibilityAuditTests.swift).
@@ -48,6 +52,9 @@ schemes:
 targets:
   CaseManagement:
     type: application
+    configFiles:
+      Debug: Overrides.xcconfig
+      Release: Overrides.xcconfig
     platform: iOS
     sources: [Sources]
     dependencies:
@@ -61,12 +68,12 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(CMS_BUNDLE_ID)
-        MARKETING_VERSION: "4.31.0"
-        CURRENT_PROJECT_VERSION: "62"
+        MARKETING_VERSION: "4.31.1"
+        CURRENT_PROJECT_VERSION: "63"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: $(CMS_TEAM)
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_APPICON_NAME: $(CMS_APP_ICON)
         # Adaptive navy / light-blue accent (Assets.xcassets/AccentColor) for system controls.
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     info:
@@ -99,6 +106,9 @@ targets:
   # (no client names). Shares TodaySnapshot (Sources/WidgetShared.swift) with the app.
   CaseManagementWidget:
     type: app-extension
+    configFiles:
+      Debug: Overrides.xcconfig
+      Release: Overrides.xcconfig
     platform: iOS
     sources:
       - Widget
@@ -110,8 +120,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(CMS_BUNDLE_ID).widget
-        MARKETING_VERSION: "4.31.0"
-        CURRENT_PROJECT_VERSION: "62"
+        MARKETING_VERSION: "4.31.1"
+        CURRENT_PROJECT_VERSION: "63"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: $(CMS_TEAM)
@@ -129,6 +139,9 @@ targets:
   # server with a test account given through the environment (never stored in the repository).
   CaseManagementUITests:
     type: bundle.ui-testing
+    configFiles:
+      Debug: Overrides.xcconfig
+      Release: Overrides.xcconfig
     platform: iOS
     sources: [UITests]
     dependencies:

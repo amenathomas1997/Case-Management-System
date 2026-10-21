@@ -22,4 +22,4 @@ Verified before commit:
 - Not checked in a browser or with a screen reader.
 
 ## Deployed 2026-10-16 12:15 CT
-From 3.0.42 with .audit_work/deploy-3.0.43. 1 migration statement ran. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.43). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.43-20261016-121539. iOS 3.0.43 (43) is not archived.
+From 3.0.42 with .audit_work/deploy-3.0.43. 1 migration statement ran. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.43). Backup: <private dir>/deploy-3.0.43-20261016-121539. iOS 3.0.43 (43) is not archived.

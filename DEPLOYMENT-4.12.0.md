@@ -2,7 +2,7 @@
 
 Web 4.12.0, and the first Android app (versionName 4.12.0, versionCode 1). No database change.
 
-The owner asked for "an Android app that is in sync with the website and the iPhone app". It is in `android/` (Kotlin, Jetpack Compose). It uses the same API, sign-in and records as the iPhone app, so everything is in sync by construction: nothing is kept on the phone except entries written without a signal, until they are sent. `android/README.md` covers what it does, how to build it, another organisation's build settings, and publishing to Google Play.
+The maintainer asked for "an Android app that is in sync with the website and the iPhone app". It is in `android/` (Kotlin, Jetpack Compose). It uses the same API, sign-in and records as the iPhone app, so everything is in sync by construction: nothing is kept on the phone except entries written without a signal, until they are sent. `android/README.md` covers what it does, how to build it, another organisation's build settings, and publishing to Google Play.
 
 **What the Android app does (first release):** the daily work of the iPhone app's main tabs.
 - Sign in with email, password and code. A build without a server asks for the address.
@@ -72,8 +72,8 @@ The owner asked for "an Android app that is in sync with the website and the iPh
 - Its first run should be an internal test (Google Play Internal testing, or the debug APK on one phone).
 
 ## Deployed 2026-10-16 23:17 CT
-The web part went from 4.11.0 with .audit_work/deploy-4.12.0: 5 files at e035572, no migration. Production files matched 4.11.0 before install and match 4.12.0 after. Smoke checks passed, and health reports 4.12.0. Backups: /home/cmsuser/casemanagement_private/deploy-4.12.0-20261016-231702.
+The web part went from 4.11.0 with .audit_work/deploy-4.12.0: 5 files at e035572, no migration. Production files matched 4.11.0 before install and match 4.12.0 after. Smoke checks passed, and health reports 4.12.0. Backups: <private dir>/deploy-4.12.0-20261016-231702.
 
 CI's first run failed in the third-party Android setup step (its licence prompt), not in the app. 4003cc0 uses the runner's own Android SDK, and all three jobs then passed, including the Android build, unit tests and lint.
 
-The Android app is not published anywhere yet. The debug APK can be built with android/README.md. Publishing needs the owner's Google Play developer account and upload key.
+The Android app is not published anywhere yet. The debug APK can be built with android/README.md. Publishing needs a Google Play developer account and upload key.

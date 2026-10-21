@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.31.0';
+const APP_VERSION = '4.31.1';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1268,8 +1268,8 @@ function audit(?int $userId, string $action, string $entity = '', ?int $entityId
  */
 /**
  * A calendar event's ID: <prefix>-<kind>-<id>@<this site's host>. The prefix is setting
- * ics_uid_prefix ("cms" on a new site; mig_4.3.0 keeps "cms" where invitations already went
- * out, so a later update or cancellation still finds the event).
+ * ics_uid_prefix ("cms" when unset; a site whose invitations already went out with another prefix
+ * keeps it there, so a later update or cancellation still finds the event).
  */
 function ics_uid(string $kind, string|int $id): string {
     static $prefix = null;

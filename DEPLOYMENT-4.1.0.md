@@ -2,7 +2,7 @@
 
 Web 4.1.0 (no iPhone app change). Apply dist/migrations/mig_4.1.0.sql (funding_agencies; clients.state, clients.time_zone; referrals.client_state; invoices.vendor_number; schema_version 4.1.0), or use Database upgrade.
 
-The owner will take referrals from VR agencies across the country, not only the Iowa Department for the Blind. Until now the system assumed one agency and one time zone.
+The system must handle referrals from VR agencies across the country, not only the Iowa Department for the Blind. Until now the system assumed one agency and one time zone.
 
 - **Funding agencies** (funding_agencies.php, administrators; inc/agencies.php).
   - Each agency has a state, its clients' usual time zone, the email domains its authorizations come from, your vendor number with it, its payment terms and its billing address.
@@ -38,4 +38,4 @@ Verified before commit:
 - Not checked in a browser or with a screen reader.
 
 ## Deployed 2026-10-16 18:30 CT
-From 4.0.0 with .audit_work/deploy-4.1.0 (30 files). mig_4.1.0.sql ran (8 statements); all 5 new columns and tables present. Production files matched 4.0.0 before install and match 4.1.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.1.0. Backups: /home/cmsuser/casemanagement_private/deploy-4.1.0-20261016-183027.
+From 4.0.0 with .audit_work/deploy-4.1.0 (30 files). mig_4.1.0.sql ran (8 statements); all 5 new columns and tables present. Production files matched 4.0.0 before install and match 4.1.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.1.0. Backups: <private dir>/deploy-4.1.0-20261016-183027.

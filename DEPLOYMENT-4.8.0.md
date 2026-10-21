@@ -2,7 +2,7 @@
 
 Web 4.8.0, iPhone app 4.8.0 (build 49). Apply dist/migrations/mig_4.8.0.sql (goal_progress.idem_key and an index; schema_version 4.8.0), or use Database upgrade.
 
-More of the iPhone app works without a signal (the owner approved the list on 2026-10-16). With no connection, these are now kept in the phone's offline queue (protected, owner-bound, sent in order when back online), as notes, hours, check-ins and device follow-ups already were:
+More of the iPhone app works without a signal (the maintainer approved the list on 2026-10-16). With no connection, these are now kept in the phone's offline queue (protected, owner-bound, sent in order when back online), as notes, hours, check-ins and device follow-ups already were:
 
 | Action | How a resend is recognised |
 |---|---|
@@ -13,7 +13,7 @@ More of the iPhone app works without a signal (the owner approved the list on 20
 
 The staff guide's offline answer lists them.
 
-**Main menu hints for JAWS** (owner report, 2026-10-16): each menu link's one-sentence hint was an aria-describedby description, which JAWS did not read when moving through the menu. It is now visually-hidden text inside the link ("Client records: Find a person…"), read on Tab and when arrowing, still no extra line or stop. The on-screen copy is unchanged (aria-hidden, shown on hover or focus).
+**Main menu hints for JAWS** (user report, 2026-10-16): each menu link's one-sentence hint was an aria-describedby description, which JAWS did not read when moving through the menu. It is now visually-hidden text inside the link ("Client records: Find a person…"), read on Tab and when arrowing, still no extra line or stop. The on-screen copy is unchanged (aria-hidden, shown on hover or focus).
 
 **Tests:** tests/v48_cases.php is new. It checks the goal progress resend, the task completion resend, and that refusal without a key is unchanged.
 
@@ -31,4 +31,4 @@ Verified before commit:
 - Not checked on a phone.
 
 ## Deployed 2026-10-16 21:37 CT
-From 4.7.1 with .audit_work/deploy-4.8.0 (10 files), at 67d32df. mig_4.8.0.sql ran; goal_progress.idem_key present. Production files matched 4.7.1 before install and match 4.8.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.8.0. The JAWS menu hint change is live for everyone. The offline additions reach staff once the iPhone app 4.8.0 (build 49) is on TestFlight. Backups: /home/cmsuser/casemanagement_private/deploy-4.8.0-20261016-213723.
+From 4.7.1 with .audit_work/deploy-4.8.0 (10 files), at 67d32df. mig_4.8.0.sql ran; goal_progress.idem_key present. Production files matched 4.7.1 before install and match 4.8.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.8.0. The JAWS menu hint change is live for everyone. The offline additions reach staff once the iPhone app 4.8.0 (build 49) is on TestFlight. Backups: <private dir>/deploy-4.8.0-20261016-213723.

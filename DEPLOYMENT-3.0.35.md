@@ -1,10 +1,10 @@
 # Release 3.0.35 — October 16, 2026
 
-Web, cron and iPhone 3.0.35 (37); migration **mig_3.0.35.sql** (referrals: Closed status, closed_reason, closed_note, closed_at, closed_by, outcome_emailed_at; new table client_closures). Builds on 3.0.34, which is held undeployed. Deploy both together: mig_3.0.34 first, then mig_3.0.35. Owner decisions of 2026-10-16:
+Web, cron and iPhone 3.0.35 (37); migration **mig_3.0.35.sql** (referrals: Closed status, closed_reason, closed_note, closed_at, closed_by, outcome_emailed_at; new table client_closures). Builds on 3.0.34, which is held undeployed. Deploy both together: mig_3.0.34 first, then mig_3.0.35. Maintainer decisions of 2026-10-16:
 - The counselor outcome email is automatic.
 - The closure reasons are the proposed list.
 - Monthly reports wait for a staff narrative.
-- A re-referred former client's record is reopened. This is the recommended default; the owner did not answer that question.
+- A re-referred former client's record is reopened. This is the recommended default; the maintainer did not answer that question.
 
 - **Close a referral** (inc/case_outcomes.php referral_close; referrals.php, api.php close_referral, iPhone).
   - The reasons are Declined services, Not eligible, Withdrawn, Unable to reach, Duplicate, Referred elsewhere and Other; Other needs a note.

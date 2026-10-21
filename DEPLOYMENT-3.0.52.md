@@ -43,4 +43,4 @@ Verified before commit:
 ## Deployed 2026-10-16 15:44 CT
 From 3.0.51 with .audit_work/deploy-3.0.52. mig_3.0.52.sql ran, and the new table is present.
 
-CI is green. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.52). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.52-20261016-154422.
+CI is green. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.52). Backup: <private dir>/deploy-3.0.52-20261016-154422.

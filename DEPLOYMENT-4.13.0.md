@@ -2,7 +2,7 @@
 
 Web 4.13.0 (release notes, the staff guide's Android section) and Android app 4.13.0 (versionCode 2). No database change.
 
-The owner asked to test the Android app and to build the rest of its screens.
+The maintainer asked to test the Android app and to build the rest of its screens.
 
 **Tested on an Android emulator for the first time:**
 - **Setup:** the emulator was Android 15, Pixel 7. It ran against a local copy of the website (`php -S`, database `cms_android_test`) with made-up records only, and a local test account whose details are in the git-ignored `private/` folder. The live site was not used.
@@ -65,4 +65,4 @@ The owner asked to test the Android app and to build the rest of its screens.
 - Still only on the website and the iPhone app: the AI tools and voice assistant, scored assessments, AT services, programs, contracts, bookings, procurement, accommodations, competencies, the knowledge base, signatures and uploading documents.
 
 ## Deployed 2026-10-16 23:54 CT
-The web part went from 4.12.0 with .audit_work/deploy-4.13.0: 4 files at a8a16e4, no migration. Production files matched 4.12.0 before install and match 4.13.0 after, and smoke checks passed. CI passed all three jobs: PHP, Android and iOS. The Android app is not on Google Play yet. Backups: /home/cmsuser/casemanagement_private/deploy-4.13.0-20261016-235434.
+The web part went from 4.12.0 with .audit_work/deploy-4.13.0: 4 files at a8a16e4, no migration. Production files matched 4.12.0 before install and match 4.13.0 after, and smoke checks passed. CI passed all three jobs: PHP, Android and iOS. The Android app is not on Google Play yet. Backups: <private dir>/deploy-4.13.0-20261016-235434.

@@ -8,11 +8,11 @@ Web 4.27.0, iPhone app 4.27.0 (build 58), Android app 4.27.0 (version code 11). 
 
 mig_3.0.36 was also made safe to run again: it no longer turns the note type back into a fixed list, which would have broken custom note types.
 
-**Not deployed with deploy.sh.** It is published as the GitHub release v4.27.0, and the owner installs it with Administration, Software update. The phone apps are built from this tag.
+**Not deployed with deploy.sh.** It is published as the GitHub release v4.27.0, and an administrator installs it with Administration, Software update. The phone apps are built from this tag.
 
-**Why.** On 2026-10-18 the owner asked for a top-to-bottom code audit (AUDIT-2026-10-18.md: 6 High, 22 Medium, about 45 Low), then "Fix all findings". Every finding is fixed here.
+**Why.** On 2026-10-18 the maintainer asked for a top-to-bottom code audit (AUDIT-2026-10-18.md: 6 High, 22 Medium, about 45 Low), then "Fix all findings". Every finding is fixed here.
 
-**Before installing: two things change for sign-in (owner decisions)**
+**Before installing: two things change for sign-in (maintainer decisions)**
 - **Authenticator app (M1).** A staff member who has turned on an authenticator app must use it (or a passkey) to sign in, on the website and in the apps. The emailed code no longer works for them, and a password reset alone never gets anyone in. If someone has lost their authenticator, an administrator resets their two-step verification.
 - **Microsoft sign-in (M2).** A first Microsoft sign-in is matched to a staff account by email only for a member of the organization's own Microsoft tenant. **In Microsoft Entra, the app registration must emit the optional ID-token claim `acct`** (App registrations, the CMS app, Token configuration, Add optional claim, ID, acct). Without it, first-time Microsoft sign-ins are refused with "Sign in with your password once, then connect Microsoft from My Account." Accounts already connected are not affected. The Microsoft sign-in page lists this as a setup step.
 
@@ -119,4 +119,4 @@ mig_3.0.36 was also made safe to run again: it no longer turns the note type bac
 - 79 files were replaced, including the scheduled jobs.
 - The sign-in and signing pages then served at 4.27.0.
 
-The live site stays as it is until the owner installs it with Software update. Before or right after installing, add the optional `acct` claim in Microsoft Entra (see above). The 4.27.0 phone apps are built from this tag.
+The live site stays as it is until an administrator installs it with Software update. Before or right after installing, add the optional `acct` claim in Microsoft Entra (see above). The 4.27.0 phone apps are built from this tag.

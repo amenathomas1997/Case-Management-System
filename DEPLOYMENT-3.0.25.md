@@ -10,4 +10,4 @@ Quick keys, on top of 3.0.24 (live from 298f796). No database migration; website
 
 ## Deployment verified
 
-Published October 15, 2026 from 346f06d with .audit_work/deploy-3.0.25/deploy.sh. Production 3.0.24 matched the baseline; backup at /home/cmsuser/casemanagement_private/deploy-3.0.25-20261015-103334/; server PHP syntax check passed; all 15 installed hashes match; .htaccess unchanged; live pages 200, api 401, updates.json and sign-in page report 3.0.25; the live sign-in page carries the Skip to main content access key and the live navigation.js the shortcut announcer.
+Published October 15, 2026 from 346f06d with .audit_work/deploy-3.0.25/deploy.sh. Production 3.0.24 matched the baseline; backup at <private dir>/deploy-3.0.25-20261015-103334/; server PHP syntax check passed; all 15 installed hashes match; .htaccess unchanged; live pages 200, api 401, updates.json and sign-in page report 3.0.25; the live sign-in page carries the Skip to main content access key and the live navigation.js the shortcut announcer.

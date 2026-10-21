@@ -11,7 +11,7 @@ function fixture(saved, blocked=false, legacy={}, accountHidden=false) {
   const size=element(), reset=element(), live=element();
   const bar={hidden:true,dataset:{saved:'Display updated.',accountHidden:String(accountHidden)},querySelectorAll:s=>s==='[data-palette]'?palettes:toggles};
   const mq={matches:false,addEventListener(_,f){osChange=f;}};
-  vm.runInNewContext(code,{window:{matchMedia:()=>mq},document:{documentElement:{setAttribute(k,v){attrs[k]=v;}},addEventListener(k,f){events[k]=f;},getElementById:id=>({'low-vision-bar':bar,'vision-live':live,'vision-size':size,'vision-reset':reset}[id])},localStorage:{getItem(k){if(blocked)throw Error();return store.get(k)||null;},setItem(k,v){if(blocked)throw Error();store.set(k,v);}}});
+  vm.runInNewContext(code,{window:{matchMedia:()=>mq},document:{documentElement:{setAttribute(k,v){attrs[k]=v;}},addEventListener(k,f){events[k]=f;},getElementById:id=>({'low-vision-bar':bar,'vision-live':live,'vision-size':size,'vision-reset':reset}[id])},localStorage:{get length(){if(blocked)throw Error();return store.size;},key(i){return [...store.keys()][i]??null;},getItem(k){if(blocked)throw Error();return store.get(k)||null;},setItem(k,v){if(blocked)throw Error();store.set(k,v);}}});
   events.DOMContentLoaded();
   return {attrs,store,bar,palettes,toggles,size,reset,live,mq,os:()=>osChange()};
 }
@@ -32,8 +32,10 @@ f=fixture(JSON.stringify({palette:'bad',size:'9999',spacing:'false'}));assert.eq
 console.log('PASS: Corrupt and invalid saved preferences fall back safely');
 f=fixture(undefined,true);f.toggles[2].events.click();assert.equal(f.attrs['data-vision-links'],'true');
 console.log('PASS: Toolbar remains usable when browser storage is blocked');
-f=fixture(undefined,false,{cms_theme:'dark',cms_textsize:'large'});assert.equal(f.attrs['data-theme'],'dark');assert.equal(f.attrs['data-vision-size'],'125');
+f=fixture(undefined,false,{old_theme:'dark',old_textsize:'large'});assert.equal(f.attrs['data-theme'],'dark');assert.equal(f.attrs['data-vision-size'],'125');
 console.log('PASS: Existing theme and larger-text preferences migrate');
+f=fixture(undefined,false,{old_low_vision:JSON.stringify({size:'175',palette:'cream'})});assert.equal(f.attrs['data-vision-size'],'175');assert.equal(f.attrs['data-vision-palette'],'cream');
+console.log('PASS: Preferences saved under an earlier prefix carry over');
 
 f=fixture(JSON.stringify({size:'150',palette:'yellow'}),false,{},true);
 assert.equal(f.bar.hidden,true);assert.equal(f.attrs['data-vision-size'],'150');assert.equal(f.attrs['data-vision-palette'],'yellow');

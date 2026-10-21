@@ -6,6 +6,9 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.31.1' => [
+        'The software is now published as a plain product any organisation can install: it carries no organisation\'s name, logo or addresses. Your own name, icon and branding stay as you set them under Settings. Everyone is signed out once after this update, and an iPhone home-screen widget may need adding again.',
+    ],
     '4.31.0' => [
         'Confirm a session, then write its note: once you mark a session completed (on the website or in the phone apps), you land straight in the case note for that client, with the training track and the subject "Session on" its date already filled in. The small session-note box on the completion step is gone, so there is one place to write the note.',
         'Group sessions: after completing a group, you write one note per client who attended, moving to the next client each time you save ("Next: Jane Doe, 2 of 4"), with Skip for now.',

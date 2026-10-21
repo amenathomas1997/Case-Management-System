@@ -22,3 +22,14 @@ android/keystore.properties
 *.jks
 private/
 ios/build/
+# An organisation's own app identity and icons for its own builds (README.md, "Building your own apps").
+android/private.properties
+android/private-res/
+ios/Private.xcconfig
+ios/Sources/Assets.xcassets/PrivateAppIcon.appiconset/
+
+# Local working notes and release scratch (kept on the maintainer's machine only)
+.audit_work/
+
+# Local Claude Code settings (kept on the maintainer's machine only)
+.claude/

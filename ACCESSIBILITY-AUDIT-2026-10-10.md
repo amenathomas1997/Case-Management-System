@@ -13,7 +13,7 @@ The web review used [W3C's WCAG 2.2 guidance](https://www.w3.org/WAI/WCAG22/unde
 
 ## Contact address
 
-Set `app.support_email` in the local, ignored `private/config.php` to **maintainer@example.org**. Existing shared footer, referral-help and counselor-portal contact paths already consume this setting. The sender mailbox and backup address are unchanged. The local configuration must be included in the next authorized deployment; this audit did not change the live site.
+Set `app.support_email` in the local, ignored `private/config.php` to the organisation's support address. Existing shared footer, referral-help and counselor-portal contact paths already consume this setting. The sender mailbox and backup address are unchanged. The local configuration must be included in the next authorized deployment; this audit did not change the live site.
 
 ## Verification
 

@@ -6,16 +6,25 @@
   var palettes = ['auto','light','dark','black','white','yellow','cream'];
   var sizes = ['100','125','150','175','200'];
   var prefs = Object.assign({}, defaults);
+  // Preferences an earlier version saved under another prefix ("<prefix>_low_vision", and before
+  // that "<prefix>_theme" / "<prefix>_textsize") are picked up once, so nobody loses their display.
+  function earlier(suffix) {
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (k && k !== key && k.slice(-suffix.length - 1) === '_' + suffix) return localStorage.getItem(k);
+    }
+    return null;
+  }
   try {
-    var stored = JSON.parse(localStorage.getItem(key) || 'null');
+    var stored = JSON.parse(localStorage.getItem(key) || earlier('low_vision') || 'null');
     if (stored && typeof stored === 'object') {
       if (palettes.includes(stored.palette)) prefs.palette = stored.palette;
       if (sizes.includes(String(stored.size))) prefs.size = String(stored.size);
       ['spacing','width','links','motion','lists'].forEach(function (k) { prefs[k] = stored[k] === true; });
     } else {
-      var theme = localStorage.getItem('cms_theme');
+      var theme = earlier('theme');
       if (theme === 'light' || theme === 'dark') prefs.palette = theme;
-      if (localStorage.getItem('cms_textsize') === 'large') prefs.size = '125';
+      if (earlier('textsize') === 'large') prefs.size = '125';
     }
   } catch (e) {}
   var mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;

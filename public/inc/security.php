@@ -126,8 +126,16 @@ function handover_marked(): bool {
     if (is_array($_SESSION['kiosk_sign'] ?? null)) return true;
     // Tests (command line only) set the marker without a cookie, as CMS_TEST_SSO_TOKENS does for sso.php.
     if (PHP_SAPI === 'cli' && getenv('CMS_TEST_HANDOVER') === '1') return true;
-    $v = $_COOKIE[HANDOVER_COOKIE] ?? null;
-    return is_string($v) && ctype_digit($v) && (int)$v > time();
+    foreach (array_merge([HANDOVER_COOKIE], handover_legacy_cookies()) as $name) {
+        $v = $_COOKIE[$name] ?? null;
+        if (is_string($v) && ctype_digit($v) && (int)$v > time()) return true;
+    }
+    return false;
+}
+
+/** Marker cookies set under the name used before 4.31.1, still honoured until they expire (2 hours). */
+function handover_legacy_cookies(): array {
+    return array_values(array_filter(array_keys($_COOKIE), fn($k) => is_string($k) && $k !== HANDOVER_COOKIE && str_ends_with($k, '_handover')));
 }
 
 /** True when the marker cookie is set with more than half its time left (no need to renew it). */
@@ -147,11 +155,13 @@ function handover_mark(): void {
 
 /** Remove the marker (after a full sign-in with password and code). */
 function handover_clear(): void {
-    if (!isset($_COOKIE[HANDOVER_COOKIE])) return;
-    unset($_COOKIE[HANDOVER_COOKIE]);
-    if (headers_sent()) return;
-    setcookie(HANDOVER_COOKIE, '', ['expires' => time() - 3600, 'path' => '/', 'secure' => (bool)($GLOBALS['isHttps'] ?? true),
-        'httponly' => true, 'samesite' => 'Lax']);
+    foreach (array_merge([HANDOVER_COOKIE], handover_legacy_cookies()) as $name) {
+        if (!isset($_COOKIE[$name])) continue;
+        unset($_COOKIE[$name]);
+        if (headers_sent()) continue;
+        setcookie($name, '', ['expires' => time() - 3600, 'path' => '/', 'secure' => (bool)($GLOBALS['isHttps'] ?? true),
+            'httponly' => true, 'samesite' => 'Lax']);
+    }
 }
 
 /** The query for Microsoft's authorize endpoint. $fresh (a handed-over browser) makes Microsoft

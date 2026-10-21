@@ -43,4 +43,4 @@ From 3.0.53 with .audit_work/deploy-3.0.54. mig_3.0.54.sql ran, and production r
 
 The production backup check now reports OK: the newest dump holds all 55 tables, and an encrypted copy opens with the backup password.
 
-CI is green. Every checksum matched and every smoke check passed (health reports 3.0.54). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.54-20261016-164442.
+CI is green. Every checksum matched and every smoke check passed (health reports 3.0.54). Backup: <private dir>/deploy-3.0.54-20261016-164442.

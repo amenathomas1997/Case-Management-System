@@ -4,7 +4,7 @@
 
 Database migration: dist/migrations/mig_3.0.27.sql adds clients.preferred_language (additive, safe to re-run). Apply it before publishing files.
 
-Decisions taken (owner may change later):
+Decisions taken (the maintainer may change them later):
 - Support phone number: a setting on the Administration page; client pages show "Call … or email …" only once it is set.
 - Survey: keeps the 1–10 scale and stored values; each scale now reads vertically with labelled ends.
 - iPhone notifications: local reminders only (session in 30 minutes; follow-ups due today), with no client names; push would need an Apple server setup.
@@ -26,4 +26,4 @@ Streams (details appended by each as it finished):
 
 ## Deployment verified
 
-Published October 15, 2026 from 3998e45 with .audit_work/deploy-3.0.27/deploy.sh. Production 3.0.26 matched the baseline; backups at /home/cmsuser/casemanagement_private/deploy-3.0.27-20261015-115630/ (website-before.tar.gz, cron-before.tar.gz, database-before.sql.gz, all verified); mig_3.0.27.sql applied (2 statements) and clients.preferred_language confirmed present; 53 files installed, server PHP syntax check passed, every installed hash matches, .htaccess unchanged; live pages 200, admin.php redirects signed-out visitors, api 401, updates.json and sign-in page report 3.0.27. Verified before publishing: run_all; full_schema 890 (incl. the 3.0.27 migration), audit_regression 61, security 63; 134 rendered pages scanned clean; iPhone clean build. iOS 3.0.27 (32) archived for TestFlight.
+Published October 15, 2026 from 3998e45 with .audit_work/deploy-3.0.27/deploy.sh. Production 3.0.26 matched the baseline; backups at <private dir>/deploy-3.0.27-20261015-115630/ (website-before.tar.gz, cron-before.tar.gz, database-before.sql.gz, all verified); mig_3.0.27.sql applied (2 statements) and clients.preferred_language confirmed present; 53 files installed, server PHP syntax check passed, every installed hash matches, .htaccess unchanged; live pages 200, admin.php redirects signed-out visitors, api 401, updates.json and sign-in page report 3.0.27. Verified before publishing: run_all; full_schema 890 (incl. the 3.0.27 migration), audit_regression 61, security 63; 134 rendered pages scanned clean; iPhone clean build. iOS 3.0.27 (32) archived for TestFlight.

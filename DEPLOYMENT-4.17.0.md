@@ -9,7 +9,7 @@ Web 4.17.0, Android app 4.17.0 (versionCode 6), iPhone app 4.17.0 (build 53). Ap
 - messages.via (portal or text), messages.idem_key (an app's retried send is posted once), and referrals.sms_ok
 - schema_version 4.17.0
 
-The owner asked for all texting features (2026-10-17). Texts go through Twilio; nothing is sent until an administrator enters the account on Settings, Text messages.
+The maintainer asked for all texting features (2026-10-17). Texts go through Twilio; nothing is sent until an administrator enters the account on Settings, Text messages.
 
 **1. Setup** (Administration, Text messages)
 - Steps on the page: Twilio account, a number that can text, A2P 10DLC registration, the incoming-message address (sms_inbound.php), then the Account SID, Auth Token and number (or a Messaging Service SID) on Settings.
@@ -65,4 +65,4 @@ The owner asked for all texting features (2026-10-17). Texts go through Twilio; 
 
 ## Deployed
 
-2026-10-17 13:07 CT with `.audit_work/make_deploy.sh 4.16.0 4.17.0` and its deploy.sh, after CI passed all three jobs on 6c520ce. Every replaced file matched 4.16.0 first. The website, cron folder and database were backed up to /home/cmsuser/casemanagement_private/deploy-4.17.0-20261017-130705. All 17 migration statements ran and the new columns and tables are present; every installed file matches the release. health.php reports 4.17.0, and the sign-in page and updates.json show 4.17.0. Both webhooks (sms_inbound.php, sms_status.php) refuse an unsigned request (403). Texting stays off until the Twilio account is entered on Settings, Text messages.
+2026-10-17 13:07 CT with `.audit_work/make_deploy.sh 4.16.0 4.17.0` and its deploy.sh, after CI passed all three jobs on 6c520ce. Every replaced file matched 4.16.0 first. The website, cron folder and database were backed up to <private dir>/deploy-4.17.0-20261017-130705. All 17 migration statements ran and the new columns and tables are present; every installed file matches the release. health.php reports 4.17.0, and the sign-in page and updates.json show 4.17.0. Both webhooks (sms_inbound.php, sms_status.php) refuse an unsigned request (403). Texting stays off until the Twilio account is entered on Settings, Text messages.

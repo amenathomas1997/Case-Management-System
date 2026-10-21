@@ -43,6 +43,6 @@ Verified before commit:
 ## Deployed 2026-10-16 17:04 CT
 From 3.0.54 with .audit_work/deploy-3.0.55. mig_3.0.55.sql ran (2 statements). schema_version is 3.0.55.
 
-CI is green. Every checksum matched and every smoke check passed (health reports 3.0.55). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.55-20261016-170412.
+CI is green. Every checksum matched and every smoke check passed (health reports 3.0.55). Backup: <private dir>/deploy-3.0.55-20261016-170412.
 
 The roadmap section "Running the system safely" is complete.

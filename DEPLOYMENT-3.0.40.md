@@ -22,5 +22,5 @@ Verified before commit:
 ## Deployed 2026-10-16 11:38 CT
 - Deployed from 3.0.39 with .audit_work/deploy-3.0.40. The migration was rehearsed locally first: a 3.0.39 schema plus mig_3.0.40 matches a fresh 3.0.40 schema.
 - 2 migration statements ran. The syntax check passed, every checksum matched, and .htaccess was unchanged. All smoke checks passed, and health.php reports 3.0.40. The expired-link page shows the new-link form.
-- Backup: /home/cmsuser/casemanagement_private/deploy-3.0.40-20261016-113801.
+- Backup: <private dir>/deploy-3.0.40-20261016-113801.
 - The first daily run (7:00) will warn about any links that lapse within 14 days.

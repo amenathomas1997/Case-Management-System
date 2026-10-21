@@ -107,7 +107,7 @@ session_set_cookie_params([
     'httponly' => true,
     'samesite' => 'Lax',
 ]);
-session_name('cms');
+session_name('cmssession');
 // Keep session files alive well past the app's own idle timeout, so expiry is
 // always handled by our code (which preserves typed input) rather than by the
 // garbage collector (which would surface as a bare CSRF failure).

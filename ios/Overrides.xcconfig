@@ -1,0 +1,14 @@
+// Read by every target (ios/project.yml, configFiles). It holds nothing itself: it only takes in
+// ios/Private.xcconfig when that file exists. Private.xcconfig is git-ignored and is where an
+// organisation keeps its own app identity for its own builds, for example:
+//   CMS_BUNDLE_ID = org.example.cms
+//   CMS_TEAM = ABCDE12345
+//   CMS_DISPLAY_NAME = Example CMS
+//   CMS_SPOKEN_NAME = Example Case Management
+//   CMS_SIGNIN_TITLE = Example Case Management
+//   CMS_DEFAULT_SERVER = cms.example.org
+//   CMS_APP_ICON = PrivateAppIcon
+// Values set there win over the ones in project.yml. CMS_APP_ICON names an icon set in
+// Sources/Assets.xcassets; keep a private one as Sources/Assets.xcassets/PrivateAppIcon.appiconset
+// (also git-ignored).
+#include? "Private.xcconfig"

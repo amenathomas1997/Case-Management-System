@@ -7,7 +7,7 @@ Web 4.20.0. The apps are unchanged. Apply dist/migrations/mig_4.20.0.sql, or use
 - scheduled_sessions.booked_by_client
 - schema_version 4.20.0
 
-The owner asked to build the improvements from the comparison with off-the-shelf software. This release covers the first two:
+The maintainer asked to build the improvements from the comparison with off-the-shelf software. This release covers the first two:
 - two-way Outlook calendar sync
 - client self-booking
 
@@ -75,8 +75,8 @@ The owner asked to build the improvements from the comparison with off-the-shelf
 
 ## Deployed
 
-2026-10-17 15:41 CT, after CI passed all three jobs on 13251c8. Every replaced file matched 4.19.1 first. The backup is at /home/cmsuser/casemanagement_private/deploy-4.20.0-20261017-154147. All 9 migration statements ran and the new tables and columns are present; every installed file matches the release, and health.php reports 4.20.0.
+2026-10-17 15:41 CT, after CI passed all three jobs on 13251c8. Every replaced file matched 4.19.1 first. The backup is at <private dir>/deploy-4.20.0-20261017-154147. All 9 migration statements ran and the new tables and columns are present; every installed file matches the release, and health.php reports 4.20.0.
 
 Published as the GitHub release v4.20.0 (latest), with the install bundle and the verified signed package.
 
-Nothing changes on the live site until the owner adds Calendars.ReadWrite to the Microsoft app (if Teams links are used) and staff turn on Outlook sync, or until self-booking is turned on.
+Nothing changes on the live site until an administrator adds Calendars.ReadWrite to the Microsoft app (if Teams links are used) and staff turn on Outlook sync, or until self-booking is turned on.

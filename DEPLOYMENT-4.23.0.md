@@ -8,9 +8,9 @@ Web 4.23.0. The apps are unchanged. Apply dist/migrations/mig_4.23.0.sql, or use
 - the setting vr_portal_since (the day the migration first runs)
 - schema_version 4.23.0
 
-**Not deployed with deploy.sh.** As with 4.21.0 and 4.22.0, it is published only as the GitHub release v4.23.0, and the owner installs it with Administration, Software update.
+**Not deployed with deploy.sh.** As with 4.21.0 and 4.22.0, it is published only as the GitHub release v4.23.0, and an administrator installs it with Administration, Software update.
 
-**Why.** On 2026-10-17 the owner asked to compare the system with other AT and VR case management software and build what was missing. Of the gaps found, the owner chose to build all four below.
+**Why.** On 2026-10-17 the maintainer asked to compare the system with other AT and VR case management software and build what was missing. Of the gaps found, the maintainer chose to build all four below.
 
 **1. VR portal tracker** (Invoices, VR portal; billing permission; inc/vr_portal.php)
 - **The gap:** VR agencies run their own vendor portals, such as AWARE, used by about 39 agencies. Providers accept authorizations and enter payment requests there. The system did not track that work.
@@ -70,7 +70,7 @@ Web 4.23.0. The apps are unchanged. Apply dist/migrations/mig_4.23.0.sql, or use
 - the install bundle, built from a clean checkout of the tag
 - the signed update package: 317 files, verified with the key built into the code
 
-The live site stays as it is until the owner installs this with Administration, Software update. 4.22.0 was published the same day; the live site was then still on 4.21.0. Installing 4.23.0 applies both migrations in order.
+The live site stays as it is until an administrator installs this with Administration, Software update. 4.22.0 was published the same day; the live site was then still on 4.21.0. Installing 4.23.0 applies both migrations in order.
 
 **Rehearsed before publishing.** The package was installed with the 4.22.0 updater onto a copy of a 4.22.0 site, with its own private and cron folders and a database in the 4.22.0 shape:
 - the real signature verified, and the plan showed no problems

@@ -1,21 +1,23 @@
 # Putting the Android app on Google Play
 
-Everything on the app side is ready: the store bundle builds and signs, the app targets Android 16 (API 36, which Google Play has required since August 31, 2026), and the listing text, icon, banner and screenshots are in `android/play-store/`. Only the steps below need you, because they need your Google account and your signing key.
+This is how an organisation publishes its own build of the Android app. Google requires each organisation to publish under its own developer account, so every step below uses your account, your app ID and your signing key. Nothing about another organisation's listing is kept in this repository.
 
-## 1. Make your upload key (once, on this Mac)
+## 0. Your app's identity
 
-The upload key proves an update comes from you. Keep it and its password somewhere safe, such as your password manager. If it is ever lost, Google can reset it, because Play holds the real app signing key.
+Set your app ID, names and server in `android/private.properties` (git-ignored) or in `android/gradle.properties`, and put your icon in `android/private-res/` (see "Building your own apps" in README.md). Your app ID (for example `org.yourorg.cms`) can never change after the first upload.
 
-In Terminal, from the repository folder:
+## 1. Make your upload key (once)
+
+The upload key proves an update comes from you. Keep it and its password somewhere safe, such as a password manager. If it is ever lost, Google can reset it, because Play holds the real app signing key.
 
 ```bash
-"/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/keytool" -genkeypair -keystore ~/cms-upload.jks -alias upload -keyalg RSA -keysize 2048 -validity 10000
+keytool -genkeypair -keystore ~/cms-upload.jks -alias upload -keyalg RSA -keysize 2048 -validity 10000
 ```
 
-It asks for a password twice, then your name and organisation. Then create `android/keystore.properties`. This file is never committed (.gitignore lists it):
+(`keytool` comes with Java; Android Studio's copy is in its `jbr/bin` folder.) It asks for a password twice, then your name and organisation. Then create `android/keystore.properties`. This file is never committed (.gitignore lists it):
 
 ```
-storeFile=/Users/maintainer/cms-upload.jks
+storeFile=/path/to/cms-upload.jks
 storePassword=the password you chose
 keyAlias=upload
 keyPassword=the password you chose
@@ -24,26 +26,24 @@ keyPassword=the password you chose
 ## 2. Build the store bundle
 
 ```bash
-cd android && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:bundleRelease
+cd android && ./gradlew :app:bundleRelease
 ```
 
-The file to upload is `android/app/build/outputs/bundle/release/app-release.aab`. Raise `cms.versionCode` in `android/gradle.properties` by one for every upload; Play refuses a number it has seen.
+Gradle runs on Java 21 (Android Studio's own runtime works: set `JAVA_HOME` to it). The file to upload is `android/app/build/outputs/bundle/release/app-release.aab`. Raise `cms.versionCode` in `android/gradle.properties` by one for every upload; Play refuses a number it has seen.
 
 ## 3. Google Play Console
 
-1. Make a developer account at play.google.com/console. It is a one-time US$25 fee. Choose an organisation account; that needs your D-U-N-S number.
-2. Create app: name "Case Management System", default language English (United States), App, Free.
-3. **Testing, Internal testing**: create a release, upload `app-release.aab`, and accept Play App Signing when asked. Under Testers, add your staff's Google account emails (up to 100), save, and send them the opt-in link. Internal testing is available within minutes and needs no full review. Staff can start using the app from here.
+1. Make a developer account at play.google.com/console (a one-time US$25 fee). An organisation account needs your D-U-N-S number.
+2. Create app: your app's name, its default language, App, Free.
+3. **Testing, Internal testing**: create a release, upload `app-release.aab`, and accept Play App Signing when asked. Under Testers, add your staff's Google account emails (up to 100), save, and send them the opt-in link. Internal testing is available within minutes and needs no full review.
 4. Before a wider (closed or production) release, Play asks for the items below, under **Policy and programs, App content** and **Grow, Store presence**.
 
 ### Store listing (Grow, Store presence, Main store listing)
 
-- **App name:** Case Management System
-- **Short description (80 characters at most):** Case management for assistive technology staff: clients, sessions and notes.
-- **Full description:**
+Prepare these yourself, from your own build:
 
-  The phone app for staff of Example Agency. It uses the same records as the website: anything saved in one shows in the other.
-
+- **App name** and a **short description** (80 characters at most), for example "Case management for assistive technology staff: clients, sessions and notes."
+- **Full description:** what your staff can do with the app. A starting point:
   - Clients: contact details, counselor, accessibility preferences, training tracks and case notes
   - Schedule: book, check in, complete, move or cancel sessions, and join online sessions
   - Hours, mileage, signatures and documents from the field
@@ -51,22 +51,18 @@ The file to upload is `android/app/build/outputs/bundle/release/app-release.aab`
   - Tasks, alerts, referrals, equipment loans and device follow-ups
   - Works without a signal: entries are kept encrypted and sent when you reconnect
   - Built for screen readers: every screen is tested with TalkBack
-
-  For staff of organisations using the Case Management System. You need an account from your organisation to sign in.
-
-- **App icon:** `play-store/icon-512.png`
-- **Feature graphic:** `play-store/feature-graphic.jpg`
-- **Phone screenshots:** the five files in `play-store/screenshots/`. They come from the test server and show only made-up people.
-- **Category:** Business. **Contact email:** your support address. **Privacy policy:** https://cms.example.org/privacy.php
+- **App icon** (512 by 512 pixels) and **feature graphic** (1024 by 500 pixels) in your own branding.
+- **Phone screenshots:** take them from a test server with made-up people only, never real client records.
+- **Category:** Business. **Contact email:** your support address. **Privacy policy:** your site's `privacy.php` page (for example https://cms.example.org/privacy.php).
 
 ### App content answers
 
-- **App access:** all functions need a sign-in. Give Google a reviewer account on the live site that can see only made-up clients. Make a separate staff user and a test client with no real data, and turn on an authenticator-app code you can share. Without one, a closed or production release is rejected. Internal testing doesn't need it.
+- **App access:** all functions need a sign-in. Give Google a reviewer account on your site that can see only made-up clients: a separate staff user, a test client with no real data, and an authenticator-app code you can share. Without one, a closed or production release is rejected. Internal testing doesn't need it.
 - **Ads:** no ads.
 - **Content rating:** answer the questionnaire as a business or productivity app with no violence, sexual content, gambling or user-to-user public sharing. The result is "Everyone".
 - **Target audience:** 18 and over.
 - **News app:** no. **Government app:** no. **Financial features:** none.
-- **Health apps declaration (every app must complete it):** choose that the app has no health features in Google's list; it is business software for staff, not a medical device. Its client records hold health-related case notes, declared under Data safety.
+- **Health apps declaration (every app must complete it):** the app has no health features in Google's list; it is business software for staff, not a medical device. Its client records hold health-related case notes, declared under Data safety.
 - **Data safety:**
   - Data is encrypted in transit: yes.
   - Users can ask for their data to be deleted: yes, through their organisation.
@@ -79,8 +75,7 @@ The file to upload is `android/app/build/outputs/bundle/release/app-release.aab`
     - App info and performance: none.
   - Nothing is shared with third parties for their own use. The optional AI features send text to the AI provider as a service provider, which Play does not count as sharing.
 
-## What was checked
+## Notes
 
-- The signed release bundle and APK build with shrinking on. The encryption library needed two "don't warn" rules, now in `app/proguard-rules.pro`.
-- The release APK starts on the emulator and shows the sign-in screen for cms.example.org. Signing in to the live site from it was not tried.
-- The debug build targeting Android 16 signs in to the local test server and works as before.
+- The release bundle is shrunk with R8. The encryption library needs two "don't warn" rules, already in `app/proguard-rules.pro`.
+- Try the release APK on an emulator or phone before uploading: it should start on the sign-in screen for your server (or ask for the server, when the build names none).

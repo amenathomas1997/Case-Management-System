@@ -43,4 +43,4 @@ Verified before commit:
 ## Deployed 2026-10-16 15:09 CT
 From 3.0.49 with .audit_work/deploy-3.0.50. mig_3.0.50.sql ran 1 data statement.
 
-CI is green. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.50). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.50-20261016-150952.
+CI is green. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.50). Backup: <private dir>/deploy-3.0.50-20261016-150952.

@@ -16,7 +16,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "28E5479A4D4E8AA21DE97A25"
+               BlueprintIdentifier = "D93FA1A4335BE0797D0C2087"
                BuildableName = "CaseManagementWidget.appex"
                BlueprintName = "CaseManagementWidget"
                ReferencedContainer = "container:CaseManagement.xcodeproj">
@@ -33,7 +33,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "28E5479A4D4E8AA21DE97A25"
+            BlueprintIdentifier = "D93FA1A4335BE0797D0C2087"
             BuildableName = "CaseManagementWidget.appex"
             BlueprintName = "CaseManagementWidget"
             ReferencedContainer = "container:CaseManagement.xcodeproj">
@@ -57,7 +57,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "28E5479A4D4E8AA21DE97A25"
+            BlueprintIdentifier = "D93FA1A4335BE0797D0C2087"
             BuildableName = "CaseManagementWidget.appex"
             BlueprintName = "CaseManagementWidget"
             ReferencedContainer = "container:CaseManagement.xcodeproj">
@@ -74,7 +74,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "28E5479A4D4E8AA21DE97A25"
+            BlueprintIdentifier = "D93FA1A4335BE0797D0C2087"
             BuildableName = "CaseManagementWidget.appex"
             BlueprintName = "CaseManagementWidget"
             ReferencedContainer = "container:CaseManagement.xcodeproj">

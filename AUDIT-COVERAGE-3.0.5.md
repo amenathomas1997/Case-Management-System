@@ -37,7 +37,7 @@ Baseline: `1aa2bf0`. Hashes identify the final source inspected or checked in th
 | ios/Sources/DashboardView.swift | 9bc5788462fd | iOS build; individual behavior not independently verified |
 | ios/Sources/DocumentsAndHomework.swift | 1a737393cbe2 | iOS build; individual behavior not independently verified |
 | ios/Sources/EquipmentView.swift | ab7a24a4591c | iOS build; individual behavior not independently verified |
-| ios/Sources/CaseManagementApp.swift | 8194756b4ada | iOS build; individual behavior not independently verified |
+| the iPhone app's main app file (ios/Sources) | 8194756b4ada | iOS build; individual behavior not independently verified |
 | ios/Sources/FollowupsView.swift | bc855abf833d | iOS build; individual behavior not independently verified |
 | ios/Sources/IncidentsView.swift | 888961590f57 | iOS build; individual behavior not independently verified |
 | ios/Sources/Keychain.swift | d6dc73d606c1 | iOS build; individual behavior not independently verified |

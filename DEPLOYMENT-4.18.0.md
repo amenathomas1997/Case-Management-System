@@ -2,7 +2,7 @@
 
 Web 4.18.0, Android app 4.18.0 (versionCode 7), iPhone app 4.18.0 (build 54). No database change: the database stays 4.17.0. Settings rows are written as needed: appkit_* and update_downloaded.
 
-The owner's requests on 2026-10-17:
+The requests on 2026-10-17:
 - texts arriving outside business hours for clients with no state
 - Play Store and TestFlight preparation
 - downloadable custom apps for other installations
@@ -93,16 +93,16 @@ The owner's requests on 2026-10-17:
 - A site with no recorded database version runs every shipped migration, as Database upgrade always has.
 - Clients without a state get the narrow texting window until their state is added. 4.19.0 asks for it at intake.
 
-**Owner actions:**
+**Maintainer actions:**
 - Back up private/update_signing_key.pem to your password manager. Without it, no update can be published.
 - Turn on private vulnerability reporting (repository Settings, Security).
 - Store accounts and uploads: see PLAY_STORE.md and TESTFLIGHT.md.
 
 ## Deployed
 
-2026-10-17 14:11 CT with `.audit_work/make_deploy.sh 4.17.0 4.18.0` and its deploy.sh, after CI passed all three jobs on 59ac76f. Every replaced file matched 4.17.0 first. The website, cron folder and database were backed up to /home/cmsuser/casemanagement_private/deploy-4.18.0-20261017-141141. There was no database change. Every installed file matches the release. health.php, updates.json and the sign-in page report 4.18.0.
+2026-10-17 14:11 CT with `.audit_work/make_deploy.sh 4.17.0 4.18.0` and its deploy.sh, after CI passed all three jobs on 59ac76f. Every replaced file matched 4.17.0 first. The website, cron folder and database were backed up to <private dir>/deploy-4.18.0-20261017-141141. There was no database change. Every installed file matches the release. health.php, updates.json and the sign-in page report 4.18.0.
 
-Published as the first GitHub release, https://github.com/amenathomas1997/Case-Management-System/releases/tag/v4.18.0 (latest, not a pre-release). It carries:
+Published as the first GitHub release, v4.18.0 on the project's GitHub releases page (latest, not a pre-release). It carries:
 - cms_dist-4.18.0.tar.gz: the install bundle, built from a clean checkout of the tag
 - cms-update-4.18.0.zip and its .sig: the signed update package, 297 files, verified with the public key built into the code
 

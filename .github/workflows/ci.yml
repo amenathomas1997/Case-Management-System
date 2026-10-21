@@ -146,10 +146,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Gradle's daemon asks for JetBrains Runtime 21 (android/gradle/gradle-daemon-jvm.properties, as
+      # Android Studio writes it); setup-java installs exactly that, so Gradle downloads no toolchain.
       - uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: '17'
+          distribution: jetbrains
+          java-version: '21'
 
       # The Ubuntu runner already has the Android SDK (ANDROID_HOME) with its licences accepted.
       - name: Build, unit tests and lint (debug)

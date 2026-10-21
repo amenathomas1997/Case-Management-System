@@ -5,9 +5,9 @@ Web 4.22.0. The apps are unchanged; the API adds the office to a client's detail
 - users.office_id and clients.office_id, each indexed
 - schema_version 4.22.0
 
-**Not deployed with deploy.sh.** As with 4.21.0, at the owner's request it is published only as the GitHub release v4.22.0, and the owner installs it on the live site with Administration, Software update.
+**Not deployed with deploy.sh.** As with 4.21.0, at the maintainer's request it is published only as the GitHub release v4.22.0, and an administrator installs it on the live site with Administration, Software update.
 
-**Offices in one company** (owner's choice, 2026-10-17: one organisation with several locations, not separate agencies; inc/offices.php, Administration, Offices)
+**Offices in one company** (maintainer's choice, 2026-10-17: one organisation with several locations, not separate agencies; inc/offices.php, Administration, Offices)
 - **Offices:** an administrator adds each location with its address, phone and time zone. An office is closed, not deleted, so records keep it. With no offices added, nothing about offices appears anywhere.
 - **Staff:** placed in an office on their user page.
 - **Clients:**
@@ -46,7 +46,7 @@ Web 4.22.0. The apps are unchanged; the API adds the office to a client's detail
 - the install bundle, built from a clean checkout of the tag
 - the signed update package: 310 files, verified with the key built into the code
 
-The live site stays at 4.21.0 until the owner installs this with Administration, Software update.
+The live site stays at 4.21.0 until an administrator installs this with Administration, Software update.
 
 **Rehearsed before publishing.** The package was installed with the 4.21.0 updater onto a copy of a 4.21.0 site, with its own private and cron folders and a database in the 4.21.0 shape:
 - the real signature verified, and the plan showed no problems

@@ -4,7 +4,7 @@
 (Actions tab, "CI", "Run workflow"). It only tests. It never deploys, holds no
 production secrets, and never connects to the production server or database:
 its database is a throwaway MariaDB 10.11 container that is deleted when the run
-ends. Production is still deployed by hand with the owner's deploy scripts.
+ends. Production is still deployed by hand with the maintainer's deploy scripts.
 
 ## Reading the results
 
@@ -41,7 +41,7 @@ Ubuntu, PHP 8.1 (the production version), Node 20 and Python 3.12. Steps:
 
 ### Job 2: iOS simulator build (optional)
 
-macOS: generates the Xcode project with XcodeGen, builds scheme CaseManagement for the
+macOS: generates the Xcode project with XcodeGen, builds the iPhone app project's scheme for the
 simulator without code signing, then runs `tests/ios_api_regression.py`. It is
 marked optional (`continue-on-error`), so a failure here shows as a warning and
 does not fail the run. It does not archive, sign or upload to TestFlight.

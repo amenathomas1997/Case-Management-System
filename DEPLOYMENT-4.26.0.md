@@ -2,9 +2,9 @@
 
 Web 4.26.0, iPhone app 4.26.0 (build 57), Android app 4.26.0 (version code 10). **No database change** (schema stays 4.25.0).
 
-**Not deployed with deploy.sh.** It is published as the GitHub release v4.26.0, and the owner installs it with Administration, Software update. The phone apps are built from this tag.
+**Not deployed with deploy.sh.** It is published as the GitHub release v4.26.0, and an administrator installs it with Administration, Software update. The phone apps are built from this tag.
 
-**Why.** On 2026-10-18 the owner asked for four things:
+**Why.** On 2026-10-18 the maintainer asked for four things:
 1. finish the Android catch-up
 2. signing with no signal
 3. testing Android against real server replies
@@ -89,4 +89,4 @@ Web 4.26.0, iPhone app 4.26.0 (build 57), Android app 4.26.0 (version code 10). 
 - The signature verified, the backup was made, and 6 files were replaced (no database change).
 - The sign-in, signing and accessibility pages then served at 4.26.0.
 
-The live site stays as it is until the owner installs it with Software update. The 4.26.0 phone apps are built from this tag.
+The live site stays as it is until an administrator installs it with Software update. The 4.26.0 phone apps are built from this tag.

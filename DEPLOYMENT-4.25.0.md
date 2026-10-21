@@ -5,9 +5,9 @@ Web 4.25.0, iPhone app 4.25.0 (build 56), Android app 4.25.0 (version code 9). A
 - client_signatures.signature_path (a drawn signature from the apps)
 - schema_version 4.25.0
 
-**Not deployed with deploy.sh.** It is published as the GitHub release v4.25.0, and the owner installs it with Administration, Software update. The phone apps are built from this tag and handed out through TestFlight and Google Play by the owner.
+**Not deployed with deploy.sh.** It is published as the GitHub release v4.25.0, and an administrator installs it with Administration, Software update. The phone apps are built from this tag and handed out through TestFlight and Google Play by the maintainer.
 
-**Why.** On 2026-10-18 the owner asked to build all the suggestions, "paying special attention to the phone apps".
+**Why.** On 2026-10-18 the maintainer asked to build all the suggestions, "paying special attention to the phone apps".
 
 **1. The phone apps catch up** (the API in public/inc/api_425.php and public/api.php)
 - **Both apps:**
@@ -132,4 +132,4 @@ Web 4.25.0, iPhone app 4.25.0 (build 56), Android app 4.25.0 (version code 9). A
 - 28 files were replaced, and the new files were added
 - afterwards the sign-in and signing pages served at 4.25.0, and the new reports asked for sign-in
 
-The live site stays as it is until the owner installs it with Software update. The 4.25.0 phone apps are built from this tag for TestFlight and Google Play.
+The live site stays as it is until an administrator installs it with Software update. The 4.25.0 phone apps are built from this tag for TestFlight and Google Play.

@@ -8,7 +8,7 @@ Validation: 823 isolated database assertions; non-database suites; 144 synthetic
 
 ## Deployment verified
 
-Published on October 14, 2026 from commit 17ce95e. Production 3.0.20 matched all 154 expected baseline hashes before publication. Backups are server-private at /home/cmsuser/casemanagement_private/deploy-3.0.21-20261014/: database-before.sql.gz, website-before.tar.gz and private-before.tar.gz. Archive integrity checks passed. Release tar SHA-256: a95eb45f0c246efe7edcff1d469c35a82ad21c29a152f3241ddae4aa058f3fe9.
+Published on October 14, 2026 from commit 17ce95e. Production 3.0.20 matched all 154 expected baseline hashes before publication. Backups are server-private at <private dir>/deploy-3.0.21-20261014/: database-before.sql.gz, website-before.tar.gz and private-before.tar.gz. Archive integrity checks passed. Release tar SHA-256: a95eb45f0c246efe7edcff1d469c35a82ad21c29a152f3241ddae4aa058f3fe9.
 
 Server PHP 8.1 syntax checks passed. Seven additive migration statements completed; all new columns and replay indexes verified. All 158 published website/cron hashes match. Hosting .htaccess checksum is unchanged. Branding and configuration files were excluded from the release overlay.
 

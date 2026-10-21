@@ -1,6 +1,6 @@
 # Release 3.0.32 — October 15, 2026
 
-Web + iPhone 3.0.32 (35); no migration. Production baseline: 3.0.31 (da9e6e8). Follows the owner's "do all suggestions" after the 3.0.31 deploy.
+Web + iPhone 3.0.32 (35); no migration. Production baseline: 3.0.31 (da9e6e8). Follows the request to "do all suggestions" after the 3.0.31 deploy.
 
 - **Session completion everywhere.** api.php complete_session takes hours (0 completes without hours), mileage and session_note, and replies with note_saved. The iPhone gets a staff-only Complete session step (hours prefilled, miles, note) before the client's signature or none; its confirmation is built from the server's note_saved. On the website, group completion has one Hours field for each client who attended, prefilled from the first member on a track. Groups get no shared miles or note, because those would bill or disclose across clients.
 - **Consent race.** A guardian consent request on the website (client.php) or through the app (inc/api_parity.php) never replaces a request sent since the page or app last showed it (consent_seen). The app path now locks the client row and sends in one transaction, with a savepoint, as the website does.
@@ -24,7 +24,7 @@ Verified before commit: full_schema 920; audit_regression 61; security 67; stagi
 
 ## Deployment verified
 
-Published October 15, 2026, 10:26 p.m. Central, from 80058d4 (main at dca6b3e after the CI merge; the website files are the same) with .audit_work/deploy-3.0.32/deploy.sh. Production 3.0.31 matched the baseline (23 files). Backups (website, cron, database 179,622 bytes, verified) are at /home/cmsuser/casemanagement_private/deploy-3.0.32-20261015-222640/. 23 files installed; the server syntax check passed, hashes match, .htaccess unchanged. Live: login, community_referral, help and privacy 200; admin 302; api 401; health 200; updates.json and the sign-in page report 3.0.32. No migration.
+Published October 15, 2026, 10:26 p.m. Central, from 80058d4 (main at dca6b3e after the CI merge; the website files are the same) with .audit_work/deploy-3.0.32/deploy.sh. Production 3.0.31 matched the baseline (23 files). Backups (website, cron, database 179,622 bytes, verified) are at <private dir>/deploy-3.0.32-20261015-222640/. 23 files installed; the server syntax check passed, hashes match, .htaccess unchanged. Live: login, community_referral, help and privacy 200; admin 302; api 401; health 200; updates.json and the sign-in page report 3.0.32. No migration.
 
 Crontab: the at_reminders line now appends to cron.log instead of /dev/null (the only line changed; the previous crontab is saved as crontab-before.txt in the backup folder). Its first logged run is 8:00 a.m. on October 16.
 

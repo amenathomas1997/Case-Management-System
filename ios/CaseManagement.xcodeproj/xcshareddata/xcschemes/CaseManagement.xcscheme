@@ -15,7 +15,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "FE6A89BC4D40D9769DC13D35"
+               BlueprintIdentifier = "344BE29B2A02AB1E1FCFF9B8"
                BuildableName = "CaseManagement.app"
                BlueprintName = "CaseManagement"
                ReferencedContainer = "container:CaseManagement.xcodeproj">
@@ -32,7 +32,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "FE6A89BC4D40D9769DC13D35"
+            BlueprintIdentifier = "344BE29B2A02AB1E1FCFF9B8"
             BuildableName = "CaseManagement.app"
             BlueprintName = "CaseManagement"
             ReferencedContainer = "container:CaseManagement.xcodeproj">
@@ -55,7 +55,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "FE6A89BC4D40D9769DC13D35"
+            BlueprintIdentifier = "344BE29B2A02AB1E1FCFF9B8"
             BuildableName = "CaseManagement.app"
             BlueprintName = "CaseManagement"
             ReferencedContainer = "container:CaseManagement.xcodeproj">
@@ -74,7 +74,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "FE6A89BC4D40D9769DC13D35"
+            BlueprintIdentifier = "344BE29B2A02AB1E1FCFF9B8"
             BuildableName = "CaseManagement.app"
             BlueprintName = "CaseManagement"
             ReferencedContainer = "container:CaseManagement.xcodeproj">

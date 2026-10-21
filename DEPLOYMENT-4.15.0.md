@@ -2,7 +2,7 @@
 
 Web 4.15.0, Android app 4.15.0 (versionCode 4), iPhone app 4.15.0 (build 51). Apply dist/migrations/mig_4.15.0.sql, or use Database upgrade. It adds three tables (staff_agreements, staff_agreement_signatures, staff_agreement_revisions) and a starting confidentiality agreement that is off until edited. schema_version becomes 4.15.0.
 
-Owner request (2026-10-17): staff sign their agreements themselves, not just have a date recorded.
+Request (2026-10-17): staff sign their agreements themselves, not just have a date recorded.
 
 **For administrators: Administration, Staff agreements.**
 - Write one or more agreements: a line starting # is a heading, a line starting - is a list item.
@@ -67,7 +67,7 @@ From 4.14.0 with .audit_work/deploy-4.15.0: 16 files at 373499f.
 - mig_4.15.0.sql ran (5 statements), and the three new tables are present.
 - Production files matched 4.14.0 before install and match 4.15.0 after; .htaccess unchanged.
 - Smoke checks passed, and health reports 4.15.0. CI passed all three jobs: PHP, Android and iOS.
-- The starting confidentiality agreement is off on the live site until the owner edits and turns it on.
+- The starting confidentiality agreement is off on the live site until an administrator edits and turns it on.
 - The phone apps need their 4.15.0 builds (TestFlight, Google Play) to show My agreements. The website works now.
 
-Backups: /home/cmsuser/casemanagement_private/deploy-4.15.0-20261017-114535.
+Backups: <private dir>/deploy-4.15.0-20261017-114535.

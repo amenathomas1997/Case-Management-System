@@ -18,4 +18,4 @@ Verified before commit:
 - Not checked in a browser or with a screen reader.
 
 ## Deployed 2026-10-16 12:03 CT
-From 3.0.41 with .audit_work/deploy-3.0.42 (built by .audit_work/make_deploy.sh). 1 migration statement ran. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.42). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.42-20261016-120336.
+From 3.0.41 with .audit_work/deploy-3.0.42 (built by .audit_work/make_deploy.sh). 1 migration statement ran. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.42). Backup: <private dir>/deploy-3.0.42-20261016-120336.

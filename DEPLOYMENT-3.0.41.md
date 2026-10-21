@@ -2,7 +2,7 @@
 
 Web and cron 3.0.41. There is no migration. The iPhone app is unchanged (3.0.40, build 42).
 
-Owner decision (2026-10-16): counselors are emailed when a no-show occurs and when an authorization is close to used up, and for nothing else.
+Maintainer decision (2026-10-16): counselors are emailed when a no-show occurs and when an authorization is close to used up, and for nothing else.
 
 - **Counselor emails** (inc/client_notices.php). Both go only to a confirmed counselor (counselor_verified) who has a working portal link, and neither names the client.
   - **No-show** (counselor_noshow_notice): sent from every No Show path (single session, group attendance, app), once per session. Template counselor_noshow: the date and the portal link.
@@ -12,7 +12,7 @@ Owner decision (2026-10-16): counselors are emailed when a no-show occurs and wh
   - Reports can be opened again. This shows the report as it reads today, with a note that the emailed copy may differ, and is audited.
   - Receipt can be confirmed with a button, without the email link.
 - **Client calendar emails** (client_session_notice).
-  - Every booking path (single, series, group, app, voice) emails the client an invite. Each session has its own calendar ID, cms-client-session-<id>.
+  - Every booking path (single, series, group, app, voice) emails the client an invite. Each session has its own calendar ID, <prefix>-client-session-<id>.
   - Cancelling a future session (web or app) emails a calendar cancellation with the same ID.
   - Only current clients with a confirmed email who do not prefer phone or post get these. New editable templates: session_booked_client and session_cancelled_client, in English and Spanish.
 - **Client portal.** Each upcoming session has Add to calendar (a calendar file with the same ID, so it is never added twice). A collapsed list shows the last 30 past sessions as attended, missed or cancelled, in Spanish too.
@@ -25,5 +25,5 @@ Verified before commit:
 
 ## Deployed 2026-10-16 11:53 CT
 - Deployed from 3.0.40 with .audit_work/deploy-3.0.41 (no migration). The syntax check passed, every checksum matched, and .htaccess was unchanged. All smoke checks passed, and health.php reports 3.0.41.
-- Backup: /home/cmsuser/casemanagement_private/deploy-3.0.41-20261016-115311.
+- Backup: <private dir>/deploy-3.0.41-20261016-115311.
 - Expect this tomorrow at 7:00: no track has a 'vrc80' mark yet, so every active VR track already at 80% or more emails its counselor once, if the counselor is confirmed and has a portal link.

@@ -9,11 +9,11 @@ Web 4.29.0, iPhone app 4.29.0 (build 60), Android app 4.29.0 (version code 13). 
 
 **mig_3.0.31 change:** running it again no longer confirms addresses of clients created after 3.0.55.
 
-**Not deployed with deploy.sh.** It is published as the GitHub release v4.29.0, and the owner installs it with Administration, Software update. The phone apps are built from this tag.
+**Not deployed with deploy.sh.** It is published as the GitHub release v4.29.0, and an administrator installs it with Administration, Software update. The phone apps are built from this tag.
 
-**Why.** On 2026-10-18 the owner asked for one more ultra audit. Ten auditors covered the whole system; the case pages were split among four helpers, and two auditors looked only at the 4.28.0 changes. The report is AUDIT-2026-10-18c.md: no High, 16 Medium, about 70 Low, and no caseload leaks. Every finding is fixed here.
+**Why.** On 2026-10-18 the maintainer asked for one more ultra audit. Ten auditors covered the whole system; the case pages were split among four helpers, and two auditors looked only at the 4.28.0 changes. The report is AUDIT-2026-10-18c.md: no High, 16 Medium, about 70 Low, and no caseload leaks. Every finding is fixed here.
 
-**Before or after installing (owner, in Microsoft Entra, App registrations, the CMS app):**
+**Before or after installing (maintainer, in Microsoft Entra, App registrations, the CMS app):**
 - **Authentication:** add a second Web redirect URI, `<your site>/login.php`. It is used when a device handed to a client for signing is given back: the browser is signed out of Microsoft too.
 - **Token configuration:** add the optional ID-token claim **auth_time**, next to acct. After a hand-over, Microsoft sign-in needs a fresh sign-in, and the claim proves it. Without it, Microsoft sign-in on that browser falls back to password and code for 2 hours. Federation and System health say when the claim is missing.
 
@@ -110,4 +110,4 @@ Web 4.29.0, iPhone app 4.29.0 (build 60), Android app 4.29.0 (version code 13). 
 - 92 files were replaced, including the scheduled jobs; cron/backup.sh stayed executable.
 - The sign-in, signing and survey pages then served at 4.29.0.
 
-The live site stays as it is until the owner installs it with Software update. The 4.29.0 phone apps are built from this tag.
+The live site stays as it is until an administrator installs it with Software update. The 4.29.0 phone apps are built from this tag.

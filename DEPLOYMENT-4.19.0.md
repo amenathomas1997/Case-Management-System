@@ -2,7 +2,7 @@
 
 Web 4.19.0, Android app 4.19.0 (versionCode 8), iPhone app 4.19.0 (build 55). No database change: the database stays 4.17.0. Settings rows are written as needed: errors_cursor and errors_alerted_at.
 
-The owner asked for all the production-readiness work (2026-10-17), and for a default time zone so that everything, update checks included, shows in the company's main time zone.
+The maintainer asked for all the production-readiness work (2026-10-17), and for a default time zone so that everything, update checks included, shows in the company's main time zone.
 
 **1. The client's state at intake**
 - **Website client form:**
@@ -65,7 +65,7 @@ The owner asked for all the production-readiness work (2026-10-17), and for a de
 
 ## Deployed
 
-2026-10-17 14:52 CT with `.audit_work/make_deploy.sh 4.18.0 4.19.0` and its deploy.sh, after CI passed all three jobs on eb524a2. Every replaced file matched 4.18.0 first. The website, cron folder and database were backed up to /home/cmsuser/casemanagement_private/deploy-4.19.0-20261017-145212. There was no database change. Every installed file matches the release. health.php, updates.json and the sign-in page report 4.19.0.
+2026-10-17 14:52 CT with `.audit_work/make_deploy.sh 4.18.0 4.19.0` and its deploy.sh, after CI passed all three jobs on eb524a2. Every replaced file matched 4.18.0 first. The website, cron folder and database were backed up to <private dir>/deploy-4.19.0-20261017-145212. There was no database change. Every installed file matches the release. health.php, updates.json and the sign-in page report 4.19.0.
 
 Published as the GitHub release v4.19.0 (latest). It carries:
 - the install bundle, which now includes restore.php and the four documents

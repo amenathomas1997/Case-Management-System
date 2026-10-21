@@ -9,4 +9,4 @@ Verification: tests/accessibility.php and tests/run_all.sh pass; all 28 hinted l
 
 ## Deployment verified
 
-Published October 15, 2026 from 298f796 with .audit_work/deploy-3.0.24/deploy.sh. Production 3.0.23 matched the baseline; backup at /home/cmsuser/casemanagement_private/deploy-3.0.24-20261015-102322/; server PHP syntax check passed; installed hashes match; .htaccess unchanged; live pages 200, api 401, updates.json and sign-in page report 3.0.24; the live stylesheet carries the new hint rule.
+Published October 15, 2026 from 298f796 with .audit_work/deploy-3.0.24/deploy.sh. Production 3.0.23 matched the baseline; backup at <private dir>/deploy-3.0.24-20261015-102322/; server PHP syntax check passed; installed hashes match; .htaccess unchanged; live pages 200, api 401, updates.json and sign-in page report 3.0.24; the live stylesheet carries the new hint rule.

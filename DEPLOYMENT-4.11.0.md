@@ -2,7 +2,7 @@
 
 Web 4.11.0, iPhone app 4.11.0 (build 50). Apply dist/migrations/mig_4.11.0.sql (clients.status, training_tracks.report_cadence and referrals.referral_source become varchar(40); schema_version 4.11.0), or use Database upgrade.
 
-The last of the owner-approved configuration items. Lists and time limits now also sets:
+The last of the maintainer-approved configuration items. Lists and time limits now also sets:
 
 **Client statuses**
 - The six built-in statuses stay, because the system relies on them.
@@ -50,4 +50,4 @@ Verified before commit:
 - Not checked in a browser or with a screen reader.
 
 ## Deployed 2026-10-16 22:52 CT
-From 4.10.0 with .audit_work/deploy-4.11.0 (20 files, including cron/monthly_reports.php), at e7a7627. mig_4.11.0.sql ran; the three columns are text. Production files matched 4.10.0 before install and match 4.11.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.11.0. The iPhone app 4.11.0 (build 50) reaches staff once it is on TestFlight; until then 4.8.0 shows the built-in statuses. Backups: /home/cmsuser/casemanagement_private/deploy-4.11.0-20261016-225217.
+From 4.10.0 with .audit_work/deploy-4.11.0 (20 files, including cron/monthly_reports.php), at e7a7627. mig_4.11.0.sql ran; the three columns are text. Production files matched 4.10.0 before install and match 4.11.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.11.0. The iPhone app 4.11.0 (build 50) reaches staff once it is on TestFlight; until then 4.8.0 shows the built-in statuses. Backups: <private dir>/deploy-4.11.0-20261016-225217.

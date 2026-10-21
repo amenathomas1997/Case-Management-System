@@ -1,6 +1,6 @@
 # Release 3.0.33 — October 15, 2026
 
-Web + cron; no migration. Production baseline: 3.0.32 (80058d4). The owner asked for a full health dashboard.
+Web + cron; no migration. Production baseline: 3.0.32 (80058d4). The maintainer asked for a full health dashboard.
 
 - **System health** (public/system_health.php, administrators only; linked from Administration, which also says on one line whether every scheduled job is running). Its sections:
   - A summary of problems, each linking to its section.
@@ -43,7 +43,7 @@ Verified before commit:
 Published October 15, 2026, 11:14 p.m. Central, with .audit_work/deploy-3.0.33/deploy.sh.
 
 - Production 3.0.32 matched the baseline (13 files; system_health.php is new).
-- Backups (website, cron, and the database at 179,632 bytes, verified) are at /home/cmsuser/casemanagement_private/deploy-3.0.33-20261015-231402/.
+- Backups (website, cron, and the database at 179,632 bytes, verified) are at <private dir>/deploy-3.0.33-20261015-231402/.
 - 14 files were installed (8 public, 6 cron). The server syntax check passed, the hashes match, and .htaccess is unchanged.
 - Live checks: login, community_referral, help and privacy answer 200; admin and system_health redirect (302) to sign-in; api answers 401; updates.json and the sign-in page report 3.0.33.
 - health.php answers 200 with all nine checks OK. The watchdog and backup are fresh. The other jobs are waiting for their first heartbeat; daily alerts keeps its earlier deadline of October 17, 9:31 a.m.

@@ -8,7 +8,7 @@ if (in_array(($argv[1] ?? ''), ['page','page_post'], true)) {
     $_GET = json_decode($argv[3], true); $_REQUEST = $_GET;
     $_SERVER += ['REQUEST_METHOD'=>'GET','REQUEST_URI'=>'/index.php','HTTPS'=>'on','HTTP_HOST'=>'example.invalid','REMOTE_ADDR'=>'127.0.0.1'];
     ini_set('session.save_path', dirname($argv[2]));
-    session_name('cms'); session_start();
+    session_name('cmssession'); session_start();
     // CMS_TEST_ANON renders the page for a visitor who is not signed in;
     // CMS_TEST_SESSION (JSON) then gives that visitor's session, such as a
     // sign-in waiting on its one-time code.
@@ -877,6 +877,7 @@ try {
     require __DIR__.'/v430_cases_cases.php';
     require __DIR__.'/v430_admin_cases.php';
     require __DIR__.'/v431_sessnote_cases.php';
+    require __DIR__.'/v4311_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
 

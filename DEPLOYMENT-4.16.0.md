@@ -7,7 +7,7 @@ Web 4.16.0, Android app 4.16.0 (versionCode 5), iPhone app 4.16.0 (build 52). Ap
 - the setting access_hold = new
 - schema_version 4.16.0
 
-The owner asked for all five follow-ups to staff agreements (2026-10-17): privacy training, signing before access, credentials, an exit checklist and an agreements report.
+The maintainer asked for all five follow-ups to staff agreements (2026-10-17): privacy training, signing before access, credentials, an exit checklist and an agreements report.
 
 **1. Staff training** (Administration, Staff training; staff use My training)
 - An administrator writes the reading and a quiz: ? starts a question, * marks the right answer and - a wrong one. They also set the pass mark and whether it is required.
@@ -100,4 +100,4 @@ On the live site the starting privacy training and exit acknowledgement are off 
 
 The apps need their 4.16.0 builds on TestFlight and Google Play; the website works now.
 
-Backups: /home/cmsuser/casemanagement_private/deploy-4.16.0-20261017-121928.
+Backups: <private dir>/deploy-4.16.0-20261017-121928.

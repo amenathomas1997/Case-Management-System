@@ -2,7 +2,7 @@
 
 Web 4.9.0 (no iPhone app change). Apply dist/migrations/mig_4.9.0.sql (schema_version only), or use Database upgrade.
 
-**Multi-session scheduler.** The owner chose (2026-10-16) several days a week, a list of dates, and plan to fill an authorization. The schedule already had a weekly repeat and group sessions.
+**Multi-session scheduler.** The maintainer chose (2026-10-16) several days a week, a list of dates, and plan to fill an authorization. The schedule already had a weekly repeat and group sessions.
 - **The form.** Schedule a session has a collapsed "More than one session" section, so a single booking has no extra stops. It holds How often, Days of the week, Last date, and Dates (one per line, each optionally with its own time).
 - **inc/session_plan.php** turns the choice into the exact sessions:
   - weekly, as before (1 to 26 weeks)
@@ -34,4 +34,4 @@ Verified before commit:
 - Not checked in a browser or with a screen reader.
 
 ## Deployed 2026-10-16 21:57 CT
-From 4.8.0 with .audit_work/deploy-4.9.0 (9 files), at c1eae45. mig_4.9.0.sql ran (1 statement). Production files matched 4.8.0 before install and match 4.9.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.9.0. The deploy script was started again by mistake afterwards; its checksum check stopped it before any backup or change (one backup folder, live still 4.9.0). Backups: /home/cmsuser/casemanagement_private/deploy-4.9.0-20261016-215723.
+From 4.8.0 with .audit_work/deploy-4.9.0 (9 files), at c1eae45. mig_4.9.0.sql ran (1 statement). Production files matched 4.8.0 before install and match 4.9.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.9.0. The deploy script was started again by mistake afterwards; its checksum check stopped it before any backup or change (one backup folder, live still 4.9.0). Backups: <private dir>/deploy-4.9.0-20261016-215723.

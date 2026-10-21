@@ -59,7 +59,7 @@ iPhone app (not distributed):
 ## User guide, privacy notice, iPhone account settings and parity (third commit)
 
 - Staff guide rewritten as task-based "How do I" topics (68 topics, table of contents) including iPhone, billing, reports, voice, shortcuts and privacy; public help updated.
-- New public privacy notice (privacy.php), linked from every footer and from the iPhone app and its sign-in screen. AI provider, redaction and retention statements are read from live settings. Owner must confirm legal entity, address, jurisdiction, privacy contact, hosting, and HIPAA/FERPA applicability.
+- New public privacy notice (privacy.php), linked from every footer and from the iPhone app and its sign-in screen. AI provider, redaction and retention statements are read from live settings. The operator must confirm legal entity, address, jurisdiction, privacy contact, hosting, and HIPAA/FERPA applicability.
 - iPhone Account screen: password, two-step sign-in, passkeys (add on the website), calendar address, app lock and voice settings, offline entries, sign out / sign out everywhere, user guide and privacy. Server: inc/account_actions.php (shared with account.php, behaviour unchanged) and inc/api_account.php.
 - Parity: inc/api_parity.php and iPhone screens for tasks, alerts, portal requests, intake progress, invoices (read-only), add/edit training tracks, consent requests, consents to renew and status history.
 
@@ -91,8 +91,8 @@ No high-severity web or API findings. Fixed:
 Published October 15, 2026 from commit e17511c with .audit_work/deploy-3.0.23/deploy.sh (SSH key authentication; the deploy key was authorized on the server the same day).
 
 - Production 3.0.21 matched all 41 baseline hashes of the files being replaced before publication.
-- Backups (server-private): /home/cmsuser/casemanagement_private/deploy-3.0.23-20261015-101718/ — website-before.tar.gz and cron-before.tar.gz (gzip integrity checked), htaccess-before.sha256.
+- Backups (server-private): <private dir>/deploy-3.0.23-20261015-101718/ — website-before.tar.gz and cron-before.tar.gz (gzip integrity checked), htaccess-before.sha256.
 - 46 website and cron files installed; server PHP 8.1.34 syntax check passed for every PHP file; all 46 installed hashes match the release; hosting .htaccess unchanged; branding and configuration untouched. No database migration.
-- Live checks: login, community referral, help and privacy pages 200; api.php without a token 401; updates.json and the sign-in page report 3.0.23; privacy notice shows the operator, address, the governing law and Linode hosting; Spanish footer shows "Aviso de privacidad"; no new error_log entries in the document root.
-- Rollback: tar xzf <backup>/website-before.tar.gz -C /home/cmsuser/public_html/casemanagement && tar xzf <backup>/cron-before.tar.gz -C /home/cmsuser/casemanagement_private
-- iOS 3.0.23 (30) is archived (Xcode Organizer); upload to TestFlight is done by the owner from Organizer.
+- Live checks: login, community referral, help and privacy pages 200; api.php without a token 401; updates.json and the sign-in page report 3.0.23; privacy notice shows the operator, address, state law and hosting provider; Spanish footer shows "Aviso de privacidad"; no new error_log entries in the document root.
+- Rollback: tar xzf <backup>/website-before.tar.gz -C <web root> && tar xzf <backup>/cron-before.tar.gz -C <private dir>
+- iOS 3.0.23 (30) is archived (Xcode Organizer); upload to TestFlight is done by the maintainer from Organizer.

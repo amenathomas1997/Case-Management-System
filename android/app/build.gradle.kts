@@ -6,7 +6,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-fun cms(key: String): String = (project.findProperty("cms.$key") as String?) ?: ""
+// An organisation's own builds: android/private.properties (git-ignored; see README.md, "Building your
+// own apps") overrides any cms.* key in gradle.properties, and android/private-res/ (also git-ignored)
+// replaces resources such as the launcher icon (mipmap-*/ic_launcher.png).
+val privateProps = Properties().apply {
+    val f = rootProject.file("private.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+// The version (cms.versionName, cms.versionCode) always comes from gradle.properties, so each release moves it on.
+fun cms(key: String): String = privateProps.getProperty("cms.$key")?.takeUnless { key.startsWith("version") }
+    ?: (project.findProperty("cms.$key") as String?) ?: ""
+val privateRes = rootProject.file("private-res")
 
 // The Play Store upload key: android/keystore.properties (never committed; see PLAY_STORE.md)
 // names the key file and its passwords. Without it a release build is made unsigned.
@@ -64,6 +74,11 @@ android {
         buildConfig = true
     }
     testOptions { unitTests.isReturnDefaultValues = true }
+    // The build types' resources win over main's, so a private icon replaces the built-in one.
+    if (privateRes.isDirectory) {
+        sourceSets.getByName("debug").res.srcDir(privateRes)
+        sourceSets.getByName("release").res.srcDir(privateRes)
+    }
 }
 
 dependencies {

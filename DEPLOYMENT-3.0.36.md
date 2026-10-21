@@ -1,6 +1,6 @@
 # Release 3.0.36 — October 16, 2026
 
-Web, cron and iPhone 3.0.36 (38); migration **mig_3.0.36.sql** (client_notes: Addendum type and addendum_to; new tables client_note_revisions, client_releases, vendor_agreements with four vendors listed as Not signed). Builds on 3.0.34 and 3.0.35, which are held undeployed. Deploy all three together: mig_3.0.34, then mig_3.0.35, then mig_3.0.36. Owner decisions of 2026-10-16:
+Web, cron and iPhone 3.0.36 (38); migration **mig_3.0.36.sql** (client_notes: Addendum type and addendum_to; new tables client_note_revisions, client_releases, vendor_agreements with four vendors listed as Not signed). Builds on 3.0.34 and 3.0.35, which are held undeployed. Deploy all three together: mig_3.0.34, then mig_3.0.35, then mig_3.0.36. Maintainer decisions of 2026-10-16:
 - An adult release of information is valid for 1 year.
 - Notes lock after 30 days. Later changes are addenda, and every version is kept.
 - Plain email reports are fine. Client detail is trimmed from email subjects.

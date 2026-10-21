@@ -6,7 +6,7 @@
 |---|---|
 | **Product** | Case Management System (web application), version 4.30.0 |
 | **Report date** | October 20, 2026 |
-| **Contact** | The organisation running your installation (its support email is in every page footer). For the software itself: https://github.com/amenathomas1997/Case-Management-System/issues |
+| **Contact** | The organisation running your installation (its support email is in every page footer). For the software itself: the project's GitHub issue tracker |
 | **Standard** | WCAG 2.2, Levels A and AA. Text contrast is held to the AAA level (7:1). |
 
 ## Scope
@@ -22,7 +22,7 @@ Not covered:
 
 **This is a self-evaluation by the developers, not a third-party audit.** The evidence:
 
-**Daily use.** The system's owner is blind and uses it every day with JAWS on Windows and VoiceOver on iPhone. Many design rules come from that use: no extra tab stops for hints, quiet combo boxes, and errors tied to their fields.
+**Design and testing.** The system is built for blind and low-vision staff and clients, and is designed and tested with JAWS on Windows, VoiceOver on iPhone and TalkBack on Android. Many design rules come from that: no extra tab stops for hints, quiet combo boxes, and errors tied to their fields.
 
 **A full accessibility audit on October 20, 2026** (ACCESSIBILITY-AUDIT-2026-10-20.md): eight reviewers covered the shared page parts, the public and client pages in English and Spanish, the staff pages, billing, reports and admin, keyboard-only task walkthroughs in a real browser, an axe-core scan of every rendered page in every colour palette, and both phone apps. Every finding was fixed in 4.30.0.
 
@@ -119,7 +119,7 @@ Not covered:
 
 ## Phone apps (summary, not evaluated against this table)
 
-The iPhone and Android apps use native controls with VoiceOver and TalkBack labels, Dynamic Type and large text, and a typed alternative to drawn signatures. The owner uses the iPhone app with VoiceOver. They have not been evaluated item by item against WCAG or EN 301 549.
+The iPhone and Android apps use native controls with VoiceOver and TalkBack labels, Dynamic Type and large text, and a typed alternative to drawn signatures. The apps are designed and tested with VoiceOver and TalkBack. They have not been evaluated item by item against WCAG or EN 301 549.
 
 ## Legal disclaimer
 

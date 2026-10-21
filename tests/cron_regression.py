@@ -68,12 +68,11 @@ with tempfile.TemporaryDirectory(prefix='cms-cron-test-') as tmp:
     for extra in (path / 'backups').glob('cms_*.sql.gz'):
         if extra != files[0]: extra.unlink()
     print('PASS: Without CMS_DB_NAME the backup dumps the database named in config.php')
-    if not Path('/home/cmsuser/casemanagement_private').exists():
-        unconfigured = {k: v for k, v in env.items() if not k.startswith('CMS_')}
-        result = subprocess.run(['bash', str(script)], env=unconfigured, capture_output=True, text=True)
-        assert result.returncode != 0 and 'backup.conf' in result.stderr
-        assert len(list((path / 'backups').glob('cms_*.sql.gz'))) == 1
-        print('PASS: Without backup.conf or CMS_PRIVATE_DIR the backup refuses to run and says why')
+    unconfigured = {k: v for k, v in env.items() if not k.startswith('CMS_')}
+    result = subprocess.run(['bash', str(script)], env=unconfigured, capture_output=True, text=True)
+    assert result.returncode != 0 and 'backup.conf' in result.stderr
+    assert len(list((path / 'backups').glob('cms_*.sql.gz'))) == 1
+    print('PASS: Without backup.conf or CMS_PRIVATE_DIR the backup refuses to run and says why')
 
     source = (root / 'cron/session_reminders.php').read_text()
     start = source.index('foreach ([')

@@ -15,7 +15,7 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "FE6A89BC4D40D9769DC13D35"
+               BlueprintIdentifier = "344BE29B2A02AB1E1FCFF9B8"
                BuildableName = "CaseManagement.app"
                BlueprintName = "CaseManagement"
                ReferencedContainer = "container:CaseManagement.xcodeproj">
@@ -29,7 +29,7 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "93675028FFEF76C1510A2025"
+               BlueprintIdentifier = "DFBCA4F978CA8AE7B73B66E7"
                BuildableName = "CaseManagementUITests.xctest"
                BlueprintName = "CaseManagementUITests"
                ReferencedContainer = "container:CaseManagement.xcodeproj">
@@ -46,7 +46,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "FE6A89BC4D40D9769DC13D35"
+            BlueprintIdentifier = "344BE29B2A02AB1E1FCFF9B8"
             BuildableName = "CaseManagement.app"
             BlueprintName = "CaseManagement"
             ReferencedContainer = "container:CaseManagement.xcodeproj">
@@ -58,7 +58,7 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "93675028FFEF76C1510A2025"
+               BlueprintIdentifier = "DFBCA4F978CA8AE7B73B66E7"
                BuildableName = "CaseManagementUITests.xctest"
                BlueprintName = "CaseManagementUITests"
                ReferencedContainer = "container:CaseManagement.xcodeproj">
@@ -82,7 +82,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "FE6A89BC4D40D9769DC13D35"
+            BlueprintIdentifier = "344BE29B2A02AB1E1FCFF9B8"
             BuildableName = "CaseManagement.app"
             BlueprintName = "CaseManagement"
             ReferencedContainer = "container:CaseManagement.xcodeproj">
@@ -99,7 +99,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "FE6A89BC4D40D9769DC13D35"
+            BlueprintIdentifier = "344BE29B2A02AB1E1FCFF9B8"
             BuildableName = "CaseManagement.app"
             BlueprintName = "CaseManagement"
             ReferencedContainer = "container:CaseManagement.xcodeproj">

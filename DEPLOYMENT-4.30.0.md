@@ -4,9 +4,9 @@ Web 4.30.0, iPhone app 4.30.0 (build 61), Android app 4.30.0 (version code 14). 
 - surveys.answer_lang (the language a survey was answered in)
 - schema_version 4.30.0
 
-**Not deployed with deploy.sh.** It is published as the GitHub release v4.30.0, and the owner installs it with Administration, Software update. The phone apps are built from this tag.
+**Not deployed with deploy.sh.** It is published as the GitHub release v4.30.0, and an administrator installs it with Administration, Software update. The phone apps are built from this tag.
 
-**Why.** On 2026-10-20 the owner asked for a check of the whole system for accessibility issues, then to fix them all. The audit is ACCESSIBILITY-AUDIT-2026-10-20.md: 2 High, about 36 Medium, about 70 Low.
+**Why.** On 2026-10-20 the maintainer asked for a check of the whole system for accessibility issues, then to fix them all. The audit is ACCESSIBILITY-AUDIT-2026-10-20.md: 2 High, about 36 Medium, about 70 Low.
 - **How it was done:** eight auditors, including an axe-core scan of every rendered page in every colour palette and keyboard-only task walkthroughs in a real browser.
 - **What it found that passes:** contrast in every theme. Nothing blocked a blind client from signing, booking, answering a survey or sending a referral.
 
@@ -98,7 +98,7 @@ Web 4.30.0, iPhone app 4.30.0 (build 61), Android app 4.30.0 (version code 14). 
   - moving between two clients didn't announce
   - long labels were cut at large font
 
-**Owner's own Android Studio change:** the build-tool upgrade found uncommitted in android/ (Gradle 9.4.1, Android plugin 9.2.1, Kotlin 2.2.10) was set aside in a git stash during this release, so 4.30.0 builds with the same tools as CI. It was put back afterwards, uncommitted, for the owner to decide on.
+**Uncommitted local Android Studio change:** the build-tool upgrade found uncommitted in android/ (Gradle 9.4.1, Android plugin 9.2.1, Kotlin 2.2.10) was set aside in a git stash during this release, so 4.30.0 builds with the same tools as CI. It was put back afterwards, uncommitted, for the maintainer to decide on.
 
 ## Published (not deployed)
 
@@ -112,4 +112,4 @@ Web 4.30.0, iPhone app 4.30.0 (build 61), Android app 4.30.0 (version code 14). 
 - 86 files were replaced, including the scheduled jobs and the new accessible_copy.php.
 - The sign-in, signing and survey pages then served at 4.30.0.
 
-The live site stays as it is until the owner installs it with Software update. The 4.30.0 phone apps are built from this tag.
+The live site stays as it is until an administrator installs it with Software update. The 4.30.0 phone apps are built from this tag.

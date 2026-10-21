@@ -1,11 +1,11 @@
 # Release 3.0.34 — October 16, 2026
 
-Web + iPhone 3.0.34 (36); migration **mig_3.0.34.sql** (adds training_tracks.authorized_amount and billing_mode; invoices.closed_reason, due_date, written_off and bill_mode; Denied and Void statuses; the invoice_payments table; backfills earlier payments and due dates). Production baseline: 3.0.33. "Getting paid", the first of the roadmap releases, with the owner's decisions of 2026-10-15: block work over an authorization; anyone with billing may write off; include private pay.
+Web + iPhone 3.0.34 (36); migration **mig_3.0.34.sql** (adds training_tracks.authorized_amount and billing_mode; invoices.closed_reason, due_date, written_off and bill_mode; Denied and Void statuses; the invoice_payments table; backfills earlier payments and due dates). Production baseline: 3.0.33. "Getting paid", the first of the roadmap releases, with the maintainer's decisions of 2026-10-15: block work over an authorization; anyone with billing may write off; include private pay.
 
 - **Billing details** (Administration, Billing details): vendor number, tax ID, remit-to address, billing phone and email, payment terms in days, and the private-pay fee and free-below income. They print on every invoice (PDF and accessible HTML), with the due date, payments, write-offs and balance due. The public referral form quotes the fee and threshold from these settings, in English and Spanish.
 - **Payments** (inc/billing.php invoice_apply / invoice_payment_remove / invoice_retotal):
   - Any number of payments per invoice, each with the date received and its reference.
-  - A write-off with a reason; any billing user may record one, as the owner decided.
+  - A write-off with a reason; any billing user may record one, as the maintainer decided.
   - An entry recorded by mistake can be removed, with the reason audited.
   - The invoice becomes Paid when its balance reaches zero.
   - Mark submitted takes the date it was sent; the due date follows from the terms.

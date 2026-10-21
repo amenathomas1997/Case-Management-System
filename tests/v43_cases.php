@@ -4,7 +4,7 @@
 // calendar IDs, all set on screen so another AT business can run the system as its own.
 
 /* Neutral built-in branding */
-check(brand('name')==='Case Management System' && brand('org')==='Assistive Technology Services' && !str_contains(brand('short'),'Example Agency'),'The built-in branding names no business');
+check(brand('name')==='Case Management System' && brand('org')==='Assistive Technology Services' && brand('short')==='Case Management','The built-in branding names no business');
 check(str_starts_with(ics_uid('session',5),'cms-session-5@'),'A new site\'s calendar IDs use a neutral prefix');
 
 /* Privacy notice details on Settings */

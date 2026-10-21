@@ -25,5 +25,5 @@ Verified before commit:
 - Before deploying, the batch was rehearsed locally: a 3.0.33 schema upgraded with the deploy's own statement splitter matches a fresh 3.0.39 schema, and a re-run changes nothing.
 - On the server: 20 migration statements ran, all 16 new columns and tables are present, and 4 vendors are listed. Every PHP file passed its syntax check, every installed file matched its checksum, and .htaccess was unchanged.
 - Smoke checks passed: login, community_referral, help, privacy (English and Spanish) and release.php return 200; admin, vendors and privacy_incidents return 302; api.php me returns 401; health.php reports ok, version 3.0.39; updates.json and the sign-in page both show 3.0.39.
-- Backup: /home/cmsuser/casemanagement_private/deploy-3.0.39-20261016-112219 (website, cron and database-before.sql.gz).
+- Backup: <private dir>/deploy-3.0.39-20261016-112219 (website, cron and database-before.sql.gz).
 - iOS 3.0.39 (41) is not archived.

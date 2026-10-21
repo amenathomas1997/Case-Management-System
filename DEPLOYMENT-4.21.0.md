@@ -8,7 +8,7 @@ Web 4.21.0. The apps are unchanged. Apply dist/migrations/mig_4.21.0.sql, or use
 - the tables qbo_connection and qbo_customers
 - schema_version 4.21.0
 
-**Not deployed with deploy.sh.** At the owner's request (2026-10-17) it is published only as the GitHub release v4.21.0. The owner installs it on the live site (4.20.0) with Administration, Software update: the first real one-button update. The package lists files new in this release first, and inc/bootstrap.php and inc/core.php last, so no page loads a file before it is there.
+**Not deployed with deploy.sh.** At the maintainer's request (2026-10-17) it is published only as the GitHub release v4.21.0. An administrator installs it on the live site (4.20.0) with Administration, Software update: the first real one-button update. The package lists files new in this release first, and inc/bootstrap.php and inc/core.php last, so no page loads a file before it is there.
 
 **1. The AT Act report** (Reports, AT Act report; inc/at_act.php)
 - **Period:** a federal fiscal year (October to September), in the Annual Progress Report's categories. On screen, or as a spreadsheet.
@@ -68,7 +68,7 @@ Web 4.21.0. The apps are unchanged. Apply dist/migrations/mig_4.21.0.sql, or use
 - the install bundle, built from a clean checkout of the tag
 - the signed update package: 307 files, verified with the key built into the code; new files first, inc/bootstrap.php and inc/core.php last
 
-The live site stays at 4.20.0 until the owner installs this with Administration, Software update.
+The live site stays at 4.20.0 until an administrator installs this with Administration, Software update.
 
 **Rehearsed before publishing.** The package was installed with the 4.20.0 updater onto a copy of a 4.20.0 site, with its own private folder, cron folder and a database in the 4.20.0 shape:
 - the real signature verified, and the plan showed no problems

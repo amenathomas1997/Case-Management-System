@@ -3,7 +3,7 @@
 # Phone apps page (phone_apps.php) fills in an organisation's own name, server, app ID and icon
 # and hands it out as their app kit. Run before each release that changes android/ or ios/;
 # tests/full_schema.php checks the zip matches the committed sources.
-# Left out: build output, this vendor's own store materials, and the Xcode project file (made
+# Left out: build output, the maintainer's store guides and upload script, and the Xcode project file (made
 # from ios/project.yml by xcodegen, so it always carries the organisation's own values).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -13,7 +13,7 @@ if [ -n "$UNTRACKED" ]; then echo "Refusing to build: these files are not tracke
 OUT=public/inc/appkit/app-source.zip
 mkdir -p public/inc/appkit
 rm -f "$OUT"
-git ls-files -- android ios | grep -Ev '^android/play-store/|^android/PLAY_STORE\.md$|^ios/(TESTFLIGHT\.md|testflight\.sh|ExportOptions\.plist)$|^ios/[^/]+\.xcodeproj/' > /tmp/appkit_files.$$
+git ls-files -- android ios | grep -Ev '^android/PLAY_STORE\.md$|^ios/(TESTFLIGHT\.md|testflight\.sh|ExportOptions\.plist)$|^ios/[^/]+\.xcodeproj/' > /tmp/appkit_files.$$
 git ls-files LICENSE >> /tmp/appkit_files.$$
 # Fixed timestamps, so the same sources always give the same zip.
 STAGE=$(mktemp -d)

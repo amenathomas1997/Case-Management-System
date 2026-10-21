@@ -9,9 +9,9 @@ Web 4.28.0, iPhone app 4.28.0 (build 59), Android app 4.28.0 (version code 12). 
 
 **mig_3.0.8 change:** it no longer turns the document category back into a fixed list, so running it again keeps custom document categories.
 
-**Not deployed with deploy.sh.** It is published as the GitHub release v4.28.0, and the owner installs it with Administration, Software update. The phone apps are built from this tag.
+**Not deployed with deploy.sh.** It is published as the GitHub release v4.28.0, and an administrator installs it with Administration, Software update. The phone apps are built from this tag.
 
-**Why.** On 2026-10-18 the owner asked for an ultra code audit and fix. Ten auditors covered the whole system, two of them only the 4.27.0 changes. Their report is AUDIT-2026-10-18b.md: no High, 16 Medium, about 70 Low. Every finding is fixed here.
+**Why.** On 2026-10-18 the maintainer asked for an ultra code audit and fix. Ten auditors covered the whole system, two of them only the 4.27.0 changes. Their report is AUDIT-2026-10-18b.md: no High, 16 Medium, about 70 Low. Every finding is fixed here.
 
 **Before or after installing**
 - **Software update now refuses** when the database is behind the site's files. Run Database upgrade first. This normally never happens with Software update.
@@ -114,4 +114,4 @@ Web 4.28.0, iPhone app 4.28.0 (build 59), Android app 4.28.0 (version code 12). 
 - 102 files were replaced, including the scheduled jobs and the new recovery script in the private cron folder.
 - The sign-in, signing and survey pages then served at 4.28.0.
 
-The live site stays as it is until the owner installs it with Software update. The 4.28.0 phone apps are built from this tag.
+The live site stays as it is until an administrator installs it with Software update. The 4.28.0 phone apps are built from this tag.

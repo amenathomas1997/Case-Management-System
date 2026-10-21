@@ -2,7 +2,7 @@
 
 Web 4.10.0 (no iPhone app change). Apply dist/migrations/mig_4.10.0.sql (meeting_accounts; schema_version 4.10.0), or use Database upgrade.
 
-**Zoom and Microsoft Teams meeting links** (owner, 2026-10-16: "each person signs in"):
+**Zoom and Microsoft Teams meeting links** (maintainer, 2026-10-16: "each person signs in"):
 - An administrator registers the system once with Zoom (a user-managed General App) and Microsoft (an Entra app registration with delegated OnlineMeetings.ReadWrite, User.Read and offline_access). The IDs and secrets go in Settings, Online meetings. Help, Administrator guide, "Setting up Zoom and Microsoft Teams meeting links" has the steps and this site's return addresses. Until then nothing new appears.
 - Each staff member connects their own account on My Account, Online meetings (Connect or Disconnect for each service; it shows the account it signed in as). Connecting and disconnecting are audited. Disconnecting Zoom also withdraws it at Zoom.
 - On Schedule a session, "Make the meeting link" (No, In Zoom, In Microsoft Teams) makes the meeting in the instructor's account once the sessions are saved. A series shares one link (Zoom: a recurring meeting with no fixed time; Teams: one meeting covering the series). The link goes into every session, the instructor's invite and the client's invite. If Zoom or Microsoft refuses, the sessions are still booked, without a link, and the message says so.
@@ -41,4 +41,4 @@ Verified before commit:
 - Not checked in a browser or with a screen reader.
 
 ## Deployed 2026-10-16 22:07 CT
-From 4.9.0 with .audit_work/deploy-4.10.0 (12 files), at 20921cb. mig_4.10.0.sql ran (2 statements); meeting_accounts present. Production files matched 4.9.0 before install and match 4.10.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.10.0; meeting_connect.php sends a signed-out visitor to sign in. Nothing new shows until Zoom or Microsoft is set up on Settings, Online meetings. Backups: /home/cmsuser/casemanagement_private/deploy-4.10.0-20261016-220739.
+From 4.9.0 with .audit_work/deploy-4.10.0 (12 files), at 20921cb. mig_4.10.0.sql ran (2 statements); meeting_accounts present. Production files matched 4.9.0 before install and match 4.10.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.10.0; meeting_connect.php sends a signed-out visitor to sign in. Nothing new shows until Zoom or Microsoft is set up on Settings, Online meetings. Backups: <private dir>/deploy-4.10.0-20261016-220739.

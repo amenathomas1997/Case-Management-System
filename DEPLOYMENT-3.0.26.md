@@ -29,8 +29,8 @@ Conformant across the checked criteria (full list in the reports). Fixed:
 
 ## Deployment verified
 
-Published October 15, 2026 from 32d2b2a with .audit_work/deploy-3.0.26/deploy.sh. Production 3.0.25 matched the baseline; backup at /home/cmsuser/casemanagement_private/deploy-3.0.26-20261015-110137/; server PHP syntax check passed; all 49 installed hashes match; .htaccess unchanged; live pages 200, api 401, updates.json and sign-in page report 3.0.26; the live navigation.js carries the Escape-dismiss fix and the Spanish referral form the renamed bot trap.
+Published October 15, 2026 from 32d2b2a with .audit_work/deploy-3.0.26/deploy.sh. Production 3.0.25 matched the baseline; backup at <private dir>/deploy-3.0.26-20261015-110137/; server PHP syntax check passed; all 49 installed hashes match; .htaccess unchanged; live pages 200, api 401, updates.json and sign-in page report 3.0.26; the live navigation.js carries the Escape-dismiss fix and the Spanish referral form the renamed bot trap.
 
 Verification before publishing: tests/run_all.sh; full_schema 862 (incl. the new no-sign-in lockout test), audit_regression 61, security 63; 129 rendered pages scanned (no duplicate ids, every in-page link and description target resolves, no duplicate access keys); iPhone clean build with no warnings.
 
-iOS: project.yml 3.0.26 build 31 archived for TestFlight (owner uploads from Xcode Organizer).
+iOS: project.yml 3.0.26 build 31 archived for TestFlight (the maintainer uploads from Xcode Organizer).

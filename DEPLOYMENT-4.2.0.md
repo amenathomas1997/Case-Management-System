@@ -2,7 +2,7 @@
 
 Web 4.2.0 (no iPhone app change). Apply dist/migrations/mig_4.2.0.sql (referrals.vr_case_open; funding_agencies.hourly_rate and mileage_rate; schema_version 4.2.0), or use Database upgrade.
 
-The owner's pricing rules (2026-10-16), with every rule set on screen so another AT business can set its own (the owner plans to open-source the system):
+The pricing rules requested (2026-10-16), with every rule set on screen so another AT business can set its own (the system is being open-sourced):
 - **Pricing rules** (pricing.php, administrators; inc/pricing.php).
   - The personal hourly rate (the old private-pay fee) and the free-below income moved here from Billing details. Billing details still accepts them from an old form.
   - Also set here:
@@ -34,7 +34,7 @@ Review: no security holes. Every finding was fixed:
 - a null quote shows "Not quoted" unless the answer was yes
 - Spanish "Not sure" is "No estoy seguro"
 
-Also: the licence is GPL version 3 (the owner's choice, 2026-10-16). LICENSE has the full text since the first commit; README.md is new, with the notice and the third-party code (FPDF is freeware; qrcode.js is our own).
+Also: the licence is GPL version 3 (the maintainer's choice, 2026-10-16). LICENSE has the full text since the first commit; README.md is new, with the notice and the third-party code (FPDF is freeware; qrcode.js is our own).
 
 Verified before commit:
 - full_schema 1424, audit_regression, security, staging_scrub, and run_all.
@@ -42,4 +42,4 @@ Verified before commit:
 - Not checked in a browser or with a screen reader.
 
 ## Deployed 2026-10-16 18:58 CT
-From 4.1.0 with .audit_work/deploy-4.2.0 (18 files). mig_4.2.0.sql ran (3 statements); all 3 new columns present. Production files matched 4.1.0 before install and match 4.2.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.2.0. Backups: /home/cmsuser/casemanagement_private/deploy-4.2.0-20261016-185842.
+From 4.1.0 with .audit_work/deploy-4.2.0 (18 files). mig_4.2.0.sql ran (3 statements); all 3 new columns present. Production files matched 4.1.0 before install and match 4.2.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.2.0. Backups: <private dir>/deploy-4.2.0-20261016-185842.

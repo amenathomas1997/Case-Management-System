@@ -1110,6 +1110,12 @@ enum PreviewStore {
     }
     static func sweep() {
         try? FileManager.default.removeItem(at: directory)
+        // Previews kept before 4.31.1 sat in a folder under the app's former name: remove those too.
+        let tmp = FileManager.default.temporaryDirectory
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: tmp.path)) ?? []
+        where name.hasSuffix("-DocumentPreviews") && name != directory.lastPathComponent {
+            try? FileManager.default.removeItem(at: tmp.appendingPathComponent(name, isDirectory: true))
+        }
     }
 }
 

@@ -32,6 +32,15 @@ Pricing, funding agencies, branding, email wording, the referral form, lists and
    - Templates, the referral form, staff agreements and training
 6. **Your own phone apps:** Administration, Phone apps, downloads the Android and iPhone apps' source already set to your name, icon and server, with the steps to build them and give them to your staff.
 
+## Building your own apps
+
+The apps in `android/` and `ios/` build as a neutral example (app ID `org.example.cms`, the name "CMS", a plain clipboard icon, and a sign-in screen that asks for the server). To build them as your organisation's apps without changing tracked files, add these git-ignored files:
+
+- **Android:** `android/private.properties` with any of the `cms.*` keys from `android/gradle.properties` (for example `cms.appId=org.yourorg.cms` and `cms.defaultServer=cms.yourorg.org`); its values win. Your icon goes in `android/private-res/mipmap-<density>/ic_launcher.png` (mdpi 48, hdpi 72, xhdpi 96, xxhdpi 144, xxxhdpi 192 pixels).
+- **iPhone:** `ios/Private.xcconfig` with any of the `CMS_*` settings from `ios/project.yml`, written `CMS_BUNDLE_ID = org.yourorg.cms`; `ios/Overrides.xcconfig` reads it, so its values win. For your own icon, add the set `ios/Sources/Assets.xcassets/PrivateAppIcon.appiconset` (a 1024-pixel PNG and its Contents.json) and the line `CMS_APP_ICON = PrivateAppIcon`.
+
+Neither the source nor the app kit that Phone apps hands out ever includes these files.
+
 ## Updates
 
 New installations check this repository's releases. When a new version is out, Administration says so.
@@ -57,7 +66,7 @@ A fork that publishes its own releases sets `UPDATE_REPO` and `UPDATE_PUBLIC_KEY
 
 ## Licence
 
-Copyright (C) 2026 Example Agency
+Copyright (C) 2026 The Case Management System authors
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, version 3. The full text is in [LICENSE](LICENSE).
 

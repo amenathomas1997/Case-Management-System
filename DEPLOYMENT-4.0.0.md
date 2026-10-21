@@ -2,7 +2,7 @@
 
 Web 4.0.0, iPhone app 4.0.0 (build 46). Apply dist/migrations/mig_4.0.0.sql (users.alert_email; equipment_loans condition_out, condition_in, accepted_name, accepted_at; schema_version 4.0.0), or use Database upgrade.
 
-This release covers the roadmap section "Voice, accessibility and the iPhone app". The owner asked for the version to jump to 4.0.
+This release covers the roadmap section "Voice, accessibility and the iPhone app". The maintainer asked for the version to jump to 4.0.
 - **Voice without AI** (inc/voice_more.php).
   - Common requests are matched without the AI: help; today and this week; tasks due; unread messages and alerts; new referrals; open requests; unbilled work; unpaid invoices; expiring authorizations; caseload; follow-ups.
   - For a named client: phone, status, next session, hours left, notes, goals and homework. It can also search, open a page or open a client.
@@ -33,7 +33,7 @@ This release covers the roadmap section "Voice, accessibility and the iPhone app
   - Update notice on the Dashboard; calendar subscription link.
 - **Tests:** tests/v4_cases.php is new.
 
-Not in this release (needs an owner decision or later work): authorization create and edit in the app, Microsoft or passkey sign-in in the app, documents in braille or audio, fuller offline queueing.
+Not in this release (needs a maintainer decision or later work): authorization create and edit in the app, Microsoft or passkey sign-in in the app, documents in braille or audio, fuller offline queueing.
 
 Review: no SQL injection or CSRF gaps. Every finding was fixed except one, kept on purpose:
 - voice billing answers (unbilled work, unpaid invoices) count only a caseload-limited person's own clients
@@ -60,4 +60,4 @@ Verified before commit:
 - Not checked in a browser or with a screen reader.
 
 ## Deployed 2026-10-16 17:51 CT
-From 3.0.55 with .audit_work/deploy-4.0.0 (28 files). mig_4.0.0.sql ran (3 statements); all 5 new columns present. Production files matched 3.0.55 before install and match 4.0.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.0.0. Backups: /home/cmsuser/casemanagement_private/deploy-4.0.0-20261016-175118. The iPhone app 4.0.0 (build 46) still needs archiving to TestFlight by the owner.
+From 3.0.55 with .audit_work/deploy-4.0.0 (28 files). mig_4.0.0.sql ran (3 statements); all 5 new columns present. Production files matched 3.0.55 before install and match 4.0.0 after; .htaccess unchanged. Smoke checks passed; health reports 4.0.0. Backups: <private dir>/deploy-4.0.0-20261016-175118. The iPhone app 4.0.0 (build 46) still needs archiving to TestFlight by the maintainer.

@@ -19,7 +19,7 @@ From the roadmap section "Keeping clients and counselors informed":
   - finished homework
   - a summary of each finished training plan: completion date, hours, and goals achieved
   These include Spanish strings.
-- **Letter list:** the owner has not said which letters staff write most; the seven common ones were built and every one is editable.
+- **Letter list:** the maintainer has not said which letters staff write most; the seven common ones were built and every one is editable.
 - **Tests:** tests/portal_letters_cases.php is new.
 
 Review: one reviewer found nothing serious. Every finding was fixed:
@@ -41,4 +41,4 @@ Verified before commit:
 ## Deployed 2026-10-16 15:30 CT
 From 3.0.50 with .audit_work/deploy-3.0.51. mig_3.0.51.sql ran, and both checked columns are present.
 
-CI is green. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.51). Backup: /home/cmsuser/casemanagement_private/deploy-3.0.51-20261016-153006.
+CI is green. The syntax check passed, every checksum matched, .htaccess was unchanged and every smoke check passed (health reports 3.0.51). Backup: <private dir>/deploy-3.0.51-20261016-153006.

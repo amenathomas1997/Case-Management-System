@@ -132,8 +132,8 @@ dashboard_swift = swift_sources['DashboardView.swift']
 static_check('notesToWrite = await loadNotesToWrite(api)' in dashboard_swift and 'NoteToWriteRow(item: item)' in dashboard_swift,
              'the Dashboard shows Notes to write with Write it now')
 project_yml = (root / 'ios/project.yml').read_text()
-static_check(project_yml.count('MARKETING_VERSION: "4.31.0"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "62"') == 2,
-             'the app and widget are version 4.31.0 (62)')
+static_check(project_yml.count('MARKETING_VERSION: "4.31.1"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "63"') == 2,
+             'the app and widget are version 4.31.1 (63)')
 
 source = (root / 'ios/Sources/API.swift').read_text()
 source = source.split('extension Color {')[0]

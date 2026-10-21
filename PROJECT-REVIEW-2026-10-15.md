@@ -4,13 +4,13 @@ Baseline: c742c5b, website 3.0.30. This is a readiness review of current source,
 
 ## Manual accessibility result
 
-The owner reports that the workflows they manually tested passed. Browsers, screen readers, devices and the exact workflow list were not supplied in that confirmation. Record this as a successful user acceptance result for the tested workflows; it does not by itself establish full WCAG 2.2 AAA conformance. The older October 14 follow-up predates several subsequent fixes and must not be treated as the current feature/deployment inventory.
+The maintainer reports that the manually tested workflows passed. Browsers, screen readers, devices and the exact workflow list were not supplied in that confirmation. Record this as a successful user acceptance result for the tested workflows; it does not by itself establish full WCAG 2.2 AAA conformance. The older October 14 follow-up predates several subsequent fixes and must not be treated as the current feature/deployment inventory.
 
 ## Current state verified
 
 The live website and release feed both report 3.0.30. Public health returned HTTP 200 with a working database, a watchdog run at 4:40 p.m. Central, and a backup from 2:15 a.m. Central on October 15. Daily alerts had no recorded first heartbeat at the time of the check. This may be expected until the next scheduled daily run following today's deployment; it does not prove a broken cron job.
 
-The only pre-existing local change is Xcode's PrivacyInfo.xcprivacy file-type metadata in ios/CaseManagement.xcodeproj/project.pbxproj. It was preserved. The local tracking branch reports origin/main at c742c5b; the remote was not fetched during this review.
+The only pre-existing local change is Xcode's PrivacyInfo.xcprivacy file-type metadata in the iPhone app project's project.pbxproj. It was preserved. The local tracking branch reports origin/main at c742c5b; the remote was not fetched during this review.
 
 ## Findings and priorities
 

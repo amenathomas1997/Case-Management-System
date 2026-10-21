@@ -3,7 +3,7 @@
 ## Scope and method
 
 - **What was audited:** the website (staff pages, the client portal, public forms, and generated PDFs and emails), the iPhone app and the Android app.
-- **Standard:** WCAG 2.2 AA, plus the owner's own rules:
+- **Standard:** WCAG 2.2 AA, plus the project's own accessibility rules:
   1. hints inside labels, with no extra stops
   2. quiet combo boxes
   3. one error summary, with each error tied to its field
@@ -43,8 +43,8 @@
 ## Medium (grouped)
 
 - **Website, shared parts:**
-  - The Text size and voice Loudness selects announce and act on every arrow press (owner rule 2).
-  - The "Type date/time instead" button adds an extra stop after every date and time field. Its name repeats the whole label, and its format notes rely on aria-describedby (owner rules 1 and 3).
+  - The Text size and voice Loudness selects announce and act on every arrow press (project rule 2).
+  - The "Type date/time instead" button adds an extra stop after every date and time field. Its name repeats the whole label, and its format notes rely on aria-describedby (project rules 1 and 3).
   - Table buttons and selects squeeze until unreadable. Examples: "Vie/w", "Sa ve", status selects showing no value at 320 px, and "Availat" at 1280 px (1.4.10, 1.4.4).
 - **Sign-in:** a wrong staff code (verify.php) is announced only through aria-describedby, and no summary takes focus.
 - **Public pages:**
@@ -52,7 +52,7 @@
   - The referral role radios announce on every arrow press.
   - The referral decline email has no Spanish version.
 - **Staff pages:**
-  - The Schedule track list shows every client's tracks as "Client — Track" (owner rule 2).
+  - The Schedule track list shows every client's tracks as "Client — Track" (project rule 2).
   - Session outcome options are sentences, and two of them read alike.
   - Edit note and addendum links name only the subject, never the date.
   - The referral list has no heading.
@@ -164,28 +164,28 @@ I drove Google Chrome (Playwright 1.48.2, channel chrome, headless) by keyboard 
   - Send a document to sign (signatures.php goes to `#list-h`): the heading "Sent to sign (1)" takes focus, and "Sent to Maria Lopez to sign." is skipped.
   - Client portal, English and Spanish: Book this time with a time chosen goes to `#sess-h`, then `flash-messages`, then body. The client never hears that the time was booked. Book with no time chosen goes to `#book-h` (tabindex=-1). The client hears "Book a session, heading" and not "Choose a time first."
   - By reading the code, the same happens for privacy_incidents.php (`#report-h`, a summary) and referrals.php close (`#close-h`, a summary), and on every other fragment redirect.
-- WCAG / rule: 4.1.3 Status Messages, 3.3.1 Error Identification, 2.4.3 Focus Order; owner rule 3 (the error summary takes focus).
+- WCAG / rule: 4.1.3 Status Messages, 3.3.1 Error Identification, 2.4.3 Focus Order; project rule 3 (the error summary takes focus).
 - Fix: Move focus after Chrome has handled the fragment. In this browser I checked two versions: `window.addEventListener('load', () => setTimeout(focusIt, 0))` and a double requestAnimationFrame both keep focus on `#flash-messages` with `#logs` in the URL. Apply this to the flash script and to both error-summary scripts (bootstrap.php:413, signatures.php:100). Alternatively, leave the fragment out of the redirect when there is a summary or flash. Then add a case to tests/accessibility_browser.js: submit a form that redirects with a fragment, and check that document.activeElement is the summary or the flash after `load`.
 - Status: CONFIRMED (focus behaviour in Chrome). JAWS speech was not run.
 
 #### [High] Portal: sending a message after browsing booking times opens an "Unsaved changes" dialog, in English even on the Spanish portal
 - Where: assets/navigation.js:72-103 (the dialog is built with `lang='en'` and hard-coded English text; `changed(except)` counts any other changed form on the page); portal.php booking form.
 - Who and what happens: A client picks a time in the booking list without booking it (for example, to hear what is offered), then types a message. Stops: Hora con su instructor (value changed), then Su mensaje (typed), then Enviar mensaje (Enter). A modal opens with focus on "Keep editing", and it says "Unsaved changes. You have changes that have not been saved. Save the form, keep editing, or leave without saving." On portal.php?lang=es all of it is English, and `<html lang>` is es while the dialog is lang=en. Enter on the focused default, "Keep editing", cancels sending. "Leave without saving" sends the message, so the wording does not fit what the button does. A Spanish-speaking client may be unable to send at all.
-- WCAG / rule: 3.1.2 Language of Parts and 3.3.2 (instructions not in the user's language), 3.2.2 On Input (an unexpected dialog); owner rule 5.
+- WCAG / rule: 3.1.2 Language of Parts and 3.3.2 (instructions not in the user's language), 3.2.2 On Input (an unexpected dialog); project rule 5.
 - Fix: On the portal, do not treat a booking-time choice as unsaved work, or skip the check when the form being submitted is the only changed form with typed text. Translate the dialog with `t()`, using the page language. When the action is a form submit, name the button for what it does ("Send anyway" / "Enviar de todos modos").
 - Status: CONFIRMED
 
 #### [Medium] A wrong sign-in code is only in the field's aria-describedby (no focused error summary)
 - Where: public/verify.php:216-226.
-- Who and what happens: Stops: type a wrong code, then Enter. The page reloads with focus in the field. Chrome exposes "6-digit code The code expires 10 minutes after it was sent., invalid", with the description "That code is not correct… 4 tries left… We emailed a 6-digit code…". If JAWS skips descriptions (which the owner has reported), the user hears "invalid entry" with no reason and no count of tries left. On every visit the description also repeats the intro paragraph shown above the field. login.php, by contrast, focuses an error box.
-- WCAG / rule: 3.3.1; owner rules 1 and 3.
+- Who and what happens: Stops: type a wrong code, then Enter. The page reloads with focus in the field. Chrome exposes "6-digit code The code expires 10 minutes after it was sent., invalid", with the description "That code is not correct… 4 tries left… We emailed a 6-digit code…". If JAWS skips descriptions (as has been reported in testing), the user hears "invalid entry" with no reason and no count of tries left. On every visit the description also repeats the intro paragraph shown above the field. login.php, by contrast, focuses an error box.
+- WCAG / rule: 3.3.1; project rules 1 and 3.
 - Fix: Use the same pattern as login.php: a focused summary (`form_error_summary` or a focused `#code-error`) that links to the field. Keep `aria-describedby` only for the error, not for the intro text.
-- Status: CONFIRMED (behaviour in Chrome); the JAWS description behaviour is from the owner's report.
+- Status: CONFIRMED (behaviour in Chrome); the JAWS description behaviour is from a user report.
 
 #### [Medium] Move-session refusal: the summary link goes to the wrong control, and the same error is repeated on every field
 - Where: schedule.php:1040 (`form_error_summary([$mKey=>''], [$mKey=>'md-'.$sidM])`) and the move form's fields.
 - Who and what happens: The fix is the "Move anyway" checkbox, but the summary link "Not moved yet: … Tick 'Move anyway'…" goes to `#md-1`, the date field. Stops from there: Date month, day, year, picker, then Type date instead, then Time hours, minutes, AM/PM, picker, then Type time instead, then Length. Every one of those is `invalid` and re-reads the same error as its description, about 10 times, even though the values are correct. Only after all of that does the user reach the "Move anyway…" checkbox and the Move button. The error text is also shown twice on screen, one right after the other: the summary, then the inline paragraph. The booking form gets this right: its summary links to the approval checkbox.
-- WCAG / rule: 3.3.1 and 3.3.3; owner rule 3 (the same error is not to be announced twice).
+- WCAG / rule: 3.3.1 and 3.3.3; project rule 3 (the same error is not to be announced twice).
 - Fix: Point the summary anchor at the Move-anyway checkbox. Mark only that checkbox invalid and give it the error. Keep the date, time and length fields valid.
 - Status: CONFIRMED
 
@@ -196,13 +196,13 @@ I drove Google Chrome (Playwright 1.48.2, channel chrome, headless) by keyboard 
 - Fix: Use "Booking approval:" with no second prefix, and say "tick 'I reviewed…' (the box above this message)" or "tick the approval box".
 - Status: CONFIRMED
 
-#### [Medium] Option labels break owner rule 2 in the scheduling and outcome lists
+#### [Medium] Option labels break project rule 2 in the scheduling and outcome lists
 - Where: schedule.php:990 and nearby (session outcome select); schedule.php:1105 (Training track); portal.php:899-906 (booking times).
 - Who and what happens:
   - The outcome select for an ended session reads "Completed — hours already logged (1.5 hours: JAWS lesson)", "Completed — hours already logged (0.25 hours: x)", then the identical label a second time for a different log, then "Completed — log hours as well (a separate visit)". These are sentences with counts, and two of the choices sound exactly the same.
   - The Training track options are "Jose Garcia — Entrenamiento NVDA", "Maria Lopez — JAWS training", and so on: a "client — item" prefix. They are not narrowed to the client already chosen, so the user has to find their own client's track in an all-client list.
   - The portal booking list has 40 sentence options ("Wednesday, October 21 at 1:00 PM, 60 minutes, online") with no grouping.
-- WCAG / rule: owner rule 2; 3.3.7 Redundant Entry (track).
+- WCAG / rule: project rule 2; 3.3.7 Redundant Entry (track).
 - Fix: Group outcome choices with `<optgroup label="Completed">` and give each a plain, distinct name (for example the log date and time). Group tracks by client with optgroup, or filter them to the chosen client. Group booking times by day with optgroup (for example "1:00 PM, online").
 - Status: CONFIRMED
 
@@ -216,7 +216,7 @@ I drove Google Chrome (Playwright 1.48.2, channel chrome, headless) by keyboard 
 #### [Low] The in-person signature field is visibly required but not programmatically required, and the Spanish label says "(required)" in English
 - Where: signatures.php:104-105 (no `required` / `aria-required` on `#signature`); inc/bootstrap.php:357 (`required_mark()` always says "(required)"); eval_report.php:310 also has no `required`, but I did not open it in the browser.
 - Who and what happens: In the hand-over page, Chrome exposes "Electronic signature (required) …" as a textbox with no required state. For a Spanish signer the label is lang=es, but its accessible text is "Firma electrónica *(required) Escriba su nombre completo…". The Spanish voice reads "required" in English, and "*" is part of the visible name. On the same page the low-vision panel, the footer links and `<html lang>` stay English.
-- WCAG / rule: owner rule 4, 1.3.1; owner rule 5, 3.1.2.
+- WCAG / rule: project rule 4, 1.3.1; project rule 5, 3.1.2.
 - Fix: Add `required` (or `aria-required`) to `#signature`. Make `required_mark()` follow the page language ("(obligatorio)"), or use `$es` here as the rest of the label already does.
 - Status: CONFIRMED (signatures.php); PLAUSIBLE (eval_report.php)
 
@@ -230,28 +230,28 @@ I drove Google Chrome (Playwright 1.48.2, channel chrome, headless) by keyboard 
 #### [Low] "Go to main menu" focuses an unnamed list, and Chrome builds a doubled name for it
 - Where: assets/navigation.js:24-30; inc/layout.php:119 (`<ul id="main-nav" tabindex="-1">` has no name).
 - Who and what happens: Stops on any staff page: Tab 4 "Go to main menu", then Enter. Focus goes to `ul#main-nav`. Chrome exposes the focused list with the name "Today Today Clients Clients Services Services Equipment Equipment Billing, compliance & reports Billing, compl…", built from each group heading and its labelled sub-list. JAWS would likely read that whole string before the first link. From there, Reports ("Business analytics") is 23 more Tab stops.
-- WCAG / rule: 4.1.2; owner rule 1 (extra speech).
+- WCAG / rule: 4.1.2; project rule 1 (extra speech).
 - Fix: Add `aria-label="Main menu"` to the `ul`, or move focus to the first group heading or link.
 - Status: PLAUSIBLE (the name is confirmed in Chrome's tree; JAWS speech was not run)
 
 #### [Low] Client record tabs reload the page at the top
 - Where: client.php:192-197 (tab links have no fragment).
 - Who and what happens: Stops: Enter on "Client Notes" reloads the page with focus at the top. To reach the notes you go through the skip link or 37 menu stops, then 20 header action stops (AI case briefing … Status History), and only then "Add a note". Overview, Tech Assessments and the other tabs behave the same.
-- WCAG / rule: 2.4.3 (efficiency), owner rule 1.
+- WCAG / rule: 2.4.3 (efficiency), project rule 1.
 - Fix: Give tab links a fragment to a focusable panel heading (`#tab-panel`, tabindex=-1). Do this only together with the fix for the first finding, so a flash is not lost.
 - Status: CONFIRMED
 
 #### [Low] Portal "Book this time" asks for confirmation before checking that a time was chosen
 - Where: portal.php:908 (`onclick="return confirm('Book this time?')"`).
 - Who and what happens: With "Choose a time" still selected, Book this time first opens the "Book this time?" / "¿Reservar esta hora?" confirm. After OK comes the error "Choose a time first." That is an extra dialog and keystroke before the error.
-- WCAG / rule: owner rule 1; 3.3.4 is met, but the order is wrong.
+- WCAG / rule: project rule 1; 3.3.4 is met, but the order is wrong.
 - Fix: Skip the confirm when `#slot` is empty, and say the chosen time in the confirm text.
 - Status: CONFIRMED
 
 #### [Low] Progress figures are read twice
 - Where: client.php overview (training tracks summary), track.php (Totals at a glance).
 - Who and what happens: Reading the page line by line, the text "0 hours of 40 hours authorized used (…)" is followed by a progressbar with exactly the same name. "Authorization usage: 0 hours of 40 hours (0%)" is the same.
-- WCAG / rule: owner rule 1 (repeated speech).
+- WCAG / rule: project rule 1 (repeated speech).
 - Fix: Put `aria-hidden="true"` on the visible text and keep the named progressbar, or name the bar briefly ("Hours used").
 - Status: CONFIRMED
 
@@ -276,49 +276,49 @@ I drove Google Chrome (Playwright 1.48.2, channel chrome, headless) by keyboard 
 #### [Medium] Low-vision "Text size" select announces and re-lays-out the page on every arrow press
 - Where: public/assets/low-vision.js:61 (`size.addEventListener('change', … update('Text size ' + size.value + '%'))`), markup public/inc/layout.php:96-98
 - Who and what happens: in Chrome on Windows, arrowing through the closed select fires `change` for each option. Each press resizes the whole page and writes "Text size 150%. Display updated." to the `#vision-live` status region. A JAWS user who arrows from 100% to 200% hears four announcements, and the page reflows four times under a magnifier user. Checked in the browser: one change event put "Text size 150%. Vista actualizada." in the live region.
-- WCAG / rule: owner rule 2 (quiet combo boxes)
+- WCAG / rule: project rule 2 (quiet combo boxes)
 - Fix: apply and announce only on blur, or after about 700 ms with no further change, and announce once.
 - Status: CONFIRMED
 
 #### [Medium] Voice assistant "Loudness" select plays a sound on every arrow press and updates the status live region when it passes Max; its option label has a parenthetical
 - Where: public/assets/voice.js:635-647; option label public/inc/layout.php:278 (`Max (deaf-blind)`)
 - Who and what happens: each arrow press plays the "notify" earcon. Arrowing past Max writes "Spoken replies off. Replies will appear here as text." to the `.vfab-status` region (role=status, aria-live=polite), and moving off it writes "Spoken replies on." The code comment already notes that arrow keys change the value at once. Checked in the browser: going Loud, Max, Loud, Normal gave two status announcements, and the earcon played on all four presses.
-- WCAG / rule: owner rule 2 (no live-region updates per arrow; plain option names)
+- WCAG / rule: project rule 2 (no live-region updates per arrow; plain option names)
 - Fix: debounce about 700 ms or apply on blur (play the sample sound and switch spoken replies then). Rename the option "Maximum" and move "for deaf-blind users" into the label as visually hidden text.
 - Status: CONFIRMED
 
 #### [Medium] Unsaved-changes dialog appears in English on Spanish public forms, falsely warns that the language switch loses data, and offers a "Save" its buttons do not have
 - Where: public/assets/navigation.js:72-119 (dialog markup with `lang='en'`, and the document click handler); lang_toggle() in public/inc/bootstrap.php:142-218
 - Who and what happens: navigation.js runs on every page, client pages included. Its click handler treats the Español/English toggle (same path, different query) as leaving the page. A client who has typed in the referral, consent or survey form and switches language gets a modal saying "You have changes that have not been saved… leave without saving". In fact lang_toggle() keeps every field in sessionStorage and puts it back. On a Spanish page the modal is wholly English (marked lang="en", so 3.1.2 passes, but a Spanish-only client cannot understand it). The text also says "Save the form", yet the Save button is hidden on these forms. The window.confirm fallback is English too. Checked in the browser on community_referral (both the English and the Spanish snapshot): typed a name, clicked the toggle, and the dialog opened with only "Keep editing" and "Leave without saving".
-- WCAG / rule: 3.3.2 (instructions do not match the controls); owner rule 5 (spirit: client-facing copy in the page language); 3.1.2 passes technically
+- WCAG / rule: 3.3.2 (instructions do not match the controls); project rule 5 (spirit: client-facing copy in the page language); 3.1.2 passes technically
 - Fix: skip the prompt for `.lang-toggle a`, which already keeps the data. Translate the dialog (pass strings from PHP through __()) on translated pages. Leave "Save the form" out of the description when Save is hidden.
 - Status: CONFIRMED
 
 #### [Medium] Date/time "Type … instead" control: extra tab stop whose name repeats the whole label and hint; format instructions and errors only in aria-describedby plus a separate visible line
 - Where: public/assets/date-entry.js:12-18, 35-37, 50, 56
-- Who and what happens: every enabled date, time and datetime field on every page (staff and client) gets an extra button after it. Its aria-label is "Type date instead: " plus the label's full textContent, so it repeats the in-label hint, and any "*" that was aria-hidden is read as text. Checked in the browser on access_bookings: "Use date and time picker instead: When date and time; leave blank if not known yet". In text mode, the format "Type YYYY-MM-DDTHH:MM…" and any validation error sit in a `<p class="hint">` / `<p class="field-error">` after the field. That paragraph is reachable only through aria-describedby (which the owner has found JAWS skips) and is also an extra line in browse mode. On Spanish client forms the button and note are English (marked lang="en"): checked on the Spanish referral form ("Type date instead" next to "Fecha de nacimiento").
-- WCAG / rule: owner rule 1; owner rule 3 (the error should be in the label or announced reliably); 3.3.2 for the format instruction
+- Who and what happens: every enabled date, time and datetime field on every page (staff and client) gets an extra button after it. Its aria-label is "Type date instead: " plus the label's full textContent, so it repeats the in-label hint, and any "*" that was aria-hidden is read as text. Checked in the browser on access_bookings: "Use date and time picker instead: When date and time; leave blank if not known yet". In text mode, the format "Type YYYY-MM-DDTHH:MM…" and any validation error sit in a `<p class="hint">` / `<p class="field-error">` after the field. That paragraph is reachable only through aria-describedby (which JAWS has been found to skip) and is also an extra line in browse mode. On Spanish client forms the button and note are English (marked lang="en"): checked on the Spanish referral form ("Type date instead" next to "Fecha de nacimiento").
+- WCAG / rule: project rule 1; project rule 3 (the error should be in the label or announced reliably); 3.3.2 for the format instruction
 - Fix: give the button a short name ("Type date instead", with the field name as visually hidden text only). In text mode, put the format inside the field's `<label>` as visually hidden text and add the error into the label as well, keeping the visible copy aria-hidden. Translate the strings on translated pages.
 - Status: CONFIRMED
 
 #### [Low] Live-region messages on Spanish pages mix English and Spanish under lang="es"
 - Where: public/assets/low-vision.js:60-61 ("Text size N%", " on"/" off"); public/assets/earcons.js:92 ("Sound cues on./off."); layout.php:87 (`Sound cues` button not passed through t())
 - Who and what happens: on Spanish client pages the low-vision bar's status says "Text size 150%. Vista actualizada." and "Más espacio entre el texto on. Vista actualizada." (both checked in the browser), all read in the Spanish voice. A staff member on a translated page also gets an English "Sound cues" button with no lang mark.
-- WCAG / rule: 3.1.2; owner rule 5
+- WCAG / rule: 3.1.2; project rule 5
 - Fix: put the message templates in data-* attributes rendered with __() (as data-saved already is), and use t('Sound cues').
 - Status: CONFIRMED
 
 #### [Low] Staff on a translated public page: timeout dialog, session-check messages and voice assistant are English without lang="en"
 - Where: public/inc/layout.php:223-311 (emitted after `PUBLIC_TRANSLATION` is restored at :171; `#timeout-warn`, `#session-check-live`, `#voice-fab` carry no lang)
 - Who and what happens: 4.29.0 marks the staff header and menu lang="en" when a signed-in user opens a Spanish public page. The inactivity warning ("Are you still there?…"), the expiry notice, the session-check and partial-date messages, and the whole voice panel are still English inside `<html lang="es">`. JAWS reads them in the Spanish voice, including the 2.2.1 warning. (Path traced in code; the test snapshots have no staff-on-Spanish page.)
-- WCAG / rule: 3.1.2; owner rule 5
+- WCAG / rule: 3.1.2; project rule 5
 - Fix: add `lang="en"` to `#timeout-warn`, `#session-check-live` and `#voice-fab` when page_lang() !== 'en'. The same applies to the `<dialog>` built by navigation.js (already en) and to session-forms.js's in-form message div.
 - Status: CONFIRMED (by code)
 
 #### [Low] Session-expired notice is spoken two or three times, under a dialog title that still asks "Are you still there?"
 - Where: public/assets/session-timeout.js:80-94; layout.php:234-246
 - Who and what happens: on expiry, expire() does three things at once. It moves `#tw-expired` into the role=alert region (announced), points aria-describedby at it, and focuses the link inside it. When the dialog was closed, it then opens with focus moved in, so JAWS reads the dialog name and description (the same text), then the link. The title stays "Are you still there?" although the session has ended.
-- WCAG / rule: owner rule 3 (same message announced once); 2.4.6
+- WCAG / rule: project rule 3 (same message announced once); 2.4.6
 - Fix: use one channel. Either focus the link with aria-describedby set to the notice, or announce through the alert without also describing. Change `#tw-title` to "You were signed out" while expired.
 - Status: PLAUSIBLE (announcement count depends on JAWS/Chrome; code path confirmed)
 
@@ -358,36 +358,36 @@ Already good, not reported: typed-name signing on sign/consent/release (2.5.7 me
 
 #### [Medium] Staff code check: the error is only in aria-describedby, and nothing takes focus
 - Where: public/verify.php:216-226 (rendered verify-post-*.html)
-- Who and what happens: After a wrong or expired code, the page reloads with autofocus on the code box. The error ("That code is not correct… 2 tries left", "Your code has expired. Use Send a new code") sits in a div above the field with no focus and no role. The field reaches it only through aria-describedby="code-error code-intro". The owner found that JAWS skips aria-describedby, so a JAWS user hears "Error" in the page title and then only "6-digit code, edit". They do not hear why, or how many tries are left. login.php, forgot.php and vrc.php all move focus to their error. This one sign-in step does not.
-- WCAG / rule: 3.3.1, 3.3.3; owner rules 1 and 3
+- Who and what happens: After a wrong or expired code, the page reloads with autofocus on the code box. The error ("That code is not correct… 2 tries left", "Your code has expired. Use Send a new code") sits in a div above the field with no focus and no role. The field reaches it only through aria-describedby="code-error code-intro". JAWS has been found to skip aria-describedby, so a JAWS user hears "Error" in the page title and then only "6-digit code, edit". They do not hear why, or how many tries are left. login.php, forgot.php and vrc.php all move focus to their error. This one sign-in step does not.
+- WCAG / rule: 3.3.1, 3.3.3; project rules 1 and 3
 - Fix: Render the error as the focused summary: tabindex="-1", focused on load (instead of autofocus on the field), with a link to #code, as form_error_summary() does. Keep aria-invalid on the field. Put the intro sentence in the label's hint rather than in aria-describedby.
 - Status: CONFIRMED
 
 #### [Medium] Custom referral questions: English labels, hints and options are not marked lang="en" on the Spanish form
 - Where: public/inc/custom_fields.php:27-29, 138-141, 152-154 (used by community_referral.php:663-670)
 - Who and what happens: custom_field_label() falls back to the English label when label_es is empty, and prints it without a lang attribute. The field's hint has no Spanish column at all and is always printed unmarked. The options of a choice field are administrator English, also unmarked. On ?lang=es, a Spanish screen-reader voice reads these English words with Spanish pronunciation. The rest of the form avoids this with $whole and $hintInline, and wording_html() avoids it with <span lang="en">.
-- WCAG / rule: 3.1.2; owner rule 5
+- WCAG / rule: 3.1.2; project rule 5
 - Fix: In public mode, wrap the label in <span lang="en"> when label_es is empty and the page is Spanish. Always wrap the hint and the choice options that way (options cannot hold a span, so put lang="en" on each <option>, as select_options() does). Better still, add a hint_es column.
 - Status: CONFIRMED (code)
 
 #### [Medium] Choosing a role on the referral form makes a second announcement on every arrow press
 - Where: public/community_referral.php:508, 732-740
-- Who and what happens: The "I am referring as a…" radios fire change on every arrow key. announce() then writes "Showing the questions for: <role>." into a polite status region 50 ms later. A screen-reader user arrowing through 6–7 roles hears each radio, then the same name again from the live region, queued on every press. This is the per-arrow live-region chatter the owner's combo-box rule forbids. The same handler also rewrites the hidden sections and required flags on every step.
-- WCAG / rule: owner rule 2 (spirit); 4.1.3 is satisfied, but too chatty
+- Who and what happens: The "I am referring as a…" radios fire change on every arrow key. announce() then writes "Showing the questions for: <role>." into a polite status region 50 ms later. A screen-reader user arrowing through 6–7 roles hears each radio, then the same name again from the live region, queued on every press. This is the per-arrow live-region chatter the project's combo-box rule forbids. The same handler also rewrites the hidden sections and required flags on every step.
+- WCAG / rule: project rule 2 (spirit); 4.1.3 is satisfied, but too chatty
 - Fix: Debounce announce() by about 700 ms (clear the timer on each change), or announce on focusout of the role group, so only the final choice is spoken once.
 - Status: CONFIRMED
 
 #### [Medium] A referral that is turned down is emailed in English even when it was sent in Spanish
 - Where: public/inc/case_outcomes.php:65; template 'referral_closed' in public/inc/core.php:319 (it has no _es version)
 - Who and what happens: A Spanish speaker who refers themselves on ?lang=es has preferred_language='es' stored on the referral. When staff decline it, the email with the reason is always the English template, and the reason comes from an English list. Every other email a client receives has a Spanish version picked by email_template_for_client().
-- WCAG / rule: Language access (no SC applies to email); owner rule 5 (spirit)
+- WCAG / rule: Language access (no SC applies to email); project rule 5 (spirit)
 - Fix: Add referral_closed_es, and choose it by the referral's preferred_language. Translate the close reasons or mark them as English.
 - Status: CONFIRMED (code)
 
 #### [Low] A customised English email silently replaces the Spanish one for Spanish clients
 - Where: public/inc/core.php:491-497 (email_template_for_client)
 - Who and what happens: If an administrator edits the English subject or body of any client template (for example to fix the organisation's wording), every Spanish-preferring client gets that English email from then on. The Spanish template is skipped, and nothing on the Email templates page says so.
-- WCAG / rule: Language access; owner rule 5 (spirit)
+- WCAG / rule: Language access; project rule 5 (spirit)
 - Fix: Let the _es template be edited separately and keep sending it. At minimum, warn on the Email templates page that saving an English change turns off the Spanish version.
 - Status: CONFIRMED (code)
 
@@ -400,36 +400,36 @@ Already good, not reported: typed-name signing on sign/consent/release (2.5.7 me
 
 #### [Low] Group errors are not on the radios themselves (survey, device check-in, referral groups)
 - Where: public/survey.php:140, 157; public/portal.php:1139; public/community_referral.php:492/504, 583/588, 592/602, 675/679, 558/565
-- Who and what happens: For an unanswered radio group, aria-invalid is never set on the radios. The error is tied only to the fieldset through aria-describedby, which JAWS skipped for the owner. On the referral form the error paragraph also comes after all the options. A user who follows the summary link to the first radio hears the legend and "radio button, not checked", without the error or "invalid entry". (The summary link text does carry the message once.)
-- WCAG / rule: 3.3.1; owner rule 3
+- Who and what happens: For an unanswered radio group, aria-invalid is never set on the radios. The error is tied only to the fieldset through aria-describedby, which JAWS has been seen to skip. On the referral form the error paragraph also comes after all the options. A user who follows the summary link to the first radio hears the legend and "radio button, not checked", without the error or "invalid entry". (The summary link text does carry the message once.)
+- WCAG / rule: 3.3.1; project rule 3
 - Fix: Put aria-invalid="true" on each radio of a group in error. Place the error paragraph right after the legend (survey and portal already do this; the referral form does not). Do not rely on describedby on the fieldset.
 - Status: CONFIRMED (code)
 
 #### [Low] "Time with your instructor" (self-booking) is effectively required but not marked
 - Where: public/portal.php:898-899
 - Who and what happens: Submitting with "Choose a time" is refused with "Choose a time first." The label has no "(required)" and the select has no required or aria-required, unlike every other required field on the portal.
-- WCAG / rule: 3.3.2; owner rule 4
+- WCAG / rule: 3.3.2; project rule 4
 - Fix: Add <span class="hint">(required)</span> inside the label and required (or aria-required="true") on the select.
 - Status: CONFIRMED
 
 #### [Low] Required custom referral questions are not programmatically required
 - Where: public/inc/custom_fields.php:138, 143-158
 - Who and what happens: A custom field the administrator marks Required shows "* (required)" in its label, but the input, select or textarea gets no required or aria-required. The state is announced only as words in the name.
-- WCAG / rule: owner rule 4 (3.3.2 / 4.1.2 polish)
+- WCAG / rule: project rule 4 (3.3.2 / 4.1.2 polish)
 - Fix: Add aria-required="true" (the form is novalidate) when $f['required'] is set.
 - Status: CONFIRMED
 
 #### [Low] "Share a document": file types and size are not in the file field's label
 - Where: public/portal.php:1211-1215
 - Who and what happens: The allowed types and the 15 MB limit are only in the paragraph above the form. A JAWS user who tabs to the field hears "Choose a file (required)" and nothing more. The message form's file field in the same page does put "(optional; PDF, Office, text or image, up to 15 MB)" in its label.
-- WCAG / rule: owner rule 1 (hint inside the label); 3.3.2
+- WCAG / rule: project rule 1 (hint inside the label); 3.3.2
 - Fix: Add the same short hint inside the "Choose a file" label.
 - Status: CONFIRMED
 
 #### [Low] "My information" is read twice, as a hidden heading and then the summary
 - Where: public/portal.php:1289-1291
 - Who and what happens: A visually hidden <h3>Update my details</h3> sits directly before <summary>Update my details</summary>. Reading down, a screen-reader user hears "heading level 3, Update my details" and then "Update my details, collapsed button". That is an extra stop with the same words.
-- WCAG / rule: owner rule 1 (no extra keystrokes)
+- WCAG / rule: project rule 1 (no extra keystrokes)
 - Fix: Put the heading inside the summary (<summary><h3 class="legend-h">…</h3></summary>), or drop the hidden heading.
 - Status: CONFIRMED
 
@@ -473,7 +473,7 @@ Already good, not reported: typed-name signing on sign/consent/release (2.5.7 me
 ### Coverage
 Covered fully (code and rendered page): portal.php (all sections, including homework support, the AI explanation, practice, devices, requests, offered times, self-booking, documents, messages, profile, guides, resources and the learning library), sign.php, consent.php, release.php, survey.php, ack.php, vrc.php (verify, caseload, timeout dialog, messages), community_referral.php (with custom fields), self_referral.php and referral.php (redirects), login.php, forgot.php, reset.php, verify.php, help.php (client sections), accessibility.php, the client and counselor email templates, and Spanish language marking on every Spanish page the suite rendered.
 
-Not finished or not done: privacy.php was checked only by the Spanish-marking scan and the 320 px reflow test, not read in full. eval_report.php, amendment_request.php, kb.php and report.php are staff-only pages (require_login); they were skimmed for labels only and are left to the staff-area audit. No live JAWS, NVDA or VoiceOver run was possible. The JAWS behaviour above comes from the owner's reported describedby problem and JAWS's default punctuation level. Contrast across the vision palettes and text spacing were not re-tested (tests/accessibility_browser.js already covers them). The suite run stopped early (tests/full_schema.php:48: the app kit no longer matches the four modified android/ files in the working tree). Most public pages had already rendered, but sign.php and Spanish versions of consent and survey were not rendered and were reviewed from code.
+Not finished or not done: privacy.php was checked only by the Spanish-marking scan and the 320 px reflow test, not read in full. eval_report.php, amendment_request.php, kb.php and report.php are staff-only pages (require_login); they were skimmed for labels only and are left to the staff-area audit. No live JAWS, NVDA or VoiceOver run was possible. The JAWS behaviour above comes from the reported describedby problem and JAWS's default punctuation level. Contrast across the vision palettes and text spacing were not re-tested (tests/accessibility_browser.js already covers them). The suite run stopped early (tests/full_schema.php:48: the app kit no longer matches the four modified android/ files in the working tree). Most public pages had already rendered, but sign.php and Spanish versions of consent and survey were not rendered and were reviewed from code.
 
 ## Area: cases
 
@@ -486,76 +486,76 @@ Overall the area is in good shape. Buttons and links repeated on each row nearly
 #### [Medium] The training-track list on Schedule a session gives every option a "Client — Track" prefix, and the list holds every client's tracks
 - Where: public/schedule.php:1104-1107 (`h($t['client_name'] . ' — ' . $t['title'])`); rendered schedule-2e648c75.html line 187 (about 60 options)
 - Who and what happens: A JAWS user who has already chosen the client has to arrow through every other client's tracks. Each option repeats a client name first, so the track name comes last in every announcement. Nothing narrows the list to the chosen client, so picking another client's track is only caught on submit ("belongs to a different client").
-- WCAG / rule: Owner rule 2 (no "Area — item" prefixes; use optgroup); 2.4.6 / 3.3.2 (usability of the control)
+- WCAG / rule: Project rule 2 (no "Area — item" prefixes; use optgroup); 2.4.6 / 3.3.2 (usability of the control)
 - Fix: Group the options with `<optgroup label="Client name">` and make each option the track title only. Better still, list only the chosen client's tracks, as the group form already does with `$tracksByClient`. If the list is filtered with a script, filter it on blur or debounce it, and announce nothing.
 - Status: CONFIRMED
 
 #### [Medium] A note's Edit / Add addendum link and its heading give only the subject, never the date
 - Where: public/client.php:1906 (`<h3><?= h($n['subject']) ?></h3>`), 1917, 1919; public/track.php:1000, 1012, 1014
-- Who and what happens: Notes are often given the same subject every week ("Weekly session", "Phone call"). In the JAWS links list and the headings list, each note then reads the same: "Edit note: Weekly session" several times. The owner cannot tell which note a link opens without reading the whole note. The default subject on track session notes includes the date, but subjects that staff type do not.
-- WCAG / rule: 2.4.4 / 2.4.9 link purpose; 2.4.6 headings; owner's row-subject naming rule ("Edit note from Oct 3")
+- Who and what happens: Notes are often given the same subject every week ("Weekly session", "Phone call"). In the JAWS links list and the headings list, each note then reads the same: "Edit note: Weekly session" several times. A screen-reader user cannot tell which note a link opens without reading the whole note. The default subject on track session notes includes the date, but subjects that staff type do not.
+- WCAG / rule: 2.4.4 / 2.4.9 link purpose; 2.4.6 headings; project row-subject naming rule ("Edit note from Oct 3")
 - Fix: Add the date to the hidden text, for example `Edit<span class="visually-hidden"> note from <?= fmt_date(created_at) ?>: subject</span>`, and do the same for Add addendum and "Earlier versions". Consider adding the date to the h3 too (for example "Weekly session, Oct 3, 2026").
 - Status: CONFIRMED
 
 #### [Medium] Referral view: the referral list has no heading and is filed under the open referral's "Assignment" heading
 - Where: public/referrals.php:398-401 (h3 Referral notes, h3 Assignment), then 470 (filter form) and 492 (table) with no heading; rendered referrals-0e79b348.html and referrals-39585dca.html
-- Who and what happens: While a referral is open, the filter form and the "Open referrals" table come straight after "h3 Assignment". With heading navigation, the owner cannot jump to the list. Screen-reader structure also presents the whole list as part of the open referral's Assignment section. Without a referral open, the page has only an H1.
+- Who and what happens: While a referral is open, the filter form and the "Open referrals" table come straight after "h3 Assignment". With heading navigation, a screen-reader user cannot jump to the list. Screen-reader structure also presents the whole list as part of the open referral's Assignment section. Without a referral open, the page has only an H1.
 - WCAG / rule: 1.3.1 info and relationships; 2.4.6 headings
 - Fix: Add `<h2 id="ref-list-h">Open referrals (N)</h2>` (wording that follows the status filter) before the filter form, and point the table region's aria-labelledby at it.
 - Status: CONFIRMED
 
 #### [Low] Clients page has no heading or count for its results
 - Where: public/clients.php:174-181; rendered clients.html (only the H1)
-- Who and what happens: After Apply filters, the owner has no heading to jump to and hears no match count. The count is only in the hidden caption, and only when results are truncated. The owner has to find the table with T or by arrowing past the whole filter form.
+- Who and what happens: After Apply filters, a screen-reader user has no heading to jump to and hears no match count. The count is only in the hidden caption, and only when results are truncated. They have to find the table with T or by arrowing past the whole filter form.
 - WCAG / rule: 2.4.6, 1.3.1; 4.1.3 (the result count is a status the user needs)
 - Fix: Add `<h2 id="clients-h" tabindex="-1">Clients (N)</h2>` before the table, with the table region labelled by it. Optionally focus it after a filter post.
 - Status: CONFIRMED
 
 #### [Low] Goal template "Area" select labels its first option with a count: "All areas (6703)"
 - Where: public/track.php:1129
-- Who and what happens: The count is read every time the owner arrows onto the first option, and it changes as templates are added.
-- WCAG / rule: Owner rule 2 (no "(N)" counts in option labels)
+- Who and what happens: The count is read every time a screen-reader user arrows onto the first option, and it changes as templates are added.
+- WCAG / rule: Project rule 2 (no "(N)" counts in option labels)
 - Fix: Use "All areas" and give the count in the static hint text if it is wanted.
 - Status: CONFIRMED
 
 #### [Low] Goal template search announces the match count after every 250 ms pause in typing
 - Where: public/track.php:1200-1203 (`schedule()` with `setTimeout(query,250)`, and `render()` writes `#tpl-count`, which is role=status)
 - Who and what happens: A screen-reader user typing in Search with key echo hears "N shown" between words, which cuts across their own echo. The Area select was already debounced to 700 ms for this reason, but the search box was not. Also, the blur handler re-runs the query whenever `timer` is set, and `timer` is never cleared after it fires. Tabbing away from Area therefore runs the query a second time and re-writes the same count.
-- WCAG / rule: 4.1.3 (status messages kept quiet); owner rule 2 (spirit: no chatty announcements while operating a control)
+- WCAG / rule: 4.1.3 (status messages kept quiet); project rule 2 (spirit: no chatty announcements while operating a control)
 - Fix: Debounce the search box to about 700 ms, or announce only on Enter or blur. Set `timer=null` inside the timeout callback.
 - Status: CONFIRMED (code); the double count on blur is PLAUSIBLE (depends on whether JAWS re-reads identical text)
 
 #### [Low] Fields marked "* (required)" are not programmatically required: release form, hold reason, the signing pages
 - Where: public/client.php:1555 (rel_signer), 1559 (rel_rtype), 1561 (rel_rname), 1564 (Information covered fieldset), 1574 (rel_purpose); client.php:1603-1605 (hold_reason: required by client_set_hold, but not marked at all); public/signatures.php "Their full name" (signer_name) and the hand-over page's "Electronic signature" input (rendered signatures-5b842594.html: input has no `required`). public/followups.php:171 "Still in use?" has the required radio and hidden "(required)" text but no visible marker.
 - Who and what happens: JAWS hears "(required)" from the label text, but the field does not report "required", and forms mode does not list it as required. Hold reason gives no warning at all until the server refuses it. In the "Information covered" group, the checkboxes are not set aria-invalid when the group is refused; only the fieldset has aria-describedby.
-- WCAG / rule: Owner rule 4; 3.3.2; 4.1.2; owner rule 3 (aria-invalid on the refused field)
+- WCAG / rule: Project rule 4; 3.3.2; 4.1.2; project rule 3 (aria-invalid on the refused field)
 - Fix: Add `required` (the forms are already `novalidate`) or `aria-required="true"`. Add the visible * and hidden "(required)" to Hold reason and to "Still in use?". Put aria-invalid on the release info checkboxes when `info` is refused.
 - Status: CONFIRMED
 
 #### [Low] Log-entry "Correct" controls name only the date
 - Where: public/track.php:971 (summary "Correct the log entry from <date>") and 978 ("Save correction for <date>")
 - Who and what happens: Two entries on the same day (for example a morning and an afternoon session) give identical names. The Move to trash button beside them already adds hours and description.
-- WCAG / rule: 2.4.6 / 2.4.9; owner's row-subject naming rule
+- WCAG / rule: 2.4.6 / 2.4.9; project row-subject naming rule
 - Fix: Reuse the trash button's suffix (date, hours, the first 50 characters of the activity) in the summary and the Save correction button.
 - Status: CONFIRMED
 
 #### [Low] Session status options are sentences
 - Where: public/schedule.php:992-997 ("Completed — hours already logged (1 hour: description…)", "Completed — log hours as well (a separate visit)", "Completed (log hours)")
-- Who and what happens: Long option text is read on every arrow press in the per-row status combo box. This is the owner's most-used control on the schedule.
-- WCAG / rule: Owner rule 2 (plain option labels, no sentences)
+- Who and what happens: Long option text is read on every arrow press in the per-row status combo box. This is one of the most-used controls on the schedule.
+- WCAG / rule: Project rule 2 (plain option labels, no sentences)
 - Fix: Use short labels ("Completed, hours already logged", "Completed, log new hours", "Cancelled", "No Show"). Move the explanation into the select's label hint and the existing confirm text.
 - Status: CONFIRMED
 
 #### [Low] A hint on the intake page sits on its own line
 - Where: public/intake.php:185 (`<p class="hint">Drafting again replaces the assessment draft below…</p>` before the button)
 - Who and what happens: It is an extra line to arrow past, separate from the control it explains.
-- WCAG / rule: Owner rule 1
+- WCAG / rule: Project rule 1
 - Fix: Put it inside the button as visually-hidden text (for example "Draft assessment with AI<span class=visually-hidden>: replaces the draft below</span>"). Only do this when `$generated` is set; the confirm() already covers edited drafts.
 - Status: CONFIRMED
 
 #### [Low] Confirm dialogs that do not name the item
 - Where: public/client.php:2112 ("Move this document to the trash?"); public/tasks.php:285 ("Delete this task permanently?"); public/trash.php ("Permanently delete this item? This cannot be undone."); public/client_merge.php:343 ("Merge and remove the duplicate record?"); public/referrals.php ("Mark this referral as reviewed?")
-- Who and what happens: The dialog is all JAWS reads, so after a mis-press on the wrong row the owner cannot catch it. Other confirms in the area already name the item (log entries, expenses, releases, follow-ups, portal link).
+- Who and what happens: The dialog is all JAWS reads, so after a mis-press on the wrong row a screen-reader user cannot catch it. Other confirms in the area already name the item (log entries, expenses, releases, follow-ups, portal link).
 - WCAG / rule: 3.3.4 error prevention (the confirmation should identify what is affected)
 - Fix: Put the item into the text the same way the trash buttons do (document title, task title, item description, the two record names).
 - Status: CONFIRMED
@@ -569,8 +569,8 @@ Overall the area is in good shape. Buttons and links repeated on each row nearly
 
 #### [Low] The client merge review uses role="alert" for a long block present at load, and a fieldset legend of about 60 words
 - Where: public/client_merge.php:277 (`<div class="alert alert-error" role="alert">`) and 312 (legend with a long hint)
-- Who and what happens: Chrome with JAWS can announce a role=alert that exists at load, and then the owner reads it again when arrowing. The long legend is re-read whenever focus enters the "Blank fields" group, which slows ticking through the boxes.
-- WCAG / rule: 4.1.3 (alert used for static content); owner rule 1 (spirit: no long repeated hint)
+- Who and what happens: Chrome with JAWS can announce a role=alert that exists at load, and then the user reads it again when arrowing. The long legend is re-read whenever focus enters the "Blank fields" group, which slows ticking through the boxes.
+- WCAG / rule: 4.1.3 (alert used for static content); project rule 1 (spirit: no long repeated hint)
 - Fix: Drop role="alert", make the review a section with an h2 ("Check before merging"), and keep the legend short. Move the email explanation into the labels of the email checkboxes only.
 - Status: PLAUSIBLE (announcement behaviour not tested in JAWS)
 
@@ -587,7 +587,7 @@ Fully, from rendered pages and source: dashboard (index), clients, client (overv
 
 ### Accessibility audit: admin area (billing, reports, administration, printables), release 4.29.0
 
-Read-only review. The rendered pages came from the integration suite using a separate database (cms_a11y_admin, now dropped). The main checkout's suite stopped at the app-kit check (the owner's uncommitted Android files), so pages it did not reach were reviewed from source. A second run used the clean copy at /private/tmp/claude-501/a11y/wt (database cms_a11y_admin2, dropped). It rendered 314 pages, then stopped at a voice-booking test that collided with a 13:00 session, a timing flake unrelated to accessibility. Line numbers refer to public/ at 4.29.0.
+Read-only review. The rendered pages came from the integration suite using a separate database (cms_a11y_admin, now dropped). The main checkout's suite stopped at the app-kit check (uncommitted local Android files), so pages it did not reach were reviewed from source. A second run used the clean copy at /private/tmp/claude-501/a11y/wt (database cms_a11y_admin2, dropped). It rendered 314 pages, then stopped at a voice-booking test that collided with a 13:00 session, a timing flake unrelated to accessibility. Line numbers refer to public/ at 4.29.0.
 
 ### Billing, generated documents and reports
 
@@ -610,8 +610,8 @@ Read-only review. The rendered pages came from the integration suite using a sep
 
 #### [Medium] A refused save on custom reports and on the incoming-authorization paste form gives no error summary and moves focus nowhere
 - Where: custom_reports.php:16 (report_name error) with the form at :141-149 (field_error only, no form_error_summary); authorizations.php:31-32 (email_text error) with the form at :144-150 (no form_error_summary).
-- Who and what happens: the redirect lands on #save-h or #paste-h with only an inline error, tied by aria-describedby, which is the channel the owner reports JAWS skipping. There is no flash and no summary, so nothing takes focus or is announced except "Error —" in the title. A JAWS user who presses Save report, or Read the email, hears the page reload and may believe it worked.
-- WCAG / rule: 3.3.1, 4.1.3; owner rule 3
+- Who and what happens: the redirect lands on #save-h or #paste-h with only an inline error, tied by aria-describedby, which is the channel JAWS has been reported to skip. There is no flash and no summary, so nothing takes focus or is announced except "Error —" in the title. A JAWS user who presses Save report, or Read the email, hears the page reload and may believe it worked.
+- WCAG / rule: 3.3.1, 4.1.3; project rule 3
 - Fix: echo `form_error_summary(['report_name' => 'Name'])` inside the save form, and `form_error_summary(['email_text' => 'The authorization email'])` inside the paste form.
 - Status: CONFIRMED
 
@@ -622,7 +622,7 @@ Read-only review. The rendered pages came from the integration suite using a sep
   - portal_requests.php:87 ("choose at least one open request": flash only)
   - authorizations.php:50-52 ("Choose the client this authorization is for.": flash, with the #client-choice fieldset not marked)
 - Who and what happens: the user hears the flash, but the control is not aria-invalid and has no inline error. On qbo.php the typed date is replaced by the stored one, so it must be retyped.
-- WCAG / rule: 3.3.1, 3.3.7; owner rule 3
+- WCAG / rule: 3.3.1, 3.3.7; project rule 3
 - Fix: keep_input() and keep_field_errors() keyed to the control or fieldset, plus form_error_summary in those forms, and no flash for the same error.
 - Status: CONFIRMED
 
@@ -632,7 +632,7 @@ Read-only review. The rendered pages came from the integration suite using a sep
   - templates.php:313 ("All areas (6703)")
   - audit.php:273 (client filter options "Name — #12", with "(archived)")
 - Who and what happens: JAWS reads the count and sentence on every arrow press through the list, against the quiet-combo rule.
-- WCAG / rule: owner rule 2
+- WCAG / rule: project rule 2
 - Fix:
   - Funder report: plain agency names. Put agencies with no current tracks in an `<optgroup label="Billed work only">`, and give the track count on the page after Run.
   - Templates: "All areas".
@@ -642,27 +642,27 @@ Read-only review. The rendered pages came from the integration suite using a sep
 #### [Medium] Letters are always marked lang="en" and filled in English, even for a client whose preferred language is Spanish
 - Where: letters.php:48 `plain_document_html($title, $body)` (inc/portal_history.php:24 defaults `$lang = 'en'`); LETTER_TEMPLATES are English only. The client's preferred_language (client_lang()) is never consulted.
 - Who and what happens: a letter written in Spanish for a Spanish-speaking client (staff translate the English wording) is saved to the client's documents and portal as `<html lang="en">`. The client's screen reader reads it with an English voice. A letter left in English on a Spanish portal is correctly marked, but the client gets no Spanish wording at all.
-- WCAG / rule: 3.1.1; owner rule 5
+- WCAG / rule: 3.1.1; project rule 5
 - Fix: pass client_lang($cid) to plain_document_html, or add a "Letter language" choice on the form. Add Spanish built-in wording (letter_es_*), as wording.php already does for interface text.
 - Status: CONFIRMED (code); the impact depends on staff writing Spanish letters
 
 #### [Low] Survey comments from Spanish-speaking clients are shown without lang="es"
 - Where: survey_responses.php:58 (`<td><?= h((string)$r['comments']) ?></td>`); also the CSV. The survey page is bilingual (survey.php lang toggle), but the answer's language is not stored or used.
 - Who and what happens: JAWS reads Spanish comments with an English voice on the English staff page.
-- WCAG / rule: 3.1.2; owner rule 5
+- WCAG / rule: 3.1.2; project rule 5
 - Fix: store the page language with each answer (or use client_lang()), and wrap the comment in `<span lang="es">` when it is Spanish.
 - Status: PLAUSIBLE
 
 #### [Low] Letters: the Letter body is required but not marked
 - Where: letters.php:101 (textarea #body). It is refused when empty (:40), but has no required_mark() and no `required` or aria-required.
-- WCAG / rule: 3.3.2; owner rule 4
+- WCAG / rule: 3.3.2; project rule 4
 - Fix: required_mark() in the label and `required` (the form is not novalidate, so add novalidate as well, so the server summary handles it).
 - Status: CONFIRMED
 
 #### [Low] Report period notes ("The From date could not be read") are a plain paragraph, not tied to the date field
 - Where: inc/report_period.php:56 and :82 notes, printed as a `<p>` by funder_report.php:155, agency_scorecard.php:99, referral_deadlines.php:32, survey_responses.php:46 and the other reports using report_period_form.
 - Who and what happens: an unreadable date silently falls back to the preset or default range. The note is not announced and the field is not aria-invalid, so a JAWS user can run a report for a period they did not ask for without noticing.
-- WCAG / rule: 3.3.1; owner rule 3
+- WCAG / rule: 3.3.1; project rule 3
 - Fix: when notes exist, mark the From or To field aria-invalid with an inline error and show a focused summary (or role="status" text placed first after the h1).
 - Status: CONFIRMED (code)
 
@@ -671,14 +671,14 @@ Read-only review. The rendered pages came from the integration suite using a sep
 #### [Medium] Users: a wrong confidentiality or privacy-training date has no error summary and gets no focus
 - Where: users.php:95-97 (validation), :502-503 (form_error_summary label list leaves out confidentiality_signed_on and privacy_training_on)
 - Who and what happens: the save is refused with only inline errors. Nothing is announced or focused.
-- WCAG / rule: 3.3.1, 4.1.3; owner rule 3
+- WCAG / rule: 3.3.1, 4.1.3; project rule 3
 - Fix: add both keys to the summary labels, with anchors u_conf and u_priv.
 - Status: CONFIRMED
 
 #### [Medium] My account: a refused mobile number has no error summary
 - Where: account.php:19 (keep_field_errors mobile), form :314-319 (no form_error_summary)
 - Who and what happens: the page reloads at #mobile-h with only an inline aria-describedby error. The user believes the number was saved.
-- WCAG / rule: 3.3.1, 4.1.3; owner rule 3
+- WCAG / rule: 3.3.1, 4.1.3; project rule 3
 - Fix: `form_error_summary(['mobile' => 'Mobile number'])` in that form.
 - Status: CONFIRMED
 
@@ -687,7 +687,7 @@ Read-only review. The rendered pages came from the integration suite using a sep
 - Who and what happens:
   - A required custom field says "(required)" or "requerido" only in its label text. There is no `required` or aria-required, on staff pages and on the public referral form.
   - On the Spanish form, the hint, the choice options and any label without a Spanish version come out in English with no lang="en", so they are read with a Spanish voice.
-- WCAG / rule: 1.3.1, 3.3.2, 3.1.2; owner rules 4 and 5
+- WCAG / rule: 1.3.1, 3.3.2, 3.1.2; project rules 4 and 5
 - Fix:
   - Emit `required aria-required="true"` on required fields.
   - On Spanish pages, wrap English text in lang="en" (on the option itself for choices).
@@ -697,14 +697,14 @@ Read-only review. The rendered pages came from the integration suite using a sep
 #### [Medium] Equipment reservation refused because the item was retired: flash only, and the typed values are lost
 - Where: equipment.php:182-185 (and the DomainException flash on return, :282)
 - Who and what happens: the client, dates and notes the user typed are discarded, and the message is not tied to the item field.
-- WCAG / rule: 3.3.1, 3.3.7; owner rule 3
+- WCAG / rule: 3.3.1, 3.3.7; project rule 3
 - Fix: keep_input() and keep_field_errors(['res_equipment_id' => ...]), then redirect to #res-form.
 - Status: CONFIRMED
 
 #### [Low] Forms with `required` controls but no `novalidate`, so Chrome's bubble replaces the site's error summary
 - Where: equipment.php:572 (scan-page loan form), equipment.php:966 (#res-form), procurement.php:370, :442, :471, programs.php:326, at_services.php:222, :230
 - Who and what happens: on an empty submit, Chrome shows its transient validation bubble, which JAWS reads inconsistently, and the focused summary never appears. This is inconsistent with the rest of the site.
-- WCAG / rule: 3.3.1; owner rule 3
+- WCAG / rule: 3.3.1; project rule 3
 - Fix: add novalidate (the server already checks). Turn the flash refusals at procurement.php:285 into field errors.
 - Status: CONFIRMED
 
@@ -719,7 +719,7 @@ Read-only review. The rendered pages came from the integration suite using a sep
   - at_services.php:223, 225; update.php:108 (have_backup checkbox); templates.php:548 (higher_is_better radios)
   - funding_agencies.php:126 (Agency name, every agency form) and vr_portal.php:91, :150 (note_t*, note_i*): label says "(required)", control has no `required`/aria-required (rendered pages)
   - admin.php:325, 330, 340: a bare "*" that JAWS reads as "star", instead of required_mark()
-- WCAG / rule: 3.3.2, 1.3.1; owner rule 4
+- WCAG / rule: 3.3.2, 1.3.1; project rule 4
 - Fix: required_mark() in each label together with `required` or aria-required on each control.
 - Status: CONFIRMED
 
@@ -731,25 +731,25 @@ Read-only review. The rendered pages came from the integration suite using a sep
 
 #### [Low] Option labels with status suffixes
 - Where: equipment.php:745 and at_services.php:225 ("... — held by a reservation"); equipment.php:975 ("Name (Available)" / "(On Loan)")
-- WCAG / rule: owner rule 2
+- WCAG / rule: project rule 2
 - Fix: use optgroups by status, and keep the option text to name and serial.
 - Status: CONFIRMED
 
 #### [Low] Credentials: the "Other" name error is put on the Credential select, not on the name field
 - Where: credentials.php:40 (error keyed type) and :78-79 (other_name has no field_aria or field_error)
-- WCAG / rule: 3.3.1; owner rule 3
+- WCAG / rule: 3.3.1; project rule 3
 - Fix: key the error to other_name, and give that field field_aria, field_error and the summary anchor.
 - Status: CONFIRMED
 
 #### [Low] Graph secret expiry date: flash-only error, and the typed value is lost
 - Where: system_health.php:45 (form at about :232-236)
-- WCAG / rule: 3.3.1, 3.3.7; owner rule 3
+- WCAG / rule: 3.3.1, 3.3.7; project rule 3
 - Fix: keep_input(), keep_field_errors(['graph_expires' => ...]), field_aria, field_error and a summary.
 - Status: CONFIRMED
 
 #### [Low] Help text outside the label (separate lines)
 - Where: admin.php:563 (note-lock), admin.php:578 (retention), email_templates.php:79 (the "Available placeholders" paragraph above the Body field), users.php:599 (caseload transfer)
-- WCAG / rule: owner rule 1 (3.3.2)
+- WCAG / rule: project rule 1 (3.3.2)
 - Fix: move each into the control's `<label>` as `<span class="hint">`.
 - Status: CONFIRMED
 
@@ -758,13 +758,13 @@ Read-only review. The rendered pages came from the integration suite using a sep
 - Who and what happens:
   - The error goes to a role="alert" paragraph and the password field gets aria-invalid plus aria-describedby, but focus stays on the button.
   - The cancel text says "Choose Add passkey", while the button reads "Add a passkey on this device".
-- WCAG / rule: 3.3.1; owner rule 3
+- WCAG / rule: 3.3.1; project rule 3
 - Fix: focus #pk_pw on a password error, and match the button's wording.
 - Status: CONFIRMED
 
 #### [Low] Spanish setting values are not marked lang="es"
 - Where: settings.php:126-127 (brand.privacy_law_es and any key ending in _es)
-- WCAG / rule: 3.1.2; owner rule 5
+- WCAG / rule: 3.1.2; project rule 5
 - Fix: add lang="es" to inputs for _es keys, as wording.php:71 already does.
 - Status: CONFIRMED
 
@@ -795,7 +795,7 @@ Read-only review. The rendered pages came from the integration suite using a sep
 
 Method: 329 pages rendered by tests/full_schema.php from a clean export of HEAD 1099ab9 (the same tree as /private/tmp/claude-501/a11y/wt), using my own database cms_a11y_automated, which is now dropped. Pages are in /private/tmp/claude-501/a11y/pages_auto. Pages were served the same way as tests/accessibility_browser.js: only audit.invalid is allowed, /assets/* maps to public/assets, and everything else is blocked. Tools: system Chrome, playwright 1.48.2, axe-core 4.10.2.
 - Full axe run (wcag2a, wcag2aa, wcag21a, wcag21aa, wcag22aa, best-practice) on every page at 1280 px and at 320 px.
-- Contrast rules (color-contrast, link-in-text-block) on every page in each vision palette: light, dark, black, white, yellow, cream. Every page has the palette switch. Each palette was set through the cms_low_vision localStorage key, and data-vision-palette was checked as applied on every scan.
+- Contrast rules (color-contrast, link-in-text-block) on every page in each vision palette: light, dark, black, white, yellow, cream. Every page has the palette switch. Each palette was set through the low-vision localStorage key, and data-vision-palette was checked as applied on every scan.
 - 2,632 scans, with no load errors.
 - tests/accessibility_browser.js run on the same pages: PASS (329 pages, 1,316 reflow scenarios, skip link, table scroll, menu, palettes, print).
 - Axe does not catch clipped controls, so I ran two extra layout probes on every page at 320 and 1280: selects too narrow to show their value, and words split across lines inside buttons. Screenshots: /private/tmp/claude-501/a11y/s1.png, s2.png, s3.png, s6.png, r1.png, r2.png, r3.png, ov1b.png.
@@ -841,7 +841,7 @@ Not covered:
 - The apps.
 
 Harness notes, not accessibility defects:
-1. In the main checkout, full_schema.php stops at v418_cases.php because of the owner's uncommitted android/ build-file edits. I left them untouched and rendered from a clean export.
+1. In the main checkout, full_schema.php stops at v418_cases.php because of uncommitted local android/ build-file edits. I left them untouched and rendered from a clean export.
 2. tests/v429_api_cases.php:181 is clock-dependent. It books a voice session at "+16 days 13:00", which collided with an earlier case's session when the suite ran at 12:10. I changed it to 21:00 in my scratch copy only.
 
 ## Area: ios
@@ -854,7 +854,7 @@ Overall the app is in very good shape. These are already handled well: one Voice
 
 #### [Medium] White text on light-blue buttons in dark mode: "Check in" and "Sign the agreement"
 - Where: ios/Sources/ScheduleView.swift:393 (Check in on each session row), ios/Sources/AgreementsView.swift:82 (Sign the agreement)
-- Who and what happens: In dark mode the brand tint is light blue (#C2D0FB). These two `.borderedProminent` buttons don't use `.onBrandLabel()`, so their labels stay white. The app's own OnBrandLabel note (CaseManagementApp.swift:918) puts that at about 2:1. A low-vision instructor in dark mode can't read Check in, which they use every day. Every other prominent button in the app sets onBrandLabel.
+- Who and what happens: In dark mode the brand tint is light blue (#C2D0FB). These two `.borderedProminent` buttons don't use `.onBrandLabel()`, so their labels stay white. The app's own OnBrandLabel note (the main app file, line 918) puts that at about 2:1. A low-vision instructor in dark mode can't read Check in, which they use every day. Every other prominent button in the app sets onBrandLabel.
 - WCAG / rule: 1.4.3 Contrast (Minimum)
 - Fix: Add `.onBrandLabel()` before `.disabled(...)` on both buttons. To stop this coming back, check in a test (or a lint step) that every `.borderedProminent` is followed by `.onBrandLabel()`.
 - Status: CONFIRMED (code; the contrast figure is the project's own)
@@ -875,18 +875,18 @@ Overall the app is in very good shape. These are already handled well: one Voice
 
 #### [Medium] Training and agreements: errors are said twice, or said but not shown, and aren't scrolled to
 - Where: ios/Sources/TrainingView.swift:103 and :117-121 (TrainingTakeView.submit); :223 (CredentialEditView.save); ios/Sources/AgreementsView.swift:104 and :114-118 (AgreementDetailView.sign)
-- Who and what happens: These screens set `error = ...` and then call `announce(...)` themselves, instead of using `showFormError`. ErrorBanner only skips its own announcement when showFormError has just made it (CaseManagementApp.swift:996-1001).
+- Who and what happens: These screens set `error = ...` and then call `announce(...)` themselves, instead of using `showFormError`. ErrorBanner only skips its own announcement when showFormError has just made it (the main app file, line 996-1001).
   - Agreement detail is a non-lazy ScrollView, so the banner appears and announces again. The person hears "Turn on that you have read the agreement…" twice.
   - Training is a long Form whose banner is the first row. At "Check my answers" that row isn't drawn, so the error ("question 3 has no answer") is spoken once and never shown. When the person later scrolls to the top, the banner appears and is announced again, long after it means anything.
   - In both screens nothing scrolls to the banner or moves focus to it, and the unanswered question or agreement switch isn't pointed to.
-- WCAG / rule: owner rule 3 (one error summary that takes focus, never announced twice); 3.3.1 Error Identification; 4.1.3 Status Messages
+- WCAG / rule: project rule 3 (one error summary that takes focus, never announced twice); 3.3.1 Error Identification; 4.1.3 Status Messages
 - Fix: Use `showFormError(_:in:)`. Wrap TrainingTakeView and CredentialEditView in `ErrorFocusForm`. For Agreement detail, use a ScrollViewReader that scrolls to the banner and focuses it, as ErrorFocusForm does. For a missing training answer, put VoiceOver on that question's header (AccessibilityFocusState) instead of only naming its number.
 - Status: CONFIRMED
 
 #### [Medium] Errors are never tied to the field they are about
 - Where: every form, e.g. ios/Sources/ClientEditSheet.swift:499-540 (the "Full name: …", "<field>: this is required", "Choose the state…" checks) and ErrorFocusForm (ClientEditSheet.swift:978-1011); grep finds no field-level error marking anywhere in the app
 - Who and what happens: When a form is refused, the message goes into one banner at the top of the form and VoiceOver focus goes to the banner. The field it names isn't marked, focused, or given the error in its value or hint. In a long form such as Client edit, a VoiceOver or Switch Control user has to work back down the form to find "State" or a custom required field. A magnifier user sees nothing next to the field.
-- WCAG / rule: owner rule 3 (tie each error to its field); 3.3.1 / 3.3.3
+- WCAG / rule: project rule 3 (tie each error to its field); 3.3.1 / 3.3.3
 - Fix: Have the validators return the field as well as the message. Show a short inline error under that field (alertRed caption, with "Error:" in words), add it to the field's accessibilityValue, and after the banner has been read (or instead of it, when there is only one error) move AccessibilityFocusState to the field.
 - Status: CONFIRMED
 
@@ -905,16 +905,16 @@ Overall the app is in very good shape. These are already handled well: one Voice
 - Status: CONFIRMED
 
 #### [Low] An error is spoken, then spoken again when focus lands on its banner
-- Where: ios/Sources/CaseManagementApp.swift:974-979 (`showFormError` announces at once), together with the focus moves 400 ms later in ClientEditSheet.swift:999-1008 (ErrorFocusForm), ScheduleView.swift:132-139, IncidentsView.swift:111-118, EquipmentView.swift:122-128 and the other list screens with an error row
+- Where: the iPhone app's main app file (ios/Sources), line 974-979 (`showFormError` announces at once), together with the focus moves 400 ms later in ClientEditSheet.swift:999-1008 (ErrorFocusForm), ScheduleView.swift:132-139, IncidentsView.swift:111-118, EquipmentView.swift:122-128 and the other list screens with an error row
 - Who and what happens: showFormError announces the message. The screen then scrolls to the banner and moves VoiceOver focus to it, and VoiceOver reads the banner's label "Error: <message>". The person hears the start of the message, cut off, then the whole message again.
-- WCAG / rule: owner rule 3 (the same error must not be announced twice)
+- WCAG / rule: project rule 3 (the same error must not be announced twice)
 - Fix: When the screen is going to focus its banner, skip the announcement (for example, a `showFormError(_:in:announce: false)` used by ErrorFocusForm and the list screens that focus their banner). Keep the announcement only where nothing takes focus.
 - Status: PLAUSIBLE (the timing makes the overlap near-certain; not heard on a device)
 
 #### [Low] Sign-in code step: the instructions are read twice in a row
 - Where: ios/Sources/LoginView.swift:193 (`.accessibilityHint(codeInstruction)` on the code field) and :299-311 / :347 (focusCodeField then queues "Password accepted. " + codeInstruction)
-- Who and what happens: With VoiceOver hints on (the default), focus lands on the code field and VoiceOver reads its label and the full hint, which is the instruction. Then the queued announcement reads the same instruction again. Each time it is about 30 words about the emailed code and when it runs out, on every sign-in. The owner signs in often.
-- WCAG / rule: owner rule 1 (no extra speech or stops); 4.1.3
+- Who and what happens: With VoiceOver hints on (the default), focus lands on the code field and VoiceOver reads its label and the full hint, which is the instruction. Then the queued announcement reads the same instruction again. Each time it is about 30 words about the emailed code and when it runs out, on every sign-in. Staff sign in often.
+- WCAG / rule: project rule 1 (no extra speech or stops); 4.1.3
 - Fix: Drop the field's hint, so the announcement carries the instruction, or announce only "Password accepted." and let the hint carry the rest.
 - Status: CONFIRMED
 
@@ -942,21 +942,21 @@ Overall the app is in very good shape. These are already handled well: one Voice
 #### [Low] Move session: the Length stepper is three VoiceOver stops
 - Where: ios/Sources/ScheduleView.swift:1204
 - Who and what happens: Every other stepper is one adjustable element. This one gives VoiceOver a label, then a separate Decrement and Increment, so it takes three swipes and works differently from the New session form beside it.
-- WCAG / rule: consistency (3.2.4); owner rule 1
+- WCAG / rule: consistency (3.2.4); project rule 1
 - Fix: Add `.voiceOverAdjustable("Length", value: hoursSpoken(hours), binding: $hours, in: 0.25...12, step: 0.25)`.
 - Status: CONFIRMED
 
 #### [Low] Spoken hints repeat what VoiceOver already says
 - Where: ios/Sources/AccessibilityHelpers.swift:12 ("Swipe up or down to change." on every adjustable); ScheduleView.swift:483 and EquipmentView.swift:275 ("Swipe up or down for actions.")
 - Who and what happens: VoiceOver already says "adjustable" and "Actions available" from the trait and custom actions, so each row or stepper gets a second instruction.
-- WCAG / rule: owner rule 1 (no extra speech)
+- WCAG / rule: project rule 1 (no extra speech)
 - Fix: Remove these hints. Keep the hint on Equipment for "Double-tap for service and details" only.
 - Status: CONFIRMED
 
 #### [Low] Some required fields aren't marked, and their Save button is just dimmed
 - Where: ios/Sources/ReferralsView.swift:449-455 (Close referral: Reason); TrackDetailView.swift:1457-1476 (Email report: Signature); TrainingView.swift:190-199 (Credential); AgreementsView.swift:78-85 (name to sign)
 - Who and what happens: The button stays off until the field is filled, but the field doesn't say "(required)" and the dimmed button gives no reason. Elsewhere the app does this properly: ATServicesView "Client (required)" with a hint on Issue, and FollowupsView "Still in use? (required)".
-- WCAG / rule: owner rule 4; 3.3.2 Labels or Instructions
+- WCAG / rule: project rule 4; 3.3.2 Labels or Instructions
 - Fix: Add "(required)" to these labels and an accessibilityHint on the disabled button saying what is missing.
 - Status: CONFIRMED
 
@@ -996,7 +996,7 @@ Overall the app is in very good shape. These are already handled well: one Voice
 - Status: PLAUSIBLE
 
 #### [Low] Widget text can be clipped at large text sizes
-- Where: ios/Widget/CaseManagementWidget.swift:99-123
+- Where: the widget's main file (ios/Widget), lines 99-123
 - Who and what happens: In the small widget, up to four lines at large Dynamic Type (the "Today" label, the count in headline, the next time, "Checked in" / "Not checked in") have only `minimumScaleFactor(0.8)` on the count and no priority. The check-in line is the one dropped at the bottom with no sign it is missing. VoiceOver isn't affected, because it reads the full `spoken` value.
 - WCAG / rule: 1.4.4 Resize Text
 - Fix: `.minimumScaleFactor` on every line, a `.layoutPriority` that keeps the next time and check-in, or the count and check-in only in `.systemSmall` at accessibility sizes.
@@ -1006,7 +1006,7 @@ Overall the app is in very good shape. These are already handled well: one Voice
 `performAccessibilityAudit(for: .all)` at the default size and at AX XXXL, but only on these screens: client detail (documents to sign, releases, documents), Client edit (Office, More details), Request a release, the Documents to sign list and its three forms, in-person signing, a message thread and its attach menu, and the Equipment new-loan sheet. It runs locally only, with a test account. The Dashboard, Schedule, Referrals, Tasks, Alerts, Agreements, Training, Credentials, Competency, Invoices, Account and the widget are never audited, and most findings above are on those screens.
 
 ### Coverage
-Read in full or close to it: CaseManagementApp (root, app lock and lock screen, reauth, tabs, sync banner, ErrorBanner, showFormError, OnBrandLabel), AccessibilityHelpers, LoginView, DashboardView (including Offline entries, Action center, briefing, in-app browser), Widget, AppIntents, WidgetShared, VoiceAssistant UI, MessagesView thread, SignatureView, DocumentsToSign in-person signing, AgreementsView, TrainingView (and Credentials), DocReviewView, KnowledgeView, AIToolsView (shared card, hub, Remediate), UtilizationView, ComplianceView, NotificationsView, SearchView, IncidentsView list, ScheduleView list, session row and Move session, LocalNotifications wording, and the AccessibilityAuditTests.
+Read in full or close to it: the main app file (root, app lock and lock screen, reauth, tabs, sync banner, ErrorBanner, showFormError, OnBrandLabel), AccessibilityHelpers, LoginView, DashboardView (including Offline entries, Action center, briefing, in-app browser), Widget, AppIntents, WidgetShared, VoiceAssistant UI, MessagesView thread, SignatureView, DocumentsToSign in-person signing, AgreementsView, TrainingView (and Credentials), DocReviewView, KnowledgeView, AIToolsView (shared card, hub, Remediate), UtilizationView, ComplianceView, NotificationsView, SearchView, IncidentsView list, ScheduleView list, session row and Move session, LocalNotifications wording, and the AccessibilityAuditTests.
 
 Covered by searching the whole app (every file) rather than reading line by line: accessibilityLabel / input labels for label-in-name, icon-only buttons, `.borderedProminent` without onBrandLabel, Reduce Motion, fixed sizes and fonts, line limits, labelsHidden, steppers, pickers outside ReadablePickers, swipe and context-menu-only actions, direct error assignment, announce-then-dismiss, custom colours, Smart Invert (no photos are shown), required-field marking.
 
@@ -1029,15 +1029,15 @@ Lint (`:app:lintDebug`): no Accessibility-category issues. The only issues are G
 
 #### [Medium] Errors never take focus, and messages appear far from the control that caused them
 - Where: Every form. ErrorText is a polite live region only (Common.kt:81-96). There is no FocusRequester anywhere except the login code field (LoginScreen.kt:55,122). Examples where the message is at the top of a long scrolling page but the action is at the bottom or in a dialog: SignaturesScreen.kt:88-89 (Sign here now / Send by email at :184-216), TrackScreen.kt:106-107 (delete entry or expense dialogs), TasksScreen.kt:58-59, 152-153, DocumentsScreen.kt:71-72, ScheduleScreen.kt:56-58, MoreTools.kt:133-134 and 60, TrainingScreens.kt:71 (the "wrong answers" notice sits above question 1 while Check my answers is at the end). In LogHoursScreen (ClientsScreen.kt:393), NewSessionScreen.kt:114, CredentialDialog (TrainingScreens.kt:157), CorrectLogDialog (TrackScreen.kt:268) and ClientEditScreen (:345), the summary names only the first problem.
-- Who and what happens: Owner rule 3 asks for one summary that takes focus. Here focus stays on the Save button. A TalkBack user hears the polite announcement at most once, then has to hunt for the field. A ZoomText-style magnifier or low-vision user at 200% text does not see a message that appeared at the top of the page or below the fold. When several fields are wrong, the summary lists only one.
-- WCAG / rule: 3.3.1 Error Identification, 3.3.3 Error Suggestion, owner rule 3.
+- Who and what happens: Project rule 3 asks for one summary that takes focus. Here focus stays on the Save button. A TalkBack user hears the polite announcement at most once, then has to hunt for the field. A ZoomText-style magnifier or low-vision user at 200% text does not see a message that appeared at the top of the page or below the fold. When several fields are wrong, the summary lists only one.
+- WCAG / rule: 3.3.1 Error Identification, 3.3.3 Error Suggestion, project rule 3.
 - Fix: Give ErrorText a FocusRequester and move focus to it (or to the first invalid field) when a refusal is set. Keep `focusable()` on the summary so TalkBack lands on it. List every field error in the summary. Put notices and errors next to the control that triggered them, or scroll them into view with `bringIntoViewRequester`.
 - Status: CONFIRMED (code).
 
 #### [Medium] Submit buttons stay disabled with no reason, and most required fields are not marked
 - Where: Common.kt:209 PrimaryButton `enabled`. 43 call sites use `enabled =`. Examples: AddNoteScreen "Save note" (ClientsScreen.kt:326-327, needs Subject plus Note, neither marked); LogHours "Log hours" (:383, needs Hours and "What was done", unmarked); ReleaseRequestScreen "Email the release to sign" (SignaturesScreen.kt:532, five unmarked conditions); ClientEditScreen "Save changes" (ClientEditScreen.kt:337, needs Full name, unmarked, while "State (required)" is marked); LoginScreen Continue (:137); AddTaskDialog Add (TasksScreen.kt:129); in-person Sign (SignaturesScreen.kt:468).
 - Who and what happens: TalkBack says "Save note, button, disabled" and nothing more. A Switch Access or Voice Access user cannot reach or activate the button, and nothing says which field is missing. Marking is inconsistent: some screens mark "(required)" or "hint = required", most mark "optional" on the others, and some, such as Subject and Full name, mark neither.
-- WCAG / rule: 3.3.2 Labels or Instructions, 3.3.1, owner rule 4.
+- WCAG / rule: 3.3.2 Labels or Instructions, 3.3.1, project rule 4.
 - Fix: Keep buttons enabled and validate on press, using the per-field error() path that already exists. Or, at minimum, mark every required field "(required)" in its label. Compose 1.6 has no required semantics, so the label text is the programmatic signal.
 - Status: CONFIRMED (code).
 
@@ -1050,20 +1050,20 @@ Lint (`:app:lintDebug`): no Accessibility-category issues. The only issues are G
 
 #### [Medium] Translated AI text is read with the English voice
 - Where: AiScreens.kt:85-87 and :125 (translate tool) → AiResult (:35-45) → MarkdownBlocks (MoreTools.kt:76-85), which uses plain `Text`. `inLanguage()` is never applied.
-- Who and what happens: A staff member translates a letter into Spanish, Arabic, Vietnamese and so on to check it before sending. TalkBack reads the result with the English text-to-speech voice, which makes it unintelligible. The owner and blind staff cannot proofread the translation.
-- WCAG / rule: 3.1.2 Language of Parts, owner rule 5.
+- Who and what happens: A staff member translates a letter into Spanish, Arabic, Vietnamese and so on to check it before sending. TalkBack reads the result with the English text-to-speech voice, which makes it unintelligible. Blind staff cannot proofread the translation.
+- WCAG / rule: 3.1.2 Language of Parts, project rule 5.
 - Fix: Pass the chosen `lang` into AiResult and MarkdownBlocks, and build each block with `inLanguage(text, lang)`, as the signing view already does.
 - Status: CONFIRMED (code).
 
 #### [Medium] Long pick lists (clients, staff, states) open as one unsearchable dialog that starts at the top
 - Where: Choice in Common.kt:177-206. It is used for "Client" in NewSessionScreen.kt:86 (every open client), "Start a conversation with" (TasksScreen.kt:196), "Assigned instructor" and "State" (ClientEditScreen.kt:303-306, 56 entries), the equipment lend dialog, and others.
 - Who and what happens: The dialog shows every option as a radio row. It has no filter field, it does not scroll to the current choice, and there is no type-ahead such as a web `<select>` gives. With TalkBack, picking a client near the end of a caseload of a few hundred means swiping through every name. Switch Access users have to scan the whole list.
-- WCAG / rule: 2.1.1/2.4.x efficiency (no strict failure); owner usability priority for blind staff.
-- Fix: Add a "Filter" text field at the top of Choice when there are more than about 15 options. It should filter quietly: announce no counts while typing (owner rule 2), and at most one debounced count. Start the list scrolled to the selected row and put initial focus on it.
+- WCAG / rule: 2.1.1/2.4.x efficiency (no strict failure); usability priority for blind and low-vision staff.
+- Fix: Add a "Filter" text field at the top of Choice when there are more than about 15 options. It should filter quietly: announce no counts while typing (project rule 2), and at most one debounced count. Start the list scrolled to the selected row and put initial focus on it.
 - Status: CONFIRMED (code).
 
 #### [Medium] At large font sizes, the app bar title, bottom tab labels and floated field labels are clipped or overlap
-- Where: RootScreen.kt:84-89 (TopAppBar, fixed 64dp, title Text with no maxLines or overflow handling); RootScreen.kt:92-105 (NavigationBar, fixed 80dp, 4 or 5 items with labels such as "Schedule"); Field() label (Common.kt:162), which puts the hint inside the label, as owner rule 1 requires. That makes labels long, such as "Client's typed name (optional; counts as their acknowledgement)", "Your organisation's web address (for example cms.example.org)" and "Independence outcome (optional, for a goal without a job, ...)".
+- Where: RootScreen.kt:84-89 (TopAppBar, fixed 64dp, title Text with no maxLines or overflow handling); RootScreen.kt:92-105 (NavigationBar, fixed 80dp, 4 or 5 items with labels such as "Schedule"); Field() label (Common.kt:162), which puts the hint inside the label, as project rule 1 requires. That makes labels long, such as "Client's typed name (optional; counts as their acknowledgement)", "Your organisation's web address (for example cms.example.org)" and "Independence outcome (optional, for a goal without a job, ...)".
 - Who and what happens: At Android's 200% font scale (or a large display size), long titles like "Worksite accommodations" or "Release of information" wrap inside a bar that cannot grow, and the second line is cut off. Tab labels wrap or clip. A multi-line OutlinedTextField label floats onto the top border and overlaps the typed text. Low-vision users lose the title or label text. TalkBack is not affected.
 - WCAG / rule: 1.4.4 Resize Text, 1.4.10 Reflow.
 - Fix: Use `maxLines = 2` with a taller title area, such as MediumTopAppBar or a heightIn(min) app bar, or keep the title single-line with ellipsis and repeat the full name as the screen's first heading. For tabs, set `alwaysShowLabel` and single-line labels with ellipsis (the label is still read in full). For fields, put a long hint in the `placeholder` or `supportingText` visually, while keeping it in the accessible label via `semantics { contentDescription }`, or keep the label short and the hint in supportingText merged into the field (still one stop).
@@ -1072,14 +1072,14 @@ Lint (`:app:lintDebug`): no Accessibility-category issues. The only issues are G
 #### [Low] A field's error can be read twice
 - Where: Common.kt:160-169. `supportingText` shows the error, and the field also gets `semantics { error(error) }`. With a label, Material3 merges the decoration box (label and supporting text) into the field node.
 - Who and what happens: TalkBack reads, for example, "Hours, edit box, …, Error: Enter the hours as a number…, Enter the hours as a number…". This is the same duplication that Choice and Tick avoid with `clearAndSetSemantics {}` on their visible error lines (Common.kt:185-186, ClientEditScreen.kt:116-117).
-- WCAG / rule: owner rule 3 (no double announcement), 4.1.2.
+- WCAG / rule: project rule 3 (no double announcement), 4.1.2.
 - Fix: Wrap the supportingText Text in `Modifier.clearAndSetSemantics {}`, keeping `error()` as the single spoken source, as Choice does.
 - Status: PLAUSIBLE.
 
 #### [Low] "Still saving" is announced twice
 - Where: Saving.kt:126-131 (HoldBackWhileSaving). It calls `announceForAccessibility(...)` and also shows a Toast with the same text.
 - Who and what happens: TalkBack reads the announcement and then reads the Toast, so the same sentence is spoken twice on Back.
-- WCAG / rule: owner rule 3 / 4.1.3 (chatty).
+- WCAG / rule: project rule 3 / 4.1.3 (chatty).
 - Fix: Keep one of them. The Toast alone is read by TalkBack and is also visible.
 - Status: CONFIRMED (code).
 
@@ -1100,7 +1100,7 @@ Lint (`:app:lintDebug`): no Accessibility-category issues. The only issues are G
 #### [Low] Instrument option labels carry an item count
 - Where: AssessmentScreens.kt:92, options read "Name, 12 items".
 - Who and what happens: Each option is read with a count, which goes against the plain option-name rule.
-- WCAG / rule: owner rule 2.
+- WCAG / rule: project rule 2.
 - Fix: Use the plain name as the option label, and show the item count after the choice is made.
 - Status: CONFIRMED (code).
 

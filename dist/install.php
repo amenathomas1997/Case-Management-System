@@ -34,6 +34,35 @@ if (is_file($lockFile)) {
     exit('Installer is locked (already ran). Delete install.lock to re-run — only do this on a fresh install.');
 }
 
+/**
+ * The built-in app icon: a white clipboard with three lines on the brand's dark colour, its clip in
+ * the accent colour. Drawn four times larger and scaled down, so the edges are smooth.
+ */
+function cms_default_icon(int $size, array $dark, array $accent) {
+    $k = 4; $n = $size * $k;
+    $big = imagecreatetruecolor($n, $n);
+    $bg = imagecolorallocate($big, $dark[0], $dark[1], $dark[2]);
+    $white = imagecolorallocate($big, 255, 255, 255);
+    $clip = imagecolorallocate($big, $accent[0], $accent[1], $accent[2]);
+    imagefill($big, 0, 0, $bg);
+    $round = function (float $x1, float $y1, float $x2, float $y2, float $r, int $c) use ($big, $n) {
+        [$x1, $y1, $x2, $y2, $r] = [(int)($x1 * $n), (int)($y1 * $n), (int)($x2 * $n), (int)($y2 * $n), (int)($r * $n)];
+        imagefilledrectangle($big, $x1 + $r, $y1, $x2 - $r, $y2, $c);
+        imagefilledrectangle($big, $x1, $y1 + $r, $x2, $y2 - $r, $c);
+        foreach ([[$x1 + $r, $y1 + $r], [$x2 - $r, $y1 + $r], [$x1 + $r, $y2 - $r], [$x2 - $r, $y2 - $r]] as [$cx, $cy]) {
+            imagefilledellipse($big, $cx, $cy, 2 * $r, 2 * $r, $c);
+        }
+    };
+    $round(0.25, 0.20, 0.75, 0.84, 0.05, $white);   // the board
+    $round(0.38, 0.14, 0.62, 0.28, 0.035, $clip);   // the clip
+    foreach ([0.42, 0.55, 0.68] as $i => $y) {        // the lines of writing
+        $round(0.33, $y, $i === 2 ? 0.55 : 0.67, $y + 0.045, 0.02, $bg);
+    }
+    $im = imagecreatetruecolor($size, $size);
+    imagecopyresampled($im, $big, 0, 0, 0, 0, $size, $size, $n, $n);
+    return $im;
+}
+
 function field(string $k, string $d = ''): string {
     return trim($_POST[$k] ?? $d);
 }
@@ -516,16 +545,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             [$ar, $ag, $ab] = sscanf($brandAccent, '#%02x%02x%02x');
             $iconsOk = true;
             foreach ([180 => 'apple-touch-icon.png', 192 => 'icon-192.png', 512 => 'icon-512.png', 1024 => 'icon-1024.png'] as $s => $file) {
-                $im = imagecreatetruecolor($s, $s);
-                imagefill($im, 0, 0, imagecolorallocate($im, $r, $g, $b));
-                $white = imagecolorallocate($im, 255, 255, 255);
-                $c = (int)($s / 2); $outer = (int)($s * 0.62); $thick = (int)($s * 0.09);
-                for ($i = 0; $i < $thick; $i++) {
-                    imageellipse($im, $c, $c, $outer - $i, $outer - $i, $white);
-                    imageellipse($im, $c, $c, $outer - $i - 1, $outer - $i, $white);
-                }
-                imagefilledellipse($im, $c, (int)($c - $outer / 2 + $thick / 2), (int)($s * 0.09), (int)($s * 0.09),
-                    imagecolorallocate($im, $ar, $ag, $ab));
+                $im = cms_default_icon($s, [$r, $g, $b], [$ar, $ag, $ab]);
                 $iconsOk = @imagepng($im, __DIR__ . '/assets/' . $file) && $iconsOk;
             }
             if ($iconsOk) $report[] = 'Brand icons generated in your colors.';

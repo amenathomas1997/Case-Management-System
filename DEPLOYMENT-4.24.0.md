@@ -7,9 +7,9 @@ Web 4.24.0. The apps are unchanged; the API adds a client's answered custom fiel
 - the tables custom_fields and custom_values
 - schema_version 4.24.0
 
-**Not deployed with deploy.sh.** It is published only as the GitHub release v4.24.0, and the owner installs it with Administration, Software update.
+**Not deployed with deploy.sh.** It is published only as the GitHub release v4.24.0, and an administrator installs it with Administration, Software update.
 
-**Why.** On 2026-10-17 the owner asked to build the rest of the competitor list ("Build it all"): portal file exchange and messaging, closure outcome data, and an intake form builder. Messaging, portal uploads, outcome surveys and editable lists already existed, so each item is built on what was there.
+**Why.** On 2026-10-17 the maintainer asked to build the rest of the competitor list ("Build it all"): portal file exchange and messaging, closure outcome data, and an intake form builder. Messaging, portal uploads, outcome surveys and editable lists already existed, so each item is built on what was there.
 
 **1. File exchange** (inc/file_exchange.php)
 - **Client portal:** a file can be attached to a message, and the message may then be empty. It is kept as the client's upload, under the portal's limits (10 an hour, 100 MB a day, 500 MB in all).
@@ -64,7 +64,7 @@ Web 4.24.0. The apps are unchanged; the API adds a client's answered custom fiel
 - the install bundle, built from a clean checkout of the tag
 - the signed update package: 321 files, verified with the key built into the code
 
-The live site stays as it is until the owner installs it with Administration, Software update. Installing from 4.21.0 applies the 4.22.0, 4.23.0 and 4.24.0 migrations in order.
+The live site stays as it is until an administrator installs it with Administration, Software update. Installing from 4.21.0 applies the 4.22.0, 4.23.0 and 4.24.0 migrations in order.
 
 **Rehearsed before publishing.** The package was installed with the 4.23.0 updater onto a copy of a 4.23.0 site, with its own private and cron folders and a database in the 4.23.0 shape:
 - the real signature verified, and the plan showed no problems

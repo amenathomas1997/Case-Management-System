@@ -6,11 +6,11 @@ require_once $root.'/public/inc/appkit.php';
 // The shipped source matches the apps' files in this checkout (dist/make_appkit.sh was run).
 $kitZip=new ZipArchive(); $kitZip->open($root.'/public/inc/appkit/app-source.zip');
 $tracked=array_filter(explode("\n",trim((string)shell_exec('cd '.escapeshellarg($root).' && git ls-files -- android ios'))),
-    fn($f)=>$f!=='' && !preg_match('~^android/play-store/|^android/PLAY_STORE\.md$|^ios/(TESTFLIGHT\.md|testflight\.sh|ExportOptions\.plist)$|^ios/[^/]+\.xcodeproj/~',$f));
+    fn($f)=>$f!=='' && !preg_match('~^android/PLAY_STORE\.md$|^ios/(TESTFLIGHT\.md|testflight\.sh|ExportOptions\.plist)$|^ios/[^/]+\.xcodeproj/~',$f));
 $stale=[];
 foreach ($tracked as $f) if ($kitZip->getFromName($f)!==file_get_contents($root.'/'.$f)) $stale[]=$f;
 check($stale===[] && $kitZip->numFiles===count($tracked)+1 && $kitZip->locateName('LICENSE')!==false,'The app source in the kit matches the apps\' files (run dist/make_appkit.sh)'.($stale?': '.implode(', ',array_slice($stale,0,5)):''));
-check($kitZip->locateName('android/play-store/icon-512.png')===false && $kitZip->locateName('ios/TESTFLIGHT.md')===false,'This vendor\'s own store materials are not in the kit');
+check($kitZip->locateName('android/PLAY_STORE.md')===false && $kitZip->locateName('ios/TESTFLIGHT.md')===false && $kitZip->locateName('ios/Private.xcconfig')===false && $kitZip->locateName('android/private.properties')===false,'Neither the store guides nor any private build file is in the kit');
 $kitZip->close();
 
 // Defaults come from the branding and the server; wrong values are refused.
@@ -32,7 +32,7 @@ $k=new ZipArchive(); $opened=$k->open($tmp.'/kit.zip')===true;
 check($opened && $err==='','The kit downloads as a zip'.($err?": $err":''));
 $gp=(string)$k->getFromName('android/gradle.properties'); $py=(string)$k->getFromName('ios/project.yml');
 check(str_contains($gp,"cms.appId=org.synthetic.cms\n") && str_contains($gp,'cms.displayName=Synth\\u00E9tic AT') && str_contains($gp,"cms.defaultServer=example.invalid\n") && str_contains($gp,'cms.signinTitle=Synthetic AT (staff)'),'Android gets the app ID, names (non-ASCII escaped) and server');
-check(str_contains($py,'CMS_BUNDLE_ID: org.synthetic.cms') && str_contains($py,'CMS_TEAM: "ABCDE12345"') && str_contains($py,'CMS_DISPLAY_NAME: "Synthétic AT"') && str_contains($py,'CMS_DEFAULT_SERVER: "example.invalid"') && !str_contains($py,'cms'),'The iPhone app gets the same, with no trace of this vendor');
+check(str_contains($py,'CMS_BUNDLE_ID: org.synthetic.cms') && str_contains($py,'CMS_TEAM: "ABCDE12345"') && str_contains($py,'CMS_DISPLAY_NAME: "Synthétic AT"') && str_contains($py,'CMS_DEFAULT_SERVER: "example.invalid"') && !str_contains($py,'org.example.cms'),'The iPhone app gets the same, with none of the built-in example values left');
 $ai=imagecreatefromstring((string)$k->getFromName('android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png'));
 $iosIcon=null; for ($i=0;$i<$k->numFiles;$i++) if (preg_match('~AppIcon\.appiconset/.+\.png$~',(string)$k->getNameIndex($i))) $iosIcon=imagecreatefromstring((string)$k->getFromIndex($i));
 check($ai && imagesx($ai)===192 && (imagecolorat($ai,96,96)>>16 & 0xFF)>150 && $iosIcon && imagesx($iosIcon)===1024 && (imagecolorat($iosIcon,512,512)>>16 & 0xFF)>150,'The kit carries the organisation\'s own icon, at each size');
