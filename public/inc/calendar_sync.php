@@ -29,6 +29,7 @@ function calendar_problem(int $userId): ?string {
     if (!(int)$q->fetchColumn()) return 'Outlook calendar sync is off for this person (My Account).';
     $acc = meeting_account($userId, 'microsoft');
     if (!$acc) return 'Microsoft is not connected for this person (My Account).';
+    if (meeting_refused_at($acc) !== null) return 'The Microsoft connection has ended: connect Microsoft again on My Account.';
     if (!str_contains(' ' . strtolower((string)($acc['granted_scope'] ?? '')) . ' ', ' calendars.readwrite ')) return 'The Microsoft connection does not include the calendar: connect Microsoft again on My Account and allow the calendar.';
     return null;
 }
@@ -116,9 +117,10 @@ function calendar_put(string $token, int $userId, array $s, ?array $link): ?stri
 }
 
 /** Remove a session's event (cancelled, reassigned, or the person turned sync off). */
-function calendar_remove(string $token, array $link): void {
+function calendar_remove(string $token, array $link): bool {
     [$code] = calendar_graph($token, 'DELETE', '/me/events/' . rawurlencode((string)$link['event_id']));
-    if (($code >= 200 && $code < 300) || $code === 404) db()->prepare('DELETE FROM calendar_links WHERE id = ?')->execute([(int)$link['id']]);
+    if (($code >= 200 && $code < 300) || $code === 404) { db()->prepare('DELETE FROM calendar_links WHERE id = ?')->execute([(int)$link['id']]); return true; }
+    return false;
 }
 
 /** Whether an Outlook event is one of this system's own invitations (the email invites sent to instructors), by its iCalendar UID. */
@@ -324,15 +326,18 @@ function calendar_busy_overlaps(int $userId, int $start, int $end): bool {
 }
 
 /** Turn sync off: the events it added are taken out of Outlook (as far as Outlook can be reached). */
-function calendar_stop(int $userId): int {
+function calendar_stop(int $userId, ?int &$left = null): int {
     $removed = 0;
     $lq = db()->prepare('SELECT * FROM calendar_links WHERE user_id = ?');
     $lq->execute([$userId]);
     $links = $lq->fetchAll();
     $tok = $links ? meeting_access_token($userId, 'microsoft') : null;
+    // Only events Outlook confirmed removed are counted (4.32.0); $left is how many stay there.
+    $deadline = time() + 60;
     foreach ($links as $l) {
-        if ($tok !== null) { calendar_remove($tok, $l); $removed++; }
+        if ($tok !== null && time() < $deadline && calendar_remove($tok, $l)) $removed++;
     }
+    $left = count($links) - $removed;
     db()->prepare('DELETE FROM calendar_links WHERE user_id = ?')->execute([$userId]);
     db()->prepare('DELETE FROM calendar_busy WHERE user_id = ?')->execute([$userId]);
     db()->prepare('UPDATE users SET calendar_sync = 0, calendar_error = NULL WHERE id = ?')->execute([$userId]);

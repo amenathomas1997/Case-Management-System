@@ -29,6 +29,7 @@ Pricing, funding agencies, branding, email wording, the referral form, lists and
 5. **Make it yours** (Administration):
    - Settings: branding and icon, email, texting, updates
    - Microsoft 365 email, "Sign in with Microsoft", Teams meetings and Outlook calendar: follow [MICROSOFT-SETUP.md](MICROSOFT-SETUP.md)
+   - Zoom meeting links: follow [ZOOM-SETUP.md](ZOOM-SETUP.md)
    - Lists and time limits, Public wording, Pricing rules, Funding agencies, client statuses
    - Templates, the referral form, staff agreements and training
 6. **Your own phone apps:** Administration, Phone apps, downloads the Android and iPhone apps' source already set to your name, icon and server, with the steps to build them and give them to your staff.

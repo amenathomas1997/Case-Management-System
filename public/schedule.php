@@ -501,7 +501,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         // Only your own account, unless you are an administrator booking for someone (owner rule, 4.10.0).
         elseif ($f['staff'] && (int)$f['staff']['id'] !== (int)$user['id'] && !can('admin')) $errors['meeting_make'] = 'A meeting can be made only in your own ' . MEETING_PROVIDERS[$meetMake]
             . ' account. ' . $f['staff']['name'] . ' can make it, or an administrator; otherwise choose No and type a link.';
-        elseif ($f['staff'] && !meeting_account((int)$f['staff']['id'], $meetMake)) $errors['meeting_make'] = $f['staff']['name'] . ' has not connected ' . MEETING_PROVIDERS[$meetMake]
+        elseif ($f['staff'] && !meeting_connected((int)$f['staff']['id'], $meetMake)) $errors['meeting_make'] = $f['staff']['name'] . (meeting_account((int)$f['staff']['id'], $meetMake) ? '\'s ' . MEETING_PROVIDERS[$meetMake] . ' connection has ended' : ' has not connected ' . MEETING_PROVIDERS[$meetMake])
             . ((int)$f['staff']['id'] === (int)$user['id'] ? '. Connect it on My Account, Online meetings, then schedule again.' : '. They connect it on their My Account page; until then choose No, or type a link.');
     }
     if ($client && $f['staff'] && $f['staff_scoped'] && (int)$client['assigned_to'] !== (int)$f['staff']['id']) {
@@ -631,6 +631,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
                     $occurrences[0][0], $occurrences[$count - 1][1], $count > 1, $meetWhy);
                 if ($link !== null) {
                     db()->prepare('UPDATE scheduled_sessions SET meeting_url = ? WHERE id IN (' . implode(',', $newSessionIds) . ')')->execute([$link]);
+                    // A single meeting expires some weeks after its time (4.32.0); a series' meeting has no fixed time.
+                    if ($count === 1) meeting_note_made_for($newSessionIds, $occurrences[0][0]);
                     $meetingUrl = $link;
                     audit($user['id'], 'meeting.create', 'client', $clientId, MEETING_PROVIDERS[$meetMake] . ' link for ' . count($newSessionIds) . ' session(s), in ' . $f['staff']['name'] . "'s account");
                 }

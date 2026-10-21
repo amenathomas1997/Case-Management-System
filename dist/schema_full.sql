@@ -947,6 +947,7 @@ CREATE TABLE `meeting_accounts` (
   `expires_at` datetime NOT NULL,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
   `granted_scope` varchar(500) DEFAULT NULL,
+  `refused_at` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `user_provider` (`user_id`,`provider`),
   CONSTRAINT `meeting_accounts_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
@@ -1251,6 +1252,7 @@ CREATE TABLE `scheduled_sessions` (
   `location` varchar(190) DEFAULT NULL,
   `is_remote` tinyint(1) NOT NULL DEFAULT 0,
   `meeting_url` varchar(500) DEFAULT NULL,
+  `meeting_made_for` datetime DEFAULT NULL,
   `notes` varchar(255) DEFAULT NULL,
   `status` enum('Scheduled','Completed','Cancelled','No Show') NOT NULL DEFAULT 'Scheduled',
   `work_log_id` int(10) unsigned DEFAULT NULL,

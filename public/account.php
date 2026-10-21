@@ -38,7 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_display_controls
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['calendar_sync'])) {
     $uid = (int)$user['id'];
     if ($_POST['calendar_sync'] === 'on') {
-        if (!meeting_account($uid, 'microsoft')) { flash('Connect Microsoft first (below), then turn on the Outlook calendar.', 'error'); redirect('account.php#calendar-h'); }
+        if (!meeting_connected($uid, 'microsoft')) { flash('Connect Microsoft first (below), then turn on the Outlook calendar.', 'error'); redirect('account.php#calendar-h'); }
         db()->prepare('UPDATE users SET calendar_sync = 1 WHERE id = ?')->execute([$uid]);
         // A first pass of up to 20 seconds; the ten-minute sync carries on with the rest.
         $r = calendar_sync_user($uid, time() + 20);
@@ -55,14 +55,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['calendar_sync'])) {
 /* ---- Online meetings: disconnect Zoom or Microsoft (4.10.0; connecting is meeting_connect.php) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && is_string($_POST['meeting_disconnect'] ?? null) && isset(MEETING_PROVIDERS[$_POST['meeting_disconnect']])) {
     $prov = (string)$_POST['meeting_disconnect'];
+    $calRemoved = null;
     try {
+        // Outlook calendar sync runs on the Microsoft connection (4.32.0): it is turned off first,
+        // while the connection can still remove the session events it put in Outlook.
+        // Never in the way of disconnecting: a failure here leaves the events, and says so.
+        $calLeft = 0;
+        if ($prov === 'microsoft' && function_exists('calendar_stop')) {
+            $cs = db()->prepare('SELECT calendar_sync FROM users WHERE id = ?');
+            $cs->execute([(int)$user['id']]);
+            if ((int)$cs->fetchColumn()) {
+                @set_time_limit(120);
+                try {
+                    $calRemoved = calendar_stop((int)$user['id'], $calLeft);
+                } catch (Throwable $e) {
+                    error_log('disconnect calendar_stop: ' . get_class($e));
+                    db()->prepare('UPDATE users SET calendar_sync = 0, calendar_error = NULL WHERE id = ?')->execute([(int)$user['id']]);
+                    db()->prepare('DELETE FROM calendar_links WHERE user_id = ?')->execute([(int)$user['id']]);
+                    $calRemoved = 0; $calLeft = -1;
+                }
+            }
+        }
         meeting_disconnect((int)$user['id'], $prov);
     } catch (PDOException $e) {
         flash('Online meetings need a database upgrade first: ask an administrator to run Database upgrade.', 'error');
         redirect('account.php#meetings-h');
     }
     audit((int)$user['id'], 'meeting.disconnect', 'user', (int)$user['id'], $prov);
-    flash(MEETING_PROVIDERS[$prov] . ' is disconnected. Links already made keep working; new remote sessions will not get ' . MEETING_PROVIDERS[$prov] . ' links until you connect again.');
+    flash(MEETING_PROVIDERS[$prov] . ' is disconnected. Links already made keep working; new remote sessions will not get ' . MEETING_PROVIDERS[$prov] . ' links until you connect again.'
+        . ($calRemoved !== null ? ' Outlook calendar sync is off too' . ($calRemoved ? '; the ' . $calRemoved . ' session events it added were removed from Outlook.' : '.') : '')
+        . ($calRemoved !== null && $calLeft !== 0 ? ' Some session events it added could not be removed, so delete any left in your Outlook calendar.' : ''));
     redirect('account.php#meetings-h');
 }
 
@@ -379,7 +401,15 @@ page_header('My Account', $user, 'account');
     <ul>
     <?php foreach ($meetApps as $prov): $acc = meeting_account((int)$user['id'], $prov); ?>
       <li>
-      <?php if ($acc): ?>
+      <?php if ($acc && meeting_refused_at($acc) !== null): ?>
+        <form method="post" action="meeting_connect.php?provider=<?= h($prov) ?>" class="inline-form"><?= csrf_field() ?>
+          <?= h(MEETING_PROVIDERS[$prov]) ?>: the connection<?= $acc['account_email'] ? ' as ' . h($acc['account_email']) : '' ?> ended on <?= h(fmt_date(substr((string)$acc['refused_at'], 0, 10))) ?>, so no links are made.
+          <button type="submit" class="btn btn-primary btn-sm">Connect <?= h(MEETING_PROVIDERS[$prov]) ?> again</button>
+        </form>
+        <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
+          <button type="submit" name="meeting_disconnect" value="<?= h($prov) ?>" class="btn btn-secondary btn-sm">Disconnect <?= h(MEETING_PROVIDERS[$prov]) ?></button>
+        </form>
+      <?php elseif ($acc): ?>
         <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
           <?= h(MEETING_PROVIDERS[$prov]) ?>: connected<?= $acc['account_email'] ? ' as ' . h($acc['account_email']) : '' ?>.
           <button type="submit" name="meeting_disconnect" value="<?= h($prov) ?>" class="btn btn-secondary btn-sm">Disconnect <?= h(MEETING_PROVIDERS[$prov]) ?></button>

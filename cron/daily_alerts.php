@@ -226,6 +226,16 @@ try {
 } catch (Throwable $e) {
     error_log('daily_alerts: QuickBooks skipped (' . get_class($e) . ')');
 }
+// Online meeting connections (4.32.0): renewed every day, so Zoom and Microsoft never end one
+// that goes unused; one they refuse is shown on its owner's My Account, and they are told once.
+try {
+    if (function_exists('meeting_renew_all')) {
+        [$mOk, $mRefused, $mFailed] = meeting_renew_all();
+        if ($mRefused || $mFailed) error_log("daily_alerts: meeting connections renewed $mOk, ended $mRefused, not answered $mFailed");
+    }
+} catch (Throwable $e) {
+    error_log('daily_alerts: meeting renewal skipped (' . get_class($e) . ')');
+}
 // Updates (3.0.54): checked every day; administrators are told once about each new version,
 // and when the database needs an upgrade for the files installed.
 try {

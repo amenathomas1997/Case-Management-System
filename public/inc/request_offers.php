@@ -212,7 +212,13 @@ function offer_confirm(int $offerId, int $clientId): array {
     complete_task_by_key('preq-' . (int)$req['id'], null);
     // An online session gets its link from the instructor's own meeting account, when they
     // connected one (as self-booking does), before the client's email so it carries the link.
+    // A session that lost its link here also loses the time the link was made for (4.32.0).
+    if ($after[0] === 'moved' && ($keepUrl ?? null) === null) {
+        try { db()->prepare('UPDATE scheduled_sessions SET meeting_made_for = NULL WHERE id = ? AND meeting_url IS NULL')->execute([$sid]); } catch (PDOException $e) {}
+    }
     if ($needLink) offer_meeting_link($sid, $instructor, $start, $end);
+    // A kept link made for a time far before the new one may expire (4.32.0): a new one first.
+    elseif ($after[0] === 'moved' && function_exists('meeting_refresh_after_move')) meeting_refresh_after_move($sid, strtotime((string)$after[1]));
     client_session_notice([$sid], $after[0]);
     if ($after[0] === 'moved') session_tell_instructor($sid, 'moved', 0, $after[1]);
     if ($oldInstructor) offer_tell_previous_instructor($sid, $oldInstructor);
@@ -226,10 +232,10 @@ function offer_meeting_link(int $sid, int $instructor, int $start, int $end): vo
     try {
         if (!function_exists('meeting_app') || !function_exists('meeting_account') || !function_exists('meeting_create')) return;
         foreach (['microsoft', 'zoom'] as $prov) {
-            if (meeting_app($prov) && meeting_account($instructor, $prov)) {
+            if (meeting_app($prov) && meeting_connected($instructor, $prov)) {
                 $why = null;
                 $url = meeting_create($instructor, $prov, (brand('short') ?: cfg('name')) . ' session', $start, $end, false, $why);
-                if ($url !== null) db()->prepare('UPDATE scheduled_sessions SET meeting_url = ? WHERE id = ?')->execute([$url, $sid]);
+                if ($url !== null) { db()->prepare('UPDATE scheduled_sessions SET meeting_url = ? WHERE id = ?')->execute([$url, $sid]); meeting_note_made_for([$sid], $start); }
                 break;
             }
         }

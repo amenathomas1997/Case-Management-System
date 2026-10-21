@@ -91,7 +91,8 @@ New-ManagementRoleAssignment -App <client ID> -Role "Application Mail.ReadWrite"
    - Save, choose **Test connection to Microsoft**, then turn Microsoft sign-in on.
    - Password sign-in keeps working alongside it.
 7. **Teams and Outlook calendar:**
-   - In **Settings → Online meetings (Zoom and Teams)**, enter the Microsoft tenant ID, the app client ID and the secret.
+   - In **Settings → Online meetings (Zoom and Teams)**, enter the Microsoft tenant ID, the app client ID and the secret. Enter the tenant ID: left blank, any work account's tenant is used, which an app registered for your organization only refuses.
+   - Teams links need a work or school account with a Teams licence. A personal Microsoft account can't make them.
    - Each staff member then opens **My Account**, connects Microsoft, and can turn on "Put my sessions in my Outlook calendar".
    - The same Settings section decides whether calendar events show the client's first name or only "Client session".
 
@@ -105,7 +106,8 @@ In **Enterprise applications → CMS Sign-in and Teams → Properties**, set **A
 2. **Email to client file:** forward an email to the mailbox with a test client's full name in the subject. Within 15 minutes it is a note on that client's file and sits in "Filed to CMS".
 3. **Microsoft sign-in:** in a private browser window, choose "Sign in with Microsoft".
 4. **Teams:** schedule a session as a Teams meeting. It should have a join link and appear in the staff member's Outlook calendar.
-5. **Offboarding (optional):** turn on the nightly Microsoft 365 check in **Administration → People & permissions**. It needs User.Read.All on the mail app.
+5. **Connections:** the CMS renews each staff member's Microsoft connection every day. If Microsoft ends one (for example, after a password reset or a sign-in policy), My Account shows **Connect Microsoft Teams again**, and the person gets one notice. Disconnecting Microsoft turns Outlook calendar sync off first and removes the session events it added.
+6. **Offboarding (optional):** turn on the nightly Microsoft 365 check in **Administration → People & permissions**. It needs User.Read.All on the mail app.
 
 ## Keeping it working
 

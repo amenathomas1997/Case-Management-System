@@ -258,11 +258,22 @@ function meeting_open(string $sealed): ?string {
 function meeting_http(string $method, string $url, array $headers, ?string $body): array {
     if (PHP_SAPI === 'cli' && ($fake = getenv('CMS_TEST_MEETINGS')) !== false && $fake !== '') {
         $map = (array)json_decode($fake, true);
-        foreach ($map as $prefix => $reply) if (str_starts_with($url, $prefix)) return [(int)($reply['status'] ?? 200), $reply['body'] ?? null];
+        // Every request is kept (4.32.0), so tests check what is sent, not only what comes back.
+        $GLOBALS['CMS_TEST_MEETING_REQUESTS'][] = ['method' => $method, 'url' => $url, 'headers' => $headers, 'body' => $body];
+        if (($log = getenv('CMS_TEST_MEETINGS_LOG')) !== false && $log !== '') file_put_contents($log, json_encode(end($GLOBALS['CMS_TEST_MEETING_REQUESTS'])) . "\n", FILE_APPEND);
+        foreach ($map as $prefix => $reply) {
+            if (!str_starts_with($url, $prefix)) continue;
+            // A list of replies is answered in turn (the last one repeats): a refusal, then success.
+            if (array_is_list($reply)) {
+                $n = $GLOBALS['CMS_TEST_MEETING_SEEN'][$prefix] = ($GLOBALS['CMS_TEST_MEETING_SEEN'][$prefix] ?? -1) + 1;
+                $reply = $reply[min($n, count($reply) - 1)];
+            }
+            return [(int)($reply['status'] ?? 200), $reply['body'] ?? null];
+        }
         return [599, null];
     }
     $ch = curl_init($url);
-    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_CUSTOMREQUEST => $method, CURLOPT_HTTPHEADER => $headers]);
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_CONNECTTIMEOUT => 10, CURLOPT_CUSTOMREQUEST => $method, CURLOPT_HTTPHEADER => $headers]);
     if ($body !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
     $resp = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -271,13 +282,26 @@ function meeting_http(string $method, string $url, array $headers, ?string $body
 }
 
 /** Exchange an authorization code, or a refresh token, for tokens. Returns the reply or null. */
-function meeting_token_request(array $app, array $fields): ?array {
+function meeting_token_request(array $app, array $fields, ?bool &$refused = null, ?string &$appProblem = null): ?array {
     // One way of proving the app per request (RFC 6749 2.3): Zoom takes Basic auth, Microsoft the body.
     $headers = ['Content-Type: application/x-www-form-urlencoded'];
     if ($app['scope'] === '') $headers[] = 'Authorization: Basic ' . base64_encode($app['id'] . ':' . $app['secret']);
     else $fields += ['client_id' => $app['id'], 'client_secret' => $app['secret']];
     [$code, $data] = meeting_http('POST', $app['token'], $headers, http_build_query($fields));
-    return $code === 200 && is_array($data) && !empty($data['access_token']) ? $data : null;
+    $ok = $code === 200 && is_array($data) && !empty($data['access_token']);
+    // Refused (4.32.0): only when the person's own grant is no longer good (the app was removed,
+    // a password changed, or the token went unused too long). Microsoft says invalid_grant; Zoom
+    // says invalid_grant, or invalid_request "Invalid Token!" for a spent refresh token. A fault
+    // of the app itself (its secret expired or changed, its permissions or tenant) is the
+    // administrator's to fix and ends nobody's connection; anything else (no answer, a server
+    // error, throttling) may pass, so the connection is kept for the next try.
+    $err = is_array($data) ? strtolower((string)($data['error'] ?? '')) : '';
+    $reason = is_array($data) ? strtolower((string)($data['reason'] ?? '')) : '';
+    $refused = !$ok && in_array($code, [400, 401], true)
+        && ($err === 'invalid_grant' || ($app['scope'] === '' && $err === 'invalid_request' && str_contains($reason, 'invalid token')));
+    $appProblem = !$ok && !$refused && in_array($code, [400, 401], true) ? ($err !== '' ? $err : 'HTTP ' . $code) : null;
+    if (!$ok) error_log('meeting token request refused: HTTP ' . $code . ' ' . mb_substr($err !== '' ? $err : $reason, 0, 80));
+    return $ok ? $data : null;
 }
 
 /* ---------- Connected accounts ---------- */
@@ -302,14 +326,38 @@ function meeting_store(int $userId, string $provider, array $tok, string $email)
         ON DUPLICATE KEY UPDATE account_email = VALUES(account_email), access_token = VALUES(access_token), refresh_token = VALUES(refresh_token), expires_at = VALUES(expires_at),
             granted_scope = COALESCE(VALUES(granted_scope), granted_scope)')
         ->execute([$userId, $provider, mb_substr($email, 0, 190), meeting_seal((string)$tok['access_token']), meeting_seal((string)($tok['refresh_token'] ?? '')), $expires, $granted]);
+    // A working connection again (4.32.0; the column comes with migration 4.32.0).
+    try {
+        db()->prepare('UPDATE meeting_accounts SET refused_at = NULL WHERE user_id = ? AND provider = ? AND refused_at IS NOT NULL')->execute([$userId, $provider]);
+    } catch (PDOException $e) {}
 }
 
-/** A working access token for this person, refreshing it when it has expired; null when not connected or refused. */
-function meeting_access_token(int $userId, string $provider): ?string {
+/** When Zoom or Microsoft refused to renew this connection (4.32.0), or null while it works. */
+function meeting_refused_at(?array $acc): ?string {
+    $v = $acc['refused_at'] ?? null;
+    return is_string($v) && $v !== '' ? $v : null;
+}
+
+/** A connection that still works: connected, and not refused at its last renewal (4.32.0). */
+function meeting_connected(int $userId, string $provider): bool {
+    $acc = meeting_account($userId, $provider);
+    return $acc !== null && meeting_refused_at($acc) === null;
+}
+
+/**
+ * A working access token for this person, refreshing it when it has expired or has less than
+ * five minutes left (a calendar run uses one token for minutes); null when not connected or
+ * refused. $force renews it whatever its time (the provider refused it before it expired:
+ * the person removed the app). A refusal is kept on the connection (4.32.0), so My Account
+ * says to connect again and the person is told once.
+ */
+function meeting_access_token(int $userId, string $provider, bool $force = false): ?string {
     $acc = meeting_account($userId, $provider);
     $app = meeting_app($provider);
-    if (!$acc || !$app) return null;
-    if (strtotime((string)$acc['expires_at']) > time()) return meeting_open((string)$acc['access_token']);
+    if (!$acc || !$app || meeting_refused_at($acc) !== null) return null;
+    $margin = time() + 300;
+    if (!$force && strtotime((string)$acc['expires_at']) > $margin) return meeting_open((string)$acc['access_token']);
+    $before = (string)$acc['access_token'];
     // Renewed under a lock on the row: Zoom replaces the refresh token each time, so two
     // bookings at once must not both spend the same one. The second finds the first's result.
     $own = !db()->inTransaction();
@@ -318,19 +366,32 @@ function meeting_access_token(int $userId, string $provider): ?string {
         $q = db()->prepare('SELECT * FROM meeting_accounts WHERE user_id = ? AND provider = ? FOR UPDATE');
         $q->execute([$userId, $provider]);
         $acc = $q->fetch();
-        if (!$acc) { if ($own) db()->rollBack(); return null; }
-        if (strtotime((string)$acc['expires_at']) > time()) { if ($own) db()->commit(); return meeting_open((string)$acc['access_token']); }
+        if (!$acc || meeting_refused_at($acc) !== null) { if ($own) db()->rollBack(); return null; }
+        // Another request renewed it while this one waited for the lock: use that.
+        $renewedMeanwhile = (string)$acc['access_token'] !== $before;
+        if ((!$force || $renewedMeanwhile) && strtotime((string)$acc['expires_at']) > $margin) { if ($own) db()->commit(); return meeting_open((string)$acc['access_token']); }
+        // A token this server cannot read (the key file missing or replaced after a restore) is
+        // the server's problem, not the person's: logged, never marked (System health shows the key).
         $refresh = meeting_open((string)$acc['refresh_token']);
         $tok = null;
-        if ($refresh !== null && $refresh !== '') {
+        $refused = false; $appProblem = null;
+        if ($refresh === null) {
+            error_log('meeting_access_token: a stored refresh token could not be read (meeting_tokens.key)');
+        } elseif ($refresh === '') {
+            $refused = true;
+        } else {
             $fields = ['grant_type' => 'refresh_token', 'refresh_token' => $refresh];
             // Only what this person granted (a connection from before 4.20.0 granted the legacy scope).
             if ($app['scope'] !== '') $fields['scope'] = trim((string)($acc['granted_scope'] ?? '')) ?: MEETING_MS_LEGACY_SCOPE;
-            $tok = meeting_token_request($app, $fields);
+            $tok = meeting_token_request($app, $fields, $refused, $appProblem);
         }
         if ($tok !== null) {
             $tok['refresh_token'] ??= $refresh;
             meeting_store($userId, $provider, $tok, (string)$acc['account_email']);
+        } elseif ($refused) {
+            meeting_mark_refused($userId, $provider, $acc);
+        } elseif ($appProblem !== null) {
+            meeting_app_refused($provider, $appProblem);
         }
         if ($own) db()->commit();
         return $tok !== null ? (string)$tok['access_token'] : null;
@@ -340,6 +401,73 @@ function meeting_access_token(int $userId, string $provider): ?string {
     }
 }
 
+/**
+ * Note that Zoom or Microsoft refused to renew this connection (4.32.0), and tell the person
+ * once: their links are no longer made until they connect again on My Account. Before
+ * migration 4.32.0 there is nowhere to keep it, and nothing is said.
+ */
+function meeting_mark_refused(int $userId, string $provider, array $acc): void {
+    try {
+        $u = db()->prepare('UPDATE meeting_accounts SET refused_at = NOW() WHERE user_id = ? AND provider = ? AND refused_at IS NULL');
+        $u->execute([$userId, $provider]);
+        if ($u->rowCount() !== 1) return;
+    } catch (PDOException $e) {
+        return;
+    }
+    $name = MEETING_PROVIDERS[$provider] ?? $provider;
+    if (function_exists('notify_user')) notify_user($userId, 'Your ' . $name . ' connection has ended, so new remote sessions will not get ' . $name . ' links. Connect ' . $name . ' again on My Account.', 'account.php#meetings-h');
+}
+
+/**
+ * Zoom or Microsoft refused the system's own app (4.32.0): its secret expired or changed, or its
+ * permissions or tenant are wrong. Nobody's connection ends; administrators are told once a day.
+ */
+function meeting_app_refused(string $provider, string $error): void {
+    if (!function_exists('setting') || !function_exists('set_setting')) return;
+    $key = 'meeting_app_refused_' . $provider;
+    if (setting($key) === date('Y-m-d')) return;
+    set_setting($key, date('Y-m-d'));
+    $name = MEETING_PROVIDERS[$provider] ?? $provider;
+    if (function_exists('notify_admin_users')) notify_admin_users($name . ' refused this system\'s app (' . mb_substr($error, 0, 40) . '): check its client ID and secret in Settings, Online meetings. Staff connections are kept.', 'settings.php');
+}
+
+/**
+ * Renew every working connection (4.32.0, from the daily job). Zoom ends a connection whose
+ * refresh token goes unused for 90 days, and Microsoft one unused for 90 days by default, so
+ * people who make links rarely would lose theirs unseen. A connection refused here is marked
+ * and its owner told (meeting_mark_refused). Returns [renewed, refused, failed].
+ */
+function meeting_renew_all(int $seconds = 240): array {
+    $done = [0, 0, 0];
+    $deadline = time() + $seconds;
+    try {
+        // Active staff only, oldest renewal first, so a run cut short by its time limit reaches the rest tomorrow.
+        $rows = db()->query("SELECT m.user_id, m.provider FROM meeting_accounts m JOIN users u ON u.id = m.user_id AND u.is_active = 1
+            WHERE m.refused_at IS NULL ORDER BY m.expires_at")->fetchAll();
+    } catch (PDOException $e) {
+        return $done;   // before migration 4.32.0
+    }
+    $appDown = [];
+    foreach ($rows as $r) {
+        if (time() >= $deadline) break;
+        if (!meeting_app((string)$r['provider']) || isset($appDown[$r['provider']])) continue;
+        try {
+            $tok = meeting_access_token((int)$r['user_id'], (string)$r['provider'], true);
+        } catch (Throwable $e) {
+            error_log('meeting_renew_all: ' . get_class($e));
+            $tok = null;
+        }
+        if ($tok !== null) $done[0]++;
+        elseif (meeting_refused_at(meeting_account((int)$r['user_id'], (string)$r['provider'])) !== null) $done[1]++;
+        else {
+            $done[2]++;
+            // The app itself refused (told to administrators): no use trying the others today.
+            if (setting('meeting_app_refused_' . $r['provider']) === date('Y-m-d')) $appDown[$r['provider']] = true;
+        }
+    }
+    return $done;
+}
+
 /** Forget a connection. Zoom is also told to withdraw it; Microsoft has no such call for one
  * app's tokens (the person removes the app under their Microsoft account's app permissions). */
 function meeting_disconnect(int $userId, string $provider): void {
@@ -347,13 +475,23 @@ function meeting_disconnect(int $userId, string $provider): void {
     $app = meeting_app($provider);
     if ($acc && $app && $provider === 'zoom') {
         try {
-            $tok = meeting_open((string)$acc['refresh_token']) ?: meeting_open((string)$acc['access_token']);
+            // Zoom withdraws the app when given a working access token (4.32.0): renewed first
+            // when it has expired, which it usually has.
+            $tok = meeting_access_token($userId, 'zoom');
+            // No fresh token (Zoom did not answer): the stored one is still sent, as before 4.32.0.
+            if (!$tok) $tok = meeting_open((string)$acc['access_token']) ?: meeting_open((string)$acc['refresh_token']);
             if ($tok) meeting_http('POST', 'https://zoom.us/oauth/revoke', ['Content-Type: application/x-www-form-urlencoded', 'Authorization: Basic ' . base64_encode($app['id'] . ':' . $app['secret'])], http_build_query(['token' => $tok]));
         } catch (Throwable $e) {
             error_log('meeting_disconnect: ' . get_class($e));
         }
     }
     db()->prepare('DELETE FROM meeting_accounts WHERE user_id = ? AND provider = ?')->execute([$userId, $provider]);
+    // A renewal refused while disconnecting must not leave a notice to connect again.
+    $name = MEETING_PROVIDERS[$provider] ?? $provider;
+    try {
+        db()->prepare("DELETE FROM notifications WHERE user_id = ? AND link = 'account.php#meetings-h' AND message LIKE ? AND created_at >= NOW() - INTERVAL 10 MINUTE")
+            ->execute([$userId, 'Your ' . $name . ' connection has ended%']);
+    } catch (PDOException $e) {}
 }
 
 /**
@@ -362,23 +500,94 @@ function meeting_disconnect(int $userId, string $provider): void {
  * Returns the join link, or null with $why set.
  */
 function meeting_create(int $userId, string $provider, string $topic, int $start, int $end, bool $series, ?string &$why = null): ?string {
+    $name = MEETING_PROVIDERS[$provider];
+    $reconnect = $name . ' is not connected for this instructor, or its connection has ended: they can connect again on My Account.';
     $token = meeting_access_token($userId, $provider);
-    if ($token === null) { $why = MEETING_PROVIDERS[$provider] . ' is not connected for this instructor, or its connection has expired: they can connect again on My Account.'; return null; }
-    $auth = ['Authorization: Bearer ' . $token, 'Content-Type: application/json'];
+    if ($token === null) { $why = $reconnect; return null; }
     if ($provider === 'zoom') {
+        $endpoint = 'https://api.zoom.us/v2/users/me/meetings';
         $body = ['topic' => mb_substr($topic, 0, 200), 'type' => $series ? 3 : 2, 'duration' => max(15, (int)round(($end - $start) / 60)),
             'start_time' => gmdate('Y-m-d\TH:i:s\Z', $start), 'timezone' => date_default_timezone_get(),
             'settings' => ['waiting_room' => true, 'join_before_host' => false]];
-        [$code, $data] = meeting_http('POST', 'https://api.zoom.us/v2/users/me/meetings', $auth, json_encode($body));
-        $url = $data['join_url'] ?? null;
     } else {
+        $endpoint = 'https://graph.microsoft.com/v1.0/me/onlineMeetings';
         $body = ['subject' => mb_substr($topic, 0, 200), 'startDateTime' => gmdate('Y-m-d\TH:i:s\Z', $start), 'endDateTime' => gmdate('Y-m-d\TH:i:s\Z', $end)];
-        [$code, $data] = meeting_http('POST', 'https://graph.microsoft.com/v1.0/me/onlineMeetings', $auth, json_encode($body));
-        $url = $data['joinWebUrl'] ?? null;
     }
+    [$code, $data] = meeting_http('POST', $endpoint, ['Authorization: Bearer ' . $token, 'Content-Type: application/json'], json_encode($body));
+    // 401 (4.32.0): the token was withdrawn before it expired (the app was removed). Renew it
+    // once and try again; a refused renewal marks the connection, and the person is told.
+    if ($code === 401) {
+        $token = meeting_access_token($userId, $provider, true);
+        if ($token === null) { $why = $reconnect; return null; }
+        [$code, $data] = meeting_http('POST', $endpoint, ['Authorization: Bearer ' . $token, 'Content-Type: application/json'], json_encode($body));
+    }
+    $url = is_array($data) ? ($provider === 'zoom' ? ($data['join_url'] ?? null) : ($data['joinWebUrl'] ?? null)) : null;
     if ($code < 200 || $code >= 300 || !is_string($url) || strlen($url) > 500 || !preg_match('~^https://\S+$~', $url)) {
-        $why = MEETING_PROVIDERS[$provider] . ' did not make the meeting (reply ' . $code . '). The session is booked without a link; add one by moving the session, or try again.';
+        $why = meeting_refusal_reason($provider, $code, $data) . ' The session is booked without a link; add one by moving the session, or try again.';
         return null;
     }
     return $url;
+}
+
+/** Why Zoom or Microsoft did not make a meeting, in words (4.32.0): the common causes named, then the provider's own message. */
+function meeting_refusal_reason(string $provider, int $code, $data): string {
+    $name = MEETING_PROVIDERS[$provider];
+    $msg = '';
+    if (is_array($data)) {
+        $m = $provider === 'zoom' ? ($data['message'] ?? '') : ($data['error']['message'] ?? '');
+        if (is_string($m)) $msg = trim(preg_replace('/\s+/', ' ', strip_tags($m)));
+    }
+    $tail = $msg !== '' ? ' ' . $name . ' said: "' . mb_substr($msg, 0, 200) . '".' : '';
+    return match (true) {
+        $code === 0 || $code >= 500 => $name . ' did not answer just now.',
+        $code === 429 => $name . ' is busy (too many requests): try again in a minute.',
+        $code === 401 => 'The connection to ' . $name . ' was refused: the instructor can connect again on My Account.' . $tail,
+        $code === 403 && $provider === 'microsoft' => 'Microsoft refused: the instructor\'s Microsoft account may not have Teams, or the app is missing the OnlineMeetings.ReadWrite permission.' . $tail,
+        $code === 403 || $code === 404 => $name . ' refused: the instructor\'s ' . $name . ' account may not allow making meetings this way.' . $tail,
+        default => $name . ' did not make the meeting (reply ' . $code . ').' . $tail,
+    };
+}
+
+/** Keep the start time a single meeting link was made for (4.32.0); before migration 4.32.0 nothing is kept. */
+function meeting_note_made_for(array $sessionIds, int $start): void {
+    $ids = array_values(array_filter(array_map('intval', $sessionIds)));
+    if (!$ids) return;
+    try {
+        db()->prepare('UPDATE scheduled_sessions SET meeting_made_for = ? WHERE id IN (' . implode(',', $ids) . ')')->execute([date('Y-m-d H:i:s', $start)]);
+    } catch (PDOException $e) {}
+}
+
+/**
+ * After a session moves (4.32.0). A single meeting made by Zoom stops working about 30 days
+ * after the time it was made for, and a Teams one 60 days after, so a session now more than 25
+ * days past the time its link was made for (however many moves that took) gets a new link from
+ * its instructor's own account, when that is still connected. Only links this system made for
+ * one time are replaced: a link someone typed (a personal meeting room) and a series' recurring
+ * meeting with no fixed time work at any time and are kept. The old meeting is left in Zoom or
+ * Teams. Never fails the move.
+ */
+function meeting_refresh_after_move(int $sid, int $oldStart): void {
+    try {
+        try {
+            $q = db()->prepare("SELECT id, user_id, start_at, end_at, is_remote, meeting_url, meeting_made_for FROM scheduled_sessions WHERE id = ? AND status = 'Scheduled'");
+            $q->execute([$sid]);
+            $s = $q->fetch();
+        } catch (PDOException $e) {
+            return;   // before migration 4.32.0
+        }
+        if (!$s || !(int)$s['is_remote'] || empty($s['meeting_made_for'])) return;
+        $url = trim((string)($s['meeting_url'] ?? ''));
+        $start = strtotime((string)$s['start_at']);
+        if ($url === '' || $start - strtotime((string)$s['meeting_made_for']) <= 25 * 86400) return;
+        $host = strtolower((string)parse_url($url, PHP_URL_HOST));
+        $provider = preg_match('/(^|\.)zoom\.us$/', $host) ? 'zoom' : (preg_match('/(^|\.)teams\.(microsoft|live)\.com$/', $host) ? 'microsoft' : null);
+        if ($provider === null || !meeting_app($provider) || !meeting_connected((int)$s['user_id'], $provider)) return;
+        $why = null;
+        $new = meeting_create((int)$s['user_id'], $provider, (brand('short') ?: cfg('name')) . ' session', $start, strtotime((string)$s['end_at']), false, $why);
+        if ($new === null) return;
+        db()->prepare('UPDATE scheduled_sessions SET meeting_url = ? WHERE id = ?')->execute([$new, $sid]);
+        meeting_note_made_for([$sid], $start);
+    } catch (Throwable $e) {
+        error_log('meeting_refresh_after_move: ' . get_class($e));
+    }
 }

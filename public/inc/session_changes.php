@@ -119,6 +119,8 @@ function session_move(int $sid, int $start, int $end, int $actor, bool|string $c
     audit($actor, 'session.move', 'session', $sid, 'client #' . (int)$sess['client_id'] . ': ' . date('Y-m-d H:i', strtotime((string)$sess['start_at']))
         . ' → ' . date('Y-m-d H:i', $start) . ($warnings ? ' (confirmed: ' . implode(' ', $warnings) . ')' : '')
         . ($leftGroup ? ' (left its group session)' : '') . ($via !== '' ? ' (' . $via . ')' : ''));
+    // Moved far ahead, a meeting made for the old time may expire (4.32.0): a new link first, so the emails carry it.
+    if (function_exists('meeting_refresh_after_move')) meeting_refresh_after_move($sid, strtotime((string)$sess['start_at']));
     client_session_notice([$sid], 'moved');
     session_tell_instructor($sid, 'moved', $actor, (string)$sess['start_at']);
     return ['error' => null, 'warnings' => $warnings, 'moved' => true, 'hash' => '', 'left_group' => $leftGroup];

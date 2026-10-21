@@ -176,14 +176,20 @@ function self_booking_book(array $client, int $start): array {
         throw $e;
     }
     // An online session gets its link from the instructor's own meeting account, when they connected one.
+    // The booking is already made: a failure here never stops the client's email or the
+    // instructor's notice (4.32.0).
     if ($slot['remote']) {
-        foreach (['microsoft', 'zoom'] as $prov) {
-            if (meeting_app($prov) && meeting_account($uid, $prov)) {
-                $why = null;
-                $url = meeting_create($uid, $prov, (brand('short') ?: cfg('name')) . ' session', $slot['start'], $slot['end'], false, $why);
-                if ($url !== null) db()->prepare('UPDATE scheduled_sessions SET meeting_url = ? WHERE id = ?')->execute([$url, $sid]);
-                break;
+        try {
+            foreach (['microsoft', 'zoom'] as $prov) {
+                if (meeting_app($prov) && meeting_connected($uid, $prov)) {
+                    $why = null;
+                    $url = meeting_create($uid, $prov, (brand('short') ?: cfg('name')) . ' session', $slot['start'], $slot['end'], false, $why);
+                    if ($url !== null) { db()->prepare('UPDATE scheduled_sessions SET meeting_url = ? WHERE id = ?')->execute([$url, $sid]); meeting_note_made_for([$sid], $slot['start']); }
+                    break;
+                }
             }
+        } catch (Throwable $e) {
+            error_log('self_book meeting link: ' . get_class($e));
         }
     }
     client_session_notice([$sid], 'booked');
