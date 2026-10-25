@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.32.0';
+const APP_VERSION = '4.32.1';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 

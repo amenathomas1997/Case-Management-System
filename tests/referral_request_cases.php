@@ -9,6 +9,14 @@ $publicForm = function (array $query, ?array $post = null) use ($renderPage): ar
 $baseReferral = ['role'=>'counselor','referrer_name'=>'Synthetic Referrer','referrer_phone'=>'555-0100','referrer_email'=>'referrer@example.invalid','organization'=>'Test agency','client_name'=>'Structured Referral Test','body'=>'Synthetic referral workflow test.','referral_purpose'=>'Additional service','requested_services'=>['Assistive technology training'],'specific_needs'=>['Screen readers','Braille devices','Screen readers']];
 [$code,$out,$err]=$publicForm(['role'=>'school']);
 check($code===0&&$err===''&&!str_contains($out,'name="preets[]"')&&!str_contains($out,'Pre-employment transition services needed')&&!str_contains($out,'Job exploration counseling')&&!str_contains($out,'value="Braille literacy"')&&!str_contains($out,'value="Independent living skills"')&&str_contains($out,'Assistive technology for daily living'),'School referral form offers only technology services and needs');
+// 4.32.1: the "Is my training free?" checker on the organisation's website links here with its answers.
+$checkedAnswer = fn(string $html, string $name, string $value): bool => (bool)preg_match('/name="' . $name . '" id="[a-z]+-\d+" value="' . $value . '" checked/', $html);
+[$code,$out,$err]=$publicForm(['role'=>'self','vr_case'=>'no','income'=>'below_2000']);
+check($code===0&&$err===''&&$checkedAnswer($out,'vr_case','no')&&$checkedAnswer($out,'income','below_2000')&&!$checkedAnswer($out,'vr_case','yes')&&!$checkedAnswer($out,'income','above_2000'),'Agency case and income answers in the link are chosen on a fresh form');
+[$code,$out,$err]=$publicForm(['role'=>'self','vr_case'=>'maybe','income'=>'<b>']);
+check($code===0&&$err===''&&!str_contains($out,'" checked data-req-roles')&&!str_contains($out,'&lt;b&gt;'),'Answers in the link that the form does not offer are ignored');
+[$code,$out,$err]=$publicForm(['role'=>'self','vr_case'=>'no','income'=>'below_2000'],['role'=>'self','vr_case'=>'yes','income'=>'above_2000','referrer_name'=>'']);
+check($code===0&&$err===''&&$checkedAnswer($out,'vr_case','yes')&&$checkedAnswer($out,'income','above_2000')&&!$checkedAnswer($out,'vr_case','no'),'Answers someone submitted win over the answers in the link');
 $before = (int)$db->query('SELECT COUNT(*) FROM referrals')->fetchColumn();
 [$code,$out,$err] = $publicForm([], $baseReferral);
 $ref = $db->query('SELECT * FROM referrals ORDER BY id DESC LIMIT 1')->fetch();

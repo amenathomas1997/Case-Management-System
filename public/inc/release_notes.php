@@ -6,6 +6,9 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.32.1' => [
+        'The community referral form can now be opened with answers already chosen, so a person coming from a "Is my training free?" checker on your website doesn\'t answer the same questions twice. The agency case and monthly income answers are picked for them, and they can still change anything before sending.',
+    ],
     '4.32.0' => [
         'Zoom and Microsoft Teams connections keep working: they are renewed every day, so they no longer end when you go a while without making a meeting link. If Zoom or Microsoft ends one anyway (for example, the app was removed there), My Account says so with Connect again, and you are told once.',
         'When a meeting link cannot be made, the reason is in words (for example, a Microsoft account without Teams, or Zoom being busy), and a connection refused part-way is renewed and tried again. A session moved more than 25 days later gets a new link, because a single Zoom or Teams meeting expires some weeks after its time.',

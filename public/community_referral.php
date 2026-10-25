@@ -78,6 +78,13 @@ $aria = function (string $k, string $describe = '') use (&$errors): string {
     return (isset($errors[$k]) ? 'aria-invalid="true" ' : '') . 'aria-describedby="' . implode(' ', $ids) . '"';
 };
 $role = is_string($_POST['role'] ?? null) ? $_POST['role'] : (is_string($_GET['role'] ?? null) ? $_GET['role'] : '');
+// The pricing answers can arrive in the link too (4.32.1), for example from an "Is my training
+// free?" checker on the organisation's own website: ?role=self&vr_case=no&income=below_2000.
+// Only a fresh form takes them, and only an answer the form offers; what someone submitted wins.
+$linked = fn(string $k, array $answers): string => is_string($_POST[$k] ?? null) ? $_POST[$k]
+    : ($_SERVER['REQUEST_METHOD'] !== 'POST' && is_string($_GET[$k] ?? null) && isset($answers[$_GET[$k]]) ? $_GET[$k] : '');
+$vrChoice = $linked('vr_case', VR_CASE_ANSWERS);
+$incomeChoice = $linked('income', INCOME_BRACKETS);
 // A referral source an administrator added (Lists and time limits, 4.11.0) is asked what
 // "Employer / other" is asked, and the referral is saved under its own name.
 $source = is_string($role) ? $role : '';
@@ -587,7 +594,7 @@ if ($errors): ?>
     <legend><h2 class="legend-h"><?php if ($asksOthers): // worded for whoever is filling it in, as the request box is ?><span data-self-text<?= $role === 'self' ? '' : ' hidden' ?>><?= t('Do you have an open case with a vocational rehabilitation (VR) agency?') ?></span><span data-other-text<?= $role === 'self' ? ' hidden' : '' ?>><?= t('Does the person have an open case with a vocational rehabilitation (VR) agency?') ?></span><?php else: ?><?= t('Do you have an open case with a vocational rehabilitation (VR) agency?') ?><?php endif; ?> <span aria-hidden="true">*</span></h2></legend>
     <?= $err('vr_case') ?>
     <?php $vrNum = 0; foreach (VR_CASE_ANSWERS as $value => $label): ?>
-    <div class="field"><label><input type="radio" name="vr_case" id="vrcase-<?= $vrNum++ ?>" value="<?= h($value) ?>" <?= ($_POST['vr_case'] ?? '') === $value ? 'checked' : '' ?><?= $inv('vr_case') ?> data-req-roles="<?= h($askRoles) ?>"> <?= t($label) ?></label></div>
+    <div class="field"><label><input type="radio" name="vr_case" id="vrcase-<?= $vrNum++ ?>" value="<?= h($value) ?>" <?= $vrChoice === $value ? 'checked' : '' ?><?= $inv('vr_case') ?> data-req-roles="<?= h($askRoles) ?>"> <?= t($label) ?></label></div>
     <?php endforeach; ?>
   </fieldset>
   <?php endif; ?>
@@ -599,7 +606,7 @@ if ($errors): ?>
     <?= $err('income') ?>
     <?php $incomeNum = 0; foreach (INCOME_BRACKETS as $value => $label): ?>
     <div class="field">
-      <label><input type="radio" name="income" id="income-<?= $incomeNum++ ?>" value="<?= h($value) ?>" <?= ($_POST['income'] ?? '') === $value ? 'checked' : '' ?><?= $inv('income') ?> data-req-roles="<?= h($askRoles) ?>">
+      <label><input type="radio" name="income" id="income-<?= $incomeNum++ ?>" value="<?= h($value) ?>" <?= $incomeChoice === $value ? 'checked' : '' ?><?= $inv('income') ?> data-req-roles="<?= h($askRoles) ?>">
         <?= fee_copy(t($label)) ?> — <strong><?= fee_copy(t($value === 'below_2000' ? 'free' : '{rate} per hour')) ?></strong></label>
     </div>
     <?php endforeach; ?>
