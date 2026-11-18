@@ -118,6 +118,16 @@ static_check(add_note.index('payload["session_id"]') < add_note.index('try api.e
 static_check('.accessibilityFocused($focusedField, equals: 0)' in add_note and '.accessibilityFocused($focusedField, equals: 100 + i)' in add_note
              and '.accessibilitySpeechQueueAnnouncement: true' in add_note,
              'a session\'s note puts VoiceOver on the first field to write, then says where it is (queued, not cutting off the field)')
+# 4.33.0: Generate structured note works from rough notes typed or dictated straight into the note.
+static_check(re.search(r'private var generatorSource: String \{.*?\(\[body_\] \+ sections\)', add_note, re.S)
+             and 'let source = generatorSource' in add_note and '"text": source' in add_note,
+             'Generate structured note works from the raw-notes box or, when it is empty, from the note as typed')
+gen_button = re.search(r'Label\(genBusy \? "Generating[^"]*" : "Generate structured note", systemImage: "wand.and.stars"\)\s*\}(\.disabled\([^)]*\))', add_note)
+static_check(gen_button is not None and gen_button.group(1) == '.disabled(genBusy)',
+             'the Generate structured note button is dimmed only while generating, never for an empty raw-notes box')
+static_check('showFormError("Raw notes:' in add_note and add_note.index('showFormError("Raw notes:') < add_note.index('"text": source')
+             and '.errorField("Raw notes")' in add_note,
+             'Generate with nothing to work from says so at the Raw notes field instead of sending nothing')
 session_notes = swift_sources['SessionNotes.swift']
 static_check('try? await api.callCached("notes_to_write"' in session_notes and 'guard api.can("clients")' in session_notes,
              'notes_to_write is optional: an older server (Unknown action) or no clients permission hides Notes to write')

@@ -911,15 +911,31 @@ struct AddNoteSheet: View {
         aiBusy = false
     }
 
-    /// Convert pasted messy notes into the chosen structured format.
+    /// What the generator works from: the raw-notes box, or, when it is empty, the note as
+    /// typed so far (the Note or Narrative box, then each section), as the website's Generate
+    /// does. Rough notes typed or dictated straight into the note need no second box (4.33.0:
+    /// the button was dimmed until the raw-notes box had text, so Generate did nothing for them).
+    private var generatorSource: String {
+        let raw = messy.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !raw.isEmpty { return raw }
+        return ([body_] + sections).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
+    /// Convert messy notes (pasted, or typed into the note itself) into the chosen structured format.
     private func generate() async {
+        let source = generatorSource
+        guard !source.isEmpty else {
+            showFormError("Raw notes: type or dictate your rough notes here, or in the note's own boxes above, then tap Generate structured note.", in: &error)
+            return
+        }
         genBusy = true; error = nil
         let sentSections = sections
         let wasFree = !structured
         do {
             let fmt = structured ? noteFormat : "BIRP"
             let r: GenerateNoteResponse = try await api.call("ai_generate_note", body: [
-                "client_id": clientId, "note_format": fmt, "text": messy,
+                "client_id": clientId, "note_format": fmt, "text": source,
             ])
             // Section text typed or dictated while the request ran is never replaced.
             guard sections == sentSections else {
@@ -928,7 +944,11 @@ struct AddNoteSheet: View {
                 return
             }
             noteFormat = r.format
-            for i in 0..<4 { sections[i] = i < r.sections.count ? r.sections[i] : "" }
+            for i in 0..<4 {
+                let drafted = i < r.sections.count ? r.sections[i] : ""
+                // A section the AI left empty keeps what was typed in it, as on the website.
+                sections[i] = drafted.isEmpty ? sentSections[i] : drafted
+            }
             questions = r.questions
             homework = r.homework
             if hwTrackId == 0 { hwTrackId = activeTracks.first?.id ?? 0 }
@@ -1052,12 +1072,14 @@ struct AddNoteSheet: View {
                 if existing == nil && api.aiHas("draft") {
                     Section {
                         DisclosureGroup(isExpanded: $showingGenerator) {
-                            Text("Paste your raw session notes; the assistant drafts the \(structured ? noteFormat : "BIRP") sections above, asks about anything missing, and pulls out homework.")
+                            Text("Paste or dictate your raw session notes here, or leave this box empty to use what you typed in the note. The assistant drafts the \(structured ? noteFormat : "BIRP") sections above, asks about anything missing, and pulls out homework. This can take up to a minute.")
                                 .font(.caption).foregroundStyle(Color.secondaryText)
-                            TextField("Paste raw notes here", text: $messy, axis: .vertical).lineLimit(3...10)
+                            TextField("Raw notes", text: $messy, axis: .vertical).lineLimit(3...10)
+                                .errorField("Raw notes")
+                            // Never dimmed for an empty box: generate() says what it needs instead.
                             Button { Task { await generate() } } label: {
-                                Label(genBusy ? "Generating…" : "Generate structured note", systemImage: "wand.and.stars")
-                            }.disabled(genBusy || messy.isEmpty)
+                                Label(genBusy ? "Generating… this can take up to a minute" : "Generate structured note", systemImage: "wand.and.stars")
+                            }.disabled(genBusy)
                         } label: {
                             Label("Generate from messy notes", systemImage: "wand.and.stars")
                         }

@@ -121,6 +121,11 @@ models.append(r'''
                 !$0.items.isEmpty && $0.items.allSatisfy { !$0.title.isEmpty && !$0.url.isEmpty && !$0.kind.isEmpty }
             }
         }
+        if fixtures["ai_generate_note"] != nil {
+            try values(GenerateNoteResponse.self, "ai_generate_note", "a generated case note: its format, four labels and sections, the questions and homework") {
+                $0.format == "BIRP" && $0.labels.count == 4 && $0.sections.count == 4 && $0.questions.count == 1 && $0.homework.count == 1 && !$0.homework[0].due.isEmpty
+            }
+        }
         if fixtures["workflow_briefing"] != nil {
             try values(BriefResponse.self, "workflow_briefing", "an AI case briefing whose every item cites a linked source") {
                 !$0.items.isEmpty && $0.items.allSatisfy { !$0.sources.isEmpty && $0.sources.values.allSatisfy { !$0.url.isEmpty } }

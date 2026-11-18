@@ -185,6 +185,23 @@ try{
         'An AI case briefing in the app cites the records it was given, with links built on the server, and the provider never receives the client\'s name');
     check($briefingAudits()===$auditsBefore+1,'An AI case briefing in the app is audited once');
     $fixtures['workflow_briefing']=$brief;
+    // The app's case-note generator (4.33.0): rough notes become the four sections of the
+    // format asked for ('free' means BIRP), with the labels, questions and homework the app
+    // decodes; the client's name never reaches the provider; a reply with no section text
+    // is refused instead of answered as four empty sections; empty notes are refused.
+    $genDue=date('Y-m-d',strtotime('+7 days'));
+    $aiReply(json_encode(['sections'=>['Workflow own client practised headings','Modelled the H key','Found two of three','Practise daily'],'questions'=>['Which document?'],'homework'=>[['title'=>'Practise headings','instructions'=>'Open the practice document and move by heading.','due'=>$genDue]]]));
+    $gen=$call('ai_generate_note',['client_id'=>$own,'note_format'=>'free','text'=>'Workflow own client did headings with the H key, found 2 of 3. homework: practise headings daily']);
+    $sent=(string)file_get_contents($tmp.'/ai_request.json');
+    check($gen['format']==='BIRP'&&$gen['labels']===['Behavior','Intervention','Response','Plan']&&count($gen['sections'])===4&&$gen['sections'][1]==='Modelled the H key'
+        &&$gen['questions']===['Which document?']&&($gen['homework'][0]['due']??'')===$genDue&&!str_contains($sent,'Workflow own client')&&str_contains($sent,'found 2 of 3'),
+        'The app\'s case-note generator answers the four sections, labels, questions and homework for a free-format note as BIRP, without the client\'s name reaching the provider');
+    $fixtures['ai_generate_note']=$gen;
+    $aiReply('Behavior: the client practised headings. Intervention: modelled the H key.');
+    $call('ai_generate_note',['client_id'=>$own,'note_format'=>'SOAP','text'=>'rough notes'],[],false,'could not be read');
+    $aiReply(json_encode(['note'=>'The client practised headings.']));
+    $call('ai_generate_note',['client_id'=>$own,'note_format'=>'SOAP','text'=>'rough notes'],[],false,'no note sections');
+    $call('ai_generate_note',['client_id'=>$own,'note_format'=>'SOAP','text'=>'   '],[],false,'Paste your session notes first');
     $aiReply($cited,'length');
     $call('workflow_briefing',['client_id'=>$own],[],false,'cut off');
     check($lastUsage('truncated')===1,'A briefing cut off at the output limit is refused and recorded as cut off');

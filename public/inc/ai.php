@@ -622,6 +622,9 @@ function ai_generate_case_note(string $messy, string $fmt, ?array $client, int $
         $vals = array_values($j['sections']);
         for ($i = 0; $i < 4; $i++) $sections[$i] = isset($vals[$i]) ? $str($vals[$i]) : '';
     }
+    // A reply with no section text at all (prose, or another shape of JSON) is refused,
+    // so no caller shows four empty sections as the result (4.33.0).
+    if (implode('', $sections) === '') { $blank['error'] = 'The AI reply had no note sections in it. Try again, or shorten the notes.'; return $blank; }
     $questions = [];
     if (isset($j['questions']) && is_array($j['questions'])) {
         foreach ($j['questions'] as $q) { $q = $str($q); if ($q !== '') $questions[] = mb_substr($q, 0, 300); }
