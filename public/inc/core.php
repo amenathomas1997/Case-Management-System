@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.32.1';
+const APP_VERSION = '4.33.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1807,6 +1807,8 @@ require_once __DIR__ . '/custom_reports.php';
 require_once __DIR__ . '/session_plan.php';
 // Each staff member's Zoom and Microsoft (Teams) connection (4.10.0).
 require_once __DIR__ . '/meetings.php';
+// The three kinds of calendar a staff member's sessions can go to (4.33.0), and the sync that drives them (4.20.0).
+require_once __DIR__ . '/calendar_kinds.php';
 require_once __DIR__ . '/calendar_sync.php';
 require_once __DIR__ . '/self_booking.php';
 require_once __DIR__ . '/at_act.php';

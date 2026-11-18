@@ -42,6 +42,7 @@ const CONFIG_OVERRIDES = [
     'meet.zoom_client_id' => ['Zoom app Client ID', 'text', 'meetings'],
     'meet.zoom_client_secret' => ['Zoom app Client secret', 'secret', 'meetings'],
     'meet.ms_tenant' => ['Microsoft directory (tenant) ID, or organizations', 'text', 'meetings'],
+    'meet.ms_accounts' => ['Microsoft accounts staff may connect: work (your directory: Teams and the calendar), personal (Outlook.com accounts: the calendar only) or any (both: the calendar only)', 'ms_accounts', 'meetings'],
     'meet.ms_client_id' => ['Microsoft app (client) ID', 'text', 'meetings'],
     'meet.ms_client_secret' => ['Microsoft app client secret', 'secret', 'meetings'],
     // (Missing means yes: see YESNO_DEFAULT_YES.)
@@ -101,13 +102,14 @@ function config_override_save(string $k, string $value, int $actor): ?string {
             'timezone' => !in_array($value, CONFIG_TIMEZONES, true),
             'color' => !preg_match('/^#[0-9a-fA-F]{6}$/', $value),
             'yesno' => !in_array($value, ['yes', 'no'], true),
+            'ms_accounts' => !in_array(strtolower($value), ['work', 'personal', 'any'], true),
             'url' => $value !== 'off' && !($k === 'app.update_url' && $value === 'github') && (!filter_var($value, FILTER_VALIDATE_URL) || !str_starts_with(strtolower($value), 'https://') || strlen($value) > 190),
             default => mb_strlen($value) > 190,
         };
         if ($bad) return $label . ': ' . match ($kind) {
             'email' => 'enter one email address.', 'minutes' => 'enter a whole number from 5 to 480.', 'otp' => 'enter a whole number from 3 to 30.',
             'timezone' => 'choose a time zone from the list.', 'color' => 'enter a colour as # and six hex digits, such as #1e3a8a.',
-            'yesno' => 'choose yes or no.', 'url' => $k === 'app.update_url' ? 'enter github, an address starting with https://, or the word off.' : 'enter an address starting with https://, or the word off.', default => 'keep it to 190 characters.',
+            'yesno' => 'choose yes or no.', 'ms_accounts' => 'enter work, personal or any.', 'url' => $k === 'app.update_url' ? 'enter github, an address starting with https://, or the word off.' : 'enter an address starting with https://, or the word off.', default => 'keep it to 190 characters.',
         };
         if ($kind === 'color' && brand_contrast_ratio($value) < 4.5) return $label . ': that colour is too light to read on white (it needs a contrast of at least 4.5 to 1).';
     }
@@ -147,7 +149,7 @@ function brand_rgb(string $key = 'color_dark'): array {
 /* ---------- Safe upgrades (3.0.54) ---------- */
 
 /** The database version this code needs: the newest migration it ships. */
-const DB_SCHEMA_VERSION = '4.32.0';
+const DB_SCHEMA_VERSION = '4.33.0';
 
 /** The database version recorded by the migrations, or null for a database from before 3.0.54. */
 function db_schema_version(): ?string {

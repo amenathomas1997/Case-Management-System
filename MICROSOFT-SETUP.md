@@ -5,7 +5,7 @@ The CMS uses Microsoft 365 for three things. You set them up as two app registra
 | App registration | Works as | What it does | Needed? |
 |---|---|---|---|
 | **CMS Mail** | the system itself, with no one signed in | sends every email (sign-in codes, invitations, reminders, backups) and files forwarded emails to client records | Recommended. Without it the server's own `mail()` is used, which is often marked as spam |
-| **CMS Sign-in and Teams** | each staff member | "Sign in with Microsoft", Teams meeting links and the Outlook calendar sync | Optional |
+| **CMS Sign-in and Teams** | each staff member | "Sign in with Microsoft", Teams meeting links and the Outlook calendar sync (work accounts, and personal Outlook.com accounts if you allow them) | Optional |
 
 You can use one app for everything (Microsoft Entra ID federation has a "Copy from email settings" button). Two apps is safer: the mail app's permissions reach a whole mailbox, so its secret should be kept in one place only.
 
@@ -68,20 +68,20 @@ New-ManagementRoleAssignment -App <client ID> -Role "Application Mail.ReadWrite"
 
 1. Make a **New registration**:
    - Name: `CMS Sign-in and Teams`.
-   - Supported account types: accounts in this organizational directory only.
+   - Supported account types: **Accounts in this organizational directory only** when every staff member has a work account. Choose **Accounts in any organizational directory and personal Microsoft accounts** when some staff will connect a personal Outlook.com calendar (see "Personal Microsoft accounts" below).
    - Redirect URI: platform **Web**, address `https://cms.example.org/sso.php`.
 2. Open **Authentication → Web → Add URI** and add two more addresses:
    - `https://cms.example.org/login.php`: signs a device that was handed over for signing in person out of Microsoft.
-   - `https://cms.example.org/meeting_connect.php?provider=microsoft`: used by Teams meetings and the Outlook calendar.
+   - `https://cms.example.org/meeting_connect.php?provider=microsoft`: used by Teams meetings and the Outlook calendar. The address must match exactly, including `?provider=microsoft`.
 3. Open **Token configuration → Add optional claim → ID**.
    - Tick **acct** and **auth_time** and add them. If Microsoft asks to turn on the Microsoft Graph profile permission, accept.
    - Both claims are required:
      - **acct**: without it, a person's first Microsoft sign-in cannot be matched to their CMS account by email.
      - **auth_time**: without it, Microsoft sign-in is refused on a device that was handed over for signing.
 4. Open **API permissions → Microsoft Graph → Delegated permissions** and add:
-   - **openid, profile, email, offline_access and User.Read**: sign-in
+   - **openid, profile, email, offline_access and User.Read**: sign-in, and the account's name when a calendar is connected
    - **OnlineMeetings.ReadWrite**: Teams meeting links
-   - **Calendars.ReadWrite**: sessions in each person's Outlook calendar
+   - **Calendars.ReadWrite** (delegated): sessions in each person's Outlook calendar, and their busy times
 
    Then choose **Grant admin consent**, so staff are not asked one by one.
 5. Under **Certificates & secrets**, make a client secret. Copy the Value and write down the expiry.
@@ -93,8 +93,22 @@ New-ManagementRoleAssignment -App <client ID> -Role "Application Mail.ReadWrite"
 7. **Teams and Outlook calendar:**
    - In **Settings → Online meetings (Zoom and Teams)**, enter the Microsoft tenant ID, the app client ID and the secret. Enter the tenant ID: left blank, any work account's tenant is used, which an app registered for your organization only refuses.
    - Teams links need a work or school account with a Teams licence. A personal Microsoft account can't make them.
-   - Each staff member then opens **My Account**, connects Microsoft, and can turn on "Put my sessions in my Outlook calendar".
+   - **Microsoft accounts staff may connect:** `work` (the default: your directory, Teams and the calendar), `personal` (Outlook.com accounts, the calendar only) or `any` (both, the calendar only). With `personal` or `any`, the sign-in asks for the calendar and not for Teams, because Microsoft refuses a Teams permission on a personal account.
+   - Each staff member then opens **My Account**, connects Microsoft under Online meetings, chooses **Use my Microsoft calendar** under My calendar, and turns on "Put my sessions in my calendar". **Test the connection** says which account is reached and how many busy times it holds in the next 7 days.
    - The same Settings section decides whether calendar events show the client's first name or only "Client session".
+
+### Personal Microsoft accounts (Outlook.com)
+
+A staff member without a Microsoft 365 account can still put their sessions in an Outlook.com calendar. Three things are needed, all on the **CMS Sign-in and Teams** app:
+
+1. **Supported account types** must be **Accounts in any organizational directory and personal Microsoft accounts**. On an existing app, change it under **Authentication → Supported account types**.
+2. The app must give out **version 2 access tokens**. Open **Manifest**, find `requestedAccessTokenVersion`, set it to `2` and save. The Authentication page refuses the change to personal accounts until this is done, and says so.
+3. In the CMS, on **Settings → Online meetings**, set "Microsoft accounts staff may connect" to `personal` (or `any`). The tenant ID is then not used: the sign-in goes to the `consumers` (or `common`) address.
+
+What the CMS does differently for a personal account:
+- It asks only for `openid email offline_access Calendars.ReadWrite`. The account's address comes from the ID token Microsoft sends with the tokens. The CMS never asks Graph for `/me` with that token: a personal account's calendar token cannot read it (Graph answers 403 with no message).
+- Access tokens are cached and renewed with the refresh token. A token Microsoft refuses before it expired (the person signed out everywhere, or removed the app) is renewed once and the calendar work tried again. A refresh token Microsoft will not renew ends the connection; My Account says to connect again.
+- Teams links are not made for a personal account.
 
 ### Optional: choose who can use Microsoft sign-in
 
@@ -106,6 +120,7 @@ In **Enterprise applications → CMS Sign-in and Teams → Properties**, set **A
 2. **Email to client file:** forward an email to the mailbox with a test client's full name in the subject. Within 15 minutes it is a note on that client's file and sits in "Filed to CMS".
 3. **Microsoft sign-in:** in a private browser window, choose "Sign in with Microsoft".
 4. **Teams:** schedule a session as a Teams meeting. It should have a join link and appear in the staff member's Outlook calendar.
+   **Calendar:** on My Account, My calendar, choose Test the connection. It names the account and the number of busy times in the next 7 days.
 5. **Connections:** the CMS renews each staff member's Microsoft connection every day. If Microsoft ends one (for example, after a password reset or a sign-in policy), My Account shows **Connect Microsoft Teams again**, and the person gets one notice. Disconnecting Microsoft turns Outlook calendar sync off first and removes the session events it added.
 6. **Offboarding (optional):** turn on the nightly Microsoft 365 check in **Administration → People & permissions**. It needs User.Read.All on the mail app.
 

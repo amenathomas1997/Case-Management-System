@@ -13,6 +13,23 @@ const MEETING_PROVIDERS = ['zoom' => 'Zoom', 'microsoft' => 'Microsoft Teams'];
 // a renewal asks for that only: Microsoft refuses a renewal asking for more than was granted, which would
 // otherwise break Teams links for everyone who connected before the calendar was added.
 const MEETING_MS_LEGACY_SCOPE = 'offline_access User.Read OnlineMeetings.ReadWrite';
+// 4.33.0: openid and email too, so the account's name comes from the ID token at connect time and
+// Graph /me is never needed (a personal account's calendar token cannot read it: 403, no message).
+const MEETING_MS_WORK_SCOPE = 'openid email offline_access User.Read OnlineMeetings.ReadWrite Calendars.ReadWrite';
+// Personal Microsoft accounts (Outlook.com) have no Teams, and Microsoft refuses a sign-in that asks
+// for OnlineMeetings.ReadWrite or User.Read on one, so they are asked for the calendar only.
+const MEETING_MS_PERSONAL_SCOPE = 'openid email offline_access Calendars.ReadWrite';
+
+/**
+ * Which Microsoft accounts staff may connect (Settings, Online meetings, 4.33.0): 'work' (the
+ * organisation's directory, or any work account when no tenant is entered: Teams and the calendar),
+ * 'personal' (Outlook.com accounts, the calendar only) or 'any' (both, the calendar only).
+ */
+function meeting_ms_accounts(): string {
+    global $CONFIG;
+    $v = strtolower(trim((string)($CONFIG['meet']['ms_accounts'] ?? '')));
+    return in_array($v, ['personal', 'any'], true) ? $v : 'work';
+}
 
 /** The registered app for a provider, or null when an administrator has not set it up. */
 function meeting_app(string $provider): ?array {
@@ -25,12 +42,42 @@ function meeting_app(string $provider): ?array {
             'scope' => '', 'redirect' => $base . '/meeting_connect.php?provider=zoom'];
     }
     if ($provider === 'microsoft' && !empty($m['ms_client_id']) && !empty($m['ms_client_secret'])) {
+        // The sign-in address names who may sign in: the tenant (or "organizations") for work
+        // accounts, "consumers" for personal ones, "common" for both (4.33.0).
+        $accounts = meeting_ms_accounts();
         $tenant = preg_match('/^[A-Za-z0-9.-]+$/', (string)($m['ms_tenant'] ?? '')) ? (string)$m['ms_tenant'] : 'organizations';
+        if ($accounts === 'personal') $tenant = 'consumers';
+        elseif ($accounts === 'any') $tenant = 'common';
         return ['id' => (string)$m['ms_client_id'], 'secret' => (string)$m['ms_client_secret'],
             'authorize' => "https://login.microsoftonline.com/{$tenant}/oauth2/v2.0/authorize", 'token' => "https://login.microsoftonline.com/{$tenant}/oauth2/v2.0/token",
-            'scope' => 'offline_access User.Read OnlineMeetings.ReadWrite Calendars.ReadWrite', 'redirect' => $base . '/meeting_connect.php?provider=microsoft'];
+            'scope' => $accounts === 'work' ? MEETING_MS_WORK_SCOPE : MEETING_MS_PERSONAL_SCOPE, 'accounts' => $accounts,
+            'redirect' => $base . '/meeting_connect.php?provider=microsoft'];
     }
     return null;
+}
+
+/**
+ * The claims of an ID token from a token reply (4.33.0): who signed in, read from the token
+ * itself. It arrived over TLS from Microsoft's own token address in the same reply as the access
+ * token, so its signature is not checked here; it is used for the account's name only, never for
+ * signing anyone in (sso.php does that, with the signature checked).
+ */
+function meeting_id_token_claims(array $tok): array {
+    $parts = explode('.', (string)($tok['id_token'] ?? ''));
+    if (count($parts) !== 3) return [];
+    $json = base64_decode(strtr($parts[1], '-_', '+/') . str_repeat('=', (4 - strlen($parts[1]) % 4) % 4), true);
+    $claims = $json === false ? null : json_decode($json, true);
+    return is_array($claims) ? $claims : [];
+}
+
+/** The email address an ID token names: the email claim, else preferred_username when it is an address. */
+function meeting_id_token_email(array $tok): string {
+    $c = meeting_id_token_claims($tok);
+    foreach (['email', 'preferred_username', 'upn'] as $k) {
+        $v = trim((string)($c[$k] ?? ''));
+        if ($v !== '' && filter_var($v, FILTER_VALIDATE_EMAIL)) return mb_substr($v, 0, 190);
+    }
+    return '';
 }
 
 /* ---------- Encryption of stored tokens ---------- */
@@ -44,6 +91,7 @@ function meeting_key_dependents(): int {
     $n = 0;
     foreach (["SELECT COUNT(*) FROM users WHERE totp_secret LIKE 'v1:%'",
               "SELECT COUNT(*) FROM meeting_accounts WHERE access_token <> '' OR refresh_token <> ''",
+              "SELECT COUNT(*) FROM calendar_accounts WHERE secret <> ''",
               "SELECT COUNT(*) FROM qbo_connection WHERE access_token <> '' OR refresh_token <> ''"] as $sql) {
         try { $n += (int)db()->query($sql)->fetchColumn(); } catch (Throwable $e) {}
     }
@@ -114,6 +162,11 @@ function meeting_unreadable_counts(): array {
                 if (!meeting_token_readable($r)) $n[$k]++;
         } catch (PDOException $e) {}
     }
+    // Connected CalDAV and Google calendars (4.33.0) keep a password or key the same way; counted with the meeting accounts.
+    try {
+        foreach (db()->query("SELECT secret AS access_token, '' AS refresh_token FROM calendar_accounts WHERE secret <> ''")->fetchAll() as $r)
+            if (!meeting_token_readable($r)) $n['meetings']++;
+    } catch (PDOException $e) {}
     return $n;
 }
 
@@ -162,6 +215,15 @@ function meeting_forget_stored_keys(int $actorId): array {
             $rows = $db->query("SELECT id, user_id, provider, access_token, refresh_token FROM meeting_accounts WHERE access_token <> '' OR refresh_token <> '' FOR UPDATE")->fetchAll();
             $del = $db->prepare('DELETE FROM meeting_accounts WHERE id = ?');
             foreach ($rows as $r) if (!meeting_token_readable($r)) { $del->execute([(int)$r['id']]); $n['meetings'] += $del->rowCount(); }
+        } catch (PDOException $e) { if ($e->getCode() !== '42S02' && $e->getCode() !== '42S22') throw $e; }
+        try {
+            // A CalDAV password or Google key that cannot be read (4.33.0) is forgotten the same way; the person connects the calendar again.
+            $rows = $db->query("SELECT id, user_id, secret FROM calendar_accounts WHERE secret <> '' FOR UPDATE")->fetchAll();
+            $del = $db->prepare('DELETE FROM calendar_accounts WHERE id = ?');
+            foreach ($rows as $r) if (meeting_open((string)$r['secret']) === null) {
+                $del->execute([(int)$r['id']]);
+                if ($del->rowCount()) { $n['meetings']++; $db->prepare('UPDATE users SET calendar_sync = 0, calendar_kind = NULL, calendar_error = NULL WHERE id = ?')->execute([(int)$r['user_id']]); }
+            }
         } catch (PDOException $e) { if ($e->getCode() !== '42S02' && $e->getCode() !== '42S22') throw $e; }
         try {
             $c = $db->query("SELECT access_token, refresh_token FROM qbo_connection WHERE id = 1 FOR UPDATE")->fetch();
@@ -254,13 +316,29 @@ function meeting_open(string $sealed): ?string {
 
 /* ---------- HTTP (replaceable in tests) ---------- */
 
-/** POST or GET returning [status, decoded JSON or null]. Tests set CMS_TEST_MEETINGS to a JSON map of URL => reply. */
+/**
+ * The one HTTP call every outside service goes through (Zoom, Microsoft, Google, a CalDAV server):
+ * [status, decoded JSON or null, raw body, response headers (lower-cased names)]. Callers that
+ * want only the first two take `[$code, $data]`.
+ *
+ * In tests (CLI only) nothing is sent. Two stand-ins are offered, and every request is kept in
+ * $GLOBALS['CMS_TEST_MEETING_REQUESTS'] so a test checks what was sent, not only what came back:
+ *  - $GLOBALS['CMS_TEST_HTTP'], a callable (method, url, headers, body) returning [status, raw body,
+ *    headers] (4.33.0), for tests that run in this process;
+ *  - CMS_TEST_MEETINGS, a JSON map of URL prefix => reply {status, body (JSON), raw, headers}, or a
+ *    list of such replies answered in turn, for pages rendered in another process.
+ */
 function meeting_http(string $method, string $url, array $headers, ?string $body): array {
-    if (PHP_SAPI === 'cli' && ($fake = getenv('CMS_TEST_MEETINGS')) !== false && $fake !== '') {
-        $map = (array)json_decode($fake, true);
+    if (PHP_SAPI === 'cli' && (isset($GLOBALS['CMS_TEST_HTTP']) || (($fake = getenv('CMS_TEST_MEETINGS')) !== false && $fake !== ''))) {
         // Every request is kept (4.32.0), so tests check what is sent, not only what comes back.
         $GLOBALS['CMS_TEST_MEETING_REQUESTS'][] = ['method' => $method, 'url' => $url, 'headers' => $headers, 'body' => $body];
         if (($log = getenv('CMS_TEST_MEETINGS_LOG')) !== false && $log !== '') file_put_contents($log, json_encode(end($GLOBALS['CMS_TEST_MEETING_REQUESTS'])) . "\n", FILE_APPEND);
+        if (isset($GLOBALS['CMS_TEST_HTTP'])) {
+            [$status, $raw, $respHeaders] = array_pad((array)($GLOBALS['CMS_TEST_HTTP'])($method, $url, $headers, $body), 3, null);
+            $raw = (string)$raw;
+            return [(int)$status, json_decode($raw, true), $raw, array_change_key_case((array)$respHeaders)];
+        }
+        $map = (array)json_decode((string)getenv('CMS_TEST_MEETINGS'), true);
         foreach ($map as $prefix => $reply) {
             if (!str_starts_with($url, $prefix)) continue;
             // A list of replies is answered in turn (the last one repeats): a refusal, then success.
@@ -268,17 +346,25 @@ function meeting_http(string $method, string $url, array $headers, ?string $body
                 $n = $GLOBALS['CMS_TEST_MEETING_SEEN'][$prefix] = ($GLOBALS['CMS_TEST_MEETING_SEEN'][$prefix] ?? -1) + 1;
                 $reply = $reply[min($n, count($reply) - 1)];
             }
-            return [(int)($reply['status'] ?? 200), $reply['body'] ?? null];
+            $data = $reply['body'] ?? null;
+            $raw = isset($reply['raw']) ? (string)$reply['raw'] : ($data === null ? '' : (string)json_encode($data));
+            return [(int)($reply['status'] ?? 200), $data, $raw, array_change_key_case((array)($reply['headers'] ?? []))];
         }
-        return [599, null];
+        return [599, null, '', []];
     }
     $ch = curl_init($url);
-    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_CONNECTTIMEOUT => 10, CURLOPT_CUSTOMREQUEST => $method, CURLOPT_HTTPHEADER => $headers]);
+    $respHeaders = [];
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_CONNECTTIMEOUT => 10, CURLOPT_CUSTOMREQUEST => $method, CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_HEADERFUNCTION => function ($ch, string $line) use (&$respHeaders): int {
+            if (str_contains($line, ':')) { [$k, $v] = explode(':', $line, 2); $respHeaders[strtolower(trim($k))] = trim($v); }
+            return strlen($line);
+        }]);
     if ($body !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
     $resp = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
-    return [$code, is_string($resp) ? json_decode($resp, true) : null];
+    $raw = is_string($resp) ? $resp : '';
+    return [$code, $raw !== '' ? json_decode($raw, true) : null, $raw, $respHeaders];
 }
 
 /** Exchange an authorization code, or a refresh token, for tokens. Returns the reply or null. */
@@ -381,8 +467,8 @@ function meeting_access_token(int $userId, string $provider, bool $force = false
             $refused = true;
         } else {
             $fields = ['grant_type' => 'refresh_token', 'refresh_token' => $refresh];
-            // Only what this person granted (a connection from before 4.20.0 granted the legacy scope).
-            if ($app['scope'] !== '') $fields['scope'] = trim((string)($acc['granted_scope'] ?? '')) ?: MEETING_MS_LEGACY_SCOPE;
+            // Only what this person granted (a work connection from before 4.20.0 granted the legacy scope).
+            if ($app['scope'] !== '') $fields['scope'] = trim((string)($acc['granted_scope'] ?? '')) ?: (($app['accounts'] ?? 'work') === 'work' ? MEETING_MS_LEGACY_SCOPE : $app['scope']);
             $tok = meeting_token_request($app, $fields, $refused, $appProblem);
         }
         if ($tok !== null) {

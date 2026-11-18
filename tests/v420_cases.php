@@ -14,7 +14,7 @@ check(str_contains((string)calendar_problem(81),'not connected'),'It needs the p
 // A connection from before 4.20.0 granted no calendar: it is asked to connect again, and keeps renewing with what it has.
 meeting_store(81,'microsoft',['access_token'=>'synthetic-access','refresh_token'=>'synthetic-refresh','expires_in'=>3600,'scope'=>'User.Read OnlineMeetings.ReadWrite'],'cal-instructor@example.invalid');
 check(str_contains((string)calendar_problem(81),'does not include the calendar'),'A connection without the calendar is asked to connect again');
-check(str_contains((string)file_get_contents($root.'/public/inc/meetings.php'),"\$fields['scope'] = trim((string)(\$acc['granted_scope'] ?? '')) ?: MEETING_MS_LEGACY_SCOPE"),'Renewals ask only for what was granted, so Teams links keep working for older connections');
+check(str_contains((string)file_get_contents($root.'/public/inc/meetings.php'),"\$fields['scope'] = trim((string)(\$acc['granted_scope'] ?? '')) ?: (("),'Renewals ask only for what was granted, so Teams links keep working for older connections');
 meeting_store(81,'microsoft',['access_token'=>'synthetic-access','refresh_token'=>'synthetic-refresh','expires_in'=>3600,'scope'=>'offline_access User.Read OnlineMeetings.ReadWrite Calendars.ReadWrite'],'cal-instructor@example.invalid');
 check(calendar_problem(81)===null,'With the calendar granted, sync can run');
 $db->exec("INSERT INTO clients(name,status,assigned_to,state) VALUES('Calvin Synthetic-Client','Active Training',81,'IA')"); $cc=(int)$db->lastInsertId();

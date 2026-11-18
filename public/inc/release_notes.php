@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.33.0' => [
+        'Your sessions can now go to a calendar of three kinds, chosen on My Account, My calendar: your Microsoft account (a work account, or a personal Outlook.com one), a CalDAV calendar (iCloud, Nextcloud, a cPanel email account\'s calendar, Fastmail) or a Google calendar you share with the system\'s service account. Sessions are added, moved and removed as they change here, and the calendar\'s busy times keep bookings away, as before with Outlook.',
+        'Test the connection on My Account says which account or calendar is reached and how many busy times it holds in the next 7 days. A wrong password, a calendar not shared with the service account, or a Microsoft connection that ended is said in plain words.',
+        'A Microsoft connection refused part-way (the app removed, or a sign-out everywhere) is renewed once and the calendar work tried again. Administrators choose on Settings, Online meetings, whether staff connect work accounts, personal Microsoft accounts, or both.',
+    ],
     '4.32.1' => [
         'The community referral form can now be opened with answers already chosen, so a person coming from a "Is my training free?" checker on your website doesn\'t answer the same questions twice. The agency case and monthly income answers are picked for them, and they can still change anything before sending.',
     ],

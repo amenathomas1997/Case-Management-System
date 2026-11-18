@@ -24,11 +24,20 @@ if ($returning) {
     $tok = meeting_token_request($app, ['grant_type' => 'authorization_code', 'code' => (string)$_GET['code'], 'redirect_uri' => $app['redirect']]
         + ($app['scope'] !== '' ? ['scope' => $app['scope']] : []));
     if ($tok === null) { flash(MEETING_PROVIDERS[$provider] . ' did not accept the sign-in, so nothing was connected. Try again, or ask an administrator to check the app settings.', 'error'); redirect($back); }
-    // Which account it is, so My Account can say so.
-    [$code, $me] = $provider === 'zoom'
-        ? meeting_http('GET', 'https://api.zoom.us/v2/users/me', ['Authorization: Bearer ' . $tok['access_token']], null)
-        : meeting_http('GET', 'https://graph.microsoft.com/v1.0/me', ['Authorization: Bearer ' . $tok['access_token']], null);
-    $email = (string)($me['email'] ?? $me['mail'] ?? $me['userPrincipalName'] ?? '');
+    // Which account it is, so My Account can say so. Microsoft (4.33.0): from the ID token that came
+    // with the tokens. Graph /me is asked only for a work account that granted User.Read: a personal
+    // account's calendar token cannot read it (403 with no message).
+    $email = '';
+    if ($provider === 'zoom') {
+        [$code, $me] = meeting_http('GET', 'https://api.zoom.us/v2/users/me', ['Authorization: Bearer ' . $tok['access_token']], null);
+        $email = (string)($me['email'] ?? '');
+    } else {
+        $email = meeting_id_token_email($tok);
+        if ($email === '' && stripos((string)($tok['scope'] ?? ''), 'user.read') !== false) {
+            [$code, $me] = meeting_http('GET', 'https://graph.microsoft.com/v1.0/me', ['Authorization: Bearer ' . $tok['access_token']], null);
+            $email = (string)($me['mail'] ?? $me['userPrincipalName'] ?? '');
+        }
+    }
     try {
         meeting_store((int)$user['id'], $provider, $tok, $email);
     } catch (MeetingKeyUnavailable $e) {

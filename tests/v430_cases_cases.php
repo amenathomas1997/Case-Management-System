@@ -65,10 +65,12 @@ check($err==='' && str_contains($out,'href="#authorization_ack" style="display:i
 check(str_contains($out,'I reviewed these warnings and approve this booking despite them.') && !str_contains($out,'these authorization warnings'),'The approval box does not call a double booking an authorization warning');
 
 // ---- Client record: notes are named by date; tabs open on the section heading ----
-$db->prepare("INSERT INTO client_notes (client_id,note_type,subject,body,author_id,created_at) VALUES (?,'Case Note','V430-CASES Weekly session','First week',1,'2026-10-03 10:00:00')")->execute([$v430c1]);
+// Dated a few days ago (4.33.0): a note older than 30 days is locked and offers Add addendum instead of Edit, so a fixed date broke this check a month after it was written.
+$v430NoteDay=date('Y-m-d',strtotime('-3 days')); $v430NoteLabel=date('M j, Y',strtotime($v430NoteDay));
+$db->prepare("INSERT INTO client_notes (client_id,note_type,subject,body,author_id,created_at) VALUES (?,'Case Note','V430-CASES Weekly session','First week',1,?)")->execute([$v430c1,$v430NoteDay.' 10:00:00']);
 [$code,$out,$err]=$renderPage('client',['id'=>(string)$v430c1,'tab'=>'notes']);
-check($err==='' && str_contains($out,'<h3>V430-CASES Weekly session<span class="muted">, Oct 3, 2026</span></h3>'),'A note heading gives the subject and the date'.($err?": $err":''));
-check(str_contains($out,'Edit<span class="visually-hidden"> note from Oct 3, 2026: V430-CASES Weekly session</span>'),'The Edit link names the note\'s date as well as its subject');
+check($err==='' && str_contains($out,'<h3>V430-CASES Weekly session<span class="muted">, '.$v430NoteLabel.'</span></h3>'),'A note heading gives the subject and the date'.($err?": $err":''));
+check(str_contains($out,'Edit<span class="visually-hidden"> note from '.$v430NoteLabel.': V430-CASES Weekly session</span>'),'The Edit link names the note\'s date as well as its subject');
 check(str_contains($out,'tab=notes#tab-panel"') && str_contains($out,'<h2 id="tab-panel" tabindex="-1" class="visually-hidden">Client Notes</h2>'),'Record tabs open the page on the section\'s own heading');
 check(str_contains($v430src('client.php'),'Add addendum<span class="visually-hidden"> to the note from <?= $nWhen ?>') && str_contains($v430src('track.php'),'Add addendum<span class="visually-hidden"> to the note from <?= $tnWhen ?>'),'Add addendum links name the note\'s date on the client and track pages');
 

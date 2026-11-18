@@ -28,7 +28,7 @@ Pricing, funding agencies, branding, email wording, the referral form, lists and
 4. **Scheduled jobs:** copy the bundle's `cron/` files into the folder the installer names, and add the cron lines it shows. They cover the nightly backup, the encrypted off-site copy, reminders and the watchdog.
 5. **Make it yours** (Administration):
    - Settings: branding and icon, email, texting, updates
-   - Microsoft 365 email, "Sign in with Microsoft", Teams meetings and Outlook calendar: follow [MICROSOFT-SETUP.md](MICROSOFT-SETUP.md)
+   - Microsoft 365 email, "Sign in with Microsoft", Teams meetings and Outlook calendar (work or personal Microsoft accounts): follow [MICROSOFT-SETUP.md](MICROSOFT-SETUP.md). Staff can instead put their sessions in a CalDAV calendar (iCloud, Nextcloud, cPanel, Fastmail) or a Google calendar from My Account; the in-app Administrator guide has the steps.
    - Zoom meeting links: follow [ZOOM-SETUP.md](ZOOM-SETUP.md)
    - Lists and time limits, Public wording, Pricing rules, Funding agencies, client statuses
    - Templates, the referral form, staff agreements and training

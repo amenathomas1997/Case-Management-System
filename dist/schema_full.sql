@@ -961,6 +961,7 @@ CREATE TABLE `calendar_links` (
   `session_id` int(10) unsigned NOT NULL,
   `user_id` int(10) unsigned NOT NULL,
   `event_id` varchar(255) NOT NULL,
+  `kind` varchar(20) NOT NULL DEFAULT 'microsoft',
   `pushed_hash` char(40) NOT NULL,
   `event_start` datetime NOT NULL,
   `event_end` datetime NOT NULL,
@@ -973,6 +974,24 @@ CREATE TABLE `calendar_links` (
   CONSTRAINT `fk_callink_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `calendar_accounts`;
+CREATE TABLE `calendar_accounts` (
+  `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+  `user_id` int(10) unsigned NOT NULL,
+  `kind` varchar(20) NOT NULL,
+  `label` varchar(190) DEFAULT NULL,
+  `server_url` varchar(500) DEFAULT NULL,
+  `username` varchar(190) DEFAULT NULL,
+  `secret` text NOT NULL,
+  `calendar_url` varchar(500) DEFAULT NULL,
+  `access_token` text DEFAULT NULL,
+  `expires_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `user_id` (`user_id`),
+  CONSTRAINT `fk_calacc_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
 DROP TABLE IF EXISTS `calendar_busy`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
@@ -1643,6 +1662,7 @@ CREATE TABLE `users` (
   `calendar_sync` tinyint(1) NOT NULL DEFAULT 0,
   `calendar_synced_at` datetime DEFAULT NULL,
   `calendar_error` varchar(255) DEFAULT NULL,
+  `calendar_kind` varchar(20) DEFAULT NULL,
   `office_id` int(10) unsigned DEFAULT NULL,
   `session_epoch` int(11) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),

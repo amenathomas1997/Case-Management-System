@@ -34,20 +34,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_display_controls
     redirect('account.php#display-settings');
 }
 
-/* ---- Outlook calendar sync (4.20.0): on, with a first sync at once, or off (its events are taken out) ---- */
+/* ---- Calendar sync (4.20.0; three kinds of calendar since 4.33.0): on, with a first sync at once, or off (its events are taken out) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['calendar_sync'])) {
     $uid = (int)$user['id'];
     if ($_POST['calendar_sync'] === 'on') {
-        if (!meeting_connected($uid, 'microsoft')) { flash('Connect Microsoft first (below), then turn on the Outlook calendar.', 'error'); redirect('account.php#calendar-h'); }
-        db()->prepare('UPDATE users SET calendar_sync = 1 WHERE id = ?')->execute([$uid]);
+        if (calendar_kind($uid) === null) { flash('Connect a calendar first (below), then turn calendar sync on.', 'error'); redirect('account.php#calendar-h'); }
+        try { db()->prepare('UPDATE users SET calendar_sync = 1, calendar_kind = ? WHERE id = ?')->execute([calendar_kind($uid), $uid]); }
+        catch (PDOException $e) { db()->prepare('UPDATE users SET calendar_sync = 1 WHERE id = ?')->execute([$uid]); }
         // A first pass of up to 20 seconds; the ten-minute sync carries on with the rest.
         $r = calendar_sync_user($uid, time() + 20);
         audit($uid, 'calendar.sync_on', 'user', $uid, $r['error'] ?? ($r['pushed'] . ' sessions'));
-        flash($r['error'] === null ? 'Outlook calendar sync is on: ' . $r['pushed'] . ' sessions are in your Outlook calendar so far, and the rest follow within ten minutes. Your Outlook busy times keep bookings away.' : 'Outlook calendar sync is on, but: ' . $r['error'], $r['error'] === null ? 'success' : 'error');
+        flash($r['error'] === null ? 'Calendar sync is on: ' . $r['pushed'] . ' sessions are in your calendar so far, and the rest follow within ten minutes. Your calendar\'s busy times keep bookings away.' : 'Calendar sync is on, but: ' . $r['error'], $r['error'] === null ? 'success' : 'error');
     } else {
         $n = calendar_stop($uid);
         audit($uid, 'calendar.sync_off', 'user', $uid, $n . ' events removed');
-        flash('Outlook calendar sync is off' . ($n ? '; the ' . $n . ' session events it added were removed from Outlook.' : '.'));
+        flash('Calendar sync is off' . ($n ? '; the ' . $n . ' session events it added were removed from your calendar.' : '.'));
+    }
+    redirect('account.php#calendar-h');
+}
+
+/* ---- Which calendar (4.33.0): connect a CalDAV or Google calendar, use the Microsoft one, test it, or disconnect it ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && is_string($_POST['calendar_action'] ?? null)) {
+    $uid = (int)$user['id'];
+    $act = (string)$_POST['calendar_action'];
+    $text = fn(string $k): string => is_string($_POST[$k] ?? null) ? trim((string)$_POST[$k]) : '';
+    try {
+        // Nothing is connected when it could not be stored afterwards (the key file).
+        if (in_array($act, ['caldav_find', 'caldav_choose', 'google'], true)) meeting_key();
+        if ($act === 'test') {
+            try { flash(calendar_test($uid)); } catch (RuntimeException $e) { flash('The connection test failed: ' . $e->getMessage(), 'error'); }
+        } elseif ($act === 'microsoft') {
+            if (!calendar_microsoft_available() || !meeting_connected($uid, 'microsoft')) { flash('Connect Microsoft first (Online meetings, below), then choose it as your calendar.', 'error'); redirect('account.php#calendar-h'); }
+            calendar_stop($uid, $left, calendar_kind($uid));
+            calendar_account_forget($uid);
+            db()->prepare("UPDATE users SET calendar_kind = 'microsoft' WHERE id = ?")->execute([$uid]);
+            audit($uid, 'calendar.connect', 'user', $uid, 'microsoft');
+            flash('Your Microsoft calendar is chosen. Turn on "Put my sessions in my calendar" below to start.');
+        } elseif ($act === 'caldav_find' || $act === 'caldav_choose') {
+            $server = $text('caldav_url'); $name = $text('caldav_user'); $pw = is_string($_POST['caldav_password'] ?? null) ? (string)$_POST['caldav_password'] : '';
+            // Choosing among several calendars: the details were kept in the session, never sent back to the browser.
+            if ($act === 'caldav_choose' && is_array($_SESSION['calendar_caldav_choice'] ?? null)) {
+                $server = (string)$_SESSION['calendar_caldav_choice']['url']; $name = (string)$_SESSION['calendar_caldav_choice']['user']; $pw = (string)$_SESSION['calendar_caldav_choice']['password'];
+            }
+            if (!preg_match('#^https?://[^/\s]+#i', $server) || $name === '' || $pw === '') { flash('Enter the server address (starting with https://), your user name and the app password.', 'error'); redirect('account.php#calendar-h'); }
+            $probe = ['kind' => 'caldav', 'user_id' => $uid, 'server_url' => $server, 'username' => $name, 'password' => $pw, 'calendar_url' => ''];
+            try { $found = caldav_discover($probe); }
+            catch (RuntimeException $e) { flash('The calendar could not be connected: ' . $e->getMessage(), 'error'); redirect('account.php#calendar-h'); }
+            $chosen = $text('caldav_calendar');
+            $pick = null;
+            foreach ($found as [$url, $label]) if ($act === 'caldav_find' ? count($found) === 1 : $url === $chosen) $pick = [$url, $label];
+            if ($pick === null) {
+                // More than one calendar: the person picks, with the details held in their session only until then.
+                $_SESSION['calendar_caldav_choice'] = ['url' => $server, 'user' => $name, 'password' => $pw, 'found' => $found];
+                if ($act === 'caldav_choose') flash('Choose one of the calendars listed.', 'error');
+                redirect('account.php#calendar-h');
+            }
+            unset($_SESSION['calendar_caldav_choice']);
+            calendar_stop($uid, $left, calendar_kind($uid));
+            calendar_account_store($uid, 'caldav', $pick[1], $server, $name, $pw, $pick[0]);
+            audit($uid, 'calendar.connect', 'user', $uid, 'caldav ' . (parse_url($server, PHP_URL_HOST) ?: ''));
+            flash('The calendar "' . $pick[1] . '" is connected. Turn on "Put my sessions in my calendar" below to start.');
+        } elseif ($act === 'caldav_cancel') {
+            unset($_SESSION['calendar_caldav_choice']);
+        } elseif ($act === 'google') {
+            $calId = $text('google_calendar');
+            $sa = google_service_account((string)($_POST['google_key'] ?? ''), $why);
+            if ($calId === '' || !preg_match('/^[A-Za-z0-9._%+@-]+$/', $calId)) { flash('Enter the calendar\'s address: usually your Gmail address, or the Calendar ID from the calendar\'s settings.', 'error'); redirect('account.php#calendar-h'); }
+            if ($sa === null) { flash('The Google calendar could not be connected: ' . $why, 'error'); redirect('account.php#calendar-h'); }
+            $probe = ['kind' => 'google', 'user_id' => $uid, 'id' => 0, 'server_url' => $calId, 'username' => $sa['client_email'], 'service_account' => $sa, 'access_token' => '', 'expires_at' => '', 'label' => ''];
+            [$label, $err] = google_calendar_name($probe);
+            if ($err !== null) { flash('The Google calendar could not be connected: ' . $err, 'error'); redirect('account.php#calendar-h'); }
+            calendar_stop($uid, $left, calendar_kind($uid));
+            calendar_account_store($uid, 'google', $label, $calId, $sa['client_email'], (string)json_encode($sa), '');
+            audit($uid, 'calendar.connect', 'user', $uid, 'google');
+            flash('The Google calendar "' . $label . '" is connected. Turn on "Put my sessions in my calendar" below to start.');
+        } elseif ($act === 'disconnect') {
+            $kind = calendar_kind($uid);
+            $n = calendar_stop($uid, $left, $kind);
+            calendar_account_forget($uid);
+            audit($uid, 'calendar.disconnect', 'user', $uid, (string)$kind . ', ' . $n . ' events removed');
+            flash('The calendar is disconnected' . ($n ? '; the ' . $n . ' session events it held were removed.' : '.') . ($left ? ' Some session events could not be removed, so delete any left in that calendar.' : ''));
+        }
+    } catch (MeetingKeyUnavailable $e) {
+        flash('The calendar could not be connected: ' . MEETING_KEY_LOST_MSG, 'error');
+    } catch (PDOException $e) {
+        flash('Calendars need a database upgrade first: ask an administrator to run Database upgrade.', 'error');
     }
     redirect('account.php#calendar-h');
 }
@@ -61,13 +132,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && is_string($_POST['meeting_disconnec
         // while the connection can still remove the session events it put in Outlook.
         // Never in the way of disconnecting: a failure here leaves the events, and says so.
         $calLeft = 0;
-        if ($prov === 'microsoft' && function_exists('calendar_stop')) {
+        if ($prov === 'microsoft' && function_exists('calendar_stop') && calendar_kind((int)$user['id']) === 'microsoft') {
             $cs = db()->prepare('SELECT calendar_sync FROM users WHERE id = ?');
             $cs->execute([(int)$user['id']]);
             if ((int)$cs->fetchColumn()) {
                 @set_time_limit(120);
                 try {
-                    $calRemoved = calendar_stop((int)$user['id'], $calLeft);
+                    $calRemoved = calendar_stop((int)$user['id'], $calLeft, 'microsoft');
                 } catch (Throwable $e) {
                     error_log('disconnect calendar_stop: ' . get_class($e));
                     db()->prepare('UPDATE users SET calendar_sync = 0, calendar_error = NULL WHERE id = ?')->execute([(int)$user['id']]);
@@ -427,17 +498,86 @@ page_header('My Account', $user, 'account');
 
     <h2 id="avail-h">My availability</h2>
     <p><a href="availability.php">My availability</a>: the hours you take sessions, which clients can book in the portal when self-booking is on.</p>
-    <?php if (calendar_available()): $cs = db()->prepare('SELECT calendar_sync, calendar_synced_at, calendar_error FROM users WHERE id = ?'); $cs->execute([(int)$user['id']]); $csr = $cs->fetch() ?: []; ?>
-    <h2 id="calendar-h">Outlook calendar</h2>
-    <p>Put your sessions in your Outlook calendar, kept up to date when they are booked, moved or cancelled. Your other Outlook appointments then count as busy, so no session is offered, booked or moved over them. If you move or delete a session's event in Outlook, you are told, so you can change the session here; Outlook alone never changes a session. It uses your Microsoft connection (Online meetings, below); if you connected Microsoft before October 2026, connect it again to allow the calendar.</p>
+    <?php if (calendar_available()): $cs = db()->prepare('SELECT calendar_sync, calendar_synced_at, calendar_error FROM users WHERE id = ?'); $cs->execute([(int)$user['id']]); $csr = $cs->fetch() ?: [];
+        $calKind = calendar_kind((int)$user['id']); $calConn = $calKind !== null ? calendar_connection((int)$user['id'], $calKind) : null;
+        $calChoice = is_array($_SESSION['calendar_caldav_choice'] ?? null) ? $_SESSION['calendar_caldav_choice'] : null; ?>
+    <h2 id="calendar-h">My calendar</h2>
+    <p>Put your sessions in your own calendar, kept up to date when they are booked, moved or cancelled. Your other appointments there then count as busy, so no session is offered, booked or moved over them. If you move or delete a session's event in your calendar, you are told, so you can change the session here; the calendar alone never changes a session. Three kinds of calendar work: your Microsoft account (work, or a personal Outlook.com account), a CalDAV calendar (iCloud, Nextcloud, a cPanel email account's calendar, Fastmail) or a Google calendar.</p>
+    <?php if ($calKind !== null): ?>
+    <h3 id="calendar-connected-h">Your calendar</h3>
+    <p><?= h(calendar_kind_name($calKind)) ?><?= $calConn !== null ? ': ' . h((string)$calConn['label']) : ' (its password or key cannot be read on this server: connect it again)' ?>.</p>
+    <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
+      <button type="submit" name="calendar_action" value="test" class="btn btn-secondary btn-sm">Test the connection</button>
+    </form>
+    <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
+      <button type="submit" name="calendar_action" value="disconnect" class="btn btn-secondary btn-sm">Disconnect this calendar</button>
+    </form>
     <?php if (!empty($csr['calendar_sync'])): ?>
-    <p>On<?= !empty($csr['calendar_synced_at']) ? ', last brought up to date ' . h(fmt_datetime((string)$csr['calendar_synced_at'])) : '' ?>.<?= !empty($csr['calendar_error']) ? ' <strong>Problem: ' . h((string)$csr['calendar_error']) . '</strong>' : '' ?></p>
+    <p>Sync is on<?= !empty($csr['calendar_synced_at']) ? ', last brought up to date ' . h(fmt_datetime((string)$csr['calendar_synced_at'])) : '' ?>.<?= !empty($csr['calendar_error']) ? ' <strong>Problem: ' . h((string)$csr['calendar_error']) . '</strong>' : '' ?></p>
     <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
       <button type="submit" name="calendar_sync" value="off" class="btn btn-secondary btn-sm">Turn off and remove the session events</button>
     </form>
     <?php else: ?>
     <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
-      <button type="submit" name="calendar_sync" value="on" class="btn btn-secondary btn-sm">Put my sessions in my Outlook calendar</button>
+      <button type="submit" name="calendar_sync" value="on" class="btn btn-primary btn-sm">Put my sessions in my calendar</button>
+    </form>
+    <?php endif; ?>
+    <p>To use another calendar, disconnect this one first.</p>
+    <?php else: ?>
+    <p>No calendar is connected yet. Connect one of these three.</p>
+    <h3 id="calendar-ms-h">1. Microsoft (Outlook)</h3>
+    <?php if (!calendar_microsoft_available()): ?>
+    <p>An administrator has not set up the Microsoft connection (Settings, Online meetings).</p>
+    <?php elseif (meeting_connected((int)$user['id'], 'microsoft')): ?>
+    <form method="post" action="account.php" class="inline-form"><?= csrf_field() ?>
+      <p>Microsoft is connected (Online meetings, below). Use its calendar.</p>
+      <button type="submit" name="calendar_action" value="microsoft" class="btn btn-secondary btn-sm">Use my Microsoft calendar</button>
+    </form>
+    <?php else: ?>
+    <p>Connect Microsoft under Online meetings below, then come back here and choose Use my Microsoft calendar. If you connected Microsoft before October 2026, connect it again to allow the calendar.</p>
+    <?php endif; ?>
+    <h3 id="calendar-caldav-h">2. A CalDAV calendar (iCloud, Nextcloud, cPanel, Fastmail)</h3>
+    <p>Use an app password, not your account password: iCloud and Fastmail make one under your account's security settings; Nextcloud under Security, Devices and sessions. For a cPanel email account the address is usually your domain with port 2080, such as https://example.org:2080, and the user name is the email address.</p>
+    <?php if ($calChoice !== null): ?>
+    <form method="post" action="account.php"><?= csrf_field() ?>
+      <fieldset>
+        <legend>Several calendars were found at <?= h((string)$calChoice['url']) ?>. Which one should hold your sessions?</legend>
+        <?php foreach ((array)$calChoice['found'] as $i => [$cUrl, $cLabel]): ?>
+        <div class="field"><label><input type="radio" name="caldav_calendar" value="<?= h($cUrl) ?>"<?= $i === 0 ? ' checked' : '' ?>> <?= h($cLabel) ?></label></div>
+        <?php endforeach; ?>
+      </fieldset>
+      <button type="submit" name="calendar_action" value="caldav_choose" class="btn btn-primary btn-sm">Use this calendar</button>
+      <button type="submit" name="calendar_action" value="caldav_cancel" class="btn btn-secondary btn-sm">Start over</button>
+    </form>
+    <?php else: ?>
+    <form method="post" action="account.php"><?= csrf_field() ?>
+      <div class="field">
+        <label for="caldav_url">Calendar server address <?= required_mark() ?> <span class="hint">For example https://caldav.icloud.com or https://example.org:2080</span></label>
+        <input type="url" id="caldav_url" name="caldav_url" required aria-required="true" autocomplete="url" <?= field_aria('caldav_url') ?>>
+      </div>
+      <div class="field">
+        <label for="caldav_user">User name <?= required_mark() ?> <span class="hint">Usually your email address</span></label>
+        <input type="text" id="caldav_user" name="caldav_user" required aria-required="true" autocomplete="username" <?= field_aria('caldav_user') ?>>
+      </div>
+      <div class="field">
+        <label for="caldav_password">App password <?= required_mark() ?></label>
+        <input type="password" id="caldav_password" name="caldav_password" required aria-required="true" autocomplete="off" <?= field_aria('caldav_password') ?>>
+      </div>
+      <button type="submit" name="calendar_action" value="caldav_find" class="btn btn-secondary btn-sm">Connect the CalDAV calendar</button>
+    </form>
+    <?php endif; ?>
+    <h3 id="calendar-google-h">3. Google Calendar</h3>
+    <p>Google Calendar is used through a service account: a Google Cloud account that acts for the system. Ask your administrator for its key file, or make one: in Google Cloud, make a project, turn on the Google Calendar API, add a service account and download a JSON key for it. Then, in Google Calendar, open your calendar's settings, Share with specific people, and add the service account's email address with "Make changes to events". Paste the key file's contents below.</p>
+    <form method="post" action="account.php"><?= csrf_field() ?>
+      <div class="field">
+        <label for="google_calendar">Calendar address <?= required_mark() ?> <span class="hint">Usually your Gmail address; otherwise the Calendar ID from the calendar's settings</span></label>
+        <input type="text" id="google_calendar" name="google_calendar" required aria-required="true" autocomplete="off" <?= field_aria('google_calendar') ?>>
+      </div>
+      <div class="field">
+        <label for="google_key">Service account key file (JSON) <?= required_mark() ?></label>
+        <textarea id="google_key" name="google_key" rows="6" required aria-required="true" autocomplete="off" <?= field_aria('google_key') ?>></textarea>
+      </div>
+      <button type="submit" name="calendar_action" value="google" class="btn btn-secondary btn-sm">Connect the Google calendar</button>
     </form>
     <?php endif; ?>
     <?php endif; ?>

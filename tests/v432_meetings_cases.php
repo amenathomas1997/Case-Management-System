@@ -54,7 +54,7 @@ $hdr=implode("\n",$tokReq['headers']??[]);
 check(str_contains($tokReq['url']??'','/oauth2/v2.0/token') && !str_contains($hdr,'Authorization:')
     && ($f['client_id']??'')==='synthetic-ms-id' && ($f['client_secret']??'')==='synthetic-ms-secret' && ($f['grant_type']??'')==='authorization_code'
     && ($f['redirect_uri']??'')==='https://example.invalid/meeting_connect.php?provider=microsoft'
-    && ($f['scope']??'')==='offline_access User.Read OnlineMeetings.ReadWrite Calendars.ReadWrite',
+    && ($f['scope']??'')===MEETING_MS_WORK_SCOPE,
     'Connecting Microsoft exchanges the code as Microsoft requires: the app in the body, the exact return address and the scopes' . ($err ? ": $err" : ''));
 putenv('CMS_TEST_MEETINGS_LOG'); @unlink($log432);
 
