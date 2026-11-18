@@ -1,6 +1,6 @@
 # Release 4.33.0 — November 18, 2026
 
-Web 4.33.0. The phone apps are unchanged and stay at 4.32.0. Apply dist/migrations/mig_4.33.0.sql, or use Database upgrade; Software update applies it on its own. It adds:
+Web 4.33.0. The phone apps stay at 4.32.0: the iPhone app's source carries one fix (below) that reaches phones with the next app build. Apply dist/migrations/mig_4.33.0.sql, or use Database upgrade; Software update applies it on its own. It adds:
 - the table calendar_accounts (a staff member's CalDAV or Google calendar; the password or key is encrypted with meeting_tokens.key)
 - users.calendar_kind (microsoft, caldav or google; set to microsoft for everyone whose sync was already on)
 - calendar_links.kind (which kind of calendar each event was made in)
@@ -26,12 +26,14 @@ Web 4.33.0. The phone apps are unchanged and stay at 4.32.0. Apply dist/migratio
 - **Test the connection** on My Account names the account or calendar and the number of busy times in the next 7 days.
 - **One HTTP helper** (meeting_http) serves Zoom, Microsoft, Google and CalDAV, now returning the raw body and response headers too, with a test hook.
 - **Wording:** notices say "your calendar" rather than "Outlook" for the other kinds; the help page's calendar section covers the three kinds.
+- **iPhone app, Generate structured note** (commit 6a05807, found by the maintainer on 2026-11-18): the button in the Add note sheet was dimmed until the separate "Paste raw notes here" box had text, so a rough note typed or dictated into the Note box could never be generated: no request, no spinner, no error. The app now generates from the raw-notes box when it has text, otherwise from the note as typed, as the website does; the button is dimmed only while generating; with nothing to work from it says so. Server side, ai_generate_case_note() refuses a provider reply that held no section text instead of answering with four empty sections. The app source kit (inc/appkit/app-source.zip) is rebuilt to match. The iPhone app's version is not bumped here: building and shipping the app is the owner's step.
 
 **Tests**
 - tests/v433_calendar_cases.php (run by full_schema), each kind against a stand-in service with every request recorded:
   - Microsoft: the consumers address and calendar-only scope for personal accounts, the account's name from the ID token with no Graph /me, the renewal's fields (refresh token, the app in the body, the granted scope), calendarView across pages with cancelled and free events skipped, create with transactionId, delete, a 401 renewed once, an expired refresh token in words, Test the connection on My Account.
   - Google: the JWT verified with a generated RSA key, freeBusy, our events listed by their private mark, create (private, no guests), the cached token reused, a 401 renewed once, notFound explained, delete with 404 as gone, connecting on My Account with the key kept encrypted.
   - CalDAV: discovery through principal and home leaving VTODO and the inbox out, the REPORT time range, a weekly repeat expanded, PUT with If-None-Match, a rewrite on move, DELETE with 404 as gone, a 401 in words, connecting on My Account with the password kept encrypted and never shown.
+- tests/ios_api_regression.py (three static checks on the Add note sheet), tests/workflow_cases.php (the ai_generate_note action through the AI stand-in: shape, labels, BIRP for a free-format note, redaction, the three refusals) and tests/ios_models.py (decoded by the app's GenerateNoteResponse), for the iPhone fix.
 - tests/v432_meetings_cases.php: the work-account scope now includes openid and email. tests/v420_cases.php: its check of the renewal's scope line follows the new code.
 - tests/v430_cases_cases.php: the note it inserts is now dated three days ago instead of 2026-10-03. A note locks 30 days after its date, so from early November that fixed date made the "Edit link names the note's date" check fail on every run. This was found while running the suite for this release and is not a calendar change.
 - Checked before commit, on an empty MariaDB database with PHP 8.5 locally (the servers run PHP 8.1; the code uses no PHP 8.2 or later feature, and CI runs the same suites on 8.1):
@@ -46,6 +48,4 @@ Web 4.33.0. The phone apps are unchanged and stay at 4.32.0. Apply dist/migratio
 2. CalDAV: make an app password in the calendar account (iCloud: appleid.apple.com, Sign-In and Security, App-Specific Passwords; Fastmail: Settings, Privacy and Security, Integrations; Nextcloud: Personal settings, Security; cPanel: the email account's password works). On My Account, enter the server address, user name and app password, choose Connect the CalDAV calendar, pick the calendar if asked, then Put my sessions in my calendar.
 3. Google: in Google Cloud, make a project, turn on the Google Calendar API, add a service account and download a JSON key. In Google Calendar, share the calendar with the service account's email address with "Make changes to events". On My Account, enter the calendar's address (the Gmail address) and paste the key file, choose Connect the Google calendar, then Put my sessions in my calendar.
 
-## Publishing (not done here)
-
-The release is committed and tagged v4.33.0. Publishing the GitHub release (the install bundle and the signed update package) and the rehearsal on a copy of a 4.32.1 site are the owner's steps, as for earlier releases. The live site stays as it is until an administrator installs it with Software update.
+The iPhone fix's own checks (the iOS suite, 100 checks, and the Xcode simulator build) passed in the session that made it; the full database suite passed again with both changes in place.
