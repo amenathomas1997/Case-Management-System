@@ -49,3 +49,13 @@ Web 4.33.0. The phone apps stay at 4.32.0: the iPhone app's source carries one f
 3. Google: in Google Cloud, make a project, turn on the Google Calendar API, add a service account and download a JSON key. In Google Calendar, share the calendar with the service account's email address with "Make changes to events". On My Account, enter the calendar's address (the Gmail address) and paste the key file, choose Connect the Google calendar, then Put my sessions in my calendar.
 
 The iPhone fix's own checks (the iOS suite, 100 checks, and the Xcode simulator build) passed in the session that made it; the full database suite passed again with both changes in place.
+
+## Published (not deployed)
+
+2026-11-18, after CI passed all three jobs on d9bfad0 (PHP 8.1 and MariaDB suites, the iOS simulator build, the Android build). The GitHub release v4.33.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag (423 files)
+- the signed update package: 338 files, two of them new (inc/calendar_kinds.php and the 4.33.0 migration), nothing removed; verified with the signing key, verified again with the public key built into the updater sites already run, and verified a third time after downloading it back from the release.
+
+**Not rehearsed:** unlike 4.32.0 and 4.32.1, the update was not installed with the previous updater onto a copy of a 4.32.1 site before publishing. The migration itself was exercised by full_schema (a 3.0.7 database brought to 4.33.0, and every migration run again on an up-to-date one).
+
+The live site stays as it is until an administrator installs it with Software update.
