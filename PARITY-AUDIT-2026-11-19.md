@@ -1611,3 +1611,114 @@ Read-only comparison of the website (public/*.php), the app API (public/api.php,
 - audit, exports/export, invoice batch generation, QuickBooks CSV: bulk or compliance downloads.
 - vr_portal: done alongside the agencies' own vendor portals at a desk.
 - portal.php: client-facing. Staff send the portal link from the apps already.
+
+---
+
+## Progress
+
+- **4.34.0 (2026-11-19):** every High finding and every Medium behaviour difference (43 items, see DEPLOYMENT-4.34.0.md), plus the Android app lock (C2b).
+
+### Parity findings left for releases after 4.34.0
+
+Source: PARITY-AUDIT-2026-11-19.md. Every Medium and Low finding not in plan-4340.md. Where 4.34.0 fixes part of a finding, only the part that is left is listed. Releases are suggested, ordered by how much field staff need them. Ids: `1.n` = audit 1, `2.n` = audit 2, `A1…D10` = area 3, `4.n` = audit 4, `5.n` = audit 5. M = Medium, L = Low.
+
+#### 4.35.0: field casework (notes, clients, sessions)
+- 2.9 (M) Group sessions: schedule a group and record attendance and complete it from the apps (`schedule_group`, `complete_group`).
+- 2.10 (M) Choose the goal worked on and the service delivered when completing a session (the default already matches the website).
+- 2.13 (M, rest) Android Log hours: service type, goal and session-note fields.
+- 2.12 (M, rest) Android "Cancel the rest of the series" / "Cancel the whole group"; iPhone visible buttons (not only the VoiceOver Actions rotor) for Move, Cancel series, Cancel group.
+- 2.14 (M) Offer times for a client request (`offer_times`); Android shows the linked session and due date.
+- 1.11 (M) Android tech assessment list and "Record a tech assessment" form; the AI intake gets a date field (1.11 L part).
+- 1.12 (M) Android "Load older notes (N more)".
+- 1.13 (M) After closure: email the survey again, phone survey answers, 90/180-day follow-up checks (with 4.13).
+- 4.13 (M) Outcome survey section on closed clients (same actions as 1.13).
+- 1.7 (M, rest) Preferred language, vision status and onset age, On Hold return date on both client forms and in the `client` reply.
+- 1.16 (L, rest) Client detail: VR case number, IPE goal, agency, guardian email on iPhone; client since, On Hold line, vision, attendance on both.
+- 1.17 (L) Android note editor: track picker for a general note, Generate structured note from the typed note, homework instructions and due date, format/track/edited-by on rows.
+- 1.18 (L, rest) Android homework due-date field.
+- 1.9 (M) Client list filters (status, caseload, type, agency, school, office).
+- 2.15 (L/M) Android homework edit (`at_homework_update`).
+- 2.18 (L, rest) Bulk "record several as no-show or cancelled" (website-only is acceptable).
+
+#### 4.36.0: daily workspace and safety
+- C2 (M) Per-phone sign-out and "Report lost and wipe" in both apps (`app_devices`, `device_action`).
+- B6 (M) Report a privacy incident from the apps (`report_privacy_incident`).
+- A2 (M) Dashboard "Today" panel and My tasks panel.
+- A3 (M) "Your week" line from `my_week`.
+- A4 (M search, L filter) Android task search and due filter; iPhone due-filter menu.
+- A5 (M, rest) Android Add task: client, Assign to, Edit, Open referral.
+- A11 (M) Android alerts open their link.
+- A13 / C3 (M) How alerts reach you: mobile number, urgent texts, alert email (`save_alert_settings`).
+- B2 (M) Android incident client picker.
+- B4 (M) Compliance: releases, no release, minors with no consent, device follow-ups due, overdue loans, contracts at risk, privacy notice.
+- C5 (M) Android sign-in "Forgot your password?" and privacy policy links.
+- C4 (M) Sign-in screens say how a Microsoft-only user gets a password; later an in-app SSO flow.
+- C9 (L, rest) Android code field `.take(6)` and enabled only at exactly 6 digits.
+- C11 (L, rest) Android code-step buttons "Verify and sign in" / "Start over".
+- A6 (L) Admin delete task; complete several at once.
+- A8 (L) Agreements, training and credentials banners from `dashboard` on both apps.
+- A9 (L) Android hides client counts without the clients permission; expiring rows open the client.
+- A12 (L) Undo "mark as read".
+- A16 (L) Conversation list preview, unread first.
+- A17 (L) "They were emailed that a message is waiting."; counselor-unconfirmed warning before typing.
+- A20 (L, rest) Android follow-up stats and Recent list.
+- B5 (L) Android funds-used line; compliance rows open the track.
+- B8 (L) iPhone hold banner opens My training when only training is held.
+- B9 (L) Signed copy reachable in the "due" state; corrections note in `agreement_copy`.
+- B11 (L) Training count "N of M to take" counts every module not done (both apps).
+- B12 (L) Credentials Notes field, API refuses over-long values, iPhone idem key and date check.
+- C7 (L) Android passkey list and remove.
+- C10 (L) Calendar sync and meeting connection status shown read-only.
+- 2.20 (L) Calendar sync status in the apps (with C10).
+- 2.16 (L/M) My availability in the apps.
+- 2.17 (L) Signing in person: notify administrators on both channels or neither (owner decision which).
+- 2.19 (L) Website Check in button for front desk.
+
+#### 4.37.0: services, equipment and reports
+- 4.7 (M) Equipment status: Mark in repair, Back in service, Retire with confirmation (`set_equipment_status`).
+- 4.16 (M) Pre-ETS: delete a logged session; add cohort with dates, coordinator and notes.
+- 4.15 (M) Device delivery adds to the loaner inventory; reason on deny/cancel; justification letter.
+- 4.14 (M, rest) Purchase date, useful life, AT type on items added from the apps.
+- 4.5 (M) Formal AT evaluation report with AI draft.
+- 4.6 (M) Worksite assessment AI recommendations and report (owner AI rule).
+- 4.10 (M) "Suggest goals with AI" on each assessment (owner AI rule).
+- 4.11 (M) Android amendment request letter with AI draft.
+- 1.15 (M) Record an amendment request as sent and record the reply (then wire `amend_request`, already accepted by save_track in 4.34.0).
+- 4.9 (M, rest) Record progress per goal from the AI review.
+- 4.12 (M) Letters (welcome, appointment, missed appointment) from the apps.
+- 1.14 (M) Paper release, withdraw a release, record a guardian's consent withdrawal; privacy notice given.
+- 4.17 (L) Android AT instructor matching and homework update.
+- 4.22 (L) Tech assessment attachment and template prefill.
+- 4.23 (L) Shared AT recommendation context; "Start a device request" from the result.
+- 4.27 (L) Retired items listed under "Not available".
+- 4.30 (L) AI draft for device justification and letters (website and apps).
+- 1.19 (L) Shared case-summary context (10 notes plus assessments); "Suggest goals" and "Format with AI".
+- 1.21 (L) Delete a document to the trash; share on upload; assessment attachments; `.heic` rule.
+- 1.24 (L, rest) `review_referral` says "Nothing was changed…"; worksite AI and report; client timeline read-only.
+- 1.20 (L) Portal link: the website's warnings and wording; "Turn off portal link".
+- 1.22 (L) iPhone referral status filter and "assigned to me"; `contact_due` in `referrals`.
+- 1.23 (L) Android pipeline "Closed in last 90 days".
+- 4.28 (L) Curriculum: save from the apps (website-only is reasonable).
+- 4.29 (L) AT Act missing loan details (website-only is reasonable).
+- D4 (M, rest) Knowledge base "answer from general knowledge" option.
+- D5 (M, rest) Translate "Other language" on both apps.
+- D8 (L) Remediation: client's preferred format and the website's prompts and errors.
+- D9 (L) Knowledge base: updated date, author, "Shared with clients", empty-list text, Android numbered lists.
+- 2.21 (L, rest) Voice booking: remote and meeting link.
+
+#### 4.38.0: billing and administration
+- 5.4 (M, rest) Android invoice paging, unbilled figure, track and authorization on rows.
+- 5.5 (M) Invoice filters (agency, month, text, id); invoices in search on the apps.
+- 5.6 (M) Incoming authorization emails: list, start the track (`incoming_auth`, already accepted by save_track), dismiss.
+- 2.8 (M) Several sessions at once (plan patterns) and "Make the meeting link" in the booking form.
+- 5.10 (L) Outstanding: past due and part-paid; days overdue per row.
+- 5.11 (L) Open the invoice (accessible HTML) from the apps.
+- 5.12 (L) Counselor portal: shared email text, failure handling after the email, Android expiry and last-used dates, Android error clearing.
+- 5.13 (L, rest) Contracts: Notes, 10-digit budgets in the forms, audit wording, change budget, close/reopen, delete deliverable/spend.
+- 5.14 (L) Access bookings: show and restore cancelled; old → new in the audit; CART label; 8-digit cost.
+- 5.15 (L) Utilization wording ("Team utilization", no bands, "at or above target"); remembered period.
+- 5.7 (L) One-line note on Android that payments are recorded on the website.
+- 5.18 (L) Vision status from `vision_statuses` (with 1.7); iPhone fallback note types.
+- 5.19 (L) Data quality and documentation auditor lists (read-only).
+- 5.20 (L) Organisation name in `me`; office filter (with 1.9).
+- 2.7 (L, none left) all bullets are in 4.34.0 (P14).
