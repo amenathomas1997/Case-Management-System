@@ -116,3 +116,16 @@ Web 4.34.0, iPhone app 4.34.0 (build 65), Android app 4.34.0 (version code 18). 
 - incoming authorization emails
 - surveys and follow-up checks after closure
 - equipment status changes
+
+## Published (not deployed)
+
+2026-11-19, after CI passed all three jobs on 84f1aa7. The GitHub release v4.34.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag, including the four new shared files
+- the signed update package: 342 files, verified
+
+**Rehearsed:** installed with the 4.33.0 updater onto a copy of a 4.33.0 site.
+- The signature verified, the plan showed no problems, and the backup was made first.
+- 23 files were replaced or added, with no database change.
+- The sign-in page then served 4.34.0.
+
+The live site stays as it is until an administrator installs it with Software update. The 4.34.0 phone apps are built from this tag.
