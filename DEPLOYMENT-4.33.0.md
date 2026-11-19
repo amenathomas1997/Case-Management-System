@@ -8,7 +8,7 @@ Web 4.33.0. The phone apps stay at 4.32.0: the iPhone app's source carries one f
 
 **Not deployed with deploy.sh.** It is to be published as the GitHub release v4.33.0, and an administrator installs it with Administration, Software update. Nothing has reached a live server.
 
-**Why.** On 2026-11-18 the maintainer asked for the calendar sync to match the Full Circle CMS website kit: three kinds of calendar, each tested end to end against a stand-in service, and personal Microsoft accounts that work.
+**Why.** On 2026-11-18 the maintainer asked for the calendar sync to match the reference website kit: three kinds of calendar, each tested end to end against a stand-in service, and personal Microsoft accounts that work.
 
 **What changed**
 - **Three kinds of calendar** (My Account, My calendar; inc/calendar_kinds.php):

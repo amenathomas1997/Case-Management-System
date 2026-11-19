@@ -5,7 +5,6 @@ import android.net.Uri
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -32,6 +31,45 @@ import org.casemanagement.app.objects
 import org.casemanagement.app.str
 import org.json.JSONObject
 
+/** 4.34.0: check-in is offered from 30 minutes before the start until the session ends (the server refuses earlier). */
+fun checkInWindow(startMs: Long?, endMs: Long?, nowMs: Long): Boolean {
+    if (startMs == null) return false
+    val end = endMs ?: (startMs + 60 * 60_000L)
+    return nowMs >= startMs - 30 * 60_000L && nowMs <= end
+}
+
+/**
+ * 4.34.0: what a session offers, as the website: check in (in its window), complete and record a
+ * no-show only once it has started, move and cancel while it is scheduled; "hours" (the hours and
+ * the signature on completing) only for a session on a training track.
+ */
+fun sessionActions(status: String, startMs: Long?, endMs: Long?, nowMs: Long, hasTrack: Boolean, checkedIn: Boolean = false): List<String> {
+    if (status != "Scheduled") return emptyList()
+    val started = startMs != null && nowMs >= startMs
+    return listOfNotNull(
+        if (!checkedIn && checkInWindow(startMs, endMs, nowMs)) "check_in" else null,
+        if (started) "complete" else null,
+        "move",
+        if (started) "no_show" else null,
+        "cancel",
+        if (hasTrack) "hours" else null,
+    )
+}
+
+/** 4.34.0: complete_session's body: "completed_logged" sends no hours or miles (those already logged are this session's). */
+fun completionBody(sessionId: Int, outcome: String, hours: Double, miles: Double): JSONObject {
+    val b = JSONObject().put("session_id", sessionId).put("outcome", outcome)
+    if (outcome != "completed_logged") { b.put("hours", hours); if (miles > 0) b.put("mileage", miles) }
+    return b
+}
+
+/** 4.34.0: "Completed, hours already logged", with " as entry N" when several entries could be it. */
+fun loggedChoiceLabel(index: Int, count: Int): String = "Completed, hours already logged" + if (count > 1) " as entry ${index + 1}" else ""
+
+/** 4.34.0: "Showing the next 100 of 140 sessions." when the schedule stops at its limit. */
+fun scheduleCutText(shownUpcoming: Int, upcomingTotal: Int): String? =
+    if (upcomingTotal > shownUpcoming) "Showing the next $shownUpcoming of $upcomingTotal sessions." else null
+
 /**
  * Sessions waiting for an outcome, then upcoming ones by day. Each session is one stop; a double
  * tap offers what can be done with it: check in, complete, record a no-show or cancel, join.
@@ -52,6 +90,8 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
     val moving = remember(movingJson) { movingJson?.let { try { JSONObject(it) } catch (e: Exception) { null } } }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    // 4.34.0: Cancel and No-show are asked about first (they cannot be changed back).
+    var confirmStatus by remember { mutableStateOf<Pair<JSONObject, String>?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -75,6 +115,7 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
             }
             val upcoming = sessions.filter { !it.overdue }
             if (upcoming.isEmpty() && overdue.isEmpty()) Text("Nothing scheduled.")
+            scheduleCutText(upcoming.size, r.optInt("upcoming_total", upcoming.size))?.let { Text(it) }
             upcoming.groupBy { (it.startAt ?: "").take(10) }.forEach { (day, list) ->
                 Heading(dayText(day))
                 list.forEach { s -> SessionRow(s) { chosen = s.raw } }
@@ -85,7 +126,10 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
 
     chosen?.let { s ->
         val id = s.optInt("id")
-        val scheduled = s.optString("status") == "Scheduled"
+        val zone = api.serverZone
+        val offered = sessionActions(s.optString("status"), org.casemanagement.app.serverTimeMillis(s.str("start_at"), zone),
+            org.casemanagement.app.serverTimeMillis(s.str("end_at"), zone), System.currentTimeMillis(),
+            hasTrack = !s.isNull("track_id") && s.optInt("track_id") > 0, checkedIn = s.str("checked_in_at") != null)
         fun act(block: suspend () -> String) {
             chosen = null; error = null
             scope.launch {
@@ -97,7 +141,7 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
             title = { Text(s.optString("client") + ", " + timeText(s.str("start_at")), modifier = Modifier.semantics { heading() }) },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    if (scheduled && s.str("checked_in_at") == null && !s.optBoolean("overdue")) TextButton(onClick = {
+                    if ("check_in" in offered && !s.optBoolean("overdue")) TextButton(onClick = {
                         // The time the button was pressed (4.27.0), sent only with a copy kept to send later with no
                         // signal, so a late check-in is accepted; one sent now is timed by the server.
                         val pressedAt = org.casemanagement.app.isoTime(System.currentTimeMillis())
@@ -106,18 +150,11 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
                                 "Checked in.") { it.put("checked_in_at", pressedAt) }.message
                         }
                     }) { Text("Check in now") }
-                    if (scheduled) TextButton(onClick = { chosen = null; completingJson = s.toString() }) { Text("Complete the session") }
-                    // 4.31.0: a completed session whose note is not written yet.
-                    if (s.optString("status") == "Completed" && s.optBoolean("note_pending")) parseNoteToWrite(JSONObject(), s)?.takeIf { api.can("clients") }?.let { n ->
-                        TextButton(onClick = { chosen = null; nav.navigate(n.route) }) { Text("Write it now") }
-                    }
-                    if (scheduled && !s.optBoolean("overdue")) TextButton(onClick = { chosen = null; movingJson = s.toString() }) { Text("Move to another time") }
-                    if (scheduled) TextButton(onClick = {
-                        act { api.call("set_session_status", body = JSONObject().put("session_id", id).put("to", "No Show")); "Recorded as a no-show." }
-                    }) { Text("Record a no-show") }
-                    if (scheduled) TextButton(onClick = {
-                        act { api.call("set_session_status", body = JSONObject().put("session_id", id).put("to", "Cancelled")); "Session cancelled." }
-                    }) { Text("Cancel the session") }
+                    if ("complete" in offered) TextButton(onClick = { chosen = null; completingJson = s.toString() }) { Text("Complete the session") }
+                    // 4.34.0: Move is offered on an ended session too, as on the website.
+                    if ("move" in offered) TextButton(onClick = { chosen = null; movingJson = s.toString() }) { Text("Move to another time") }
+                    if ("no_show" in offered) TextButton(onClick = { chosen = null; confirmStatus = s to "No Show" }) { Text("Record a no-show") }
+                    if ("cancel" in offered) TextButton(onClick = { chosen = null; confirmStatus = s to "Cancelled" }) { Text("Cancel the session") }
                     s.str("meeting_url")?.takeIf { it.startsWith("https://", ignoreCase = true) }?.let { url ->
                         TextButton(onClick = {
                             chosen = null
@@ -128,6 +165,21 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
             },
             confirmButton = { TextButton(onClick = { chosen = null }) { Text("Close") } },
         )
+    }
+
+    confirmStatus?.let { (s, to) ->
+        val who = s.optString("client") + ", " + whenText(s.str("start_at"))
+        Confirm(if (to == "Cancelled") "Record this session as Cancelled?" else "Record this session as a No Show?",
+            "$who. This cannot be changed back.", "Record it", {
+                error = null
+                scope.launch {
+                    try {
+                        api.call("set_session_status", body = JSONObject().put("session_id", s.optInt("id")).put("to", to))
+                        notice = if (to == "Cancelled") "Session with $who cancelled." else "Session with $who recorded as a no-show."
+                        state.reload()
+                    } catch (e: ApiException) { error = e.message }
+                }
+            }, { confirmStatus = null })
     }
 
     moving?.let { s -> MoveDialog(api, s, onDone = { m -> movingJson = null; notice = m; state.reload() }, onCancel = { movingJson = null }) }
@@ -153,7 +205,6 @@ private fun SessionRow(s: SessionItem, onClick: () -> Unit) {
             s.instructor?.let { "with $it" },
             s.checkedInAt?.let { "checked in at " + timeText(it) },
             s.groupSize.takeIf { it > 1 }?.let { "group of $it" },
-            if (s.notePending) "note not written yet" else null,
         ).joinToString(", "),
     )
     ListRow(lines, action = "see what you can do", onClick = onClick)
@@ -171,6 +222,7 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String, NoteToWrite
     val length = if (end > start) Math.round((end - start) / 900_000.0) / 4.0 else 1.0
     // Kept across rotation, a text-size change and process death, with the client's drawn signature (4.28.0).
     val id = s.optInt("id")
+    val hasTrack = !s.isNull("track_id") && s.optInt("track_id") > 0
     var hours by rememberSaveable(id) { mutableStateOf(hoursText(length)) }
     var miles by rememberSaveable(id) { mutableStateOf("") }
     val idem = rememberSaveable(id) { java.util.UUID.randomUUID().toString() }
@@ -185,8 +237,8 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String, NoteToWrite
     val scope = rememberCoroutineScope()
 
     fun send(outcome: String, workLogId: Int? = null) {
-        val h = number(hours)
-        val m = number(miles.ifBlank { "0" })
+        val h = if (hasTrack) number(hours) else 0.0
+        val m = if (hasTrack) number(miles.ifBlank { "0" }) else 0.0
         if (busy) return
         // Each error on its field as well as in the summary (4.28.0).
         hoursError = if (h == null || h < 0 || h > 24) "Enter the hours as a number from 0 to 24." else null
@@ -196,10 +248,10 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String, NoteToWrite
         // Busy at once (launchSave), so a second tap in the same moment does not send twice (4.28.0).
         scope.launchSave({ busy = it }, { }) {
             try {
-                val body = JSONObject().put("session_id", s.optInt("id")).put("outcome", outcome).put("hours", h)
-                if (m > 0) body.put("mileage", m)
-                signature.png(density)?.let { body.put("signature_b64", it) }
-                if (signedName.isNotBlank()) body.put("signed_name", signedName.trim().take(120))
+                // 4.34.0: hours already logged are those hours: none are sent again (the website's rule).
+                val body = completionBody(s.optInt("id"), outcome, h, m)
+                if (hasTrack) signature.png(density)?.let { body.put("signature_b64", it) }
+                if (hasTrack && signedName.isNotBlank()) body.put("signed_name", signedName.trim().take(120))
                 workLogId?.let { body.put("work_log_id", it) }
                 body.put("idem_key", idem)
                 // Sent now, or with no signal kept to send later (in order, before the note written next).
@@ -222,17 +274,21 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String, NoteToWrite
         title = { Text("Complete: " + s.optString("client"), modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal, error = hoursError, required = true)
-                Field("Miles driven", miles, { miles = it }, hint = "0 if none", keyboard = KeyboardType.Decimal, error = milesError)
-                SignaturePad(signature)
-                Field("Client's typed name", signedName, { signedName = it }, hint = "optional; counts as their acknowledgement")
+                // 4.34.0: a session on no training track logs no hours, so neither hours nor the signature are asked.
+                if (hasTrack) {
+                    Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal, error = hoursError, required = true)
+                    Field("Miles driven", miles, { miles = it }, hint = "0 if none", keyboard = KeyboardType.Decimal, error = milesError)
+                    SignaturePad(signature)
+                    Field("Client's typed name", signedName, { signedName = it }, hint = "optional; counts as their acknowledgement")
+                } else Text("This session is not on a training track, so no hours are logged.")
                 ErrorText(error)
-                logged.forEach { w ->
+                // 4.34.0: the website's choices; each uses the Hours and Miles as they are now.
+                logged.forEachIndexed { i, w ->
                     TextButton(onClick = { send("completed_logged", w.optInt("id")) }) {
-                        Text("These are this session's hours: ${hoursText(w.optDouble("hours", 0.0))} hours, ${w.optString("description").take(60)}")
+                        Text(loggedChoiceLabel(i, logged.size) + ": ${hoursText(w.optDouble("hours", 0.0))} hours, ${w.optString("description").take(60)}")
                     }
                 }
-                if (logged.isNotEmpty()) TextButton(onClick = { send("completed_separate") }) { Text("This was a separate visit: log these hours as well") }
+                if (logged.isNotEmpty()) TextButton(onClick = { send("completed_separate") }) { Text("Completed — log hours as well") }
             }
         },
         confirmButton = { TextButton(onClick = { send("completed") }, enabled = !busy) { Text(if (busy) "Saving…" else "Complete") } },

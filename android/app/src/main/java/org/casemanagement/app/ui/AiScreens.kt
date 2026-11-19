@@ -56,6 +56,40 @@ fun copyText(context: Context, text: String) {
     (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(clip)
 }
 
+/** 4.34.0: the languages offered for translation: the code (for TalkBack's voice) and the name sent to the server. */
+val TRANSLATE_LANGS = listOf("es" to "Spanish", "ar" to "Arabic", "zh-Hans" to "Chinese (Simplified)", "vi" to "Vietnamese", "ru" to "Russian",
+    "fr" to "French", "ht" to "Haitian Creole", "so" to "Somali", "ne" to "Nepali", "ko" to "Korean", "tl" to "Tagalog")
+
+/** 4.34.0: the language name the server's prompt needs ("Somali", not "so"). */
+fun translateLangName(code: String): String = TRANSLATE_LANGS.firstOrNull { it.first == code }?.second ?: code
+
+/** 4.34.0: characters as people count them (an emoji or a CJK supplement letter is one), as the server counts them. */
+fun codePointCount(s: String): Int = s.codePointCount(0, s.length)
+
+/**
+ * 4.34.0: the notices that go with an AI result, as the website says them: an answer the AI cut
+ * off, a caseload that did not fit, the period a risk review covers.
+ */
+fun aiNotices(tool: String, r: JSONObject): List<String> = listOfNotNull(
+    if (tool == "risk" && r.has("period_from")) "Period: ${r.optString("period_from")} to ${r.optString("period_to")}." else null,
+    if (r.optBoolean("truncated")) when (tool) {
+        "ask" -> "Incomplete: the AI stopped before finishing this answer, so clients after the last line are missing. Narrow the question and ask again."
+        "risk" -> "Incomplete: the AI stopped before finishing this list, so the clients after the last item were not assessed."
+        "translate" -> "Incomplete: the translation stops before the end of your text; split it and translate each part."
+        "curriculum" -> "Incomplete: the AI stopped before finishing the lesson plan. Narrow the focus and draft it again."
+        "progress" -> "Incomplete: the AI stopped before finishing this summary. Review it closely, or ask again."
+        else -> "Incomplete: the result stops before the end of your text; split it and try again."
+    } else null,
+    if (tool == "ask" && r.optBoolean("caseload_cut")) "Note: only part of the caseload fit in one question — narrow the question for larger caseloads." else null,
+)
+
+/** 4.34.0: what staff are told under every AI result, with whether identifiers are stripped (null: an older server). */
+fun aiReviewWords(redaction: Boolean?): String = when (redaction) {
+    true -> "Staff review every AI draft before it is used. Client identifiers are stripped before client data is sent to the provider."
+    false -> "Staff review every AI draft before it is used. Identifier redaction is currently off."
+    null -> "Staff review every AI draft."
+}
+
 /** The general AI tools: plain language, translation, curriculum, ask about the caseload or knowledge base, risk review. */
 @Composable
 fun AiToolsScreen(api: Api) {
@@ -89,7 +123,7 @@ fun AiToolsScreen(api: Api) {
                 Field("Your text", input, { input = it; resultText = null }, hint = "sent to the AI provider as it is", singleLine = false, minLines = 5, required = true)
             }
             "translate" -> {
-                Choice("Into", lang, listOf("es" to "Spanish", "ar" to "Arabic", "zh-Hans" to "Chinese (Simplified)", "vi" to "Vietnamese", "ru" to "Russian", "fr" to "French", "ht" to "Haitian Creole", "so" to "Somali", "ne" to "Nepali", "ko" to "Korean", "tl" to "Tagalog")) { lang = it; resultText = null }
+                Choice("Into", lang, TRANSLATE_LANGS) { lang = it; resultText = null }
                 Field("Text to translate", input, { input = it; resultText = null }, hint = "up to 6,000 characters", singleLine = false, minLines = 5, required = true)
             }
             "ask" -> Field("Your question", input, { input = it; resultText = null }, hint = "client names are never sent to the AI", singleLine = false, required = true)
@@ -103,15 +137,17 @@ fun AiToolsScreen(api: Api) {
         }
         ErrorText(error)
         val needed = when (tool) { "risk" -> null; "translate" -> "Text to translate"; "curriculum" -> "Technology"; "remediate" -> "Your text"; else -> "Your question" }
-        PrimaryButton("Ask the AI", busy = busy, busyText = AI_WORKING, announceBusy = true, missing = if (needed != null && input.isBlank()) stillNeeded(listOf(needed)) else null) {
-            if (tool == "translate" && input.length > 6000) { error = "The content is too long to translate at once (maximum 6,000 characters; it has ${input.length}). Split it into parts and translate each one."; return@PrimaryButton }
+        PrimaryButton(if (tool == "curriculum") "Draft lesson plan" else "Ask the AI", busy = busy, busyText = AI_WORKING, announceBusy = true, missing = if (needed != null && input.isBlank()) stillNeeded(listOf(needed)) else null) {
+            val chars = codePointCount(input)
+            if (tool == "translate" && chars > 6000) { error = "The content is too long to translate at once (maximum 6,000 characters; it has $chars). Split it into parts and translate each one."; return@PrimaryButton }
             error = null; resultText = null
             scope.launch {
                 busy = true
                 try {
                     resultText = when (tool) {
                         "remediate" -> api.call("ai_remediate", body = JSONObject().put("mode", mode).put("content", input))
-                        "translate" -> api.call("ai_translate", body = JSONObject().put("lang", lang).put("content", input))
+                        // 4.34.0: the language's name, as the website sends it (the server also maps a code).
+                        "translate" -> api.call("ai_translate", body = JSONObject().put("lang", translateLangName(lang)).put("content", input))
                         "ask" -> api.call("ai_ask", body = JSONObject().put("question", input.trim()))
                         "kb" -> api.call("ai_kb", body = JSONObject().put("question", input.trim()))
                         "curriculum" -> api.call("ai_curriculum", body = JSONObject().put("tech", input.trim()).put("level", level).put("focus", focus.trim()))
@@ -122,16 +158,18 @@ fun AiToolsScreen(api: Api) {
         }
         result?.let { r ->
             val footer = when (tool) {
-                "remediate" -> if (r.optBoolean("truncated")) "Incomplete: the result stops before the end of your text; split it and try again." else null
                 "kb" -> r.optJSONArray("sources").objects().takeIf { it.isNotEmpty() }?.joinToString(", ", prefix = "Grounded in: ") { it.optString("title") }
-                "curriculum" -> "Create the full curriculum on the website's Templates page."
+                "curriculum" -> "Save it as a curriculum on the website: AI tools › Curriculum generator."
                 "risk" -> if (r.optInt("assessed") < r.optInt("total_active")) "${r.optInt("assessed")} of ${r.optInt("total_active")} active clients assessed: only those with no session yet or the longest time since their last session fit one review." else null
                 "ask" -> "Read-only; check before acting."
                 else -> null
             }
-            // A translation is read in the language it was put into (owner rule 5).
-            AiResult("Result", r.optString("text"), footer, lang = if (tool == "translate") lang else null)
-            Text("Staff review every AI draft.")
+            // 4.34.0: the notices are part of the result text (no extra stop), before it.
+            val notices = aiNotices(tool, r)
+            // A translation is read in the language it was put into (owner rule 5); its notices are in English, so they go in the footer.
+            if (tool == "translate") AiResult("Result", r.optString("text"), listOfNotNull(notices.joinToString(" ").ifEmpty { null }, footer).joinToString(" ").ifEmpty { null }, lang = lang)
+            else AiResult("Result", (notices + r.optString("text")).filter { it.isNotBlank() }.joinToString("\n\n"), footer)
+            Text(aiReviewWords(api.aiRedaction))
         }
     }
 }
@@ -202,7 +240,7 @@ fun ClientAiScreen(api: Api, nav: NavHostController, clientId: Int) {
         val r = result ?: return@Page
         when (tool) {
             "recommend" -> AiResult("Recommendations", r.optString("text"), "Create a device request to pursue a recommendation.")
-            "progress" -> AiResult("Progress summary", r.optString("text"))
+            "progress" -> AiResult("Progress summary", (aiNotices("progress", r) + r.optString("text")).filter { it.isNotBlank() }.joinToString("\n\n"))
             "intake" -> {
                 if (fields["summary"].isNullOrBlank()) { ErrorText("The assistant's reply could not be read. Try again, or add the assessment yourself."); return@Page }
                 Heading("Draft assessment: review each field, then save")

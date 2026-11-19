@@ -3,7 +3,6 @@ package org.casemanagement.app.ui
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,8 +33,28 @@ import org.casemanagement.app.idsFromText
 
 fun money(d: Double) = "$" + String.format(Locale.US, "%,.2f", d)
 
-/** "24.50", "24,50" or "$24.50" as the server's money format, or null. */
-fun moneyText(s: String): String? = s.trim().removePrefix("$").replace(',', '.').takeIf { Regex("^\\d{1,7}(\\.\\d{1,2})?$").matches(it) }
+/**
+ * "24.50", "$1,250" or "$ 2,995.00" as the server's money format ("1250.00"), or null. 4.34.0: as
+ * the website, a comma only groups thousands (never a decimal point, so "12,50" is refused), and up
+ * to [maxDigits] digits before the point, as the server's api_money: 7, or 10 for a contract's amounts.
+ */
+fun moneyText(s: String, maxDigits: Int = 7): String? {
+    val t = s.trim().removePrefix("$").trim().replace(" ", "")
+    if (!Regex("^(\\d{1,3}(,\\d{3})+|\\d+)(\\.\\d{1,2})?$").matches(t)) return null
+    val plain = t.replace(",", "")
+    if (plain.substringBefore('.').length > maxDigits) return null
+    return java.math.BigDecimal(plain).setScale(2).toPlainString()
+}
+
+/** A contract's amount and its spending may run to 10 digits before the point (the server's api_money for contracts). */
+const val CONTRACT_DIGITS = 10
+
+/** 4.34.0: whole percent of a budget spent, rounded down and worked in cents (contracts.php), so an exact 29% stays 29. */
+fun percentInCents(spent: Double, amount: Double): Int {
+    val amountCents = Math.round(amount * 100)
+    if (amountCents <= 0) return 0
+    return ((Math.round(spent * 100) * 100) / amountCents).toInt()
+}
 
 /** The clients a form can choose from (closed cases left out unless asked for). */
 suspend fun clientChoices(api: Api, includeClosed: Boolean = false): List<JSONObject> {
@@ -230,7 +249,7 @@ private fun AddContractDialog(api: Api, onDone: (Int) -> Unit, onCancel: () -> U
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     FormDialog("Add a contract", "Add", busy, missing = stillNeeded(missingNames("Name" to name.isBlank())), onSave = {
-        val a = if (amount.isBlank()) "0" else moneyText(amount)
+        val a = if (amount.isBlank()) "0" else moneyText(amount, CONTRACT_DIGITS)
         amountError = if (a == null) "Enter the budget in dollars, such as 12500." else null
         if (a == null) { error = amountError; return@FormDialog }
         scope.launchSave({ busy = it }, { error = it }) {
@@ -264,7 +283,7 @@ fun ContractScreen(api: Api, id: Int) {
             Heading(c.optString("name"), large = true)
             NoticeText(notice)
             ErrorText(error)
-            ListRow(listOf("Spent " + money(spent) + " of " + money(amount) + if (amount > 0) " (${Math.floor(spent * 100 / amount).toInt()}%)" else " (no budget set)"))
+            ListRow(listOf("Spent " + money(spent) + " of " + money(amount) + if (amount > 0) " (${percentInCents(spent, amount)}%)" else " (no budget set)"))
             listOfNotNull(c.str("funder")?.let { "Funder: $it" }, c.str("contract_number")?.let { "Number: $it" }, c.str("end_date")?.let { "Ends " + dayText(it) }).forEach { ListRow(listOf(it)) }
             val dels = r.optJSONArray("deliverables").objects()
             Heading("Deliverables (${dels.size})")
@@ -299,7 +318,7 @@ fun ContractScreen(api: Api, id: Int) {
             val body: JSONObject
             val done: String
             if (form == "spend") {
-                val m = moneyText(a)
+                val m = moneyText(a, CONTRACT_DIGITS)
                 fieldErrors = listOfNotNull(
                     if (m == null || m.toDouble() <= 0) "amount" to "Enter the amount in dollars, such as 120.50." else null,
                     if (!day.matches(b.trim())) "date" to "Enter the date as year-month-day, such as ${today()}." else null,

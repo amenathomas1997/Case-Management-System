@@ -241,7 +241,7 @@ struct AccountView: View {
         Section {
             LabeledContent("Authenticator app", value: s.totpEnabled ? "On" : (setup != nil ? "Being set up" : "Off"))
             if s.totpEnabled {
-                Text("At sign-in you can enter a code from your authenticator app or the emailed code. Both work.")
+                Text("At sign-in, enter a code from your authenticator app (or use a passkey); codes are no longer emailed.")
                 SecureCaptionedField(label: "Account password, to turn it off", text: $totpOffPassword)
                 Button(role: .destructive) { Task { await totpDisable() } } label: {
                     Text("Turn off authenticator app").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -277,7 +277,7 @@ struct AccountView: View {
                 }
                 .disabled(busy)
             } else {
-                Text("Add an authenticator app as a second way to get sign-in codes. Email codes keep working either way.")
+                Text("Add an authenticator app for your sign-in codes. Once it is on, sign-in codes are no longer emailed.")
                 Button { Task { await totpBegin() } } label: {
                     Text("Set up authenticator app").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }

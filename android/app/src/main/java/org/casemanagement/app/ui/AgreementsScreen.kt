@@ -38,6 +38,7 @@ fun AgreementScreen(api: Api, nav: NavHostController, id: Int) {
     var name by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var agreeError by remember { mutableStateOf<String?>(null) }
+    var nameError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     Show(state, "the agreement") { a ->
@@ -50,23 +51,29 @@ fun AgreementScreen(api: Api, nav: NavHostController, id: Int) {
             } else {
                 Heading("Sign")
                 Tick("I have read this agreement and agree to it", agree, error = agreeError) { agree = it; if (it) agreeError = null }
-                Field("Type your full name to sign", name, { name = it }, hint = "as it is on your account: ${api.userName}", required = true)
+                Field("Type your full name to sign", name, { name = it; nameError = null }, hint = "as it is on your account: ${api.userName}", required = true, error = nameError)
                 ErrorText(error)
                 PrimaryButton("Sign the agreement", busy = busy, missing = stillNeeded(missingNames("your full name" to name.isBlank()))) {
                     agreeError = if (!agree) "Tick that you have read the agreement and agree to it." else null
                     if (!agree) { error = agreeError; return@PrimaryButton }
                     scope.launchSave({ busy = it }, { error = it }) {
-                        try {
+                        val r = try {
                             // The fingerprint of the text shown here: a change since it loaded is refused.
-                            val r = api.call("sign_agreement", body = JSONObject().put("id", id).put("version", a.optInt("version")).put("agree", true)
+                            api.call("sign_agreement", body = JSONObject().put("id", id).put("version", a.optInt("version")).put("agree", true)
                                 .put("signed_name", name.trim()).put("text_hash", a.optString("text_hash")))
-                            Flash.pending = r.optString("message").ifEmpty { "Signed." }
-                            nav.popBackStack()
                         } catch (e: ApiException) {
                             // Changed while open: show the new text, so it is read before signing.
                             if (e.status == 409) { agree = false; state.reload() }
+                            // 4.34.0: a refused name belongs to the name field.
+                            if (e.status == 422) nameError = e.message
                             throw e
                         }
+                        // Signed: that stands whatever happens next.
+                        Flash.pending = r.optString("message").ifEmpty { "Signed." }
+                        // 4.34.0: the hold on client records lifts at once after the last agreement; a refresh
+                        // that fails is not a failed signature (the next start reads it again).
+                        try { api.refreshMe() } catch (e: ApiException) { } catch (e: java.io.IOException) { }
+                        nav.popBackStack()
                     }
                 }
             }

@@ -19,6 +19,7 @@ run php tests/accessibility.php
 run php tests/breadcrumbs.php
 run php tests/health_checks.php
 run php tests/hygiene_static.php
+run php tests/brand_guard.php
 run php tests/ai_eval/run.php
 run python3 tests/cron_regression.py
 run python3 tests/installer_gate.py

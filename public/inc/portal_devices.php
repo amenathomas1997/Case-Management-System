@@ -103,3 +103,18 @@ function loan_reminders(): int {
     }
     return $sent;
 }
+
+/** The status a reopened device request resumes at (4.34.0: shared by procurement.php and the app's
+ *  device_request_update): the furthest step it had recorded (delivery, order, authorization,
+ *  recommended quote, any quote), so its status agrees with its lifecycle and it is counted and
+ *  filtered where it belongs. Nothing can change those steps while it is closed. $r needs
+ *  delivered_at, ordered_at, authorized_at and selected_quote_id. */
+function device_request_reopen_status(array $r, int $requestId): string {
+    if (!empty($r['delivered_at'])) return 'Delivered';
+    if (!empty($r['ordered_at'])) return 'Ordered';
+    if (!empty($r['authorized_at'])) return 'Authorized';
+    if (!empty($r['selected_quote_id'])) return 'Awaiting Authorization';
+    $qc = db()->prepare('SELECT COUNT(*) FROM device_request_quotes WHERE request_id = ?');
+    $qc->execute([$requestId]);
+    return (int)$qc->fetchColumn() > 0 ? 'Quoting' : 'Requested';
+}

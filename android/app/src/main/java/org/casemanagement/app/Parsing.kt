@@ -20,11 +20,14 @@ private fun JSONObject.text(key: String): String = str(key) ?: ""
 data class Me(
     val id: Int, val name: String, val perms: List<String>, val scoped: Boolean, val aiEnabled: Boolean,
     val aiFeatures: List<String>, val accessHold: List<String>, val serverVersion: String?, val timezone: String?,
+    /** 4.34.0: whether client identifiers are stripped before AI (null: an older server does not say). */
+    val aiRedaction: Boolean? = null,
 )
 
 fun parseMe(r: JSONObject) = Me(
     r.optInt("id"), r.text("name"), r.optJSONArray("perms").strings(), r.optBoolean("scoped"), r.optBoolean("ai_enabled"),
     r.optJSONArray("ai_features").strings(), r.optJSONArray("access_hold").strings(), r.str("server_version"), r.str("timezone"),
+    if (r.has("ai_redaction") && !r.isNull("ai_redaction")) r.optBoolean("ai_redaction") else null,
 )
 
 /* ---------- form_options ---------- */
@@ -60,7 +63,13 @@ data class TrackSummary(
     val hoursWorked: Double, val expirationDate: String?,
 )
 
-data class NoteItem(val id: Int, val subject: String, val noteType: String, val createdAt: String?, val author: String?, val body: String)
+data class NoteItem(
+    val id: Int, val subject: String, val noteType: String, val createdAt: String?, val author: String?, val body: String,
+    /** 4.34.0: past the edit window (an addendum is offered instead), and whether this account may edit it. */
+    val locked: Boolean = false, val canEdit: Boolean = false, val addendumTo: Int? = null, val noteVersion: String? = null,
+    val trackId: Int? = null, val noteFormat: String = "free", val sections: List<String> = emptyList(),
+    val editor: String? = null, val trackTitle: String? = null,
+)
 
 data class ReleaseItem(val id: Int, val recipientName: String, val recipientType: String?, val status: String, val expiresOn: String?, val infoScope: String?)
 
@@ -85,7 +94,71 @@ fun parseClientDetail(r: JSONObject): ClientDetail? {
         r.optInt("notes_total", notes.size), releases, custom, c.optInt("signatures_waiting"), c.has("device_counts"), c)
 }
 
-fun parseNote(n: JSONObject) = NoteItem(n.optInt("id"), n.text("subject"), n.text("note_type"), n.str("created_at"), n.str("author"), n.text("body"))
+fun parseNote(n: JSONObject) = NoteItem(
+    n.optInt("id"), n.text("subject"), n.text("note_type"), n.str("created_at"), n.str("author"), n.text("body"),
+    n.optBoolean("locked"), n.optBoolean("can_edit"), n.intOrNull("addendum_to")?.takeIf { it > 0 }, n.str("note_version"),
+    n.intOrNull("track_id")?.takeIf { it > 0 }, n.str("note_format") ?: "free",
+    n.optJSONArray("sections").let { a -> if (a == null) emptyList() else List(a.length()) { a.optString(it) } },
+    n.str("editor"), n.str("track_title"),
+)
+
+/** 4.34.0: an addendum's subject, "Addendum: Phone call", never "Addendum: Addendum: Phone call". */
+fun addendumSubject(subject: String): String {
+    val s = subject.trim()
+    return if (s.startsWith("Addendum:", ignoreCase = true)) s else "Addendum: $s"
+}
+
+/** 4.34.0: what an edit refusal means: "addendum" (the note just locked), "conflict" (saved by someone since), or "error". */
+fun noteEditOutcome(status: Int, reply: JSONObject?): String = when {
+    status == 409 && reply?.optBoolean("locked") == true -> "addendum"
+    status == 409 && reply?.optBoolean("conflict") == true -> "conflict"
+    else -> "error"
+}
+
+/** 4.34.0: the website's words when an edit becomes an addendum (client.php:518). */
+fun lockedToAddendumMessage(serverMessage: String?): String =
+    (serverMessage?.takeIf { it.isNotBlank() } ?: "This note is locked.") + " Your changes are in the addendum form below."
+
+/** 4.34.0: what was typed in a note, to keep for copying after a Reload: the narrative and each labelled section. */
+fun typedNoteText(format: String, body: String, sections: List<String>, labels: List<String>?): String =
+    if (format == "free" || labels == null) body.trim()
+    else (sections.mapIndexedNotNull { i, v -> v.trim().takeIf { it.isNotEmpty() }?.let { "${labels.getOrElse(i) { "Section ${i + 1}" }}: $it" } } +
+        listOfNotNull(body.trim().takeIf { it.isNotEmpty() }?.let { "Narrative: $it" })).joinToString("\n\n")
+
+/**
+ * 4.34.0: add_note's errors.hw_due_N (N counts the homework items sent, from 1) on the rows of the
+ * form they came from: [sentRows] holds each sent item's row, in the order sent.
+ */
+fun homeworkRowErrors(reply: JSONObject?, sentRows: List<Int>): Map<Int, String> {
+    val errs = reply?.optJSONObject("errors") ?: return emptyMap()
+    return errs.keys().asSequence().mapNotNull { k ->
+        val n = Regex("^hw_due_(\\d+)$").find(k)?.groupValues?.get(1)?.toIntOrNull() ?: return@mapNotNull null
+        sentRows.getOrNull(n - 1)?.let { it to errs.optString(k) }
+    }.toMap()
+}
+
+/** 4.34.0: the case notes heading; the client reply holds the newest 50. */
+fun notesHeading(shown: Int, total: Int): String = if (total > shown) "Case notes (latest $shown of $total)" else "Case notes ($total)"
+
+/** The website's words (client.php:461) when Free text is chosen but sections still hold text. */
+const val FREE_TEXT_SECTIONS_LOST = "Free text is chosen as the note format, but the structured sections still hold text that a free-text note does not keep. " +
+    "Move anything you need from the sections into the narrative box and clear them, or choose a structured format again."
+
+/** 4.34.0: true when [format] is Free text and a section still holds text that would be lost. */
+fun sectionsLost(format: String, sections: List<String>): Boolean = format == "free" && sections.any { it.isNotBlank() }
+
+/**
+ * 4.34.0: what add_note's reply says, as the website (client.php:623): homework added to the
+ * portal and the session warning. Null [reply] (kept offline) gives null: the queued words stay.
+ */
+fun noteSavedMessage(reply: JSONObject?, saved: String = "Case note saved."): String? {
+    if (reply == null) return null
+    if (reply.optBoolean("deduplicated")) return "This was already saved from an earlier try, so it was not added twice."
+    val n = reply.optInt("homework_created")
+    val hw = if (n > 0) " $n homework ${if (n == 1) "item" else "items"} added to the client portal." else ""
+    val warn = reply.str("warning")?.let { " $it" } ?: ""
+    return saved + hw + warn
+}
 
 data class StatusChange(val id: Int, val newStatus: String, val oldStatus: String?, val changedAt: String?, val changedBy: String, val note: String?)
 
@@ -159,11 +232,26 @@ fun parseTrackNotes(r: JSONObject): TrackNotes {
 
 /* ---------- messages, documents, homework ---------- */
 
-data class ThreadSummary(val clientId: Int, val clientName: String, val unread: Int, val lastAt: String?)
+data class ThreadSummary(val clientId: Int, val clientName: String, val unread: Int, val lastAt: String?, val unreadClient: Int = 0, val unreadCounselor: Int = 0)
 
 fun parseMessageThreads(r: JSONObject): List<ThreadSummary> = r.optJSONArray("threads").objects().map { t ->
-    ThreadSummary(t.optInt("client_id"), t.text("client_name"), t.optInt("unread"), t.str("last_at"))
+    ThreadSummary(t.optInt("client_id"), t.text("client_name"), t.optInt("unread"), t.str("last_at"),
+        // 4.34.0: by channel; an older server's single count is the client's.
+        if (t.has("unread_client")) t.optInt("unread_client") else t.optInt("unread"), t.optInt("unread_counselor"))
 }
+
+/** 4.34.0: a conversation opens on the channel with the unread messages, as on the iPhone. */
+fun startChannel(unreadClient: Int, unreadCounselor: Int): String = if (unreadClient == 0 && unreadCounselor > 0) "counselor" else "client"
+
+/** 4.34.0: a conversation row's unread words, by channel. */
+fun threadUnreadWords(t: ThreadSummary): String = listOfNotNull(
+    t.unreadClient.takeIf { it > 0 }?.let { "$it unread from the client" },
+    t.unreadCounselor.takeIf { it > 0 }?.let { "$it unread from the counselor" },
+).joinToString(", ")
+
+/** 4.34.0: both channels are always offered; the counselor is named when known. */
+fun threadChannelOptions(counselorName: String?): List<Pair<String, String>> =
+    listOf("client" to "The client", "counselor" to (counselorName?.takeIf { it.isNotBlank() }?.let { "The counselor, $it" } ?: "The counselor"))
 
 data class Message(val id: Int, val who: String, val body: String, val createdAt: String?, val byText: Boolean, val documentId: Int?, val fileLabel: String?)
 data class MessageThread(val clientName: String, val counselorName: String?, val textEnabled: Boolean, val textBlocked: String?, val messages: List<Message>)
@@ -274,15 +362,25 @@ fun parseReferrals(r: JSONObject): List<ReferralItem> = r.optJSONArray("referral
 
 data class TaskItem(
     val id: Int, val title: String, val details: String?, val clientId: Int?, val clientName: String?, val assignedName: String?,
-    val status: String, val daysLeft: Int?, val canOpenClient: Boolean,
+    val status: String, val daysLeft: Int?, val canOpenClient: Boolean, val dueDate: String? = null,
 ) {
     val open: Boolean get() = status == "Open"
 }
 
 fun parseTasks(r: JSONObject): List<TaskItem> = r.optJSONArray("tasks").objects().map { t ->
     TaskItem(t.optInt("id"), t.text("title"), t.str("details"), t.intOrNull("client_id"), t.str("client_name"), t.str("assigned_name"),
-        t.text("status"), t.intOrNull("days_left"), t.optBoolean("can_open_client"))
+        t.text("status"), t.intOrNull("days_left"), t.optBoolean("can_open_client"), t.str("due_date"))
 }
+
+/** 4.34.0: a task that is done is never "overdue": its due date is said plainly. [dayWords] formats the date. */
+fun doneTaskDueText(t: TaskItem, dayWords: (String) -> String = { it }): String =
+    if (t.open) dueWords(t.daysLeft) else t.dueDate?.let { "due " + dayWords(it) } ?: "no due date"
+
+/** 4.34.0: the unread alerts listed, as mark_notifications_read's ids (comma-separated). */
+fun markReadIds(items: List<AlertItem>): String = items.filter { it.unread }.joinToString(",") { it.id.toString() }
+
+/** 4.34.0: "Mark these 3 as read" when more are unread than listed, else "Mark all as read". */
+fun markReadLabel(listedUnread: Int, totalUnread: Int): String = if (totalUnread > listedUnread) "Mark these $listedUnread as read" else "Mark all as read"
 
 /** When a task is due, in words. */
 fun dueWords(daysLeft: Int?): String = when {

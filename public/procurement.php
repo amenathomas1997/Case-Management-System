@@ -271,12 +271,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
             // order, authorization, recommended quote, any quote), so its status agrees
             // with its lifecycle and it is counted and filtered where it belongs. Nothing
             // can change those steps while it is closed.
-            if ($to === 'Requested') {
-                $qc = db()->prepare('SELECT COUNT(*) FROM device_request_quotes WHERE request_id = ?');
-                $qc->execute([$rid]);
-                $to = $r['delivered_at'] ? 'Delivered' : ($r['ordered_at'] ? 'Ordered' : ($r['authorized_at'] ? 'Authorized'
-                    : ($r['selected_quote_id'] ? 'Awaiting Authorization' : ((int)$qc->fetchColumn() > 0 ? 'Quoting' : 'Requested'))));
-            }
+            if ($to === 'Requested') $to = device_request_reopen_status($r, $rid);   // inc/portal_devices.php, shared with the app
             db()->prepare('UPDATE device_requests SET status = ?, notes = ? WHERE id = ?')
                 ->execute([$to, mb_substr(dr_text('notes', (string)($r['notes'] ?? '')), 0, 4000) ?: null, $rid]);
             audit($user['id'], 'device.status', 'device_request', $rid, ($isReopen ? 'reopened as ' : '') . $to);

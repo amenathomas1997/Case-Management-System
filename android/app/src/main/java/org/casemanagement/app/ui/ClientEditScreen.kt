@@ -103,6 +103,36 @@ val US_STATES = listOf(
     "VI" to "U.S. Virgin Islands",
 )
 
+/**
+ * 4.34.0: a date typed as year-month-day that is a real date, today or earlier; blank is fine
+ * (the field is optional).
+ */
+fun pastOrToday(text: String, todayIs: String = today()): Boolean {
+    val t = text.trim()
+    if (t.isEmpty()) return true
+    if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(t)) return false
+    val real = try { java.time.LocalDate.parse(t); true } catch (e: Exception) { false }
+    return real && t <= todayIs && t >= "1900-01-01"
+}
+
+/** 4.34.0: save_client's refusal of a possible duplicate (409, duplicate true). */
+fun duplicateRefusal(status: Int, reply: JSONObject?): Boolean = status == 409 && reply?.optBoolean("duplicate") == true
+
+/** The form's fields named by the server's 422 messages ("IPE date: …"). */
+val CLIENT_ERROR_FIELDS = listOf("IPE amendment date" to "ipe_amended_on", "IPE date" to "ipe_date", "Date of birth" to "dob", "The date of birth" to "dob",
+    "Say why the client is going On Hold" to "status_note")
+
+/**
+ * 4.34.0: a refusal's field errors: the reply's errors map when it has one (keys as the server
+ * names them), otherwise the one message tied to the field its start names in [byPrefix].
+ */
+fun serverFieldErrors(reply: JSONObject?, byPrefix: List<Pair<String, String>> = emptyList(), message: String? = null): Map<String, String>? {
+    val errs = reply?.optJSONObject("errors")
+    if (errs != null && errs.length() > 0) return errs.keys().asSequence().mapNotNull { k -> errs.optString(k).takeIf { it.isNotBlank() }?.let { k to it } }.toMap()
+    val m = message ?: return null
+    return byPrefix.firstOrNull { m.startsWith(it.first) }?.let { mapOf(it.second to m) }
+}
+
 /** A tick box that is one stop, read with its label and state. */
 @Composable
 fun Tick(label: String, checked: Boolean, error: String? = null, onChange: (Boolean) -> Unit) {
@@ -190,6 +220,12 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
     var school by rememberSaveable { mutableStateOf(c.str("school") ?: "") }
     var vrCase by rememberSaveable { mutableStateOf(c.str("vr_case_number") ?: "") }
     var ipeGoal by rememberSaveable { mutableStateOf(c.str("ipe_goal") ?: "") }
+    // 4.34.0: the IPE dates, as the website's client form.
+    var ipeDate by rememberSaveable { mutableStateOf(c.str("ipe_date") ?: "") }
+    var ipeAmended by rememberSaveable { mutableStateOf(c.str("ipe_amended_on") ?: "") }
+    // 4.34.0: a possible duplicate refuses the new client until "This is a different person" is ticked.
+    var dupAsked by rememberSaveable { mutableStateOf(false) }
+    var notDuplicate by rememberSaveable { mutableStateOf(false) }
     // Offices (4.22.0): only when the organisation uses them (the server sends none otherwise).
     val offices = parseOffices(c)
     var office by rememberSaveable { mutableStateOf(if (c.isNull("office_id") || !c.has("office_id")) "" else c.optInt("office_id").toString()) }
@@ -248,6 +284,7 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         screenReader = mergeReloaded(screenReader, base.optBoolean("a11y_screen_reader"), c.optBoolean("a11y_screen_reader"))
         guardianName = m(guardianName, "guardian_name"); guardianPhone = m(guardianPhone, "guardian_phone"); guardianEmail = m(guardianEmail, "guardian_email")
         school = m(school, "school"); vrCase = m(vrCase, "vr_case_number"); ipeGoal = m(ipeGoal, "ipe_goal")
+        ipeDate = m(ipeDate, "ipe_date"); ipeAmended = m(ipeAmended, "ipe_amended_on")
         val fresh = formSnapshot(c)
         smsConsent = mergeReloaded(smsConsent, base.optBoolean("_sms_agreed"), fresh.optBoolean("_sms_agreed"))
         smsSource = mergeReloaded(smsSource, base.optString("_sms_source"), fresh.optString("_sms_source"))
@@ -265,8 +302,11 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         Heading(if (id == 0) "Add a client" else "Edit " + (c.str("name") ?: "client"), large = true)
         NoticeText(notice)
         Field("Full name", name, { name = it }, required = true, error = fieldErrors["name"])
+        if (dupAsked) Tick("This is a different person", notDuplicate) { notDuplicate = it }
         Choice("Status", status, statuses.map { it to it }) { status = it }
-        if (statusChanged) Field("Reason for the status change", statusNote, { statusNote = it }, hint = if (status == "On Hold") "required for On Hold" else "kept in the history")
+        // 4.34.0: as the website, the label says it is required for On Hold (no extra hint line).
+        if (statusChanged) Field(if (status == "On Hold") "Reason for status change (required for On Hold)" else "Reason for status change (recorded in the history)",
+            statusNote, { statusNote = it }, error = fieldErrors["status_note"])
         if (closing) {
             Choice("Why the case is closed", reason, listOf("" to "Choose a reason") + reasons.map { it to it }, fieldErrors["reason"], required = true) { reason = it }
             if (reason == "Other") Field("Say why", reasonNote, { reasonNote = it })
@@ -288,7 +328,7 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         Choice("Client type", type, types.map { it to it }) { type = it }
         // As the website: only a Pre-ETS student has a school.
         if (type == "Pre-ETS") Field("School", school, { school = it })
-        Field("Date of birth", dob, { dob = it }, hint = "optional, year-month-day")
+        Field("Date of birth", dob, { dob = it }, hint = "optional, year-month-day", error = fieldErrors["dob"])
         // A new number needs the client's agreement again (the server clears it too).
         Field("Phone", phone, { phone = it; if (it.trim() != (c.str("phone") ?: "").trim()) smsConsent = false }, keyboard = KeyboardType.Phone)
         // Texts (4.17.0), as the website's client form: after STOP, only the client's START turns them back on.
@@ -317,6 +357,8 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         Field("Counselor phone", counselorPhone, { counselorPhone = it }, keyboard = KeyboardType.Phone)
         Field("VR case number", vrCase, { vrCase = it }, hint = "optional")
         Field("IPE employment goal", ipeGoal, { ipeGoal = it }, hint = "optional")
+        Field("IPE date", ipeDate, { ipeDate = it }, hint = "optional, year-month-day, today or earlier", error = fieldErrors["ipe_date"])
+        Field("IPE amended on", ipeAmended, { ipeAmended = it }, hint = "optional, year-month-day, today or earlier", error = fieldErrors["ipe_amended_on"])
         Heading("Accessibility")
         Choice("Preferred format", format, listOf("" to "Not set") + A11Y_FORMATS.map { it to it }) { format = it }
         Choice("Preferred contact", contact, listOf("" to "Not set") + A11Y_CONTACTS.map { it to it }) { contact = it }
@@ -338,10 +380,14 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
                 if (name.isBlank()) "name" to "Enter the client's full name." else null,
                 if (closing && reason.isEmpty()) "reason" to "Choose why the case is closed." else null,
                 if (usState.isEmpty() && stateRequired) "state" to "Choose the state the client lives in. It sets their time zone for reminders and texts." else null,
+                if (statusChanged && status == "On Hold" && statusNote.isBlank()) "status_note" to "Say why the client is going On Hold (for example, waiting for the authorization)." else null,
+                if (!pastOrToday(dob)) "dob" to "Date of birth: enter a real date as year-month-day, not in the future." else null,
+                if (!pastOrToday(ipeDate)) "ipe_date" to "IPE date: enter a valid date (YYYY-MM-DD), today or earlier." else null,
+                if (!pastOrToday(ipeAmended)) "ipe_amended_on" to "IPE amended on: enter a valid date (YYYY-MM-DD), today or earlier." else null,
             ).toMap()
             customErrors = customProblemsByField(customFields, custom, requireAnswers = id == 0)
             // 4.30.0: the summary lists every problem, in the form's order.
-            val all = errorSummary(listOf(fieldErrors["name"], fieldErrors["reason"], fieldErrors["state"]) + customErrors.values)
+            val all = errorSummary(listOf("name", "status_note", "reason", "dob", "state", "ipe_date", "ipe_amended_on").map { fieldErrors[it] } + customErrors.values)
             if (all != null) { error = all; return@PrimaryButton }
             scope.launchSave({ busy = it }, { error = it }) {
                 val b = JSONObject().put("id", id).put("name", name.trim()).put("status", status).put("client_type", type)
@@ -352,6 +398,7 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
                     .put("a11y_screen_reader", screenReader).put("a11y_notes", a11yNotes.trim())
                     .put("guardian_name", guardianName.trim()).put("guardian_phone", guardianPhone.trim()).put("guardian_email", guardianEmail.trim())
                     .put("vr_case_number", vrCase.trim()).put("ipe_goal", ipeGoal.trim())
+                    .put("ipe_date", ipeDate.trim()).put("ipe_amended_on", ipeAmended.trim())
                 if (type == "Pre-ETS") b.put("school", school.trim())
                 // A new client left on "Your own office" sends nothing, so the server gives them the creator's office.
                 if (offices.isNotEmpty() && (id > 0 || office.isNotEmpty())) b.put("office_id", office.toIntOrNull() ?: JSONObject.NULL)
@@ -374,13 +421,25 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
                     if (employed == "yes") b.put("closure_employer", employer.trim()).put("closure_job_title", jobTitle.trim())
                         .put("closure_job_start", jobStart.trim()).put("closure_hours", jobHours.trim()).put("closure_wage", wage.trim())
                 }
-                val r = if (id == 0) api.callOnce("save_client", b, idem, { idem = it }, "the new client") else {
+                // 4.34.0: a new client is checked for duplicates first (dup_check); a refusal shows
+                // "This is a different person", and ticking it sends not_duplicate (a new retry key follows
+                // from the changed body).
+                if (id == 0) { b.put("dup_check", 1); if (dupAsked && notDuplicate) b.put("not_duplicate", 1) }
+                val r = if (id == 0) try { api.callOnce("save_client", b, idem, { idem = it }, "the new client") } catch (e: ApiException) {
+                    if (duplicateRefusal(e.status, e.reply)) {
+                        dupAsked = true; notDuplicate = false
+                        fieldErrors = fieldErrors + ("name" to (e.message ?: ""))
+                    } else serverFieldErrors(e.reply, CLIENT_ERROR_FIELDS, e.message)?.let { fieldErrors = fieldErrors + it }
+                    throw e
+                } else {
                     base.str("updated_at")?.let { b.put("loaded_at", it) }
                     // 4.28.0: what the form opened with (the keys sent), so a 409 names only what the other person changed.
                     b.put("orig", openedValues(b, base))
                     try { api.call("save_client", body = b) } catch (e: ApiException) {
                         // The server names the fields someone else changed; Reload is offered next to the message.
                         if (e.status == 409 && e.reply?.optBoolean("conflict") == true) conflict = true
+                        // 4.34.0: a refused date or On Hold reason belongs to its field.
+                        else serverFieldErrors(e.reply, CLIENT_ERROR_FIELDS, e.message)?.let { fieldErrors = fieldErrors + it }
                         throw e
                     }
                 }
@@ -389,6 +448,7 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
                     if (r.optBoolean("unarchived")) "The archived record was reopened." else null,
                     when { r.isNull("survey_sent") || !r.has("survey_sent") -> null; r.optBoolean("survey_sent") -> "An outcome survey was emailed to the client."; else -> "No outcome survey was emailed." },
                     r.str("duplicate_warning"),
+                    r.str("advisory"),
                 ).joinToString(" ")
                 if (id == 0) { nav.popBackStack(); nav.navigate("client/${r.optInt("client_id")}") } else nav.popBackStack()
             }

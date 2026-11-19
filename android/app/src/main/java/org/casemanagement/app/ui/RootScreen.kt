@@ -44,6 +44,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -63,20 +66,74 @@ import org.casemanagement.app.Api
 
 /** Sign in, or the app: the tabs mirror the website's permission groups (the server enforces access either way). */
 @Composable
-fun RootScreen(api: Api) {
+fun RootScreen(api: Api, lock: org.casemanagement.app.AppLock? = null) {
     if (!api.isSignedIn && !api.reauthRequired) {
         LoginScreen(api)
         return
     }
-    // Another account starts from fresh screens; the same account signing back in keeps them.
-    androidx.compose.runtime.key(api.userId) { MainScreen(api) }
-    // Signing in person: above every screen until staff unlock the phone.
-    InPersonSigningHost(api)
-    if (api.reauthRequired) {
-        // Above the open screens, which stay as they were (a half-written note is kept).
-        androidx.compose.ui.window.Dialog(onDismissRequest = {}, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false)) {
-            LoginScreen(api, reauth = true)
+    // 4.34.0: behind the app lock the screens stay (a half-written note is kept) but are neither
+    // drawn nor reachable by TalkBack; the lock screen is a window above everything.
+    val hidden = lock?.locked == true
+    // Every dialog under the lock stays open (what was typed is kept) but shows nothing (LockAware.kt).
+    androidx.compose.runtime.CompositionLocalProvider(LocalAppLocked provides hidden) {
+        Box(Modifier.fillMaxSize().then(if (hidden) Modifier.alpha(0f).clearAndSetSemantics { } else Modifier)) {
+            // Another account starts from fresh screens; the same account signing back in keeps them.
+            androidx.compose.runtime.key(api.userId) { MainScreen(api) }
         }
+        // Signing in person: above every screen until staff unlock the phone (hidden too under the lock).
+        InPersonSigningHost(api)
+        if (api.reauthRequired) {
+            // Above the open screens, which stay as they were (a half-written note is kept).
+            androidx.compose.ui.window.Dialog(onDismissRequest = {}, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false)) {
+                LoginScreen(api, reauth = true)
+            }
+        }
+    }
+    if (lock != null) {
+        if (hidden) LockScreen(api, lock)
+        lock.noLockWarning?.let { w ->
+            androidx.compose.material3.AlertDialog(onDismissRequest = { lock.noLockWarning = null },
+                title = { Text("No screen lock", modifier = Modifier.semantics { heading() }) }, text = { Text(w) },
+                confirmButton = { androidx.compose.material3.TextButton(onClick = { lock.noLockWarning = null }) { Text("OK") } })
+        }
+    }
+}
+
+/**
+ * 4.34.0: the app lock's screen, a full window above every screen and dialog: TalkBack lands on
+ * "Client records are locked", then the Unlock button, which asks for the phone's own lock.
+ */
+@Composable
+private fun LockScreen(api: Api, lock: org.casemanagement.app.AppLock) {
+    var askSignOut by remember { mutableStateOf(false) }
+    val activity = androidx.compose.ui.platform.LocalContext.current.findActivity() as? androidx.fragment.app.FragmentActivity
+    val headingFocus = remember { FocusRequester() }
+    androidx.compose.ui.window.Dialog(onDismissRequest = {}, properties = androidx.compose.ui.window.DialogProperties(
+        usePlatformDefaultWidth = false, dismissOnBackPress = false, dismissOnClickOutside = false)) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize().verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                Text("Client records are locked", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
+                    modifier = Modifier.focusRequester(headingFocus).focusable().semantics { heading() })
+                Text("Unlock with this phone's fingerprint, face or screen lock.", textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
+                lock.problem?.let { p -> ErrorText(p) }
+                androidx.compose.material3.Button(onClick = { activity?.let { lock.authenticate(it) } },
+                    modifier = Modifier.padding(top = 16.dp).heightIn(min = 48.dp)) { Text("Unlock") }
+                // 4.34.0: the way out when the phone cannot check its own lock, in one sentence.
+                Text("If this phone cannot unlock the app, sign out and sign in again with your password and code; anything waiting to send stays on this phone.",
+                    textAlign = TextAlign.Center, modifier = Modifier.padding(top = 24.dp))
+                androidx.compose.material3.OutlinedButton(onClick = { askSignOut = true }, modifier = Modifier.padding(top = 8.dp).heightIn(min = 48.dp)) { Text("Sign out") }
+            }
+        }
+        // Inside the lock's window, so it shows above it.
+        if (askSignOut) Confirm("Sign out?", listOfNotNull(api.unsentSignaturesWarning,
+            "Open screens close, and you sign in again with your password and a code.").joinToString(" "), "Sign out",
+            { lock.signedOut(); api.signOut() }, { askSignOut = false })
+    }
+    // TalkBack starts on the heading (read once, as focus lands there); Unlock is the next stop.
+    LaunchedEffect(Unit) {
+        delay(300)
+        try { headingFocus.requestFocus() } catch (e: IllegalStateException) { /* not placed yet */ }
     }
 }
 
@@ -100,6 +157,8 @@ private fun MainScreen(api: Api) {
     // 4.31.0: a session's note says where you are: "Case note for Jane Doe, session on Oct 20".
     val sessionNote = (entry?.arguments?.getString("session")?.toIntOrNull() ?: 0) > 0
     val title = if (sessionNote) org.casemanagement.app.sessionNoteTitle(entry?.arguments?.getString("client"), entry?.arguments?.getString("subject"))
+        else if (route.startsWith("note/") && route.contains("/edit/")) "Edit case note"
+        else if (route.startsWith("note/") && route.contains("/addendum/")) "Add addendum"
         else titles[route.substringBefore('/')] ?: ""
     // Each screen opened, by its back stack entry (two clients are two screens, though one route).
     val entryKey = entry?.id ?: "home"
@@ -222,7 +281,7 @@ private val titles = mapOf(
     "home" to "Home", "clients" to "Clients", "client" to "Client", "note" to "Add a case note", "hours" to "Log hours",
     "schedule" to "Schedule", "tasks" to "Tasks", "more" to "More", "alerts" to "Alerts", "referrals" to "Referrals",
     "referral" to "Referral", "messages" to "Messages", "thread" to "Conversation", "account" to "My account", "offline" to "Offline entries",
-    "clientEdit" to "Client details", "track" to "Training track", "trackEdit" to "Track details", "newSession" to "Schedule a session",
+    "clientEdit" to "Client details", "track" to "Training track", "trackEdit" to "Track details", "report" to "Email the report", "newSession" to "Schedule a session",
     "equipment" to "Equipment", "followups" to "Device follow-ups", "docs" to "Documents and homework", "search" to "Search",
     "pipeline" to "Pipeline", "waitlist" to "Waitlist", "compliance" to "Compliance", "invoices" to "Invoices", "incidents" to "Incidents",
     "voice" to "Voice assistant", "clientAi" to "AI help", "aiTools" to "AI tools", "scored" to "Scored assessment", "scoredList" to "Scored assessments",
@@ -240,6 +299,8 @@ private val noteArgs = listOf("subject", "session", "client").map { name ->
     androidx.navigation.navArgument(name) { type = androidx.navigation.NavType.StringType; nullable = true; defaultValue = null }
 }
 
+private fun n0(e: androidx.navigation.NavBackStackEntry, k: String): Int = e.arguments?.getString(k)?.toIntOrNull() ?: 0
+
 @Composable
 private fun Graph(api: Api, nav: NavHostController) {
     NavHost(nav, startDestination = "home") {
@@ -252,6 +313,13 @@ private fun Graph(api: Api, nav: NavHostController) {
             AddNoteScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, 0,
                 it.arguments?.getString("session")?.toIntOrNull() ?: 0, it.arguments?.getString("subject") ?: "")
         }
+        // 4.34.0: editing a saved note, and an addendum to a locked one.
+        composable("note/{clientId}/edit/{noteId}") {
+            AddNoteScreen(api, nav, n0(it, "clientId"), editNoteId = n0(it, "noteId"))
+        }
+        composable("note/{clientId}/addendum/{noteId}") {
+            AddNoteScreen(api, nav, n0(it, "clientId"), addendumTo = n0(it, "noteId"))
+        }
         composable("hours/{clientId}/{trackId}") {
             LogHoursScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0)
         }
@@ -263,6 +331,7 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("referral/{id}") { ReferralScreen(api, nav, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
         composable("clientEdit/{id}") { ClientEditScreen(api, nav, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
         composable("track/{clientId}/{trackId}") { TrackScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0) }
+        composable("report/{clientId}/{trackId}") { SendReportScreen(api, nav, n0(it, "clientId"), n0(it, "trackId")) }
         composable("trackEdit/{clientId}/{trackId}") { TrackEditScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0) }
         composable("newSession") { NewSessionScreen(api, nav) }
         composable("equipment") { EquipmentScreen(api, nav) }
@@ -319,7 +388,10 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("agreement/{id}") { AgreementScreen(api, nav, n(it, "id")) }
         composable("agreementCopy/{id}") { AgreementCopyScreen(api, n(it, "id")) }
         composable("messages") { MessagesScreen(api, nav) }
-        composable("thread/{clientId}") { ThreadScreen(api, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0) }
+        // 4.34.0: opened on the channel with the unread messages.
+        composable("thread/{clientId}?channel={channel}", arguments = listOf(androidx.navigation.navArgument("channel") { type = androidx.navigation.NavType.StringType; nullable = true; defaultValue = null })) {
+            ThreadScreen(api, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("channel") ?: "client")
+        }
         composable("signatures/{clientId}") { SignaturesScreen(api, n(it, "clientId")) }
         composable("release/{clientId}") { ReleaseRequestScreen(api, nav, n(it, "clientId")) }
         composable("history/{clientId}") { StatusHistoryScreen(api, n(it, "clientId")) }

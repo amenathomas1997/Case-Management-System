@@ -4,6 +4,11 @@ struct SearchGroup: Decodable, Identifiable {
     var id: String { group }
     let group: String
     let items: [SearchHit]
+    /// More matched than the 25 shown (4.34.0); nil from an older server.
+    var capped: Bool?
+
+    /// "Notes (first 25 shown, more match)" when the server cut the group, as the website says it.
+    var heading: String { capped == true ? "\(group) (first \(items.count) shown, more match)" : group }
 }
 
 struct SearchHit: Decodable, Identifiable {
@@ -11,9 +16,11 @@ struct SearchHit: Decodable, Identifiable {
     let title: String
     let subtitle: String?
     let clientId: Int?
-    /// What `id` is: "client", "note", "referral" or "track" (nil from older servers, whose
-    /// hits all open the client).
+    /// What `id` is: "client", "note", "referral", "track", and (4.34.0) "goal", "document" or
+    /// "invoice" (nil from older servers, whose hits all open the client).
     let kind: String?
+    /// The goal's track (4.34.0), which a goal hit opens.
+    var trackId: Int?
 }
 
 struct SearchResponse: Decodable { let results: [SearchGroup] }
@@ -39,7 +46,7 @@ struct SearchView: View {
                 Text("No results for “\(query)”.").foregroundStyle(Color.secondaryText)
             }
             ForEach(groups) { group in
-                Section(group.group) {
+                Section(group.heading) {
                     ForEach(group.items) { hit in
                         // A referral has no client yet, and a track opens at the track itself.
                         if hit.kind == "referral" {
@@ -50,6 +57,14 @@ struct SearchView: View {
                             NavigationLink { SearchTrackView(trackId: hit.id, clientId: clientId) } label: {
                                 hitRow(hit)
                             }
+                        } else if hit.kind == "goal", let trackId = hit.trackId, trackId > 0, let clientId = hit.clientId {
+                            // A goal opens the track it belongs to.
+                            NavigationLink { SearchTrackView(trackId: trackId, clientId: clientId) } label: {
+                                hitRow(hit)
+                            }
+                        } else if hit.kind == "invoice" {
+                            // Invoices are worked on the Invoices screen: shown, not opened here.
+                            hitRow(hit)
                         } else if let clientId = hit.clientId {
                             NavigationLink(value: clientId) {
                                 hitRow(hit)
@@ -63,7 +78,7 @@ struct SearchView: View {
         }
         .navigationTitle("Search")
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "Clients, notes, referrals, tracks")
+                    prompt: "Clients, notes, referrals, tracks, goals")
         .onSubmit(of: .search) { Task { await run(submitted: true) } }
         .task { if !searched && groups.isEmpty && query.count >= 2 { await run() } }
         .onChange(of: query) { newValue in

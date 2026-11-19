@@ -25,7 +25,9 @@ function api_more(string $action, array $input, int $userId): ?array {
             $cf = array_map(fn($f) => ['id' => (int)$f['id'], 'label' => (string)$f['label'], 'hint' => (string)($f['hint'] ?? ''), 'type' => (string)$f['type'],
                 'options' => $f['type'] === 'yesno' ? ['Yes', 'No'] : custom_field_options($f), 'required' => (int)$f['required'] === 1, 'value' => ''], custom_fields_all(true));
             $offices = offices_on() ? array_map(fn($o) => ['id' => (int)$o['id'], 'name' => (string)$o['name']], offices_all(true)) : [];
-            return ['ok' => true, 'lists' => $lists, 'custom_fields' => $cf, 'offices' => $offices];
+            // The administrator's time limits the forms start from (4.34.0): a loan's return date.
+            return ['ok' => true, 'lists' => $lists, 'custom_fields' => $cf, 'offices' => $offices,
+                'numbers' => ['loan_due_days' => (int)cms_number('loan_due_days')]];
         }
         // Staff agreements (4.15.0): this person's own, to read and sign by typing their name.
         case 'agreements': {
@@ -45,7 +47,8 @@ function api_more(string $action, array $input, int $userId): ?array {
             [$sid, $err, $changed] = staff_agreement_sign($userId, (int)($input['id'] ?? 0), is_string($input['signed_name'] ?? null) ? $input['signed_name'] : '',
                 (int)($input['version'] ?? 0), $via, is_string($input['text_hash'] ?? null) ? $input['text_hash'] : '');
             // A change while it was open is 409, so the app reloads the agreement before asking again.
-            if ($err !== null) return ['ok' => false, 'error' => $err, 'status' => $changed ? 409 : 422];
+            // A refused name (4.34.0) is tied to the name field; a change while it was open is not.
+            if ($err !== null) return ['ok' => false, 'error' => $err, 'status' => $changed ? 409 : 422] + ($changed ? [] : ['errors' => ['signed_name' => $err]]);
             return ['ok' => true, 'signature_id' => $sid, 'message' => 'Signed. A copy is kept with your account, and you are asked again in a year or if the text changes.'];
         }
         case 'agreement_copy': {
@@ -116,11 +119,12 @@ function api_more(string $action, array $input, int $userId): ?array {
             $q = db()->prepare("SELECT i.id, i.invoice_number, i.created_at FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id WHERE i.id = ? AND i.status = 'Draft'" . ($scoped ? ' AND c.assigned_to = ?' : ''));
             $q->execute($scoped ? [$id, $userId] : [$id]);
             $inv = $q->fetch();
-            if (!$inv) return ['ok' => false, 'error' => 'That invoice is no longer a draft, or is not on your caseload.', 'status' => 409];
+            if (!$inv) return ['ok' => false, 'error' => 'That invoice is no longer a draft, or is not on your caseload.', 'changed' => true, 'status' => 409];
             $raw = trim((string)($input['submitted_on'] ?? ''));
             $on = $raw === '' ? date('Y-m-d') : billing_date_in($raw, (string)$inv['created_at']);
-            if ($on === null) return ['ok' => false, 'error' => 'The date sent must be from the day the invoice was created to today.', 'status' => 422];
-            if (!invoice_submit($id, $on)) return ['ok' => false, 'error' => 'That invoice was changed meanwhile.', 'status' => 409];
+            if ($on === null) return ['ok' => false, 'error' => 'The date sent must be from the day the invoice was created to today.', 'status' => 422,
+                'errors' => ['submitted_on' => 'The date sent must be from the day the invoice was created to today.']];
+            if (!invoice_submit($id, $on)) return ['ok' => false, 'error' => 'That invoice was changed meanwhile.', 'changed' => true, 'status' => 409];
             audit($userId, 'invoice.submit', 'invoice', $id, 'submitted ' . $on . ' (app)');
             return ['ok' => true, 'submitted_on' => $on, 'due_date' => (string)db()->query('SELECT due_date FROM invoices WHERE id = ' . $id)->fetchColumn()];
         }

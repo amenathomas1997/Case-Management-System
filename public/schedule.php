@@ -81,12 +81,7 @@ function schedule_short_name(string $n): string {
     return count($parts) < 2 ? trim($n) : $parts[0] . ' ' . mb_substr(end($parts), 0, 1) . '.';
 }
 
-/** The work log text for a completed session. A sitting of a group says so, however
- *  it is completed: the invoice line is the only place a group service shows. */
-function schedule_log_description(array $sess): string {
-    if (!empty($sess['group_uid'])) return 'Group session' . ($sess['notes'] ? ': ' . $sess['notes'] : '');
-    return 'Training session' . ($sess['notes'] ? ': ' . $sess['notes'] : '') . ($sess['location'] ? ' (' . $sess['location'] . ')' : '');
-}
+// schedule_log_description() is in inc/session_changes.php (4.34.0), shared with the app's API and voice.
 
 /** Unbilled hours already logged on the session's track for the session's day that no
  *  session is linked to. Voice, the app and the track page log hours without closing
@@ -111,14 +106,7 @@ function schedule_auth_approved(string $p, array $warnings): bool {
     $posted = $_POST[$p . 'authorization_hash'] ?? null;
     return ($_POST[$p . 'authorization_ack'] ?? '') === '1' && is_string($posted) && hash_equals(schedule_auth_hash($warnings), $posted);
 }
-/** The approval message beside the booking warnings (4.30.0). It is called an authorization
- *  review only when a track's authorization raised one; a double booking or a busy Outlook
- *  calendar alone is a plain check. It names the box without saying where it is, because the
- *  same words are read in the error summary at the top and beside the box. */
-function schedule_review_message(bool $authorization, array $lines, bool $group = false): string {
-    return ($authorization ? 'Authorization review: ' : 'Check before booking: ') . implode(' ', $lines)
-        . ' Review the ' . ($group ? 'tracks' : 'track') . ' and the calendar, then tick "I reviewed these warnings" if this booking is still appropriate.';
-}
+// schedule_review_message() is in inc/session_changes.php (4.34.0), shared with the app's API.
 
 /**
  * Tell each session's instructor when someone else cancels it or records a No Show:
@@ -237,7 +225,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_group_session']))
     $gAuthorization = (bool)$authLines;
     // The instructor's Outlook calendar (4.20.0), approved with the rest.
     if (!$errors && $f['staff'] && function_exists('calendar_busy_overlaps') && calendar_busy_overlaps((int)$f['staff']['id'], $f['start'], $f['end'])) {
-        $authLines[] = $f['staff']['name'] . '\'s Outlook calendar shows them busy then.';
+        $authLines[] = $f['staff']['name'] . '\'s calendar shows them busy then.';
     }
     // The instructor's own sessions at that time (4.29.0), approved with the rest; read again
     // under the instructor's lock below, so a booking made meanwhile is seen.
@@ -524,7 +512,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
     if (!$errors && $f['staff'] && function_exists('calendar_busy_overlaps')) {
         $busyDays = [];
         foreach ($occurrences as [$s0, $e0]) if (calendar_busy_overlaps((int)$f['staff']['id'], $s0, $e0)) $busyDays[] = date('D, M j g:i A', $s0);
-        if ($busyDays) $authWarnings[] = $f['staff']['name'] . '\'s Outlook calendar shows them busy then (' . implode('; ', array_slice($busyDays, 0, 5)) . (count($busyDays) > 5 ? '; and ' . (count($busyDays) - 5) . ' more' : '') . ').';
+        if ($busyDays) $authWarnings[] = $f['staff']['name'] . '\'s calendar shows them busy then (' . implode('; ', array_slice($busyDays, 0, 5)) . (count($busyDays) > 5 ? '; and ' . (count($busyDays) - 5) . ' more' : '') . ').';
     }
     // The instructor's own sessions at those times (4.29.0), approved with the rest; read again
     // under the instructor's lock below, so a booking made meanwhile is seen.
@@ -892,7 +880,7 @@ $scopeAnd = $scoped ? ' AND c.assigned_to = ?' : '';
 $scopeParams = $scoped ? [(int)$user['id']] : [];
 
 // Open cases that can be scheduled: every open status but Waitlist, including added ones (4.11.0).
-$bookable = array_values(array_diff(client_open_statuses(), ['Waitlist']));
+$bookable = schedule_bookable_statuses();
 $cq = db()->prepare('SELECT id, name FROM clients c WHERE status IN (' . implode(',', array_fill(0, count($bookable), '?')) . ')' . $scopeAnd . ' ORDER BY name');
 $cq->execute(array_merge($bookable, $scopeParams));
 $clients = $cq->fetchAll();
@@ -1165,7 +1153,7 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
       <div class="field"><label for="duration">Duration (hours) <?= required_mark() ?></label>
         <input type="number" id="duration" name="duration" step="0.25" min="0.25" max="12" required value="<?= h(old_in('duration', '1.5')) ?>" <?= field_aria('duration') ?>><?= field_error('duration') ?></div>
       <div class="field"><label for="repeat_weeks">Repeat weekly <span class="hint">1 = single session; e.g., 8 = every week for 8 weeks</span></label>
-        <input type="number" id="repeat_weeks" name="repeat_weeks" min="1" max="52" value="<?= h(old_in('repeat_weeks', '1')) ?>" <?= field_aria('repeat_weeks') ?>><?= field_error('repeat_weeks') ?></div>
+        <input type="number" id="repeat_weeks" name="repeat_weeks" min="1" max="26" value="<?= h(old_in('repeat_weeks', '1')) ?>" <?= field_aria('repeat_weeks') ?>><?= field_error('repeat_weeks') ?></div>
       <div class="field"><label for="location">Location</label>
         <input type="text" id="location" name="location" maxlength="190" value="<?= h(old_in('location')) ?>" <?= field_aria('location') ?>><?= field_error('location') ?></div>
       <div class="field"><label for="notes">Notes</label>

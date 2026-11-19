@@ -564,6 +564,15 @@ function voice_execute(string $do, array $in, array $user): array {
             db()->beginTransaction();
             try {
                 session_lock_instructor($uid);
+                // The client next, then the website's check (schedule.php, 4.34.0): the same session
+                // already on the schedule is never added twice.
+                db()->prepare('SELECT id FROM clients WHERE id = ? FOR UPDATE')->execute([$cid]);
+                $dupQ = db()->prepare("SELECT 1 FROM scheduled_sessions WHERE client_id = ? AND user_id = ? AND start_at = ? AND status = 'Scheduled' LIMIT 1");
+                $dupQ->execute([$cid, $uid, date('Y-m-d H:i:s', $start)]);
+                if ($dupQ->fetchColumn()) {
+                    db()->rollBack();
+                    return ['ok' => false, 'error' => 'That session is already on the schedule (' . voice_client_name($cid) . ' with ' . $staff['name'] . ', ' . date('D, M j, Y g:i A', $start) . '), so it was not added again.'];
+                }
                 $overlaps = session_instructor_overlaps($uid, (string)$staff['name'], [[$start, $end]], [$cid]);
                 if ($overlaps) {
                     db()->rollBack();
@@ -577,7 +586,7 @@ function voice_execute(string $do, array $in, array $user): array {
                 if (db()->inTransaction()) db()->rollBack();
                 throw $e;
             }
-            audit($uid, 'session.add', 'client', $cid, 'voice');
+            audit($uid, 'session.schedule', 'client', $cid, 'single session (voice)');
             client_session_notice([$sessionId], 'booked'); // 3.0.41: the client's calendar invite
             // As on the website and in the app, the instructor (the speaker) is emailed a
             // calendar invite. The session is already saved: a failed invite is only said.
@@ -839,7 +848,7 @@ function voice_execute(string $do, array $in, array $user): array {
                 // group says so, as on the website.
                 if ($hours > 0) {
                     $logId = auto_log_session((int)$sess['track_id'], date('Y-m-d', strtotime($sess['start_at'])), $hours,
-                        (!empty($sess['group_uid']) ? 'Group session' : 'Session') . ($sess['notes'] ? ': ' . $sess['notes'] : ''), (int)$sess['user_id'], $authIssue);
+                        schedule_log_description($sess), (int)$sess['user_id'], $authIssue);
                     db()->prepare('UPDATE scheduled_sessions SET work_log_id = ? WHERE id = ?')->execute([$logId, $sid]);
                 }
                 db()->commit();
@@ -851,7 +860,7 @@ function voice_execute(string $do, array $in, array $user): array {
                 if (db()->inTransaction()) db()->rollBack();
                 return voice_write_failed($e);
             }
-            audit($uid, 'session.complete', 'client', (int)$sess['client_id'], 'voice');
+            audit($uid, 'session.complete', 'session', $sid, 'voice');
             // Its case note is to be written (4.31.0): marked, with a task for the instructor, and
             // the link goes to the full note editor for it when the user writes notes.
             sessnote_mark_pending($sid, $uid);

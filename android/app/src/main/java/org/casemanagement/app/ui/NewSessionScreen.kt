@@ -3,7 +3,6 @@ package org.casemanagement.app.ui
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -42,6 +41,13 @@ fun time24(s: String): String? {
 }
 
 /**
+ * 4.34.0: the clients a session can be booked for: the server's bookable flag (open and not on the
+ * waitlist, as the website); an older server without it keeps the old rule (not Closed).
+ */
+fun bookableFilter(rows: List<JSONObject>): List<JSONObject> =
+    rows.filter { if (it.has("bookable")) it.optBoolean("bookable") else !it.optString("status").startsWith("Closed") }
+
+/**
  * Schedule a session (once, or weekly), as on the website: client, track, instructor, date, time,
  * length, place or online meeting. Authorization warnings are shown and must be approved. Times
  * are the organisation's time zone, as on the website.
@@ -51,7 +57,7 @@ fun NewSessionScreen(api: Api, nav: NavHostController) {
     val choices = rememberLoaded(api.userId) {
         val clients = try { api.call("client_choices").optJSONArray("clients").objects() } catch (e: ApiException) {
             if (e.status == 404) api.call("clients").optJSONArray("clients").objects() else throw e
-        }.filter { !it.optString("status").startsWith("Closed") }
+        }.let { bookableFilter(it) }
         val tracks = if (api.can("clients")) api.call("tracks").optJSONArray("tracks").objects() else emptyList()
         val staff = if (api.scoped) emptyList() else try { api.call("staff").optJSONArray("staff").objects() } catch (e: ApiException) { emptyList() }
         Triple(clients, tracks, staff)
@@ -73,6 +79,7 @@ fun NewSessionScreen(api: Api, nav: NavHostController) {
         // 4.27.0: the server's hash of the warnings shown; approving sends it back, so it covers exactly those.
         var warningsHash by remember { mutableStateOf<String?>(null) }
         var error by remember { mutableStateOf<String?>(null) }
+        var info by remember { mutableStateOf<String?>(null) }
         // 4.28.0: each problem on its own field too (the summary above Save stays).
         var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
         var busy by remember { mutableStateOf(false) }
@@ -94,17 +101,20 @@ fun NewSessionScreen(api: Api, nav: NavHostController) {
             Field("Repeat weekly for this many weeks", weeks, { weeks = it; changed() }, hint = "1 for a single session", keyboard = KeyboardType.Number, error = fieldErrors["weeks"], required = true)
             Tick("Remote or telepractice session", remote) { remote = it }
             if (remote) Field("Meeting link", link, { link = it }, hint = "https://…, optional", keyboard = KeyboardType.Uri, error = fieldErrors["link"])
-            else Field("Location", location, { location = it }, hint = "optional")
+            // 4.34.0: a remote session keeps its location too (where the client joins from), as on the website.
+            Field("Location", location, { location = it }, hint = "optional")
             Field("Notes", notes, { notes = it }, hint = "optional")
             if (warnings.isNotEmpty()) {
                 Heading("Authorization review")
                 warnings.forEach { ListRow(listOf(it)) }
                 Tick("I reviewed these authorization warnings and approve booking despite them", approved) { approved = it }
             }
+            NoticeText(info)
             ErrorText(error, focusKey = presses)
             PrimaryButton("Schedule and send the invite", busy = busy) {
                 if (busy) return@PrimaryButton
                 presses++
+                info = null
                 val t = time24(time); val d = number(duration); val w = weeks.trim().toIntOrNull()
                 fieldErrors = listOfNotNull(
                     if (client.isEmpty()) "client" to "Choose a client." else null,
@@ -121,7 +131,7 @@ fun NewSessionScreen(api: Api, nav: NavHostController) {
                     try {
                         val b = JSONObject().put("client_id", client.toInt()).put("track_id", track.toInt()).put("staff_id", who.toInt())
                             .put("date", date.trim()).put("time", t).put("duration", d).put("repeat_weeks", w)
-                            .put("location", if (remote) "" else location.trim()).put("notes", notes.trim())
+                            .put("location", location.trim()).put("notes", notes.trim())
                             .put("is_remote", if (remote) 1 else 0).put("authorization_ack", approved)
                         if (remote && link.isNotBlank()) b.put("meeting_url", link.trim())
                         if (approved) warningsHash?.let { b.put("authorization_ack_hash", it) }
@@ -138,7 +148,13 @@ fun NewSessionScreen(api: Api, nav: NavHostController) {
                             warnings = shown
                             warningsHash = e.reply?.str("authorization_hash")
                             error = "Check the authorization warnings below, then approve and schedule again."
-                        } else error = e.message
+                        } else if (e.status == 409 && e.reply?.optBoolean("duplicate") == true) {
+                            // 4.34.0: it is already booked, so this is information, not a failure.
+                            error = null; info = e.message
+                        } else {
+                            serverFieldErrors(e.reply)?.let { m -> fieldErrors = m.mapKeys { (k, _) -> if (k == "client_id") "client" else k } }
+                            error = e.message
+                        }
                     }
                 }
             }

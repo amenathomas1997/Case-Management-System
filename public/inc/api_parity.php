@@ -183,6 +183,9 @@ function parity_consent_state(int $clientId): array {
         'withdrawn_at' => $consentWithdrawn ? $latestSigned['withdrawn_at'] : null,
         'expires' => $consentExpires,
         'pending_sent_at' => $pendingConsent['sent_at'] ?? null,
+        // The newest unsigned request's id (4.34.0), sent back as consent_seen so a request
+        // a colleague sent since is never replaced unseen; 0 when none is waiting.
+        'pending_id' => $pendingConsent ? (int)$pendingConsent['id'] : 0,
         'can_request' => $canRequest,
         // The page's summary wording for the request form.
         'request_label' => $pendingConsent ? 'Resend the guardian consent request by email'
@@ -203,14 +206,30 @@ function parity_track_choices(array $client, ?array $track): array {
         array_unshift($bundles, ['id' => (int)$kept['id'], 'name' => $kept['name'] . ' (' . ($kept['active'] ? 'not offered for ' . $clientType . ' clients' : 'retired') . ' — kept on this track until you choose another)',
             'categories' => bundle_categories($kept), 'available' => false]);
     }
+    $serviceTypes = cms_choices('service_types', $track['service_type'] ?? null);
+    // The RSA category each service type starts with (4.34.0), as the website's form moves it.
+    $rsaDefaults = [];
+    foreach ($serviceTypes as $st) $rsaDefaults[(string)$st] = rsa_default_for((string)$st);
     return [
-        'service_types' => cms_choices('service_types', $track['service_type'] ?? null),
+        'service_types' => $serviceTypes,
         'statuses' => TRACK_STATUSES,
         'cadences' => report_cadence_options($track['report_cadence'] ?? null),
         'rsa_categories' => rsa_all_categories(),
         'bundles' => $bundles,
         'client_type' => $clientType,
+        // Who pays (4.34.0): the website's three choices, the personal rate a Private pay track
+        // starts at, and for a new track the form's starting values (track_edit.php).
+        'billing_modes' => array_map(fn($v, $l) => ['value' => $v, 'label' => $l], array_keys(BILLING_MODES), array_values(BILLING_MODES)),
+        'private_rate' => number_format((float)billing_settings()['private_rate'], 2, '.', ''),
+        'rsa_defaults' => (object)$rsaDefaults,
+        'defaults' => $track ? null : track_new_defaults((int)($client['id'] ?? 0)),
     ];
+}
+
+/** Money typed as "$4,500" or "4 500.00" (4.34.0, as track_edit.php): the dollar sign, spaces and
+ *  thousands commas are dropped before the number is checked. Anything else is left as sent. */
+function parity_money_text($raw) {
+    return is_string($raw) ? str_replace(['$', ',', ' '], '', trim($raw)) : $raw;
 }
 
 /** A training track's editable values as the app's form reads them. */
@@ -230,7 +249,7 @@ function parity_track_norm(array $src, string $f): string {
     if ($f === 'bundle_id') return (string)(int)$v;
     if ($f === 'billing_mode') return $v === '' ? 'vr' : $v;
     if (in_array($f, ['authorized_hours', 'hourly_rate', 'authorized_amount', 'mileage_rate'], true)) {
-        $v = str_replace([',', '$'], '', $v);
+        $v = str_replace([',', '$', ' '], '', $v);
         if ($v === '' || !is_numeric($v)) return $v;
         return number_format(round((float)$v, $f === 'mileage_rate' ? 3 : 2), $f === 'mileage_rate' ? 3 : 2, '.', '');
     }
@@ -443,7 +462,7 @@ case 'mark_notifications_read': {
     $left = (int)$left->fetchColumn();
     out(['ok' => true, 'marked' => $marked, 'unread' => $left,
         'message' => $marked . ' alert' . ($marked === 1 ? '' : 's') . ' marked as read.'
-            . ($left ? ' ' . $left . ' unread alert' . ($left === 1 ? ' remains.' : 's remain.') : '')]);
+            . ($left ? ' ' . $left . ' more unread alert' . ($left === 1 ? ' is' : 's are') . ' listed now.' : '')]);
 }
 
 /* ---------- Client self-service requests (portal_requests.php) ---------- */
@@ -505,6 +524,9 @@ case 'portal_request_update': {
         db()->prepare('UPDATE portal_requests SET status = ?, handled_by = ?, outcome = COALESCE(?, outcome) WHERE id = ?')->execute([$to, $userId, $outcome !== '' ? $outcome : null, $id]);
         if (in_array($to, $closed, true)) {
             complete_task_by_key('preq-' . $id, $userId);
+            // Times still offered on it are withdrawn, as portal_requests.php does (4.34.0): the
+            // client can no longer pick one, and reopening the request never revives them.
+            db()->prepare("UPDATE portal_request_offers SET status = 'Withdrawn' WHERE request_id = ? AND status = 'Offered'")->execute([$id]);
         } elseif (in_array($row['status'], $closed, true)) {
             $owner = db()->prepare('SELECT u.id FROM clients c JOIN users u ON u.id = c.assigned_to AND u.is_active = 1 WHERE c.id = ?');
             $owner->execute([(int)$row['client_id']]);
@@ -549,6 +571,7 @@ case 'save_track': {
     }
 
     $errors = [];
+    foreach (['authorized_amount', 'hourly_rate'] as $moneyKey) if (array_key_exists($moneyKey, $input)) $input[$moneyKey] = parity_money_text($input[$moneyKey]);
     $title = trim((string)($input['title'] ?? ''));
     $authNumber = trim((string)($input['auth_number'] ?? ''));
     $agency = agency_canonical((string)($input['funding_agency'] ?? ''));
@@ -647,6 +670,9 @@ case 'save_track': {
         $newTrackId = (int)db()->lastInsertId();
         track_mark_ended($newTrackId, $status);
         audit($userId, 'track.create', 'track', $newTrackId, $title . ' (auth ' . $authNumber . ')');
+        // Started from an authorization email (4.34.0, as track_edit.php): the email is marked handled.
+        $incAuth = (int)($input['incoming_auth'] ?? 0);
+        if ($incAuth > 0) incoming_authorization_handled($incAuth, 'Track created', $newTrackId, $userId, $clientId);
         out(['ok' => true, 'id' => $newTrackId, 'message' => 'Training track created.' . $pricingNote]);
     }
 
@@ -734,6 +760,12 @@ case 'save_track': {
                     $authNoChanged ? $track['auth_number'] : null, $authNoChanged ? $authNumber : null,
                     $mileageChanged ? $track['mileage_rate'] : null, $mileageChanged ? $mileageRate : null,
                     $reason !== '' ? $reason : null, $userId]);
+            // Entered from an approved amendment request (4.34.0, as track_edit.php): the two are linked.
+            $amendReq = (int)($input['amend_request'] ?? 0);
+            if ($amendReq > 0) {
+                db()->prepare("UPDATE amendment_requests SET amendment_id = ? WHERE id = ? AND track_id = ? AND status IN ('Approved','Partly approved') AND amendment_id IS NULL")
+                    ->execute([(int)db()->lastInsertId(), $amendReq, $id]);
+            }
         }
         if ($expChanged) {
             db()->prepare("DELETE FROM sent_alerts WHERE track_id = ? AND alert_key LIKE 'exp%'")->execute([$id]);
@@ -839,7 +871,7 @@ case 'request_consent': {
             if ($newest && (int)$newest['id'] !== (int)$seen) {
                 $pdo->rollBack();
                 out(['ok' => false, 'error' => 'A consent form was already emailed to ' . $newest['guardian_name'] . ' at ' . fmt_datetime($newest['sent_at'])
-                    . ' (from another device, or by a colleague), so this one was not sent, and that link still works. Refresh, then send again if a new one is needed.'], 409);
+                    . ' (from another device, or by a colleague), so this one was not sent, and that link still works. Refresh, then send again if a new one is needed.', 'consent_changed' => true], 409);
             }
         }
         $pdo->prepare('INSERT INTO consent_forms (client_id, guardian_name, guardian_email, token) VALUES (?,?,?,?)')
@@ -888,7 +920,7 @@ case 'consents_due': {
     $today = date('Y-m-d');
     $soon = date('Y-m-d', strtotime('+30 days'));
     $validDays = (int)(setting('consent_validity_days') ?: 365);
-    $cf = db()->prepare("SELECT c.id AS cid, c.name AS client,
+    $cf = db()->prepare("SELECT c.id AS cid, c.name AS client, c.dob,
             s.guardian_name AS signed_guardian, s.signed_at, s.withdrawn_at,
             p.guardian_name AS pending_guardian, p.sent_at AS pending_sent_at
         FROM clients c
@@ -900,11 +932,21 @@ case 'consents_due': {
     $cf->execute($scopeArg);
     $consentRisk = [];
     $unsignedBefore = date('Y-m-d', strtotime('-14 days'));
+    // 4.34.0, as compliance.php (4.29.0): the date a client turned 18, once it has passed, or null:
+    // a guardian's consent signed before then no longer speaks for the client.
+    $adultSince = function (?string $dob) use ($today): ?string {
+        if (!$dob || strtotime($dob) === false) return null;
+        $d = date('Y-m-d', strtotime($dob . ' +18 years'));
+        return $d <= $today ? $d : null;
+    };
     foreach ($cf->fetchAll() as $f) {
         $f['kind'] = null;
+        $adult = $adultSince($f['dob'] ?? null);
         $f['guardian_name'] = $f['signed_at'] ? $f['signed_guardian'] : $f['pending_guardian'];
         if ($f['signed_at'] && $f['withdrawn_at']) {
             $f['kind'] = 'Withdrawn'; $f['when'] = substr($f['withdrawn_at'], 0, 10);
+        } elseif ($f['signed_at'] && $adult !== null && substr($f['signed_at'], 0, 10) < $adult) {
+            $f['kind'] = 'Adult'; $f['when'] = $adult;
         } elseif ($f['signed_at']) {
             $exp = date('Y-m-d', strtotime($f['signed_at'] . ' +' . $validDays . ' days'));
             if ($exp <= $soon) { $f['kind'] = $exp < $today ? 'Expired' : 'Expiring'; $f['when'] = $exp; }
@@ -913,14 +955,14 @@ case 'consents_due': {
         }
         if ($f['kind'] !== null) $consentRisk[] = $f;
     }
-    $noConsent = fn(array $f): int => in_array($f['kind'], ['Expired', 'Withdrawn'], true) ? 0 : 1;
+    $noConsent = fn(array $f): int => in_array($f['kind'], ['Expired', 'Withdrawn', 'Adult'], true) ? 0 : 1;
     usort($consentRisk, fn($a, $b) => [$noConsent($a), $a['when']] <=> [$noConsent($b), $b['when']]);
     $items = [];
     foreach ($consentRisk as $f) {
         $items[] = ['client_id' => (int)$f['cid'], 'client' => (string)$f['client'], 'guardian_name' => (string)($f['guardian_name'] ?? ''),
-            'kind' => $f['kind'], 'label' => $f['kind'] === 'Unsigned' ? 'Not signed' : $f['kind'], 'date' => substr((string)$f['when'], 0, 10),
+            'kind' => $f['kind'], 'label' => $f['kind'] === 'Unsigned' ? 'Not signed' : ($f['kind'] === 'Adult' ? 'Signed by a guardian before the client turned 18' : $f['kind']), 'date' => substr((string)$f['when'], 0, 10),
             'pending_sent_at' => $f['kind'] !== 'Unsigned' && $f['pending_sent_at'] ? substr((string)$f['pending_sent_at'], 0, 10) : null,
-            'action' => $f['pending_sent_at'] ? 'Resend consent request' : ($f['kind'] === 'Withdrawn' ? 'Request new consent' : 'Renew consent')];
+            'action' => $f['pending_sent_at'] ? 'Resend consent request' : ($f['kind'] === 'Withdrawn' ? 'Request new consent' : ($f['kind'] === 'Adult' ? 'Request the client\'s own consent' : 'Renew consent'))];
     }
     out(['ok' => true, 'consents' => $items, 'validity_days' => $validDays]);
 }

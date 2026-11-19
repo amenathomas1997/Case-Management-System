@@ -3,6 +3,8 @@ import SwiftUI
 struct ClientsView: View {
     @EnvironmentObject var api: API
     @State private var clients: [ClientRow] = []
+    /// How many clients matched in all (4.34.0), for "first 200 of N".
+    @State private var total: Int?
     @State private var search = ""
     @State private var error: String?
     @State private var loaded = false
@@ -39,8 +41,11 @@ struct ClientsView: View {
                         }
                     }
                 }
-                // The server sends at most 200 clients.
-                if clients.count >= 200 {
+                // The server sends at most 200 clients; it says how many matched (4.34.0).
+                if let total, total > clients.count {
+                    Text("Showing the first \(clients.count) of \(total) clients. Search to find others.")
+                        .font(.callout).foregroundStyle(Color.secondaryText)
+                } else if total == nil && clients.count >= 200 {
                     Text("Showing the first 200 clients. Search by name to find others.")
                         .font(.callout).foregroundStyle(Color.secondaryText)
                 }
@@ -97,6 +102,7 @@ struct ClientsView: View {
             }
             guard q == search else { return } // a newer keystroke superseded this request
             clients = response.clients
+            total = response.total
             loaded = true
             offlineSince = savedAt
             // Focus stays in the search field, so the outcome of a search is spoken.
@@ -202,6 +208,18 @@ struct ClientDetailView: View {
             }
     }
 
+    /// The client type (with the school for Pre-ETS) and date of birth (4.34.0), as the website shows them.
+    @ViewBuilder
+    private func clientTypeAndBirth(_ c: ClientInfo) -> some View {
+        if let type = c.clientType, !type.isEmpty {
+            let school = (c.school ?? "").trimmingCharacters(in: .whitespaces)
+            LabeledContent("Client type", value: type == "Pre-ETS" && !school.isEmpty ? "\(type) · \(school)" : type)
+        }
+        if let dob = c.dob, !dob.isEmpty {
+            LabeledContent("Date of birth", value: formatDate(dob))
+        }
+    }
+
     /// Where the client lives and their office (4.25.0), as the website's client page shows them.
     @ViewBuilder
     private func placeAndOffice(_ detail: ClientDetail) -> some View {
@@ -226,6 +244,7 @@ struct ClientDetailView: View {
             if let detail {
                 Section("Contact") {
                     LabeledContent("Status", value: detail.client.status)
+                    clientTypeAndBirth(detail.client)
                     placeAndOffice(detail)
                     if let phone = detail.client.phone, !phone.isEmpty {
                         // A stored number that can't be dialled is still shown, as plain text.
@@ -773,6 +792,13 @@ struct AddNoteSheet: View {
     let existing: Note?
     /// A new note written as an addendum to this (locked) note.
     var addendumTo: Note? = nil
+    /// The note being edited locked before the edit was saved (4.34.0): the form became an
+    /// addendum to it, keeping what was typed, as the website does.
+    @State private var lockedParent: Note?
+    /// The note being edited (nil once it became an addendum).
+    private var editNote: Note? { lockedParent == nil ? existing : nil }
+    /// The note a new addendum is to: the locked edit's note, or the one it opened for.
+    private var addendumParent: Note? { lockedParent ?? addendumTo }
     /// 4.31.0: the case note for a completed session, opened straight after the completion. The
     /// subject it starts with ("Session on Oct 20"), the session it is linked to (sent with
     /// add_note as session_id), the line saying where the person is ("Case note for Jane Doe,
@@ -828,11 +854,11 @@ struct AddNoteSheet: View {
     /// offline or discarded.
     private var draftKey: String {
         if let sessionId { return "note-\(clientId)-session-\(sessionId)" }
-        return addendumTo.map { "note-\(clientId)-addendum-\($0.id)" } ?? "note-\(clientId)"
+        return addendumParent.map { "note-\(clientId)-addendum-\($0.id)" } ?? "note-\(clientId)"
     }
 
     private func saveDraft() {
-        guard existing == nil else { return }
+        guard editNote == nil else { return }
         var fields = ["subject": subject, "body": body_,
                       "sec1": sections[0], "sec2": sections[1], "sec3": sections[2], "sec4": sections[3]]
         // The type and format travel only with text: a draft with nothing typed is removed.
@@ -859,7 +885,7 @@ struct AddNoteSheet: View {
     }
 
     private func clearDraft() {
-        if existing == nil { DraftStore.clear(key: draftKey, owner: api.userId) }
+        if editNote == nil { DraftStore.clear(key: draftKey, owner: api.userId) }
     }
 
     private var activeTracks: [Track] { tracks.filter { $0.status == "Active" } }
@@ -874,7 +900,7 @@ struct AddNoteSheet: View {
 
     /// Anything typed, dictated or generated that closing the sheet would throw away.
     private var hasChanges: Bool {
-        if let opened = existing.map({ loadedNote ?? $0 }) {
+        if let opened = editNote.map({ loadedNote ?? $0 }) {
             let existing = opened
             let saved = existing.sections?.count == 4 ? existing.sections! : ["", "", "", ""]
             // Every field update_note saves, against what onAppear filled in from the note.
@@ -886,7 +912,7 @@ struct AddNoteSheet: View {
     }
 
     /// The subject an addendum starts with.
-    private var addendumSubject: String { addendumTo.map { String("Addendum: \($0.subject)".prefix(255)) } ?? "" }
+    private var addendumSubject: String { addendumParent.map { String(addendumSubjectFor($0.subject).prefix(255)) } ?? "" }
 
     private func cleanup() async {
         aiBusy = true; error = nil
@@ -992,14 +1018,14 @@ struct AddNoteSheet: View {
                         }
                     }
                 }
-                if existing != nil {
+                if editNote != nil {
                     Text("Edits are recorded on the note and in the audit log.")
                         .font(.caption).foregroundStyle(Color.secondaryText)
                 } else if restoredDraft {
                     Text("Your unsaved note from earlier was restored. Cancel, then Discard, removes it.")
                         .font(.callout)
                 }
-                if let sessionContext, existing == nil {
+                if let sessionContext, editNote == nil {
                     // Where the person is, as the first thing on the screen (4.31.0).
                     Text(sessionContext)
                         .font(.headline)
@@ -1021,8 +1047,10 @@ struct AddNoteSheet: View {
                     CaptionedField(label: "Subject (required)", text: $subject, prompt: "Subject", errorName: "Subject")
                 }
 
-                if structured {
-                    Section("\(noteFormat) sections (fill in at least one)") {
+                // Free text with section text still in the sections (4.34.0): they are shown, so
+                // they can be moved into the note and cleared, as the website refuses to drop them.
+                if structured || sectionsHoldText {
+                    Section(structured ? "\(noteFormat) sections (fill in at least one)" : "Structured sections (not kept with free text: clear them)") {
                         ForEach(0..<4, id: \.self) { i in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(i < labels.count ? labels[i] : "Section \(i + 1)")
@@ -1037,14 +1065,15 @@ struct AddNoteSheet: View {
                     // (before the format changed, or before Generate) is saved after the
                     // sections under "Narrative", never dropped. An edit keeps the note's own
                     // narrative on the server, so it is not shown here.
-                    if existing == nil {
+                    if structured && editNote == nil {
                         Section("Narrative (optional)") {
                             TextField("Narrative", text: $body_, axis: .vertical).lineLimit(3...12)
                             Text("Saved after the sections under “Narrative”. Clear it if the sections already cover it.")
                                 .font(.caption).foregroundStyle(Color.secondaryText)
                         }
                     }
-                } else {
+                }
+                if !structured {
                     Section("Note (required)") {
                         TextField("Note", text: $body_, axis: .vertical).lineLimit(5...12)
                             .errorField("Note")
@@ -1069,7 +1098,7 @@ struct AddNoteSheet: View {
 
                 // Generator: paste messy notes → structured draft. After the note itself, folded
                 // away until wanted, so Subject leads straight to the note's text.
-                if existing == nil && api.aiHas("draft") {
+                if editNote == nil && api.aiHas("draft") {
                     Section {
                         DisclosureGroup(isExpanded: $showingGenerator) {
                             Text("Paste or dictate your raw session notes here, or leave this box empty to use what you typed in the note. The assistant drafts the \(structured ? noteFormat : "BIRP") sections above, asks about anything missing, and pulls out homework. This can take up to a minute.")
@@ -1135,6 +1164,7 @@ struct AddNoteSheet: View {
                                     if !activeTracks.isEmpty {
                                         OptionalDayField(title: "Homework \(number) due date", text: $hw.due)
                                             .font(.callout)
+                                            .errorField("Homework \(number) due date")
                                     }
                                 }
                             }
@@ -1142,7 +1172,7 @@ struct AddNoteSheet: View {
                     } header: { Text("Homework → client portal") }
                 }
             }
-            .navigationTitle(existing != nil ? "Edit note" : (addendumTo != nil ? "Add addendum" : (sessionId != nil ? "Case note" : "Add note")))
+            .navigationTitle(editNote != nil ? "Edit note" : (addendumParent != nil ? "Add addendum" : (sessionId != nil ? "Case note" : "Add note")))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1155,7 +1185,7 @@ struct AddNoteSheet: View {
                 }
             }
             .discardChangesGuard(hasChanges: hasChanges, busy: busy,
-                                 question: existing == nil ? "Discard this note?" : "Discard your changes to this note?",
+                                 question: editNote == nil ? "Discard this note?" : "Discard your changes to this note?",
                                  asking: $askingDiscard) { clearDraft(); dismiss() }
             .onChange(of: subject) { _ in saveDraft() }
             .onChange(of: body_) { _ in saveDraft() }
@@ -1214,6 +1244,12 @@ struct AddNoteSheet: View {
             showFormError(structured ? "\(noteFormat) sections: fill in at least one section." : "Note: write the note before saving.", in: &error)
             return
         }
+        // 4.34.0: as the website, free text is not saved while the sections still hold text
+        // a free-text note would drop (it used to be dropped and "Note saved" said).
+        if sectionsLost(format: noteFormat, sections: sections) {
+            showFormError(freeTextSectionsMessage, in: &error, field: "Note")
+            return
+        }
         busy = true; error = nil
         var payload: [String: Any] = ["note_type": noteType, "note_format": noteFormat, "subject": subject]
         if structured {
@@ -1227,16 +1263,31 @@ struct AddNoteSheet: View {
             }
         } else {
             payload["body"] = body_
+            // Sent whenever they hold text, so the server's own check applies too.
+            for (i, text) in sections.enumerated() where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                payload["sec\(i + 1)"] = text
+            }
         }
         payload["track_id"] = attachTrackId
         do {
-            if let existing {
+            if let existing = editNote {
                 payload["id"] = existing.id
                 // 4.29.0: the version the editor opened (or reloaded); none from an older server.
                 if let version = (loadedNote ?? existing).noteVersion, !version.isEmpty { payload["note_version"] = version }
                 var refusedConflict = false
+                var refusedLocked = false
                 do {
-                    let _: OKResponse = try await api.call("update_note", body: payload, refusal: { refusedConflict = ($0["conflict"] as? Bool) == true })
+                    let _: OKResponse = try await api.call("update_note", body: payload, refusal: { reply in
+                        refusedConflict = (reply["conflict"] as? Bool) == true
+                        refusedLocked = (reply["locked"] as? Bool) == true
+                    })
+                } catch where refusedLocked {
+                    // 4.34.0: the note locked while it was open. As on the website, what was
+                    // typed moves into an addendum to it instead of being lost.
+                    becomeAddendum(to: loadedNote ?? existing)
+                    showFormError(error.localizedDescription + " Your changes are in the addendum form below.", in: &self.error)
+                    busy = false
+                    return
                 } catch where refusedConflict {
                     noteConflict = true
                     showFormError(error.localizedDescription + " What you typed is still in the form.", in: &self.error)
@@ -1249,8 +1300,11 @@ struct AddNoteSheet: View {
                 payload["idem_key"] = idemKey
                 // 4.31.0: the completed session this note is for (kept with an offline save too).
                 if let sessionId { payload["session_id"] = sessionId }
-                if let addendumTo { payload["addendum_to"] = addendumTo.id }
+                if let parent = addendumParent { payload["addendum_to"] = parent.id }
                 let kept = homework.filter { $0.include && !$0.title.isEmpty }
+                // The server numbers the items it was sent (ticked and titled); each sent item's
+                // row number on this form, so its refusal is tied to the right row.
+                let sentRows = sentHomeworkRows(homework)
                 // Only to an active track the picker offers: the sheet says homework is not
                 // saved otherwise (opened from a completed track, for example).
                 if !kept.isEmpty && activeTracks.contains(where: { $0.id == hwTrackId }) {
@@ -1259,8 +1313,27 @@ struct AddNoteSheet: View {
                 }
                 let content = [noteType, noteFormat, subject, body_] + sections
                 if firstTryContent == nil { firstTryContent = content }
+                var refusedFields: [String: String] = [:]
                 do {
-                    let result: SaveAck = try await api.call("add_note", body: payload)
+                    let result: SaveAck
+                    do {
+                        result = try await api.call("add_note", body: payload, refusal: { refusedFields = ($0["errors"] as? [String: String]) ?? [:] })
+                    } catch APIError.server(let message) where !refusedFields.isEmpty {
+                        // Tied to the field it is about (4.34.0): a homework due date, or the note.
+                        if let key = refusedFields.keys.sorted().first(where: { $0.hasPrefix("hw_due_") }),
+                           let n = Int(key.dropFirst("hw_due_".count)), n >= 1, n <= sentRows.count {
+                            let row = sentRows[n - 1]
+                            let text = refusedFields[key] ?? message
+                            let detail = text.range(of: ": ").map { String(text[$0.upperBound...]) } ?? text
+                            showFormError("Homework \(row) due date: " + detail, in: &self.error, field: "Homework \(row) due date")
+                        } else if let text = refusedFields["note_content"] {
+                            showFormError(text, in: &self.error, field: "Note")
+                        } else {
+                            showFormError(message, in: &self.error)
+                        }
+                        busy = false
+                        return
+                    }
                     if result.deduplicated == true {
                         // An earlier try was saved although its reply was lost.
                         let message = firstTryContent == content
@@ -1268,6 +1341,8 @@ struct AddNoteSheet: View {
                             : "This note was already saved from an earlier try, so it was not added twice. Changes made after that try are not in it; edit the saved note to add them."
                         clearDraft(); onSaved(message); dismiss(); return
                     }
+                    // 4.34.0: the homework added and the session warning, as the website says them.
+                    clearDraft(); onSaved(noteSavedMessage(result)); dismiss(); return
                 } catch APIError.network {
                     // No signal: keep the note on the phone and sync later. Homework
                     // is included in the payload, so it syncs with the note.
@@ -1277,11 +1352,28 @@ struct AddNoteSheet: View {
                 }
             }
             clearDraft()
-            onSaved(existing == nil ? "Note saved." : "Note updated."); dismiss()
+            onSaved(editNote == nil ? "Note saved." : "Note updated."); dismiss()
         } catch {
             showFormError(error.localizedDescription, in: &self.error)
             busy = false
         }
+    }
+
+    /// Whether any structured section holds text.
+    private var sectionsHoldText: Bool { sections.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } }
+
+    /// The edit's note locked (4.34.0): the form becomes an addendum to it, keeping the text.
+    private func becomeAddendum(to note: Note) {
+        lockedParent = note
+        noteConflict = false
+        typedBeforeReload = nil
+        noteType = "Addendum"
+        subject = String(addendumSubjectFor(note.subject).prefix(255))
+        // A structured edit's body holds the whole saved note (it is not shown or sent): the
+        // addendum keeps the sections typed, not a copy of the note it is added to.
+        if structured && body_ == note.body { body_ = "" }
+        attachTrackId = note.trackId ?? attachTrackId
+        saveDraft()
     }
 
     /// After a conflict (4.29.0): loads the note as saved now into the form, and keeps what was
@@ -1423,6 +1515,40 @@ struct AIDraftResponse: Decodable {
 struct SaveAck: Decodable {
     let ok: Bool
     let deduplicated: Bool?
+    /// add_note (4.34.0 apps read them): the session's warning, and homework items added.
+    var warning: String?
+    var homeworkCreated: Int?
+}
+
+/// "Note saved." with the homework added and the session warning, as the website says it.
+func noteSavedMessage(_ result: SaveAck) -> String {
+    var message = "Note saved."
+    if let n = result.homeworkCreated, n > 0 {
+        message += " \(n) homework item\(n == 1 ? "" : "s") added to the client portal."
+    }
+    if let warning = result.warning?.trimmingCharacters(in: .whitespacesAndNewlines), !warning.isEmpty {
+        message += " " + warning
+    }
+    return message
+}
+
+/// The website's refusal when free text is chosen but the sections still hold text (4.34.0).
+let freeTextSectionsMessage = "Free text is chosen as the note format, but the structured sections still hold text that a free-text note does not keep. Move anything you need from the sections into the narrative box and clear them, or choose a structured format again."
+
+/// Whether saving would drop section text (free text chosen while a section holds text).
+func sectionsLost(format: String, sections: [String]) -> Bool {
+    format == "free" && sections.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+}
+
+/// The form's row number (1-based) of each homework item add_note is sent, in the order sent:
+/// only ticked items with a title go, and the server numbers them among those (hw_due_N).
+func sentHomeworkRows(_ items: [GenHomework]) -> [Int] {
+    items.enumerated().filter { $0.element.include && !$0.element.title.isEmpty }.map { $0.offset + 1 }
+}
+
+/// "Addendum: <subject>", never "Addendum: Addendum: …".
+func addendumSubjectFor(_ subject: String) -> String {
+    subject.hasPrefix("Addendum: ") ? subject : "Addendum: " + subject
 }
 
 /// Generates an AI case summary for review, then lets the user save it as a note.
@@ -1600,6 +1726,9 @@ struct ConsentState: Decodable {
     let pendingSentAt: String?
     let canRequest: Bool
     let requestLabel: String
+    /// The unsigned request waiting now (4.34.0; 0 for none), sent back as consent_seen so a
+    /// request a colleague has just sent is not replaced unseen; nil from an older server.
+    var pendingId: Int?
 }
 struct ConsentStatusResponse: Decodable {
     let consent: ConsentState
@@ -1642,6 +1771,22 @@ struct ConsentRequestSheet: View {
     @State private var confirming = false
     @State private var askingDiscard = false
     @State private var started = false
+    /// The consent as reloaded after a colleague's request arrived meanwhile (4.34.0).
+    @State private var reloaded: ConsentStatusResponse?
+    private var shown: ConsentStatusResponse { reloaded ?? status }
+    /// A newer request arrived meanwhile and the consent has not been reloaded since.
+    @State private var needsReload = false
+    @State private var reloading = false
+
+    /// Loads the consent as it is now; true when it worked (Send is allowed again).
+    private func reloadConsent() async -> Bool {
+        reloading = true
+        defer { reloading = false }
+        guard let now: ConsentStatusResponse = try? await api.call("request_consent", query: ["client_id": String(clientId)]) else { return false }
+        reloaded = now
+        needsReload = false
+        return true
+    }
 
     private var draftKey: String { "consent-\(clientId)" }
     private var hasChanges: Bool { name != (status.guardianName ?? "") || email != (status.guardianEmail ?? "") }
@@ -1649,8 +1794,17 @@ struct ConsentRequestSheet: View {
     var body: some View {
         NavigationStack {
             ErrorFocusForm(inNavigationStack: true, error: error) {
+                if needsReload {
+                    Button {
+                        Task {
+                            if await reloadConsent() { error = nil; announce("Reloaded. " + shown.consent.summary) }
+                            else { showFormError("The consent could still not be reloaded. Check your connection and try again.", in: &error) }
+                        }
+                    } label: { Text(reloading ? "Reloading…" : "Reload the consent as it is now") }
+                    .disabled(reloading)
+                }
                 Section {
-                    Text(status.consent.summary)
+                    Text(shown.consent.summary)
                     Text("Sending a new request turns off any earlier consent link that has not been signed.").font(.callout)
                 }
                 Section("Guardian") {
@@ -1668,7 +1822,7 @@ struct ConsentRequestSheet: View {
                     Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }.disabled(busy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(busy ? "Sending…" : "Email consent form") { check() }.disabled(busy)
+                    Button(busy ? "Sending…" : "Email consent form") { check() }.disabled(busy || needsReload)
                 }
             }
             .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this consent request?", asking: $askingDiscard) {
@@ -1713,8 +1867,37 @@ struct ConsentRequestSheet: View {
         busy = true; error = nil
         do {
             var body: [String: Any] = ["client_id": clientId, "guardian_name": name, "guardian_email": email]
+            // 4.34.0: the waiting request this form was opened with; the server refuses to
+            // replace a newer one (409 consent_changed) instead of turning it off unseen.
+            if let seen = shown.consent.pendingId { body["consent_seen"] = seen }
             body["idem_key"] = idem.key(for: body)
-            let r: TaskSaveResult = try await api.call("request_consent", body: body)
+            var changed = false
+            var fields: [String: String] = [:]
+            let r: TaskSaveResult
+            do {
+                r = try await api.call("request_consent", body: body, refusal: { reply in
+                    changed = (reply["consent_changed"] as? Bool) == true
+                    fields = (reply["errors"] as? [String: String]) ?? [:]
+                })
+            } catch APIError.server(let message) where changed || !fields.isEmpty {
+                idem.failed(APIError.server(message))
+                busy = false
+                if changed {
+                    // Someone sent a request meanwhile: the form shows it now, and nothing was sent.
+                    // Until that reload works, Send stays off (it would replace the request unseen).
+                    needsReload = true
+                    if await reloadConsent() {
+                        showFormError(message, in: &self.error)
+                    } else {
+                        showFormError(message + " The consent could not be reloaded, so sending stays off. Use Reload below, then check before sending.", in: &self.error)
+                    }
+                } else {
+                    // The server's whole text in the summary; the first field it names is tied.
+                    let field: String? = fields["guardian_name"] != nil ? "Guardian name" : (fields["guardian_email"] != nil ? "Guardian email" : nil)
+                    showFormError(message, in: &self.error, field: field)
+                }
+                return
+            }
             idem.answered()
             DraftStore.clear(key: draftKey, owner: api.userId)
             onSent(r.message ?? "Consent form emailed.")

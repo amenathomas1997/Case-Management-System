@@ -395,7 +395,7 @@ struct TaskEditSheet: View {
 
     private func save() async {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { showFormError("What needs doing: the task needs a title.", in: &error); return }
+        if trimmed.isEmpty { showFormError("The task needs a title: say what needs doing.", in: &error, field: "What needs doing"); return }
         busy = true; error = nil
         var body: [String: Any] = ["title": trimmed, "details": details, "due_date": due]
         if let existing { body["id"] = existing.id }

@@ -105,6 +105,9 @@ struct InvoicesView: View {
     @State private var page = 1
     /// The draft waiting for a yes before it is marked submitted (4.0.0).
     @State private var pendingSubmit: InvoiceItem?
+    /// The submit sheet's result, said (or shown, for a refusal) once the sheet has gone.
+    @State private var submitResult: String?
+    @State private var submitRefused: String?
 
     var body: some View {
         List {
@@ -158,14 +161,13 @@ struct InvoicesView: View {
         .navigationTitle("Invoices")
         // The Show picker's choice is not cut short at the accessibility text sizes.
         .modifier(ReadablePickers(inNavigationStack: true))
-        .confirmationDialog("Mark invoice \(pendingSubmit?.invoiceNumber ?? "") submitted today?",
-                            isPresented: Binding(get: { pendingSubmit != nil }, set: { if !$0 { pendingSubmit = nil } }),
-                            titleVisibility: .visible) {
-            Button("Mark submitted") {
-                if let inv = pendingSubmit { Task { await markSubmitted(inv) } }
-                pendingSubmit = nil
+        // 4.34.0: asks for the date it was sent, as the website does (the due date follows from it).
+        .sheet(item: $pendingSubmit, onDismiss: afterSubmitSheet) { inv in
+            SubmitInvoiceSheet(invoice: inv) { message, refused in
+                submitResult = message
+                if refused { submitRefused = message }
+                Task { await load() }
             }
-            Button("Cancel", role: .cancel) { pendingSubmit = nil }
         }
         .onChange(of: status) { _ in page = 1; Task { await load(announceView: true) } }
         .refreshable { await load() }
@@ -211,15 +213,15 @@ struct InvoicesView: View {
         }
     }
 
-    private func markSubmitted(_ inv: InvoiceItem) async {
-        do {
-            error = nil
-            let _: OKResponse = try await api.call("submit_invoice", body: ["id": inv.id])
-            announce("Invoice \(inv.invoiceNumber) marked submitted today.")
-            await load()
-        } catch {
-            showFormError(error.localizedDescription, in: &self.error)
+    /// Said once the sheet has gone (a message said while it closes is cut off).
+    private func afterSubmitSheet() {
+        if let refused = submitRefused {
+            submitRefused = nil; submitResult = nil
+            showFormError(refused, in: &error)
+            return
         }
+        if let message = submitResult { announceAfterDismiss(message) }
+        submitResult = nil
     }
 
     private func load(announceView: Bool = false) async {
@@ -247,9 +249,81 @@ private struct DraftSubmitActions: ViewModifier {
         if isDraft {
             content
                 .swipeActions { Button("Mark submitted", action: action).tint(.brandTeal) }
-                .accessibilityAction(named: "Mark submitted today", action)
+                .accessibilityAction(named: "Mark submitted", action)
         } else {
             content
+        }
+    }
+}
+
+/// Mark a draft invoice submitted (4.34.0): the date it went to the funder, from the day it was
+/// created to today, as the website asks; the due date is set from it by the payment terms.
+struct SubmitInvoiceSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let invoice: InvoiceItem
+    /// The message to say, and whether it is a refusal (the list is reloaded either way).
+    let onDone: (String, Bool) -> Void
+    @State private var submittedOn = Date()
+    @State private var busy = false
+    @State private var error: String?
+    @State private var idem = IdemKey()
+
+    private var earliest: Date {
+        APIDate.strictDay(String(invoice.createdAt.prefix(10))).map { min($0, Date()) } ?? Calendar.current.startOfDay(for: Date())
+    }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
+                Text("Mark invoice \(invoice.invoiceNumber) as submitted to the funder? Its due date is set from the payment terms.")
+                DatePicker("Date submitted", selection: $submittedOn, in: earliest...Date(), displayedComponents: .date)
+                    .errorField("Date submitted")
+            }
+            .navigationTitle("Mark submitted")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(busy ? "Saving…" : "Mark submitted") { Task { await submit() } }.disabled(busy)
+                }
+            }
+        }
+    }
+
+    private func submit() async {
+        busy = true; error = nil
+        struct Reply: Decodable { let submittedOn: String?; let dueDate: String? }
+        var body: [String: Any] = ["id": invoice.id, "submitted_on": APIDate.day(submittedOn)]
+        body["idem_key"] = idem.key(for: body)
+        var status409 = false
+        var dateRefused = false
+        do {
+            let r: Reply = try await api.call("submit_invoice", body: body, refusal: { reply in
+                // 4.34.0: the server marks a draft that changed meanwhile (its 409) with changed:true.
+                status409 = (reply["changed"] as? Bool) == true
+                let fields = (reply["errors"] as? [String: String]) ?? [:]
+                dateRefused = fields["submitted_on"] != nil
+            })
+            idem.answered()
+            let on = formatDate(r.submittedOn ?? APIDate.day(submittedOn))
+            let due = (r.dueDate ?? "").isEmpty ? "" : "; it is due \(formatDate(r.dueDate))"
+            onDone("Invoice \(invoice.invoiceNumber) marked submitted on \(on)\(due).", false)
+            dismiss()
+        } catch {
+            idem.failed(error)
+            busy = false
+            if status409 {
+                // Someone else changed it: the list is reloaded and the reason said there.
+                onDone(error.localizedDescription, true)
+                dismiss()
+                return
+            }
+            // About the date: by its error key, or (the server sends none today) by its words,
+            // "The date sent must be from the day the invoice was created to today."
+            let aboutDate = dateRefused || error.localizedDescription.contains("date sent")
+            showFormError(aboutDate ? error.localizedDescription : IdemKey.message(for: error, what: "the invoice"),
+                          in: &self.error, field: aboutDate ? "Date submitted" : nil)
         }
     }
 }

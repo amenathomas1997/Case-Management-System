@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.34.0' => [
+        'The iPhone and Android apps now give the same results as the website. Completing a session credits the hours to its instructor (a group sitting is billed as a group), a session can be completed when hours were already logged that day, a progress report covers the period since the last one with barriers, recommendations and AI drafts, and loans use your usual loan period.',
+        'Notes, clients and tracks: section text is never lost, Android can edit a note or add an addendum, the client form has date of birth and IPE dates on both apps, a possible duplicate client is stopped until you say it is a different person, and track edits offer Who pays and the authorized amount.',
+        'Also matching the website: your own incident types, consents that end at 18, the AI tools and Translate, closing a client request, reopening a device request, invoice submitted dates, utilization, and the wording of messages. Android now locks with your fingerprint, face or phone PIN, as the iPhone does.',
+    ],
     '4.33.0' => [
         'Your sessions can now go to a calendar of three kinds, chosen on My Account, My calendar: your Microsoft account (a work account, or a personal Outlook.com one), a CalDAV calendar (iCloud, Nextcloud, a cPanel email account\'s calendar, Fastmail) or a Google calendar you share with the system\'s service account. Sessions are added, moved and removed as they change here, and the calendar\'s busy times keep bookings away, as before with Outlook.',
         'Test the connection on My Account says which account or calendar is reached and how many busy times it holds in the next 7 days. A wrong password, a calendar not shared with the service account, or a Microsoft connection that ended is said in plain words.',

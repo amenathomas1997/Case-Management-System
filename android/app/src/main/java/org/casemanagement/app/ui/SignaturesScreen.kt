@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -436,7 +435,8 @@ fun InPersonSigningHost(api: Api) {
 
     Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false, dismissOnClickOutside = false)) {
         androidx.activity.compose.BackHandler { if (!locked) leave() }
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        // 4.34.0: shows nothing while the app lock is up.
+        Surface(Modifier.fillMaxSize().hiddenWhileLocked(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 16.dp)) {
                 if (noLock) {
                     Heading("Hand the phone back to staff", large = true)
@@ -496,7 +496,7 @@ fun InPersonSigningHost(api: Api) {
 }
 
 /** The activity a Compose context belongs to (a dialog's context wraps it). */
-private tailrec fun android.content.Context.findActivity(): android.app.Activity? = when (this) {
+internal tailrec fun android.content.Context.findActivity(): android.app.Activity? = when (this) {
     is android.app.Activity -> this
     is android.content.ContextWrapper -> baseContext.findActivity()
     else -> null

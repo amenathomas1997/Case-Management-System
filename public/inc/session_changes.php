@@ -256,3 +256,32 @@ function session_set_outcome(int $sid, string $to, int $userId, string $via): ?s
         }
     return null;
 }
+
+/** The work log text for a completed session (4.34.0: moved from schedule.php, unchanged, so the
+ *  website, the app's API and voice describe a session the same way). A sitting of a group says
+ *  so, however it is completed: the invoice line is the only place a group service shows. */
+function schedule_log_description(array $sess): string {
+    if (!empty($sess['group_uid'])) return 'Group session' . ($sess['notes'] ? ': ' . $sess['notes'] : '');
+    return 'Training session' . ($sess['notes'] ? ': ' . $sess['notes'] : '') . ($sess['location'] ? ' (' . $sess['location'] . ')' : '');
+}
+
+/** The opening words of a booking review (4.30.0): an authorization review only when a track's
+ *  authorization raised one; a double booking or a busy calendar alone is a plain check. */
+function schedule_review_prefix(bool $authorization): string {
+    return $authorization ? 'Authorization review: ' : 'Check before booking: ';
+}
+
+/** The approval message beside the booking warnings (4.30.0; in this file since 4.34.0). It names
+ *  the box without saying where it is, because the same words are read in the error summary at
+ *  the top and beside the box. */
+function schedule_review_message(bool $authorization, array $lines, bool $group = false): string {
+    return schedule_review_prefix($authorization) . implode(' ', $lines)
+        . ' Review the ' . ($group ? 'tracks' : 'track') . ' and the calendar, then tick "I reviewed these warnings" if this booking is still appropriate.';
+}
+
+/** The statuses a session can be booked for (4.11.0; shared since 4.34.0): every open status but
+ *  Waitlist, including added ones. The website's Schedule page, the app's client picker
+ *  (client_choices' bookable) and the app's booking all use it. */
+function schedule_bookable_statuses(): array {
+    return array_values(array_diff(client_open_statuses(), ['Waitlist']));
+}

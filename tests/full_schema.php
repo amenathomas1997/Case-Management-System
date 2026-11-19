@@ -882,6 +882,7 @@ try {
     require __DIR__.'/v433_calendar_cases.php';
     require __DIR__.'/account_api_cases.php';
     require __DIR__.'/parity_api_cases.php';
+    require __DIR__.'/v434_parity_cases.php';
 
     // Upgrade path: mig_3.0.8.sql applied to a database still in the 3.0.7 shape
     // must give exactly the columns, indexes and foreign keys schema_full.sql

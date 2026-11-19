@@ -96,3 +96,16 @@ function pricing_mode_conflict(int $clientId, string $mode, ?array $track = null
             ? 'Training ' . $what . ' is not allowed for them: choose VR or agency authorization.'
             : 'This training is ' . $what . ' anyway; check that is right.')];
 }
+
+/** A new track's Who pays and hourly rate as the track form starts them (4.34.0: shared by track_edit.php and the app's save_track) (3.0.34, 4.2.0): the fee
+ *  quoted when the client's referral came in ($0 is No charge, an hourly fee is Private pay at that
+ *  fee), else VR; an open VR case is billed at the VR rate whatever was quoted. */
+function track_new_defaults(int $clientId): array {
+    $newMode = 'vr'; $newRate = '';
+    $qf = db()->prepare('SELECT quoted_fee FROM referrals WHERE client_id = ? AND quoted_fee IS NOT NULL ORDER BY id DESC LIMIT 1');
+    $qf->execute([$clientId]);
+    $fee = $qf->fetchColumn();
+    if ($fee !== false) { $newMode = (float)$fee > 0 ? 'private' : 'none'; $newRate = (float)$fee > 0 ? number_format((float)$fee, 2, '.', '') : ''; }
+    if (pricing_settings()['vr_first'] && client_open_vr_case($clientId)) { $newMode = 'vr'; $newRate = ''; }
+    return ['billing_mode' => $newMode, 'hourly_rate' => $newRate];
+}

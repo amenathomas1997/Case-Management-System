@@ -15,7 +15,12 @@ struct AITextResponse: Decodable {
     /// one review (ai_risk; nil when an older server does not say).
     let assessed: Int?
     let totalActive: Int?
-    private enum CodingKeys: String, CodingKey { case text, truncated, lang, dir, assessed, totalActive }
+    /// Ask your caseload (4.34.0): only part of the caseload fit in one question.
+    let caseloadCut: Bool
+    /// Risk flags (4.34.0): the period the sessions were counted in ("YYYY-MM-DD").
+    let periodFrom: String?
+    let periodTo: String?
+    private enum CodingKeys: String, CodingKey { case text, truncated, lang, dir, assessed, totalActive, caseloadCut, periodFrom, periodTo }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         text = try c.decode(String.self, forKey: .text)
@@ -26,6 +31,25 @@ struct AITextResponse: Decodable {
         dir = try? c.decodeIfPresent(String.self, forKey: .dir)
         assessed = try? c.decodeIfPresent(Int.self, forKey: .assessed)
         totalActive = try? c.decodeIfPresent(Int.self, forKey: .totalActive)
+        caseloadCut = (try? c.decodeIfPresent(Bool.self, forKey: .caseloadCut))
+            ?? (try? c.decodeIfPresent(Int.self, forKey: .caseloadCut)).map { $0 != 0 } ?? false
+        periodFrom = (try? c.decodeIfPresent(String.self, forKey: .periodFrom)) ?? nil
+        periodTo = (try? c.decodeIfPresent(String.self, forKey: .periodTo)) ?? nil
+    }
+}
+
+/// The notices said above an AI result (4.34.0), as the website words them for each tool.
+enum AINotice {
+    static let askIncomplete = "Incomplete: the AI stopped before finishing this answer, so clients after the last line are missing. Narrow the question and ask again."
+    static let caseloadCut = "Note: only part of the caseload fit in one question — narrow the question for larger caseloads."
+    static let riskIncomplete = "Incomplete: the AI stopped before finishing this list, so the clients after the last item were not assessed."
+    static let curriculumIncomplete = "Incomplete: the AI stopped before finishing this lesson plan, so the last lessons are missing. Narrow the focus and draft again."
+    static let progressIncomplete = "Incomplete: the AI stopped before finishing this review, so the last goals may be missing. Generate the review again."
+
+    /// Ask your caseload's notices, joined into one (said as one stop with the result).
+    static func ask(truncated: Bool, caseloadCut: Bool) -> String? {
+        let parts = [truncated ? askIncomplete : nil, caseloadCut ? self.caseloadCut : nil].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 }
 struct AIKBSource: Decodable, Identifiable { let id: Int; let title: String }
@@ -43,6 +67,9 @@ struct AIResultCard: View {
     var rightToLeft = false
     /// The provider stopped at its output limit: the result ends before the text sent did.
     var incomplete = false
+    /// The tool's own words for what is missing (4.34.0), shown where the incomplete notice is
+    /// and in its place; shown even when the result is complete (a caseload cut, say).
+    var notice: String? = nil
     /// Set by the screen when a new result arrives (see `revealAIResult`). The card moves
     /// VoiceOver onto the result once and clears it, so the row scrolling back into view
     /// later never pulls focus or repeats the announcement.
@@ -64,10 +91,10 @@ struct AIResultCard: View {
                     .accessibilityAction(named: "Copy result") { copyResult() }
                     .accessibilityFocused($focus, equals: .result)
             }
-            if incomplete {
+            if incomplete || notice != nil {
                 // In words with an icon (not colour alone), and above the result, so VoiceOver
                 // lands on it first when the result arrives.
-                Label("Incomplete — the result stops before the end of your text; split it and try again.", systemImage: "exclamationmark.triangle")
+                Label(notice ?? "Incomplete — the result stops before the end of your text; split it and try again.", systemImage: "exclamationmark.triangle")
                     .font(.callout.weight(.semibold))
                     .accessibilityFocused($focus, equals: .notice)
             }
@@ -99,7 +126,7 @@ struct AIResultCard: View {
             guard reveal else { return }
             try? await Task.sleep(nanoseconds: 900_000_000)
             guard !Task.isCancelled else { return }
-            focus = incomplete ? .notice : .result
+            focus = incomplete || notice != nil ? .notice : .result
             reveal = false
         }
     }
@@ -270,7 +297,7 @@ struct AIToolsView: View {
                     if !anyGeneralTool { Text("No general AI tools are switched on for your account.") }
                 }
                 Section {
-                    Text("Staff review every AI draft." + (anyClientTool ? " Client-specific tools (assistive technology recommendations, guided intake, progress review) are on each client's screen." : ""))
+                    Text(aiReviewSentence(api.aiRedaction) + (anyClientTool ? " Client-specific tools (assistive technology recommendations, guided intake, progress review) are on each client's screen." : ""))
                         .font(.caption)
                 }
             }
@@ -405,6 +432,7 @@ struct CurriculumGenView: View {
     @State private var level = "Beginner"
     @State private var focus = ""
     @State private var result: String?
+    @State private var notice: String?
     @State private var reveal = false
     @State private var busy = false
     @State private var error: String?
@@ -412,15 +440,18 @@ struct CurriculumGenView: View {
     var body: some View {
         Form {
             if let error { ErrorBanner(message: error) }
-            // Locked while drafting, and a change clears the draft, so the skills shown always
+            // Locked while drafting, and a change clears the draft, so the plan shown always
             // match the technology, level and focus above them.
             AILabeledField(label: "Technology (e.g. JAWS)", text: $tech).disabled(busy)
             Picker("Level", selection: $level) { ForEach(["Beginner", "Intermediate", "Advanced"], id: \.self) { Text($0) } }
                 .disabled(busy)
             AILabeledField(label: "Focus / notes", text: $focus).disabled(busy)
-            Button { Task { await run() } } label: { Label(busy ? "Drafting…" : "Draft skills", systemImage: "list.bullet.rectangle") }
+            Button { Task { await run() } } label: { Label(busy ? "Drafting…" : "Draft lesson plan", systemImage: "list.bullet.rectangle") }
                 .accessibilityValue(busy ? "In progress" : "").disabled(busy || tech.isEmpty)
-            if let result { AIResultCard(text: result, footer: "Create the full curriculum on the website's Templates page.", reveal: $reveal) }
+            if let result {
+                AIResultCard(text: result, footer: "Save it as a curriculum on the website: AI tools › Curriculum generator.",
+                             notice: notice, reveal: $reveal)
+            }
         }
         .onChange(of: tech) { _ in if !busy { result = nil } }
         .onChange(of: level) { _ in if !busy { result = nil } }
@@ -430,8 +461,12 @@ struct CurriculumGenView: View {
     }
     private func run() async {
         busy = true; error = nil; result = nil
-        announceAIWork("Drafting skills")
-        do { let r: AITextResponse = try await api.call("ai_curriculum", body: ["tech": tech, "level": level, "focus": focus]); result = r.text; revealAIResult(&reveal) }
+        announceAIWork("Drafting the lesson plan")
+        do {
+            let r: AITextResponse = try await api.call("ai_curriculum", body: ["tech": tech, "level": level, "focus": focus])
+            notice = r.truncated ? AINotice.curriculumIncomplete : nil
+            result = r.text; revealAIResult(&reveal)
+        }
         catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
@@ -441,6 +476,7 @@ struct AskCaseloadView: View {
     @EnvironmentObject var api: API
     @State private var question = ""
     @State private var result: String?
+    @State private var notice: String?
     @State private var reveal = false
     @State private var busy = false
     @State private var error: String?
@@ -454,7 +490,7 @@ struct AskCaseloadView: View {
             Text("Client names are never sent to the AI: each name is replaced with a code before sending, and the names are put back in the answer. Read-only; verify before acting.").font(.caption)
             Button { Task { await run() } } label: { Label(busy ? "Thinking…" : "Ask", systemImage: "questionmark.bubble") }
                 .accessibilityValue(busy ? "In progress" : "").disabled(busy || question.isEmpty)
-            if let result { AIResultCard(text: result, reveal: $reveal) }
+            if let result { AIResultCard(text: result, notice: notice, reveal: $reveal) }
         }
         .onChange(of: question) { _ in if !busy { result = nil } }
         .navigationTitle("Ask your caseload").navigationBarTitleDisplayMode(.inline)
@@ -462,7 +498,12 @@ struct AskCaseloadView: View {
     private func run() async {
         busy = true; error = nil; result = nil
         announceAIWork("Thinking")
-        do { let r: AITextResponse = try await api.call("ai_ask", body: ["question": question]); result = r.text; revealAIResult(&reveal) }
+        do {
+            let r: AITextResponse = try await api.call("ai_ask", body: ["question": question])
+            // 4.34.0: said when the answer stopped early or only part of the caseload fit.
+            notice = AINotice.ask(truncated: r.truncated, caseloadCut: r.caseloadCut)
+            result = r.text; revealAIResult(&reveal)
+        }
         catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
@@ -505,6 +546,7 @@ struct RiskView: View {
     /// "N of M active clients assessed", when the review could not cover them all.
     @State private var resultCaption: String?
     @State private var resultFooter: String?
+    @State private var riskNotice: String?
     @State private var reveal = false
     @State private var busy = false
     @State private var error: String?
@@ -515,7 +557,7 @@ struct RiskView: View {
             Text("Reviews active clients' engagement and progress signals and flags who's at risk of not completing. Operational triage, not a prediction; each client name is replaced with a code before anything is sent to the AI.").font(.caption)
             Button { Task { await run() } } label: { Label(busy ? "Assessing…" : "Assess active clients", systemImage: "exclamationmark.triangle") }
                 .accessibilityValue(busy ? "In progress" : "").disabled(busy)
-            if let result { AIResultCard(text: result, caption: resultCaption, footer: resultFooter, reveal: $reveal) }
+            if let result { AIResultCard(text: result, caption: resultCaption, footer: resultFooter, notice: riskNotice, reveal: $reveal) }
         }
         .navigationTitle("Risk flags").navigationBarTitleDisplayMode(.inline)
     }
@@ -526,12 +568,18 @@ struct RiskView: View {
             let r: AITextResponse = try await api.call("ai_risk", body: [:])
             // As on the website: when there are more active clients than fit one review, say
             // how many were covered and which, so the flags are not read as the whole caseload.
+            var footer: [String] = []
+            if let from = r.periodFrom, let to = r.periodTo {
+                footer.append("Period: \(formatDate(from)) to \(formatDate(to)).")
+            }
             if let assessed = r.assessed, let total = r.totalActive, assessed < total {
                 resultCaption = "\(assessed) of \(total) active clients assessed"
-                resultFooter = "Only the \(assessed) with no session yet or the longest time since their last session fit one review; the others were not assessed."
+                footer.append("Only the \(assessed) with no session yet or the longest time since their last session fit one review; the others were not assessed.")
             } else {
-                resultCaption = nil; resultFooter = nil
+                resultCaption = nil
             }
+            resultFooter = footer.isEmpty ? nil : footer.joined(separator: " ")
+            riskNotice = r.truncated ? AINotice.riskIncomplete : nil
             result = r.text; revealAIResult(&reveal)
         }
         catch { showFormError(error.localizedDescription, in: &self.error) }
@@ -572,6 +620,7 @@ struct AIProgressReviewView: View {
     @EnvironmentObject var api: API
     let clientId: Int
     @State private var result: String?
+    @State private var notice: String?
     @State private var reveal = false
     @State private var busy = false
     @State private var error: String?
@@ -582,14 +631,18 @@ struct AIProgressReviewView: View {
             Text("Reviews recent notes and sessions against each active goal. Record any progress from the goal in its track.").font(.caption)
             Button { Task { await run() } } label: { Label(busy ? "Reviewing…" : "Generate review", systemImage: "chart.bar.doc.horizontal") }
                 .accessibilityValue(busy ? "In progress" : "").disabled(busy)
-            if let result { AIResultCard(text: result, reveal: $reveal) }
+            if let result { AIResultCard(text: result, notice: notice, reveal: $reveal) }
         }
         .navigationTitle("Progress review").navigationBarTitleDisplayMode(.inline)
     }
     private func run() async {
         busy = true; error = nil; result = nil
         announceAIWork("Reviewing")
-        do { let r: AITextResponse = try await api.call("ai_progress", body: ["client_id": clientId]); result = r.text; revealAIResult(&reveal) }
+        do {
+            let r: AITextResponse = try await api.call("ai_progress", body: ["client_id": clientId])
+            notice = r.truncated ? AINotice.progressIncomplete : nil
+            result = r.text; revealAIResult(&reveal)
+        }
         catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
@@ -724,5 +777,15 @@ struct AIIntakeView: View {
             idem.failed(error)
             showFormError(IdemKey.message(for: error, what: "the assessment"), in: &self.error); busy = false
         }
+    }
+}
+
+/// The AI tools' review sentence (4.34.0), saying whether client identifiers are stripped
+/// before client data goes to the provider (me's ai_redaction; nil from an older server).
+func aiReviewSentence(_ redaction: Bool?) -> String {
+    switch redaction {
+    case true?: return "Staff review every AI draft before it is used. Client identifiers are stripped before client data is sent to the provider."
+    case false?: return "Staff review every AI draft before it is used. Identifier redaction is currently off."
+    case nil: return "Staff review every AI draft."
     }
 }

@@ -1484,22 +1484,65 @@ struct SendReportSheet: View {
     let clientName: String
     let onDone: (String) -> Void
 
+    /// The website's report form (4.34.0 report_form); nil while loading, or from an older
+    /// server, which sends the whole progress report to the counselor on file.
+    @State private var reportForm: ReportFormResponse?
+    @State private var formLoaded = false
+    /// report_form failed for another reason than an older server (no signal, say): nothing is
+    /// sent until it loads, so the report never goes out as the older, whole-history one.
+    @State private var formLoadFailed = false
+    @State private var recipient = ""
     @State private var intro = ""
+    @State private var reportKind = "progress"
+    @State private var sincePeriod = true
+    @State private var barriers = ""
+    @State private var recommendations = ""
+    @State private var copyToMe = true
+    @State private var sharePortal = false
     @State private var signature = ""
     @State private var busy = false
+    @State private var aiBusy = false
+    @State private var previewBusy = false
+    @State private var preview: ReportPreview?
+    /// A placeholder the AI draft still holds, as the server words it.
+    @State private var placeholderWarning: String?
     @State private var error: String?
     @State private var askingDiscard = false
     /// Sent as idem_key (4.28.0), so a retry after a lost reply does not email the report twice.
     @State private var idem = IdemKey()
 
-    private var hasChanges: Bool { !intro.isEmpty || !signature.isEmpty }
+    private var hasChanges: Bool {
+        !intro.isEmpty || !signature.isEmpty || !barriers.isEmpty || !recommendations.isEmpty
+            || (reportForm != nil && recipient != (reportForm?.recipient ?? ""))
+    }
+
+    /// What the report is built from, for the preview, the AI drafts and the send.
+    private var reportFields: [String: Any] {
+        var fields: [String: Any] = ["track_id": trackId, "intro": intro]
+        guard let reportForm else { return fields }
+        fields["report_kind"] = reportKind
+        fields["period"] = (reportForm.lastReportAt != nil && sincePeriod) ? 1 : 0
+        fields["barriers"] = barriers
+        fields["recommendations"] = recommendations
+        return fields
+    }
 
     var body: some View {
         NavigationStack {
             ErrorFocusForm(inNavigationStack: true, error: error) {
-                Text("Sends the full progress report for \(clientName) — authorization status, goals, and session log — to the VR counselor on file, with a receipt-confirmation link.")
-                    .font(.callout)
-                CaptionedField(label: "Personal message (optional)", text: $intro, lines: 2...5)
+                if !formLoaded {
+                    ProgressView("Loading the report form…")
+                } else if formLoadFailed {
+                    Button { Task { await loadForm() } } label: {
+                        Label("Try loading the report form again", systemImage: "arrow.clockwise")
+                    }
+                } else if let reportForm {
+                    newFormBody(reportForm)
+                } else {
+                    Text("Sends the full progress report for \(clientName) — authorization status, goals, and session log — to the VR counselor on file, with a receipt-confirmation link.")
+                        .font(.callout)
+                    CaptionedField(label: "Personal message (optional)", text: $intro, lines: 2...5)
+                }
                 Section("Electronic signature") {
                     // The exact name the server requires stays visible above the field once
                     // typing starts (a placeholder alone disappeared).
@@ -1521,45 +1564,160 @@ struct SendReportSheet: View {
                     // Not dimmed while the signature is empty (4.30.0): Send then says what is
                     // missing, on the field.
                     Button("Send") { Task { await send() } }
-                        .disabled(busy)
+                        .disabled(busy || !formLoaded || formLoadFailed)
                 }
             }
             .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this report message and signature?",
                                  asking: $askingDiscard) { dismiss() }
+            .sheet(item: $preview) { shown in ReportPreviewSheet(text: shown.text) }
+            .task { if !formLoaded { await loadForm() } }
         }
     }
 
+    /// The website's report form (4.34.0): who it goes to, the kind, the period, barriers and
+    /// recommendations with AI drafts, copies, and a preview.
+    @ViewBuilder private func newFormBody(_ form: ReportFormResponse) -> some View {
+        Section("Report for \(clientName)") {
+            CaptionedField(label: "Send to (required)", text: $recipient, keyboard: .emailAddress, errorName: "Send to")
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            // Quiet: two plain choices.
+            Picker("Report", selection: $reportKind) {
+                Text("Progress report").tag("progress")
+                Text("Final report (closing: adds skill levels, devices and the closure)").tag("final")
+            }
+            if let last = form.lastReportAt, !last.isEmpty {
+                Toggle("Cover only the period since the last report (\(formatDate(last))); totals stay for the whole authorization", isOn: $sincePeriod)
+            }
+        }
+        Section("Message") {
+            CaptionedField(label: "Personal message (optional)", text: $intro, lines: 2...6, hint: placeholderWarning, errorName: "Personal message")
+            if api.aiHas("draft") {
+                Button { Task { await draftIntro() } } label: {
+                    Label(aiBusy ? "Drafting…" : "Draft with AI", systemImage: "sparkles")
+                }
+                .disabled(aiBusy || busy)
+            }
+        }
+        Section("Barriers and recommendations") {
+            CaptionedField(label: "Barriers (optional)", text: $barriers, lines: 2...6, errorName: "Barriers")
+            CaptionedField(label: "Recommendations (optional)", text: $recommendations, lines: 2...6, errorName: "Recommendations")
+            if api.aiHas("draft") {
+                Button { Task { await draftSections() } } label: {
+                    Label(aiBusy ? "Drafting…" : "Draft barriers and recommendations with AI", systemImage: "sparkles")
+                }
+                .disabled(aiBusy || busy)
+            }
+        }
+        Section("Copies") {
+            if let mine = form.myEmail, !mine.isEmpty {
+                Toggle("Send a copy to me (\(mine))", isOn: $copyToMe)
+            }
+            if form.canSharePortal == true {
+                Toggle("Also put a copy in the client's portal", isOn: $sharePortal)
+            }
+            Button { Task { await showPreview() } } label: {
+                Text(previewBusy ? "Building the preview…" : "Preview the report")
+            }
+            .disabled(previewBusy || busy)
+        }
+    }
+
+    private func loadForm() async {
+        formLoaded = false
+        do {
+            let r: ReportFormResponse = try await api.call("report_form", query: ["track_id": String(trackId)])
+            reportForm = r
+            recipient = r.recipient ?? ""
+            sincePeriod = r.lastReportAt != nil
+            formLoadFailed = false
+            if error != nil { error = nil; announce("Report form loaded.") }
+        } catch APIError.server(let message) where message == "Unknown action." {
+            reportForm = nil     // an older server: the report as it always was
+            formLoadFailed = false
+        } catch {
+            formLoadFailed = true
+            showFormError("Could not load the report form. \(error.localizedDescription) Try again below; nothing has been sent.", in: &self.error)
+        }
+        formLoaded = true
+    }
+
+    /// The cover message drafted by AI (ai_draft report_intro), added below what is typed.
+    private func draftIntro() async {
+        aiBusy = true; error = nil
+        defer { aiBusy = false }
+        do {
+            var body = reportFields
+            body["type"] = "report_intro"
+            body["text"] = intro
+            let r: ReportIntroDraft = try await api.call("ai_draft", body: body)
+            intro = appendDraftBelow(intro, r.text)
+            placeholderWarning = (r.placeholderWarning ?? "").isEmpty ? nil : r.placeholderWarning
+            var said = "Draft added below your message. Review it before sending."
+            if r.truncated == true { said += " The draft stopped before the end." }
+            if let warning = placeholderWarning { said += " " + warning }
+            announce(said)
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
+
+    /// Barriers and recommendations drafted by AI (ai_draft report_sections), added below what is typed.
+    private func draftSections() async {
+        aiBusy = true; error = nil
+        defer { aiBusy = false }
+        do {
+            var body = reportFields
+            body["type"] = "report_sections"
+            let r: ReportSectionsDraft = try await api.call("ai_draft", body: body)
+            barriers = appendDraftBelow(barriers, r.barriers ?? "")
+            recommendations = appendDraftBelow(recommendations, r.recommendations ?? "")
+            var said = "Barriers and recommendations drafted below what you typed. Review them before sending."
+            if r.truncated == true { said += " The draft stopped before the end." }
+            announce(said)
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
+
+    private func showPreview() async {
+        previewBusy = true; error = nil
+        defer { previewBusy = false }
+        do {
+            let r: ReportPreviewResponse = try await api.call("report_preview", body: reportFields)
+            preview = ReportPreview(text: r.text)
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
+
     private func send() async {
+        if reportForm != nil && !recipient.contains("@") {
+            showFormError("Send to: enter the counselor's email address in the form name@example.com.", in: &error); return
+        }
         guard !signature.trimmingCharacters(in: .whitespaces).isEmpty else {
             showFormError("Signature: type your full name to sign the report.", in: &error); return
         }
         busy = true; error = nil
         do {
-            // Tolerant: the report has gone out once the server says ok; a missing address
-            // in the reply must not look like a failure (a retry would email it twice).
-            struct SendResult: Decodable {
-                let sentTo: String
-                private enum CodingKeys: String, CodingKey { case ok, sentTo }
-                init(from decoder: Decoder) throws {
-                    let c = try decoder.container(keyedBy: CodingKeys.self)
-                    guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
-                        throw DecodingError.dataCorruptedError(forKey: .ok, in: c, debugDescription: "not ok")
-                    }
-                    sentTo = (try? c.decode(String.self, forKey: .sentTo)) ?? ""
-                }
+            var body: [String: Any] = reportFields
+            body["signature"] = signature
+            if let reportForm {
+                body["recipient"] = recipient.trimmingCharacters(in: .whitespaces)
+                body["cc_self"] = (copyToMe && !(reportForm.myEmail ?? "").isEmpty) ? 1 : 0
+                body["share_portal"] = (sharePortal && reportForm.canSharePortal == true) ? 1 : 0
             }
-            var body: [String: Any] = ["track_id": trackId, "intro": intro, "signature": signature]
             body["idem_key"] = idem.key(for: body)
-            let result: SendResult = try await api.call("send_report", body: body)
+            let result: ReportSendResult = try await api.call("send_report", body: body)
             idem.answered()
             // Said by the track screen once this sheet has closed: heard there, it is not sent twice.
-            onDone(result.sentTo.isEmpty ? "Report signed and emailed." : "Report signed and emailed to \(result.sentTo).")
+            var message = result.sentTo.isEmpty ? "Report signed and emailed." : "Report signed and emailed to \(result.sentTo)."
+            if result.copied == true { message += " A copy was emailed to you." }
+            if result.portalShared == true { message += " A copy is in the client's portal." }
+            else if result.portalShared == false && sharePortal { message += " The copy could not be put in the client's portal." }
+            if let warning = result.releaseWarning, !warning.isEmpty { message += " " + warning }
+            onDone(message)
             dismiss()
         } catch APIError.network {
             // The request may have arrived and the email gone (the server sends it before it
             // answers): sending again could email the counselor twice.
             // The key is kept (4.28.0): sending again unchanged is recognised and not emailed twice.
-            showFormError("The connection dropped before the server answered, so it isn't known whether the report was sent. Check the client's notes for “Training report emailed to VRC” before sending it again.", in: &self.error)
+            let subject = reportKind == "final" && reportForm != nil ? "Final report emailed to VRC" : "Training report emailed to VRC"
+            showFormError("The connection dropped before the server answered, so it isn't known whether the report was sent. Check the client's notes for “\(subject)” before sending it again.", in: &self.error)
             busy = false
         } catch {
             idem.failed(error)
@@ -1567,6 +1725,84 @@ struct SendReportSheet: View {
             busy = false
         }
     }
+}
+
+/// report_form's reply (4.34.0).
+struct ReportFormResponse: Decodable {
+    let recipient: String?
+    let lastReportAt: String?
+    let myEmail: String?
+    let canSharePortal: Bool?
+    let counselorVerified: Bool?
+}
+
+struct ReportPreviewResponse: Decodable { let text: String }
+
+struct ReportIntroDraft: Decodable {
+    let text: String
+    let truncated: Bool?
+    let placeholderWarning: String?
+}
+
+struct ReportSectionsDraft: Decodable {
+    let barriers: String?
+    let recommendations: String?
+    let truncated: Bool?
+}
+
+/// send_report's reply. Tolerant: the report has gone out once the server says ok; a missing
+/// address in the reply must not look like a failure (a retry would email it twice).
+struct ReportSendResult: Decodable {
+    let sentTo: String
+    let copied: Bool?
+    let portalShared: Bool?
+    let releaseWarning: String?
+    let reportSubject: String?
+    private enum CodingKeys: String, CodingKey { case ok, sentTo, copied, portalShared, releaseWarning, reportSubject }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
+            throw DecodingError.dataCorruptedError(forKey: .ok, in: c, debugDescription: "not ok")
+        }
+        sentTo = (try? c.decode(String.self, forKey: .sentTo)) ?? ""
+        copied = (try? c.decodeIfPresent(Bool.self, forKey: .copied)) ?? nil
+        portalShared = (try? c.decodeIfPresent(Bool.self, forKey: .portalShared)) ?? nil
+        releaseWarning = (try? c.decodeIfPresent(String.self, forKey: .releaseWarning)) ?? nil
+        reportSubject = (try? c.decodeIfPresent(String.self, forKey: .reportSubject)) ?? nil
+    }
+}
+
+/// The report as it will be sent, shown before sending.
+struct ReportPreview: Identifiable {
+    let id = UUID()
+    let text: String
+}
+
+struct ReportPreviewSheet: View {
+    let text: String
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(text)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .navigationTitle("Report preview")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+}
+
+/// An AI draft goes below what was typed, never in its place.
+func appendDraftBelow(_ typed: String, _ draft: String) -> String {
+    let d = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !d.isEmpty else { return typed }
+    let t = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+    return t.isEmpty ? d : t + "\n\n" + d
 }
 
 // MARK: - Add or edit a training track (save_track, the website's track_edit.php)
@@ -1599,6 +1835,21 @@ struct TrackFormValues: Decodable {
     let expirationDate: String?
     /// The saved version (4.29.0), sent back as save_track's loaded_at; nil from an older server.
     let updatedAt: String?
+    /// Who pays ("vr", "private" or "none") and the dollar authorization (4.29.0 servers send them).
+    var billingMode: String?
+    var authorizedAmount: Double?
+}
+
+/// One "Who pays" choice (4.34.0 save_track GET).
+struct BillingModeChoice: Decodable, Hashable {
+    let value: String
+    let label: String
+}
+
+/// A new track's starting values (4.34.0), as the website's form starts them.
+struct TrackNewDefaults: Decodable {
+    let billingMode: String?
+    let hourlyRate: String?
 }
 
 struct TrackFormResponse: Decodable {
@@ -1609,6 +1860,30 @@ struct TrackFormResponse: Decodable {
     let cadences: [TrackCadenceChoice]
     let rsaCategories: [String]
     let bundles: [TrackBundleChoice]
+    /// 4.34.0: Who pays, the personal rate Private pay starts at, each service type's RSA
+    /// category, and a new track's defaults; nil from an older server.
+    var billingModes: [BillingModeChoice]?
+    var privateRate: String?
+    var rsaDefaults: [String: String]?
+    var defaults: TrackNewDefaults?
+
+    /// The RSA category a service type starts with: the server's rule (rsa_default_for), or for
+    /// an older server the first category, as before.
+    func rsaDefault(for serviceType: String) -> String {
+        if let category = rsaDefaults?[serviceType], rsaCategories.contains(category) { return category }
+        return rsaCategories.contains("Rehabilitation Technology") ? "Rehabilitation Technology" : (rsaCategories.first ?? "")
+    }
+}
+
+/// Money typed as on the website (4.34.0): "$4,500" or "4 500.00" is 4500 (the dollar sign,
+/// spaces and thousands commas are dropped); a single comma before the cents stays a decimal comma.
+func moneyInput(_ raw: String) -> String {
+    var text = raw.replacingOccurrences(of: "$", with: "").replacingOccurrences(of: " ", with: "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.range(of: "^[0-9]{1,3}(,[0-9]{3})+(\\.[0-9]{1,2})?$", options: .regularExpression) != nil {
+        text = text.replacingOccurrences(of: ",", with: "")
+    }
+    return text
 }
 
 struct TrackSaveResult: Decodable {
@@ -1680,14 +1955,22 @@ struct TrackEditSheet: View {
     @State private var reason = ""
     @State private var startDate = ""
     @State private var expirationDate = ""
+    /// Who pays and the dollar authorization (4.34.0).
+    @State private var billingMode = "vr"
+    @State private var authorizedAmount = ""
+    /// The service type the RSA category was last defaulted for, so a change moves the default.
+    @State private var defaultedFor = ""
 
     private var draftKey: String { trackId.map { "track-edit-\($0)" } ?? "track-new-\(clientId ?? 0)" }
 
     private var fields: [String: String] {
         ["title": title, "service_type": serviceType, "bundle_id": String(bundleId), "rsa_category": rsaCategory, "status": status,
          "report_cadence": cadence, "auth_number": authNumber, "funding_agency": fundingAgency, "authorized_hours": hours,
-         "hourly_rate": rate, "mileage_rate": mileage, "amendment_reason": reason, "start_date": startDate, "expiration_date": expirationDate]
+         "hourly_rate": rate, "mileage_rate": mileage, "amendment_reason": reason, "start_date": startDate, "expiration_date": expirationDate,
+         "billing_mode": billingMode, "authorized_amount": authorizedAmount]
     }
+    /// Whether the server offers Who pays (4.34.0); an older one keeps every app track VR.
+    private var offersBilling: Bool { !(form?.billingModes ?? []).isEmpty }
     private var hasChanges: Bool { form != nil && fields != original }
     /// Only the fields changed here (4.29.0): all that a draft keeps and restores.
     private var changedFields: [String: String] { fields.filter { original[$0.key] != $0.value } }
@@ -1755,8 +2038,15 @@ struct TrackEditSheet: View {
             Text("For \(form.clientName ?? clientName). Fields marked required must be filled in.").font(.callout)
         }
         Section("Track") {
-            CaptionedField(label: "Track title (required)", text: $title, prompt: "For example, Screen Reader Training — JAWS")
+            CaptionedField(label: "Track title (required)", text: $title, prompt: "For example, Screen Reader Training — JAWS", errorName: "Track title")
             Picker("Service type", selection: $serviceType) { ForEach(form.serviceTypes, id: \.self) { Text($0).tag($0) } }
+                .onChange(of: serviceType) { now in
+                    // As the website's form: the RSA category follows the service type unless it was changed.
+                    if bundleId == 0, rsaCategory.isEmpty || rsaCategory == form.rsaDefault(for: defaultedFor) {
+                        rsaCategory = form.rsaDefault(for: now)
+                    }
+                    defaultedFor = now
+                }
             Picker("Service bundle", selection: $bundleId) {
                 Text("No bundle: single RSA category").tag(0)
                 ForEach(form.bundles) { b in Text(b.name).tag(b.id) }
@@ -1777,12 +2067,37 @@ struct TrackEditSheet: View {
             }
         }
         Section("Service authorization") {
-            CaptionedField(label: "Authorization number (required)", text: $authNumber)
-            CaptionedField(label: "Funding agency (required)", text: $fundingAgency)
-            CaptionedField(label: "Authorized hours, total granted (required)", text: $hours, keyboard: .decimalPad, errorName: "Authorized hours")
+            if let modes = form.billingModes, !modes.isEmpty {
+                // Quiet: plain labels, as the website's Who pays.
+                Picker("Who pays", selection: $billingMode) {
+                    ForEach(modes, id: \.value) { Text($0.label).tag($0.value) }
+                }
+                .errorField("Who pays")
+                .onChange(of: billingMode) { now in
+                    if now == "private", rate.trimmingCharacters(in: .whitespaces).isEmpty || rate == "0",
+                       let personal = form.privateRate, (Double(personal) ?? 0) > 0 {
+                        rate = personal
+                    }
+                }
+            }
+            CaptionedField(label: billingMode == "vr" ? "Authorization number (required)" : "Authorization number (optional)", text: $authNumber,
+                           errorName: "Authorization number")
+            if billingMode == "vr" {
+                CaptionedField(label: "Funding agency (required)", text: $fundingAgency, errorName: "Funding agency")
+            } else {
+                // The server names the payer itself for these (track_edit.php), so nothing is typed.
+                LabeledContent("Funding agency (set by Who pays)", value: billingMode == "private" ? "Private pay" : "No charge")
+            }
+            CaptionedField(label: billingMode == "vr" ? "Authorized hours, total granted (required)" : "Authorized hours, total granted",
+                           text: $hours, keyboard: .decimalPad, errorName: "Authorized hours")
+            if offersBilling && billingMode == "vr" {
+                CaptionedField(label: "Authorized dollar amount (optional)", text: $authorizedAmount, prompt: "For example, 4500.00",
+                               keyboard: .decimalPad, errorName: "Authorized dollar amount")
+            }
             // 4.29.0: what a new rate does is part of the rate fields (their hint) and shown once,
             // under the amendment reason, never as a VoiceOver stop of its own.
-            CaptionedField(label: "Hourly billing rate in dollars (required)", text: $rate, prompt: "For example, 85.00", keyboard: .decimalPad,
+            CaptionedField(label: billingMode == "none" ? "Hourly billing rate in dollars (no charge)" : "Hourly billing rate in dollars (required)",
+                           text: $rate, prompt: "For example, 85.00", keyboard: .decimalPad,
                            spokenHint: trackId == nil ? nil : Self.newRateHelp, errorName: "Hourly billing rate")
             CaptionedField(label: "Mileage rate in dollars per mile", text: $mileage, prompt: "0 when travel is not billable", keyboard: .decimalPad,
                            spokenHint: trackId == nil ? nil : Self.newRateHelp, errorName: "Mileage rate")
@@ -1791,9 +2106,23 @@ struct TrackEditSheet: View {
                                hint: Self.newRateHelp)
             }
             OptionalDayField(title: "Start date", text: $startDate)
+                .errorField("Start date")
             OptionalDayField(title: "Expiration date", text: $expirationDate)
+                .errorField("Expiration date")
         }
     }
+
+    /// save_track's `errors` keys in the order their fields are on the form.
+    private static let errorOrder = ["title", "billing_mode", "auth_number", "funding_agency", "authorized_hours",
+                                     "authorized_amount", "hourly_rate", "mileage_rate", "start_date", "expiration_date"]
+
+    /// The form's field each of save_track's `errors` keys is about.
+    private static let errorFields: [String: String] = [
+        "title": "Track title", "auth_number": "Authorization number", "funding_agency": "Funding agency",
+        "authorized_hours": "Authorized hours", "hourly_rate": "Hourly billing rate", "mileage_rate": "Mileage rate",
+        "authorized_amount": "Authorized dollar amount", "billing_mode": "Who pays",
+        "start_date": "Start date", "expiration_date": "Expiration date",
+    ]
 
     /// The form's fields as the server has them for `t` (blank where the form would offer a default).
     private static func values(of t: TrackFormValues, rsaDefault: String) -> [String: String] {
@@ -1801,7 +2130,9 @@ struct TrackEditSheet: View {
          "rsa_category": t.rsaCategory ?? rsaDefault, "status": t.status, "report_cadence": t.reportCadence,
          "auth_number": t.authNumber, "funding_agency": t.fundingAgency,
          "authorized_hours": trackNumberString(t.authorizedHours, decimals: 2), "hourly_rate": trackNumberString(t.hourlyRate, decimals: 2),
-         "mileage_rate": trackNumberString(t.mileageRate, decimals: 3), "start_date": t.startDate ?? "", "expiration_date": t.expirationDate ?? ""]
+         "mileage_rate": trackNumberString(t.mileageRate, decimals: 3), "start_date": t.startDate ?? "", "expiration_date": t.expirationDate ?? "",
+         "billing_mode": t.billingMode ?? "vr",
+         "authorized_amount": t.authorizedAmount.map { String(format: "%.2f", $0) } ?? ""]
     }
 
     private static let newRateHelp = "A new hourly or mileage rate also applies to work on this track not yet invoiced, and re-prices its Draft invoices; submitted and paid invoices keep what they billed."
@@ -1812,6 +2143,7 @@ struct TrackEditSheet: View {
         "status": "Status", "report_cadence": "Automatic progress reports", "auth_number": "Authorization number",
         "funding_agency": "Funding agency", "authorized_hours": "Authorized hours", "hourly_rate": "Hourly billing rate",
         "mileage_rate": "Mileage rate", "start_date": "Start date", "expiration_date": "Expiration date",
+        "billing_mode": "Who pays", "authorized_amount": "Authorized dollar amount",
     ]
 
     private static func words(_ names: [String]) -> String {
@@ -1838,6 +2170,8 @@ struct TrackEditSheet: View {
         reason = values["amendment_reason"] ?? reason
         startDate = values["start_date"] ?? startDate
         expirationDate = values["expiration_date"] ?? expirationDate
+        billingMode = values["billing_mode"] ?? billingMode
+        authorizedAmount = values["authorized_amount"] ?? authorizedAmount
     }
 
     private func load() async {
@@ -1847,12 +2181,17 @@ struct TrackEditSheet: View {
         do {
             let r: TrackFormResponse = try await api.call("save_track", query: query)
             if let t = r.track {
-                apply(Self.values(of: t, rsaDefault: r.rsaCategories.first ?? ""))
+                apply(Self.values(of: t, rsaDefault: r.rsaDefault(for: t.serviceType)))
                 opened = t
             } else {
                 serviceType = r.serviceTypes.contains("Assistive Technology") ? "Assistive Technology" : (r.serviceTypes.first ?? "")
-                rsaCategory = r.rsaCategories.contains("Rehabilitation Technology") ? "Rehabilitation Technology" : (r.rsaCategories.first ?? "")
+                // 4.34.0: the service type's own RSA category (rsa_default_for), and the website's
+                // new-track Who pays and rate (a quoted fee, or VR first when the client has a case).
+                rsaCategory = r.rsaDefault(for: serviceType)
+                if let mode = r.defaults?.billingMode, (r.billingModes ?? []).contains(where: { $0.value == mode }) { billingMode = mode }
+                if let startRate = r.defaults?.hourlyRate, !startRate.isEmpty { rate = startRate }
             }
+            defaultedFor = serviceType
             original = fields
             form = r
             restoreDraft()
@@ -1885,14 +2224,14 @@ struct TrackEditSheet: View {
     /// saved value (someone else's change); a field edited here keeps what was typed. The next
     /// Save is then checked against this load.
     private func reload() async {
-        guard let trackId, let form else { return }
+        guard let trackId, form != nil else { return }
         reloading = true
         defer { reloading = false }
         do {
             let r: TrackFormResponse = try await api.call("save_track", query: ["id": String(trackId)])
             guard let t = r.track else { throw APIError.server("The track could not be found.") }
             let typed = changedFields
-            let saved = Self.values(of: t, rsaDefault: r.rsaCategories.first ?? form.rsaCategories.first ?? "")
+            let saved = Self.values(of: t, rsaDefault: r.rsaDefault(for: t.serviceType))
             apply(saved)
             apply(typed)
             // The amendment reason is not a saved field: it counts as changed only when typed.
@@ -1912,8 +2251,11 @@ struct TrackEditSheet: View {
         guard let hoursText = trackNumberText(hours, whole: 5, decimals: 2) else {
             showFormError("Authorized hours: enter a number such as 40 or 12.5.", in: &error); return
         }
-        guard let rateText = checkedAmount(rate, maxWholeDigits: 6) else {
+        guard let rateText = checkedAmount(moneyInput(rate), maxWholeDigits: 6) else {
             showFormError(amountFormatMessage("Hourly billing rate", maxWholeDigits: 6), in: &error); return
+        }
+        guard let amountText = checkedAmount(moneyInput(authorizedAmount), maxWholeDigits: 8) else {
+            showFormError(amountFormatMessage("Authorized dollar amount", maxWholeDigits: 8), in: &error); return
         }
         guard let mileageText = trackNumberText(mileage, whole: 3, decimals: 3) else {
             showFormError("Mileage rate: enter dollars per mile with up to 3 decimals, such as 0.655, or 0.", in: &error); return
@@ -1924,6 +2266,11 @@ struct TrackEditSheet: View {
                                    "authorized_hours": hoursText, "hourly_rate": rateText, "mileage_rate": mileageText,
                                    "start_date": startDate, "expiration_date": expirationDate, "rsa_category": rsaCategory]
         if let trackId { body["id"] = trackId; body["amendment_reason"] = reason } else if let clientId { body["client_id"] = clientId }
+        // 4.34.0: Who pays and the dollar authorization (blank clears it), on a server that offers them.
+        if offersBilling {
+            body["billing_mode"] = billingMode
+            body["authorized_amount"] = billingMode == "vr" ? amountText : ""
+        }
         // 4.29.0: the version loaded and the values the form opened with, so the server refuses
         // the save (409) when someone else changed the track since, instead of reversing their
         // amendment and re-pricing work. orig is the server's own values, not the form's defaults.
@@ -1937,10 +2284,12 @@ struct TrackEditSheet: View {
         if trackId == nil { body["idem_key"] = idem.key(for: body) }
         var refusedConflict = false
         var changedNames: [String] = []
+        var refusedFields: [String: String] = [:]
         do {
             let r: TrackSaveResult = try await api.call("save_track", body: body, refusal: { reply in
                 refusedConflict = (reply["conflict"] as? Bool) == true
                 changedNames = (reply["changed"] as? [String]) ?? []
+                refusedFields = (reply["errors"] as? [String: String]) ?? [:]
             })
             idem.answered()
             conflict = false
@@ -1956,6 +2305,19 @@ struct TrackEditSheet: View {
                     ? "Someone else changed this track since you opened it."
                     : "Someone else changed \(Self.words(changedNames)) since you opened this track."
                 showFormError(said + " Nothing was saved. Reload to bring in their changes; what you typed stays in the form.", in: &self.error)
+                return
+            }
+            // A refusal about one field is tied to it (4.34.0: "Hourly rate must be greater
+            // than zero." to Hourly billing rate).
+            // Several at once: the summary has the server's whole text, and the first field in the
+            // form's order is the one tied (VoiceOver goes there).
+            if case APIError.server(let message) = error,
+               let key = Self.errorOrder.first(where: { refusedFields[$0] != nil }) {
+                showFormError(message, in: &self.error, field: Self.errorFields[key])
+                return
+            }
+            if case APIError.server(let message) = error, message.hasPrefix("Hourly rate") {
+                showFormError(message, in: &self.error, field: "Hourly billing rate")
                 return
             }
             showFormError(trackId == nil ? IdemKey.message(for: error, what: "the track") : error.localizedDescription, in: &self.error)

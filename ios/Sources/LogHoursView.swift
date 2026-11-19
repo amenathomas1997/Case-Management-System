@@ -17,9 +17,8 @@ struct LogHoursView: View {
     @State private var goals: [Goal] = []
     @State private var selectedGoal: Int?
     @State private var date = Date()
-    @State private var hours = 1.0
-    /// The hours as typed, kept in step with the stepper: a value within its range and steps
-    /// moves the stepper, and the stepper rewrites it.
+    /// The hours as typed (4.34.0, as the website: two decimals, 0 to 24; 0 with miles for
+    /// travel only; blank with a session note saves the note on its own).
     @State private var hoursText = "1"
     @State private var mileage = ""
     @State private var descriptionText = ""
@@ -52,6 +51,7 @@ struct LogHoursView: View {
     /// An entry typed but not yet logged, which closing the sheet would throw away.
     private var trimmedNote: String { sessionNote.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var hasEntry: Bool { !trimmedDescription.isEmpty || !mileage.isEmpty || !trimmedNote.isEmpty }
+    private var trimmedHours: String { hoursText.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
         NavigationStack {
@@ -123,26 +123,14 @@ struct LogHoursView: View {
                 // 2000 through today, as the server accepts for logged hours, so a flick of the
                 // year wheel can't queue a future entry that is refused when it syncs.
                 DatePicker("Date", selection: $date, in: Self.dateRange, displayedComponents: .date)
-                // Up to 24 hours, as the server and the website allow.
-                Stepper(value: $hours, in: Self.hoursRange, step: 0.25) {
-                    Text(String(format: "Hours: %.2f", hours))
-                }
-                .voiceOverAdjustable("Hours", value: hoursSpoken(hours), binding: $hours, in: Self.hoursRange, step: 0.25)
-                // The same value typed directly, for an amount far from the stepper's start.
-                // 4.29.0: the format message is part of the field (its hint), not a stop of its own.
-                CaptionedField(label: "Hours, typed (0.25 to 24, in quarter hours)", text: $hoursText,
-                               prompt: "Hours, like 1.5", keyboard: .decimalPad,
-                               spokenHint: (hoursTextProblem ? Self.hoursFormatHelp + " " : "")
-                                   + "Type the hours instead of using the stepper. Logged as the stepper shows them.", errorName: "Hours")
-                if hoursTextProblem {
-                    Text(Self.hoursFormatHelp)
-                        .font(.caption).foregroundStyle(Color.secondaryText)
-                        .accessibilityHidden(true)
-                }
+                // Up to 24 hours with two decimals, as the server and the website allow (4.34.0:
+                // no quarter-hour stepper); the rules are in the label, not a stop of their own.
+                CaptionedField(label: "Hours (0 with miles for travel only; blank to save only the session note)", text: $hoursText,
+                               prompt: "Hours, like 1.5", keyboard: .decimalPad, errorName: "Hours")
                 // Each name stays visible above its field once it holds text.
                 CaptionedField(label: "Mileage (optional, 0 to 1000 miles)", text: $mileage, keyboard: .decimalPad, errorName: "Mileage")
-                CaptionedField(label: "What did you work on? (required)", text: $descriptionText,
-                               prompt: "What did you work on?", lines: 3...8)
+                CaptionedField(label: "What did you work on? (required with hours)", text: $descriptionText,
+                               prompt: "What did you work on?", lines: 3...8, errorName: "Description")
                 // The session's case note, saved with the hours in one step (as on the website).
                 CaptionedField(label: "Session note (optional)", text: $sessionNote,
                                prompt: "Progress, concerns, plan for next time", lines: 3...12)
@@ -156,12 +144,10 @@ struct LogHoursView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
-                .disabled(busy || selectedTrack == nil || trimmedDescription.isEmpty)
+                .disabled(busy || selectedTrack == nil)
                 .accessibilityLabel("Log hours")
                 .accessibilityValue(busy ? "Saving hours" : "")
-                .accessibilityHint(selectedTrack == nil || trimmedDescription.isEmpty
-                                   ? "Available once a training track is chosen and the work is described."
-                                   : "")
+                .accessibilityHint(selectedTrack == nil ? "Available once a training track is chosen." : "")
             }
             .navigationTitle("Log hours")
             .toolbar {
@@ -176,7 +162,7 @@ struct LogHoursView: View {
                 // keep their save: reached in a flick or two instead of past every field.
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Log") { Task { await submit() } }
-                        .disabled(busy || selectedTrack == nil || trimmedDescription.isEmpty)
+                        .disabled(busy || selectedTrack == nil)
                         .accessibilityLabel("Log hours")
                         .accessibilityValue(busy ? "Saving hours" : "")
                         .accessibilityInputLabels(["Log", "Log hours"])
@@ -190,13 +176,7 @@ struct LogHoursView: View {
             .onChange(of: descriptionText) { _ in saveDraft() }
             .onChange(of: sessionNote) { _ in saveDraft() }
             .onChange(of: mileage) { _ in saveDraft() }
-            .onChange(of: hours) { newValue in
-                if Self.parsedHours(hoursText) != newValue { hoursText = Self.hoursString(newValue) }
-                saveDraft()
-            }
-            .onChange(of: hoursText) { newValue in
-                if let typed = Self.parsedHours(newValue), typed != hours { hours = typed }
-            }
+            .onChange(of: hoursText) { _ in saveDraft() }
             .onChange(of: date) { _ in
                 // The authorization problem was for the date it was sent with.
                 clearAuthorizationIssue()
@@ -220,7 +200,7 @@ struct LogHoursView: View {
         var fields = ["description": descriptionText, "mileage": mileage, "session_note": sessionNote]
         // The rest of the entry travels only with text: a draft with nothing typed is removed.
         if fields.values.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
-            fields["hours"] = String(hours)
+            fields["hours"] = hoursText
             fields["date"] = APIDate.day(date)
             fields["service_type"] = serviceType
             fields["rsa_category"] = rsaCategory
@@ -241,7 +221,7 @@ struct LogHoursView: View {
         descriptionText = text
         mileage = miles
         sessionNote = note
-        if let h = draft["hours"].flatMap(Double.init), Self.hoursRange.contains(h) { hours = h }
+        if let h = draft["hours"] { hoursText = h }
         var checks: [String] = []
         // 2000 through today, as the date picker allows (yyyy-MM-dd compares as text).
         if let day = draft["date"], let saved = APIDate.strictDay(day), day >= "2000-01-01", day <= APIDate.day(Date()) {
@@ -275,26 +255,13 @@ struct LogHoursView: View {
         DraftStore.clear(key: draftKey(trackId), owner: api.userId)
     }
 
-    private static let hoursRange = 0.25...24.0
-    private static let hoursFormatHelp = "Enter 0.25 to 24 hours in quarter hours, like 1.5 or 2.75. The stepper shows what will be logged."
-
-    /// Typed hours the stepper could show (0.25 to 24, in quarter hours; a comma may be the
+    /// Typed hours as the website takes them (0 to 24, at most two decimals; a comma may be the
     /// decimal point), or nil.
-    private static func parsedHours(_ raw: String) -> Double? {
+    static func parsedHours(_ raw: String) -> Double? {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
         guard text.range(of: "^[0-9]{1,2}(\\.[0-9]{1,2})?$|^\\.[0-9]{1,2}$", options: .regularExpression) != nil,
-              let value = Double(text), hoursRange.contains(value),
-              (value * 4).rounded() == value * 4 else { return nil }
+              let value = Double(text), value >= 0, value <= 24 else { return nil }
         return value
-    }
-
-    private static func hoursString(_ value: Double) -> String {
-        String(format: "%g", value)
-    }
-
-    /// Something typed in the hours field that is not what the stepper shows.
-    private var hoursTextProblem: Bool {
-        Self.parsedHours(hoursText) != hours
     }
 
     /// The tracks the picker offers: a client's own when opened from their record (all of
@@ -384,9 +351,20 @@ struct LogHoursView: View {
 
     private func submit() async {
         guard let trackId = selectedTrack else { return }
-        // Typed hours the stepper could not take are reported, never logged as the stepper's value.
-        guard !hoursTextProblem else {
-            showFormError("Hours: enter 0.25 to 24 hours in quarter hours, like 1.5 or 2.75, in digits. Use a period or comma for the decimal point; or use the hours stepper.", in: &error)
+        // 4.34.0: the website's rules. Blank hours with a session note save the note on its own.
+        let noteOnly = trimmedHours.isEmpty
+        if noteOnly && trimmedNote.isEmpty {
+            showFormError("Enter the hours worked, or write a session note to save the note on its own.", in: &error, field: "Hours")
+            return
+        }
+        let hours = noteOnly ? 0 : (Self.parsedHours(trimmedHours) ?? -1)
+        let typedMiles = Double(mileage.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")) ?? 0
+        if !noteOnly && (hours < 0 || (hours == 0 && typedMiles <= 0)) {
+            showFormError("Enter the hours worked as a number more than 0 and no more than 24, such as 1.5, or 0 with miles for travel only.", in: &error, field: "Hours")
+            return
+        }
+        if !noteOnly && trimmedDescription.isEmpty {
+            showFormError("Describe the activity, for the hours on the invoice.", in: &error, field: "Description")
             return
         }
         // Mileage is billable: something typed that isn't a number is reported, never logged as 0.
@@ -395,7 +373,7 @@ struct LogHoursView: View {
         guard let mileageText = checkedAmount(mileage, maxWholeDigits: 4),
               mileageText.isEmpty || mileageText.range(of: "^[0-9]+(\\.[0-9]0?)?$", options: .regularExpression) != nil,
               (Double(mileageText) ?? 0) <= 1000 else {
-            showFormError("Mileage: enter the miles driven, from 0 to 1000, in digits with at most one decimal place, like 12.5. Use a period or comma for the decimal point; no thousands separators or units.", in: &error)
+            showFormError("Mileage must be a number from 0 to 1000 miles per entry.", in: &error, field: "Mileage")
             return
         }
         busy = true; error = nil; confirmation = nil
@@ -404,7 +382,7 @@ struct LogHoursView: View {
             "track_id": trackId,
             "service_type": serviceType,
             "rsa_category": rsaCategory,
-            "hours": hours,
+            "hours": noteOnly ? "" as Any : hours as Any,
             "date": APIDate.day(date),
             "mileage": Double(mileageText) ?? 0,
             "description": trimmedDescription,
@@ -416,12 +394,23 @@ struct LogHoursView: View {
         if withNote { body["session_note"] = trimmedNote }
         // Only once the person turned it on, in answer to the server's authorization problem.
         if authorizationIssue != nil && authorizationAck { body["authorization_ack"] = true }
+        var refusedFields: [String: String] = [:]
         do {
-            let result: SaveAck = try await api.call("log_hours", body: body)
-            confirmation = result.deduplicated == true
-                ? "These hours were already logged from an earlier try, so they were not logged twice."
-                : String(format: withNote ? "%.2f hours logged and the session note saved." : "%.2f hours logged.", hours)
-            announce(confirmation!)
+            let result: LogHoursResult = try await api.call("log_hours", body: body, refusal: { refusedFields = ($0["errors"] as? [String: String]) ?? [:] })
+            var said: String
+            if result.deduplicated == true {
+                said = "These hours were already logged from an earlier try, so they were not logged twice."
+            } else if noteOnly || (result.noteSaved == true && result.hoursLogged == false) {
+                said = "Session note saved. No hours were logged."
+            } else if hours == 0 {
+                said = withNote ? "Travel logged with no hours, and the session note saved." : "Travel logged with no hours."
+            } else {
+                said = String(format: withNote ? "%.2f hours logged and the session note saved." : "%.2f hours logged.", hours)
+            }
+            // The website's reminder when the track has no homework (4.34.0).
+            if let reminder = result.reminder, !reminder.isEmpty { said += " " + reminder }
+            confirmation = said
+            announce(said)
             clearDraft(trackId)
             descriptionText = ""
             mileage = ""
@@ -431,7 +420,7 @@ struct LogHoursView: View {
         } catch APIError.network {
             // No signal: keep the entry on the phone and sync automatically.
             do {
-                try api.enqueue("log_hours", body: body, label: "Hours: \(trimmedDescription.prefix(40))")
+                try api.enqueue("log_hours", body: body, label: noteOnly ? "Session note" : "Hours: \(trimmedDescription.prefix(40))")
                 confirmation = "No connection — saved on this phone, will sync automatically."
                 announce(confirmation!)
                 clearDraft(trackId)
@@ -451,9 +440,33 @@ struct LogHoursView: View {
             authorizationAck = false
             showFormError(problem + " To log these hours anyway (the authorization is being renewed or amended), turn on “Log it anyway” just below this message, then tap Log hours again.", in: &self.error)
         } catch {
-            showFormError(error.localizedDescription, in: &self.error)
+            // Tied to the field the server names (4.34.0: errors.hours, errors.description).
+            // The server's whole text in the summary; the first field it names (in form order) is tied.
+            let field = [("hours", "Hours"), ("mileage", "Mileage"), ("description", "Description")]
+                .first(where: { refusedFields[$0.0] != nil })?.1
+            showFormError(error.localizedDescription, in: &self.error, field: field)
         }
         busy = false
+    }
+}
+
+/// log_hours' reply (4.34.0 adds note_saved, hours_logged and reminder). Tolerant: once the
+/// server says ok, an unexpected shape must not turn logged hours into an error to retry.
+struct LogHoursResult: Decodable {
+    let deduplicated: Bool?
+    let noteSaved: Bool?
+    let hoursLogged: Bool?
+    let reminder: String?
+    private enum CodingKeys: String, CodingKey { case ok, deduplicated, noteSaved, hoursLogged, reminder }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
+            throw DecodingError.dataCorruptedError(forKey: .ok, in: c, debugDescription: "not ok")
+        }
+        deduplicated = (try? c.decodeIfPresent(Bool.self, forKey: .deduplicated)) ?? nil
+        noteSaved = (try? c.decodeIfPresent(Bool.self, forKey: .noteSaved)) ?? nil
+        hoursLogged = (try? c.decodeIfPresent(Bool.self, forKey: .hoursLogged)) ?? nil
+        reminder = (try? c.decodeIfPresent(String.self, forKey: .reminder)) ?? nil
     }
 }
 

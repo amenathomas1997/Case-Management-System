@@ -74,6 +74,9 @@ private fun AddDeviceRequestDialog(api: Api, onDone: (Int) -> Unit, onCancel: ()
 }
 
 /** One device request through its steps: quotes, authorization, order, delivery, training. */
+/** 4.34.0: "Request reopened. Status updated to Ordered." (plain "Request reopened." from an older server). */
+fun reopenedWords(r: JSONObject): String = r.str("status")?.let { "Request reopened. Status updated to $it." } ?: "Request reopened."
+
 @Composable
 fun DeviceRequestScreen(api: Api, id: Int) {
     val state = rememberLoaded(id) { api.call("device_request", mapOf("id" to id.toString())) }
@@ -83,6 +86,7 @@ fun DeviceRequestScreen(api: Api, id: Int) {
     var ask by remember { mutableStateOf<Triple<String, String, JSONObject>?>(null) }
     // 4.28.0: adding a quote is sent with a retry key, so a lost reply never adds it twice (see sendOnce).
     var quoteKey by rememberSaveable { mutableStateOf("") }
+    var reopening by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     suspend fun send(body: JSONObject) {
         if (body.optString("op") == "add_quote") api.callOnce("device_request_update", body.put("id", id), quoteKey, { quoteKey = it }, "the quote")
@@ -125,7 +129,15 @@ fun DeviceRequestScreen(api: Api, id: Int) {
                 SecondaryButton("Complete training") { ask = Triple("Mark training complete and close this request?", "A trained request cannot be reopened.", JSONObject().put("op", "train")) }
                 SecondaryButton("Mark denied") { ask = Triple("Mark this request denied?", "It is closed until someone reopens it.", JSONObject().put("op", "status").put("to", "Denied")) }
                 SecondaryButton("Cancel the request") { ask = Triple("Cancel this request?", "It is closed until someone reopens it.", JSONObject().put("op", "status").put("to", "Cancelled")) }
-            } else if (status != "Trained") SecondaryButton("Reopen the request") { update(JSONObject().put("op", "status").put("to", "Requested"), "Request reopened.") }
+            } else if (status != "Trained") SecondaryButton(if (reopening) "Reopening…" else "Reopen the request") {
+                // 4.34.0: it returns to its furthest step, which the reply names; one press at a time.
+                if (reopening) return@SecondaryButton
+                reopening = true; error = null
+                scope.launch {
+                    try { val r = api.call("device_request_update", body = JSONObject().put("op", "status").put("to", "Requested").put("id", id)); state.reload(); notice = reopenedWords(r) }
+                    catch (e: ApiException) { error = e.message } finally { reopening = false }
+                }
+            }
         }
         // 4.29.0: the dialog stays open, with what was typed, until the server took it; a refusal shows inside it.
         if (step.isNotEmpty()) key(dialogKey("device-step", step)) {

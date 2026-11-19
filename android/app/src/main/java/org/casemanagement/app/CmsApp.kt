@@ -9,10 +9,16 @@ import kotlinx.coroutines.launch
 class CmsApp : Application() {
     lateinit var api: Api
         private set
+    /** 4.34.0: the app lock, kept here so a new Activity (a turned phone) does not unlock it. */
+    lateinit var lock: AppLock
+        private set
 
     override fun onCreate() {
         super.onCreate()
         api = Api(this)
+        // A session kept on the phone starts locked, as on the iPhone.
+        lock = AppLock(api.store, startSignedIn = api.isSignedIn)
+        api.onSignedIn = { lock.signedIn() }
         // The connection coming back sends what was kept without a signal: offline entries and
         // signatures taken in a client's home (4.26.0).
         try {

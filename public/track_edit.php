@@ -344,15 +344,10 @@ else $fromAuth = null;
 $v = fn(string $k, $default = '') => h($_POST[$k] ?? $track[$k] ?? $default);
 // A new track starts from the fee quoted when the client's referral came in (3.0.34):
 // $0 (free) is No charge, an hourly fee is Private pay at that fee; else VR.
+// An open VR case is billed at the VR rate (Pricing rules, 4.2.0), whatever was quoted.
+// The same rule starts the app's new-track form (track_new_defaults, inc/pricing.php).
 $newMode = 'vr'; $newRate = '';
-if (!$track) {
-    $qf = db()->prepare('SELECT quoted_fee FROM referrals WHERE client_id = ? AND quoted_fee IS NOT NULL ORDER BY id DESC LIMIT 1');
-    $qf->execute([$clientId]);
-    $fee = $qf->fetchColumn();
-    if ($fee !== false) { $newMode = (float)$fee > 0 ? 'private' : 'none'; $newRate = (float)$fee > 0 ? number_format((float)$fee, 2, '.', '') : ''; }
-    // An open VR case is billed at the VR rate (Pricing rules, 4.2.0), whatever was quoted.
-    if (pricing_settings()['vr_first'] && client_open_vr_case($clientId)) { $newMode = 'vr'; $newRate = ''; }
-}
+if (!$track) ['billing_mode' => $newMode, 'hourly_rate' => $newRate] = track_new_defaults($clientId);
 $curMode = (string)($_POST['billing_mode'] ?? $track['billing_mode'] ?? $newMode);
 // The shared helpers render the error summary, each inline error, and the
 // aria-invalid / aria-describedby that ties an error to its control.

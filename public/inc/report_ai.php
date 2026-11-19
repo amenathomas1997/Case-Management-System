@@ -27,7 +27,7 @@ function report_ai_sections(string $aiText, array $clientRow, int $actor, bool $
     };
     $b = $grab('BARRIERS', 'RECOMMENDATIONS'); $r = $grab('RECOMMENDATIONS', 'BARRIERS');
     if ($b === '' && $r === '') return ['ok' => false, 'barriers' => '', 'recommendations' => '', 'error' => 'The AI answer could not be read as barriers and recommendations. Try again, or write them yourself.'];
-    return ['ok' => true, 'barriers' => $b, 'recommendations' => $r, 'error' => null];
+    return ['ok' => true, 'barriers' => $b, 'recommendations' => $r, 'error' => null, 'truncated' => !empty($res['truncated'])];
 }
 
 /**
@@ -82,4 +82,33 @@ function report_ai_narrative_card(string $action, ?string $draft, string $what):
         . '<form method="post" action="' . h($action) . '" class="inline-form">' . csrf_field()
         . '<button type="submit" name="ai_narrative" value="1" class="btn btn-secondary btn-sm">Draft a narrative summary of ' . h($what) . ' with AI</button></form>'
         . '</section>';
+}
+
+/** The cover note at the top of a progress or final report (4.34.0: moved from report.php, shared
+ *  with the app's ai_draft report_intro). The prompt is the report's masked text; the full client
+ *  row lets ai_run() also mask the client's own details wherever else they appear. */
+function report_ai_cover_note(string $aiText, array $clientRow, int $actor, bool $final): array {
+    return ai_run('draft',
+        ai_system_base() . ' You are drafting a brief cover note (2–3 short paragraphs) that a VR instructor will put at '
+            . 'the top of a ' . ($final ? 'final report at the close of training, summarizing what the client achieved and the outcome' : 'training progress report') . ' to the counselor. Summarize progress and next steps warmly and professionally. '
+            . 'Do not restate the tables of hours — those follow below your note. Details in square brackets, such as [CLIENT] '
+            . 'or [COUNSELOR], were withheld for privacy: keep them as placeholders and do not invent names, dates or numbers.',
+        "Write the cover note for this training progress report.\n\n" . $aiText,
+        900, $clientRow, $actor);
+}
+
+/** The details withheld from the AI, to put back in its draft (as amendment_request.php does).
+ *  $t is build_track_report()'s track row. Empty values are left out, so a placeholder with no
+ *  detail on file stays for staff to fill in. */
+function report_ai_restore_map(array $t): array {
+    $restore = ['[CLIENT]' => (string)($t['client_name'] ?? ''), '[COUNSELOR]' => trim((string)($t['counselor_name'] ?? '')), '[AUTH]' => trim((string)($t['auth_number'] ?? '')),
+        '[EMPLOYER]' => (string)(client_last_closure((int)$t['cid'])['employer'] ?? '')];
+    return array_filter($restore, fn($v) => $v !== '');
+}
+
+/** The first unfilled [PLACEHOLDER] in a cover note (the same test as eval_report.php), or null
+ *  (4.34.0: moved from report.php). A screen reader at its default punctuation level does not
+ *  voice the brackets, so "[CLIENT]" would sound like a finished word. */
+function report_placeholder(string $s): ?string {
+    return preg_match('/\[(?=[^\[\]\n]*\p{L})[^\[\]\n]{1,80}\]/u', $s, $m) ? $m[0] : null;
 }

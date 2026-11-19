@@ -3,7 +3,6 @@ package org.casemanagement.app.ui
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -102,28 +101,55 @@ fun EquipmentScreen(api: Api, nav: NavHostController) {
         )
     }
     returning?.let { e ->
-        fun ret(condition: String) {
-            returning = null; error = null; notice = null
-            scope.launch {
-                try { api.call("return_equipment", body = JSONObject().put("loan_id", e.loanId ?: 0).put("condition_in", condition)); notice = e.name + " marked returned."; state.reload() }
-                catch (x: ApiException) { error = x.message }
-            }
-        }
+        // 4.34.0: the condition it came back in, from the organisation's list (Unchanged first), as on the website.
+        var condition by remember(e.id) { mutableStateOf("") }
+        val conditions = api.formList("equipment_conditions", listOf("New", "Good", "Fair", "Needs Repair"))
         AlertDialog(
             onDismissRequest = { returning = null },
             title = { Text("Return " + e.name, modifier = Modifier.semantics { heading() }) },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text(e.borrower?.let { "On loan to $it." } ?: "On loan.")
-                    TextButton(onClick = { ret("") }) { Text("Returned in the same condition") }
-                    TextButton(onClick = { ret("Needs Repair") }) { Text("Returned needing repair") }
+                    Choice("Condition when returned", condition, returnConditionOptions(conditions)) { condition = it }
                 }
             },
-            confirmButton = { TextButton(onClick = { returning = null }) { Text("Keep on loan") } },
+            confirmButton = { TextButton(onClick = {
+                returning = null; error = null; notice = null
+                scope.launch {
+                    try { api.call("return_equipment", body = JSONObject().put("loan_id", e.loanId ?: 0).put("condition_in", condition)); notice = e.name + " marked returned."; state.reload() }
+                    catch (x: ApiException) { error = x.message }
+                }
+            }) { Text("Mark ${e.name} returned") } },
+            dismissButton = { TextButton(onClick = { returning = null }) { Text("Keep on loan") } },
         )
     }
     lending?.let { e -> key(dialogKey("lend", e.id)) { LendDialog(api, e, onDone = { m -> lendingId = null; notice = m; state.reload() }, onCancel = { lendingId = null }) } }
     if (adding) AddEquipmentDialog(api, onDone = { m -> adding = false; notice = m; state.reload() }, onCancel = { adding = false })
+}
+
+/** 4.34.0: the conditions an item can come back in, "Unchanged" ("") first. */
+fun returnConditionOptions(conditions: List<String>): List<Pair<String, String>> = listOf("" to "Unchanged") + conditions.map { it to it }
+
+/** 4.34.0: the conditions a loan can go out in, starting at "Not recorded" (""), as on the website. */
+fun loanConditionOptions(conditions: List<String>): List<Pair<String, String>> = listOf("" to "Not recorded") + conditions.map { it to it }
+
+/** 4.34.0: the return date a loan starts with: today plus the administrator's loan period. */
+fun defaultReturnDate(todayIs: String, days: Int): String =
+    try { java.time.LocalDate.parse(todayIs).plusDays(days.toLong()).toString() } catch (e: Exception) { "" }
+
+/** 4.34.0: what cancelling a reservation did, saying when the item went to the next client waiting. */
+fun reservationCancelledWords(r: JSONObject?): String =
+    if (r?.optBoolean("promoted") == true) "Reservation cancelled. The item is now held for the client who has waited longest on its waitlist." else "Reservation cancelled."
+
+/** 4.34.0: the follow-up's answers (Unknown too); nothing is chosen to start with. */
+val FOLLOWUP_ANSWERS = listOf("yes" to "Yes", "no" to "No", "unknown" to "Unknown")
+
+/** 4.34.0: what recording a follow-up did: the server's warning, or what a "No" created. */
+fun followupRecordedWords(reply: JSONObject?, fallback: String): String {
+    if (reply == null) return fallback
+    reply.str("warning")?.let { return it }
+    if (reply.optBoolean("abandoned")) return "Recorded. Because the device is no longer in use, a case note and a follow-up task were created."
+    return fallback
 }
 
 private const val INTERVAL_MESSAGE = "Service interval: enter a whole number of days from 0 to 3650, like 7, 14 or 365 (0 means no service schedule)."
@@ -297,7 +323,7 @@ fun ReservationsScreen(api: Api) {
         Confirm("Cancel the reservation?", "Cancel the reservation of ${r.itemName} for ${r.clientName}? A waitlist place cannot be given back.", "Cancel reservation", {
             error = null; notice = null
             scope.launch {
-                try { api.call("cancel_reservation", body = JSONObject().put("reservation_id", r.id)); notice = "Reservation cancelled." }
+                try { notice = reservationCancelledWords(api.call("cancel_reservation", body = JSONObject().put("reservation_id", r.id))) }
                 catch (e: ApiException) { error = e.message }
                 state.reload()
             }
@@ -329,7 +355,8 @@ private fun ReservationDialog(api: Api, fixedItem: Int, onDone: (String) -> Unit
         if (busy) return@FormDialog
         // 4.29.0: each problem on its own field; 4.30.0: all of them in the summary.
         fromError = if (from.isNotBlank() && !day.matches(from.trim())) "Enter Needed from as year-month-day, or leave it empty." else null
-        untilError = if (until.isNotBlank() && !day.matches(until.trim())) "Enter Needed until as year-month-day, or leave it empty." else null
+        untilError = if (until.isNotBlank() && !day.matches(until.trim())) "Enter Needed until as year-month-day, or leave it empty."
+            else if (until.isNotBlank() && until.trim() < today()) "Needed until cannot be in the past. Enter today or a later date, or leave it blank." else null
         when {
             fromError != null || untilError != null -> error = fromError ?: untilError
             else -> scope.launchSave({ busy = it }, { error = it }) {
@@ -374,8 +401,10 @@ val BORROWER_TYPES = listOf(
 private fun LendDialog(api: Api, e: EquipmentItem, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val clients = rememberLoaded(e.id) { openClientChoices(api.call("client_choices")) }
     var client by rememberSaveable { mutableStateOf("") }
-    var due by rememberSaveable { mutableStateOf("") }
-    var condition by rememberSaveable { mutableStateOf(e.condition ?: "Good") }
+    // 4.34.0: the administrator's loan period gives the return date; clearing it means no return date.
+    var due by rememberSaveable { mutableStateOf(defaultReturnDate(today(), api.formNumber("loan_due_days", 60))) }
+    var dueError by remember { mutableStateOf<String?>(null) }
+    var condition by rememberSaveable { mutableStateOf("") }
     var signedBy by rememberSaveable { mutableStateOf("") }
     var purpose by rememberSaveable { mutableStateOf("") }
     var borrower by rememberSaveable { mutableStateOf("") }
@@ -395,8 +424,8 @@ private fun LendDialog(api: Api, e: EquipmentItem, onDone: (String) -> Unit, onC
                 if (clients.loading) Text("Loading clients…")
                 ErrorText(clients.error, takeFocus = false)
                 Choice("Client", client, listOf("" to "Choose a client") + list.map { it.id.toString() to it.name }, required = true) { client = it }
-                Field("Due back", due, { due = it }, hint = "year-month-day; empty for the usual period")
-                Choice("Condition going out", condition, conditions.map { it to it }) { condition = it }
+                Field("Return due", due, { due = it; dueError = null }, hint = "year-month-day; clear it for no return date", error = dueError)
+                Choice("Condition going out", condition, loanConditionOptions(conditions)) { condition = it }
                 Field("Received by", signedBy, { signedBy = it }, hint = "the name of who took it, optional")
                 Choice("Purpose", purpose, listOf("" to "Not recorded") + LOAN_PURPOSES) { purpose = it }
                 Choice("Who is borrowing", borrower, listOf("" to "Not recorded") + BORROWER_TYPES) { borrower = it }
@@ -408,9 +437,13 @@ private fun LendDialog(api: Api, e: EquipmentItem, onDone: (String) -> Unit, onC
         confirmButton = {
             TextButton(enabled = !busy, onClick = {
                 if (!gate.check(stillNeeded(missingNames("Client" to client.isEmpty())))) return@TextButton
+                dueError = if (due.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(due.trim())) "Return due: enter the date as year-month-day, or clear it for no return date."
+                    else if (due.isNotBlank() && due.trim() < today()) "Return due cannot be before today." else null
+                dueError?.let { error = it; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
                     val b = JSONObject().put("equipment_id", e.id).put("client_id", client.toInt()).put("condition_out", condition).put("accepted_name", signedBy.trim())
-                    if (due.isNotBlank()) b.put("due_date", due.trim())
+                    // Always sent: a cleared date ("") is a loan with no return date.
+                    b.put("due_date", due.trim())
                     if (notes.isNotBlank()) b.put("notes", notes.trim().take(255))
                     if (purpose.isNotEmpty()) b.put("purpose", purpose)
                     if (borrower.isNotEmpty()) b.put("borrower_type", borrower)
@@ -462,7 +495,9 @@ private fun FollowupDialog(api: Api, f: JSONObject, onDone: (String) -> Unit, on
     var notes by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var asking by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val client = f.optString("client_name"); val equipment = f.optString("equipment_name")
     fun send(op: String) {
         // 4.29.0: one press at a time, so a repeated double tap never moves it twice.
         if (busy) return
@@ -474,7 +509,7 @@ private fun FollowupDialog(api: Api, f: JSONObject, onDone: (String) -> Unit, on
                 b.put("in_use", inUse).put("barriers", barriers.trim()).put("notes", notes.trim())
                 satisfaction.toIntOrNull()?.let { b.put("satisfaction", it) }
                 onDone(saveOrQueue(api, "save_followup", b, "Device follow-up: " + f.optString("client_name"), "Follow-up recorded.").let { s ->
-                    s.reply?.str("warning") ?: s.message
+                    followupRecordedWords(s.reply, s.message)
                 })
             } else {
                 val r = api.call("save_followup", body = b)
@@ -483,14 +518,14 @@ private fun FollowupDialog(api: Api, f: JSONObject, onDone: (String) -> Unit, on
             }
         }
     }
-    val gate = rememberGate(stillNeeded(missingNames("Still using it" to inUse.isEmpty())))
+    val gate = rememberGate(stillNeeded(missingNames("Still in use?" to inUse.isEmpty())))
     AlertDialog(
         // 4.29.0: not closed while saving (Back or a tap outside), so the entry is never left half-sent.
         onDismissRequest = { if (!busy) onCancel() },
         title = { Text(f.optString("client_name") + ": " + f.optString("equipment_name"), modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Choice("Still using it", inUse, listOf("" to "Not answered", "yes" to "Yes", "no" to "No"), required = true) { inUse = it }
+                Choice("Still in use?", inUse, listOf("" to "Not answered") + FOLLOWUP_ANSWERS, required = true) { inUse = it }
                 Choice("How satisfied", satisfaction, listOf("" to "Not answered") + (1..5).map { it.toString() to "$it of 5" }) { satisfaction = it }
                 Field("Anything in the way", barriers, { barriers = it }, hint = "optional")
                 Field("Notes", notes, { notes = it }, hint = "optional", singleLine = false)
@@ -498,10 +533,18 @@ private fun FollowupDialog(api: Api, f: JSONObject, onDone: (String) -> Unit, on
                 ErrorText(error)
                 GateError(gate)
                 TextButton(enabled = !busy, onClick = { send("snooze") }) { Text("Ask again in 14 days") }
-                TextButton(enabled = !busy, onClick = { send("skip") }) { Text("Skip this check") }
+                TextButton(enabled = !busy, onClick = { asking = "skip" }) { Text("Skip this check") }
             }
         },
-        confirmButton = { TextButton(enabled = !busy, onClick = { if (gate.check(stillNeeded(missingNames("Still using it" to inUse.isEmpty())))) send("complete") }) { Text(if (busy) "Saving…" else "Record") } },
+        confirmButton = { TextButton(enabled = !busy, onClick = {
+            if (gate.check(stillNeeded(missingNames("Still in use?" to inUse.isEmpty())))) { if (inUse == "no") asking = "no" else send("complete") }
+        }) { Text(if (busy) "Saving…" else "Record") } },
         dismissButton = { TextButton(enabled = !busy, onClick = onCancel) { Text("Cancel") } },
     )
+    // 4.34.0: a "No" and a skip are asked about first, naming the device and the client.
+    when (asking) {
+        "no" -> Confirm("Record that $equipment is no longer in use?", "Record that $equipment is no longer in use by $client? This adds a case note and a follow-up task, and a recorded follow-up cannot be changed.",
+            "Record it", { send("complete") }, { asking = null })
+        "skip" -> Confirm("Skip this follow-up?", "Skip the ${f.optInt("interval_days")}-day follow-up for $client, $equipment?", "Skip it", { send("skip") }, { asking = null })
+    }
 }

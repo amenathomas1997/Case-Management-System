@@ -54,6 +54,9 @@ class Api(context: Context) {
     /** The AI features switched on for this account (draft, recommend, intake, voice and the rest). */
     var aiFeatures by mutableStateOf<List<String>>(emptyList())
         private set
+    /** 4.34.0: whether client identifiers are stripped before AI (me.ai_redaction; null from an older server). */
+    var aiRedaction by mutableStateOf<Boolean?>(null)
+        private set
     var serverVersion by mutableStateOf<String?>(null)
         private set
     /** Why the app went back to Sign in by itself (an expired session), shown there once. */
@@ -653,7 +656,12 @@ class Api(context: Context) {
         sessionNotice = null
         token = newToken; store.put("apiToken", newToken)
         store.remove(REFUSED_TOKEN_KEY, REFUSED_AT_KEY, REFUSED_SERVER_KEY)
+        // 4.34.0: a password and code sign-in is itself the app lock's unlock.
+        onSignedIn?.invoke()
     }
+
+    /** 4.34.0: told of each sign-in (the app lock unlocks). */
+    var onSignedIn: (() -> Unit)? = null
 
     /** Name, permissions and the organisation's lists; after sign-in and on each start. */
     suspend fun refreshMe() {
@@ -667,15 +675,19 @@ class Api(context: Context) {
         scoped = m.scoped; store.put("userScoped", scoped)
         aiEnabled = m.aiEnabled
         aiFeatures = m.aiFeatures
+        aiRedaction = m.aiRedaction
         accessHold = m.accessHold
         serverVersion = m.serverVersion
         m.timezone?.takeIf { java.util.TimeZone.getAvailableIDs().contains(it) }?.let { serverZone = it; store.put("serverZone", it); org.casemanagement.app.ui.serverZoneId = it }
         permsLoaded = true; store.put("userPermsLoaded", true)
         try {
-            val lists = call("form_options").optJSONObject("lists")
+            val options = call("form_options")
+            val lists = options.optJSONObject("lists")
             if (lists != null && token == sessionToken) store.put("formOptions", lists.toString())
+            // 4.34.0: the administrator's numbers (loan_due_days), for the forms that start from them.
+            if (token == sessionToken) options.optJSONObject("numbers")?.let { store.put("formNumbers", it.toString()) } ?: store.remove("formNumbers")
         } catch (e: ApiException) {
-            if (!e.network) store.remove("formOptions")
+            if (!e.network) store.remove("formOptions", "formNumbers")
         }
     }
 
@@ -693,6 +705,13 @@ class Api(context: Context) {
         if (raw.isEmpty()) return builtIn
         val list = try { parseFormLists(JSONObject().put("lists", JSONObject(raw)))[name] ?: emptyList() } catch (e: Exception) { emptyList() }
         return list.ifEmpty { builtIn }
+    }
+
+    /** 4.34.0: a number set by the administrator (form_options numbers), or [builtIn] when the server sent none. */
+    fun formNumber(name: String, builtIn: Int): Int {
+        val raw = store.string("formNumbers")
+        if (raw.isEmpty()) return builtIn
+        return try { JSONObject(raw).let { if (it.has(name) && !it.isNull(name)) it.optInt(name, builtIn) else builtIn } } catch (e: Exception) { builtIn }
     }
 
     fun expireSession() {
@@ -745,7 +764,7 @@ class Api(context: Context) {
         endInPerson()
         clearSigning(withKept = !keepQueue)
         perms = emptyList(); permsLoaded = false; scoped = false; aiEnabled = false; aiFeatures = emptyList(); accessHold = emptyList(); serverVersion = null
-        store.remove("userPerms", "userPermsLoaded", "userScoped", "formOptions")
+        store.remove("userPerms", "userPermsLoaded", "userScoped", "formOptions", "formNumbers")
         if (!keepQueue) store.remove(QUEUE_KEY)
         pendingSync = ownPending(loadQueue())
     }

@@ -96,13 +96,15 @@ struct ComplianceView: View {
             if data != nil { Section {
                 if let c = consents?.consents, !c.isEmpty {
                     ForEach(c) { f in
-                        let when = ["Unsigned": "sent", "Expired": "expired", "Withdrawn": "withdrawn", "Expiring": "expires"][f.kind] ?? ""
+                        // 4.34.0: "Adult", a guardian's consent from before the client turned 18, as the website lists it.
+                        let when = ["Unsigned": "sent", "Expired": "expired", "Withdrawn": "withdrawn", "Expiring": "expires",
+                                    "Adult": "client turned 18 on"][f.kind] ?? ""
                         let renewal = f.pendingSentAt.map { "Renewal request sent \(formatDate($0)), not yet signed." }
                         NavigationLink { ClientDetailView(clientId: f.clientId) } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(f.client).font(.body.weight(.semibold))
                                 Text("\(f.label) · \(when) \(formatDate(f.date))").font(.caption)
-                                    .foregroundStyle(f.kind == "Expired" || f.kind == "Withdrawn" ? complianceAlertRed : .primary)
+                                    .foregroundStyle(f.kind == "Expired" || f.kind == "Withdrawn" || f.kind == "Adult" ? complianceAlertRed : .primary)
                                 if !f.guardianName.isEmpty { Text("Guardian: \(f.guardianName)").font(.caption) }
                                 if let renewal { Text(renewal).font(.caption) }
                             }

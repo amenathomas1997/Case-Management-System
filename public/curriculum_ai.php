@@ -16,8 +16,8 @@ if (!ai_feature_enabled('curriculum')) {
     exit;
 }
 
-// Most text accepted per request (sent to the AI provider or stored as skills).
-const CURRICULUM_AI_MAX_CHARS = 20000;
+// The prompt, the plan's parsing and the 20,000-character limit are shared with the app (inc/curriculum_ai.php, 4.34.0).
+require_once __DIR__ . '/inc/curriculum_ai.php';
 $postText = fn(string $k, string $default = ''): string => is_string($_POST[$k] ?? null) ? $_POST[$k] : $default;
 
 /* ---- Create the reviewed curriculum ---- */
@@ -75,32 +75,7 @@ $skillsText = $postText('skills');
 $planText = $postText('plan');
 $truncated = false;
 
-/**
- * The plan's plain text as lessons: each "Lesson: <title>" block with its
- * Objectives, Steps to complete the task and How you know it's done lines. Text
- * that does not follow the layout gives no lessons (it is then shown as is).
- */
-function curriculum_parse_plan(string $text): array {
-    $lessons = []; $cur = null; $sect = '';
-    foreach (preg_split('/\r?\n/', $text) ?: [] as $line) {
-        $t = trim($line);
-        if ($t === '') continue;
-        if (preg_match('/^lesson(?:\s*\d+)?\s*:\s*(.+)$/iu', $t, $m)) {
-            if ($cur) $lessons[] = $cur;
-            $cur = ['title' => trim($m[1]), 'objectives' => [], 'steps' => [], 'done' => []]; $sect = '';
-            continue;
-        }
-        if ($cur === null) continue;
-        if (preg_match('/^objectives?\s*:\s*(.*)$/iu', $t, $m)) { $sect = 'objectives'; $t = trim($m[1]); }
-        elseif (preg_match('/^steps(?:\s+to complete the task)?\s*:\s*(.*)$/iu', $t, $m)) { $sect = 'steps'; $t = trim($m[1]); }
-        elseif (preg_match('/^how you know it\W?s done\s*:\s*(.*)$/iu', $t, $m)) { $sect = 'done'; $t = trim($m[1]); }
-        if ($t === '' || $sect === '') continue;
-        $t = preg_replace('/^(?:[-*•]|\d{1,3}[.)])\s+/u', '', $t);
-        if ($t !== '') $cur[$sect][] = $t;
-    }
-    if ($cur) $lessons[] = $cur;
-    return $lessons;
-}
+// curriculum_parse_plan() is in inc/curriculum_ai.php (4.34.0), shared with the app.
 
 /* ---- Download the plan as plain text (the steps included) ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['download']) && trim($planText) !== '') {
@@ -121,15 +96,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) {
     elseif (!ai_rate_limit((int)$user['id'])) { flash('You have reached the AI usage limit for now. Please wait a few minutes.', 'error'); }
     else {
         $started = microtime(true);
-        $res = ai_generate(
-            ai_system_base() . ' You design training curricula for assistive technology instruction. Produce an ordered lesson plan for the given technology and learner level: '
-                . 'a sequence of lessons, each teaching concrete skills a learner can demonstrate. Write it in exactly this plain-text layout, with no preamble or commentary, and a blank line between lessons:'
-                . "\nLesson: <short lesson title>"
-                . "\nObjectives:\n- <one objective per line, each a single skill the learner can demonstrate, at most 300 characters>"
-                . "\nSteps to complete the task:\n1. <numbered, learner-facing steps in order: what the learner does, naming the keystrokes, gestures, settings or app features where relevant (for example the JAWS or VoiceOver command, the braille display key, or the menu in the app)>"
-                . "\nHow you know it's done:\n- <one or two success criteria>"
-                . ' Keep every objective on one line, and use only those four labels.',
-            "Technology: {$tech}\nLevel: {$level}\nFocus / notes: " . (trim((string)$focus) ?: '[none]'), 4000);
+        $res = ai_generate(curriculum_ai_system(), curriculum_ai_prompt((string)$tech, $level, (string)$focus), CURRICULUM_AI_TOKENS);
         // Outcome, provider time and cut-off are logged as ai_run() logs them.
         ai_log_usage('curriculum', mb_strlen((string)$tech) + mb_strlen((string)$focus), $res['ok'] ? mb_strlen($res['text']) : 0, false, (int)$user['id'],
             (bool)$res['ok'], (int)round((microtime(true) - $started) * 1000), !empty($res['truncated']));
@@ -137,10 +104,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) {
             $planText = trim($res['text']);
             // The curriculum's skills are the objectives, one per line (each a
             // curriculum_skills row); a reply not in the lesson layout is used line by line.
-            $lessons = curriculum_parse_plan($planText);
-            $lines = [];
-            foreach ($lessons as $ls) foreach ($ls['objectives'] ?: [$ls['title']] as $o) $lines[] = $o;
-            $skillsText = $lessons ? implode("\n", $lines) : $planText;
+            $skillsText = curriculum_skills_text($planText);
             if ($name === '') $name = trim($tech . ' — ' . $level);
             // Stopped at the token limit: the last lesson may be half-written.
             $truncated = !empty($res['truncated']);

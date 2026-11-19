@@ -97,12 +97,12 @@ struct DashboardView: View {
                         }
 
                         if api.can("clients") {
-                            Text("Expired or expiring within 30 days")
+                            Text(data.authSoonDays.map { "Expired or expiring within \($0) days" } ?? "Authorizations ending soon")
                                 .font(.headline)
                                 .padding(.top, 8)
                                 .accessibilityAddTraits(.isHeader)
                             if data.expiring.isEmpty {
-                                Text("No authorizations have expired or expire in the next 30 days.")
+                                Text(data.authSoonDays.map { "No authorizations have expired or expire in the next \($0) days." } ?? "No authorizations have expired or are ending soon.")
                                     .foregroundStyle(Color.secondaryText)
                             } else {
                                 ForEach(data.expiring) { track in
@@ -193,7 +193,7 @@ struct DashboardView: View {
                     }
                     if api.can("clients") { MoreToolLink(title: "Client portal requests", subtitle: "Appointments, changes and device help clients asked for", systemImage: "tray.full") { PortalRequestsView() } }
                     if api.can("clients") { MoreToolLink(title: "Intake progress", subtitle: "Referrals and clients by stage", systemImage: "chart.bar.doc.horizontal") { PipelineView() } }
-                    if api.can("billing") { MoreToolLink(title: "Invoices", subtitle: "Read only: status, amounts and balances", systemImage: "doc.plaintext") { InvoicesView() } }
+                    if api.can("billing") { MoreToolLink(title: "Invoices", subtitle: "Status, balances, and marking drafts submitted", systemImage: "doc.plaintext") { InvoicesView() } }
                     // AT services offers only modules the user holds a permission for, so the link
                     // is shown only when at least one of them is available.
                     if api.can("clients") || api.can("equipment") || api.can("schedule") || api.can("admin") || api.can("billing") {

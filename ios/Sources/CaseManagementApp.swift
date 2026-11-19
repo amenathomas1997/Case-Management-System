@@ -1094,6 +1094,8 @@ struct ErrorBanner: View {
 struct OptionalDayField: View {
     let title: String
     @Binding var text: String
+    /// The latest day the picker offers (4.34.0: today for a date of birth or an IPE date).
+    var latest: Date? = nil
 
     /// "Set due date" for "Due date"; an acronym at the start ("IPE date") keeps its capitals.
     private var switchTitle: String {
@@ -1110,8 +1112,13 @@ struct OptionalDayField: View {
                                               set: { text = $0 ? APIDate.day(Date()) : "" }))
                 .accessibilityHint(day != nil ? "Turning this off clears the date." : "Turning this on sets the date to today, then you can change it.")
             if let day {
-                DatePicker(title, selection: Binding(get: { day }, set: { text = APIDate.day($0) }),
-                           displayedComponents: .date)
+                if let latest {
+                    DatePicker(title, selection: Binding(get: { day }, set: { text = APIDate.day($0) }),
+                               in: ...max(latest, day), displayedComponents: .date)
+                } else {
+                    DatePicker(title, selection: Binding(get: { day }, set: { text = APIDate.day($0) }),
+                               displayedComponents: .date)
+                }
             }
         } else {
             // A stored value that is not a calendar day: keep it editable rather than dropping it.

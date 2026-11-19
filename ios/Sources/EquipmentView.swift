@@ -159,14 +159,17 @@ struct EquipmentView: View {
                 isPresented: Binding(get: { pendingReturn != nil }, set: { if !$0 { pendingReturn = nil } }),
                 titleVisibility: .visible
             ) {
-                Button("Mark returned in the same condition") {
+                // The condition when returned (4.34.0, as the website's list): Unchanged first, then
+                // the organisation's conditions; a changed one also changes the item's own condition.
+                Button("Condition when returned: Unchanged") {
                     if let item = pendingReturn { Task { await returnItem(item) } }
                     pendingReturn = nil
                 }
-                // Damage found on return (4.0.0) also changes the item's own condition.
-                Button("Mark returned, needing repair") {
-                    if let item = pendingReturn { Task { await returnItem(item, condition: "Needs Repair") } }
-                    pendingReturn = nil
+                ForEach(equipmentConditions, id: \.self) { condition in
+                    Button("Condition when returned: \(condition)") {
+                        if let item = pendingReturn { Task { await returnItem(item, condition: condition) } }
+                        pendingReturn = nil
+                    }
                 }
                 Button("Keep on loan", role: .cancel) { pendingReturn = nil }
             }
@@ -421,6 +424,8 @@ struct LoanSheet: View {
 
     @State private var selectedClient: Int?
     @State private var dueDate = LoanSheet.defaultDue
+    /// No return date at all (4.34.0: sends due_date "", as the website's blank date).
+    @State private var noReturnDate = false
     @State private var notes = ""
     /// The hand-off (4.0.0): the condition as it goes out, and the client's typed name accepting the loan agreement.
     @State private var conditionOut = ""
@@ -448,8 +453,9 @@ struct LoanSheet: View {
         ("technology", "A technology professional"),
     ]
 
-    /// The return date the sheet starts with.
-    private static var defaultDue: Date { Calendar.current.date(byAdding: .day, value: 60, to: Date()) ?? Date() }
+    /// The return date the sheet starts with: today plus the administrator's loan period
+    /// (form_options numbers.loan_due_days, 4.34.0; 60 days from an older server).
+    private static var defaultDue: Date { Calendar.current.date(byAdding: .day, value: loanDueDays, to: Date()) ?? Date() }
     /// Today through 31 December five years on: the website refuses a return date before today
     /// (the loan would be overdue at once), and the server refuses a year more than five ahead.
     private static var dueRange: ClosedRange<Date> {
@@ -461,7 +467,7 @@ struct LoanSheet: View {
     }
 
     private var hasChanges: Bool {
-        selectedClient != nil || !Calendar.current.isDate(dueDate, inSameDayAs: Self.defaultDue)
+        selectedClient != nil || !Calendar.current.isDate(dueDate, inSameDayAs: Self.defaultDue) || noReturnDate
             || !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !purpose.isEmpty || !borrowerType.isEmpty
     }
@@ -478,7 +484,11 @@ struct LoanSheet: View {
                         .font(.callout)
                 }
                 NewRecordClientPicker(title: "Client (required)", selection: $selectedClient)
-                DatePicker("Return due", selection: $dueDate, in: Self.dueRange, displayedComponents: .date)
+                Toggle("No return date", isOn: $noReturnDate)
+                if !noReturnDate {
+                    DatePicker("Return due", selection: $dueDate, in: Self.dueRange, displayedComponents: .date)
+                        .errorField("Return due")
+                }
                 // A visible name that stays once the field holds text.
                 CaptionedField(label: "Notes (optional)", text: $notes)
                 Picker("Condition as it goes out", selection: $conditionOut) {
@@ -520,7 +530,7 @@ struct LoanSheet: View {
         do {
             var body: [String: Any] = [
                 "equipment_id": item.id, "client_id": clientId,
-                "due_date": APIDate.day(dueDate), "notes": notes,
+                "due_date": noReturnDate ? "" : APIDate.day(dueDate), "notes": notes,
                 "condition_out": conditionOut, "accepted_name": acceptedName,
             ]
             if !purpose.isEmpty { body["purpose"] = purpose }
@@ -872,14 +882,18 @@ struct ReservationsView: View {
         let index = reservations.firstIndex(where: { $0.id == id }) ?? 0
         do {
             error = nil
-            let _: OKResponse = try await api.call("cancel_reservation", body: ["reservation_id": id])
+            struct CancelReply: Decodable { let promoted: Bool? }
+            let reply: CancelReply = try await api.call("cancel_reservation", body: ["reservation_id": id])
             await load()
             // The cancelled row (where VoiceOver was) has gone: put VoiceOver on the reservation
             // now in its place, then confirm, after the focus move so it is not cut off.
             if !reservations.contains(where: { $0.id == id }) {
                 focusedReservation = reservations.isEmpty ? -1 : reservations[min(index, reservations.count - 1)].id
             }
-            announceAfterDismiss("Reservation cancelled.")
+            // 4.34.0: the waitlist moved up, as the website says it.
+            announceAfterDismiss(reply.promoted == true
+                ? "Reservation cancelled. The item is now held for the client who has waited longest on its waitlist."
+                : "Reservation cancelled.")
         }
         catch { showFormError(error.localizedDescription, in: &self.error) }
     }
@@ -898,11 +912,13 @@ struct ReservationSheet: View {
     @State private var selectedItem: Int?
     @State private var selectedClient: Int?
     @State private var hasFrom = false; @State private var from = Date()
+    /// Needed until (4.34.0, as the website): today or later, or not set.
+    @State private var hasUntil = false; @State private var until = Date()
     @State private var notes = ""; @State private var busy = false; @State private var error: String?
     @State private var askingDiscard = false
 
     private var hasChanges: Bool {
-        (fixedItemId == nil && selectedItem != nil) || selectedClient != nil || hasFrom
+        (fixedItemId == nil && selectedItem != nil) || selectedClient != nil || hasFrom || hasUntil
             || !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -924,6 +940,11 @@ struct ReservationSheet: View {
                 NewRecordClientPicker(title: "Client (required)", selection: $selectedClient)
                 Toggle("Needed from", isOn: $hasFrom)
                 if hasFrom { DatePicker("From", selection: $from, displayedComponents: .date) }
+                Toggle("Needed until", isOn: $hasUntil)
+                if hasUntil {
+                    DatePicker("Until", selection: $until, in: Calendar.current.startOfDay(for: Date())..., displayedComponents: .date)
+                        .errorField("Needed until")
+                }
                 // A visible name that stays once the field holds text.
                 CaptionedField(label: "Notes", text: $notes)
             }
@@ -963,9 +984,15 @@ struct ReservationSheet: View {
     private func submit() async {
         guard let cid = selectedClient else { return }
         let eid = fixedItemId ?? selectedItem ?? 0
+        // 4.34.0: as the website, the end of the need cannot come before its start.
+        if hasUntil && hasFrom && APIDate.day(until) < APIDate.day(from) {
+            showFormError("Needed until: choose the day the need ends, on or after Needed from (\(from.formatted(date: .abbreviated, time: .omitted))).", in: &error)
+            return
+        }
         busy = true; error = nil
         var b: [String: Any] = ["equipment_id": eid, "client_id": cid, "notes": notes]
         if hasFrom { b["needed_from"] = APIDate.day(from) }
+        if hasUntil { b["needed_until"] = APIDate.day(until) }
         b["idem_key"] = idem.key(for: b)
         do {
             let r: ReservationResult = try await api.call("add_reservation", body: b)

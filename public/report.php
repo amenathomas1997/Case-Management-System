@@ -36,12 +36,7 @@ function report_name_key(string $s): string {
     if (class_exists('Normalizer')) $s = Normalizer::normalize($s, Normalizer::FORM_C) ?: $s;
     return mb_convert_case(preg_replace('/\s+/u', ' ', trim($s)) ?? trim($s), MB_CASE_FOLD, 'UTF-8');
 }
-/** The first unfilled [PLACEHOLDER] in a cover note (the same test as eval_report.php),
- *  or null. A screen reader at its default punctuation level does not voice the
- *  brackets, so "[CLIENT]" would sound like a finished word. */
-function report_placeholder(string $s): ?string {
-    return preg_match('/\[(?=[^\[\]\n]*\p{L})[^\[\]\n]{1,80}\]/u', $s, $m) ? $m[0] : null;
-}
+// report_placeholder(), the cover-note prompt and the restore map are in inc/report_ai.php (4.34.0), shared with the app.
 
 // AI: draft a short cover narrative from the report data. Fills the intro field,
 // which the staff member then edits before sending.
@@ -57,18 +52,10 @@ if ($posted && isset($_POST['ai_draft']) && !ai_feature_enabled('draft')) {
     $cr = db()->prepare('SELECT * FROM clients WHERE id = ?');
     $cr->execute([(int)$t['cid']]);
     $clientRow = $cr->fetch() ?: ['name' => $t['client_name'] ?? ''];
-    $res = ai_run('draft',
-        ai_system_base() . ' You are drafting a brief cover note (2–3 short paragraphs) that a VR instructor will put at '
-            . 'the top of a ' . ($finalMode ? 'final report at the close of training, summarizing what the client achieved and the outcome' : 'training progress report') . ' to the counselor. Summarize progress and next steps warmly and professionally. '
-            . 'Do not restate the tables of hours — those follow below your note. Details in square brackets, such as [CLIENT] '
-            . 'or [COUNSELOR], were withheld for privacy: keep them as placeholders and do not invent names, dates or numbers.',
-        "Write the cover note for this training progress report.\n\n" . $report['ai_text'],
-        900, $clientRow, (int)$user['id']);
+    $res = report_ai_cover_note($report['ai_text'], $clientRow, (int)$user['id'], $finalMode);
     if ($res['ok']) {
         // The details withheld from the AI are put back here, as amendment_request.php does.
-        $restore = ['[CLIENT]' => (string)($t['client_name'] ?? ''), '[COUNSELOR]' => trim((string)($t['counselor_name'] ?? '')), '[AUTH]' => trim((string)($t['auth_number'] ?? '')),
-            '[EMPLOYER]' => (string)(client_last_closure((int)$t['cid'])['employer'] ?? '')];
-        $aiDraft = strtr($res['text'], array_filter($restore, fn($v) => $v !== ''));
+        $aiDraft = strtr($res['text'], report_ai_restore_map($t));
         // A message the user already typed is kept: the draft goes below it, never in its place.
         $typedIntro = trim($introIn) !== '';
         $left = report_placeholder($aiDraft);
@@ -87,9 +74,8 @@ if ($posted && isset($_POST['ai_sections']) && ai_feature_enabled('draft')) {
     $cr->execute([(int)$t['cid']]);
     $sec = report_ai_sections($report['ai_text'], $cr->fetch() ?: ['name' => $t['client_name'] ?? ''], (int)$user['id'], $finalMode);
     if ($sec['ok']) {
-        $restore = ['[CLIENT]' => (string)($t['client_name'] ?? ''), '[COUNSELOR]' => trim((string)($t['counselor_name'] ?? '')), '[AUTH]' => trim((string)($t['auth_number'] ?? '')),
-            '[EMPLOYER]' => (string)(client_last_closure((int)$t['cid'])['employer'] ?? '')];
-        $fill = fn(string $mine, string $draft): string => trim($mine) === '' ? strtr($draft, array_filter($restore, fn($v) => $v !== '')) : rtrim($mine) . "\n" . strtr($draft, array_filter($restore, fn($v) => $v !== ''));
+        $restore = report_ai_restore_map($t);
+        $fill = fn(string $mine, string $draft): string => trim($mine) === '' ? strtr($draft, $restore) : rtrim($mine) . "\n" . strtr($draft, $restore);
         $barriersIn = $fill($barriersIn, $sec['barriers']);
         $recommendIn = $fill($recommendIn, $sec['recommendations']);
         $report = build_track_report($trackId, $user['name'], trim($introIn), 3,

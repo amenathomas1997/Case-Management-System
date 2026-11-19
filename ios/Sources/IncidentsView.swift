@@ -21,6 +21,12 @@ struct IncidentsView: View {
     private let errorRow = "incidentsError"
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// " · reported by Jane Smith", as the website's incident list says it (4.34.0).
+    private func reportedBy(_ inc: Incident) -> String {
+        guard let who = inc.reporter, !who.isEmpty else { return "" }
+        return " · reported by \(who)"
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             List {
@@ -42,7 +48,7 @@ struct IncidentsView: View {
                                 Spacer()
                                 Text(inc.status).font(.caption).foregroundStyle(Color.secondaryText)
                             }
-                            Text("\(formatDate(inc.incidentDate))\(inc.clientName != nil ? " · \(inc.clientName!)" : "")\(inc.location != nil && !inc.location!.isEmpty ? " · \(inc.location!)" : "")")
+                            Text("\(formatDate(inc.incidentDate))\(inc.clientName != nil ? " · \(inc.clientName!)" : "")\(inc.location != nil && !inc.location!.isEmpty ? " · \(inc.location!)" : "")\(reportedBy(inc))")
                                 .font(.caption).foregroundStyle(Color.secondaryText)
                             // Shown in full at the accessibility text sizes; otherwise a long description
                             // is cut to 5 lines with a button that shows the rest.

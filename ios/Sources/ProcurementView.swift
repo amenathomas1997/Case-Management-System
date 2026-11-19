@@ -220,9 +220,16 @@ struct DeviceRequestDetail: View {
         var b = body; b["id"] = id
         do {
             error = nil
-            let _: OKResponse = try await api.call("device_request_update", body: b)
+            struct UpdateReply: Decodable { let status: String? }
+            let reply: UpdateReply = try await api.call("device_request_update", body: b)
             let reloaded = await load(); onChanged()
             if reloaded, let focusQuote { focusedQuote = focusQuote }
+            // 4.34.0: a reopened request goes back to its furthest step, which the server names.
+            if body["to"] as? String == "Requested" {
+                let status = reply.status ?? (reloaded ? req?.status : nil)
+                announceAfterDismiss(status.map { "Request reopened. Status updated to \($0)." } ?? "Request reopened.")
+                return
+            }
             // Said after the reload and the focus move, so neither cuts it off. The saved step is
             // still reported when the refresh fails; only the status is left out then.
             announceAfterDismiss(reloaded && req != nil ? "\(done) Status: \(req!.status)." : done)

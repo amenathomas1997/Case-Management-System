@@ -56,12 +56,14 @@ struct DashboardData: Decodable {
     let unbilledHours: Double
     let unbilledAmount: Double
     let expiring: [ExpiringTrack]
-    /// How many authorizations expire within 30 days in all (the list holds at most 10);
+    /// How many authorizations are ending soon in all (the list holds at most 10);
     /// nil from a server that does not report it.
     let expiringTotal: Int?
     let recentReferrals: [RecentReferral]
     let recentNotes: [RecentNote]
-    private enum CodingKeys: String, CodingKey { case activeClients, pendingClients, newReferrals, unbilledHours, unbilledAmount, expiring, expiringTotal, recentReferrals, recentNotes }
+    /// The administrator's "authorization ending soon" days (4.34.0); nil from an older server.
+    let authSoonDays: Int?
+    private enum CodingKeys: String, CodingKey { case activeClients, pendingClients, newReferrals, unbilledHours, unbilledAmount, expiring, expiringTotal, recentReferrals, recentNotes, authSoonDays }
     // Tolerant decode so one absent field doesn't blank the entire home tab.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -74,6 +76,7 @@ struct DashboardData: Decodable {
         expiringTotal = try? c.decodeIfPresent(Int.self, forKey: .expiringTotal)
         recentReferrals = (try? c.decode([RecentReferral].self, forKey: .recentReferrals)) ?? []
         recentNotes = (try? c.decode([RecentNote].self, forKey: .recentNotes)) ?? []
+        authSoonDays = (try? c.decodeIfPresent(Int.self, forKey: .authSoonDays)) ?? nil
     }
 }
 
@@ -138,9 +141,16 @@ struct ClientRow: Decodable, Identifiable {
     let status: String
     let phone: String?
     let email: String?
+    /// Whether a session can be booked for this client (4.34.0 client_choices: an open status
+    /// that is not Waitlist); nil from an older server or the clients list.
+    var bookable: Bool?
 }
 
-struct ClientsResponse: Decodable { let clients: [ClientRow] }
+struct ClientsResponse: Decodable {
+    let clients: [ClientRow]
+    /// How many clients matched in all (4.34.0); nil from an older server.
+    var total: Int?
+}
 
 struct ClientInfo: Decodable {
     let id: Int
@@ -218,9 +228,27 @@ enum FormOptions {
     static func clear() {
         cache.lock.lock(); defer { cache.lock.unlock() }
         UserDefaults.standard.removeObject(forKey: key)
+        UserDefaults.standard.removeObject(forKey: numbersKey)
         cache.lists = [:]
     }
+
+    /// The administrator's numbers (4.34.0 form_options `numbers`, such as loan_due_days).
+    static let numbersKey = "formOptionNumbers"
+    static func saveNumbers(_ raw: [String: Any]) {
+        var numbers: [String: Int] = [:]
+        for (name, value) in raw {
+            if let n = value as? Int { numbers[name] = n } else if let t = value as? String, let n = Int(t) { numbers[name] = n }
+        }
+        UserDefaults.standard.set(numbers, forKey: numbersKey)
+    }
+    /// The number the server set, or `fallback` when it has not said (an older server).
+    static func number(_ name: String, _ fallback: Int) -> Int {
+        (UserDefaults.standard.dictionary(forKey: numbersKey) as? [String: Int])?[name] ?? fallback
+    }
 }
+
+/// The loan period a new loan's return date starts from (Lists and time limits, 4.34.0).
+var loanDueDays: Int { max(1, FormOptions.number("loan_due_days", 60)) }
 
 var clientTypes: [String] { FormOptions.list("client_types", ["VR", "Pre-ETS"]) }
 let a11yFormats = ["Standard print", "Large print", "Plain text", "Braille-ready (BRF)", "Audio", "Accessible PDF"]
@@ -870,6 +898,8 @@ struct MeResponse: Decodable {
     let scoped: Bool?
     let aiEnabled: Bool?
     let aiFeatures: [String]?
+    /// Whether client identifiers are stripped before AI requests (4.34.0); nil from an older server.
+    var aiRedaction: Bool?
     /// What must be finished before client records open (4.16.0); nil from an older server.
     let accessHold: [String]?
     /// The server's time zone, such as "America/Chicago"; nil from a server that does not report it.
@@ -1379,6 +1409,8 @@ final class API: ObservableObject {
     @Published var aiEnabled: Bool = false
     /// Enabled AI feature keys (recommend, intake, progress, remediate, ask, kb, translate, curriculum, risk).
     @Published var aiFeatures: [String] = []
+    /// Whether client identifiers are stripped before AI requests (4.34.0 me); nil when not said.
+    @Published var aiRedaction: Bool?
     /// The agreements and training to finish before client records open (4.16.0).
     @Published var accessHold: [String] = []
     /// The website's release (4.0.0), to say when this app is older than it.
@@ -1434,6 +1466,7 @@ final class API: ObservableObject {
             scoped = me.scoped ?? false
             aiEnabled = me.aiEnabled ?? false
             aiFeatures = me.aiFeatures ?? []
+            aiRedaction = me.aiRedaction
             accessHold = me.accessHold ?? []
             serverVersion = me.serverVersion
             permsLoaded = true
@@ -1444,7 +1477,10 @@ final class API: ObservableObject {
             }
             // The organisation's own lists (4.5.0); an older server answers "Unknown action".
             if let obj = try? await callDict("form_options"), let lists = obj["lists"] as? [String: [String]] {
-                if token == sessionToken { FormOptions.save(lists) }
+                if token == sessionToken {
+                    FormOptions.save(lists)
+                    FormOptions.saveNumbers(obj["numbers"] as? [String: Any] ?? [:])
+                }
             } else if token == sessionToken {
                 FormOptions.clear()   // an older server, or none sent: the built-in lists
             }
@@ -2096,7 +2132,7 @@ final class API: ObservableObject {
         permsLoaded = false
         scoped = false
         aiEnabled = false
-        aiFeatures = []
+        aiFeatures = []; aiRedaction = nil
         accessHold = []
         syncError = nil
         syncNoticeDismissed = false
@@ -2124,7 +2160,9 @@ final class API: ObservableObject {
     /// picks a client, so a group without the clients permission (such as Front Desk) can still
     /// choose one; a server that predates it falls back to the clients list. Errors are thrown,
     /// not swallowed, so a picker can say why it is empty.
-    func clientPickerChoices() async throws -> [ClientRow] {
+    /// `forSchedule` (4.34.0): only clients a session can be booked for, as the website's
+    /// schedule offers (an open status that is not Waitlist), when the server says (`bookable`).
+    func clientPickerChoices(forSchedule: Bool = false) async throws -> [ClientRow] {
         let rows: [ClientRow]
         do {
             let response: ClientsResponse = try await call("client_choices")
@@ -2133,7 +2171,10 @@ final class API: ObservableObject {
             let response: ClientsResponse = try await call("clients")
             rows = response.clients
         }
-        return rows.filter { !$0.status.hasPrefix("Closed") }
+        return rows.filter { row in
+            if forSchedule, let bookable = row.bookable { return bookable }
+            return !row.status.hasPrefix("Closed")
+        }
     }
 
     /// Whether this phone can keep client information between launches (drafts, the offline queue,

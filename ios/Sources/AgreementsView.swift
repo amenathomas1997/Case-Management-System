@@ -113,24 +113,39 @@ struct AgreementDetailView: View {
         } catch { self.error = error.localizedDescription }
     }
 
+    /// sign_agreement's refusals of the typed name (staff_agreement_sign), when no error key is sent.
+    static let nameRefusals = ["Type your full name to sign.", "Type your full name as it is on your account",
+                               "The name typed does not match the name on your account"]
+
     private func sign(_ a: [String: Any]) async {
         guard agree else { showFormError("Agree: turn on that you have read the agreement and agree to it.", in: &error); return }
         guard !name.trimmingCharacters(in: .whitespaces).isEmpty else {
             showFormError("Name: type your full name to sign, as it is on your account.", in: &error); return
         }
         busy = true; error = nil
+        var nameRefused = false
         do {
             // The fingerprint of the text shown here: a change since it loaded is refused.
-            let r = try await api.callDict("sign_agreement", body: ["id": id, "version": a["version"] as? Int ?? 0, "agree": true,
-                                                                 "signed_name": name.trimmingCharacters(in: .whitespaces),
-                                                                 "text_hash": a["text_hash"] as? String ?? ""])
+            struct SignReply: Decodable { let message: String? }
+            let r: SignReply = try await api.call("sign_agreement", body: ["id": id, "version": a["version"] as? Int ?? 0, "agree": true,
+                                                                        "signed_name": name.trimmingCharacters(in: .whitespaces),
+                                                                        "text_hash": a["text_hash"] as? String ?? ""],
+                                                  refusal: { reply in
+                                                      nameRefused = ((reply["errors"] as? [String: Any])?["signed_name"]) != nil
+                                                  })
+            // 4.34.0: the access hold lifts at once after the last agreement (me's access_hold).
+            await api.refreshMe()
             onSigned()
             // Said once this screen has closed: the pop moves VoiceOver, which cut it off.
-            announceAfterDismiss(r["message"] as? String ?? "Signed.")
+            announceAfterDismiss(r.message ?? "Signed.")
             dismiss()
         } catch {
             busy = false
-            showFormError(error.localizedDescription, in: &self.error)
+            // A refused name is about the Name field: by the server's errors.signed_name, or (a
+            // server that sends no key) by its own name sentences; anything else goes to the summary.
+            let said = error.localizedDescription
+            let aboutName = nameRefused || Self.nameRefusals.contains { said.hasPrefix($0) }
+            showFormError(said, in: &self.error, field: aboutName ? "Name" : nil)
             // Changed while open: load the new text, so it is read before signing.
             if error.localizedDescription.contains("changed while you had it open") { agree = false; await load() }
         }

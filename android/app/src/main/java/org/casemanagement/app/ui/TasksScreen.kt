@@ -3,7 +3,6 @@ package org.casemanagement.app.ui
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -64,7 +63,7 @@ fun TasksScreen(api: Api, nav: NavHostController) {
             tasks.forEach { t ->
                 val id = t.id
                 val status = queued[id]?.let { reopen -> if (reopen) "Reopened, waiting to send" else "Done, waiting to send" } ?: t.status
-                ListRow(listOf(t.title, listOfNotNull(status, dueWords(t.daysLeft), t.clientName, t.assignedName?.let { "for $it" }).joinToString(", ")),
+                ListRow(listOf(t.title, listOfNotNull(status, org.casemanagement.app.doneTaskDueText(t) { d -> dayText(d) }, t.clientName, t.assignedName?.let { "for $it" }).joinToString(", ")),
                     action = "see what you can do", onClick = if (id in queued) null else ({ chosen = t }))
             }
         }
@@ -121,7 +120,7 @@ private fun AddTaskDialog(api: Api, onDone: (String) -> Unit, onCancel: () -> Un
         title = { Text("Add a task", modifier = Modifier.semantics { heading() }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field("Task", title, { title = it }, required = true, error = titleError)
+                Field("What needs doing?", title, { title = it }, required = true, error = titleError)
                 Field("Due date", due, { due = it }, hint = "optional, year-month-day such as ${today()}", error = dueError)
                 Field("Details", details, { details = it }, hint = "optional", singleLine = false, minLines = 3)
                 ErrorText(error, focusKey = presses)
@@ -130,7 +129,7 @@ private fun AddTaskDialog(api: Api, onDone: (String) -> Unit, onCancel: () -> Un
         confirmButton = {
             TextButton(enabled = !busy, onClick = {
                 presses++
-                titleError = if (title.isBlank()) "Name the task." else null
+                titleError = if (title.isBlank()) "The task needs a title: say what needs doing." else null
                 dueError = if (due.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(due.trim())) "Enter the due date as year-month-day, such as ${today()}, or leave it empty." else null
                 errorSummary(listOf(titleError, dueError))?.let { error = it; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
@@ -156,9 +155,16 @@ fun AlertsScreen(api: Api) {
             NoticeText(notice)
             ErrorText(error)
             val unread = r.unread
-            if (unread > 0) PrimaryButton("Mark all $unread as read") {
+            // 4.34.0: only the alerts listed here are marked (the website's rule); older ones then list.
+            val listedUnread = list.count { it.unread }
+            if (unread > listedUnread && listedUnread > 0) Text("Showing the newest $listedUnread of $unread unread alerts. Mark these as read to list the older ones.")
+            if (unread > 0) PrimaryButton(if (listedUnread > 0) org.casemanagement.app.markReadLabel(listedUnread, unread) else "Mark all as read") {
                 scope.launch {
-                    try { notice = api.call("mark_notifications_read", body = JSONObject().put("all", true)).optString("message").ifEmpty { "All marked as read." }; state.reload() }
+                    try {
+                        val ids = org.casemanagement.app.markReadIds(list)
+                        val b = if (ids.isEmpty()) JSONObject().put("all", true) else JSONObject().put("ids", ids)
+                        notice = api.call("mark_notifications_read", body = b).optString("message").ifEmpty { "Marked as read." }; state.reload()
+                    }
                     catch (e: ApiException) { error = e.message }
                 }
             }
@@ -203,9 +209,9 @@ fun MessagesScreen(api: Api, nav: NavHostController) {
             Heading("Conversations (${list.size})")
             if (list.isEmpty()) Text("No messages.")
             list.forEach { t ->
-                val unread = t.unread
-                ListRow(listOf(t.clientName, (if (unread > 0) "$unread unread, " else "") + "last " + whenText(t.lastAt)),
-                    onClick = { nav.navigate("thread/${t.clientId}") })
+                val unread = org.casemanagement.app.threadUnreadWords(t)
+                ListRow(listOf(t.clientName, (if (unread.isNotEmpty()) "$unread, " else "") + "last " + whenText(t.lastAt)),
+                    onClick = { nav.navigate("thread/${t.clientId}?channel=" + org.casemanagement.app.startChannel(t.unreadClient, t.unreadCounselor)) })
             }
         }
     }
@@ -219,9 +225,9 @@ private sealed class Attachment {
 }
 
 @Composable
-fun ThreadScreen(api: Api, clientId: Int) {
+fun ThreadScreen(api: Api, clientId: Int, startOn: String = "client") {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var channel by rememberSaveable { mutableStateOf("client") }
+    var channel by rememberSaveable { mutableStateOf(if (startOn == "counselor") "counselor" else "client") }
     val state = rememberLoaded(clientId, channel) { api.learn425(clientId); api.call("message_thread", mapOf("client_id" to clientId.toString(), "channel" to channel)) }
     var text by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -246,7 +252,9 @@ fun ThreadScreen(api: Api, clientId: Int) {
         val r = parseMessageThread(raw)
         Page {
             Heading(r.clientName, large = true)
-            Choice("With", channel, listOfNotNull("client" to "The client", r.counselorName?.let { "counselor" to "The counselor, $it" })) { channel = it }
+            // 4.34.0: the counselor is always offered, as on the iPhone.
+            Choice("With", channel, org.casemanagement.app.threadChannelOptions(r.counselorName)) { channel = it }
+            if (channel == "counselor" && r.counselorName.isNullOrBlank()) Text("No counselor on file for this client.")
             r.messages.forEach { m ->
                 val file = m.fileLabel
                 ListRow(listOfNotNull(m.who + ", " + whenText(m.createdAt) + (if (m.byText) ", by text" else ""), m.body, file),

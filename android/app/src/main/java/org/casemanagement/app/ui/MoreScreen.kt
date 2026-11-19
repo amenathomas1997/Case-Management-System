@@ -98,11 +98,17 @@ fun AccountScreen(api: Api, nav: NavHostController) {
             ListRow(listOf("App version: " + BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")"))
             api.serverVersion?.let { ListRow(listOf("Website version: $it")) }
             AccountSecurity(api, a) { state.reload() }
-            a.optString("group").takeIf { it.isNotEmpty() && it != "null" }?.let { ListRow(listOf("Permission group: $it")) }
+            // 4.34.0: the role, with the permission group, as on the website's My Account.
+            ListRow(listOf("Role: " + roleWords(a.str("role"), a.str("group"))))
             ListRow(listOf("Authenticator app: " + if (a.optBoolean("totp_enabled")) "on" else "off"))
             ListRow(listOf("Phones signed in to the app: " + a.optInt("app_sessions")))
         }
         Text("Passkeys and lost phones are managed under My Account on the website.")
+        // 4.34.0: the app lock, as the iPhone's My Account says it.
+        val context = LocalContext.current
+        val canLock = remember { androidx.biometric.BiometricManager.from(context).canAuthenticate(org.casemanagement.app.appLockAuthenticators()) != androidx.biometric.BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED }
+        Heading("This phone")
+        ListRow(listOf("App lock: " + if (canLock) "On" else "Not available", appLockWords(canLock)))
         if (api.pendingSync > 0) {
             Text("${api.pendingSync} offline ${if (api.pendingSync == 1) "entry is" else "entries are"} waiting to send. They stay on this phone after signing out and send when you sign in again.")
         }
@@ -167,7 +173,7 @@ fun OfflineScreen(api: Api, nav: NavHostController) {
     }
     discard?.let { item ->
         val text = readable(item)
-        androidx.compose.material3.AlertDialog(
+        AlertDialog(
             onDismissRequest = { discard = null },
             title = { Text(item.optString("label")) },
             text = { Text(text) },
@@ -202,6 +208,25 @@ private fun copyProtected(context: Context, text: String) {
     (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
 }
 
+/** 4.34.0: what the app lock does on this phone, in words. */
+fun appLockWords(canLock: Boolean): String = if (canLock)
+    "The app locks when it opens and after 2 minutes away from it. It unlocks with this phone's own fingerprint, face or screen lock, which you set in the phone's Settings."
+    else "This phone has no screen lock, so the app cannot lock. Set a screen lock in the phone's Settings to protect client records."
+
+/** 4.34.0: "Administrator" or "Staff", with the permission group when there is one. */
+fun roleWords(role: String?, group: String?): String =
+    (if (role == "admin") "Administrator" else "Staff") + (group?.takeIf { it.isNotBlank() && it != "null" }?.let { ", permission group $it" } ?: "")
+
+/** 4.34.0: change_password's error keys as the form's fields. */
+fun passwordErrorKeys(errors: JSONObject?): Map<String, String> {
+    if (errors == null) return emptyMap()
+    val names = mapOf("current_password" to "current", "new_password" to "new", "confirm_password" to "again", "ack_passkeys" to "ack")
+    return errors.keys().asSequence().mapNotNull { k -> errors.optString(k).takeIf { it.isNotBlank() }?.let { (names[k] ?: k) to it } }.toMap()
+}
+
+/** 4.34.0: the calendar address button: replacing one that exists, or making the first. */
+fun calendarButtonName(hasFeed: Boolean): String = if (hasFeed) "Make a new calendar address" else "Create my calendar address"
+
 /** Password, sign-out everywhere, the calendar address and the authenticator app, as the iPhone app's Account screen. */
 @Composable
 private fun AccountSecurity(api: Api, a: JSONObject, reload: () -> Unit) {
@@ -218,6 +243,7 @@ private fun AccountSecurity(api: Api, a: JSONObject, reload: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var confirmEverywhere by remember { mutableStateOf(false) }
+    var confirmReplace by remember { mutableStateOf(false) }
     var pwErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -254,7 +280,12 @@ private fun AccountSecurity(api: Api, a: JSONObject, reload: () -> Unit) {
                 when {
                     pwErrors.isNotEmpty() -> error = errorSummary(pwErrors.values)
                     else -> act {
-                        val r = api.call("change_password", body = JSONObject().put("current_password", current).put("new_password", new1).put("confirm_password", new2).put("ack_passkeys", ackPasskeys))
+                        val r = try {
+                            api.call("change_password", body = JSONObject().put("current_password", current).put("new_password", new1).put("confirm_password", new2).put("ack_passkeys", ackPasskeys))
+                        } catch (e: org.casemanagement.app.ApiException) {
+                            // 4.34.0: each refusal on its own field.
+                            pwErrors = passwordErrorKeys(e.reply?.optJSONObject("errors")); throw e
+                        }
                         api.signOut()
                         api.sessionNotice = "You were signed out because your password was changed. " + r.optString("message")
                         ""
@@ -277,16 +308,31 @@ private fun AccountSecurity(api: Api, a: JSONObject, reload: () -> Unit) {
                     modifier = androidx.compose.ui.Modifier.semantics { contentDescription = "In your authenticator app, add an account with this key, spelled: " + secret.toList().joinToString(", ") + ". Account name: " + s.optString("account_name") + "." })
                 SecondaryButton("Copy the key") { copyProtected(context, secret); notice = "Key copied. Paste it into your authenticator app." }
                 SecondaryButton("Open in my authenticator app") { if (!openLink(context, android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(s.optString("otpauth_uri"))))) error = "No authenticator app on this phone opens setup links; type the key instead." }
-                Field("The 6-digit code it shows", code, { code = it.filter { c -> c.isDigit() }.take(6) }, keyboard = androidx.compose.ui.text.input.KeyboardType.NumberPassword, required = true)
+                if (s.optInt("expires_minutes") > 0) Text("This setup key works for ${s.optInt("expires_minutes")} minutes.")
+                // 4.34.0: the website's order: the password first, the code last.
                 Field("Your password", password, { password = it }, password = true, required = true, autofill = Fill.Password)
+                Field("The 6-digit code it shows", code, { code = it.filter { c -> c.isDigit() }.take(6) }, keyboard = androidx.compose.ui.text.input.KeyboardType.NumberPassword, required = true)
                 // The setup is kept until the code is accepted, so a mistyped code can be tried again with the same key.
-                PrimaryButton("Turn on", busy = busy, missing = stillNeeded(missingNames("the 6-digit code" to (code.length != 6), "Your password" to password.isEmpty()))) { act { val m = api.call("totp_confirm", body = JSONObject().put("password", password).put("code", code)).optString("message").ifEmpty { "Authenticator app turned on." }; setup = null; m } }
+                PrimaryButton("Turn on", busy = busy, missing = stillNeeded(missingNames("Your password" to password.isEmpty(), "the 6-digit code" to (code.length != 6)))) { act {
+                    val m = try { api.call("totp_confirm", body = JSONObject().put("password", password).put("code", code)).optString("message").ifEmpty { "Authenticator app turned on." } }
+                    catch (e: org.casemanagement.app.ApiException) {
+                        // The setup ran out: start again from the button (a new key).
+                        if ((e.message ?: "").startsWith("The authenticator setup had ended")) setup = null
+                        throw e
+                    }
+                    setup = null; m
+                } }
             }
         }
         "cal" -> {
             Field("Your password", password, { password = it }, password = true, required = true, autofill = Fill.Password)
             SecondaryButton("Show my calendar address") { act { val r = api.call("cal_feed_show", body = JSONObject().put("password", password)); calAddress = r.str("address"); r.optString("message").ifEmpty { if (calAddress == null) "You have no calendar address yet." else "Your calendar address is below." } } }
-            SecondaryButton("Make a new calendar address") { act { val r = api.call("cal_feed_regen", body = JSONObject().put("password", password)); calAddress = r.str("address"); r.optString("message").ifEmpty { "New calendar address made. The old one no longer works." } } }
+            // 4.34.0: replacing an address that exists is asked about first.
+            val hasFeed = a.optBoolean("has_cal_feed")
+            SecondaryButton(calendarButtonName(hasFeed)) {
+                if (hasFeed) confirmReplace = true
+                else act { val r = api.call("cal_feed_regen", body = JSONObject().put("password", password)); calAddress = r.str("address"); r.optString("message").ifEmpty { "Calendar address made. Add it as a subscribed calendar." } }
+            }
             calAddress?.let { addr ->
                 Text(addr)
                 SecondaryButton("Copy the address") { copyProtected(context, addr); notice = "Address copied. Add it as a subscribed calendar." }
@@ -298,6 +344,9 @@ private fun AccountSecurity(api: Api, a: JSONObject, reload: () -> Unit) {
             PrimaryButton("Sign out everywhere", busy = busy) { confirmEverywhere = true }
         }
     }
+    if (confirmReplace) Confirm("Replace the calendar address?", "The old address stops working everywhere it was added. Subscribe your calendar to the new one.", "Replace the address", {
+        act { val r = api.call("cal_feed_regen", body = JSONObject().put("password", password)); calAddress = r.str("address"); r.optString("message").ifEmpty { "New calendar address made. The old one no longer works." } }
+    }, { confirmReplace = false })
     if (confirmEverywhere) Confirm("Sign out of the app on every device?", listOfNotNull(api.unsentSignaturesWarning, "Every phone signed in to the app, this one too, has to sign in again. Website sessions are not affected.").joinToString(" "), "Sign out everywhere", {
         act { val r = api.call("logout_all", body = JSONObject().put("password", password)); api.signOut(); api.sessionNotice = r.optString("message"); "" }
     }, { confirmEverywhere = false })

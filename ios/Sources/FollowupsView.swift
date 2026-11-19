@@ -374,7 +374,13 @@ struct RecordFollowupSheet: View {
             // The list announces the result once this sheet has gone (a message posted while it
             // is still open is cut off when it closes).
             clearDraft()
-            onSaved(r.warning); dismiss()
+            // 4.34.0: a "No" says what it created, as the website does.
+            if r.warning == nil && r.abandoned == true {
+                onSaved("Recorded. Because the device is no longer in use, a case note and a follow-up task were created.")
+            } else {
+                onSaved(r.warning)
+            }
+            dismiss()
         } catch APIError.network {
             // No signal: the answers are kept on this phone with the offline notes and hours,
             // and upload automatically (the server records the check then).
@@ -396,10 +402,13 @@ struct RecordFollowupSheet: View {
 /// failure that invites recording it again.
 struct SaveFollowupResponse: Decodable {
     let warning: String?
-    private enum CodingKeys: String, CodingKey { case warning }
+    /// The device was recorded as no longer in use, so a case note and a task were added.
+    let abandoned: Bool?
+    private enum CodingKeys: String, CodingKey { case warning, abandoned }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         let text = try? c.decodeIfPresent(String.self, forKey: .warning)
         warning = (text ?? "").isEmpty ? nil : text
+        abandoned = (try? c.decodeIfPresent(Bool.self, forKey: .abandoned)) ?? nil
     }
 }

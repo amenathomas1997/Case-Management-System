@@ -3,7 +3,6 @@ package org.casemanagement.app.ui
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,13 +44,17 @@ fun SearchScreen(api: Api, nav: NavHostController) {
             groups.forEach { g ->
                 val items = g.optJSONArray("items").objects()
                 if (items.isEmpty()) return@forEach
-                Heading(g.optString("group") + " (${items.size})")
+                // 4.34.0: a group cut at 25 says more matched, as the website does.
+                Heading(searchGroupHeading(g.optString("group"), items.size, g.optBoolean("capped")))
                 items.forEach { i ->
                     val client = if (i.isNull("client_id")) 0 else i.optInt("client_id")
+                    val track = if (i.isNull("track_id")) 0 else i.optInt("track_id")
                     ListRow(listOf(i.optString("title"), i.optString("subtitle")), action = "open it", onClick = when (i.optString("kind")) {
                         "referral" -> ({ nav.navigate("referral/${i.optInt("id")}") })
                         "client" -> ({ nav.navigate("client/${i.optInt("id")}") })
                         "track" -> if (client > 0) ({ nav.navigate("track/$client/${i.optInt("id")}") }) else null
+                        "goal" -> if (client > 0 && track > 0) ({ nav.navigate("track/$client/$track") }) else if (client > 0) ({ nav.navigate("client/$client") }) else null
+                        "invoice" -> null
                         else -> if (client > 0) ({ nav.navigate("client/$client") }) else null
                     })
                 }
@@ -59,6 +62,32 @@ fun SearchScreen(api: Api, nav: NavHostController) {
         }
     }
 }
+
+/** 4.34.0: "Notes (25)", or "Notes (first 25 shown, more match)" when the server stopped at its limit. */
+fun searchGroupHeading(group: String, shown: Int, capped: Boolean): String = if (capped) "$group (first $shown shown, more match)" else "$group ($shown)"
+
+/** 4.34.0: one consent that needs attention (consents_due), as lines of its row. */
+fun consentRowWords(o: JSONObject): List<String> {
+    val date = o.str("date")?.let { dayText(it) } ?: ""
+    val whenWords = when (o.optString("kind")) {
+        "Expired" -> "ended $date"
+        "Expiring" -> "ends $date"
+        "Withdrawn" -> "withdrawn $date"
+        "Unsigned" -> "sent $date"
+        "Adult" -> "client turned 18 on $date"
+        else -> date
+    }
+    val head = o.optString("client") + (o.str("guardian_name")?.let { ", guardian $it" } ?: "")
+    val state = listOf(o.optString("label").ifEmpty { o.optString("kind") }, whenWords).filter { it.isNotBlank() }.joinToString(", ")
+    val resent = o.str("pending_sent_at")?.let { "A new request was sent " + dayText(it) }
+    return listOfNotNull(head, state, resent, o.str("action"))
+}
+
+/** 4.34.0: an incident date after today is refused, as the website refuses it. */
+fun incidentDateNotFuture(date: String, todayIs: String): Boolean = date.trim() <= todayIs
+
+/** 4.34.0: an invoice's due date is shown only once it has been submitted (a draft's is not set yet). */
+fun invoiceDueShownOnlySubmitted(status: String, due: String?): String? = if (status == "Submitted" && !due.isNullOrBlank()) due else null
 
 /** Where every referral and client sits, and for how long. */
 @Composable
@@ -84,6 +113,7 @@ fun PipelineScreen(api: Api, nav: NavHostController) {
 @Composable
 fun ComplianceScreen(api: Api, nav: NavHostController) {
     val state = rememberLoaded(api.userId) { api.call("compliance") }
+    val consents = rememberLoaded(api.userId) { api.call("consents_due").optJSONArray("consents").objects() }
     Show(state, "compliance") { r ->
         Page {
             val risk = r.optJSONArray("auth_risk").objects()
@@ -96,6 +126,12 @@ fun ComplianceScreen(api: Api, nav: NavHostController) {
             if (eq.isNotEmpty()) {
                 Heading("Equipment service due (${eq.size})")
                 eq.forEach { e -> ListRow(listOf(e.optString("name"), (if (e.optBoolean("overdue")) "overdue since " else "due ") + dayText(e.str("due")))) }
+            }
+            // 4.34.0: consents to renew, as the website's compliance page (guardian consents that ended at 18 too).
+            Heading("Consents to renew" + (consents.data?.let { " (${it.size})" } ?: ""))
+            Show(consents, "consents") { list ->
+                if (list.isEmpty()) Text("No consents need attention.")
+                list.forEach { c -> ListRow(consentRowWords(c), action = "open the client", onClick = if (c.optInt("client_id") > 0) ({ nav.navigate("client/${c.optInt("client_id")}") }) else null) }
             }
         }
     }
@@ -170,7 +206,7 @@ fun InvoicesScreen(api: Api) {
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     Page {
-        Choice("Show", status, listOf("" to "All invoices", "Draft" to "Drafts", "Submitted" to "Submitted", "Paid" to "Paid", "Denied" to "Denied", "Void" to "Void")) { status = it }
+        Choice("Show", status, listOf("" to "All invoices", "Draft" to "Drafts", "Submitted" to "Submitted", "Paid" to "Paid", "Denied" to "Denied", "Void" to "Void")) { status = it; error = null }
         NoticeText(notice)
         ErrorText(error)
         Show(state, "invoices") { r ->
@@ -185,18 +221,46 @@ fun InvoicesScreen(api: Api) {
             list.forEach { i ->
                 ListRow(listOf("${i.optString("invoice_number")}: ${i.optString("client_name")}", i.optString("status") + ", " + money(i.optDouble("total_amount", 0.0)) +
                     (if (i.optDouble("balance", 0.0) > 0 && i.optString("status") != "Draft") ", balance " + money(i.optDouble("balance", 0.0)) else "") +
-                    (i.str("due_date")?.let { ", due " + dayText(it) } ?: ""), i.optString("funding_agency")),
+                    (invoiceDueShownOnlySubmitted(i.optString("status"), i.str("due_date"))?.let { ", due " + dayText(it) } ?: ""), i.optString("funding_agency")),
                     action = "mark it submitted", onClick = if (i.optString("status") == "Draft") ({ submit = i }) else null)
             }
         }
     }
-    submit?.let { i ->
-        Confirm("Mark invoice ${i.optString("invoice_number")} submitted today?", "Its due date is set from today.", "Mark submitted", {
-            scope.launch {
-                try { val r = api.call("submit_invoice", body = JSONObject().put("id", i.optInt("id"))); notice = "Invoice ${i.optString("invoice_number")} submitted; due " + dayText(r.str("due_date")) + "."; state.reload() }
-                catch (e: ApiException) { error = e.message }
+    submit?.let { i -> key(dialogKey("submit", i.optInt("id"))) { SubmitInvoiceDialog(api, i, onDone = { m -> submit = null; error = null; notice = m; state.reload() },
+        onRefused = { m -> submit = null; notice = null; error = m; state.reload() }, onCancel = { submit = null }) } }
+}
+
+/**
+ * 4.34.0: marking a draft submitted asks the date it was sent to the funder (today by default),
+ * as the website does; the due date follows from that day and the payment terms.
+ */
+@Composable
+private fun SubmitInvoiceDialog(api: Api, i: JSONObject, onDone: (String) -> Unit, onRefused: (String) -> Unit, onCancel: () -> Unit) {
+    val number = i.optString("invoice_number")
+    var date by rememberSaveable { mutableStateOf(today()) }
+    var dateError by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var idem by rememberSaveable { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    FormDialog("Mark invoice $number as submitted to the funder?", "Mark submitted", busy, onSave = {
+        val created = i.str("created_at")?.take(10) ?: "2000-01-01"
+        dateError = if (!pastOrToday(date) || date.isBlank()) "Date submitted: enter a date as year-month-day, today or earlier."
+            else if (date.trim() < created) "Date submitted: the invoice was created on ${dayText(created)}, so it cannot have been sent earlier." else null
+        dateError?.let { error = it; return@FormDialog }
+        scope.launchSave({ busy = it }, { error = it }) {
+            try {
+                val r = api.callOnce("submit_invoice", JSONObject().put("id", i.optInt("id")).put("submitted_on", date.trim()), idem, { idem = it }, "marking the invoice submitted")
+                onDone("Invoice $number marked submitted on ${dayText(date.trim())}" + (r.str("due_date")?.let { "; it is due " + dayText(it) } ?: "") + ".")
+            } catch (e: ApiException) {
+                // Someone else changed it meanwhile: the list is read again.
+                if (e.status == 409) onRefused(e.message ?: "The invoice changed meanwhile.") else throw e
             }
-        }, { submit = null })
+        }
+    }, onCancel = onCancel) {
+        Text("Its due date is set from the payment terms.")
+        Field("Date submitted", date, { date = it }, hint = "year-month-day", error = dateError, required = true)
+        ErrorText(error)
     }
 }
 
@@ -220,7 +284,8 @@ fun IncidentsScreen(api: Api) {
             val list = r.optJSONArray("incidents").objects()
             Heading("Incidents (${list.size})")
             list.forEach { i ->
-                ListRow(listOf(i.optString("type") + ", " + i.optString("severity") + ": " + dayText(i.str("incident_date")), i.optString("status") + (i.str("client_name")?.let { ", $it" } ?: ""), i.optString("description")),
+                ListRow(listOf(i.optString("type") + ", " + i.optString("severity") + ": " + dayText(i.str("incident_date")), i.optString("status") + (i.str("client_name")?.let { ", $it" } ?: "") +
+                    (i.str("reporter")?.let { ", reported by $it" } ?: ""), i.optString("description")),
                     action = "change its status", onClick = if (i.optBoolean("can_edit")) ({ chosen = i }) else null)
             }
         }
@@ -250,9 +315,11 @@ fun IncidentsScreen(api: Api) {
 
 @Composable
 private fun IncidentDialog(api: Api, r: JSONObject, onDone: (String) -> Unit, onCancel: () -> Unit) {
-    val types = r.optJSONArray("types").let { a -> List(a?.length() ?: 0) { a!!.optString(it) } }.ifEmpty { listOf("Injury", "Near miss", "Equipment failure", "Behavioral", "Property damage", "Medical", "Safety concern", "Other") }
+    // 4.34.0: the agency's own list only (the server refuses any other type).
+    val types = r.optJSONArray("types").let { a -> List(a?.length() ?: 0) { a!!.optString(it) } }.filter { it.isNotBlank() }
     var date by rememberSaveable { mutableStateOf(today()) }
-    var type by rememberSaveable { mutableStateOf(types.firstOrNull() ?: "Other") }
+    var type by rememberSaveable { mutableStateOf("") }
+    var typeError by remember { mutableStateOf<String?>(null) }
     var severity by rememberSaveable { mutableStateOf("Low") }
     var description by rememberSaveable { mutableStateOf("") }
     var location by rememberSaveable { mutableStateOf("") }
@@ -270,7 +337,7 @@ private fun IncidentDialog(api: Api, r: JSONObject, onDone: (String) -> Unit, on
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Field("Date", date, { date = it }, hint = "year-month-day", error = dateError, required = true)
-                Choice("Type", type, types.map { it to it }) { type = it }
+                Choice("Type", type, listOf("" to "Choose a type") + types.map { it to it }, typeError, required = true) { type = it; typeError = null }
                 Choice("Severity", severity, listOf("Low", "Medium", "High", "Critical").map { it to it }) { severity = it }
                 Field("What happened", description, { description = it }, singleLine = false, minLines = 3, required = true, error = descriptionError)
                 Field("Where", location, { location = it }, hint = "optional")
@@ -282,9 +349,11 @@ private fun IncidentDialog(api: Api, r: JSONObject, onDone: (String) -> Unit, on
             TextButton(enabled = !busy, onClick = {
                 if (busy) return@TextButton
                 presses++
-                dateError = if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim())) "Enter the date as year-month-day, such as ${today()}." else null
+                dateError = if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim())) "Enter the date as year-month-day, such as ${today()}."
+                    else if (!incidentDateNotFuture(date, today())) "The incident date cannot be in the future. Check the year." else null
+                typeError = if (type.isEmpty()) "Choose a type from the list." else null
                 descriptionError = if (description.isBlank()) "Say what happened." else null
-                errorSummary(listOf(dateError, descriptionError))?.let { error = it; return@TextButton }
+                errorSummary(listOf(dateError, typeError, descriptionError))?.let { error = it; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
                     // 4.28.0: a retry after a lost reply reports it once (see sendOnce).
                     api.callOnce("add_incident", JSONObject().put("incident_date", date.trim()).put("type", type).put("severity", severity)

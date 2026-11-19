@@ -142,8 +142,169 @@ dashboard_swift = swift_sources['DashboardView.swift']
 static_check('notesToWrite = await loadNotesToWrite(api)' in dashboard_swift and 'NoteToWriteRow(item: item)' in dashboard_swift,
              'the Dashboard shows Notes to write with Write it now')
 project_yml = (root / 'ios/project.yml').read_text()
-static_check(project_yml.count('MARKETING_VERSION: "4.32.0"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "64"') == 2,
-             'the app and widget are version 4.32.0 (64)')
+static_check(project_yml.count('MARKETING_VERSION: "4.34.0"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "65"') == 2,
+             'the app and widget are version 4.34.0 (65)')
+
+# 4.34.0: the iPhone app behaves as the website does (PARITY-AUDIT-2026-11-19, plan P1-P43; static).
+api_swift = swift_sources['API.swift']
+add_note = clients_swift[clients_swift.index('struct AddNoteSheet: View {'):clients_swift.index('// MARK: - Parity helpers')]
+static_check(re.search(r'refusal: \{ reply in[^}]*reply\["locked"\]', add_note) and 'Your changes are in the addendum form below.' in add_note
+             and 'becomeAddendum(to:' in add_note and 'payload["addendum_to"] = parent.id' in add_note,
+             'P1: an edit refused because the note locked becomes an addendum with the typed text kept, as the website does')
+static_check('func addendumSubjectFor' in clients_swift and 'subject.hasPrefix("Addendum: ") ? subject' in clients_swift,
+             'P1: an addendum\'s subject is "Addendum: <subject>", never doubled')
+free_text_msg = ('Free text is chosen as the note format, but the structured sections still hold text that a free-text note does not keep. '
+                 'Move anything you need from the sections into the narrative box and clear them, or choose a structured format again.')
+static_check(free_text_msg in clients_swift and 'sectionsLost(format: noteFormat, sections: sections)' in add_note
+             and 'showFormError(freeTextSectionsMessage, in: &error, field: "Note")' in add_note,
+             'P2: free text with section text is refused with the website\'s words, tied to the note, before anything is sent')
+static_check('payload["sec\\(i + 1)"] = text' in add_note, 'P2: a free-text note sends sections that hold text, so the server check applies too')
+edit_sheet = swift_sources['ClientEditSheet.swift']
+client_save = edit_sheet[edit_sheet.index('    private func save() async {'):edit_sheet.index('    /// The form field a save_client refusal is about')]
+client_body = client_save[client_save.index('var body: [String: Any] = ['):client_save.index('if existing == nil {\n                // 4.34.0: a possible duplicate')]
+static_check(all('"%s": %s' % (k, v) in client_body for k, v in (('dob', 'dob'), ('ipe_date', 'ipeDate'), ('ipe_amended_on', 'ipeAmendedOn')))
+             and 'if clientType == "Pre-ETS" { body["school"] = school }' in client_body
+             and '(required for On Hold)' in edit_sheet
+             and 'Say why the client is going On Hold (for example, waiting for the authorization).' in edit_sheet,
+             'P3: the client form sends date of birth, school, IPE dates and requires a reason for On Hold, as the website')
+static_check('LabeledContent("Date of birth"' in clients_swift and 'LabeledContent("Client type"' in clients_swift,
+             'P3: the client screen shows date of birth and client type')
+static_check('body["dup_check"] = 1' in edit_sheet and 'body["not_duplicate"] = 1' in edit_sheet
+             and 'Toggle("This is a different person"' in edit_sheet and 'refusedDuplicate = (reply["duplicate"] as? Bool) == true' in edit_sheet
+             and re.search(r'showFormError\(refusedFields\["name"\] \?\? error\.localizedDescription, in: &self\.error, field: "Full name"\)', client_save)
+             and 'message += " " + advisory' in client_save and 'message += " " + warning' in client_save,
+             'P4: a new client matching someone on file is refused until "This is a different person"; advisory and old warning said')
+save_ack = clients_swift[clients_swift.index('struct SaveAck: Decodable {'):clients_swift.index('func noteSavedMessage')]
+static_check(re.search(r'^\s*var warning: String\?$', save_ack, re.M) and re.search(r'^\s*var homeworkCreated: Int\?$', save_ack, re.M) and 'added to the client portal.' in clients_swift
+             and 'onSaved(noteSavedMessage(result))' in add_note,
+             'P5: "Note saved." says the homework added and the session warning')
+static_check('body["consent_seen"] = seen' in clients_swift and 'var pendingId: Int?' in clients_swift
+             and 'reply["consent_changed"]' in clients_swift
+             and 'fields["guardian_name"] != nil ? "Guardian name" : (fields["guardian_email"] != nil ? "Guardian email" : nil)' in clients_swift,
+             'P6: a consent request sends consent_seen, reloads after consent_changed, and ties guardian errors to their fields')
+search_swift = swift_sources['SearchView.swift']
+static_check('var capped: Bool?' in search_swift and '(first \\(items.count) shown, more match)' in search_swift
+             and 'hit.kind == "goal", let trackId = hit.trackId' in search_swift and 'hit.kind == "invoice"' in search_swift,
+             'P7: search groups say when more matched, a goal opens its track, an invoice is a plain row')
+complete_sheet = schedule_swift[schedule_swift.index('struct CompleteSessionSheet: View {'):schedule_swift.index('private struct SigningStep')]
+static_check('body["outcome"] = outcome.value' in schedule_swift and '"completed_logged"' in schedule_swift and '"completed_separate"' in schedule_swift
+             and 'Completed — log hours as well' in complete_sheet and 'Completed, hours already logged' in complete_sheet
+             and 'reply["logged_hours"]' in schedule_swift and 'signature: sig, signedName: name, entries: refusal.entries' in complete_sheet,
+             'P9: completing sends the outcome and, when hours are logged that day, offers the website\'s two choices keeping the signature')
+move_sheet = schedule_swift[schedule_swift.index('struct MoveSessionSheet: View {'):]
+static_check('ErrorFocusForm(inNavigationStack: true, error: error)' in move_sheet and '.errorField("New start")' in move_sheet,
+             'P9: the Move session sheet uses ErrorFocusForm with its date tied')
+track_swift = swift_sources['TrackDetailView.swift']
+static_check('body["billing_mode"] = billingMode' in track_swift and 'body["authorized_amount"]' in track_swift
+             and 'rsaDefaults' in track_swift and 'r.rsaDefault(for: serviceType)' in track_swift and 'r.defaults?.billingMode' in track_swift
+             and '"hourly_rate": "Hourly billing rate"' in track_swift and 'func moneyInput' in track_swift
+             and 'showFormError(message, in: &self.error, field: Self.errorFields[key])' in track_swift
+             and re.search(r'\.onChange\(of: serviceType\) \{ now in.*?rsaCategory = form\.rsaDefault\(for: now\)', track_swift, re.S),
+             'P11: the track form offers Who pays and the dollar amount, starts from the website\'s defaults and ties the rate error')
+static_check('refusedDuplicate = ($0["duplicate"] as? Bool) == true' in schedule_swift and 'refusedFields["date"]' in schedule_swift
+             and 'field: "Starts"' in schedule_swift and '.errorField("Starts")' in schedule_swift,
+             'P12: a session already booked is said as information; a series overlapping one is tied to the date')
+static_check('if forSchedule, let bookable = row.bookable { return bookable }' in api_swift and 'var bookable: Bool?' in api_swift
+             and 'clientPickerChoices(forSchedule: true)' in schedule_swift,
+             'P13: the booking picker offers only clients the server marks bookable (no Waitlist), others unchanged')
+static_check(re.search(r'if started \{\s*Button \{\s*pendingOutcome = SessionOutcome\(session: session, to: "No Show"\)', schedule_swift)
+             and re.search(r'if started \{\s*Button\("No-show"\)', schedule_swift),
+             'P15: Record a no-show is offered only once the session has started')
+log_hours_swift = swift_sources['LogHoursView.swift']
+static_check('step: 0.25' not in log_hours_swift and 'Stepper(' not in log_hours_swift
+             and 'Hours (0 with miles for travel only' in log_hours_swift
+             and 'Enter the hours worked, or write a session note to save the note on its own.' in log_hours_swift
+             and 'result.reminder' in log_hours_swift,
+             'P16: hours are typed with two decimals (0 with miles for travel, blank for a note only) and the homework reminder is said')
+static_check('Recorded. Because the device is no longer in use, a case note and a follow-up task were created.' in swift_sources['FollowupsView.swift'],
+             'P18: a "No" follow-up says what it created')
+static_check('The task needs a title: say what needs doing.' in swift_sources['TasksView.swift'],
+             'P20: the task title error is the website\'s')
+static_check('reported by \\(who)' in swift_sources['IncidentsView.swift'], 'P22: each incident says who reported it')
+static_check('"Adult": "client turned 18 on"' in swift_sources['ComplianceView.swift'],
+             'P23: a guardian consent from before the client turned 18 is listed as the website lists it')
+agreements_swift = swift_sources['AgreementsView.swift']
+static_check('await api.refreshMe()' in agreements_swift and 'field: aboutName ? "Name" : nil' in agreements_swift
+             and 'nameRefused = ((reply["errors"] as? [String: Any])?["signed_name"]) != nil' in agreements_swift
+             and 'localizedCaseInsensitiveContains("name")' not in agreements_swift,
+             'P24: signing the last agreement lifts the access hold at once')
+account_swift = swift_sources['AccountView.swift']
+static_check('Both work.' not in account_swift and 'Email codes keep working' not in account_swift
+             and 'codes are no longer emailed.' in account_swift and 'Once it is on, sign-in codes are no longer emailed.' in account_swift,
+             'P25: My Account says codes are no longer emailed once an authenticator is on')
+ai_swift = swift_sources['AIToolsView.swift']
+static_check('caseloadCut' in ai_swift and 'AINotice.ask(truncated: r.truncated, caseloadCut: r.caseloadCut)' in ai_swift
+             and 'only part of the caseload fit in one question' in ai_swift,
+             'P28: Ask your caseload says when the answer stopped early or only part of the caseload fit')
+static_check('"Draft lesson plan"' in ai_swift and 'Save it as a curriculum on the website: AI tools › Curriculum generator.' in ai_swift
+             and 'AINotice.curriculumIncomplete' in ai_swift,
+             'P31: the curriculum generator drafts the website\'s lesson plan')
+static_check('periodFrom' in ai_swift and 'Period: \\(formatDate(from)) to \\(formatDate(to)).' in ai_swift and 'AINotice.riskIncomplete' in ai_swift,
+             'P32: risk flags say their period and when the list was cut off')
+static_check('aiRedaction' in api_swift and 'Client identifiers are stripped before client data is sent to the provider.' in ai_swift
+             and 'Identifier redaction is currently off.' in ai_swift,
+             'P33: the AI tools say whether client identifiers are stripped')
+static_check('AINotice.progressIncomplete' in ai_swift, 'P34: the progress review says when it stopped early')
+report_sheet = track_swift[track_swift.index('struct SendReportSheet: View {'):track_swift.index('struct ReportFormResponse')]
+static_check(all(k in report_sheet for k in ('"report_kind"', '"barriers"', '"recommendations"', '"report_intro"', '"report_sections"',
+                                             '"report_form"', '"report_preview"', '"cc_self"', '"share_portal"', 'releaseWarning'))
+             and 'appendDraftBelow(intro, r.text)' in report_sheet,
+             'P35: the report form matches the website (kind, period, barriers, recommendations, copies, preview, AI drafts below typed text)')
+static_check('Request reopened. Status updated to' in swift_sources['ProcurementView.swift'],
+             'P36: reopening a device request says the step it returned to')
+equipment_swift = swift_sources['EquipmentView.swift']
+loan_sheet = equipment_swift[equipment_swift.index('struct LoanSheet: View {'):equipment_swift.index('var loanConditions')]
+static_check('loanDueDays' in loan_sheet and 'value: 60' not in loan_sheet and 'Toggle("No return date"' in loan_sheet
+             and 'noReturnDate ? "" :' in loan_sheet and 'FormOptions.saveNumbers(obj["numbers"] as? [String: Any] ?? [:])' in api_swift
+             and 'FormOptions.number("loan_due_days", 60)' in api_swift and 'Condition when returned: Unchanged' in equipment_swift,
+             'P37: a loan\'s return date follows the administrator\'s loan period, can be left blank, and returns offer the condition list')
+static_check('b["needed_until"]' in equipment_swift and 'The item is now held for the client who has waited longest on its waitlist.' in equipment_swift,
+             'P38: a reservation can say needed until, and a cancel says when the waitlist moved up')
+invoices_swift = swift_sources['InvoicesView.swift']
+static_check('"submitted_on"' in invoices_swift and 'body["idem_key"] = idem.key(for: body)' in invoices_swift
+             and 'Its due date is set from the payment terms.' in invoices_swift
+             and 'Status, balances, and marking drafts submitted' in dashboard_swift,
+             'P41: marking an invoice submitted asks for the date sent, with a retry key, and says the due date')
+static_check('30 days' not in dashboard_swift and 'authSoonDays' in dashboard_swift,
+             'P42: the dashboard says the administrator\'s "ending soon" days, never a fixed 30')
+clients_response = api_swift[api_swift.index('struct ClientsResponse: Decodable {'):api_swift.index('struct ClientInfo: Decodable')]
+static_check('var total: Int?' in clients_response and 'Showing the first \\(clients.count) of \\(total) clients. Search to find others.' in clients_swift,
+             'P43: the client list says "first 200 of N" from the server\'s total')
+static_check('"hw_due_"' in add_note and 'let sentRows = sentHomeworkRows(homework)' in add_note and 'let row = sentRows[n - 1]' in add_note
+             and 'field: "Homework \\(row) due date"' in add_note
+             and 'items.enumerated().filter { $0.element.include && !$0.element.title.isEmpty }.map { $0.offset + 1 }' in clients_swift,
+             'P43: a refused homework due date (numbered among the items sent) is tied to that item\'s row on the form')
+static_check(re.search(r'else if let text = refusedFields\["note_content"\] \{\s*showFormError\(text, in: &self\.error, field: "Note"\)', add_note),
+             'P2: the server\'s note_content refusal is tied to the note')
+choose_fn = complete_sheet[complete_sheet.index('private func choose('):complete_sheet.index('var body: some View')]
+static_check('try await onDone(details, choice.signature, choice.signedName, outcome)' in choose_fn and 'guard let now = checked() else { return }' in choose_fn
+             and 'if let details, outcome.value != CompletionOutcome.alreadyLoggedValue {' in schedule_swift
+             and 'Completed — log hours as well' in complete_sheet and 'Completed, log new hours' not in schedule_swift,
+             'P9: a choice sends its outcome with the Hours and Miles checked again; "hours already logged" sends no hours or miles; the website\'s wording')
+static_check('let aboutDate = refusedFields["start_at"] != nil || refusedFields["date"] != nil\n' in move_sheet,
+             'P9: a Move refusal is tied to New start only when the server names the date')
+static_check(re.search(r'let key = Self\.errorOrder\.first\(where: \{ refusedFields\[\$0\] != nil \}\)', track_swift)
+             and 'Funding agency (set by Who pays)' in track_swift,
+             'P11: several track errors show the whole server text with the first field tied; Funding agency is set by Who pays when not VR')
+consent_sheet = clients_swift[clients_swift.index('struct ConsentRequestSheet: View {'):clients_swift.index('extension ClientRelease {')]
+static_check('showFormError(message, in: &self.error, field: field)' in consent_sheet and '.disabled(busy || needsReload)' in consent_sheet
+             and 'The consent could not be reloaded, so sending stays off.' in consent_sheet,
+             'P6: guardian errors keep the whole server text with the first field tied; a failed reload after consent_changed keeps Send off')
+static_check(re.search(r'let field = \[\("hours", "Hours"\), \("mileage", "Mileage"\), \("description", "Description"\)\]', log_hours_swift)
+             and 'showFormError(error.localizedDescription, in: &self.error, field: field)' in log_hours_swift,
+             'P16: several hours errors keep the whole server text with the first field tied')
+static_check('if message.hasPrefix("IPE amendment date") { return "IPE amended on" }' in edit_sheet
+             and 'message.hasPrefix("The date of birth")' in edit_sheet
+             and re.search(r'\.onChange\(of: \[name, dob, phone, email\]\) \{ _ in\s*if duplicateRefused \{ duplicateRefused = false; notDuplicate = false \}', edit_sheet),
+             'P3/P4: IPE amendment and date-of-birth refusals are tied to their fields; changing the details resets "This is a different person"')
+static_check('Button { Task { await loadForm() } }' in report_sheet and '.disabled(busy || !formLoaded || formLoadFailed)' in report_sheet,
+             'P35: a report form that fails to load (not an older server) offers Try again and sends nothing meanwhile')
+static_check('status409 = (reply["changed"] as? Bool) == true' in invoices_swift and 'contains("no longer a draft")' not in invoices_swift
+             and 'dateRefused = fields["submitted_on"] != nil' in invoices_swift,
+             'P41: a draft changed meanwhile is told by changed:true; the date error by its key, the words only as a fallback')
+reservation_sheet = equipment_swift[equipment_swift.index('struct ReservationSheet: View {'):]
+static_check('if hasUntil && hasFrom && APIDate.day(until) < APIDate.day(from) {' in reservation_sheet and 'Needed until: choose the day' in reservation_sheet,
+             'P38: Needed until before Needed from is refused on the phone, tied to Needed until')
 
 source = (root / 'ios/Sources/API.swift').read_text()
 source = source.split('extension Color {')[0]

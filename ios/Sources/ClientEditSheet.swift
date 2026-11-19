@@ -116,6 +116,14 @@ struct ClientEditSheet: View {
     @State private var guardianEmail = ""
     @State private var vrCaseNumber = ""
     @State private var ipeGoal = ""
+    /// Date of birth, school (Pre-ETS) and IPE dates (4.34.0), "YYYY-MM-DD" or blank.
+    @State private var dob = ""
+    @State private var school = ""
+    @State private var ipeDate = ""
+    @State private var ipeAmendedOn = ""
+    /// A new client matches one already on file (4.34.0): saving waits for "This is a different person".
+    @State private var duplicateRefused = false
+    @State private var notDuplicate = false
     @State private var staff: [StaffMember] = []
     /// The staff list could not be loaded: said, with a retry, instead of a picker with no names.
     @State private var staffError: String?
@@ -189,6 +197,10 @@ struct ClientEditSheet: View {
         _guardianEmail = State(initialValue: existing.guardianEmail ?? "")
         _vrCaseNumber = State(initialValue: existing.vrCaseNumber ?? "")
         _ipeGoal = State(initialValue: existing.ipeGoal ?? "")
+        _dob = State(initialValue: existing.dob ?? "")
+        _school = State(initialValue: existing.school ?? "")
+        _ipeDate = State(initialValue: existing.ipeDate ?? "")
+        _ipeAmendedOn = State(initialValue: existing.ipeAmendedOn ?? "")
         _clientType = State(initialValue: existing.clientType ?? "VR")
         _a11yScreenReader = State(initialValue: existing.a11yScreenReader ?? false)
         _a11yFormat = State(initialValue: existing.a11yFormat ?? "")
@@ -227,7 +239,8 @@ struct ClientEditSheet: View {
         [name, phone, email, address, status, statusNote, counselorName, counselorAgency,
          counselorEmail, counselorPhone, String(assignedTo), clientType, a11yScreenReader ? "1" : "0",
          a11yFormat, a11yPrimaryTech, a11yContact, a11yNotes, confirmEmail ? "1" : "0",
-         guardianName, guardianPhone, guardianEmail, vrCaseNumber, ipeGoal, usState]
+         guardianName, guardianPhone, guardianEmail, vrCaseNumber, ipeGoal, usState,
+         dob, school, ipeDate, ipeAmendedOn]
     }
     /// The same fields as the form opens with them (see init and the property defaults).
     private static func values(of c: ClientInfo?) -> [String] {
@@ -235,7 +248,8 @@ struct ClientEditSheet: View {
          c?.counselorName ?? "", c?.counselorAgency ?? "", c?.counselorEmail ?? "", c?.counselorPhone ?? "",
          String(c?.assignedTo ?? 0), c?.clientType ?? "VR", (c?.a11yScreenReader ?? false) ? "1" : "0",
          c?.a11yFormat ?? "", c?.a11yPrimaryTech ?? "", c?.a11yContact ?? "", c?.a11yNotes ?? "", "0",
-         c?.guardianName ?? "", c?.guardianPhone ?? "", c?.guardianEmail ?? "", c?.vrCaseNumber ?? "", c?.ipeGoal ?? "", c?.state ?? ""]
+         c?.guardianName ?? "", c?.guardianPhone ?? "", c?.guardianEmail ?? "", c?.vrCaseNumber ?? "", c?.ipeGoal ?? "", c?.state ?? "",
+         c?.dob ?? "", c?.school ?? "", c?.ipeDate ?? "", c?.ipeAmendedOn ?? ""]
     }
     private var originalCustom: [Int: String] {
         Dictionary(customFields.map { ($0.id, $0.value) }, uniquingKeysWith: { a, _ in a })
@@ -277,6 +291,12 @@ struct ClientEditSheet: View {
                 // Each name stays visible above its field (a filled-in edit form showed bare values).
                 Section("Client") {
                     CaptionedField(label: "Full name (required)", text: $name, prompt: "Full name", errorName: "Full name")
+                    // 4.34.0: a new client who matches someone on file is saved only once this is on.
+                    if duplicateRefused {
+                        Toggle("This is a different person", isOn: $notDuplicate)
+                    }
+                    OptionalDayField(title: "Date of birth", text: $dob, latest: Date())
+                        .errorField("Date of birth")
                     CaptionedField(label: "Phone", text: $phone, keyboard: .phonePad)
                         // A new number needs the client's agreement again (the server clears it too).
                         // 4.29.0: compared with the record as last loaded (Reload's after a conflict), and
@@ -330,7 +350,8 @@ struct ClientEditSheet: View {
                         ForEach(clientStatuses.contains(status) || status.isEmpty ? clientStatuses : clientStatuses + [status], id: \.self) { Text($0) }
                     }
                     if statusChanged {
-                        CaptionedField(label: "Reason for status change", text: $statusNote)
+                        CaptionedField(label: status == "On Hold" ? "Reason for status change (required for On Hold)" : "Reason for status change",
+                                       text: $statusNote, errorName: "Reason for status change")
                         Text("Recorded in the audit history.").font(.caption).foregroundStyle(Color.secondaryText)
                         // Said before Save: the email can't be called back once it has gone.
                         if status == "Closed - Rehabilitated" {
@@ -421,6 +442,10 @@ struct ClientEditSheet: View {
                 Section("Plan for employment (IPE)") {
                     CaptionedField(label: "VR case or participant number", text: $vrCaseNumber)
                     CaptionedField(label: "IPE employment goal", text: $ipeGoal)
+                    OptionalDayField(title: "IPE date", text: $ipeDate, latest: Date())
+                        .errorField("IPE date")
+                    OptionalDayField(title: "IPE amended on", text: $ipeAmendedOn, latest: Date())
+                        .errorField("IPE amended on")
                 }
                 Section("Parent or guardian") {
                     CaptionedField(label: "Guardian name", text: $guardianName)
@@ -439,6 +464,9 @@ struct ClientEditSheet: View {
                 }
                 Section("Case type") {
                     Picker("Client type", selection: $clientType) { ForEach(clientTypes, id: \.self) { Text($0) } }
+                    if clientType == "Pre-ETS" {
+                        CaptionedField(label: "School", text: $school, errorName: "School")
+                    }
                 }
                 Section("Accessibility & access needs") {
                     Toggle("Uses a screen reader", isOn: $a11yScreenReader)
@@ -459,6 +487,11 @@ struct ClientEditSheet: View {
                 }
             }
             .navigationTitle(existing == nil ? "New client" : "Edit client")
+            // The duplicate check was for the name, date of birth, phone and email as sent: a
+            // change to any of them is checked again, so "This is a different person" goes.
+            .onChange(of: [name, dob, phone, email]) { _ in
+                if duplicateRefused { duplicateRefused = false; notDuplicate = false }
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -513,7 +546,10 @@ struct ClientEditSheet: View {
                 /// Whether the outcome survey email went out: nil when none was due (or from an
                 /// older server); false also when the client has no valid email address.
                 let surveySent: Bool?
-                private enum CodingKeys: String, CodingKey { case ok, clientId, unarchived, surveySent }
+                /// An older app's save-then-warn (4.34.0 apps are refused first) and the Pre-ETS age note.
+                let duplicateWarning: String?
+                let advisory: String?
+                private enum CodingKeys: String, CodingKey { case ok, clientId, unarchived, surveySent, duplicateWarning, advisory }
                 init(from decoder: Decoder) throws {
                     let c = try decoder.container(keyedBy: CodingKeys.self)
                     guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
@@ -522,6 +558,8 @@ struct ClientEditSheet: View {
                     clientId = (try? c.decode(Int.self, forKey: .clientId)) ?? 0
                     unarchived = (try? c.decode(Bool.self, forKey: .unarchived)) ?? false
                     surveySent = try? c.decodeIfPresent(Bool.self, forKey: .surveySent)
+                    duplicateWarning = (try? c.decodeIfPresent(String.self, forKey: .duplicateWarning)) ?? nil
+                    advisory = (try? c.decodeIfPresent(String.self, forKey: .advisory)) ?? nil
                 }
             }
             if usState.isEmpty && stateRequired {
@@ -532,6 +570,20 @@ struct ClientEditSheet: View {
             if existing == nil, let missing = customFields.first(where: { $0.required && (customValues[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
                 showFormError("\(missing.label): this is required.", in: &error, field: missing.label)
                 return
+            }
+            // 4.34.0: as the website, going On Hold needs a reason.
+            if status == "On Hold" && (base?.status ?? "") != status && statusNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                showFormError("Say why the client is going On Hold (for example, waiting for the authorization).", in: &error, field: "Reason for status change")
+                return
+            }
+            for (value, label) in [(dob, "Date of birth"), (ipeDate, "IPE date"), (ipeAmendedOn, "IPE amended on")] {
+                guard !value.isEmpty else { continue }
+                guard let day = APIDate.strictDay(value) else {
+                    showFormError("\(label): enter the date as year-month-day, such as 2024-05-01, or turn it off.", in: &error); return
+                }
+                if day > Date() {
+                    showFormError("\(label): the date cannot be in the future.", in: &error); return
+                }
             }
             if status.hasPrefix("Closed") && (base?.status ?? "") != status && closureReason.isEmpty {
                 showFormError("Closing reason: choose why the case is closing.", in: &error)
@@ -557,7 +609,15 @@ struct ClientEditSheet: View {
                 "client_type": clientType, "a11y_screen_reader": a11yScreenReader ? 1 : 0,
                 "a11y_format": a11yFormat, "a11y_primary_tech": a11yPrimaryTech,
                 "a11y_contact": a11yContact, "a11y_notes": a11yNotes,
+                // 4.34.0: as the website's form (blank clears).
+                "dob": dob, "ipe_date": ipeDate, "ipe_amended_on": ipeAmendedOn,
             ]
+            if clientType == "Pre-ETS" { body["school"] = school }
+            if existing == nil {
+                // 4.34.0: a possible duplicate is refused until "This is a different person".
+                body["dup_check"] = 1
+                if notDuplicate { body["not_duplicate"] = 1 }
+            }
             if status.hasPrefix("Closed") && (base?.status ?? "") != status {
                 body["closure_reason"] = closureReason
                 body["closure_note"] = statusNote
@@ -612,16 +672,37 @@ struct ClientEditSheet: View {
             // A new client: a retry after a lost reply is recognised and not created twice.
             if existing == nil { body["idem_key"] = idem.key(for: body) }
             var refusedConflict = false
+            var refusedDuplicate = false
+            var refusedFields: [String: String] = [:]
             let result: SaveResult
             do {
                 result = try await api.call("save_client", body: body,
-                                            refusal: { refusedConflict = ($0["conflict"] as? Bool) == true })
+                                            refusal: { reply in
+                                                refusedConflict = (reply["conflict"] as? Bool) == true
+                                                refusedDuplicate = (reply["duplicate"] as? Bool) == true
+                                                refusedFields = (reply["errors"] as? [String: String]) ?? [:]
+                                            })
             } catch {
                 idem.failed(error)
+                if refusedDuplicate {
+                    // Nothing was saved: the match is said with Full name, and the switch to
+                    // save anyway appears just below it.
+                    duplicateRefused = true
+                    notDuplicate = false
+                    showFormError(refusedFields["name"] ?? error.localizedDescription, in: &self.error, field: "Full name")
+                    busy = false
+                    return
+                }
                 if refusedConflict {
                     conflict = true
                     let said = error.localizedDescription
                     showFormError(said + " What you typed is still in the form.", in: &self.error)
+                    busy = false
+                    return
+                }
+                // 4.34.0: a refusal about a field whose name differs from the server's words.
+                if case APIError.server(let message) = error, let field = Self.refusalField(message, keys: Array(refusedFields.keys)) {
+                    showFormError(message, in: &self.error, field: field)
                     busy = false
                     return
                 }
@@ -643,12 +724,25 @@ struct ClientEditSheet: View {
             } else if result.surveySent == false && email.trimmingCharacters(in: .whitespaces).contains("@") {
                 message += " The outcome survey email could not be sent. Close the case again later or check the email settings."
             }
+            if let warning = result.duplicateWarning, !warning.isEmpty { message += " " + warning }
+            if let advisory = result.advisory, !advisory.isEmpty { message += " " + advisory }
             onSaved(result.clientId > 0 ? result.clientId : (existing?.id ?? 0), message)
             dismiss()
         } catch {
             showFormError(existing == nil ? IdemKey.message(for: error, what: "the new client") : error.localizedDescription, in: &self.error)
             busy = false
         }
+    }
+
+    /// The form field a save_client refusal is about when its words differ from the field's
+    /// name ("IPE amendment date: …" is IPE amended on; the future date of birth; On Hold).
+    static func refusalField(_ message: String, keys: [String]) -> String? {
+        let byKey = ["ipe_amended_on": "IPE amended on", "ipe_date": "IPE date", "dob": "Date of birth", "school": "School"]
+        if let key = keys.sorted().first(where: { byKey[$0] != nil }) { return byKey[key] }
+        if message.hasPrefix("IPE amendment date") { return "IPE amended on" }
+        if message.hasPrefix("The date of birth") || message.hasPrefix("Date of birth") { return "Date of birth" }
+        if message.hasPrefix("Say why the client is going On Hold") { return "Reason for status change" }
+        return nil
     }
 
     /// The record's values under the keys save_client takes (sent as `orig`, 4.28.0).
@@ -663,6 +757,7 @@ struct ClientEditSheet: View {
             "client_type": c.clientType ?? "VR", "a11y_screen_reader": (c.a11yScreenReader ?? false) ? 1 : 0,
             "a11y_format": c.a11yFormat ?? "", "a11y_primary_tech": c.a11yPrimaryTech ?? "",
             "a11y_contact": c.a11yContact ?? "", "a11y_notes": c.a11yNotes ?? "", "state": c.state ?? "",
+            "dob": c.dob ?? "", "ipe_date": c.ipeDate ?? "", "ipe_amended_on": c.ipeAmendedOn ?? "", "school": c.school ?? "",
         ]
     }
 
@@ -695,6 +790,10 @@ struct ClientEditSheet: View {
             take(&guardianEmail, old.guardianEmail ?? "", now.guardianEmail ?? "")
             take(&vrCaseNumber, old.vrCaseNumber ?? "", now.vrCaseNumber ?? "")
             take(&ipeGoal, old.ipeGoal ?? "", now.ipeGoal ?? "")
+            take(&dob, old.dob ?? "", now.dob ?? "")
+            take(&school, old.school ?? "", now.school ?? "")
+            take(&ipeDate, old.ipeDate ?? "", now.ipeDate ?? "")
+            take(&ipeAmendedOn, old.ipeAmendedOn ?? "", now.ipeAmendedOn ?? "")
             take(&clientType, old.clientType ?? "VR", now.clientType ?? "VR")
             take(&a11yScreenReader, old.a11yScreenReader ?? false, now.a11yScreenReader ?? false)
             take(&a11yFormat, old.a11yFormat ?? "", now.a11yFormat ?? "")

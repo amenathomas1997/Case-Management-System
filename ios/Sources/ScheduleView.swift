@@ -233,8 +233,8 @@ struct ScheduleView: View {
                 // client's signature for a retry instead of asking them to sign again.
                 // Hours and miles first (staff only), then the client's signature or none: one
                 // step records the session, then its case note opens (4.31.0).
-                CompleteSessionSheet(session: session) { details, sig, name in
-                    try await complete(session, signature: sig, signedName: name, details: details)
+                CompleteSessionSheet(session: session) { details, sig, name, outcome in
+                    try await complete(session, signature: sig, signedName: name, details: details, outcome: outcome)
                 }
             }
             .sheet(item: $noteRequest, onDismiss: afterNoteSheet) { request in
@@ -583,13 +583,17 @@ struct ScheduleView: View {
                     }
                     .accessibilityLabel("Cancel \(name)")
                     .accessibilityInputLabels(["Cancel session", "Cancel \(name)"])
-                    Button {
-                        pendingOutcome = SessionOutcome(session: session, to: "No Show")
-                    } label: {
-                        Label("No-show", systemImage: "person.crop.circle.badge.xmark")
+                    // As on the website, a no-show is recorded once the start has passed (4.34.0;
+                    // the server refuses it before then).
+                    if started {
+                        Button {
+                            pendingOutcome = SessionOutcome(session: session, to: "No Show")
+                        } label: {
+                            Label("No-show", systemImage: "person.crop.circle.badge.xmark")
+                        }
+                        .accessibilityLabel("Mark \(name) as a no-show")
+                        .accessibilityInputLabels(["No-show", "Mark \(name) as a no-show"])
                     }
-                    .accessibilityLabel("Mark \(name) as a no-show")
-                    .accessibilityInputLabels(["No-show", "Mark \(name) as a no-show"])
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
@@ -615,7 +619,9 @@ struct ScheduleView: View {
                         Button("Mark completed") { markCompleted(session) }
                     }
                     Button("Cancel session") { pendingOutcome = SessionOutcome(session: session, to: "Cancelled") }
-                    Button("No-show") { pendingOutcome = SessionOutcome(session: session, to: "No Show") }
+                    if started {
+                        Button("No-show") { pendingOutcome = SessionOutcome(session: session, to: "No Show") }
+                    }
                     Button("Move session") { movingSession = session }
                     if session.inSeries { Button("Cancel this and later sessions in the series") { cancellingMore = (session, "cancel_series") } }
                     if session.groupUid != nil { Button("Cancel the whole group") { cancellingMore = (session, "cancel_group") } }
@@ -810,16 +816,23 @@ struct ScheduleView: View {
     /// session sheet it is opened once that sheet has closed.
     @discardableResult
     private func complete(_ session: Session, signature: String? = nil, signedName: String? = nil,
-                          details: CompletionDetails? = nil) async throws -> SessionNoteRequest? {
+                          details: CompletionDetails? = nil,
+                          outcome: CompletionOutcome = .completed) async throws -> SessionNoteRequest? {
         guard !completing.contains(session.id) else {
             throw APIError.server("This session is already being marked completed.")
         }
         completing.insert(session.id)
         defer { completing.remove(session.id) }
         confirmation = nil
+        var refusedLogged: [LoggedHoursEntry] = []
         do {
             error = nil
             var body: [String: Any] = ["session_id": session.id]
+            // 4.34.0: the outcome, as the website's Complete choices send it; when hours are
+            // already logged that day the server answers with them (logged_hours) and the
+            // Complete session sheet offers the website's two choices.
+            body["outcome"] = outcome.value
+            if let workLogId = outcome.workLogId { body["work_log_id"] = workLogId }
             let key = completionKeys[session.id] ?? UUID().uuidString
             completionKeys[session.id] = key
             body["idem_key"] = key
@@ -827,11 +840,15 @@ struct ScheduleView: View {
             if let signedName { body["signed_name"] = signedName }
             // What the Complete session step recorded (3.0.32 servers; older ones ignore it).
             // 4.31.0: no session note here any more; the full case note opens next.
-            if let details {
+            // 4.34.0: "hours already logged" records no new hours or miles (the server refuses
+            // miles with it), so neither is sent then.
+            if let details, outcome.value != CompletionOutcome.alreadyLoggedValue {
                 body["hours"] = details.hours
                 if details.miles > 0 { body["mileage"] = details.miles }
             }
-            let result: CompleteSessionReply = try await api.call("complete_session", body: body)
+            let result: CompleteSessionReply = try await api.call("complete_session", body: body, refusal: { reply in
+                refusedLogged = LoggedHoursEntry.list(reply["logged_hours"])
+            })
             completionKeys[session.id] = nil
             let done: String = result.hoursLogged > 0
                 ? String(format: "Session completed — %.2f hours logged for %@.", result.hoursLogged, session.client)
@@ -854,6 +871,10 @@ struct ScheduleView: View {
             return request
         } catch {
             if !IdemKey.keeps(error) { completionKeys[session.id] = nil }
+            if !refusedLogged.isEmpty, case APIError.server(let message) = error {
+                // Nothing was recorded: the sheet asks which of the website's choices it is.
+                throw LoggedHoursRefusal(message: message, entries: refusedLogged)
+            }
             // Quietly: the failure is said with the completion's own message.
             await load(reportsFailure: false)
             if loaded && self.error == nil && !sessions.contains(where: { $0.id == session.id }) {
@@ -978,6 +999,7 @@ struct NewSessionSheet: View {
                 }
                 .errorField("Instructor")
                 DatePicker("Starts", selection: $date)
+                    .errorField("Starts")
                 Stepper(value: $duration, in: 0.25...12, step: 0.25) {
                     Text(String(format: "Duration: %.2f hours", duration))
                 }
@@ -1042,7 +1064,7 @@ struct NewSessionSheet: View {
         // Front Desk); a failure is said, not swallowed — an empty picker gave no reason.
         var clientProblem: String?
         do {
-            clients = try await api.clientPickerChoices()
+            clients = try await api.clientPickerChoices(forSchedule: true)
         } catch {
             let problem = "Could not load the client list. \(error.localizedDescription)"
             clientProblem = problem
@@ -1138,17 +1160,38 @@ struct NewSessionSheet: View {
             request["idem_key"] = idem.key(for: request)
             var refusedHash: String?
             var refusedWarnings: [String]?
+            var refusedDuplicate = false
+            var refusedFields: [String: String] = [:]
             let result: Result
             do {
                 result = try await api.call("schedule_session", body: request,
                                             refusal: {
                                                 refusedHash = $0["authorization_hash"] as? String
                                                 refusedWarnings = $0["authorization_warnings"] as? [String]
+                                                refusedDuplicate = ($0["duplicate"] as? Bool) == true
+                                                refusedFields = ($0["errors"] as? [String: String]) ?? [:]
                                             })
             } catch {
                 authorizationHash = refusedHash
                 serverWarnings = refusedWarnings
                 idem.failed(error)
+                // 4.34.0: the session is already on the schedule (the server refused a second
+                // copy): said as information, not an error, since nothing is wrong.
+                if refusedDuplicate, case APIError.server(let message) = error {
+                    onDone(message)
+                    dismiss()
+                    return
+                }
+                // Some weeks of a series are already booked (errors.date), or the client is on
+                // the waitlist or closed (errors.client_id): tied to the field to change.
+                if case APIError.server = error {
+                    if let dateError = refusedFields["date"] {
+                        showFormError(dateError, in: &self.error, field: "Starts"); busy = false; return
+                    }
+                    if let clientError = refusedFields["client_id"] {
+                        showFormError(clientError, in: &self.error, field: "Client"); busy = false; return
+                    }
+                }
                 throw error
             }
             idem.answered()
@@ -1194,12 +1237,55 @@ struct CompletionDetails {
     let miles: Double
 }
 
+/// complete_session's `outcome` (4.34.0), as the website's Complete choices: completed, or —
+/// when hours are already logged for the track that day — completed with those hours (one
+/// entry, `work_log_id`) or with new hours logged as well.
+struct CompletionOutcome {
+    let value: String
+    var workLogId: Int?
+    static let alreadyLoggedValue = "completed_logged"
+    static let completed = CompletionOutcome(value: "completed")
+    static let separate = CompletionOutcome(value: "completed_separate")
+    static func alreadyLogged(_ id: Int) -> CompletionOutcome { CompletionOutcome(value: alreadyLoggedValue, workLogId: id) }
+}
+
+/// One of the hours already logged that day, from a refusal's `logged_hours`.
+struct LoggedHoursEntry: Identifiable, Equatable {
+    let id: Int
+    let hours: Double
+    let description: String
+
+    static func list(_ raw: Any?) -> [LoggedHoursEntry] {
+        guard let rows = raw as? [[String: Any]] else { return [] }
+        return rows.compactMap { row in
+            let id = (row["id"] as? Int) ?? Int(row["id"] as? String ?? "")
+            guard let id, id > 0 else { return nil }
+            let hours = (row["hours"] as? Double) ?? Double(row["hours"] as? String ?? "") ?? 0
+            return LoggedHoursEntry(id: id, hours: hours, description: (row["description"] as? String) ?? "")
+        }
+    }
+
+    /// "1.5 hours: Training session…", the entry as the website lists it.
+    var summary: String {
+        let h = String(format: "%g", hours)
+        return description.isEmpty ? "\(h) hours" : "\(h) hours: \(description)"
+    }
+}
+
+/// complete_session refused because hours are already logged that day (its 422 with logged_hours).
+struct LoggedHoursRefusal: LocalizedError {
+    let message: String
+    let entries: [LoggedHoursEntry]
+    var errorDescription: String? { message }
+}
+
 /// Completing a session on a track: the hours (the scheduled length unless changed) and miles,
 /// then the client's signature or none. Staff fill this in; only the signature step is handed
 /// to the client. 4.31.0: no session note here; the full case note opens once it is completed.
 struct CompleteSessionSheet: View {
     let session: Session
-    let onDone: (_ details: CompletionDetails, _ signatureB64: String?, _ signedName: String?) async throws -> Void
+    let onDone: (_ details: CompletionDetails, _ signatureB64: String?, _ signedName: String?,
+                 _ outcome: CompletionOutcome) async throws -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var hoursText = ""
     @State private var milesText = ""
@@ -1207,6 +1293,11 @@ struct CompleteSessionSheet: View {
     @State private var error: String?
     @State private var signing: SigningStep?
     @State private var finished = false
+    /// Hours already logged that day (4.34.0): the completion waits for the website's choice,
+    /// keeping what was entered and the client's signature and signed name.
+    @State private var loggedChoice: LoggedHoursChoice?
+    /// The refusal's message, said once the signature sheet (and its app lock) has gone.
+    @State private var choiceMessage: String?
 
     /// The scheduled length in quarter hours, as the server would log it.
     private var scheduledHours: Double {
@@ -1241,8 +1332,43 @@ struct CompleteSessionSheet: View {
         guard let details = checked() else { return }
         busy = true; error = nil
         do {
-            try await onDone(details, nil, nil)
+            try await onDone(details, nil, nil, .completed)
             dismiss()
+        } catch let refusal as LoggedHoursRefusal {
+            loggedChoice = LoggedHoursChoice(details: details, signature: nil, signedName: nil, entries: refusal.entries)
+            showFormError(Self.choiceText(refusal.message), in: &self.error)
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+        }
+        busy = false
+    }
+
+    /// The server's sentence and what to do next, in the error summary.
+    private static func choiceText(_ message: String) -> String {
+        message + " Choose below: Completed, hours already logged, or Completed — log hours as well."
+    }
+
+    /// One of the website's choices, with what was signed before and the Hours and Miles as
+    /// they are now (checked again: they may have been changed since the refusal).
+    private func choose(_ outcome: CompletionOutcome) async {
+        guard let choice = loggedChoice else { return }
+        let details: CompletionDetails
+        if outcome.value == CompletionOutcome.alreadyLoggedValue {
+            // Nothing new is logged: the hours and miles typed are not sent.
+            details = choice.details
+        } else {
+            guard let now = checked() else { return }
+            details = now
+        }
+        busy = true; error = nil
+        do {
+            try await onDone(details, choice.signature, choice.signedName, outcome)
+            loggedChoice = nil
+            dismiss()
+        } catch let refusal as LoggedHoursRefusal {
+            loggedChoice = LoggedHoursChoice(details: details, signature: choice.signature,
+                                             signedName: choice.signedName, entries: refusal.entries)
+            showFormError(Self.choiceText(refusal.message), in: &self.error)
         } catch {
             showFormError(error.localizedDescription, in: &self.error)
         }
@@ -1252,10 +1378,26 @@ struct CompleteSessionSheet: View {
     var body: some View {
         NavigationStack {
             ErrorFocusForm(inNavigationStack: true, error: error) {
+                if let choice = loggedChoice {
+                    Section("Hours already logged that day") {
+                        ForEach(Array(choice.entries.enumerated()), id: \.element.id) { index, entry in
+                            Button { Task { await choose(.alreadyLogged(entry.id)) } } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Completed, hours already logged" + (choice.entries.count > 1 ? " as entry \(index + 1)" : ""))
+                                    Text(entry.summary).font(.caption).foregroundStyle(Color.secondaryText)
+                                }
+                                .accessibilityElement(children: .combine)
+                            }
+                            .disabled(busy)
+                        }
+                        Button("Completed — log hours as well") { Task { await choose(.separate) } }
+                            .disabled(busy)
+                    }
+                }
                 CaptionedField(label: "Hours worked", text: $hoursText, keyboard: .decimalPad, errorName: "Hours")
                 CaptionedField(label: "Miles driven (optional)", text: $milesText, keyboard: .decimalPad, errorName: "Miles")
                 Button("Get the client's signature") {
-                    if let details = checked() { error = nil; signing = SigningStep(details: details) }
+                    if let details = checked() { error = nil; loggedChoice = nil; signing = SigningStep(details: details) }
                 }
                 .disabled(busy)
                 Button {
@@ -1280,10 +1422,24 @@ struct CompleteSessionSheet: View {
             .onAppear {
                 if hoursText.isEmpty { hoursText = String(format: "%g", scheduledHours) }
             }
-            .sheet(item: $signing, onDismiss: { if finished { dismiss() } }) { step in
+            .sheet(item: $signing, onDismiss: {
+                if finished { dismiss() }
+                else if let message = choiceMessage {
+                    // Back with the device owner (the app was locked as the pad closed): the choice is theirs.
+                    choiceMessage = nil
+                    showFormError(Self.choiceText(message), in: &error)
+                }
+            }) { step in
                 SignatureSheet(clientName: session.client) { sig, name in
-                    try await onDone(step.details, sig, name)
-                    finished = true
+                    do {
+                        try await onDone(step.details, sig, name, .completed)
+                        finished = true
+                    } catch let refusal as LoggedHoursRefusal {
+                        // The signature and name are kept; the pad closes (locking the app) and
+                        // the staff member chooses here, not the client.
+                        loggedChoice = LoggedHoursChoice(details: step.details, signature: sig, signedName: name, entries: refusal.entries)
+                        choiceMessage = refusal.message
+                    }
                 }
             }
         }
@@ -1294,6 +1450,14 @@ struct CompleteSessionSheet: View {
 private struct SigningStep: Identifiable {
     let id = UUID()
     let details: CompletionDetails
+}
+
+/// A completion waiting for the website's choice (4.34.0), with what was entered and signed.
+private struct LoggedHoursChoice {
+    let details: CompletionDetails
+    let signature: String?
+    let signedName: String?
+    let entries: [LoggedHoursEntry]
 }
 
 /// Move a session to a new time (move_session, 3.0.43). When the server has warnings (the
@@ -1325,10 +1489,10 @@ struct MoveSessionSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                if let error { ErrorBanner(message: error) }
+            ErrorFocusForm(inNavigationStack: true, error: error) {
                 Section("Session with \(session.client)") {
                     DatePicker("New start", selection: $start)
+                        .errorField("New start")
                     Stepper("Length: \(hours.formatted()) hours", value: $hours, in: 0.25...12, step: 0.25)
                         // One adjustable stop, as the New session form's Duration (4.30.0).
                         .voiceOverAdjustable("Length", value: hoursSpoken(hours), binding: $hours, in: 0.25...12, step: 0.25)
@@ -1358,7 +1522,16 @@ struct MoveSessionSheet: View {
             var body: [String: Any] = ["session_id": session.id, "start_at": f.string(from: start),
                                        "duration": hours, "confirm": confirm]
             if confirm, let warningsHash { body["confirm_hash"] = warningsHash }
-            let r: MoveSessionResult = try await api.call("move_session", body: body)
+            var refusedFields: [String: String] = [:]
+            let r: MoveSessionResult
+            do {
+                r = try await api.call("move_session", body: body, refusal: { refusedFields = ($0["errors"] as? [String: String]) ?? [:] })
+            } catch APIError.server(let message) {
+                // A refused time is about the date field (4.34.0): said there, with the field.
+                let aboutDate = refusedFields["start_at"] != nil || refusedFields["date"] != nil
+                showFormError(message, in: &self.error, field: aboutDate ? "New start" : nil)
+                return
+            }
             if r.moved == true {
                 onMoved(r.message ?? "Session moved.")
                 dismiss()
