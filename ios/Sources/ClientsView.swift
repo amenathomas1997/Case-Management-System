@@ -1,5 +1,19 @@
 import SwiftUI
 
+/// The client list's filters as chosen on this phone (4.35.0), as clients.php's filter form.
+/// `who` is nil until a caseload is chosen here: the server then uses the remembered one.
+struct ClientListQuery: Equatable {
+    var status = ""
+    var who: String?
+    var type = ""
+    var agency = ""
+    var school = ""
+    var office = 0
+
+    /// Any filter other than the caseload is set (a search needs the server, as these do).
+    var narrows: Bool { !status.isEmpty || !type.isEmpty || !agency.isEmpty || !school.trimmingCharacters(in: .whitespaces).isEmpty || office > 0 }
+}
+
 struct ClientsView: View {
     @EnvironmentObject var api: API
     @State private var clients: [ClientRow] = []
@@ -15,6 +29,57 @@ struct ClientsView: View {
     /// The result of the last client save, shown here; announced once its sheet has gone.
     @State private var confirmation: String?
     @State private var sheetResult: String?
+    /// 4.35.0: the filters chosen, and the choices and caseload in use the server sent (nil
+    /// from an older server, which hides the Filters button).
+    @State private var query = ClientListQuery()
+    @State private var filters: ClientListFilters?
+    @State private var showingFilters = false
+    /// Said once the list has reloaded after Apply filters.
+    @State private var announceCount = false
+
+    /// The query clients is sent (only the filters that are set).
+    static func clientsQuery(_ f: ClientListQuery, search: String) -> [String: String] {
+        var q: [String: String] = ["with_filters": "1"]
+        if !search.isEmpty { q["q"] = search }
+        if !f.status.isEmpty { q["status"] = f.status }
+        if let who = f.who { q["who"] = who }
+        if !f.type.isEmpty { q["type"] = f.type }
+        if !f.agency.isEmpty { q["agency"] = f.agency }
+        let school = f.school.trimmingCharacters(in: .whitespaces)
+        if !school.isEmpty { q["school"] = school }
+        if f.office > 0 { q["office"] = String(f.office) }
+        return q
+    }
+
+    /// How many filters are on: the caseload counts when it is not everyone's (a caseload-only
+    /// account always sees only its own, which is no filter of its own).
+    static func filtersOnCount(_ f: ClientListQuery, who: String, scoped: Bool) -> Int {
+        // The caseload counts whenever it is not Everyone's clients (""), as on the Android app.
+        [!f.status.isEmpty, !who.isEmpty, !f.type.isEmpty, !f.agency.isEmpty,
+         !f.school.trimmingCharacters(in: .whitespaces).isEmpty, f.office > 0].filter { $0 }.count
+    }
+
+    /// The list's heading and its "first 200" line, in the website's words.
+    static func clientsHeading(shown: Int, total: Int?, filtered: Bool) -> (heading: String?, more: String?) {
+        let all = total ?? shown
+        let heading: String? = filtered ? "Clients matching the filters (\(all))" : nil
+        guard all > shown else { return (heading, nil) }
+        // clients.php's sentence, word for word (its count with thousands separators).
+        return (heading, "Showing the first \(shown) of \(websiteNumber(all)) matching clients, in name order. Search by name or narrow the filters to find the rest.")
+    }
+
+    /// A count as the website prints it (number_format: 1,234).
+    static func websiteNumber(_ n: Int) -> String {
+        let f = NumberFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.numberStyle = .decimal
+        f.groupingSeparator = ","
+        f.usesGroupingSeparator = true
+        f.groupingSize = 3
+        return f.string(from: NSNumber(value: n)) ?? String(n)
+    }
+
+    private var filtersOn: Int { Self.filtersOnCount(query, who: query.who ?? filters?.who ?? "", scoped: api.scoped) }
 
     var body: some View {
         NavigationStack {
@@ -24,13 +89,26 @@ struct ClientsView: View {
                     Text(confirmation).font(.callout.weight(.medium)).foregroundStyle(Color.brandTeal)
                 }
                 if let offlineSince { OfflineNotice(savedAt: offlineSince).listRowSeparator(.hidden) }
+                // 4.35.0: the website's filters, beside the search field.
+                if filters != nil {
+                    Button { showingFilters = true } label: {
+                        Label(filtersOn > 0 ? "Filters, \(filtersOn) on" : "Filters", systemImage: "line.3.horizontal.decrease.circle")
+                            .frame(minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .disabled(offlineSince != nil)
+                }
+                let wording = Self.clientsHeading(shown: clients.count, total: total, filtered: filtersOn > 0)
+                if loaded, let heading = wording.heading {
+                    Text(heading).font(.headline).accessibilityAddTraits(.isHeader)
+                }
                 if !loaded && error == nil {
                     ProgressView("Loading clients…")
                 } else if loaded && clients.isEmpty && error == nil {
                     // "Still loading", "failed" and "nothing matched" each say so.
-                    Text(search.isEmpty
-                         ? (api.scoped ? "No clients on your caseload." : "No clients yet.")
-                         : "No clients found for “\(search)”.")
+                    Text(!search.isEmpty ? "No clients found for “\(search)”."
+                         : filtersOn > 0 ? "No clients match the filters."
+                         : (api.scoped ? "No clients on your caseload." : "No clients yet."))
                         .foregroundStyle(Color.secondaryText)
                 }
                 ForEach(clients) { client in
@@ -42,9 +120,8 @@ struct ClientsView: View {
                     }
                 }
                 // The server sends at most 200 clients; it says how many matched (4.34.0).
-                if let total, total > clients.count {
-                    Text("Showing the first \(clients.count) of \(total) clients. Search to find others.")
-                        .font(.callout).foregroundStyle(Color.secondaryText)
+                if let more = wording.more {
+                    Text(more).font(.callout).foregroundStyle(Color.secondaryText)
                 } else if total == nil && clients.count >= 200 {
                     Text("Showing the first 200 clients. Search by name to find others.")
                         .font(.callout).foregroundStyle(Color.secondaryText)
@@ -64,6 +141,17 @@ struct ClientsView: View {
                 ClientEditSheet(existing: nil) { _, message in
                     confirmation = message; sheetResult = message
                     Task { await load() }
+                }
+            }
+            .sheet(isPresented: $showingFilters, onDismiss: {
+                guard announceCount else { return }
+                Task { await load(announceFilters: true) }
+            }) {
+                if let filters {
+                    ClientFiltersSheet(choices: filters, current: query, currentWho: query.who ?? filters.who) { chosen in
+                        query = chosen
+                        announceCount = true
+                    }
                 }
             }
             .searchable(text: $search, prompt: "Search clients")
@@ -86,33 +174,143 @@ struct ClientsView: View {
         await load(announceResult: !q.isEmpty)
     }
 
-    private func load(announceResult: Bool = false) async {
+    private func load(announceResult: Bool = false, announceFilters: Bool = false) async {
         let q = search
+        let f = query
+        announceCount = false
         do {
             error = nil
-            // With no signal, the full list as last sent by the server is shown (a search
+            // With no signal, the list as last sent by the server is shown (a search or a filter
             // needs the server, so it is not answered from the saved copy).
             let response: ClientsResponse
             let savedAt: Date?
-            if q.isEmpty {
-                (response, savedAt) = try await api.callCached("clients", cacheKey: "clients")
+            if q.isEmpty && !f.narrows {
+                // The caseload chosen here has its own saved copy, so with no signal it still shows.
+                (response, savedAt) = try await api.callCached("clients", query: Self.clientsQuery(f, search: ""),
+                                                               cacheKey: f.who.map { "clients-who-\($0)" } ?? "clients")
             } else {
-                response = try await api.call("clients", query: ["q": q])
+                response = try await api.call("clients", query: Self.clientsQuery(f, search: q))
                 savedAt = nil
             }
-            guard q == search else { return } // a newer keystroke superseded this request
+            guard q == search, f == query else { return } // a newer search or filter superseded this request
             clients = response.clients
             total = response.total
+            if let sent = response.filters { filters = sent }
             loaded = true
             offlineSince = savedAt
             // Focus stays in the search field, so the outcome of a search is spoken.
             if announceResult {
                 announce(clients.isEmpty ? "No clients found." : "\(clients.count) client\(clients.count == 1 ? "" : "s") found.")
+            } else if announceFilters {
+                let n = total ?? clients.count
+                announce(filtersOn > 0 ? "\(n) client\(n == 1 ? "" : "s") match the filters." : "Filters cleared. \(n) client\(n == 1 ? "" : "s").")
             }
         } catch {
             guard q == search else { return }
             showFormError(error.localizedDescription, in: &self.error)
         }
+    }
+}
+
+/// The client list's filters (4.35.0), as clients.php's form: Case status, Caseload, Client
+/// type, Funding agency, School and Office. A changed caseload is remembered for the website
+/// too (clients_filter).
+struct ClientFiltersSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let choices: ClientListFilters
+    let current: ClientListQuery
+    /// The caseload in use when the sheet opened.
+    let currentWho: String
+    let onApply: (ClientListQuery) -> Void
+    @State private var status = ""
+    @State private var who = ""
+    @State private var type = ""
+    @State private var agency = ""
+    @State private var school = ""
+    @State private var office = 0
+    @State private var busy = false
+    @State private var error: String?
+
+    init(choices: ClientListFilters, current: ClientListQuery, currentWho: String, onApply: @escaping (ClientListQuery) -> Void) {
+        self.choices = choices
+        self.current = current
+        self.currentWho = currentWho
+        self.onApply = onApply
+        _status = State(initialValue: current.status)
+        _who = State(initialValue: currentWho)
+        _type = State(initialValue: current.type)
+        _agency = State(initialValue: current.agency)
+        _school = State(initialValue: current.school)
+        _office = State(initialValue: current.office)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
+                Picker("Case status", selection: $status) {
+                    Text("All statuses").tag("")
+                    ForEach(choices.statuses, id: \.self) { Text($0).tag($0) }
+                }
+                if !choices.whoChoices.isEmpty {
+                    Picker("Caseload", selection: $who) {
+                        ForEach(choices.whoChoices, id: \.value) { Text($0.label).tag($0.value) }
+                    }
+                    .errorField("Caseload")
+                }
+                Picker("Client type", selection: $type) {
+                    Text("All types").tag("")
+                    ForEach(choices.types, id: \.self) { Text($0).tag($0) }
+                }
+                Picker("Funding agency", selection: $agency) {
+                    Text("All agencies").tag("")
+                    ForEach(choices.agencies, id: \.self) { Text($0).tag($0) }
+                }
+                CaptionedField(label: "School (contains)", text: $school)
+                if !choices.offices.isEmpty {
+                    Picker("Office", selection: $office) {
+                        Text("All offices").tag(0)
+                        ForEach(choices.offices, id: \.id) { Text($0.name).tag($0.id) }
+                    }
+                }
+                Button(busy ? "Applying…" : "Apply filters") { Task { await apply() } }
+                    .disabled(busy)
+                Button("Clear filters") {
+                    status = ""; type = ""; agency = ""; school = ""; office = 0
+                    // Everyone's clients, when it is offered (a caseload-only account keeps its own).
+                    if choices.whoChoices.contains(where: { $0.value == "" }) { who = "" }
+                    Task { await apply() }
+                }
+                .disabled(busy)
+            }
+            .navigationTitle("Filter clients")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) }
+            }
+        }
+    }
+
+    private func apply() async {
+        var chosen = ClientListQuery(status: status, who: current.who, type: type, agency: agency, school: school, office: office)
+        if !choices.whoChoices.isEmpty && who != currentWho {
+            // Remembered for the website's list too, as its filter form does (clients_filter).
+            busy = true; error = nil
+            defer { busy = false }
+            var refusedFields: [String: String] = [:]
+            do {
+                let _: OKResponse = try await api.call("clients_filter", body: ["who": who], refusal: { reply in
+                    refusedFields = (reply["errors"] as? [String: String]) ?? [:]
+                })
+            } catch {
+                showFormError(refusedFields["who"] ?? error.localizedDescription, in: &self.error,
+                              field: refusedFields["who"] != nil ? "Caseload" : nil)
+                return
+            }
+            chosen.who = who
+        }
+        onApply(chosen)
+        dismiss()
     }
 }
 
@@ -220,6 +418,55 @@ struct ClientDetailView: View {
         }
     }
 
+    /// "On Hold: waiting for the authorization. Expected back Dec 1, 2026." (4.35.0), as the
+    /// website's overview; nil when neither the reason nor the date is recorded.
+    static func onHoldLine(reason: String?, until: String?) -> String? {
+        let r = (reason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let u = (until ?? "").trimmingCharacters(in: .whitespaces)
+        guard !r.isEmpty || !u.isEmpty else { return nil }
+        var line = r.isEmpty ? "On Hold." : "On Hold: \(r)\(r.hasSuffix(".") ? "" : ".")"
+        if !u.isEmpty { line += " Expected back \(formatDate(u))." }
+        return line
+    }
+
+    /// "Low vision, since age 12" (4.35.0); nil when neither is recorded.
+    static func visionText(status: String?, onset: Int?) -> String? {
+        let s = (status ?? "").trimmingCharacters(in: .whitespaces)
+        switch (s.isEmpty, onset) {
+        case (true, nil): return nil
+        case (false, nil): return s
+        case (true, let age?): return "Since age \(age)"
+        case (false, let age?): return "\(s), since age \(age)"
+        }
+    }
+
+    /// The rest of the website's overview (4.35.0), in its order: VR case number, IPE goal and
+    /// date, counselor agency, guardian email, vision, attendance and client since.
+    @ViewBuilder
+    private func overviewExtras(_ detail: ClientDetail) -> some View {
+        let c = detail.client
+        if let v = c.vrCaseNumber, !v.isEmpty { LabeledContent("VR case number", value: v) }
+        if let g = c.ipeGoal, !g.isEmpty { LabeledContent("IPE goal", value: g) }
+        if let d = c.ipeDate, !d.isEmpty { LabeledContent("IPE date", value: formatDate(d)) }
+        if let a = c.counselorAgency, !a.isEmpty { LabeledContent("Counselor agency", value: a) }
+        if let gEmail = c.guardianEmail, !gEmail.isEmpty {
+            if let url = mailtoURL(gEmail) {
+                Link(destination: url) { LabeledContent("Guardian email", value: gEmail) }
+            } else {
+                LabeledContent("Guardian email", value: gEmail)
+            }
+        }
+        if let vision = Self.visionText(status: detail.extras.visionStatus, onset: detail.extras.visionOnsetAge) {
+            LabeledContent("Vision", value: vision)
+        }
+        if let attendance = detail.extras.attendance, attendance.any {
+            LabeledContent("Attendance", value: attendance.text)
+        }
+        if let since = detail.extras.createdAt, !since.isEmpty {
+            LabeledContent("Client since", value: formatDate(since))
+        }
+    }
+
     /// Where the client lives and their office (4.25.0), as the website's client page shows them.
     @ViewBuilder
     private func placeAndOffice(_ detail: ClientDetail) -> some View {
@@ -243,6 +490,10 @@ struct ClientDetailView: View {
             }
             if let detail {
                 Section("Contact") {
+                    if detail.client.status == "On Hold",
+                       let hold = Self.onHoldLine(reason: detail.extras.onHoldReason, until: detail.extras.onHoldUntil) {
+                        Text(hold).font(.callout.weight(.semibold))
+                    }
                     LabeledContent("Status", value: detail.client.status)
                     clientTypeAndBirth(detail.client)
                     placeAndOffice(detail)
@@ -280,6 +531,7 @@ struct ClientDetailView: View {
                             LabeledContent("Guardian phone", value: gPhone)
                         }
                     }
+                    overviewExtras(detail)
                     // The organisation's own fields (4.25.0), answered ones only.
                     ForEach(Array(detail.extras.customFields.enumerated()), id: \.offset) { _, field in
                         LabeledContent(field.label, value: field.value)
@@ -293,6 +545,14 @@ struct ClientDetailView: View {
                         if let t = detail.client.a11yPrimaryTech, !t.isEmpty { LabeledContent("Primary assistive technology", value: t) }
                         if let c = detail.client.a11yContact, !c.isEmpty { LabeledContent("Preferred contact", value: c) }
                         if let n = detail.client.a11yNotes, !n.isEmpty { Text(n).font(.callout) }
+                    }
+                }
+
+                // 4.35.0: after closure, as the website's client page.
+                if let after = detail.afterClosure {
+                    AfterClosureSection(clientId: clientId, clientName: detail.client.name, state: after) { message in
+                        confirmation = message
+                        Task { await reload() }
                     }
                 }
 
@@ -807,6 +1067,8 @@ struct AddNoteSheet: View {
     var sessionId: Int? = nil
     var sessionContext: String? = nil
     var arrivalAnnouncement: String? = nil
+    /// The way out without saving (4.35.0: "Skip for now" while a group's notes are walked through).
+    var cancelLabel = "Cancel"
     /// The result to tell the person. The presenter shows it and says it once the sheet has
     /// gone: closing the sheet moves VoiceOver focus, which cut off a message said from here.
     let onSaved: (String) -> Void
@@ -1176,7 +1438,7 @@ struct AddNoteSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                    Button(cancelLabel) { if hasChanges { askingDiscard = true } else { dismiss() } }
                         .disabled(busy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -1916,5 +2178,277 @@ extension ClientRelease {
         if status == "Current", let e = expiresOn { line += ", valid until \(formatDate(e))" }
         else if status == "Expired", let e = expiresOn { line += " on \(formatDate(e))" }
         return line + ". Covers \(infoScope)."
+    }
+}
+
+// MARK: - After closure (4.35.0): the outcome survey and the 30, 60 and 90-day follow-up checks
+
+/// The website's "After closure" card: the outcome surveys with Email the survey and the
+/// answers taken by phone, then each follow-up check (recorded, due later, or due now).
+struct AfterClosureSection: View {
+    @EnvironmentObject var api: API
+    let clientId: Int
+    let clientName: String
+    let state: AfterClosureState
+    /// The server's message: shown and said by the record, which then reloads.
+    let onDone: (String) -> Void
+    @State private var askingSend = false
+    @State private var sending = false
+    @State private var sendIdem = IdemKey()
+    @State private var showingPhone = false
+    @State private var recording: ClosureFollowup?
+    @State private var sheetResult: String?
+    @State private var error: String?
+
+    var body: some View {
+        Section("After closure") {
+            if let error { ErrorBanner(message: error, announces: false) }
+            Text("Outcome survey").font(.headline).accessibilityAddTraits(.isHeader)
+            if state.surveys.isEmpty {
+                Text("No survey sent yet.").foregroundStyle(Color.secondaryText)
+            }
+            ForEach(state.surveys) { Text($0.text).font(.callout) }
+            Button { askingSend = true } label: {
+                Label(sending ? "Emailing the survey…" : (state.byPhone ? "Email the survey (client prefers phone or post)" : "Email the survey"),
+                      systemImage: "envelope")
+            }
+            .disabled(sending)
+            .confirmationDialog(Self.surveyQuestion(client: clientName, byPhone: state.byPhone), isPresented: $askingSend, titleVisibility: .visible) {
+                Button("Email the survey") { Task { await sendSurvey() } }
+                Button("Cancel", role: .cancel) {}
+            }
+            Button { showingPhone = true } label: {
+                Label("Enter survey answers taken by phone", systemImage: "phone")
+            }
+            Text("Follow-up checks").font(.headline).accessibilityAddTraits(.isHeader)
+            if state.followups.isEmpty {
+                Text("None scheduled. Checks are scheduled at 30, 60 and 90 days when the closure is recorded.")
+                    .foregroundStyle(Color.secondaryText)
+            }
+            ForEach(state.followups) { fu in
+                Text(fu.text).font(.callout)
+                if fu.status == "Pending" && fu.dueNow {
+                    Button { recording = fu } label: {
+                        Label("Record the \(fu.label)", systemImage: "checkmark.circle")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingPhone, onDismiss: sayResult) {
+            PhoneSurveySheet(clientId: clientId, clientName: clientName) { message in sheetResult = message }
+        }
+        .sheet(item: $recording, onDismiss: sayResult) { fu in
+            FollowupCheckSheet(clientId: clientId, clientName: clientName, followup: fu) { message in sheetResult = message }
+        }
+    }
+
+    /// The question before the survey is emailed; it says so when the client prefers phone or post.
+    static func surveyQuestion(client: String, byPhone: Bool) -> String {
+        "Email the outcome survey to \(client)?"
+            + (byPhone ? " They prefer phone or post, so it may not be emailed; you can enter their answers by phone instead." : "")
+    }
+
+    private func sayResult() {
+        guard let message = sheetResult else { return }
+        sheetResult = nil
+        onDone(message)
+        announceAfterDismiss(message)
+    }
+
+    private func sendSurvey() async {
+        sending = true
+        defer { sending = false }
+        error = nil
+        var body: [String: Any] = ["client_id": clientId]
+        body["idem_key"] = sendIdem.key(for: body)
+        do {
+            let r: TaskSaveResult = try await api.call("send_survey", body: body)
+            sendIdem.answered()
+            let message = r.message ?? "Outcome survey emailed."
+            onDone(message)
+            announce(message)
+        } catch {
+            sendIdem.failed(error)
+            // Already emailed, or not emailed (no confirmed address, prefers phone or post): the
+            // server's sentence says what to do, shown here and said once.
+            let message = IdemKey.message(for: error, what: "the survey email")
+            self.error = message
+            announce(message)
+        }
+    }
+}
+
+/// Survey answers taken by phone (phone_survey, 4.35.0), as the website's form.
+struct PhoneSurveySheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let clientId: Int
+    let clientName: String
+    let onSaved: (String) -> Void
+    @State private var satisfaction = ""
+    @State private var goalsMet = ""
+    @State private var comments = ""
+    @State private var idem = IdemKey()
+    @State private var busy = false
+    @State private var error: String?
+
+    /// A rating from 1 to 10, or nil.
+    static func rating(_ raw: String) -> Int? {
+        let t = raw.trimmingCharacters(in: .whitespaces)
+        guard t.count <= 2, t.allSatisfy(\.isASCII), let n = Int(t), (1...10).contains(n) else { return nil }
+        return n
+    }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
+                Section("Outcome survey for \(clientName)") {
+                    CaptionedField(label: "Satisfaction, 1 to 10 (required)", text: $satisfaction, keyboard: .numberPad, errorName: "Satisfaction")
+                    CaptionedField(label: "Goals met, 1 to 10 (required)", text: $goalsMet, keyboard: .numberPad, errorName: "Goals met")
+                    CaptionedField(label: "Comments (optional, up to 2,000 characters)", text: $comments, lines: 3...8, errorName: "Comments")
+                }
+            }
+            .navigationTitle("Survey answers by phone")
+            .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(busy || !satisfaction.isEmpty || !goalsMet.isEmpty || !comments.isEmpty)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(busy ? "Saving…" : "Save survey answers") { Task { await save() } }.disabled(busy)
+                }
+            }
+        }
+    }
+
+    private func save() async {
+        guard let sat = Self.rating(satisfaction) else {
+            showFormError("Satisfaction: enter a rating from 1 to 10.", in: &error); return
+        }
+        guard let goals = Self.rating(goalsMet) else {
+            showFormError("Goals met: enter a rating from 1 to 10.", in: &error); return
+        }
+        // The website's limit (its comments box holds 2000 characters).
+        if comments.unicodeScalars.count > 2000 {
+            showFormError("Comments: keep the comments to 2,000 characters or fewer.", in: &error); return
+        }
+        var body: [String: Any] = ["client_id": clientId, "satisfaction": sat, "goals_met": goals, "comments": comments]
+        body["idem_key"] = idem.key(for: body)
+        busy = true; error = nil
+        defer { busy = false }
+        var refusedFields: [String: String] = [:]
+        do {
+            let r: TaskSaveResult = try await api.call("phone_survey", body: body, refusal: { reply in
+                refusedFields = (reply["errors"] as? [String: String]) ?? [:]
+            })
+            idem.answered()
+            onSaved(r.message ?? "Survey answers recorded.")
+            dismiss()
+        } catch {
+            idem.failed(error)
+            if let text = refusedFields["satisfaction"] { showFormError(text, in: &self.error, field: "Satisfaction") }
+            else if let text = refusedFields["goals_met"] { showFormError(text, in: &self.error, field: "Goals met") }
+            else { showFormError(IdemKey.message(for: error, what: "the survey answers"), in: &self.error) }
+        }
+    }
+}
+
+/// A 30, 60 or 90-day follow-up check (closure_followup, 4.35.0), as the website's form:
+/// four questions, each Not asked, Yes or No, and notes.
+struct FollowupCheckSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let clientId: Int
+    let clientName: String
+    let followup: ClosureFollowup
+    let onSaved: (String) -> Void
+    @State private var employed = ""
+    @State private var usingTech = ""
+    @State private var independent = ""
+    @State private var needsService = ""
+    @State private var notes = ""
+    @State private var confirming = false
+    @State private var idem = IdemKey()
+    @State private var busy = false
+    @State private var error: String?
+
+    /// The question asked before saving, naming the check and the client.
+    static func followupConfirm(_ label: String, client: String, needsService: Bool) -> String {
+        "Save the \(label) for \(client)? It cannot be recorded again." + (needsService ? " A re-referral task will be added." : "")
+    }
+
+    private var hasChanges: Bool {
+        ![employed, usingTech, independent, needsService].allSatisfy(\.isEmpty) || !notes.isEmpty
+    }
+
+    /// The server's rule and sentence: the notes trimmed, counted in characters (code points).
+    static func notesProblem(_ notes: String) -> String? {
+        notes.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.count > 1000
+            ? "Notes are too long (1,000 characters maximum)." : nil
+    }
+
+    @ViewBuilder private func question(_ label: String, _ value: Binding<String>) -> some View {
+        // The website's order: Yes, No, Not asked (the default).
+        Picker(label, selection: value) {
+            Text("Yes").tag("yes")
+            Text("No").tag("no")
+            Text("Not asked").tag("")
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
+                Section("\(followup.label) for \(clientName), due \(formatDate(followup.dueOn))") {
+                    question("Still employed?", $employed)
+                    question("Still using the technology?", $usingTech)
+                    question("Living or working independently?", $independent)
+                    question("Needs more service?", $needsService)
+                    CaptionedField(label: "Notes (optional, up to 1000 characters)", text: $notes, lines: 2...6, errorName: "Notes")
+                }
+                Button(busy ? "Saving…" : "Save the \(followup.label)") {
+                    if let problem = Self.notesProblem(notes) {
+                        showFormError(problem, in: &error, field: "Notes"); return
+                    }
+                    confirming = true
+                }
+                .disabled(busy)
+            }
+            .navigationTitle("Follow-up check")
+            .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(busy || hasChanges)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) }
+            }
+            .confirmationDialog(Self.followupConfirm(followup.label, client: clientName, needsService: needsService == "yes"),
+                                isPresented: $confirming, titleVisibility: .visible) {
+                Button("Save the \(followup.label)") { Task { await save() } }
+                Button("Not yet", role: .cancel) {}
+            }
+        }
+    }
+
+    private func save() async {
+        var body: [String: Any] = [
+            "client_id": clientId, "followup_id": followup.id,
+            "still_employed": employed, "still_using_tech": usingTech,
+            "independent": independent, "needs_service": needsService,
+            "notes": notes,
+        ]
+        body["idem_key"] = idem.key(for: body)
+        busy = true; error = nil
+        defer { busy = false }
+        var refusedFields: [String: String] = [:]
+        do {
+            let r: TaskSaveResult = try await api.call("closure_followup", body: body, refusal: { reply in
+                refusedFields = (reply["errors"] as? [String: String]) ?? [:]
+            })
+            idem.answered()
+            onSaved(r.message ?? (needsService == "yes" ? "Follow-up recorded. Because the client needs more service, a re-referral task was added." : "Follow-up recorded."))
+            dismiss()
+        } catch {
+            idem.failed(error)
+            if let text = refusedFields["notes"] { showFormError(text, in: &self.error, field: "Notes") }
+            else { showFormError(IdemKey.message(for: error, what: "the follow-up check"), in: &self.error) }
+        }
     }
 }

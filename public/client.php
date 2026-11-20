@@ -656,20 +656,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_assessment'])) {
     $tech = in_array($_POST['primary_tech'] ?? '', cms_list_items('tech_types'), true) ? $_POST['primary_tech'] : 'Screen Reader';
     // Everything is checked before the attachment is stored, so a refused form
     // never leaves a client file on disk (limits are the tech_assessments columns).
-    $aErrs = [];
-    if ($date === '') $aErrs['assessment_date'] = 'Assessment date is required.';
-    elseif (!valid_date($date, 2000, (int)date('Y'))) $aErrs['assessment_date'] = 'Enter the assessment date as a valid date (YYYY-MM-DD) from the year 2000 onwards.';
-    // The newest assessment is read as the client's current one everywhere
-    // (RSA-911, recommendations), and none can be edited later: no future dates.
-    elseif ($date > date('Y-m-d')) $aErrs['assessment_date'] = 'The assessment date cannot be in the future. Check the year.';
-    foreach (['primary_disability' => [190, 'Primary disability / needs'], 'hardware_details' => [255, 'Hardware details'],
-              'software_version' => [190, 'Software & version']] as $k => [$max, $label]) {
-        $n = mb_strlen(trim((string)($_POST[$k] ?? '')));
-        if ($n > $max) $aErrs[$k] = "{$label} is {$n} characters; shorten it to {$max} or fewer (more detail can go in the summary).";
-    }
-    if (strlen(trim((string)($_POST['summary'] ?? ''))) > 65535) {
-        $aErrs['summary'] = 'Assessment summary is too long (65,535 bytes maximum; accented letters and symbols count as 2 to 4 bytes each).';
-    }
+    // The date (no future dates) and the column limits, shared with the intake and the app (inc/tech_assessments.php, 4.35.0).
+    $aErrs = tech_assessment_errors($_POST);
     $att = is_array($_FILES['attachment'] ?? null) ? $_FILES['attachment'] : [];
     $attErr = (int)($att['error'] ?? UPLOAD_ERR_NO_FILE);
     $attOrig = is_string($att['name'] ?? null) ? $att['name'] : '';
@@ -1064,12 +1052,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['withdraw_release'])) 
 }
 /* ---- POST: after closure (3.0.47): send the outcome survey, enter phone answers, record a follow-up check ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_survey'])) {
-    $open = db()->prepare("SELECT sent_at FROM surveys WHERE client_id = ? AND completed_at IS NULL AND sent_at > DATE_SUB(NOW(), INTERVAL 30 DAY) ORDER BY id DESC LIMIT 1");
-    $open->execute([$id]);
-    if ($was = $open->fetchColumn()) flash('A survey was emailed on ' . fmt_date((string)$was) . ' and is not answered yet. Enter the answers by phone instead, or wait for the reminder.', 'error');
-    elseif (($GLOBALS['mail_last_outcome'] = null) || send_outcome_survey($id)) { audit($user['id'], 'survey.send', 'client', $id, 'outcome survey emailed'); flash('Outcome survey emailed.'); }
-    elseif (($GLOBALS['mail_last_outcome'] ?? null) === 'unknown') flash('The email service did not confirm the survey email, so it may still arrive. Do not send it again yet; check later whether it was answered.', 'info');
-    else flash('The survey was not emailed: the client has no confirmed email address, prefers phone or post, or the email could not be sent. Ask the questions by phone and enter the answers here.', 'error');
+    // Shared with the app's send_survey (inc/outcome_followups.php, 4.35.0).
+    $sent = outcome_survey_send_now($id, (int)$user['id']);
+    flash($sent['message'], match ($sent['status']) { 'sent' => 'success', 'unknown' => 'info', default => 'error' });
     redirect("client.php?id=$id#after-h");
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['phone_survey'])) {
@@ -1090,11 +1075,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['phone_survey'])) {
     redirect("client.php?id=$id#after-h");
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['closure_followup'])) {
-    $yn = fn(string $k) => ($_POST[$k] ?? '') === 'yes' ? 1 : (($_POST[$k] ?? '') === 'no' ? 0 : null);
+    $yn = fn(string $k) => closure_followup_yes_no($_POST[$k] ?? '');
     $err = closure_followup_record((int)($_POST['followup_id'] ?? 0), $id, $yn('still_employed'), $yn('still_using_tech'), $yn('independent'), $yn('needs_service'),
         is_string($_POST['fu_notes'] ?? null) ? $_POST['fu_notes'] : '', (int)$user['id']);
     if ($err !== null) flash($err, 'error');
-    else flash($yn('needs_service') === 1 ? 'Follow-up recorded. Because the client needs more service, a re-referral task was added.' : 'Follow-up recorded.');
+    else flash(closure_followup_message($yn('needs_service')));
     redirect("client.php?id=$id#after-h");
 }
 
@@ -1674,20 +1659,17 @@ $relDefaultSigner = !empty($client['guardian_name']) && !empty($client['dob']) &
 </section>
 <?php
 // After closure (3.0.47): the outcome survey and the 30, 60 and 90-day follow-up checks.
-$closeFus = closure_followups($id);
-$svq = db()->prepare('SELECT * FROM surveys WHERE client_id = ? ORDER BY id DESC LIMIT 5');
-$svq->execute([$id]);
-$surveysHere = $svq->fetchAll();
-if (str_starts_with((string)$client['status'], 'Closed') || $closeFus || $surveysHere):
-    $ynOut = fn($v) => $v === null ? 'not asked' : ((int)$v === 1 ? 'yes' : 'no'); ?>
+// The lines are drawn from the state the app's client reply carries too (4.35.0).
+$afterClosure = after_closure_state($id, (string)$client['status']);
+if ($afterClosure !== null):
+    $surveysHere = $afterClosure['surveys']; $closeFus = $afterClosure['followups']; ?>
 <section class="card" aria-labelledby="after-h">
   <h2 id="after-h">After closure</h2>
   <h3>Outcome survey</h3>
   <?php if (!$surveysHere): ?><p>No survey sent yet.</p><?php else: ?>
   <ul>
     <?php foreach ($surveysHere as $sv): ?>
-    <li><?= $sv['completed_at'] ? 'Answered ' . fmt_date($sv['completed_at']) . (($sv['channel'] ?? 'Email') === 'Phone' ? ' by phone' : '') . ': satisfaction ' . (int)$sv['satisfaction'] . ' of 10, goals met ' . (int)$sv['goals_met'] . ' of 10' . ($sv['comments'] ? '. "' . h($sv['comments']) . '"' : '')
-        : 'Emailed ' . fmt_date($sv['sent_at']) . ', not answered yet' . (!empty($sv['reminded_at']) ? ' (reminder sent ' . fmt_date($sv['reminded_at']) . ')' : '') ?></li>
+    <li><?= h($sv['text']) ?></li>
     <?php endforeach; ?>
   </ul>
   <?php endif; ?>
@@ -1708,11 +1690,9 @@ if (str_starts_with((string)$client['status'], 'Closed') || $closeFus || $survey
   </details>
   <h3>Follow-up checks</h3>
   <?php if (!$closeFus): ?><p>None scheduled. Checks are scheduled at 30, 60 and 90 days when the closure is recorded.</p><?php endif; ?>
-  <?php foreach ($closeFus as $fu): $fuLabel = (int)$fu['interval_days'] . '-day check'; ?>
-    <?php if ($fu['status'] !== 'Pending'): ?>
-    <p><strong><?= $fuLabel ?></strong>, recorded <?= fmt_date($fu['completed_at']) ?><?= $fu['by_name'] ? ' by ' . h($fu['by_name']) : '' ?>: still employed <?= $ynOut($fu['still_employed']) ?>; still using the technology <?= $ynOut($fu['still_using_tech']) ?>; independent <?= $ynOut($fu['independent']) ?>; needs more service <?= $ynOut($fu['needs_service']) ?>.<?= $fu['notes'] ? ' ' . h($fu['notes']) : '' ?></p>
-    <?php elseif ($fu['due_on'] > date('Y-m-d')): ?>
-    <p><strong><?= $fuLabel ?></strong>, due <?= fmt_date($fu['due_on']) ?>.</p>
+  <?php foreach ($closeFus as $fu): $fuLabel = $fu['label']; ?>
+    <?php if ($fu['status'] !== 'Pending' || !$fu['due_now']): ?>
+    <p><strong><?= h($fuLabel) ?></strong><?= h(substr($fu['text'], strlen($fuLabel))) ?></p>
     <?php else: ?>
     <form method="post" action="client.php?id=<?= $id ?>" class="fu-item"><?= csrf_field() ?>
       <input type="hidden" name="followup_id" value="<?= (int)$fu['id'] ?>">

@@ -41,7 +41,11 @@ static_check("'truncated' => !empty($res['truncated'])" in draft and not re.sear
 log_hours = api_case('log_hours')
 static_check('$sigPath ? ($signedNameIn' not in log_hours,
              'log_hours keeps a typed signed name even when no signature is drawn')
-static_check(re.search(r"fail\('RSA category this visit: .*?is not offered on this track\..*?, 422\)", log_hours, re.S),
+# 4.35.0: the check moved into inc/work_logs.php's visit_choice_problem(), shared with complete_session.
+work_logs_php = (root / 'public/inc/work_logs.php').read_text()
+static_check(re.search(r"fail\('RSA category this visit: .*?is not offered on this track\..*?, 422\)", log_hours, re.S)
+             or (re.search(r"visit_choice_problem\([^;]*\)\)\s*fail_field\(\$visitProblem\[0\], \$visitProblem\[1\]\)", log_hours)
+                 and re.search(r"\['rsa_category', 'RSA category this visit: .*?is not offered on this track\.", work_logs_php, re.S)),
              'log_hours refuses an RSA category the track does not offer with a 422, naming the field')
 static_check("fail('Not found.', 404)" not in api_php,
              'api.php never answers a bare "Not found." 404 (the message names what was not found)')
@@ -136,14 +140,14 @@ static_check('body["idem_key"] = key' in schedule_swift and 'if !IdemKey.keeps(e
              'complete_session sends one retry key per Complete session sheet, kept after no answer or "still being processed"')
 static_check(re.search(r'if case APIError\.server = error, api\.can\("clients"\),\s*let item = notesShown\.first\(where: \{ \$0\.sessionId == session\.id \}\).*?return request', schedule_swift, re.S),
              'a retry answered "already closed" opens that session\'s case note from Notes to write instead of only an error')
-static_check('Button("Cancel") { dismiss() }' in session_notes and 'tracksTimeout' in session_notes and 'if tracks == nil && !Task.isCancelled { tracks = [] }' in session_notes,
+static_check('Button(request.cancelLabel) { dismiss() }' in session_notes and 'var cancelLabel = "Cancel"' in session_notes and 'tracksTimeout' in session_notes and 'if tracks == nil && !Task.isCancelled { tracks = [] }' in session_notes,
              'opening a session\'s case note can be cancelled and opens without the track list after a short timeout')
 dashboard_swift = swift_sources['DashboardView.swift']
 static_check('notesToWrite = await loadNotesToWrite(api)' in dashboard_swift and 'NoteToWriteRow(item: item)' in dashboard_swift,
              'the Dashboard shows Notes to write with Write it now')
 project_yml = (root / 'ios/project.yml').read_text()
-static_check(project_yml.count('MARKETING_VERSION: "4.34.0"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "65"') == 2,
-             'the app and widget are version 4.34.0 (65)')
+static_check(project_yml.count('MARKETING_VERSION: "4.35.0"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "66"') == 2,
+             'the app and widget are version 4.35.0 (66)')
 
 # 4.34.0: the iPhone app behaves as the website does (PARITY-AUDIT-2026-11-19, plan P1-P43; static).
 api_swift = swift_sources['API.swift']
@@ -268,7 +272,8 @@ static_check('"submitted_on"' in invoices_swift and 'body["idem_key"] = idem.key
 static_check('30 days' not in dashboard_swift and 'authSoonDays' in dashboard_swift,
              'P42: the dashboard says the administrator\'s "ending soon" days, never a fixed 30')
 clients_response = api_swift[api_swift.index('struct ClientsResponse: Decodable {'):api_swift.index('struct ClientInfo: Decodable')]
-static_check('var total: Int?' in clients_response and 'Showing the first \\(clients.count) of \\(total) clients. Search to find others.' in clients_swift,
+static_check('var total: Int?' in clients_response and 'Showing the first \\(shown) of \\(websiteNumber(all)) matching clients, in name order.' in clients_swift
+             and 'clientsHeading(shown: clients.count, total: total' in clients_swift,
              'P43: the client list says "first 200 of N" from the server\'s total')
 static_check('"hw_due_"' in add_note and 'let sentRows = sentHomeworkRows(homework)' in add_note and 'let row = sentRows[n - 1]' in add_note
              and 'field: "Homework \\(row) due date"' in add_note
@@ -293,6 +298,362 @@ static_check('showFormError(message, in: &self.error, field: field)' in consent_
 static_check(re.search(r'let field = \[\("hours", "Hours"\), \("mileage", "Mileage"\), \("description", "Description"\)\]', log_hours_swift)
              and 'showFormError(error.localizedDescription, in: &self.error, field: field)' in log_hours_swift,
              'P16: several hours errors keep the whole server text with the first field tied')
+
+# 4.35.0: field casework in the iPhone app (plan-4350 Q1-Q13, IPHONE parts; static). Each check
+# reads the request the app sends and the reply fields it reads, not comments.
+api_swift = swift_sources['API.swift']
+schedule_swift = swift_sources['ScheduleView.swift']
+clients_swift = swift_sources['ClientsView.swift']
+edit_sheet = swift_sources['ClientEditSheet.swift']
+portal_swift = swift_sources['PortalRequestsView.swift']
+
+
+def between(text, start, end):
+    """The source from `start` through `end` (both must be there)."""
+    a = text.index(start)
+    b = text.index(end, a + len(start))
+    return text[a:b + len(end)]
+
+
+def coding_keys(text, struct, indent=''):
+    """The CodingKeys cases of a struct (not of a type nested in it), as a set of names; `indent`
+    is the struct's own indentation (a struct nested in another)."""
+    body = between(text, '\n%sstruct %s: ' % (indent, struct), '\n%s}\n' % indent)
+    m = re.search(r'\n%s    (?:private )?enum CodingKeys: String, CodingKey \{ case ([^}]*)\}' % indent, body)
+    return set(k.strip() for k in m.group(1).replace('\n', ' ').split(',')) if m else set()
+
+
+group_sheet = between(schedule_swift, 'struct GroupSessionSheet: View {', 'struct GroupAttendanceSheet: View {')
+group_body = between(group_sheet, 'static func groupBody(', 'private func submit()')
+group_submit = between(group_sheet, 'private func submit()', '\n    }\n}\n')
+static_check('try await api.call("schedule_group", body: body, refusal: { reply in' in group_submit
+             and all(k in group_body for k in ('"client_ids": clientIds', '"tracks": Dictionary(uniqueKeysWithValues: tracks.map { (String($0.key), $0.value) })',
+                                                '"staff_id": staffId', '"date": APIDate.dayCentral(start)', '"time": APIDate.timeCentral(start)',
+                                                '"duration": duration', '"location": location', '"notes": notes',
+                                                '"is_remote": isRemote ? 1 : 0', '"meeting_url": meetingUrl'))
+             and 'if approved, let warningsHash { body["authorization_ack_hash"] = warningsHash }' in group_submit
+             and 'body["idem_key"] = idem.key(for: body)' in group_submit
+             and all('reply["%s"]' % k in group_submit for k in ('errors', 'authorization_warnings', 'authorization_hash', 'duplicate')),
+             'Q1: Schedule a group session sends schedule_group with the clients, each one\'s track, the time in the server\'s zone, the approval hash and a retry key')
+static_check('let r: GroupChoicesResponse = try await api.call("group_choices")' in group_sheet
+             and coding_keys(schedule_swift, 'GroupChoicesResponse') == {'clients', 'staff', 'defaultStaffId'}
+             and coding_keys(schedule_swift, 'GroupChoiceClient') == {'id', 'name', 'tracks'}
+             and 'staffId = r.defaultStaffId ??' in group_sheet
+             and 'Label("Schedule a group session", systemImage: "person.3")' in schedule_swift
+             and 'let _: GroupChoicesResponse = try await api.call("group_choices")' in schedule_swift,
+             'Q1: the group form reads group_choices (clients with their tracks, instructors, the default one); the button shows only on a server that has it')
+static_check('Toggle("I reviewed these warnings and approve this group booking despite them", isOn: $approved)' in group_sheet
+             and 'warnings = refusedWarnings' in group_submit and 'warningsHash = refusedHash' in group_submit
+             and re.search(r'if refusedDuplicate \{\s*onDone\(message\)\s*dismiss\(\)', group_submit)
+             and 'if key.hasPrefix("track_"), let cid = Int(key.dropFirst(6))' in group_sheet and 'return "Training track for \\(c.name)"' in group_sheet
+             and '.errorField("Training track for \\(client.name)")' in group_sheet and 'Toggle(label, isOn: on).errorField("Clients")' in group_sheet
+             and '"clients": "Clients", "staff_id": "Instructor"' in group_sheet
+             and 'showFormError(text, in: &self.error, field: fieldName(key))' in group_submit
+             and '— no active training track, so no hours will be logged' in group_sheet,
+             'Q1: warnings are approved by their hash, an already-booked group is information, and errors.clients / errors.track_<id> are tied to their fields')
+attend_sheet = between(schedule_swift, 'struct GroupAttendanceSheet: View {', '\n}\n')
+static_check('try await api.call("group_session", query: ["group_uid": groupUid])' in attend_sheet
+             and {'startAt', 'started', 'canRecord', 'defaultHours', 'members'} <= coding_keys(schedule_swift, 'GroupSessionResponse')
+             and {'sessionId', 'clientName', 'trackId', 'trackTitle'} <= coding_keys(schedule_swift, 'GroupSessionMember')
+             and 'attended = Set(r.members.map(\\.sessionId))' in attend_sheet and 'hoursText = r.defaultHours' in attend_sheet
+             and 'Label("Record attendance for the group", systemImage: "person.3.fill")' in schedule_swift
+             and 'recordingGroup = GroupRef(id: uid)' in schedule_swift,
+             'Q2: Record attendance for the group (a visible button) reads group_session: every member ticked, the website\'s hours prefilled')
+attend_submit = between(attend_sheet, 'private func submit()', '\n    }\n')
+static_check('try await api.call("complete_group", body: body, refusal: { reply in' in attend_submit
+             and '"group_uid": groupUid' in attend_submit and '"listed": group.members.map(\\.sessionId)' in attend_submit
+             and '"attended": group.members.map(\\.sessionId).filter { attended.contains($0) }' in attend_submit
+             and '"hours": hours' in attend_submit and 'body["idem_key"] = idem.key(for: body)' in attend_submit
+             and 'if let text = refusedFields["hours"] {\n                showFormError(text, in: &self.error, field: "Hours")' in attend_submit
+             and {'message', 'notesToWrite'} <= coding_keys(schedule_swift, 'GroupCompleteReply')
+             and 'onDone(r.message ??' in attend_submit and 'Self.notesWithMembers(r.notesToWrite, group: group))' in attend_submit,
+             'Q2: complete_group sends who was listed and who attended with the hours and a retry key; errors.hours is tied; the reply\'s message and notes are read')
+static_check('" will be recorded as No Show, with no hours logged."' in attend_sheet.replace('"\\(total - attended) will be recorded', '" will be recorded')
+             and 'Record attendance for this group session? \\(attended) of \\(total) clients attended and will be marked Completed' in attend_sheet
+             and 'logged to their training track and billed. ' in attend_sheet
+             and '.confirmationDialog(confirmText, isPresented: $confirming' in attend_sheet
+             and 'groupNoteAfterSheet = groupNoteRequest(0, lead: message)' in schedule_swift
+             and re.search(r'private func afterGroupSheet\(\) \{.*?openNote\(request\)', schedule_swift, re.S),
+             'Q2: recording asks with the website\'s sentence, and the first attended client\'s case note opens afterwards')
+complete_sheet = between(schedule_swift, 'struct CompleteSessionSheet: View {', 'private struct SigningStep')
+complete_fn = between(schedule_swift, '    private func complete(_ session: Session,', '\nstruct NewSessionSheet: View {')
+static_check('if let goalId = details.goalId { body["goal_id"] = goalId }' in complete_fn
+             and 'if let category = details.category { body["rsa_category"] = category }' in complete_fn
+             and 'refusedFields = (reply["errors"] as? [String: String]) ?? [:]' in complete_fn
+             and 'refusedFields["goal_id"] != nil ? "Goal worked on" : (refusedFields["rsa_category"] != nil ? "Service delivered" : nil)' in complete_fn
+             and 'Picker("Goal worked on", selection: $goalId)' in complete_sheet and 'Picker("Service delivered", selection: $category)' in complete_sheet
+             and '.errorField("Goal worked on")' in complete_sheet and '.errorField("Service delivered")' in complete_sheet
+             and 'try? await api.call("goals", query: ["track_id": String(trackId)])' in complete_sheet
+             and 'r.tracks.first(where: { $0.id == trackId })?.visitCategories' in complete_sheet
+             and 'categories.count > 1 && !category.isEmpty ? category : nil' in complete_sheet
+             and complete_sheet.count('catch let refusal as FieldRefusal') == 2,
+             'Q3: completing a session offers Goal worked on and Service delivered as the website, sends goal_id / rsa_category, and ties their refusals')
+row_fn = between(schedule_swift, '    private func sessionRow(_ session: Session) -> some View {', '    private struct CheckInResult')
+# Drawn after the row's rotor, outside its one VoiceOver stop (review item 4).
+visible = row_fn[row_fn.index("// 4.35.0: outside the row's one VoiceOver stop"):]
+static_check(all(re.search(r'Button \{\s*%s\s*\} label: \{\s*Label\("%s"' % (re.escape(action), label), visible)
+                 for action, label in (('movingSession = session', 'Move session'),
+                                       ('cancellingMore = (session, "cancel_series")', 'Cancel the series'),
+                                       ('cancellingMore = (session, "cancel_group")', 'Cancel the whole group')))
+             and '.accessibilityLabel("Move \\(name)")' in visible and 'Cancel the whole group: the group \\(name)' in visible
+             and 'Cancel this group session on \\(date) for every client in it? Each client is sent a calendar cancellation.' in schedule_swift
+             and 'Cancel this session with \\(client) on \\(date) and every later session in its weekly series?' in schedule_swift
+             and 'Button("Move session") { movingSession = session }' in row_fn[row_fn.index('.accessibilityActions {'):],
+             'Q5: Move session, Cancel the series and Cancel the whole group are visible buttons naming the session (kept on the rotor too), asking with the website\'s words')
+offer_sheet = between(portal_swift, 'struct OfferTimesSheet: View {', '\n}\n')
+offer_submit = between(offer_sheet, 'private func submit()', '\n    }\n')
+static_check('try await api.call("offer_times", query: ["id": String(requestId)])' in offer_sheet
+             and coding_keys(portal_swift, 'OfferTimesForm') == {'request', 'canOffer', 'staff', 'defaults', 'lengths', 'keepsLength', 'tracks', 'offered'}
+             and {'staffId', 'minutes', 'remote', 'location', 'trackId'} <= coding_keys(portal_swift, 'OfferDefaults', indent='    ')
+             and 'try await api.call("offer_times", body: body, refusal: { reply in' in offer_submit
+             and all(k in offer_submit for k in ('"id": requestId', '"times": sent.map(\\.time)', '"minutes": minutes', '"staff_id": staffId',
+                                                  '"track_id": form.keepsLength ? 0 : trackId', '"remote": remote ? 1 : 0', '"location":'))
+             and 'body["idem_key"] = idem.key(for: body)' in offer_submit
+             and 'APIDate.dayCentral($0) + " " + APIDate.timeCentral($0)' in offer_sheet
+             and 'static let timeFields = ["First time", "Second time", "Third time"]' in offer_sheet
+             and 'showFormError(text, in: &self.error, field: Self.timeErrorField(key, sent: sent) ?? Self.fieldNames[key])' in offer_submit,
+             'Q6: Offer times reads the offer form\'s defaults and sends up to three "Y-m-d H:i" times with length, instructor, track, remote, location and a retry key; errors tied')
+static_check('Text("Offer these times")' in offer_sheet and 'They choose one in their portal.' in offer_sheet
+             and 'Text("The session keeps its length.")' in offer_sheet
+             and {'canOffer', 'offered'} <= coding_keys(portal_swift, 'PortalRequestItem')
+             and 'canOffer = SessionNoteTarget.flag(c, .canOffer) ?? false' in portal_swift
+             and 'if r.canOffer {' in portal_swift and '"Offer times" : "Offer different times"' in portal_swift,
+             'Q6: an open appointment or reschedule request offers Offer times (a visible button) and lists the times offered')
+assess_sheet = between(edit_sheet, 'struct AddAssessmentSheet: View {', '\n}\n')
+static_check('try await api.call("add_assessment", body: body, refusal: { reply in' in assess_sheet
+             and 'refusedFields = (reply["errors"] as? [String: String]) ?? [:]' in assess_sheet
+             and '("assessment_date", "Assessment date")' in assess_sheet and '("hardware_details", "Hardware details")' in assess_sheet
+             and '("software_version", "Software & version")' in assess_sheet and '("summary", "Assessment summary")' in assess_sheet
+             and 'showFormError(first.flatMap { refusedFields[$0.key] } ?? message, in: &self.error, field: first?.field)' in assess_sheet
+             and '.errorField("Assessment date")' in assess_sheet and 'errorName: "Hardware details"' in assess_sheet
+             and 'var techTypes: [String]?' in between(edit_sheet, 'struct AssessmentsResponse: Decodable {', '\n}\n')
+             and 'if let list = response.techTypes, !list.isEmpty { techChoices = list }' in edit_sheet,
+             'Q7: Record a tech assessment ties add_assessment\'s errors to their fields and uses the server\'s technology list')
+after_section = between(clients_swift, 'struct AfterClosureSection: View {', 'struct PhoneSurveySheet: View {')
+phone_sheet = between(clients_swift, 'struct PhoneSurveySheet: View {', 'struct FollowupCheckSheet: View {')
+fu_sheet = clients_swift[clients_swift.index('struct FollowupCheckSheet: View {'):]
+static_check('afterClosure' in coding_keys(api_swift, 'ClientDetail')
+             and coding_keys(api_swift, 'AfterClosureState') == {'surveys', 'followups', 'byPhone'}
+             and {'id', 'intervalDays', 'dueOn', 'status', 'dueNow', 'text'} <= coding_keys(api_swift, 'ClosureFollowup')
+             and 'if let after = detail.afterClosure {' in clients_swift
+             and 'try await api.call("send_survey", body: body)' in after_section and 'body["idem_key"] = sendIdem.key(for: body)' in after_section
+             and "Email the outcome survey to \\(client)?" in after_section and 'Email the survey (client prefers phone or post)' in after_section
+             and 'if fu.status == "Pending" && fu.dueNow {' in after_section and 'Label("Record the \\(fu.label)"' in after_section
+             and 'Label("Enter survey answers taken by phone"' in after_section,
+             'Q9: the client record shows After closure from after_closure: Email the survey (asking first), answers by phone, and each due follow-up check')
+static_check('try await api.call("phone_survey", body: body, refusal: { reply in' in phone_sheet
+             and '["client_id": clientId, "satisfaction": sat, "goals_met": goals, "comments": comments]' in phone_sheet
+             and 'if let text = refusedFields["satisfaction"] { showFormError(text, in: &self.error, field: "Satisfaction") }' in phone_sheet
+             and 'else if let text = refusedFields["goals_met"] { showFormError(text, in: &self.error, field: "Goals met") }' in phone_sheet
+             and 'try await api.call("closure_followup", body: body, refusal: { reply in' in fu_sheet
+             and all(k in fu_sheet for k in ('"followup_id": followup.id', '"still_employed": employed', '"still_using_tech": usingTech',
+                                              '"independent": independent', '"needs_service": needsService', '"notes": notes'))
+             and fu_sheet.count('body["idem_key"] = idem.key(for: body)') == 1 and phone_sheet.count('body["idem_key"] = idem.key(for: body)') == 1
+             and '" A re-referral task will be added."' in fu_sheet and 'Text("Not asked").tag("")' in fu_sheet,
+             'Q9: phone survey answers and follow-up checks send the website\'s fields with retry keys; rating errors are tied')
+client_save = between(edit_sheet, '    private func save() async {', '    /// The form field a save_client refusal is about')
+static_check(all(k in client_save for k in ('body["preferred_language"] = language', 'body["vision_status"] = visionStatus',
+                                            'body["vision_onset_age"] = onsetText.trimmingCharacters(in: .whitespaces)', 'body["on_hold_until"] ='))
+             and 'if sends435 {' in client_save
+             and {'preferredLanguage', 'visionStatus', 'visionOnsetAge', 'onHoldReason', 'onHoldUntil', 'createdAt', 'attendance'} <= coding_keys(api_swift, 'ClientExtras')
+             and 'supports435 = c.contains(.preferredLanguage)' in api_swift
+             and '"vision_onset_age": "Age when vision loss began", "on_hold_until": "Expected return date"' in edit_sheet
+             and 'Picker("Preferred language (the client\'s portal and emails use it)", selection: $language)' in edit_sheet
+             and 'Picker("Vision status", selection: $visionStatus)' in edit_sheet and 'Text("Not recorded").tag("")' in edit_sheet
+             and 'Toggle("Expected return date (On Hold only, optional)", isOn: $holdUntilSet)' in edit_sheet
+             and 'Age when vision loss began: enter a whole number of years from 0 to 120, or leave it blank.' in edit_sheet,
+             'Q10: the client form offers language, vision status and onset age, and the On Hold return date, sends them only to a server that reports them, and ties their errors')
+static_check(all('LabeledContent("%s"' % k in clients_swift for k in ('VR case number', 'IPE goal', 'IPE date', 'Counselor agency',
+                                                                     'Guardian email', 'Vision', 'Attendance', 'Client since'))
+             and 'Expected back \\(formatDate(u)).' in clients_swift
+             and 'Self.onHoldLine(reason: detail.extras.onHoldReason, until: detail.extras.onHoldUntil)' in clients_swift
+             and coding_keys(api_swift, 'ClientAttendance') == {'completed', 'noShow', 'cancelled'}
+             and '\\(completed) completed, \\(noShow) no-show' in api_swift,
+             'Q11: the client detail shows the website\'s overview: On Hold line, VR case, IPE, agency, guardian email, vision, attendance, client since')
+clients_list = between(clients_swift, 'struct ClientListQuery: Equatable {', 'struct ClientDetailView: View {')
+static_check('var q: [String: String] = ["with_filters": "1"]' in clients_list
+             and all('q["%s"] =' % k in clients_list for k in ('status', 'who', 'type', 'agency', 'school', 'office'))
+             and 'api.call("clients", query: Self.clientsQuery(f, search: q))' in clients_list
+             and coding_keys(api_swift, 'ClientListFilters') == {'who', 'statuses', 'whoChoices', 'types', 'agencies', 'offices'}
+             and 'filters = (try? c.decodeIfPresent(ClientListFilters.self, forKey: .filters)) ?? nil' in api_swift
+             and 'try await api.call("clients_filter", body: ["who": who], refusal: { reply in' in clients_list
+             and 'field: refusedFields["who"] != nil ? "Caseload" : nil' in clients_list
+             and 'ForEach(choices.whoChoices, id: \\.value) { Text($0.label).tag($0.value) }' in clients_list
+             and all('Picker("%s"' % k in clients_list for k in ('Case status', 'Caseload', 'Client type', 'Funding agency', 'Office'))
+             and '"Filters, \\(filtersOn) on"' in clients_list and 'Clients matching the filters (\\(all))' in clients_list
+             and 'matching clients, in name order. Search by name or narrow the filters to find the rest.' in clients_list,
+             'Q13: the client list offers the website\'s filters, sends only those set with with_filters, remembers the caseload with clients_filter, and says the filtered count')
+static_check('All clients (' not in clients_swift, 'Q13: the client list heading is never a hard-coded "All clients (N)"')
+
+# 4.35.0 review round: each key the app reads must be one the server sends (read from the server
+# files themselves), and the fixes of the independent review and the parity decisions.
+api_435_php = (root / 'public/inc/api_435.php').read_text()
+client_list_php = (root / 'public/inc/client_list.php').read_text()
+outcome_php = (root / 'public/inc/outcome_followups.php').read_text()
+client_fields_php = (root / 'public/inc/client_fields.php').read_text()
+api_parity_php = (root / 'public/inc/api_parity.php').read_text()
+
+
+def sends(php, *keys):
+    """Every key is written as a reply key ('key' =>) in the server source."""
+    return all("'%s' =>" % k in php for k in keys)
+
+
+static_check(sends(api_435_php, 'clients', 'staff', 'default_staff_id', 'tracks', 'group_uid', 'sessions_created', 'no_track', 'invite_sent',
+                   'authorization_warnings', 'authorization_hash', 'duplicate')
+             and "'group_choices' =>" in api_435_php and "'schedule_group' =>" in api_435_php
+             and re.search(r"\$input\['client_ids'\]", api_435_php) and re.search(r"\$input\['tracks'\]", api_435_php)
+             and re.search(r"\$input\['authorization_ack_hash'\]", api_435_php),
+             'Q1 (server): group_choices and schedule_group send and read the keys the app uses')
+static_check(sends(api_435_php, 'start_at', 'started', 'instructor', 'can_record', 'default_hours', 'members', 'session_id', 'client_id',
+                   'client_name', 'track_id', 'track_title', 'completed', 'message', 'notes_to_write', 'note_subject')
+             and all(re.search(r"\$input\['%s'\]" % k, api_435_php) for k in ('group_uid', 'listed', 'attended', 'hours'))
+             and "$_GET['group_uid']" in api_435_php,
+             'Q2 (server): group_session and complete_group send and read the keys the app uses')
+static_check(sends(api_435_php, 'request', 'can_offer', 'defaults', 'lengths', 'keeps_length', 'offered', 'staff_name', 'minutes', 'remote', 'location')
+             and sends(api_parity_php, 'can_offer', 'offered')
+             and "$timeErrs['time' . $n]" in api_435_php and 'foreach ([1, 2, 3] as $n)' in api_435_php
+             and all(re.search(r"\$input\['%s'\]" % k, api_435_php) for k in ('times', 'staff_id', 'minutes', 'track_id', 'remote', 'location')),
+             'Q6 (server): offer_times sends the form and reads the offer the app sends; its timeN is the Nth time sent')
+static_check("'tech_types' => array_values(cms_list_items('tech_types'))" in api_php
+             and sends(outcome_php, 'surveys', 'followups', 'by_phone', 'due_now', 'text')
+             and "'after_closure' => after_closure_state(" in api_php
+             and "'attendance' => $client['attendance']" in api_php
+             and "['completed' => $attendance['done'], 'no_show' => $attendance['noshow'], 'cancelled' => $attendance['cancelled']]" in api_php
+             and all(k in api_php for k in ('preferred_language, vision_status, vision_onset_age, on_hold_reason, on_hold_until, created_at FROM clients',))
+             and "$errors['vision_onset_age']" in client_fields_php,
+             'Q7/Q9/Q10/Q11 (server): tech_types, after_closure (surveys, followups, by_phone, due_now, text), attendance and the client fields are sent')
+static_check(sends(api_435_php, 'who') and "'who' => 'Caseload: choose one of the listed caseloads.'" in api_435_php
+             and sends(client_list_php, 'statuses', 'who_choices', 'types', 'agencies', 'offices', 'value', 'label')
+             and "$clientsReply['filters'] = ['who' => $whoApi] + client_list_filters(" in api_php
+             and "['', 'Everyone\\'s clients']" in client_list_php
+             and "'notes' => 'Notes are too long (1,000 characters maximum).'" in api_435_php
+             and "['satisfaction' => 'Satisfaction', 'goals_met' => 'Goals met']" in api_435_php,
+             'Q9/Q13 (server): the client list filters, clients_filter and the follow-up notes error are what the app reads')
+
+# Review item 1: time errors are tied to the field the time came from.
+static_check('static func timeErrorField(_ key: String, sent: [(field: String, time: String)]) -> String? {' in offer_sheet
+             and 'return n <= sent.count ? sent[n - 1].field : timeFields.first' in offer_sheet
+             and '"times": sent.map(\\.time)' in offer_sheet
+             and 'field: Self.timeErrorField(key, sent: sent) ?? Self.fieldNames[key]' in offer_sheet
+             and '"time1": "First time"' not in offer_sheet,
+             'Review 1: offer_times\'s timeN error is tied to the Nth time sent (Third time when only the first and third are offered)')
+# Review item 2 and the walk-through of every note.
+static_check('static func notesWithMembers(_ notes: [SessionNoteTarget], group: GroupSessionResponse) -> [SessionNoteTarget] {' in attend_sheet
+             and 'trackId: n.trackId ?? m?.trackId' in attend_sheet and 'startAt: n.startAt ?? group.startAt' in attend_sheet
+             and 'Self.notesWithMembers(r.notesToWrite, group: group)' in attend_sheet
+             and '"Next: \\(name), \\(index + 1) of \\(total)."' in schedule_swift
+             and 'cancelLabel: "Skip for now")' in schedule_swift
+             and 'if groupNoteIndex + 1 < groupNotes.count {' in schedule_swift
+             and 'Button(cancelLabel) { if hasChanges { askingDiscard = true } else { dismiss() } }' in clients_swift
+             and 'cancelLabel: request.cancelLabel, onSaved: onSaved)' in swift_sources['SessionNotes.swift'],
+             'Review 2: each note after a group is linked to the member\'s track and session, and every note is walked through ("Next: …, N of M", Skip for now)')
+# Review item 3: Reload refreshes the 4.35.0 fields and orig carries them.
+reload_fn = between(edit_sheet, '    private func reload() async {', '\n    }\n')
+opened_fn = between(edit_sheet, 'private static func openedValues(of c: ClientInfo, extras: ClientExtras?)', '\n    }\n')
+static_check(all(k in reload_fn for k in ('take(&language, opened435[0], freshLang)', 'take(&visionStatus, opened435[1], freshVision)',
+                                          'take(&onsetText, opened435[2], freshOnset)', 'storedHoldUntil = freshUntil',
+                                          'opened435 = [freshLang, freshVision, freshOnset, freshUntil]', 'baseExtras = ex'))
+             and all('"%s":' % k in opened_fn for k in ('preferred_language', 'vision_status', 'vision_onset_age', 'on_hold_until'))
+             and 'Self.openedValues(of: base, extras: baseExtras)' in edit_sheet,
+             'Review 3: Reload after a conflict refreshes language, vision and the return date, and orig carries them')
+# Review item 4: the new buttons are outside the row's one VoiceOver stop.
+row_tail = row_fn[row_fn.index('.accessibilityActions {'):]
+rotor = row_tail[:row_tail.index('// 4.35.0: outside the row\'s one VoiceOver stop')]
+outside = row_tail[len(rotor):]
+static_check(all('Label("%s"' % k in outside for k in ('Move session', 'Cancel the series', 'Cancel the whole group', 'Record attendance for the group'))
+             and all('Button("%s")' % k in rotor for k in ('Move session', 'Cancel the whole group', 'Record attendance for the group'))
+             and '.accessibilityElement(children: VoiceOverRows.children)' not in outside
+             and row_fn.index('.accessibilityElement(children: VoiceOverRows.children)') < row_fn.index('let moreLayout'),
+             'Review 4: Move session, Cancel the series, Cancel the whole group and Record attendance are reached by swiping (outside the row\'s one stop) and on the rotor')
+portal_row = between(portal_swift, '    @ViewBuilder private func row(_ r: PortalRequestItem, statuses: [String]) -> some View {', '\n    }\n')
+static_check(portal_row.index('.accessibilityElement(children: VoiceOverRows.children)') < portal_row.index('Label(r.offered.isEmpty ? "Offer times" : "Offer different times"')
+             and 'Button(r.offered.isEmpty ? "Offer times" : "Offer different times") { offering = r }' in portal_row
+             and '+ r.clientName + ", " + r.typeLabel.lowercased() + " request")' in portal_row,
+             'Review 4: Offer times is reached by swiping (after the request\'s one stop), names the client, and stays on the rotor')
+summary_stop = row_fn[:row_fn.index('.accessibilityElement(children: VoiceOverRows.children)')]
+after_stop = row_fn[row_fn.index('.accessibilityActions {'):]
+after_rotor = after_stop[after_stop.index("// 4.35.0: Check in and the outcomes are separate buttons"):]
+static_check(all('Label("%s"' % k not in summary_stop for k in ('Check in', 'Mark completed', 'Cancel session', 'No-show'))
+             and all(re.search(r'Button \{\s*%s\s*\} label: \{\s*Label\("%s"' % (re.escape(a), l), after_rotor)
+                     for a, l in (('Task { await self.checkIn(session) }', 'Check in'), ('markCompleted(session)', 'Mark completed'),
+                                  ('pendingOutcome = SessionOutcome(session: session, to: "Cancelled")', 'Cancel session'),
+                                  ('pendingOutcome = SessionOutcome(session: session, to: "No Show")', 'No-show')))
+             and all(k in after_rotor for k in ('.accessibilityLabel("Check in to \\(name)")', '.accessibilityLabel("Mark \\(name) completed")',
+                                                '.accessibilityLabel("Cancel \\(name)")', '.accessibilityLabel("Mark \\(name) as a no-show")'))
+             and all('Button("%s")' % k in after_stop[:after_stop.index("// 4.35.0: Check in")] for k in ('Check in', 'Mark completed', 'Cancel session', 'No-show'))
+             and '.accessibilityAction { announceRowActions() }' in row_fn,
+             'Review 4: Check in, Mark completed, Cancel session and No-show are buttons after the row\'s one VoiceOver stop, each naming the session, also on the rotor; the row\'s double-tap only says how to reach them')
+after_links = after_stop[after_stop.index("// 4.35.0: the row's links, also after its one VoiceOver stop"):]
+static_check(all(k not in summary_stop for k in ('Link("Join online"', 'Link(destination: url)', 'NavigationLink('))
+             and 'Link("Join online", destination: url)' in after_links and '.accessibilityLabel("Join \\(name) online")' in after_links
+             and 'Link(destination: url) { Text("\\(location), directions")' in after_links
+             and '.accessibilityLabel("Directions to \\(location), for the \\(name)")' in after_links
+             and 'NavigationLink(destination: ClientDetailView(clientId: cid))' in after_links
+             and ".accessibilityLabel(\"Open \\(session.client)'s record, from the \\(name)\")" in after_links
+             and all(k in after_stop[:after_stop.index("// 4.35.0: the row's links")] for k in ('Button("Join online")', 'Button("Directions to \\(location)")', "Button(\"Open \\(session.client)'s record\")")),
+             'Review 4: Join online, Directions and Open the client\'s record are links after the row\'s one VoiceOver stop, each naming the session, and stay on the rotor')
+# Review items 5-12.
+static_check('cacheKey: f.who.map { "clients-who-\\($0)" } ?? "clients")' in clients_list and 'if q.isEmpty && !f.narrows {' in clients_list,
+             'Review 5: a chosen caseload has its own saved copy, shown with no signal')
+static_check('.interactiveDismissDisabled(busy || hasChanges)' in fu_sheet and '.interactiveDismissDisabled(busy || hasChanges)' in offer_sheet
+             and '|| !Calendar.current.isDate(day, inSameDayAs: openedDay)' in group_sheet and 'from: time) != Calendar.current.dateComponents' in group_sheet,
+             'Review 6: unsaved follow-up checks and offers are not lost to a swipe; a changed group date or time counts as a change')
+static_check('notes.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.count > 1000' in fu_sheet
+             and '"Notes are too long (1,000 characters maximum)."' in fu_sheet
+             and 'if let text = refusedFields["notes"] { showFormError(text, in: &self.error, field: "Notes") }' in fu_sheet,
+             'Review 7: follow-up notes are counted as the server counts them, with its sentence, and errors.notes is tied to Notes')
+static_check('"^([0-9]+\\\\.?[0-9]*|\\\\.[0-9]+)$"' in attend_sheet and 'is_numeric($raw)' in (root / 'public/inc/session_group.php').read_text(),
+             'Review 8: the group hours accept what the server\'s session_group_hours_input accepts (".5", "3.125")')
+static_check('Calendar.current.startOfDay(for: APIDate.parseDay(APIDate.dayCentral(Date())) ?? Date())' in edit_sheet
+             and 'in: Self.serverToday..., displayedComponents: .date' in edit_sheet,
+             'Review 9: the earliest return date is the server\'s today')
+static_check('FormOptions.has("vision_statuses") ? FormOptions.list("vision_statuses", []) : []' in edit_sheet
+             and 'visionStatus.isEmpty || list.contains(visionStatus) ? list : list + [visionStatus]' in edit_sheet
+             and 'static func has(_ name: String) -> Bool' in api_swift,
+             'Review 10: vision choices wait for the organisation\'s list and always keep the client\'s current value')
+probe_fn = between(schedule_swift, '    private func probeGroups() async {', '\n    }\n')
+static_check('Self.supportsGroups(serverVersion: api.serverVersion)' in probe_fn
+             and 'catch APIError.server(let message) where message == "Unknown action." {\n            groupSupported = false' in probe_fn
+             and probe_fn.count('groupSupported = false') == 1
+             and 'private var groupsOffered: Bool { groupSupported != false }' in schedule_swift
+             and 'return major > 4 || (major == 4 && minor >= 35)' in schedule_swift,
+             'Review 11: the group buttons hide only for a server before 4.35 (its release, or "Unknown action."), never after another failure')
+static_check('showFormError(Self.warningsBanner, in: &self.error)' in group_submit
+             and 'Check the warnings below, then turn on the approval and tap Schedule group session again.' in group_sheet
+             and 'message + " To book it anyway' not in group_submit,
+             'Review 12: the group warnings are read once, in their section; the banner points to them')
+# Parity decisions.
+static_check(re.search(r'Text\("Yes"\)\.tag\("yes"\)\s*Text\("No"\)\.tag\("no"\)\s*Text\("Not asked"\)\.tag\(""\)', fu_sheet)
+             and 'Save the \\(label) for \\(client)? It cannot be recorded again.' in fu_sheet
+             and 'Self.surveyQuestion(client: clientName, byPhone: state.byPhone)' in after_section
+             and '(byPhone ? " They prefer phone or post' in after_section
+             and '"Offer \\(times.count == 1 ? "this time" : "these times") to \\(client): \\(times.map(formatDateTime).joined(separator: "; "))? They choose one in their portal."' in offer_sheet
+             and 'Button("Offer these times") { Task { await submit() } }' in offer_sheet and 'Button("Not yet", role: .cancel)' in offer_sheet,
+             'Parity: follow-up answers Yes, No, Not asked; the follow-up, survey and offer questions as the Android app asks them')
+clients_php = (root / 'public/clients.php').read_text()
+static_check('matching clients, in name order. Search by name or narrow the filters to find the rest.' in clients_php
+             and 'Showing the first \\(shown) of \\(websiteNumber(all)) matching clients, in name order. Search by name or narrow the filters to find the rest.' in clients_list
+             and '[!f.status.isEmpty, !who.isEmpty,' in clients_list
+             and 'weekly series? The client is sent a calendar cancellation.' in schedule_swift
+             and "weekly series? The client is sent a calendar cancellation." in (root / 'public/schedule.php').read_text(),
+             'Parity: the "first N" line is clients.php\'s sentence; the badge counts any caseload but Everyone\'s; cancel-series asks as the website')
+schedule_php = (root / 'public/schedule.php').read_text()
+static_check(all(label in schedule_php for label in ('Group session instructor', 'Group session date', 'Group session start time',
+                                                    'Group session duration (hours)', 'Group session location', 'Group session notes',
+                                                    'Group session is remote / telepractice', 'Schedule group session'))
+             and all(label in group_sheet for label in ('Picker("Group session instructor"', 'DatePicker("Group session date (required)"',
+                                                       'DatePicker("Group session start time (required)"', 'label: "Group session duration (hours) (required)"',
+                                                       'label: "Group session location"', 'label: "Group session notes"',
+                                                       'Toggle("Group session is remote / telepractice"', '"Schedule group session"'))
+             and "old_in('g_time', '10:00')" in schedule_php and 'bySettingHour: 10, minute: 0' in group_sheet,
+             'Parity: the group form uses schedule.php\'s labels, button and 10:00 start')
+client_php = (root / 'public/client.php').read_text()
+static_check(all(l in client_php for l in ('Primary focus / tech recommended', 'Assessment summary', 'Record a tech assessment', 'maxlength="2000"'))
+             and 'Picker("Primary focus / tech recommended"' in assess_sheet and 'label: "Assessment summary"' in assess_sheet
+             and 'Label("Record a tech assessment"' in edit_sheet
+             and 'comments.unicodeScalars.count > 2000' in phone_sheet,
+             'Parity: tech assessment labels are client.php\'s; phone survey comments are limited to 2000 characters as the website')
 static_check('if message.hasPrefix("IPE amendment date") { return "IPE amended on" }' in edit_sheet
              and 'message.hasPrefix("The date of birth")' in edit_sheet
              and re.search(r'\.onChange\(of: \[name, dob, phone, email\]\) \{ _ in\s*if duplicateRefused \{ duplicateRefused = false; notDuplicate = false \}', edit_sheet),

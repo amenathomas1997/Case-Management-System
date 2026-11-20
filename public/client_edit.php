@@ -122,11 +122,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $planVals = [$gIn('vr_case_number'), $gIn('ipe_goal'), $planDates['ipe_date'], $planDates['ipe_amended_on']];
     // Vision status and age of onset (3.0.47), for the Outcome report's breakdowns.
     // A value since removed from the list stays when it is sent back unchanged (Lists, 4.4.0).
-    $visionIn = in_array($_POST['vision_status'] ?? '', array_merge(cms_list_items('vision_statuses'), $client && $client['vision_status'] !== null ? [(string)$client['vision_status']] : []), true) ? $_POST['vision_status'] : null;
-    $onsetRaw = $gIn('vision_onset_age');
-    $onsetIn = $onsetRaw !== null && ctype_digit($onsetRaw) && (int)$onsetRaw <= 120 ? (int)$onsetRaw : null;
-    if ($onsetRaw !== null && $onsetIn === null) { $errors['vision_onset_age'] = 'Age when vision loss began: enter a whole number of years from 0 to 120, or leave it blank.'; set_form_errors($errors); }
-    $visionVals = [$visionIn, $onsetIn];
+    // Shared with the app's save_client (inc/client_fields.php, 4.35.0).
+    $visionRead = client_vision_input($_POST, $client ?: null);
+    if ($visionRead['errors']) { $errors += $visionRead['errors']; set_form_errors($errors); }
+    $visionVals = [$visionRead['status'], $visionRead['onset']];
     // Where the client lives and their time zone (4.1.0). Only a zone someone picked is stored:
     // with none, the state's usual zone applies, and follows the state if it changes.
     $stateIn = us_state(is_string($_POST['state'] ?? null) ? $_POST['state'] : null);
@@ -163,7 +162,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         in_array($_POST['a11y_contact'] ?? '', A11Y_CONTACTS, true) ? $_POST['a11y_contact'] : null,
         $a11yNotes !== '' ? $a11yNotes : null,
         // The language the portal opens in and the client's emails are sent in.
-        ($_POST['preferred_language'] ?? 'en') === 'es' ? 'es' : 'en',
+        client_language_input(is_string($_POST['preferred_language'] ?? null) ? $_POST['preferred_language'] : null),
     ];
     // Automatic progress reports, the counselor portal and email filing use the
     // counselor email only once it is confirmed (counselor_verified). An address

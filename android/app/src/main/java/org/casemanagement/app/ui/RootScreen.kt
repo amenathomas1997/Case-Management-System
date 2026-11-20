@@ -163,6 +163,7 @@ private fun MainScreen(api: Api) {
     // Each screen opened, by its back stack entry (two clients are two screens, though one route).
     val entryKey = entry?.id ?: "home"
     val titleFocus = remember { FocusRequester() }
+    val backDispatcher = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
     val noticeFocus = remember { FocusRequester() }
     // 4.30.0: the confirmation that takes focus on this screen (with the screen's name), if any.
     var flashFocused by remember { mutableStateOf(false) }
@@ -182,7 +183,9 @@ private fun MainScreen(api: Api) {
     }
 
     Scaffold(
-        topBar = { TitleBar(title, showBack = !isTab, focus = titleFocus) { nav.popBackStack() } },
+        // 4.35.0: the title bar's Back goes through the system Back, so a form that asks before
+        // discarding (or says it is still saving) asks here too.
+        topBar = { TitleBar(title, showBack = !isTab, focus = titleFocus) { backDispatcher?.onBackPressed() ?: nav.popBackStack() } },
         bottomBar = {
             TabBar(tabs, route) { t ->
                 nav.navigate(t.route) {
@@ -282,6 +285,7 @@ private val titles = mapOf(
     "schedule" to "Schedule", "tasks" to "Tasks", "more" to "More", "alerts" to "Alerts", "referrals" to "Referrals",
     "referral" to "Referral", "messages" to "Messages", "thread" to "Conversation", "account" to "My account", "offline" to "Offline entries",
     "clientEdit" to "Client details", "track" to "Training track", "trackEdit" to "Track details", "report" to "Email the report", "newSession" to "Schedule a session",
+    "newGroupSession" to "Schedule a group session", "offerTimes" to "Offer times", "assessments" to "Tech assessments",
     "equipment" to "Equipment", "followups" to "Device follow-ups", "docs" to "Documents and homework", "search" to "Search",
     "pipeline" to "Pipeline", "waitlist" to "Waitlist", "compliance" to "Compliance", "invoices" to "Invoices", "incidents" to "Incidents",
     "voice" to "Voice assistant", "clientAi" to "AI help", "aiTools" to "AI tools", "scored" to "Scored assessment", "scoredList" to "Scored assessments",
@@ -334,6 +338,10 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("report/{clientId}/{trackId}") { SendReportScreen(api, nav, n0(it, "clientId"), n0(it, "trackId")) }
         composable("trackEdit/{clientId}/{trackId}") { TrackEditScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0) }
         composable("newSession") { NewSessionScreen(api, nav) }
+        // 4.35.0: a group session, times offered for a client's request, a client's tech assessments.
+        composable("newGroupSession") { GroupSessionScreen(api, nav) }
+        composable("offerTimes/{id}") { OfferTimesScreen(api, nav, n0(it, "id")) }
+        composable("assessments/{clientId}") { TechAssessmentsScreen(api, n0(it, "clientId")) }
         composable("equipment") { EquipmentScreen(api, nav) }
         composable("equipmentItem/{id}") { EquipmentDetailScreen(api, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
         composable("reservations") { ReservationsScreen(api) }

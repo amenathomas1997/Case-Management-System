@@ -101,7 +101,8 @@ if (in_array($action ?? '', API_IDEM_ACTIONS, true) && ($_SERVER['REQUEST_METHOD
     $idemKey = is_string($input['idem_key'] ?? null) ? $input['idem_key'] : null;
     if ($idemCreates && $idemKey !== null) {
         $idemPrev = api_idem_begin($action, $userId, $idemKey);
-        if ($idemPrev !== null) out($idemPrev);
+        // 4.35.0: a repeat of a group booking, a group's attendance or offered times rebuilds its lists (inc/api_435.php).
+        if ($idemPrev !== null) out(function_exists('api_435_repeat') ? api_435_repeat($action, $input, $userId, $idemPrev) : $idemPrev);
         $GLOBALS['API_IDEM_OPEN'] = [$action, $userId, $idemKey];
     }
     unset($idemCreates, $idemKey, $idemPrev);
@@ -490,7 +491,11 @@ case 'portal_requests': {
             'status' => (string)$r['status'], 'created_at' => (string)$r['created_at'],
             'session_id' => $r['session_id'] !== null ? (int)$r['session_id'] : null, 'session_start' => $r['start_at'],
             // 3.0.38: a records request's due date and the outcome the client sees.
-            'due_on' => $r['due_on'] ?? null, 'outcome' => $r['outcome'] ?? null];
+            'due_on' => $r['due_on'] ?? null, 'outcome' => $r['outcome'] ?? null,
+            // 4.35.0: whether times can be offered (an open appointment or reschedule request, as the
+            // page offers its form) and the times still on offer (offer_times in inc/api_435.php).
+            'can_offer' => in_array($r['type'], OFFER_REQUEST_TYPES, true) && !in_array($r['status'], ['Done', 'Declined'], true),
+            'offered' => in_array($r['type'], OFFER_REQUEST_TYPES, true) ? array_map(fn($o) => ['start_at' => (string)$o['start_at']], request_offers((int)$r['id'])) : []];
     }
     out(['ok' => true, 'requests' => $items, 'statuses' => PARITY_PREQ_STATUSES, 'new_count' => (int)$nc->fetchColumn(),
         'truncated' => $truncated, 'showing_all' => $showDone, 'scoped' => $scoped]);

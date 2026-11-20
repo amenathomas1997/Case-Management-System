@@ -120,7 +120,12 @@ fun duplicateRefusal(status: Int, reply: JSONObject?): Boolean = status == 409 &
 
 /** The form's fields named by the server's 422 messages ("IPE date: …"). */
 val CLIENT_ERROR_FIELDS = listOf("IPE amendment date" to "ipe_amended_on", "IPE date" to "ipe_date", "Date of birth" to "dob", "The date of birth" to "dob",
-    "Say why the client is going On Hold" to "status_note")
+    "Say why the client is going On Hold" to "status_note",
+    // 4.35.0: an older server's one-message refusals of the return date and the onset age.
+    "Enter the expected return date" to "on_hold_until", "Age when vision loss began" to "vision_onset_age")
+
+/** 4.35.0: the vision statuses when the server sent none (as the iPhone app). */
+val VISION_STATUSES_FALLBACK = listOf("Totally blind", "Legally blind", "Low vision", "Other visual impairment", "No visual impairment")
 
 /**
  * 4.34.0: a refusal's field errors: the reply's errors map when it has one (keys as the server
@@ -223,6 +228,16 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
     // 4.34.0: the IPE dates, as the website's client form.
     var ipeDate by rememberSaveable { mutableStateOf(c.str("ipe_date") ?: "") }
     var ipeAmended by rememberSaveable { mutableStateOf(c.str("ipe_amended_on") ?: "") }
+    // 4.35.0: the portal's language, vision, and the On Hold return date, as the website's client form.
+    var language by rememberSaveable { mutableStateOf(if (c.str("preferred_language") == "es") "es" else "en") }
+    var visionStatus by rememberSaveable { mutableStateOf(c.str("vision_status") ?: "") }
+    var onsetAge by rememberSaveable { mutableStateOf(if (c.has("vision_onset_age") && !c.isNull("vision_onset_age")) c.optInt("vision_onset_age").toString() else "") }
+    var holdUntil by rememberSaveable { mutableStateOf(c.str("on_hold_until") ?: "") }
+    // Only a 4.35.0 server reads language and vision (an older one would show them as saved, and ignore them).
+    val has435 = serverAtLeast(api.serverVersion, "4.35")
+    // The stored return date goes back only when changed here, so a date now past never blocks other edits.
+    val holdChanged = holdUntil.trim() != (c.str("on_hold_until") ?: "")
+    val visionList = api.formList("vision_statuses", VISION_STATUSES_FALLBACK).let { l -> visionStatus.takeIf { it.isNotEmpty() && it !in l }?.let { l + it } ?: l }
     // 4.34.0: a possible duplicate refuses the new client until "This is a different person" is ticked.
     var dupAsked by rememberSaveable { mutableStateOf(false) }
     var notDuplicate by rememberSaveable { mutableStateOf(false) }
@@ -285,6 +300,7 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         guardianName = m(guardianName, "guardian_name"); guardianPhone = m(guardianPhone, "guardian_phone"); guardianEmail = m(guardianEmail, "guardian_email")
         school = m(school, "school"); vrCase = m(vrCase, "vr_case_number"); ipeGoal = m(ipeGoal, "ipe_goal")
         ipeDate = m(ipeDate, "ipe_date"); ipeAmended = m(ipeAmended, "ipe_amended_on")
+        language = m(language, "preferred_language", "en"); visionStatus = m(visionStatus, "vision_status"); onsetAge = m(onsetAge, "vision_onset_age")
         val fresh = formSnapshot(c)
         smsConsent = mergeReloaded(smsConsent, base.optBoolean("_sms_agreed"), fresh.optBoolean("_sms_agreed"))
         smsSource = mergeReloaded(smsSource, base.optString("_sms_source"), fresh.optString("_sms_source"))
@@ -307,6 +323,8 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         // 4.34.0: as the website, the label says it is required for On Hold (no extra hint line).
         if (statusChanged) Field(if (status == "On Hold") "Reason for status change (required for On Hold)" else "Reason for status change (recorded in the history)",
             statusNote, { statusNote = it }, error = fieldErrors["status_note"])
+        // 4.35.0: shown while the status is On Hold (already On Hold, only the date can change).
+        if (holdDateShown(status)) Field("Expected return date", holdUntil, { holdUntil = it }, hint = "On Hold only, optional; year-month-day", error = fieldErrors["on_hold_until"])
         if (closing) {
             Choice("Why the case is closed", reason, listOf("" to "Choose a reason") + reasons.map { it to it }, fieldErrors["reason"], required = true) { reason = it }
             if (reason == "Other") Field("Say why", reasonNote, { reasonNote = it })
@@ -360,6 +378,11 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
         Field("IPE date", ipeDate, { ipeDate = it }, hint = "optional, year-month-day, today or earlier", error = fieldErrors["ipe_date"])
         Field("IPE amended on", ipeAmended, { ipeAmended = it }, hint = "optional, year-month-day, today or earlier", error = fieldErrors["ipe_amended_on"])
         Heading("Accessibility")
+        if (has435) {
+            Choice("Preferred language (the client's portal and emails use it)", language, languageChoices()) { language = it }
+            Choice("Vision status", visionStatus, listOf("" to "Not recorded") + visionList.map { it to it }, error = fieldErrors["vision_status"]) { visionStatus = it }
+            Field("Age when vision loss began", onsetAge, { onsetAge = it }, hint = "0 to 120, optional", keyboard = KeyboardType.Number, error = fieldErrors["vision_onset_age"])
+        }
         Choice("Preferred format", format, listOf("" to "Not set") + A11Y_FORMATS.map { it to it }) { format = it }
         Choice("Preferred contact", contact, listOf("" to "Not set") + A11Y_CONTACTS.map { it to it }) { contact = it }
         Field("Primary technology", tech, { tech = it })
@@ -384,10 +407,12 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
                 if (!pastOrToday(dob)) "dob" to "Date of birth: enter a real date as year-month-day, not in the future." else null,
                 if (!pastOrToday(ipeDate)) "ipe_date" to "IPE date: enter a valid date (YYYY-MM-DD), today or earlier." else null,
                 if (!pastOrToday(ipeAmended)) "ipe_amended_on" to "IPE amended on: enter a valid date (YYYY-MM-DD), today or earlier." else null,
+                if (holdDateShown(status) && holdChanged) holdDateRule(holdUntil)?.let { "on_hold_until" to it } else null,
+                if (has435) onsetAgeRule(onsetAge)?.let { "vision_onset_age" to it } else null,
             ).toMap()
             customErrors = customProblemsByField(customFields, custom, requireAnswers = id == 0)
             // 4.30.0: the summary lists every problem, in the form's order.
-            val all = errorSummary(listOf("name", "status_note", "reason", "dob", "state", "ipe_date", "ipe_amended_on").map { fieldErrors[it] } + customErrors.values)
+            val all = errorSummary(listOf("name", "status_note", "on_hold_until", "reason", "dob", "state", "ipe_date", "ipe_amended_on", "vision_status", "vision_onset_age").map { fieldErrors[it] } + customErrors.values)
             if (all != null) { error = all; return@PrimaryButton }
             scope.launchSave({ busy = it }, { error = it }) {
                 val b = JSONObject().put("id", id).put("name", name.trim()).put("status", status).put("client_type", type)
@@ -400,6 +425,9 @@ private fun ClientForm(api: Api, nav: NavHostController, id: Int, c: JSONObject,
                     .put("vr_case_number", vrCase.trim()).put("ipe_goal", ipeGoal.trim())
                     .put("ipe_date", ipeDate.trim()).put("ipe_amended_on", ipeAmended.trim())
                 if (type == "Pre-ETS") b.put("school", school.trim())
+                // 4.35.0: a 4.34.0 server ignores these; the server keeps what is stored for a key not sent.
+                if (has435) b.put("preferred_language", language).put("vision_status", visionStatus).put("vision_onset_age", onsetAge.trim())
+                if (holdDateShown(status)) b.put("on_hold_until", if (holdChanged) holdUntil.trim() else "")
                 // A new client left on "Your own office" sends nothing, so the server gives them the creator's office.
                 if (offices.isNotEmpty() && (id > 0 || office.isNotEmpty())) b.put("office_id", office.toIntOrNull() ?: JSONObject.NULL)
                 customBody(customFields, custom)?.let { b.put("custom", it) }

@@ -37,6 +37,19 @@ struct ScheduleView: View {
     @State private var movingSession: Session?
     /// Asking before the rest of a series, or a whole group, is cancelled.
     @State private var cancellingMore: (session: Session, action: String)?
+    /// 4.35.0: booking a group session, and recording a group's attendance. `groupSupported`
+    /// is nil until the server has answered group_choices once; false (a server before 4.35.0)
+    /// hides both buttons.
+    @State private var showingGroupSession = false
+    @State private var recordingGroup: GroupRef?
+    @State private var groupSupported: Bool?
+    /// The first case note to write after a group's attendance was recorded, opened once that
+    /// sheet has closed.
+    @State private var groupNoteAfterSheet: SessionNoteRequest?
+    /// 4.35.0: the case notes to write after a group's attendance, walked through in turn as the
+    /// website does ("Next: Jane Doe, 2 of 3", with Skip for now), and the one open now.
+    @State private var groupNotes: [SessionNoteTarget] = []
+    @State private var groupNoteIndex = 0
     @State private var loaded = false
     /// Set while the list is the copy kept on this phone (the server could not be reached):
     /// when it was saved. Nothing can be changed until a load succeeds.
@@ -192,6 +205,15 @@ struct ScheduleView: View {
                     }
                     .disabled(offlineSince != nil)
                 }
+                // 4.35.0: as the website's "Schedule a group session" form.
+                if groupsOffered {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { showingGroupSession = true } label: {
+                            Label("Schedule a group session", systemImage: "person.3")
+                        }
+                        .disabled(offlineSince != nil)
+                    }
+                }
                 // Logging hours reads client tracks, which needs the clients
                 // permission — hide the button for schedule-only groups.
                 if api.can("clients") {
@@ -212,21 +234,38 @@ struct ScheduleView: View {
             .sheet(isPresented: $showingLogHours) {
                 LogHoursView()
             }
+            .sheet(isPresented: $showingGroupSession, onDismiss: announceSheetResult) {
+                GroupSessionSheet { message in
+                    confirmation = message
+                    sheetResult = message
+                    Task { await load() }
+                }
+            }
+            .sheet(item: $recordingGroup, onDismiss: afterGroupSheet) { group in
+                GroupAttendanceSheet(groupUid: group.id) { message, notes in
+                    confirmation = message
+                    sheetResult = message
+                    if api.can("clients"), !notes.isEmpty {
+                        groupNotes = notes
+                        groupNoteIndex = 0
+                        groupNoteAfterSheet = groupNoteRequest(0, lead: message)
+                    }
+                    Task { await load() }
+                }
+            }
             .sheet(item: $movingSession, onDismiss: announceSheetResult) { session in
                 MoveSessionSheet(session: session) { message in
                     sheetResult = message
                     Task { await load() }
                 }
             }
-            .confirmationDialog(cancellingMore?.action == "cancel_group" ? "Cancel this group session for every client in it?" : "Cancel this session and every later session in its weekly series?",
+            .confirmationDialog(cancelMoreQuestion,
                                 isPresented: Binding(get: { cancellingMore != nil }, set: { if !$0 { cancellingMore = nil } }), titleVisibility: .visible) {
-                Button(cancellingMore?.action == "cancel_group" ? "Cancel the whole group" : "Cancel the series", role: .destructive) {
+                Button("Cancel them", role: .destructive) {
                     if let c = cancellingMore { Task { await cancelMore(c.session, action: c.action) } }
                     cancellingMore = nil
                 }
                 Button("Keep them", role: .cancel) { cancellingMore = nil }
-            } message: {
-                Text("Each client with a confirmed email is sent a calendar cancellation.")
             }
             .sheet(item: $signingSession, onDismiss: afterCompletionSheet) { session in
                 // The sheet stays open until the completion is saved, so a failure keeps the
@@ -242,6 +281,7 @@ struct ScheduleView: View {
             }
             .refreshable { await load() }
             .task { await load() }
+            .task { await probeGroups() }
             .onChange(of: lock.locked) { locked in
                 if !locked, let request = noteAfterUnlock {
                     // The client signed and handed the phone back: once the device owner has
@@ -270,6 +310,72 @@ struct ScheduleView: View {
     private func sessionName(_ session: Session) -> String {
         let instructor = (session.instructor ?? "").isEmpty ? nil : session.instructor
         return "session with \(session.client)\(instructor.map { ", instructor \($0)," } ?? "") on \(formatDateTime(session.startAt))"
+    }
+
+    /// 4.35.0: the website's questions, naming the session (Cancel the series / the whole group).
+    private var cancelMoreQuestion: String {
+        guard let c = cancellingMore else { return "" }
+        return Self.cancelMoreConfirm(c.action, client: c.session.client, date: formatDateTime(c.session.startAt))
+    }
+
+    static func cancelMoreConfirm(_ action: String, client: String, date: String) -> String {
+        action == "cancel_group"
+            ? "Cancel this group session on \(date) for every client in it? Each client is sent a calendar cancellation."
+            : "Cancel this session with \(client) on \(date) and every later session in its weekly series? The client is sent a calendar cancellation."
+    }
+
+    /// Whether a server release is 4.35.0 or later ("4.35.0", "4.36"); nil when it can't be read.
+    static func supportsGroups(serverVersion: String?) -> Bool? {
+        guard let v = serverVersion, !v.isEmpty else { return nil }
+        let parts = v.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 }
+        guard let major = parts.first else { return nil }
+        let minor = parts.count > 1 ? parts[1] : 0
+        return major > 4 || (major == 4 && minor >= 35)
+    }
+
+    /// Whether this server books groups (4.35.0). The release `me` reported decides (a light
+    /// check, as the Android app makes); with none known, group_choices is asked, and only
+    /// "Unknown action." (a server before 4.35.0) hides the buttons. Any other failure keeps
+    /// them, and the server is asked again the next time.
+    private func probeGroups() async {
+        if let known = Self.supportsGroups(serverVersion: api.serverVersion) { groupSupported = known; return }
+        guard groupSupported == nil else { return }
+        do {
+            let _: GroupChoicesResponse = try await api.call("group_choices")
+            groupSupported = true
+        } catch APIError.server(let message) where message == "Unknown action." {
+            groupSupported = false
+        } catch {
+            // Not known: the buttons stay, and the form says what went wrong if it is opened.
+        }
+    }
+
+    /// The group buttons show unless the server is known not to book groups.
+    private var groupsOffered: Bool { groupSupported != false }
+
+    /// The case note for the group's note `index`, saying which it is ("Next: Jane Doe, 1 of 3")
+    /// after `lead`; leaving it is Skip for now (the note stays under Notes to write).
+    private func groupNoteRequest(_ index: Int, lead: String) -> SessionNoteRequest {
+        let t = groupNotes[index]
+        return SessionNoteRequest(target: t, arrival: Self.groupNoteArrival(lead: lead, name: t.clientName, index: index, total: groupNotes.count) + " " + t.contextLine + ".",
+                                  cancelLabel: "Skip for now")
+    }
+
+    static func groupNoteArrival(lead: String, name: String, index: Int, total: Int) -> String {
+        (lead.isEmpty ? "" : lead + " ") + "Next: \(name), \(index + 1) of \(total)."
+    }
+
+    /// The attendance sheet has closed: the first client's case note opens (as after a single
+    /// completion), else the result is said.
+    private func afterGroupSheet() {
+        guard let request = groupNoteAfterSheet else { announceSheetResult(); return }
+        groupNoteAfterSheet = nil
+        sheetResult = nil
+        Task { @MainActor in
+            await loadNotes()
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            openNote(request)
+        }
     }
 
     private var outcomeQuestion: String {
@@ -321,6 +427,23 @@ struct ScheduleView: View {
     /// Schedule says so and VoiceOver is put on the session's row under Notes to write.
     private func afterNoteSheet() {
         let closed = noteRequest
+        // 4.35.0: after a group, the next client's note opens, saved or skipped, until the last.
+        if !groupNotes.isEmpty, closed.map({ c in groupNotes.indices.contains(groupNoteIndex) && groupNotes[groupNoteIndex].sessionId == c.target.sessionId }) == true {
+            if groupNoteIndex + 1 < groupNotes.count {
+                let lead = noteSavedMessage ?? "Skipped for now: that note stays under Notes to write."
+                noteSavedMessage = nil
+                groupNoteIndex += 1
+                let next = groupNoteRequest(groupNoteIndex, lead: lead)
+                Task { @MainActor in
+                    await loadNotes()
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    openNote(next)
+                }
+                return
+            }
+            groupNotes = []
+            groupNoteIndex = 0
+        }
         if let message = noteSavedMessage {
             noteSavedMessage = nil
             confirmation = message
@@ -488,18 +611,102 @@ struct ScheduleView: View {
             // Read-only while the list is the copy kept on this phone.
             let busy = completing.contains(session.id) || offlineSince != nil
             let checkIn = canCheckIn(session, at: context.date)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(session.client).font(.body.weight(.semibold))
-                Text(formatDateTime(session.startAt))
-                    .font(.callout)
-                // Said in words on the row too, for anyone moving row by row past the heading.
-                if session.overdue == true {
-                    Text("Ended — awaiting an outcome").font(.caption.weight(.semibold)).foregroundStyle(Color.secondaryText)
+            VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(session.client).font(.body.weight(.semibold))
+                    Text(formatDateTime(session.startAt))
+                        .font(.callout)
+                    // Said in words on the row too, for anyone moving row by row past the heading.
+                    if session.overdue == true {
+                        Text("Ended — awaiting an outcome").font(.caption.weight(.semibold)).foregroundStyle(Color.secondaryText)
+                    }
+                    if let checked = checkedInText(session) {
+                        Label(checked, systemImage: "person.crop.circle.badge.checkmark")
+                            .font(.callout.weight(.medium)).foregroundStyle(Color.brandTeal)
+                    }
+                    // Every instructor's sessions are listed: say whose this one is.
+                    if let instructor {
+                        Text("Instructor: \(instructor)").font(.callout).foregroundStyle(Color.secondaryText)
+                    }
+                    if session.isRemote == true {
+                        Text("Remote").font(.caption2.weight(.semibold)).foregroundStyle(Color.brandTeal)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.brandTeal.opacity(0.15)).clipShape(Capsule())
+                    } else if let location = session.location, !location.isEmpty, mapsURL(location) == nil {
+                        Text(location).font(.callout).foregroundStyle(Color.secondaryText)
+                    }
+                    if session.trackId != nil {
+                        Text("Completing logs hours automatically")
+                            .font(.caption).foregroundStyle(Color.secondaryText)
+                    }
                 }
-                if let checked = checkedInText(session) {
-                    Label(checked, systemImage: "person.crop.circle.badge.checkmark")
-                        .font(.callout.weight(.medium)).foregroundStyle(Color.brandTeal)
+                // VoiceOver: the session is one stop, read in full; its buttons are the Actions
+                // rotor's entries (swipe up or down, then double-tap), each asking first as on screen.
+                // A double-tap on the row only says so (as the Tasks and Bookings rows do): it used to
+                // be Mark completed, which for a tracked session opened the signature sheet, whose
+                // Cancel locks the app — a stray double-tap locked the person out.
+                .accessibilityElement(children: VoiceOverRows.children)
+                .accessibilityLabel(sessionSummary(session, started: started))
+                .accessibilityFocused($focusedSession, equals: session.id)
+                .accessibilityAction { announceRowActions() }
+                .accessibilityActions {
+                    if checkIn, !checkingIn.contains(session.id) {
+                        Button("Check in") { Task { await self.checkIn(session) } }
+                    }
+                    if !busy {
+                        if started {
+                            Button("Mark completed") { markCompleted(session) }
+                        }
+                        Button("Cancel session") { pendingOutcome = SessionOutcome(session: session, to: "Cancelled") }
+                        if started {
+                            Button("No-show") { pendingOutcome = SessionOutcome(session: session, to: "No Show") }
+                        }
+                        Button("Move session") { movingSession = session }
+                        if session.inSeries { Button("Cancel this and later sessions in the series") { cancellingMore = (session, "cancel_series") } }
+                        if session.groupUid != nil { Button("Cancel the whole group") { cancellingMore = (session, "cancel_group") } }
+                        if let uid = session.groupUid, started, groupsOffered {
+                            Button("Record attendance for the group") { recordingGroup = GroupRef(id: uid) }
+                        }
+                    }
+                    if let url = joinURL(session) {
+                        Button("Join online") { openURL(url) }
+                    }
+                    // The links on the row, which VoiceOver reads as one stop (4.0.0).
+                    if session.isRemote != true, let location = session.location, let url = mapsURL(location) {
+                        Button("Directions to \(location)") { openURL(url) }
+                    }
+                    if let cid = session.clientId, api.can("clients") {
+                        Button("Open \(session.client)'s record") { openClientId = cid; showingClient = true }
+                    }
                 }
+                // 4.35.0: the row's links, also after its one VoiceOver stop (reached by swiping
+                // and on the rotor), each naming the session.
+                if let url = joinURL(session) {
+                    Link("Join online", destination: url).font(.callout)
+                        .frame(minHeight: 44, alignment: .leading)   // the row's 44-point standard
+                        .contentShape(Rectangle())
+                        .accessibilityLabel("Join \(name) online")
+                        .accessibilityInputLabels(["Join online", "Join \(name) online"])
+                }
+                if session.isRemote != true, let location = session.location, !location.isEmpty, let url = mapsURL(location) {
+                    // Directions to the session's location (4.0.0).
+                    Link(destination: url) { Text("\(location), directions").font(.callout) }
+                        .frame(minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .accessibilityLabel("Directions to \(location), for the \(name)")
+                        .accessibilityInputLabels(["Directions", "Directions to \(location)"])
+                }
+                if let cid = session.clientId, api.can("clients") {
+                    NavigationLink(destination: ClientDetailView(clientId: cid)) { Text("Open \(session.client)'s record") }
+                        .font(.callout)
+                        .frame(minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .accessibilityLabel("Open \(session.client)'s record, from the \(name)")
+                        .accessibilityInputLabels(["Open \(session.client)'s record"])
+                }
+                // 4.35.0: Check in and the outcomes are separate buttons after the row's one
+                // VoiceOver stop, so they are reached by swiping as well as on the rotor. The row
+                // itself still only says how to reach them when double-tapped (4.34.0).
                 // Arriving: check in works offline too (kept on the phone with the notes and hours).
                 if checkIn {
                     Button {
@@ -514,44 +721,6 @@ struct ScheduleView: View {
                     .disabled(checkingIn.contains(session.id))
                     .accessibilityLabel("Check in to \(name)")
                     .accessibilityInputLabels(["Check in", "Check in to \(name)"])
-                }
-                // Every instructor's sessions are listed: say whose this one is.
-                if let instructor {
-                    Text("Instructor: \(instructor)").font(.callout).foregroundStyle(Color.secondaryText)
-                }
-                if session.isRemote == true {
-                    HStack(spacing: 6) {
-                        Text("Remote").font(.caption2.weight(.semibold)).foregroundStyle(Color.brandTeal)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.brandTeal.opacity(0.15)).clipShape(Capsule())
-                        if let url = joinURL(session) {
-                            Link("Join online", destination: url).font(.callout)
-                                .frame(minHeight: 44, alignment: .leading)   // the row's 44-point standard
-                                .contentShape(Rectangle())
-                                .accessibilityLabel("Join \(name) online")
-                                .accessibilityInputLabels(["Join online", "Join \(name) online"])
-                        }
-                    }
-                } else if let location = session.location, !location.isEmpty {
-                    // Directions to the session's location (4.0.0).
-                    if let url = mapsURL(location) {
-                        Link(destination: url) { Text("\(location), directions").font(.callout) }
-                            .frame(minHeight: 44, alignment: .leading)
-                            .contentShape(Rectangle())
-                            .accessibilityLabel("Directions to \(location)")
-                    } else {
-                        Text(location).font(.callout).foregroundStyle(Color.secondaryText)
-                    }
-                }
-                if let cid = session.clientId, api.can("clients") {
-                    NavigationLink("Open \(session.client)'s record", destination: ClientDetailView(clientId: cid))
-                        .font(.callout)
-                        .frame(minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                if session.trackId != nil {
-                    Text("Completing logs hours automatically")
-                        .font(.caption).foregroundStyle(Color.secondaryText)
                 }
                 if started {
                     Button {
@@ -569,6 +738,7 @@ struct ScheduleView: View {
                     Text("Can be marked completed once it has started.")
                         .font(.caption).foregroundStyle(Color.secondaryText)
                         .padding(.top, 4)
+                        .accessibilityHidden(true)   // said in the row's summary
                 }
                 // The other outcomes close the session without logging hours: each asks first.
                 // Stacked at the accessibility text sizes, where side by side they broke mid-word.
@@ -599,44 +769,58 @@ struct ScheduleView: View {
                 .controlSize(.large)
                 .padding(.top, 4)           // 8 points from Mark completed with the row's spacing
                 .disabled(busy)
+                // 4.35.0: outside the row's one VoiceOver stop, so each is reached by swiping
+                // too (and kept on the rotor): nothing is rotor-only.
+                let moreLayout = typeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                    : AnyLayout(HStackLayout(spacing: 8))
+                // 4.35.0: the website's "Move or cancel more", as visible buttons (they were only
+                // on the Actions rotor), each naming the session.
+                moreLayout {
+                    Button {
+                        movingSession = session
+                    } label: {
+                        Label("Move session", systemImage: "calendar.badge.clock")
+                    }
+                    .accessibilityLabel("Move \(name)")
+                    .accessibilityInputLabels(["Move session", "Move \(name)"])
+                    if session.inSeries {
+                        Button {
+                            cancellingMore = (session, "cancel_series")
+                        } label: {
+                            Label("Cancel the series", systemImage: "calendar.badge.minus")
+                        }
+                        .accessibilityLabel("Cancel the series: \(name) and every later session in its weekly series")
+                        .accessibilityInputLabels(["Cancel the series", "Cancel the series for \(session.client)"])
+                    }
+                    if session.groupUid != nil {
+                        Button {
+                            cancellingMore = (session, "cancel_group")
+                        } label: {
+                            Label("Cancel the whole group", systemImage: "person.3.sequence")
+                        }
+                        .accessibilityLabel("Cancel the whole group: the group \(name)")
+                        .accessibilityInputLabels(["Cancel the whole group", "Cancel the whole group for \(session.client)"])
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(busy)
+                // 4.35.0: a group whose start has passed records who attended in one step.
+                if let uid = session.groupUid, started, groupsOffered {
+                    Button {
+                        recordingGroup = GroupRef(id: uid)
+                    } label: {
+                        Label("Record attendance for the group", systemImage: "person.3.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(busy)
+                    .accessibilityLabel("Record attendance for the group: \(name)")
+                    .accessibilityInputLabels(["Record attendance for the group", "Record attendance for the group with \(session.client)"])
+                }
             }
             .padding(.vertical, 4)
-            // VoiceOver: the session is one stop, read in full; its buttons are the Actions
-            // rotor's entries (swipe up or down, then double-tap), each asking first as on screen.
-            // A double-tap on the row only says so (as the Tasks and Bookings rows do): it used to
-            // be Mark completed, which for a tracked session opened the signature sheet, whose
-            // Cancel locks the app — a stray double-tap locked the person out.
-            .accessibilityElement(children: VoiceOverRows.children)
-            .accessibilityLabel(sessionSummary(session, started: started))
-            .accessibilityFocused($focusedSession, equals: session.id)
-            .accessibilityAction { announceRowActions() }
-            .accessibilityActions {
-                if checkIn, !checkingIn.contains(session.id) {
-                    Button("Check in") { Task { await self.checkIn(session) } }
-                }
-                if !busy {
-                    if started {
-                        Button("Mark completed") { markCompleted(session) }
-                    }
-                    Button("Cancel session") { pendingOutcome = SessionOutcome(session: session, to: "Cancelled") }
-                    if started {
-                        Button("No-show") { pendingOutcome = SessionOutcome(session: session, to: "No Show") }
-                    }
-                    Button("Move session") { movingSession = session }
-                    if session.inSeries { Button("Cancel this and later sessions in the series") { cancellingMore = (session, "cancel_series") } }
-                    if session.groupUid != nil { Button("Cancel the whole group") { cancellingMore = (session, "cancel_group") } }
-                }
-                if let url = joinURL(session) {
-                    Button("Join online") { openURL(url) }
-                }
-                // The links on the row, which VoiceOver reads as one stop (4.0.0).
-                if session.isRemote != true, let location = session.location, let url = mapsURL(location) {
-                    Button("Directions to \(location)") { openURL(url) }
-                }
-                if let cid = session.clientId, api.can("clients") {
-                    Button("Open \(session.client)'s record") { openClientId = cid; showingClient = true }
-                }
-            }
         }
     }
 
@@ -825,6 +1009,7 @@ struct ScheduleView: View {
         defer { completing.remove(session.id) }
         confirmation = nil
         var refusedLogged: [LoggedHoursEntry] = []
+        var refusedFields: [String: String] = [:]
         do {
             error = nil
             var body: [String: Any] = ["session_id": session.id]
@@ -845,9 +1030,14 @@ struct ScheduleView: View {
             if let details, outcome.value != CompletionOutcome.alreadyLoggedValue {
                 body["hours"] = details.hours
                 if details.miles > 0 { body["mileage"] = details.miles }
+                // 4.35.0: the goal worked on and the service delivered, as the website's
+                // "Hours, miles and goal" (sent only when the pickers were offered).
+                if let goalId = details.goalId { body["goal_id"] = goalId }
+                if let category = details.category { body["rsa_category"] = category }
             }
             let result: CompleteSessionReply = try await api.call("complete_session", body: body, refusal: { reply in
                 refusedLogged = LoggedHoursEntry.list(reply["logged_hours"])
+                refusedFields = (reply["errors"] as? [String: String]) ?? [:]
             })
             completionKeys[session.id] = nil
             let done: String = result.hoursLogged > 0
@@ -874,6 +1064,12 @@ struct ScheduleView: View {
             if !refusedLogged.isEmpty, case APIError.server(let message) = error {
                 // Nothing was recorded: the sheet asks which of the website's choices it is.
                 throw LoggedHoursRefusal(message: message, entries: refusedLogged)
+            }
+            // 4.35.0: a goal or service no longer on the track: nothing was recorded, and the
+            // sheet ties the refusal to its picker.
+            if case APIError.server(let message) = error,
+               let field = refusedFields["goal_id"] != nil ? "Goal worked on" : (refusedFields["rsa_category"] != nil ? "Service delivered" : nil) {
+                throw FieldRefusal(message: message, field: field)
             }
             // Quietly: the failure is said with the completion's own message.
             await load(reportsFailure: false)
@@ -1235,6 +1431,17 @@ struct NewSessionSheet: View {
 struct CompletionDetails {
     let hours: Double
     let miles: Double
+    /// 4.35.0: the goal worked on (nil: none) and the service delivered (nil: not offered, so
+    /// the server uses the track's default).
+    var goalId: Int? = nil
+    var category: String? = nil
+}
+
+/// A refusal about one field of a sheet (4.35.0), so the sheet can tie it to that field.
+struct FieldRefusal: LocalizedError {
+    let message: String
+    let field: String
+    var errorDescription: String? { message }
 }
 
 /// complete_session's `outcome` (4.34.0), as the website's Complete choices: completed, or —
@@ -1286,9 +1493,17 @@ struct CompleteSessionSheet: View {
     let session: Session
     let onDone: (_ details: CompletionDetails, _ signatureB64: String?, _ signedName: String?,
                  _ outcome: CompletionOutcome) async throws -> Void
+    @EnvironmentObject var api: API
     @Environment(\.dismiss) private var dismiss
     @State private var hoursText = ""
     @State private var milesText = ""
+    /// 4.35.0: the track's open goals and its services (visit categories), as the website's
+    /// "Hours, miles and goal". Empty when they could not be loaded (offline): the pickers are
+    /// then absent and nothing is sent, so the server uses the website's defaults.
+    @State private var openGoals: [Goal] = []
+    @State private var categories: [String] = []
+    @State private var goalId: Int?
+    @State private var category = ""
     @State private var busy = false
     @State private var error: String?
     @State private var signing: SigningStep?
@@ -1325,7 +1540,29 @@ struct CompleteSessionSheet: View {
         guard miles == 0 || hours > 0 else {
             showFormError("Hours: miles are logged with hours, so enter the hours worked, or clear the miles.", in: &error); return nil
         }
-        return CompletionDetails(hours: hours, miles: miles)
+        return CompletionDetails(hours: hours, miles: miles,
+                                 goalId: openGoals.isEmpty ? nil : goalId,
+                                 category: categories.count > 1 && !category.isEmpty ? category : nil)
+    }
+
+    /// The pickers are offered as the website offers them: the goal when the track has open
+    /// goals ("None" first), the service when it has more than one.
+    static func visitChoicesShown(openGoals: Int, categories: Int) -> (goal: Bool, service: Bool) {
+        (openGoals >= 1, categories > 1)
+    }
+
+    /// The track's open goals (goals?track_id=) and visit categories (tracks), as Log hours reads
+    /// them. A failure leaves both pickers out.
+    private func loadVisitChoices() async {
+        guard let trackId = session.trackId, api.can("clients") else { return }
+        if let r: GoalsResponse = try? await api.call("goals", query: ["track_id": String(trackId)]) {
+            openGoals = r.goals.filter { $0.status != "Achieved" }
+        }
+        if let r: TracksResponse = try? await api.call("tracks"),
+           let list = r.tracks.first(where: { $0.id == trackId })?.visitCategories {
+            categories = list
+            if category.isEmpty || !list.contains(category) { category = list.first ?? "" }
+        }
     }
 
     private func completeWithoutSignature() async {
@@ -1337,6 +1574,8 @@ struct CompleteSessionSheet: View {
         } catch let refusal as LoggedHoursRefusal {
             loggedChoice = LoggedHoursChoice(details: details, signature: nil, signedName: nil, entries: refusal.entries)
             showFormError(Self.choiceText(refusal.message), in: &self.error)
+        } catch let refusal as FieldRefusal {
+            showFormError(refusal.message, in: &self.error, field: refusal.field)
         } catch {
             showFormError(error.localizedDescription, in: &self.error)
         }
@@ -1369,6 +1608,8 @@ struct CompleteSessionSheet: View {
             loggedChoice = LoggedHoursChoice(details: details, signature: choice.signature,
                                              signedName: choice.signedName, entries: refusal.entries)
             showFormError(Self.choiceText(refusal.message), in: &self.error)
+        } catch let refusal as FieldRefusal {
+            showFormError(refusal.message, in: &self.error, field: refusal.field)
         } catch {
             showFormError(error.localizedDescription, in: &self.error)
         }
@@ -1396,6 +1637,20 @@ struct CompleteSessionSheet: View {
                 }
                 CaptionedField(label: "Hours worked", text: $hoursText, keyboard: .decimalPad, errorName: "Hours")
                 CaptionedField(label: "Miles driven (optional)", text: $milesText, keyboard: .decimalPad, errorName: "Miles")
+                let shown = Self.visitChoicesShown(openGoals: openGoals.count, categories: categories.count)
+                if shown.goal {
+                    Picker("Goal worked on", selection: $goalId) {
+                        Text("None").tag(nil as Int?)
+                        ForEach(openGoals) { g in Text(g.specificGoal).lineLimit(2).tag(g.id as Int?) }
+                    }
+                    .errorField("Goal worked on")
+                }
+                if shown.service {
+                    Picker("Service delivered", selection: $category) {
+                        ForEach(categories, id: \.self) { Text($0).tag($0) }
+                    }
+                    .errorField("Service delivered")
+                }
                 Button("Get the client's signature") {
                     if let details = checked() { error = nil; loggedChoice = nil; signing = SigningStep(details: details) }
                 }
@@ -1422,6 +1677,7 @@ struct CompleteSessionSheet: View {
             .onAppear {
                 if hoursText.isEmpty { hoursText = String(format: "%g", scheduledHours) }
             }
+            .task { await loadVisitChoices() }
             .sheet(item: $signing, onDismiss: {
                 if finished { dismiss() }
                 else if let message = choiceMessage {
@@ -1541,5 +1797,575 @@ struct MoveSessionSheet: View {
                 announce("Not moved yet. " + warnings.joined(separator: " ") + " Choose Move anyway if the time is right.")
             }
         } catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
+}
+
+// MARK: - Group sessions (4.35.0): booking and recording attendance, as the website's Schedule
+
+/// A group being recorded (the sheet's item).
+struct GroupRef: Identifiable { let id: String }
+
+/// A client's active track in group_choices, newest first.
+struct GroupChoiceTrack: Decodable, Identifiable, Hashable {
+    let id: Int
+    let title: String
+    private enum CodingKeys: String, CodingKey { case id, title }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        guard let id = SessionNoteTarget.int(c, .id) else {
+            throw DecodingError.dataCorruptedError(forKey: .id, in: c, debugDescription: "no id")
+        }
+        self.id = id
+        title = (try? c.decode(String.self, forKey: .title)) ?? "Training track"
+    }
+}
+
+/// A bookable client in group_choices, with their active tracks.
+struct GroupChoiceClient: Decodable, Identifiable {
+    let id: Int
+    let name: String
+    let tracks: [GroupChoiceTrack]
+    private enum CodingKeys: String, CodingKey { case id, name, tracks }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        guard let id = SessionNoteTarget.int(c, .id) else {
+            throw DecodingError.dataCorruptedError(forKey: .id, in: c, debugDescription: "no id")
+        }
+        self.id = id
+        name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        tracks = LenientList.decode(GroupChoiceTrack.self, from: c, forKey: .tracks)
+    }
+}
+
+/// group_choices (4.35.0): the website's bookable clients in scope, the instructors, and who is
+/// chosen first.
+struct GroupChoicesResponse: Decodable {
+    let clients: [GroupChoiceClient]
+    let staff: [StaffMember]
+    let defaultStaffId: Int?
+    private enum CodingKeys: String, CodingKey { case clients, staff, defaultStaffId }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        clients = LenientList.decode(GroupChoiceClient.self, from: c, forKey: .clients)
+        staff = LenientList.decode(StaffMember.self, from: c, forKey: .staff)
+        defaultStaffId = SessionNoteTarget.int(c, .defaultStaffId)
+    }
+}
+
+/// schedule_group's reply. Tolerant: once the server says ok, a missing count must not turn a
+/// booked group into an error the person would retry.
+struct GroupBookReply: Decodable {
+    let sessionsCreated: Int
+    let noTrack: [String]
+    let inviteSent: Bool
+    let message: String?
+    private enum CodingKeys: String, CodingKey { case ok, sessionsCreated, noTrack, inviteSent, message }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
+            throw DecodingError.dataCorruptedError(forKey: .ok, in: c, debugDescription: "not ok")
+        }
+        sessionsCreated = SessionNoteTarget.int(c, .sessionsCreated) ?? 0
+        noTrack = (try? c.decodeIfPresent([String].self, forKey: .noTrack)) ?? []
+        inviteSent = SessionNoteTarget.flag(c, .inviteSent) ?? false
+        message = try? c.decodeIfPresent(String.self, forKey: .message)
+    }
+}
+
+/// One client's session in a group (group_session).
+struct GroupSessionMember: Decodable, Identifiable {
+    let sessionId: Int
+    let clientId: Int
+    let clientName: String
+    let trackId: Int?
+    let trackTitle: String?
+    var id: Int { sessionId }
+    private enum CodingKeys: String, CodingKey { case sessionId, clientId, clientName, trackId, trackTitle }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        guard let sid = SessionNoteTarget.int(c, .sessionId) else {
+            throw DecodingError.dataCorruptedError(forKey: .sessionId, in: c, debugDescription: "no session")
+        }
+        sessionId = sid
+        clientId = SessionNoteTarget.int(c, .clientId) ?? 0
+        clientName = (try? c.decode(String.self, forKey: .clientName)) ?? ""
+        let track = SessionNoteTarget.int(c, .trackId)
+        trackId = (track ?? 0) > 0 ? track : nil
+        let title = (try? c.decodeIfPresent(String.self, forKey: .trackTitle)) ?? nil
+        trackTitle = (title?.isEmpty ?? true) ? nil : title
+    }
+}
+
+/// group_session (4.35.0): the group card's members, and whether it can be recorded yet.
+struct GroupSessionResponse: Decodable {
+    let startAt: String
+    let started: Bool
+    let instructor: String?
+    let canRecord: Bool
+    /// The website's prefill for the hours ("" when no member has a track).
+    let defaultHours: String
+    let members: [GroupSessionMember]
+    private enum CodingKeys: String, CodingKey { case startAt, started, instructor, canRecord, defaultHours, members }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        startAt = (try? c.decode(String.self, forKey: .startAt)) ?? ""
+        started = SessionNoteTarget.flag(c, .started) ?? false
+        instructor = try? c.decodeIfPresent(String.self, forKey: .instructor)
+        members = LenientList.decode(GroupSessionMember.self, from: c, forKey: .members)
+        canRecord = SessionNoteTarget.flag(c, .canRecord) ?? (started && members.count >= 2)
+        if let text = try? c.decode(String.self, forKey: .defaultHours) { defaultHours = text }
+        else if let number = try? c.decode(Double.self, forKey: .defaultHours) { defaultHours = String(format: "%g", number) }
+        else { defaultHours = "" }
+    }
+}
+
+/// complete_group's reply (4.35.0): the website's message and each case note to write.
+struct GroupCompleteReply: Decodable {
+    let completed: Int
+    let message: String?
+    let notesToWrite: [SessionNoteTarget]
+    private enum CodingKeys: String, CodingKey { case ok, completed, message, notesToWrite }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
+            throw DecodingError.dataCorruptedError(forKey: .ok, in: c, debugDescription: "not ok")
+        }
+        completed = SessionNoteTarget.int(c, .completed) ?? 0
+        message = try? c.decodeIfPresent(String.self, forKey: .message)
+        notesToWrite = LenientList.decode(SessionNoteTarget.self, from: c, forKey: .notesToWrite)
+    }
+}
+
+/// Schedule a group session (schedule_group, 4.35.0), with the website's fields in its order:
+/// the clients (two or more, each with their training track), the instructor, date, start
+/// time, duration, location, notes, remote and meeting link. Warnings are approved as on the
+/// single booking form, by the hash of the warnings shown.
+struct GroupSessionSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let onDone: (String) -> Void
+
+    @State private var choices: GroupChoicesResponse?
+    @State private var loadError: String?
+    @State private var picked: Set<Int> = []
+    /// The track chosen for a client with more than one (the newest is preselected).
+    @State private var trackPicks: [Int: Int] = [:]
+    @State private var staffId: Int?
+    @State private var day = Date()
+    @State private var time = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: Date()) ?? Date()
+    @State private var durationText = "1.5"
+    @State private var location = ""
+    @State private var notes = ""
+    @State private var isRemote = false
+    @State private var meetingUrl = ""
+    /// The warnings the server named (authorization_warnings), with the approval and its hash.
+    @State private var warnings: [String] = []
+    @State private var warningsHash: String?
+    @State private var approved = false
+    @State private var idem = IdemKey()
+    @State private var busy = false
+    @State private var error: String?
+    @State private var askingDiscard = false
+
+    private var clients: [GroupChoiceClient] { choices?.clients ?? [] }
+
+    /// The date and start time the form opened with (today, 10:00 as on the website).
+    @State private var openedDay = Date()
+    @State private var openedTime = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: Date()) ?? Date()
+
+    private var hasChanges: Bool {
+        !picked.isEmpty || !location.isEmpty || !notes.isEmpty || isRemote || !meetingUrl.isEmpty || durationText != "1.5"
+            || !Calendar.current.isDate(day, inSameDayAs: openedDay)
+            || Calendar.current.dateComponents([.hour, .minute], from: time) != Calendar.current.dateComponents([.hour, .minute], from: openedTime)
+    }
+
+    /// "Jane Doe — Screen reader training", or that no hours will be logged for her; a client
+    /// with more than one track is named alone (the picker under them says which).
+    static func clientLabel(_ name: String, tracks: [String]) -> String {
+        if tracks.isEmpty { return "\(name) — no active training track, so no hours will be logged" }
+        if tracks.count == 1 { return "\(name) — \(tracks[0])" }
+        return name
+    }
+
+    /// The fields an error key is about, in the form's order (the server's `errors` keys).
+    private func fieldName(_ key: String) -> String? {
+        if key.hasPrefix("track_"), let cid = Int(key.dropFirst(6)), let c = clients.first(where: { $0.id == cid }) {
+            return "Training track for \(c.name)"
+        }
+        return ["clients": "Clients", "staff_id": "Instructor", "date": "Date", "time": "Start time", "duration": "Duration",
+                "location": "Location", "notes": "Notes", "meeting_url": "Meeting link"][key]
+    }
+
+    static let warningsBanner = "This group booking needs your approval. Check the warnings below, then turn on the approval and tap Schedule group session again."
+
+    private static let fieldOrder = ["clients", "staff_id", "date", "time", "duration", "location", "notes", "meeting_url"]
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
+                if let loadError {
+                    ErrorBanner(message: loadError)
+                    Button { Task { await loadChoices() } } label: {
+                        Label("Try loading the clients again", systemImage: "arrow.clockwise")
+                    }
+                }
+                // Offered only once the server has named the warnings, just after the error.
+                if !warnings.isEmpty {
+                    Section("Warnings to review") {
+                        ForEach(warnings, id: \.self) { Text($0).font(.callout) }
+                        Toggle("I reviewed these warnings and approve this group booking despite them", isOn: $approved)
+                    }
+                }
+                Section("Clients (required: choose two or more)") {
+                    if choices == nil && loadError == nil {
+                        ProgressView("Loading clients…")
+                    } else if choices != nil && clients.isEmpty {
+                        Text("No clients can be booked: each needs a status that is not Waitlist or Closed.")
+                            .foregroundStyle(Color.secondaryText)
+                    }
+                    ForEach(Array(clients.enumerated()), id: \.element.id) { index, client in
+                        let label = Self.clientLabel(client.name, tracks: client.tracks.map(\.title))
+                        let on = Binding(get: { picked.contains(client.id) },
+                                         set: { if $0 { picked.insert(client.id) } else { picked.remove(client.id) } })
+                        if index == 0 {
+                            Toggle(label, isOn: on).errorField("Clients")
+                        } else {
+                            Toggle(label, isOn: on)
+                        }
+                        if picked.contains(client.id) && client.tracks.count > 1 {
+                            Picker("Training track for \(client.name) (their hours log here; the newest track is preselected)", selection: Binding(
+                                get: { trackPicks[client.id] ?? client.tracks[0].id },
+                                set: { trackPicks[client.id] = $0 })) {
+                                ForEach(client.tracks) { Text($0.title).tag($0.id) }
+                            }
+                            .errorField("Training track for \(client.name)")
+                        }
+                    }
+                }
+                // The website's group form labels (schedule.php).
+                Picker("Group session instructor", selection: $staffId) {
+                    ForEach(choices?.staff ?? []) { Text($0.name).tag($0.id as Int?) }
+                }
+                .errorField("Instructor")
+                DatePicker("Group session date (required)", selection: $day, displayedComponents: .date)
+                    .errorField("Date")
+                DatePicker("Group session start time (required)", selection: $time, displayedComponents: .hourAndMinute)
+                    .errorField("Start time")
+                CaptionedField(label: "Group session duration (hours) (required)", text: $durationText, keyboard: .decimalPad, errorName: "Duration")
+                CaptionedField(label: "Group session location", text: $location, errorName: "Location")
+                CaptionedField(label: "Group session notes", text: $notes, errorName: "Notes")
+                Toggle("Group session is remote / telepractice", isOn: $isRemote)
+                CaptionedField(label: "Meeting link (https://…; tick Remote above to use it)", text: $meetingUrl,
+                               prompt: "https://…", keyboard: .URL, errorName: "Meeting link")
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            .navigationTitle("Schedule a group session")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }
+                        .disabled(busy)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(busy ? "Scheduling…" : "Schedule group session") { Task { await submit() } }
+                        .disabled(busy || choices == nil)
+                }
+            }
+            .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this group session?",
+                                 asking: $askingDiscard) { dismiss() }
+            .task { await loadChoices() }
+            // The warnings were for the booking as it was: a change that can alter them withdraws
+            // the approval (the server is asked again on the next Schedule group).
+            .onChange(of: picked) { _ in clearWarnings() }
+            .onChange(of: trackPicks) { _ in clearWarnings() }
+            .onChange(of: staffId) { _ in clearWarnings() }
+            .onChange(of: day) { _ in clearWarnings() }
+            .onChange(of: time) { _ in clearWarnings() }
+            .onChange(of: durationText) { _ in clearWarnings() }
+        }
+    }
+
+    private func clearWarnings() {
+        warnings = []
+        warningsHash = nil
+        approved = false
+    }
+
+    private func loadChoices() async {
+        loadError = nil
+        do {
+            let r: GroupChoicesResponse = try await api.call("group_choices")
+            choices = r
+            if staffId == nil { staffId = r.defaultStaffId ?? r.staff.first(where: { $0.id == api.userId })?.id ?? r.staff.first?.id }
+        } catch {
+            showFormError("Could not load the clients who can be booked. \(error.localizedDescription)", in: &loadError)
+        }
+    }
+
+    /// The day from Date and the hour and minute from Start time, as one moment.
+    private var start: Date {
+        let cal = Calendar.current
+        let d = cal.dateComponents([.year, .month, .day], from: day)
+        let t = cal.dateComponents([.hour, .minute], from: time)
+        return cal.date(from: DateComponents(year: d.year, month: d.month, day: d.day, hour: t.hour, minute: t.minute)) ?? day
+    }
+
+    /// The request as schedule_group takes it: the clients in the list's order, each one's
+    /// track when they have more than one, and the time in the server's zone.
+    static func groupBody(clientIds: [Int], tracks: [Int: Int], staffId: Int, start: Date, duration: Double,
+                          location: String, notes: String, isRemote: Bool, meetingUrl: String) -> [String: Any] {
+        [
+            "client_ids": clientIds,
+            "tracks": Dictionary(uniqueKeysWithValues: tracks.map { (String($0.key), $0.value) }),
+            "staff_id": staffId,
+            "date": APIDate.dayCentral(start),
+            "time": APIDate.timeCentral(start),
+            "duration": duration,
+            "location": location,
+            "notes": notes,
+            "is_remote": isRemote ? 1 : 0,
+            "meeting_url": meetingUrl,
+        ]
+    }
+
+    private func submit() async {
+        let chosen = clients.filter { picked.contains($0.id) }
+        guard chosen.count >= 2 else {
+            showFormError("Clients: choose at least two clients.", in: &error, field: "Clients"); return
+        }
+        guard let staffId else {
+            showFormError("Instructor: choose who leads the group session.", in: &error, field: "Instructor"); return
+        }
+        let durationRaw = durationText.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
+        guard let duration = Double(durationRaw), duration >= 0.25, duration <= 12 else {
+            showFormError("Duration: enter a duration between 0.25 and 12 hours.", in: &error, field: "Duration"); return
+        }
+        let link = meetingUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !link.isEmpty && !isRemote {
+            showFormError("Meeting link: a meeting link was entered but \"Group session is remote / telepractice\" is off. Turn it on, or clear the link.", in: &error, field: "Meeting link"); return
+        }
+        var tracks: [Int: Int] = [:]
+        for c in chosen where c.tracks.count > 1 { tracks[c.id] = trackPicks[c.id] ?? c.tracks[0].id }
+        var body = Self.groupBody(clientIds: chosen.map(\.id), tracks: tracks, staffId: staffId, start: start, duration: duration,
+                                  location: location.trimmingCharacters(in: .whitespaces), notes: notes.trimmingCharacters(in: .whitespaces),
+                                  isRemote: isRemote, meetingUrl: link)
+        if approved, let warningsHash { body["authorization_ack_hash"] = warningsHash }
+        // A retry after a lost reply is recognised, so the group is not booked twice.
+        body["idem_key"] = idem.key(for: body)
+        busy = true; error = nil
+        announce("Scheduling the group session.")
+        defer { busy = false }
+        var refusedFields: [String: String] = [:]
+        var refusedWarnings: [String] = []
+        var refusedHash: String?
+        var refusedDuplicate = false
+        do {
+            let r: GroupBookReply = try await api.call("schedule_group", body: body, refusal: { reply in
+                refusedFields = (reply["errors"] as? [String: String]) ?? [:]
+                refusedWarnings = (reply["authorization_warnings"] as? [String]) ?? []
+                refusedHash = reply["authorization_hash"] as? String
+                refusedDuplicate = (reply["duplicate"] as? Bool) == true
+            })
+            idem.answered()
+            let message = r.message ?? "Group session scheduled for \(r.sessionsCreated) clients."
+            onDone(message)
+            dismiss()
+        } catch {
+            idem.failed(error)
+            if case APIError.network = error {
+                showFormError("The connection dropped before the server answered, so it isn't known whether the group was scheduled. Check the Schedule for \(start.formatted(date: .abbreviated, time: .shortened)) before scheduling it again.", in: &self.error)
+                return
+            }
+            let message = error.localizedDescription
+            // The same group is already on the schedule: said as information, nothing is wrong.
+            if refusedDuplicate {
+                onDone(message)
+                dismiss()
+                return
+            }
+            if !refusedWarnings.isEmpty {
+                warnings = refusedWarnings
+                warningsHash = refusedHash
+                approved = false
+                // The warnings are listed once, in the section below the banner.
+                showFormError(Self.warningsBanner, in: &self.error)
+                return
+            }
+            let keys = refusedFields.keys.sorted { a, b in
+                (Self.fieldOrder.firstIndex(of: a) ?? 50) < (Self.fieldOrder.firstIndex(of: b) ?? 50)
+            }
+            if let key = keys.first, let text = refusedFields[key] {
+                showFormError(text, in: &self.error, field: fieldName(key))
+                return
+            }
+            showFormError(message, in: &self.error)
+        }
+    }
+}
+
+/// Record who attended a group session and complete it (complete_group, 4.35.0), as the
+/// website's group card: everyone ticked is Completed with hours logged to their track, anyone
+/// not ticked is recorded as No Show with no hours logged.
+struct GroupAttendanceSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let groupUid: String
+    /// The server's message and the case notes to write, first one first.
+    let onDone: (_ message: String, _ notes: [SessionNoteTarget]) -> Void
+
+    @State private var group: GroupSessionResponse?
+    @State private var loadError: String?
+    @State private var attended: Set<Int> = []
+    @State private var hoursText = ""
+    @State private var confirming = false
+    @State private var idem = IdemKey()
+    @State private var busy = false
+    @State private var error: String?
+
+    /// The website's confirmation sentence (schedule.php's group card).
+    static func groupConfirmText(attended: Int, total: Int, billable: Int, hours: String) -> String {
+        let hv = hours.trimmingCharacters(in: .whitespaces)
+        let none = !hv.isEmpty && !((Double(hv.replacingOccurrences(of: ",", with: ".")) ?? 0) > 0)
+        return "Record attendance for this group session? \(attended) of \(total) clients attended and will be marked Completed"
+            + (none ? ", with no hours logged. "
+                    : ", and \(billable) of them will have \(hv.isEmpty ? "hours" : hv + " hours") logged to their training track and billed. ")
+            + "\(total - attended) will be recorded as No Show, with no hours logged."
+    }
+
+    /// notes_to_write carries no track or time: each note is linked to its member's track and
+    /// the group's session day, so the case note opens on that track (4.35.0).
+    static func notesWithMembers(_ notes: [SessionNoteTarget], group: GroupSessionResponse) -> [SessionNoteTarget] {
+        notes.map { n in
+            let m = group.members.first { $0.sessionId == n.sessionId }
+            return SessionNoteTarget(sessionId: n.sessionId, clientId: n.clientId > 0 ? n.clientId : (m?.clientId ?? 0),
+                                     clientName: n.clientName.isEmpty ? (m?.clientName ?? "") : n.clientName,
+                                     trackId: n.trackId ?? m?.trackId, sessionDate: n.sessionDate.isEmpty ? String(group.startAt.prefix(10)) : n.sessionDate,
+                                     startAt: n.startAt ?? group.startAt, noteSubject: n.noteSubject)
+        }
+    }
+
+    private var confirmText: String {
+        let members = group?.members ?? []
+        let present = members.filter { attended.contains($0.sessionId) }
+        return Self.groupConfirmText(attended: present.count, total: members.count,
+                                     billable: present.filter { $0.trackId != nil }.count, hours: hoursText)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
+                if let loadError {
+                    ErrorBanner(message: loadError)
+                    Button { Task { await load() } } label: {
+                        Label("Try loading the group again", systemImage: "arrow.clockwise")
+                    }
+                } else if group == nil {
+                    ProgressView("Loading the group…")
+                }
+                if let group {
+                    Section("Group session of \(formatDateTime(group.startAt))") {
+                        if let instructor = group.instructor, !instructor.isEmpty {
+                            LabeledContent("Instructor", value: instructor)
+                        }
+                        if !group.canRecord {
+                            Text(group.started ? "This group has fewer than two clients still scheduled. Record each one from the schedule."
+                                               : "It can be completed once it has started, with who attended.")
+                                .foregroundStyle(Color.secondaryText)
+                        }
+                    }
+                    if group.canRecord {
+                        Section("Who attended? (untick anyone who did not come: they are recorded as No Show, with no hours logged)") {
+                            ForEach(group.members) { m in
+                                Toggle("\(m.clientName) attended (" + (m.trackId != nil ? "hours logged to \(m.trackTitle ?? "their training track")" : "no training track, so no hours are logged") + ")",
+                                       isOn: Binding(get: { attended.contains(m.sessionId) },
+                                                     set: { if $0 { attended.insert(m.sessionId) } else { attended.remove(m.sessionId) } }))
+                            }
+                        }
+                        CaptionedField(label: "Hours for each client who attended (blank: each client's own scheduled length)",
+                                       text: $hoursText, keyboard: .decimalPad, errorName: "Hours")
+                        Button {
+                            if checkedHours() != nil { confirming = true }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text("Record attendance and complete")
+                                if busy { ProgressView().accessibilityHidden(true) }
+                            }
+                        }
+                        .disabled(busy)
+                        .accessibilityValue(busy ? "Saving" : "")
+                    }
+                }
+            }
+            .navigationTitle("Record attendance")
+            .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(busy)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.disabled(busy)
+                }
+            }
+            .confirmationDialog(confirmText, isPresented: $confirming, titleVisibility: .visible) {
+                Button("Record attendance") { Task { await submit() } }
+                Button("Not yet", role: .cancel) {}
+            }
+            .task { await load() }
+        }
+    }
+
+    /// "" (each client's own scheduled length) or 0 to 24 with up to two decimals; nil after
+    /// saying what to fix.
+    private func checkedHours() -> String? {
+        let t = hoursText.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
+        if t.isEmpty { return "" }
+        // As the server reads it (session_group_hours_input: any number from 0 to 24, ".5" and
+        // "3.125" too, rounded to two decimals there).
+        guard t.range(of: "^([0-9]+\\.?[0-9]*|\\.[0-9]+)$", options: .regularExpression) != nil, let h = Double(t), h <= 24 else {
+            showFormError("Hours: enter the hours for each client who attended as a number from 0 to 24, such as 1.5, or leave it blank.", in: &error, field: "Hours")
+            return nil
+        }
+        return t
+    }
+
+    private func load() async {
+        loadError = nil
+        do {
+            let r: GroupSessionResponse = try await api.call("group_session", query: ["group_uid": groupUid])
+            group = r
+            attended = Set(r.members.map(\.sessionId))   // all ticked, as on the website
+            if hoursText.isEmpty { hoursText = r.defaultHours }
+        } catch {
+            showFormError(error.localizedDescription, in: &loadError)
+        }
+    }
+
+    private func submit() async {
+        guard let group, let hours = checkedHours() else { return }
+        var body: [String: Any] = [
+            "group_uid": groupUid,
+            "listed": group.members.map(\.sessionId),
+            "attended": group.members.map(\.sessionId).filter { attended.contains($0) },
+            "hours": hours,
+        ]
+        body["idem_key"] = idem.key(for: body)
+        busy = true; error = nil
+        announce("Recording attendance.")
+        defer { busy = false }
+        var refusedFields: [String: String] = [:]
+        do {
+            let r: GroupCompleteReply = try await api.call("complete_group", body: body, refusal: { reply in
+                refusedFields = (reply["errors"] as? [String: String]) ?? [:]
+            })
+            idem.answered()
+            onDone(r.message ?? "Attendance recorded: \(r.completed) completed.", Self.notesWithMembers(r.notesToWrite, group: group))
+            dismiss()
+        } catch {
+            idem.failed(error)
+            if let text = refusedFields["hours"] {
+                showFormError(text, in: &self.error, field: "Hours")
+            } else {
+                showFormError(IdemKey.message(for: error, what: "the attendance"), in: &self.error)
+            }
+        }
     }
 }

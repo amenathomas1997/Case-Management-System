@@ -69,6 +69,8 @@ data class NoteItem(
     val locked: Boolean = false, val canEdit: Boolean = false, val addendumTo: Int? = null, val noteVersion: String? = null,
     val trackId: Int? = null, val noteFormat: String = "free", val sections: List<String> = emptyList(),
     val editor: String? = null, val trackTitle: String? = null,
+    /** 4.35.0: when it was last edited (shown with the editor's name). */
+    val updatedAt: String? = null,
 )
 
 data class ReleaseItem(val id: Int, val recipientName: String, val recipientType: String?, val status: String, val expiresOn: String?, val infoScope: String?)
@@ -99,7 +101,7 @@ fun parseNote(n: JSONObject) = NoteItem(
     n.optBoolean("locked"), n.optBoolean("can_edit"), n.intOrNull("addendum_to")?.takeIf { it > 0 }, n.str("note_version"),
     n.intOrNull("track_id")?.takeIf { it > 0 }, n.str("note_format") ?: "free",
     n.optJSONArray("sections").let { a -> if (a == null) emptyList() else List(a.length()) { a.optString(it) } },
-    n.str("editor"), n.str("track_title"),
+    n.str("editor"), n.str("track_title"), n.str("updated_at"),
 )
 
 /** 4.34.0: an addendum's subject, "Addendum: Phone call", never "Addendum: Addendum: Phone call". */
@@ -285,10 +287,15 @@ fun sharedWords(d: DocumentItem): String {
     return if (with.isEmpty()) "Not shared" else "Shared with " + with.joinToString(" and ")
 }
 
-data class HomeworkItem(val id: Int, val title: String, val status: String, val dueDate: String?, val trackTitle: String?, val instructions: String?)
+data class HomeworkItem(
+    val id: Int, val title: String, val status: String, val dueDate: String?, val trackTitle: String?, val instructions: String?,
+    /** 4.35.0: sent back with an edit (at_homework_update), and when the client reported it done. */
+    val editToken: String? = null, val clientReportedAt: String? = null,
+)
 
 fun parseHomework(r: JSONObject): List<HomeworkItem> = r.optJSONArray("homework").objects().map { h ->
-    HomeworkItem(h.optInt("id"), h.text("title"), h.text("status"), h.str("due_date"), h.str("track_title"), h.str("instructions"))
+    HomeworkItem(h.optInt("id"), h.text("title"), h.text("status"), h.str("due_date"), h.str("track_title"), h.str("instructions"),
+        h.str("edit_token"), h.str("client_reported_at"))
 }
 
 /* ---------- documents to sign and releases ---------- */

@@ -292,9 +292,12 @@ const API_CLIENT_FIELDS = ['name' => 'Name', 'dob' => 'Date of birth', 'email' =
     'a11y_screen_reader' => 'Screen reader', 'a11y_format' => 'Preferred format', 'a11y_primary_tech' => 'Primary assistive technology',
     'a11y_contact' => 'Preferred contact method', 'a11y_notes' => 'Accessibility notes', 'guardian_name' => 'Guardian name',
     'guardian_phone' => 'Guardian phone', 'guardian_email' => 'Guardian email', 'vr_case_number' => 'VR case number',
-    'ipe_goal' => 'IPE employment goal', 'ipe_date' => 'IPE date', 'ipe_amended_on' => 'IPE amendment date', 'state' => 'State', 'office_id' => 'Office'];
+    'ipe_goal' => 'IPE employment goal', 'ipe_date' => 'IPE date', 'ipe_amended_on' => 'IPE amendment date', 'state' => 'State', 'office_id' => 'Office',
+    // 4.35.0: the language and vision the apps now edit.
+    'preferred_language' => 'Preferred language', 'vision_status' => 'Vision status', 'vision_onset_age' => 'Age when vision loss began'];
 function api_client_field_norm(string $f, mixed $v): string {
     if (in_array($f, ['assigned_to', 'office_id'], true)) return (string)(int)$v;
+    if ($f === 'preferred_language') return $v === 'es' ? 'es' : 'en';
     if ($f === 'a11y_screen_reader') return !empty($v) ? '1' : '0';
     return is_scalar($v) ? trim((string)$v) : '';
 }
@@ -349,7 +352,8 @@ if ($postMax > 0 && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $postMax) {
 // Every value is read as a single string or number unless its key is one the
 // code reads as a list/object. Anything else is refused up front, so a stray
 // array can never be cast to "Array" or to 1 and written to a record.
-const API_ARRAY_INPUT_KEYS = ['scores', 'levels', 'present', 'homework', 'values', 'history', 'params', 'sections', 'answers', 'custom', 'info', 'orig'];   // custom and info: 4.25.0 (custom fields, release requests); orig: 4.28.0 (a stale save's opened values)
+const API_ARRAY_INPUT_KEYS = ['scores', 'levels', 'present', 'homework', 'values', 'history', 'params', 'sections', 'answers', 'custom', 'info', 'orig',
+    'client_ids', 'tracks', 'listed', 'attended', 'times'];   // custom and info: 4.25.0 (custom fields, release requests); orig: 4.28.0 (a stale save's opened values); 4.35.0: a group's clients and tracks, its attendance, the times offered (inc/api_435.php)
 // A decoded JSON body takes many times its own size in memory, so a body larger than
 // this is decoded only once the caller's token has been checked (below): only the
 // app's own uploads (documents, signatures) need more, and an anonymous caller can
@@ -781,7 +785,10 @@ const API_IDEM_ACTIONS = ['send_report', 'schedule_session', 'add_incident', 'up
     'at_issue', 'save_client', 'save_kb', 'save_task', 'save_track', 'save_credential', 'at_save', 'device_request_update', 'cohort_member',
     'contract_update',   // contract_update (4.29.0): its add_spend and add_deliverable
     'complete_session',   // 4.31.0: the apps queue completions offline with a kept key
-    'submit_invoice'];   // 4.34.0: a retry after a lost reply gets the first answer (inc/api_more.php)
+    'submit_invoice',   // 4.34.0: a retry after a lost reply gets the first answer (inc/api_more.php)
+    // 4.35.0 (inc/api_435.php): a group booked, its attendance recorded, times offered, the survey
+    // emailed or entered, a follow-up check recorded. offer_times is guarded on POST only.
+    'schedule_group', 'complete_group', 'offer_times', 'send_survey', 'phone_survey', 'closure_followup'];
 // The retry guard (api_idem_begin / api_idem_end) is opened inside inc/api_parity.php
 // before any action runs, the parity actions included (4.29.0: save_task, save_track and
 // request_consent are parity actions, and before this they ran before the guard).
@@ -994,33 +1001,47 @@ switch ($action) {
 
     case 'clients':
         $q = trim((string)($_GET['q'] ?? ''));
-        $sql = "SELECT id, name, status, phone, email FROM clients WHERE 1=1";
+        $sql = "SELECT c.id, c.name, c.status, c.phone, c.email FROM clients c WHERE 1=1";
         $params = [];
         // Retention-archived clients leave the day-to-day list, as on the website
         // (clients.php); only an administrator can list them, with ?archived=1.
-        $sql .= (!empty($_GET['archived']) && can('admin')) ? ' AND archived_at IS NOT NULL' : ' AND archived_at IS NULL';
+        $sql .= (!empty($_GET['archived']) && can('admin')) ? ' AND c.archived_at IS NOT NULL' : ' AND c.archived_at IS NULL';
         if ($q !== '') {
             // As the website's client list (clients.php): name, email and counselor name; and
             // the phone (4.29.0), by its digits, when the search has at least 4 of them (the
             // last 10, so a leading country code 1 still finds a 10-digit number).
             $like = api_like($q);
-            $sql .= " AND (name LIKE ? ESCAPE '!' OR email LIKE ? ESCAPE '!' OR counselor_name LIKE ? ESCAPE '!'";
+            $sql .= " AND (c.name LIKE ? ESCAPE '!' OR c.email LIKE ? ESCAPE '!' OR c.counselor_name LIKE ? ESCAPE '!'";
             array_push($params, $like, $like, $like);
             $qDigits = preg_replace('/\D+/', '', $q);
             if (strlen($qDigits) >= 4) {
-                $sql .= " OR REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(phone, ''), ' ', ''), '-', ''), '(', ''), ')', ''), '.', ''), '+', '') LIKE ?";
+                $sql .= " OR REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(c.phone, ''), ' ', ''), '-', ''), '(', ''), ')', ''), '.', ''), '+', '') LIKE ?";
                 $params[] = '%' . substr($qDigits, -10) . '%';
             }
             $sql .= ')';
         }
-        if (caseload_scoped()) { $sql .= " AND assigned_to = ?"; $params[] = $userId; }
+        // The website's filters (4.35.0, inc/client_list.php): status, caseload (who), client type,
+        // funding agency, school and office, with the caseload scope. with_filters=1 (4.35.0 apps)
+        // starts from the remembered caseload and answers the choices; without it (older apps)
+        // there is no caseload filter unless one is sent, as before.
+        $userRow = ['id' => $userId];
+        $withFilters = in_array($_GET['with_filters'] ?? null, ['1', 'true'], true);
+        $whoSent = is_string($_GET['who'] ?? null) ? $_GET['who'] : null;
+        $whoApi = $withFilters ? client_list_who($userRow, $whoSent)
+            : ($whoSent !== null && in_array($whoSent, array_column(client_list_who_choices($userRow), 0), true) ? $whoSent : '');
+        [$filterSql, $filterParams] = client_list_where(['status' => $_GET['status'] ?? '', 'who' => $whoApi, 'type' => $_GET['type'] ?? '',
+            'agency' => $_GET['agency'] ?? '', 'school' => $_GET['school'] ?? '', 'office' => $_GET['office'] ?? ''], $userRow);
+        $sql .= $filterSql;
+        $params = array_merge($params, $filterParams);
         // total (4.29.0): every match, so the app can say "first 200 of N" instead of "All clients (200)".
-        $cnt = db()->prepare(str_replace('SELECT id, name, status, phone, email FROM', 'SELECT COUNT(*) FROM', $sql));
+        $cnt = db()->prepare(str_replace('SELECT c.id, c.name, c.status, c.phone, c.email FROM', 'SELECT COUNT(*) FROM', $sql));
         $cnt->execute($params);
-        $sql .= " ORDER BY name LIMIT 200";
+        $sql .= " ORDER BY c.name LIMIT 200";
         $s = db()->prepare($sql);
         $s->execute($params);
-        out(['ok' => true, 'clients' => $s->fetchAll(), 'total' => (int)$cnt->fetchColumn(), 'limit' => 200]);
+        $clientsReply = ['ok' => true, 'clients' => $s->fetchAll(), 'total' => (int)$cnt->fetchColumn(), 'limit' => 200];
+        if ($withFilters) $clientsReply['filters'] = ['who' => $whoApi] + client_list_filters($userRow);
+        out($clientsReply);
 
     case 'client_choices':
         // Every client a picker may offer (scheduling, loans, reservations, bookings,
@@ -1056,7 +1077,7 @@ switch ($action) {
         $id = (int)($_GET['id'] ?? 0);
         api_require_client($id, $userId);
         record_client_view($userId, $id, api_app_name());
-        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email, vr_case_number, ipe_goal, ipe_date, ipe_amended_on, state, time_zone, office_id, updated_at FROM clients WHERE id = ?');
+        $c = db()->prepare('SELECT id, name, status, dob, phone, email, email_verified, address, school, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, counselor_verified, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, guardian_name, guardian_phone, guardian_email, vr_case_number, ipe_goal, ipe_date, ipe_amended_on, state, time_zone, office_id, updated_at, preferred_language, vision_status, vision_onset_age, on_hold_reason, on_hold_until, created_at FROM clients WHERE id = ?');
         $c->execute([$id]);
         $client = $c->fetch();
         // updated_at (4.28.0): sent back as save_client's loaded_at, so a save from a form
@@ -1064,6 +1085,12 @@ switch ($action) {
         if (!$client) fail('Client not found.', 404);
         // The office that serves them (4.22.0): office_id and its name, null when none.
         $client['office_id'] = $client['office_id'] !== null ? (int)$client['office_id'] : null;
+        // As the website's overview (4.35.0): the language, vision, On Hold reason and return date,
+        // when the client was added, and their sessions completed, missed and cancelled.
+        $client['preferred_language'] = client_language_input((string)$client['preferred_language']);
+        $client['vision_onset_age'] = $client['vision_onset_age'] !== null ? (int)$client['vision_onset_age'] : null;
+        $attendance = client_attendance($id);
+        $client['attendance'] = ['completed' => $attendance['done'], 'no_show' => $attendance['noshow'], 'cancelled' => $attendance['cancelled']];
         $client['office'] = office_get($client['office_id'])['name'] ?? null;
         // The organisation's own fields (4.24.0), answered ones only, as label and value.
         $client['custom_fields'] = array_map(fn($p) => ['label' => $p[0], 'value' => $p[1]], custom_fields_display($id));
@@ -1139,7 +1166,10 @@ switch ($action) {
         $smsRow = sms_client($id);
         $texting = ['enabled' => sms_enabled(), 'agreed' => !empty($smsRow['sms_consent_at']), 'opted_out' => !empty($smsRow['sms_opted_out_at']),
             'source' => $smsRow['sms_consent_source'] ?? null, 'words' => $smsRow ? sms_client_words($smsRow) : '', 'blocked' => sms_client_blocked($smsRow), 'sources' => SMS_CONSENT_SOURCES];
-        out(['ok' => true, 'client' => $client, 'notes' => $notes, 'notes_total' => $notesTotal, 'notes_offset' => $notesOffset, 'tracks' => $tracks, 'releases' => $releases, 'texting' => $texting]);
+        // after_closure (4.35.0): the website's "After closure" section (the outcome survey and the
+        // follow-up checks), or null when the page does not show it.
+        out(['ok' => true, 'client' => $client, 'notes' => $notes, 'notes_total' => $notesTotal, 'notes_offset' => $notesOffset, 'tracks' => $tracks, 'releases' => $releases, 'texting' => $texting,
+            'attendance' => $client['attendance'], 'after_closure' => after_closure_state($id, (string)$client['status'])]);
 
     case 'add_note': {
         $cid = (int)($input['client_id'] ?? 0);
@@ -1479,6 +1509,19 @@ switch ($action) {
                 fail('This track has no hourly rate. Ask an administrator to set the rate on the track before logging hours.', 422);
             }
         }
+        // The goal worked on and the service delivered (4.35.0, as schedule.php's row): optional;
+        // a value that is not this track's is refused with its field, before anything changes
+        // (the website, whose form offers only the track's own, ignores one). Only for a new work
+        // log: hours already logged keep theirs.
+        $visitGoal = (int)($input['goal_id'] ?? 0);
+        $visitCat = $input['rsa_category'] ?? '';
+        $visitTrack = null;
+        if ($hours > 0 && ($visitGoal > 0 || ($visitCat !== '' && $visitCat !== null))) {
+            $vt = db()->prepare('SELECT * FROM training_tracks WHERE id = ?');
+            $vt->execute([(int)$sess['track_id']]);
+            $visitTrack = $vt->fetch() ?: null;
+            if ($visitTrack && ($visitProblem = visit_choice_problem($visitTrack, $visitGoal, $visitCat))) fail_field($visitProblem[0], $visitProblem[1]);
+        }
         // As schedule.php: unbilled hours already logged on the track for that day that no
         // session is linked to (by voice, the app's hour log or the track page) may be this
         // session's, so they are not logged a second time until the user says which it is.
@@ -1559,6 +1602,7 @@ switch ($action) {
                     schedule_log_description($sess), (int)$sess['user_id'], $authIssue, $miles);
                 db()->prepare('UPDATE scheduled_sessions SET work_log_id = ? WHERE id = ?')
                     ->execute([$logId, $sid]);
+                if ($visitTrack) visit_choices_apply($logId, $visitTrack, $visitGoal, is_string($visitCat) ? $visitCat : '');
                 // A typed name stands on its own, so a client who cannot draw on the
                 // screen can still attest the session.
                 if ($sigPath || $signedName !== '') {
@@ -1681,22 +1725,15 @@ switch ($action) {
         // track does not offer (for example a category removed from its program while
         // the entry waited offline) is refused with the field named, never swapped.
         $visitType = api_choice($input, 'service_type', cms_choices('service_types', $trackRow['service_type'] ?? null), 'Service this visit', $trackRow['service_type'] ?? null);
+        // The category and the goal are checked by the shared rule (inc/work_logs.php, 4.35.0),
+        // also used by complete_session; the refusal is tied to its field.
         $offered = track_visit_categories($trackRow);
-        $rsaIn = $input['rsa_category'] ?? '';
-        if ($rsaIn === '') {
-            $visitRsa = $offered[0] ?? null;
-        } elseif (is_string($rsaIn) && in_array($rsaIn, $offered, true)) {
-            $visitRsa = $rsaIn;
-        } else {
-            fail('RSA category this visit: ' . (is_string($rsaIn) ? '"' . mb_strimwidth($rsaIn, 0, 120, '…') . '" ' : 'that category ')
-                . 'is not offered on this track. Choose one of: ' . implode(', ', array_filter($offered, 'is_string')) . '.', 422);
-        }
+        // A null category is none (the track's own), as complete_session reads it.
+        $rsaIn = $input['rsa_category'] ?? null;
+        if ($rsaIn === null) $rsaIn = '';
         $goalId = (int)($input['goal_id'] ?? 0) ?: null;
-        if ($goalId !== null) {
-            $gv = db()->prepare('SELECT id FROM smart_goals WHERE id = ? AND track_id = ?');
-            $gv->execute([$goalId, $tid]);
-            if (!$gv->fetch()) fail('Goal this session advanced: that goal is not on this track. It may have been removed. Choose another goal, or none.', 422);
-        }
+        if ($visitProblem = visit_choice_problem($trackRow, (int)$goalId, $rsaIn)) fail_field($visitProblem[0], $visitProblem[1]);
+        $visitRsa = $rsaIn === '' ? ($offered[0] ?? null) : $rsaIn;
         // Never snapshot a $0.00 rate (as track.php and auto_log_session refuse). A 4xx,
         // so a queued offline entry is reported as rejected instead of retried forever.
         if (track_needs_rate($trackRow) && (float)$trackRow['hourly_rate'] <= 0) {
@@ -1853,7 +1890,27 @@ switch ($action) {
         $statusNote = api_text($input, 'status_note', 255, 'Status note');
         // On Hold needs a reason (3.0.44); on_hold_until (YYYY-MM-DD) is optional.
         [$holdErr, $holdUntil] = on_hold_input($status, (string)($old['status'] ?? ''), (string)$statusNote, is_string($input['on_hold_until'] ?? null) ? $input['on_hold_until'] : '');
-        if ($holdErr !== null) fail($holdErr, 422);
+        // Tied to the return date or to the reason (4.35.0), as client_edit.php ties them.
+        if ($holdErr !== null) fail_field(str_contains($holdErr, 'return date') ? 'on_hold_until' : 'status_note', $holdErr);
+        // The preferred language and the vision status and age of onset (4.35.0), read as
+        // client_edit.php reads them (inc/client_fields.php). Each only when the app sends it:
+        // a key not sent keeps the stored value, so an older app clears nothing.
+        // A value of the wrong kind is refused on its field, never changed: the language and the
+        // status are text; the age is a whole number (12 or 12.0), as text or a number.
+        $langSent = array_key_exists('preferred_language', $input);
+        $statusSent = array_key_exists('vision_status', $input);
+        $onsetSent = array_key_exists('vision_onset_age', $input);
+        if ($langSent && $input['preferred_language'] !== null && !is_string($input['preferred_language'])) fail_field('preferred_language', 'Preferred language: choose English or Spanish.');
+        if ($statusSent && $input['vision_status'] !== null && !is_string($input['vision_status'])) fail_field('vision_status', 'Vision status: choose one of the listed statuses, or Not recorded.');
+        $visionIn = ['vision_status' => $input['vision_status'] ?? null, 'vision_onset_age' => $input['vision_onset_age'] ?? null];
+        if (is_float($visionIn['vision_onset_age'])) $visionIn['vision_onset_age'] = floor($visionIn['vision_onset_age']) === $visionIn['vision_onset_age'] ? (int)$visionIn['vision_onset_age'] : 'not whole';
+        if (is_bool($visionIn['vision_onset_age'])) $visionIn['vision_onset_age'] = 'not a number';
+        $visionApi = client_vision_input($visionIn, $old ?: null);
+        if ($onsetSent && $visionApi['errors']) fail_field('vision_onset_age', (string)reset($visionApi['errors']));
+        // Kept as stored when not sent: read again from the row locked for the update (below).
+        $langApi = $langSent ? client_language_input($input['preferred_language']) : 'en';
+        $visionStatusApi = $statusSent ? $visionApi['status'] : null;
+        $visionOnsetApi = $onsetSent ? $visionApi['onset'] : null;
         // A closure records why (3.0.35): app builds that send closure_reason are checked as
         // the website checks it; older builds, which do not ask, record 'Not recorded'.
         $closing = str_starts_with($status, 'Closed') && (($old['status'] ?? null) !== $status);
@@ -1987,6 +2044,10 @@ switch ($action) {
                     $vals[6] = $assignedTo;
                     $newAssignee = $assignedTo;
                 }
+                // The language and vision the app did not send stay as they are now (4.35.0).
+                if (!$langSent) $langApi = client_language_input((string)($locked['preferred_language'] ?? 'en'));
+                if (!$statusSent) $visionStatusApi = $locked['vision_status'] ?? null;
+                if (!$onsetSent) $visionOnsetApi = $locked['vision_onset_age'] !== null ? (int)$locked['vision_onset_age'] : null;
                 $closingNow = str_starts_with($status, 'Closed') && $locked['status'] !== $status;
                 if ($closingNow && $closureData === null) $closureData = $closureFor();
                 $closing = $closingNow;
@@ -2000,8 +2061,8 @@ switch ($action) {
                 db()->prepare('UPDATE clients SET name=?, dob=?, email=?, phone=?, address=?, status=?, assigned_to=?, counselor_name=?, counselor_email=?, counselor_phone=?, counselor_agency=?, client_type=?, a11y_screen_reader=?, a11y_format=?, a11y_primary_tech=?, a11y_contact=?, a11y_notes=?, counselor_verified=?, school=?, email_verified=?'
                     . ($unarchive ? ', archived_at=NULL' : '') . ' WHERE id=?')->execute($vals);
                 // Guardian details (3.0.37): a field the app did not send keeps its value.
-                db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=?, vr_case_number=?, ipe_goal=?, ipe_date=?, ipe_amended_on=? WHERE id=?')
-                    ->execute([$keep('guardian_name'), $keep('guardian_phone'), $keep('guardian_email'), $keep('vr_case_number'), $keep('ipe_goal'), $keep('ipe_date'), $keep('ipe_amended_on'), $cid]);
+                db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=?, vr_case_number=?, ipe_goal=?, ipe_date=?, ipe_amended_on=?, preferred_language=?, vision_status=?, vision_onset_age=? WHERE id=?')
+                    ->execute([$keep('guardian_name'), $keep('guardian_phone'), $keep('guardian_email'), $keep('vr_case_number'), $keep('ipe_goal'), $keep('ipe_date'), $keep('ipe_amended_on'), $langApi, $visionStatusApi, $visionOnsetApi, $cid]);
                 // A portal link already emailed to the old address stops working when the
                 // address changes: it may belong to someone else now (client_edit.php).
                 if (trim((string)($old['email'] ?? '')) !== '' && strcasecmp((string)($clientEmail ?? ''), trim((string)$old['email'])) !== 0) {
@@ -2063,8 +2124,8 @@ switch ($action) {
             } else {
                 db()->prepare('INSERT INTO clients (name, dob, email, phone, address, status, assigned_to, counselor_name, counselor_email, counselor_phone, counselor_agency, client_type, a11y_screen_reader, a11y_format, a11y_primary_tech, a11y_contact, a11y_notes, counselor_verified, school, email_verified) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($vals);
                 $cid = (int)db()->lastInsertId();
-                db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=?, vr_case_number=?, ipe_goal=?, ipe_date=?, ipe_amended_on=? WHERE id=?')
-                    ->execute([$keep('guardian_name'), $keep('guardian_phone'), $keep('guardian_email'), $keep('vr_case_number'), $keep('ipe_goal'), $keep('ipe_date'), $keep('ipe_amended_on'), $cid]);
+                db()->prepare('UPDATE clients SET guardian_name=?, guardian_phone=?, guardian_email=?, vr_case_number=?, ipe_goal=?, ipe_date=?, ipe_amended_on=?, preferred_language=?, vision_status=?, vision_onset_age=? WHERE id=?')
+                    ->execute([$keep('guardian_name'), $keep('guardian_phone'), $keep('guardian_email'), $keep('vr_case_number'), $keep('ipe_goal'), $keep('ipe_date'), $keep('ipe_amended_on'), $langApi, $visionStatusApi, $visionOnsetApi, $cid]);
                 record_status_change($cid, null, $status, $userId, 'Client created (mobile)');
                 on_hold_save($cid, $status, '', (string)$statusNote, $holdUntil);
                 if ($closing) client_closure_record($cid, $status, $closureData, $userId);
@@ -2373,17 +2434,19 @@ switch ($action) {
         $s = db()->prepare('SELECT a.id, a.assessment_date, a.primary_disability, a.primary_tech, a.hardware_details, a.software_version, a.summary, u.name AS author
             FROM tech_assessments a LEFT JOIN users u ON u.id = a.created_by WHERE a.client_id = ? ORDER BY a.assessment_date DESC');
         $s->execute([$cid]);
-        out(['ok' => true, 'assessments' => $s->fetchAll()]);
+        // tech_types (4.35.0): the Primary technology choices, so the form needs no second call.
+        out(['ok' => true, 'assessments' => $s->fetchAll(), 'tech_types' => array_values(cms_list_items('tech_types'))]);
 
     case 'add_assessment':
         $cid = (int)($input['client_id'] ?? 0);
-        // An assessment has taken place: from 2000 to tomorrow at the latest (a day of
-        // slack for the phone's time zone), never a mistyped year ahead.
-        $date = api_date($input, 'assessment_date', 'Assessment date', 2000, (int)date('Y', strtotime('+1 day')));
-        if ($cid <= 0 || !$date) fail('Client and a valid assessment date (YYYY-MM-DD) are required.');
-        if ($date > date('Y-m-d', strtotime('+1 day'))) fail('Assessment date: ' . fmt_date($date) . ' is in the future. Enter the date the assessment took place.', 422);
-        // Checked against the column sizes so a long (often AI-drafted) answer is
-        // reported back to be shortened instead of failing in the database.
+        if ($cid <= 0) fail('Client and a valid assessment date (YYYY-MM-DD) are required.');
+        // The website's checks (inc/tech_assessments.php, 4.35.0), each tied to its field: a date
+        // from 2000 to tomorrow at the latest (a day of slack for the phone's time zone, as
+        // before), and the column sizes, so a long (often AI-drafted) answer is reported back to
+        // be shortened instead of failing in the database.
+        $assessErrs = tech_assessment_errors($input, 1);
+        if ($assessErrs) out(['ok' => false, 'error' => (string)reset($assessErrs), 'errors' => $assessErrs], 422);
+        $date = trim((string)$input['assessment_date']);
         $disability = api_text($input, 'primary_disability', 190, 'Primary disability');
         $primaryTech = api_choice($input, 'primary_tech', cms_list_items('tech_types'), 'Primary technology', 'Screen Reader');
         $hardware = api_text($input, 'hardware_details', 255, 'Hardware details');
@@ -5075,7 +5138,8 @@ switch ($action) {
 
     default:
         // The 4.0.0 actions (inc/api_more.php): alerts, client requests, invoices and tasks.
-        $more = api_more($action, $input, $userId) ?? api_425($action, $input, $userId);   // and the 4.25.0 ones (inc/api_425.php)
+        $more = api_more($action, $input, $userId) ?? api_425($action, $input, $userId)   // and the 4.25.0 ones (inc/api_425.php)
+            ?? api_435($action, $input, $userId);   // and the 4.35.0 ones (inc/api_435.php)
         if ($more === null) fail('Unknown action.', 404);
         // A refusal keeps its other fields (4.27.0: fields, signed), without the status.
         if (empty($more['ok'])) { $st = (int)($more['status'] ?? 400); unset($more['status']); out(['ok' => false, 'error' => (string)$more['error']] + $more, $st); }

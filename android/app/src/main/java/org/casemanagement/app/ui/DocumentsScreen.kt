@@ -45,6 +45,9 @@ fun DocumentsScreen(api: Api, clientId: Int) {
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var completing by remember { mutableStateOf<HomeworkItem?>(null) }
+    // 4.35.0: an assigned item's choices (complete it or edit it), and the one being edited (kept across rotation).
+    var hwChosen by remember { mutableStateOf<HomeworkItem?>(null) }
+    var editingId by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
     var assigning by rememberSaveable { mutableStateOf(false) }
     var uploading by rememberSaveable { mutableStateOf(false) }
     var chosen by remember { mutableStateOf<DocumentItem?>(null) }
@@ -90,7 +93,8 @@ fun DocumentsScreen(api: Api, clientId: Int) {
                 val waiting = h.id in queued
                 val status = if (waiting) "Completed, waiting to send" else h.status
                 ListRow(listOf(h.title, listOfNotNull(status, h.dueDate?.let { "due " + dayText(it) }, h.trackTitle).joinToString(", "), h.instructions ?: ""),
-                    action = "mark it completed", onClick = if (h.status == "Assigned" && !waiting) ({ completing = h }) else null)
+                    action = if (api.can("clients")) "complete it or edit it" else "mark it completed",
+                    onClick = if (h.status == "Assigned" && !waiting) ({ if (api.can("clients")) hwChosen = h else completing = h }) else null)
             }
             if (api.can("clients")) SecondaryButton("Assign homework") { assigning = true }
         }
@@ -102,6 +106,24 @@ fun DocumentsScreen(api: Api, clientId: Int) {
                 catch (e: ApiException) { error = e.message }
             }
         }, { completing = null })
+    }
+    hwChosen?.let { h ->
+        AlertDialog(
+            onDismissRequest = { hwChosen = null },
+            title = { Text(h.title, modifier = Modifier.semantics { heading() }) },
+            text = {
+                Column {
+                    TextButton(onClick = { hwChosen = null; completing = h }) { Text("Mark it completed") }
+                    TextButton(onClick = { hwChosen = null; editingId = h.id }) { Text("Edit homework: ${h.title}") }
+                }
+            },
+            confirmButton = { TextButton(onClick = { hwChosen = null }) { Text("Close") } },
+        )
+    }
+    state.data?.second?.firstOrNull { editingId != 0 && it.id == editingId }?.let { h ->
+        androidx.compose.runtime.key(org.casemanagement.app.dialogKey("homework-edit", editingId)) {
+            EditHomeworkDialog(api, clientId, h, onDone = { m -> editingId = 0; notice = m; state.reload() }, onCancel = { editingId = 0 })
+        }
     }
     chosen?.let { d ->
         val portal = d.portalShared
@@ -183,7 +205,7 @@ private fun AssignHomeworkDialog(api: Api, clientId: Int, onDone: (String) -> Un
                 // 4.30.0: every problem at once, each on its field and all in the summary.
                 trackError = if (track.isEmpty()) "Choose a training track." else null
                 titleError = if (title.isBlank()) "Give the homework a title." else null
-                dueError = if (due.isNotBlank() && !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(due.trim())) "Enter the due date as year-month-day, such as ${today()}, or leave it empty." else null
+                dueError = if (due.isNotBlank() && !realDate(due)) "Due date must be a valid date (YYYY-MM-DD)." else null
                 errorSummary(listOf(trackError, titleError, dueError))?.let { error = it; return@TextButton }
                 scope.launchSave({ busy = it }, { error = it }) {
                     // 4.28.0: a retry after a lost reply assigns it once (see sendOnce).
@@ -195,4 +217,80 @@ private fun AssignHomeworkDialog(api: Api, clientId: Int, onDone: (String) -> Un
         },
         dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
+}
+
+/**
+ * 4.35.0: edit an assigned homework item (title, instructions, due date), as the website and the
+ * iPhone app (at_homework_update with its edit token). Changing the title or instructions clears
+ * the client's report that it is done, and the Save question says so.
+ */
+@Composable
+private fun EditHomeworkDialog(api: Api, clientId: Int, h: HomeworkItem, onDone: (String) -> Unit, onCancel: () -> Unit) {
+    var title by rememberSaveable { mutableStateOf(h.title) }
+    var instructions by rememberSaveable { mutableStateOf(h.instructions ?: "") }
+    var due by rememberSaveable { mutableStateOf(h.dueDate?.take(10) ?: "") }
+    // The version the form was filled from (replaced by Reload).
+    var token by rememberSaveable { mutableStateOf(h.editToken ?: "") }
+    var baseTitle by rememberSaveable { mutableStateOf(h.title) }
+    var baseInstructions by rememberSaveable { mutableStateOf(h.instructions ?: "") }
+    var reported by rememberSaveable { mutableStateOf(h.clientReportedAt != null) }
+    var kept by rememberSaveable { mutableStateOf<String?>(null) }
+    var stale by remember { mutableStateOf(false) }
+    var titleError by remember { mutableStateOf<String?>(null) }
+    var dueError by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var asking by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var presses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
+    val textChanged = title.trim() != baseTitle.trim() || instructions.trim() != baseInstructions.trim()
+    FormDialog("Edit homework: ${h.title}", "Save", busy, onSave = {
+        if (busy) return@FormDialog
+        presses++
+        titleError = if (title.isBlank()) "Title: give the homework a title." else null
+        dueError = if (due.isNotBlank() && !realDate(due)) "Use a valid due date with a four-digit year from 2000 to ${currentYear() + 5}." else null
+        error = errorSummary(listOf(titleError, dueError))
+        if (error == null) asking = true
+    }, onCancel = onCancel) {
+        if (reported) Text("The client reported this done. Changing the title or instructions clears that report; changing only the due date keeps it.")
+        Field("Title", title, { title = it }, required = true, error = titleError)
+        Field("Instructions", instructions, { instructions = it }, hint = "optional", singleLine = false, minLines = 3)
+        Field("Due date", due, { due = it }, hint = "optional, year-month-day", error = dueError)
+        ErrorText(error, focusKey = presses)
+        if (stale) SecondaryButton(if (busy) "Reloading…" else "Reload") {
+            if (busy) return@SecondaryButton
+            busy = true
+            scope.launch {
+                try {
+                    val fresh = parseHomework(api.call("homework", mapOf("client_id" to clientId.toString()))).firstOrNull { it.id == h.id }
+                        ?: throw ApiException("This assignment is no longer listed for the client.")
+                    kept = listOfNotNull("Title: " + title.trim(), instructions.trim().takeIf { it.isNotEmpty() }?.let { "Instructions: $it" },
+                        due.trim().takeIf { it.isNotEmpty() }?.let { "Due date: $it" }).joinToString("\n")
+                    title = fresh.title; instructions = fresh.instructions ?: ""; due = fresh.dueDate?.take(10) ?: ""
+                    token = fresh.editToken ?: ""; baseTitle = fresh.title; baseInstructions = fresh.instructions ?: ""; reported = fresh.clientReportedAt != null
+                    stale = false; error = null
+                } catch (e: ApiException) { presses++; error = e.message } finally { busy = false }
+            }
+        }
+        kept?.let { k ->
+            Heading("Your text, not saved")
+            androidx.compose.foundation.text.selection.SelectionContainer { Text(k) }
+        }
+    }
+    if (asking) Confirm(homeworkEditConfirm(h.title, reported, textChanged), "It shows in the client portal as changed.", "Save the changes", {
+        scope.launchSave({ busy = it }, { }) {
+            try {
+                api.call("at_homework_update", body = homeworkEditBody(h.id, title, instructions, due, token))
+                onDone("Homework updated.")
+            } catch (e: ApiException) {
+                presses++
+                when (homeworkEditErrorField(e.message)) {
+                    "title" -> titleError = e.message
+                    "due" -> dueError = e.message
+                    "reload" -> stale = true
+                }
+                error = e.message
+            }
+        }
+    }, { asking = false })
 }

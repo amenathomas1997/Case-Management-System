@@ -121,19 +121,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['offer_times'])) {
     if ($res['error'] !== null) {
         keep_input();
         // Each error on the box it is about; one about the request itself (closed, no portal link) is a message.
-        $errField = match (true) {
-            ($res['field'] ?? '') === 'staff' => 'offer_staff-' . $id,
-            str_starts_with($res['error'], 'Choose a length') => 'offer_len-' . $id,
-            str_starts_with($res['error'], 'Choose one of this client') => 'offer_track-' . $id,
-            str_starts_with($res['error'], 'Enter at least one'), str_starts_with($res['error'], 'Offer at most'), str_starts_with($res['error'], 'None of the times') => 'offer_t1-' . $id,
+        // The mapping is shared with the app's offer_times (inc/request_offers.php, 4.35.0).
+        $errField = match (offer_times_error_field($res)) {
+            'staff' => 'offer_staff-' . $id,
+            'minutes' => 'offer_len-' . $id,
+            'track_id' => 'offer_track-' . $id,
+            'times' => 'offer_t1-' . $id,
             default => null,
         };
         if ($errField !== null) keep_field_errors([$errField => $res['error']]); else flash($res['error'], 'error');
         redirect('portal_requests.php#offer-' . $id);
     }
-    flash($res['offered'] . ' time' . ($res['offered'] === 1 ? '' : 's') . ' offered to ' . $row['client_name'] . '. They choose one in their portal.'
-        . (empty($res['emailed']) ? ' They were not emailed (they prefer phone or post, or have no confirmed email): tell them the times are waiting.' : '')
-        . ($res['refused'] ? ' Not offered: ' . implode(' ', $res['refused']) : ''));
+    flash(offer_times_message($res, (string)$row['client_name']));
     redirect('portal_requests.php');
 }
 
@@ -217,18 +216,12 @@ page_header('Client requests', $user, 'portal_requests');
         <?php if (in_array($r['type'], OFFER_REQUEST_TYPES, true) && !in_array($r['status'], ['Done', 'Declined'], true)):
             $open = request_offers((int)$r['id']);
             $staffList ??= db()->query('SELECT id, name FROM users WHERE is_active = 1 ORDER BY name')->fetchAll();
-            $trq = db()->prepare("SELECT id, title FROM training_tracks WHERE client_id = ? AND status = 'Active' ORDER BY id DESC");
-            $trq->execute([(int)$r['cid']]);
-            $trackList = $trq->fetchAll();
             $rid = (int)$r['id'];
-            $assignedQ = db()->prepare('SELECT assigned_to FROM clients WHERE id = ?'); $assignedQ->execute([(int)$r['cid']]); $defStaff = (int)$assignedQ->fetchColumn() ?: (int)$user['id'];
             // A reschedule starts from the session's own instructor and place (4.28.0): what is
-            // offered here is what the session becomes when the client chooses a time.
-            $defRemote = false; $defLoc = '';
-            if ($r['type'] === 'reschedule' && !empty($r['session_id'])) {
-                $msq = db()->prepare("SELECT user_id, is_remote, location FROM scheduled_sessions WHERE id = ?"); $msq->execute([(int)$r['session_id']]);
-                if ($ms = $msq->fetch()) { $defStaff = (int)$ms['user_id'] ?: $defStaff; $defRemote = (int)$ms['is_remote'] === 1; $defLoc = (string)($ms['location'] ?? ''); }
-            } ?>
+            // offered here is what the session becomes when the client chooses a time. Shared with
+            // the app's offer_times (inc/request_offers.php, 4.35.0).
+            $offDef = offer_form_defaults(['type' => $r['type'], 'session_id' => $r['session_id'], 'client_id' => (int)$r['cid']], (int)$user['id']);
+            $trackList = $offDef['tracks']; $defStaff = $offDef['staff_id']; $defRemote = $offDef['remote']; $defLoc = $offDef['location']; ?>
         <?php if ($open): ?><p>Offered: <?= h(implode('; ', array_map(fn($o) => date('D, M j g:i A', strtotime($o['start_at'])), $open))) ?></p><?php endif; ?>
         <?php // 4.29.0: every field of the offer form can carry its error; the form opens again after any refused offer.
             $offLabels = ['offer_t1-' . $rid => 'First time', 'offer_t2-' . $rid => 'Second time', 'offer_t3-' . $rid => 'Third time',

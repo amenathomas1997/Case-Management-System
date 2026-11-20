@@ -38,8 +38,14 @@ function closure_followups(int $clientId): array {
  */
 function closure_followup_record(int $id, int $clientId, ?int $employed, ?int $usingTech, ?int $independent, ?int $needsService, string $notes, int $actor): ?string {
     $notes = mb_substr(trim($notes), 0, 1000);
+    // A check not yet due is refused (4.35.0): the website offers its form only from the due
+    // date, so this stops a crafted post or an app's offline copy sent early.
+    $dq = db()->prepare("SELECT due_on FROM closure_followups WHERE id = ? AND client_id = ? AND status = 'Pending'");
+    $dq->execute([$id, $clientId]);
+    $dueOn = $dq->fetchColumn();
+    if ($dueOn !== false && (string)$dueOn > date('Y-m-d')) return 'That follow-up is not due until ' . fmt_date((string)$dueOn) . '.';
     $u = db()->prepare("UPDATE closure_followups SET status = 'Completed', still_employed = ?, still_using_tech = ?, independent = ?, needs_service = ?, notes = ?,
-        completed_at = NOW(), completed_by = ? WHERE id = ? AND client_id = ? AND status = 'Pending'");
+        completed_at = NOW(), completed_by = ? WHERE id = ? AND client_id = ? AND status = 'Pending' AND due_on <= CURDATE()");
     $u->execute([$employed, $usingTech, $independent, $needsService, $notes !== '' ? $notes : null, $actor, $id, $clientId]);
     if ($u->rowCount() !== 1) return 'That follow-up was already recorded.';
     complete_task_by_key('closefu-' . $id, $actor);
@@ -53,6 +59,78 @@ function closure_followup_record(int $id, int $clientId, ?int $employed, ?int $u
     }
     audit($actor, 'followup.closure', 'client', $clientId, 'closure follow-up #' . $id . ($needsService === 1 ? ' (needs more service)' : ''));
     return null;
+}
+
+/** A follow-up answer as the form sends it: "yes" is 1, "no" is 0, anything else (Not asked) null. */
+function closure_followup_yes_no(mixed $v): ?int {
+    return $v === 'yes' ? 1 : ($v === 'no' ? 0 : null);
+}
+
+/** What is said once a follow-up check is recorded. */
+function closure_followup_message(?int $needs): string {
+    return $needs === 1 ? 'Follow-up recorded. Because the client needs more service, a re-referral task was added.' : 'Follow-up recorded.';
+}
+
+/**
+ * Email the outcome survey now (client.php's "Email the survey", 4.35.0: shared with the app's
+ * send_survey). status: sent; pending (an unanswered survey was emailed in the last 30 days, so
+ * none is sent); unknown (the email service did not confirm it: do not send again yet); refused
+ * (no confirmed email, a phone or post preference, or the email failed). message: the website's.
+ */
+function outcome_survey_send_now(int $clientId, int $actor): array {
+    $open = db()->prepare("SELECT sent_at FROM surveys WHERE client_id = ? AND completed_at IS NULL AND sent_at > DATE_SUB(NOW(), INTERVAL 30 DAY) ORDER BY id DESC LIMIT 1");
+    $open->execute([$clientId]);
+    if ($was = $open->fetchColumn()) return ['status' => 'pending', 'message' => 'A survey was emailed on ' . fmt_date((string)$was) . ' and is not answered yet. Enter the answers by phone instead, or wait for the reminder.'];
+    $GLOBALS['mail_last_outcome'] = null;
+    if (send_outcome_survey($clientId)) {
+        audit($actor, 'survey.send', 'client', $clientId, 'outcome survey emailed');
+        return ['status' => 'sent', 'message' => 'Outcome survey emailed.'];
+    }
+    if (($GLOBALS['mail_last_outcome'] ?? null) === 'unknown') return ['status' => 'unknown', 'message' => 'The email service did not confirm the survey email, so it may still arrive. Do not send it again yet; check later whether it was answered.'];
+    return ['status' => 'refused', 'message' => 'The survey was not emailed: the client has no confirmed email address, prefers phone or post, or the email could not be sent. Ask the questions by phone and enter the answers here.'];
+}
+
+/**
+ * What the client page's "After closure" section shows (4.35.0: the website draws it from this,
+ * and the app's client reply carries it): null when the section is not shown (the case is not
+ * closed and has no follow-ups or surveys). Each survey and follow-up has the website's line in
+ * text; a follow-up's label is its first words ("30-day check").
+ */
+function after_closure_state(int $clientId, string $status): ?array {
+    $closeFus = closure_followups($clientId);
+    try {
+        $svq = db()->prepare('SELECT * FROM surveys WHERE client_id = ? ORDER BY id DESC LIMIT 5');
+        $svq->execute([$clientId]);
+        $surveysHere = $svq->fetchAll();
+    } catch (PDOException $e) { $surveysHere = []; }
+    if (!(str_starts_with($status, 'Closed') || $closeFus || $surveysHere)) return null;
+    $ynOut = fn($v) => $v === null ? 'not asked' : ((int)$v === 1 ? 'yes' : 'no');
+    $yn = fn($v) => $v === null ? null : (int)$v === 1;
+    $surveys = [];
+    foreach ($surveysHere as $sv) {
+        $text = $sv['completed_at'] ? 'Answered ' . fmt_date($sv['completed_at']) . (($sv['channel'] ?? 'Email') === 'Phone' ? ' by phone' : '') . ': satisfaction ' . (int)$sv['satisfaction'] . ' of 10, goals met ' . (int)$sv['goals_met'] . ' of 10' . ($sv['comments'] ? '. "' . $sv['comments'] . '"' : '')
+            : 'Emailed ' . fmt_date($sv['sent_at']) . ', not answered yet' . (!empty($sv['reminded_at']) ? ' (reminder sent ' . fmt_date($sv['reminded_at']) . ')' : '');
+        $surveys[] = ['id' => (int)$sv['id'], 'sent_at' => $sv['sent_at'], 'completed_at' => $sv['completed_at'], 'channel' => (string)($sv['channel'] ?? 'Email'),
+            'satisfaction' => $sv['satisfaction'] !== null ? (int)$sv['satisfaction'] : null, 'goals_met' => $sv['goals_met'] !== null ? (int)$sv['goals_met'] : null,
+            'comments' => $sv['comments'], 'reminded_at' => $sv['reminded_at'] ?? null, 'text' => $text];
+    }
+    $today = date('Y-m-d');
+    $followups = [];
+    foreach ($closeFus as $fu) {
+        $label = (int)$fu['interval_days'] . '-day check';
+        if ($fu['status'] !== 'Pending') {
+            $text = $label . ', recorded ' . fmt_date($fu['completed_at']) . ($fu['by_name'] ? ' by ' . $fu['by_name'] : '') . ': still employed ' . $ynOut($fu['still_employed'])
+                . '; still using the technology ' . $ynOut($fu['still_using_tech']) . '; independent ' . $ynOut($fu['independent']) . '; needs more service ' . $ynOut($fu['needs_service']) . '.'
+                . ($fu['notes'] ? ' ' . $fu['notes'] : '');
+        } else {
+            $text = $label . ', due ' . fmt_date($fu['due_on']) . '.';
+        }
+        $followups[] = ['id' => (int)$fu['id'], 'interval_days' => (int)$fu['interval_days'], 'label' => $label, 'due_on' => (string)$fu['due_on'], 'status' => (string)$fu['status'],
+            'due_now' => $fu['status'] === 'Pending' && (string)$fu['due_on'] <= $today, 'completed_at' => $fu['completed_at'], 'by_name' => $fu['by_name'],
+            'answers' => ['still_employed' => $yn($fu['still_employed']), 'still_using_tech' => $yn($fu['still_using_tech']), 'independent' => $yn($fu['independent']), 'needs_service' => $yn($fu['needs_service'])],
+            'notes' => $fu['notes'], 'text' => $text];
+    }
+    return ['surveys' => $surveys, 'followups' => $followups, 'by_phone' => client_survey_by_phone($clientId)];
 }
 
 /** Whether a client prefers phone or post, so the outcome survey is asked by phone, not emailed. */

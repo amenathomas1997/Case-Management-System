@@ -73,3 +73,37 @@ function staff_week_text(array $w): string {
         . ($w['booked'] > 0 ? ', ' . fmt_hours($w['booked']) . ' still booked' : '')
         . ($w['target'] > 0 ? ', against your weekly target of ' . fmt_hours($w['target']) . '.' : '.');
 }
+
+/**
+ * The goal worked on and the service delivered on a visit (4.35.0, shared by the app's log_hours
+ * and complete_session): null when both can be used, otherwise [field, message]. A goal id of 0
+ * and a blank category mean none and the track's own; anything else must be this track's.
+ */
+function visit_choice_problem(array $track, int $goalId, mixed $category): ?array {
+    if ($category !== '' && $category !== null) {
+        $offered = track_visit_categories($track);
+        if (!is_string($category) || !in_array($category, $offered, true)) {
+            return ['rsa_category', 'RSA category this visit: ' . (is_string($category) ? '"' . mb_strimwidth($category, 0, 120, '…') . '" ' : 'that category ')
+                . 'is not offered on this track. Choose one of: ' . implode(', ', array_filter($offered, 'is_string')) . '.'];
+        }
+    }
+    if ($goalId > 0) {
+        $gv = db()->prepare('SELECT id FROM smart_goals WHERE id = ? AND track_id = ?');
+        $gv->execute([$goalId, (int)$track['id']]);
+        if (!$gv->fetch()) return ['goal_id', 'Goal this session advanced: that goal is not on this track. It may have been removed. Choose another goal, or none.'];
+    }
+    return null;
+}
+
+/** Put the goal worked on and the service delivered (3.0.46) on a completed session's work log:
+ *  only this track's own (anything else is left as it is). Moved from schedule.php (4.35.0). */
+function visit_choices_apply(int $logId, array $track, int $goalId, string $category): void {
+    if ($goalId > 0) {
+        $gq = db()->prepare('SELECT id FROM smart_goals WHERE id = ? AND track_id = ?');
+        $gq->execute([$goalId, (int)$track['id']]);
+        if ($gq->fetchColumn()) db()->prepare('UPDATE work_logs SET goal_id = ? WHERE id = ?')->execute([$goalId, $logId]);
+    }
+    if ($category !== '' && in_array($category, track_visit_categories($track), true)) {
+        db()->prepare('UPDATE work_logs SET rsa_category = ? WHERE id = ?')->execute([$category, $logId]);
+    }
+}

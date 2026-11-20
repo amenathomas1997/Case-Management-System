@@ -84,10 +84,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_assessment'])) {
     if (!mb_check_encoding($fields['summary'], 'UTF-8')) $errs['summary'] = 'Summary contains characters that could not be read; paste or type it again.';
     elseif (strlen($fields['summary']) > 65535) $errs['summary'] = 'Summary is too long to save (65,535 bytes maximum; accented letters and symbols count as 2 to 4 bytes each). Shorten it, then save.';
     // Same rule as client.php: a real date from 2000 onwards, never after today.
+    // (inc/tech_assessments.php, shared with client.php and the app since 4.35.0)
     $date = valid_date($assessDate, 2000, (int)date('Y'));
-    if ($assessDate === '') $errs['assessment_date'] = 'Assessment date is required.';
-    elseif ($date === null) $errs['assessment_date'] = 'Enter the assessment date as a valid date (YYYY-MM-DD) from the year 2000 onwards.';
-    elseif ($date > date('Y-m-d')) $errs['assessment_date'] = 'The assessment date cannot be in the future. Check the year.';
+    if (($dateErr = tech_assessment_date_error($assessDate)) !== null) $errs['assessment_date'] = $dateErr;
     if (!$errs) {
         // The same draft saved twice (Enter pressed again while it loads) is saved once.
         $assessKey = web_idem_key($_POST);

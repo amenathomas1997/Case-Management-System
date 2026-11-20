@@ -302,14 +302,14 @@ fun SecondaryButton(text: String, modifier: Modifier = Modifier, lang: String? =
     OutlinedButton(onClick = onClick, modifier = modifier.padding(vertical = 4.dp).heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 16.dp)) { Text(inLanguage(text, lang)) }
 }
 
-/** Asks before something that cannot be undone. */
+/** Asks before something that cannot be undone. [no] names the button that keeps things as they are. */
 @Composable
-fun Confirm(title: String, text: String, yes: String, onYes: () -> Unit, onDismiss: () -> Unit) {
+fun Confirm(title: String, text: String, yes: String, onYes: () -> Unit, onDismiss: () -> Unit, no: String = "Cancel") {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) }, text = { Text(text) },
+        title = { Text(title) }, text = if (text.isEmpty()) null else { { Text(text) } },
         confirmButton = { TextButton(onClick = { onDismiss(); onYes() }) { Text(yes) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(no) } },
     )
 }
 

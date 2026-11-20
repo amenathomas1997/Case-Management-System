@@ -26,31 +26,100 @@ import org.casemanagement.app.zoneWords
 import org.casemanagement.app.listTotal
 import org.casemanagement.app.countLabel
 
-/** The client list, searched on the server as on the website. */
+/** The client list, searched on the server as on the website. 4.35.0: with the website's filters. */
 @Composable
 fun ClientsScreen(api: Api, nav: NavHostController) {
     var q by rememberSaveable { mutableStateOf("") }
     var search by rememberSaveable { mutableStateOf("") }
-    // The whole list is kept on the phone for reading without a signal (a search is not).
-    val state = rememberLoaded(search) {
+    // 4.35.0: the filters (the caseload is null until chosen here: the server then uses the remembered one).
+    var fStatus by rememberSaveable { mutableStateOf("") }
+    var fWho by rememberSaveable { mutableStateOf<String?>(null) }
+    var fType by rememberSaveable { mutableStateOf("") }
+    var fAgency by rememberSaveable { mutableStateOf("") }
+    var fSchool by rememberSaveable { mutableStateOf("") }
+    var fOffice by rememberSaveable { mutableStateOf("") }
+    var filtersOpen by rememberSaveable { mutableStateOf(false) }
+    var applied by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    var filterError by remember { mutableStateOf<String?>(null) }
+    // The filter lists and the caseload in use, from the last reply that had them.
+    var filterInfo by remember { mutableStateOf<org.json.JSONObject?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val filters = mapOf("status" to fStatus, "who" to fWho, "type" to fType, "agency" to fAgency, "school" to fSchool, "office" to fOffice)
+    val whoDefault = if (api.scoped) "me" else ""
+    val shownWho = fWho ?: filterInfo?.str("who") ?: whoDefault
+    // The caseload counts as a filter whenever it is not Everyone's clients (as the iPhone app).
+    val on = filtersOnCount(filters + ("who" to shownWho), "")
+    val query = clientsQuery(filters, search)
+    // The whole list is kept on the phone for reading without a signal (a search or a filter is not).
+    val state = rememberLoaded(query.toString()) {
         // 4.29.0: with the server's total, so a list cut at its limit says so.
-        if (search.isEmpty()) api.callCached("clients", cacheKey = "clients").let { (r, at) -> parseClients(r).let { l -> Triple(l, listTotal(r, l.size), at) } }
-        else api.call("clients", mapOf("q" to search)).let { r -> parseClients(r).let { l -> Triple(l, listTotal(r, l.size), null) } }
+        val (r, at) = if (search.isEmpty() && filtersOnCount(filters, whoDefault) == 0) api.callCached("clients", query, cacheKey = "clients") else api.call("clients", query) to null
+        r.optJSONObject("filters")?.let { filterInfo = it }
+        parseClients(r).let { l -> Triple(l, listTotal(r, l.size), at) }
     }
     Page {
         // The server searches the name, email and phone (4.29.0), as the hint says.
         Field("Search clients", q, { q = it }, hint = "name, phone or email")
         SecondaryButton("Search") { search = q.trim() }
+        // 4.35.0: only from a server that sends the filters (an older one has none).
+        if (filterInfo != null) SecondaryButton(if (on > 0) "Filters, $on on" else "Filters") { filterError = null; filtersOpen = true }
         SecondaryButton("Add a client") { nav.navigate("clientEdit/0") }
+        ErrorText(filterError)
         Show(state, "clients") { (list, total, savedAt) ->
             OfflineCopyNotice(savedAt)
             Announce(if (search.isNotEmpty()) (if (total > list.size) "First ${list.size} of $total clients found" else "${list.size} ${if (list.size == 1) "client" else "clients"} found") else null)
-            Heading(countLabel(if (search.isEmpty()) "All clients" else "Clients matching $search", list.size, total, "first"))
-            if (total > list.size) Text("Showing the first ${list.size} of $total, by name. Search to find the others.")
+            // 4.35.0: the count is said once after the filters are applied.
+            if (applied > 0 && search.isEmpty()) Announce("$total ${if (total == 1) "client matches" else "clients match"} the filters.", key = "$applied:$total")
+            Heading(clientsHeading(list.size, total, on > 0, search))
+            clientsCutText(list.size, total, on > 0)?.let { Text(it) }
             if (list.isEmpty()) Text("No clients found.")
             list.forEach { c ->
                 ListRow(listOf(c.name, c.status, c.phone ?: ""), onClick = { nav.navigate("client/${c.id}") })
             }
+        }
+    }
+    val info = filterInfo
+    if (filtersOpen && info != null) ClientFiltersDialog(info, filters + ("who" to shownWho), offices = info.optJSONArray("offices").objects(),
+        whoDefault = whoDefault, onApply = { f ->
+            filtersOpen = false; filterError = null
+            val who = f["who"] ?: whoDefault
+            fun apply() {
+                fStatus = f["status"] ?: ""; fType = f["type"] ?: ""; fAgency = f["agency"] ?: ""; fSchool = f["school"] ?: ""; fOffice = f["office"] ?: ""
+                if (who != shownWho || fWho != null) fWho = who
+                applied++
+            }
+            // The caseload is remembered for the website too (the same setting), as the website's filter form does.
+            if (who != shownWho) scope.launch {
+                try { api.call("clients_filter", body = org.json.JSONObject().put("who", who)) } catch (e: ApiException) { filterError = e.message }
+                apply()
+            } else apply()
+        }, onCancel = { filtersOpen = false })
+}
+
+/** 4.35.0: the website's client list filters, in its order. */
+@Composable
+private fun ClientFiltersDialog(info: org.json.JSONObject, current: Map<String, String?>, offices: List<org.json.JSONObject>, whoDefault: String,
+                                onApply: (Map<String, String>) -> Unit, onCancel: () -> Unit) {
+    var status by rememberSaveable { mutableStateOf(current["status"] ?: "") }
+    var who by rememberSaveable { mutableStateOf(current["who"] ?: whoDefault) }
+    var type by rememberSaveable { mutableStateOf(current["type"] ?: "") }
+    var agency by rememberSaveable { mutableStateOf(current["agency"] ?: "") }
+    var school by rememberSaveable { mutableStateOf(current["school"] ?: "") }
+    var office by rememberSaveable { mutableStateOf(current["office"] ?: "") }
+    fun list(key: String) = info.optJSONArray(key)?.let { a -> List(a.length()) { a.optString(it) } }?.filter { it.isNotEmpty() } ?: emptyList()
+    val whoChoices = info.optJSONArray("who_choices").objects().map { it.optString("value") to it.optString("label") }
+    FormDialog("Filters", "Apply filters", busy = false, onSave = {
+        onApply(mapOf("status" to status, "who" to who, "type" to type, "agency" to agency, "school" to school.trim(), "office" to office))
+    }, onCancel = onCancel) {
+        Choice("Case status", status, listOf("" to "All statuses") + list("statuses").map { it to it }) { status = it }
+        if (whoChoices.isNotEmpty()) Choice("Caseload", who, whoChoices + listOfNotNull((who to who).takeIf { p -> whoChoices.none { it.first == p.first } })) { who = it }
+        Choice("Client type", type, listOf("" to "All types") + list("types").map { it to it }) { type = it }
+        Choice("Funding agency", agency, listOf("" to "All agencies") + list("agencies").map { it to it }) { agency = it }
+        Field("School", school, { school = it }, hint = "contains")
+        if (offices.isNotEmpty()) Choice("Office", office, listOf("" to "All offices") + offices.map { it.optInt("id").toString() to it.optString("name") }) { office = it }
+        // Clears every filter and shows the list at once (the caseload goes back to the account's default).
+        SecondaryButton("Clear filters") {
+            onApply(mapOf("status" to "", "who" to whoDefault, "type" to "", "agency" to "", "school" to "", "office" to ""))
         }
     }
 }
@@ -67,16 +136,41 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
     var portalKey by rememberSaveable { mutableStateOf("") }
     var consentAsk by remember { mutableStateOf(false) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    // 4.35.0: older notes loaded under the newest 50 (kept while the screen is open; a reload of the
+    // record drops them, and says so once). Not kept across process death: a page of notes is too
+    // large for the saved state.
+    var olderNotes by remember(id) { mutableStateOf<List<NoteItem>>(emptyList()) }
+    var olderBusy by remember { mutableStateOf(false) }
+    var olderError by remember { mutableStateOf<String?>(null) }
+    var olderSaid by remember { mutableStateOf<String?>(null) }
+    var lastTotal by remember { androidx.compose.runtime.mutableIntStateOf(-1) }
+    androidx.compose.runtime.LaunchedEffect(state.data) {
+        val r = state.data?.first ?: return@LaunchedEffect
+        val total = r.optInt("notes_total", -1)
+        // A reload keeps the older notes already loaded (the newest page is merged over them). Only when
+        // notes were removed meanwhile are they dropped, and that is said once unless a save's message is showing.
+        if (olderNotes.isNotEmpty() && lastTotal >= 0 && total in 0 until lastTotal) {
+            olderNotes = emptyList()
+            if (notice == null && Flash.message == null) olderSaid = "The notes were refreshed. Load older notes again if you need them."
+        }
+        lastTotal = total
+    }
+    Announce(olderSaid)
     Show(state, "the client") { (r, savedAt) ->
         val detail = parseClientDetail(r) ?: return@Show
         val c = detail.raw
         Page {
             Heading(detail.name, large = true)
             OfflineCopyNotice(savedAt)
+            // 4.35.0: as the website, the On Hold reason and return date come first.
+            if (detail.status == "On Hold") onHoldLine(c.str("on_hold_reason"), c.str("on_hold_until"))?.let { ListRow(listOf(it)) }
             ListRow(listOf("Status: " + detail.status))
             // 4.34.0: as the website's client page.
             c.str("client_type")?.let { ListRow(listOf("Client type: $it")) }
             c.str("dob")?.let { ListRow(listOf("Date of birth: " + dayText(it))) }
+            // 4.35.0: attendance and vision, as the website's Demographics.
+            attendanceText(c.optJSONObject("attendance") ?: r.optJSONObject("attendance"))?.let { ListRow(listOf(it)) }
+            visionText(c.str("vision_status"), if (c.has("vision_onset_age") && !c.isNull("vision_onset_age")) c.optInt("vision_onset_age") else null)?.let { ListRow(listOf(it)) }
             c.str("ipe_date")?.let { ListRow(listOf("IPE date: " + dayText(it) + (c.str("ipe_amended_on")?.let { a -> ", amended " + dayText(a) } ?: ""))) }
             detail.phone?.let { p -> ListRow(listOf("Phone: $p"), action = "call", onClick = {
                 if (!openLink(context, Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + p.filter { it.isDigit() || it == '+' })))) linkError = "This phone has no app for calls."
@@ -99,6 +193,8 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
             if (a11y.isNotEmpty()) ListRow(listOf("Accessibility: " + a11y.joinToString(", ")))
             if (c.optBoolean("a11y_screen_reader")) ListRow(listOf("Uses a screen reader"))
             c.str("a11y_notes")?.let { ListRow(listOf("Accessibility notes: $it")) }
+            c.str("preferred_language")?.let { l -> if (l == "es") ListRow(listOf("Preferred language: Spanish")) }
+            c.str("created_at")?.let { ListRow(listOf("Client since " + dayText(it))) }
             if (detail.customFields.isNotEmpty()) {
                 Heading("More details")
                 detail.customFields.forEach { (label, value) -> ListRow(listOf("$label: $value")) }
@@ -120,6 +216,7 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
             if (listOf("recommend", "progress", "intake", "draft").any { api.aiHas(it) }) SecondaryButton("AI help for this client") { nav.navigate("clientAi/$id") }
             if (api.can("clients") && api.aiHas("briefing")) SecondaryButton("AI case briefing") { nav.navigate("briefing/$id") }
             if (api.aiHas("voice") && api.can("clients")) SecondaryButton("Voice assistant") { nav.navigate("voice/$id/" + android.net.Uri.encode(detail.name.ifEmpty { "-" })) }
+            SecondaryButton("Tech assessments") { nav.navigate("assessments/$id") }
             SecondaryButton("Scored assessments") { nav.navigate("scoredList/$id") }
             SecondaryButton("Curriculum competencies") { nav.navigate("competency/$id") }
 
@@ -146,8 +243,32 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
                     listOfNotNull(rel.status, rel.expiresOn?.let { "ends " + dayText(it) }).joinToString(", "), rel.infoScope ?: ""))
             }
 
-            Heading(org.casemanagement.app.notesHeading(detail.notes.size, detail.notesTotal))
-            detail.notes.forEach { n -> NoteRow(n, onEdit = { nav.navigate("note/$id/edit/${n.id}") }, onAddendum = { nav.navigate("note/$id/addendum/${n.id}") }) }
+            // 4.35.0: after closure, the outcome survey and the follow-up checks (from a server that sends them).
+            (r.optJSONObject("after_closure") ?: c.optJSONObject("after_closure"))?.let { a ->
+                if (afterClosureShown(a)) AfterClosureSection(api, id, detail.name, a, onChanged = { m -> notice = m; state.reload() })
+            }
+
+            val notes = mergeNotePages(detail.notes, olderNotes)
+            Heading(org.casemanagement.app.notesHeading(notes.size, detail.notesTotal))
+            notes.forEach { n -> NoteRow(n, onEdit = { nav.navigate("note/$id/edit/${n.id}") }, onAddendum = { nav.navigate("note/$id/addendum/${n.id}") }) }
+            // 4.35.0: the older notes, a page at a time, as the iPhone app.
+            if (detail.notesTotal > notes.size && savedAt == null) {
+                SecondaryButton(if (olderBusy) "Loading older notes…" else olderNotesLabel(detail.notesTotal, notes.size)) {
+                    if (olderBusy) return@SecondaryButton
+                    olderBusy = true; olderError = null; olderSaid = null
+                    scope.launch {
+                        try {
+                            val page = parseClientDetail(api.call("client", mapOf("id" to id.toString(), "notes_offset" to notes.size.toString())))?.notes ?: emptyList()
+                            val merged = mergeNotePages(notes, page)
+                            olderNotes = merged.drop(detail.notes.size)
+                            val added = merged.size - notes.size
+                            olderSaid = if (added > 0) "$added older ${if (added == 1) "note" else "notes"} loaded." else "No older notes were found."
+                        } catch (e: ApiException) { olderError = e.message } finally { olderBusy = false }
+                    }
+                }
+                Announce(if (olderBusy) "Loading older notes…" else null, key = olderBusy)
+                ErrorText(olderError)
+            }
         }
         if (portalAsk) Confirm("Email a new portal link?", "A new link to the client portal is emailed to ${detail.email ?: ""}. Any earlier link stops working.", "Email the link", {
             notice = null; linkError = null
@@ -235,13 +356,32 @@ fun StatusHistoryScreen(api: Api, clientId: Int) {
 @Composable
 private fun NoteRow(n: NoteItem, onEdit: () -> Unit = {}, onAddendum: () -> Unit = {}) {
     var open by remember { mutableStateOf(false) }
-    val head = listOf(n.subject, n.noteType + ", " + whenText(n.createdAt) + (n.author?.let { ", by $it" } ?: ""))
+    // 4.35.0: the format, the track and who edited it, as the website's note rows.
+    val head = noteRowLines(n)
     ListRow(head, action = if (open) "close the note" else "read the note", state = if (open) "expanded" else "collapsed", onClick = { open = !open })
     if (open) {
         Text(n.body)
         // 4.34.0: as on the website, an editable note can be edited; a locked one takes an addendum.
         if (n.canEdit) SecondaryButton("Edit note: ${n.subject}", onClick = onEdit)
         if (n.locked) SecondaryButton("Add addendum to ${n.subject}", onClick = onAddendum)
+    }
+}
+
+/** 4.35.0: Generate structured note with nothing to work from (the iPhone app's words). */
+const val GENERATE_NOTHING = "Rough notes: type or dictate your rough notes here, or in the note's own boxes above, then choose Generate structured note."
+
+/**
+ * 4.35.0: one of a client's notes, paging back through the record 50 at a time until it is found
+ * (the editor can open a note older than the newest 50). Null when it is not on the record.
+ */
+suspend fun findClientNote(api: Api, clientId: Int, noteId: Int): NoteItem? {
+    var offset = 0
+    while (true) {
+        val r = api.call("client", if (offset == 0) mapOf("id" to clientId.toString()) else mapOf("id" to clientId.toString(), "notes_offset" to offset.toString()))
+        val d = parseClientDetail(r) ?: return null
+        d.notes.firstOrNull { it.id == noteId }?.let { return it }
+        offset += d.notes.size
+        if (d.notes.isEmpty() || offset >= d.notesTotal || offset > 5000) return null
     }
 }
 
@@ -272,9 +412,15 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
     var sections by rememberSaveable { mutableStateOf(listOf("", "", "", "")) }
     var sectionsBefore by rememberSaveable { mutableStateOf<List<String>?>(null) }
     var rough by rememberSaveable { mutableStateOf("") }
-    var questions by remember { mutableStateOf<List<String>>(emptyList()) }
-    var homework by remember { mutableStateOf<List<org.json.JSONObject>>(emptyList()) }
-    var include by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    var roughError by remember { mutableStateOf<String?>(null) }
+    // 4.35.0: the generated questions, homework items (with their edits) and ticks are kept across
+    // rotation and process death, as the rest of the note.
+    var questions by rememberSaveable(stateSaver = androidx.compose.runtime.saveable.Saver<List<String>, String>(
+        save = { stringsToText(it) }, restore = { stringsFromText(it) })) { mutableStateOf(emptyList()) }
+    var homework by rememberSaveable(stateSaver = androidx.compose.runtime.saveable.Saver<List<org.json.JSONObject>, String>(
+        save = { homeworkToText(it) }, restore = { homeworkFromText(it) })) { mutableStateOf(emptyList()) }
+    var include by rememberSaveable(stateSaver = androidx.compose.runtime.saveable.Saver<Set<Int>, String>(
+        save = { org.casemanagement.app.idsToText(it) }, restore = { org.casemanagement.app.idsFromText(it) })) { mutableStateOf(emptySet()) }
     var hwTrack by rememberSaveable { mutableStateOf("") }
     // 4.34.0: a refused homework due date, on the homework row it belongs to.
     var homeworkErrors by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
@@ -291,8 +437,7 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
     var keptText by rememberSaveable { mutableStateOf<String?>(null) }
     val existing = rememberLoaded(clientId, editNoteId, addendumTo) {
         val wanted = if (editNoteId > 0) editNoteId else addendumTo
-        if (wanted <= 0) null else parseClientDetail(api.call("client", mapOf("id" to clientId.toString())))?.notes?.firstOrNull { it.id == wanted }
-            ?: throw ApiException("That note is not among this client's latest 50 notes. Open it on the website.")
+        if (wanted <= 0) null else findClientNote(api, clientId, wanted) ?: throw ApiException("That note could not be found on this client's record. It may have been removed.")
     }
     androidx.compose.runtime.LaunchedEffect(existing.data) {
         val n = existing.data ?: return@LaunchedEffect
@@ -305,6 +450,8 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
             noteTrack = n.trackId ?: 0; noteVersion = n.noteVersion ?: ""
         } else {
             subject = org.casemanagement.app.addendumSubject(n.subject); type = "Addendum"
+            // 4.35.0: an addendum is filed on its note's track unless it was opened from another.
+            if (noteTrack == 0) noteTrack = n.trackId ?: 0
         }
     }
     val types = if (type.isNotEmpty() && type !in baseTypes) baseTypes + type else baseTypes
@@ -335,6 +482,11 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
             Choice("Note type", type, types.map { it to it }) { type = it }
             Choice("Format", format, listOf("free" to "Free text", "BIRP" to "BIRP", "PAIP" to "PAIP", "SOAP" to "SOAP")) { format = it; bodyError = null }
             Field("Subject", subject, { subject = it }, required = true)
+            // 4.35.0: any note can be filed on a track, as on the website (an addendum keeps its note's track).
+            val active = tracks.data ?: emptyList()
+            val trackOptions = listOf("0" to "General (not tied to a track)") + active.map { it.optInt("id").toString() to it.optString("title") } +
+                listOfNotNull((noteTrack.toString() to (existing.data?.trackTitle ?: "Track $noteTrack")).takeIf { noteTrack > 0 && active.none { a -> a.optInt("id") == noteTrack } })
+            Choice("Track", noteTrack.toString(), trackOptions) { noteTrack = it.toIntOrNull() ?: 0 }
         }
         // 4.31.0: opened from a completed session, the title ("Case note for Jane Doe, session on
         // Oct 20") is followed by the first thing to write; the type, format and the subject already
@@ -349,7 +501,7 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
             val mine = org.casemanagement.app.typedNoteText(format, body, sections, NOTE_LABELS[format])
             scope.launch {
                 try {
-                    val n = parseClientDetail(api.call("client", mapOf("id" to clientId.toString())))?.notes?.firstOrNull { it.id == parentId }
+                    val n = findClientNote(api, clientId, parentId)
                         ?: throw ApiException("That note could not be read again. Open it on the website.")
                     keptText = mine
                     subject = n.subject; type = n.noteType.ifEmpty { type }; format = n.noteFormat.takeIf { it in listOf("free", "BIRP", "PAIP", "SOAP") } ?: "free"
@@ -386,28 +538,6 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
             original?.let { o -> SecondaryButton("Restore my original text") { body = o; original = null; notice = "Your original text is back." } }
         } else {
             val labels = NOTE_LABELS[format] ?: NOTE_LABELS.getValue("BIRP")
-            if (api.aiHas("draft")) {
-                Field("Rough notes for the AI to sort into sections", rough, { rough = it }, hint = "optional", singleLine = false, minLines = 3)
-                if (rough.isNotBlank()) SecondaryButton(if (aiBusy) "Drafting… this can take up to a minute" else "Draft the $format sections") {
-                    if (aiBusy) return@SecondaryButton
-                    val before = sections
-                    scope.launch {
-                        aiBusy = true; error = null
-                        try {
-                            val r = api.call("ai_generate_note", body = org.json.JSONObject().put("client_id", clientId).put("note_format", format).put("text", rough))
-                            if (sections != before) { notice = "The sections changed while the AI was working, so the draft was not applied."; return@launch }
-                            val a = r.optJSONArray("sections")
-                            if (before.any { it.isNotBlank() }) sectionsBefore = before
-                            sections = List(4) { a?.optString(it) ?: "" }
-                            questions = r.optJSONArray("questions").let { q -> List(q?.length() ?: 0) { q!!.optString(it) } }
-                            homework = r.optJSONArray("homework").objects()
-                            include = homework.indices.toSet()
-                            notice = "$format sections drafted." + (if (questions.isNotEmpty()) " ${questions.size} things to double-check." else "") +
-                                (if (homework.isNotEmpty()) " ${homework.size} homework items found." else "") + " Review before saving."
-                        } catch (e: ApiException) { error = e.message } finally { aiBusy = false }
-                    }
-                }
-            }
             sectionsBefore?.let { old -> SecondaryButton("Restore my sections") { sections = old; sectionsBefore = null; notice = "Your sections are back." } }
             labels.forEachIndexed { i, l -> Field(l, sections[i], { v -> sections = sections.toMutableList().also { it[i] = v } }, singleLine = false, minLines = 3) }
             if (questions.isNotEmpty()) { Heading("Before you save, double-check"); questions.forEach { Text("• $it") } }
@@ -417,10 +547,58 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
                 if (active.isEmpty()) Text("Homework needs an active training track; none was found, so it will not be saved.")
                 else if (active.size == 1 && hwTrack.isEmpty()) hwTrack = active[0].optInt("id").toString()
                 if (active.isNotEmpty()) Choice("Homework goes on the track", hwTrack, listOf("" to "Choose a track") + active.map { it.optInt("id").toString() to it.optString("title") }) { hwTrack = it }
-                homework.forEachIndexed { i, h -> Tick("Include: " + h.optString("title"), i in include, error = homeworkErrors[i]) { on -> include = if (on) include + i else include - i } }
+                // 4.35.0: each item's title, instructions and due date can be changed before saving, as on the website.
+                homework.forEachIndexed { i, h ->
+                    val n = i + 1
+                    fun edit(key: String, v: String) { homework = homework.toMutableList().also { it[i] = org.json.JSONObject(it[i].toString()).put(key, v) } }
+                    Tick("Include: " + h.optString("title").ifBlank { "homework $n" }, i in include) { on -> include = if (on) include + i else include - i }
+                    if (i in include) {
+                        Field("Homework $n title", h.optString("title"), { edit("title", it) })
+                        Field("Homework $n instructions", h.optString("instructions"), { edit("instructions", it) }, singleLine = false, minLines = 2)
+                        if (active.isNotEmpty()) Field("Homework $n due date", h.optString("due"), { edit("due", it); homeworkErrors = homeworkErrors - i },
+                            hint = "optional, year-month-day", error = homeworkErrors[i])
+                    }
+                }
             }
             Field(if (mode == "edit") "Narrative (optional; left blank keeps the narrative already saved)" else "Narrative", body, { body = it },
                 hint = if (mode == "edit") null else "optional", singleLine = false, minLines = 3)
+        }
+        // 4.35.0: Generate structured note, in every format, from the rough box or else from what was typed
+        // (a free-text note becomes BIRP, its text kept as the narrative), as the website and the iPhone app.
+        if (api.aiHas("draft") && mode != "edit") {
+            Field("Rough notes", rough, { rough = it; roughError = null }, hint = "optional; leave empty to use what you typed in the note", singleLine = false, minLines = 3, error = roughError)
+            SecondaryButton(if (aiBusy) "Generating… this can take up to a minute" else "Generate structured note") {
+                if (aiBusy) return@SecondaryButton
+                presses++
+                val source = org.casemanagement.app.ui.generatorSource(rough, body, sections)
+                if (source.isEmpty()) { roughError = GENERATE_NOTHING; error = GENERATE_NOTHING; return@SecondaryButton }
+                roughError = null
+                val before = sections
+                val wasFree = !structured
+                val fmt = generateFormat(format)
+                scope.launch {
+                    aiBusy = true; error = null
+                    try {
+                        val r = api.call("ai_generate_note", body = org.json.JSONObject().put("client_id", clientId).put("note_format", fmt).put("text", source))
+                        if (sections != before) { error = "The $fmt sections changed while the draft was being generated, so it was not applied. Choose Generate structured note again to replace them."; return@launch }
+                        val a = r.optJSONArray("sections")
+                        if (before.any { it.isNotBlank() }) sectionsBefore = before
+                        val got = r.str("format")?.takeIf { it in NOTE_LABELS } ?: fmt
+                        format = got
+                        // A section the AI left empty keeps what was typed in it.
+                        sections = List(4) { i -> a?.optString(i)?.takeIf { it.isNotBlank() } ?: before[i] }
+                        questions = r.optJSONArray("questions").let { q -> List(q?.length() ?: 0) { q!!.optString(it) } }
+                        homework = r.optJSONArray("homework").objects()
+                        include = homework.indices.toSet()
+                        homeworkErrors = emptyMap()
+                        var summary = "$got sections drafted."
+                        if (wasFree && body.isNotBlank()) summary += " The text you typed in Note is kept as the narrative, saved after the sections."
+                        if (questions.isNotEmpty()) summary += " ${questions.size} ${if (questions.size == 1) "thing" else "things"} to double-check."
+                        if (homework.isNotEmpty()) summary += " ${homework.size} homework ${if (homework.size == 1) "item" else "items"} found."
+                        notice = "$summary Review before saving."
+                    } catch (e: ApiException) { error = e.message } finally { aiBusy = false }
+                }
+            }
         }
         if (forSession) about()
         // 4.30.0: the AI's wait is said once when it starts.
@@ -428,6 +606,8 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
         // 4.30.0: Save stays enabled; a press says what is still needed.
         val missing = stillNeeded(missingNames("Subject" to subject.isBlank(),
             (if (structured) "at least one section" else "Note") to (if (structured) sections.none { it.isNotBlank() } else body.isBlank())))
+        // 4.35.0: a group's note can be left for later; it stays on Notes to write.
+        val inGroup = forSession && mode == "new" && GroupNoteQueue.items.size > 1 && GroupNoteQueue.items.any { it.sessionId == sessionId }
         PrimaryButton(when (mode) { "edit" -> "Save changes"; "addendum" -> "Save addendum"; else -> "Save note" }, busy = busy, missing = missing) {
             presses++
             if (busy) return@PrimaryButton
@@ -437,6 +617,12 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
             }
             if (mode != "edit" && structured && include.isNotEmpty() && homework.isNotEmpty() && hwTrack.isEmpty() && (tracks.data ?: emptyList()).isNotEmpty()) {
                 error = "Choose a track for the homework, or untick it."; return@PrimaryButton
+            }
+            // 4.35.0: a homework due date is checked here with the server's words (numbered among the items sent).
+            if (mode == "new" && structured && hwTrack.isNotEmpty()) {
+                val rows = homework.indices.filter { i -> i in include && homework[i].optString("title").isNotBlank() }
+                val bad = rows.mapIndexedNotNull { k, i -> homeworkDueRule(k + 1, homework[i].optString("due"))?.let { i to it } }.toMap()
+                if (bad.isNotEmpty()) { homeworkErrors = bad; error = errorSummary(bad.values); return@PrimaryButton }
             }
             bodyError = null
             scope.launchSave({ busy = it }, { error = it }) {
@@ -491,8 +677,31 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
                 val saved = try { saveOrQueue(api, "add_note", payload, (if (mode == "addendum") "Addendum: " else "Case note: ") + subject.trim().take(40), savedWords) }
                     catch (e: ApiException) { homeworkErrors = org.casemanagement.app.homeworkRowErrors(e.reply, sentRows); throw e }
                 // 4.34.0: the homework added and the session warning, as the website says them.
-                Flash.pending = org.casemanagement.app.noteSavedMessage(saved.reply, savedWords) ?: saved.message
-                nav.popBackStack()
+                val said = org.casemanagement.app.noteSavedMessage(saved.reply, savedWords) ?: saved.message
+                // 4.35.0: a group's notes are written in turn: saving one opens the next (as the website).
+                val next = if (forSession) nextInQueue(GroupNoteQueue.items, sessionId) else null
+                if (next != null) {
+                    Flash.pending = said + nextNoteWords(next.first.clientName, next.second, GroupNoteQueue.items.size)
+                    nav.popBackStack(); nav.navigate(next.first.route)
+                } else {
+                    if (forSession && GroupNoteQueue.items.any { it.sessionId == sessionId }) GroupNoteQueue.items = emptyList()
+                    Flash.pending = said
+                    nav.popBackStack()
+                }
+            }
+        }
+        if (inGroup) {
+            val next = nextInQueue(GroupNoteQueue.items, sessionId)
+            SecondaryButton("Skip for now") {
+                if (busy) return@SecondaryButton
+                if (next != null) {
+                    Flash.pending = "Skipped for now: that note stays under Notes to write." + nextNoteWords(next.first.clientName, next.second, GroupNoteQueue.items.size)
+                    nav.popBackStack(); nav.navigate(next.first.route)
+                } else {
+                    GroupNoteQueue.items = emptyList()
+                    Flash.pending = "Skipped for now: that note stays under Notes to write."
+                    nav.popBackStack()
+                }
             }
         }
     }
@@ -510,19 +719,40 @@ fun hoursRule(hours: Double?, miles: Double?): String? {
     return null
 }
 
-/** 4.34.0: log_hours' errors keys on the form's fields (the server's mileage is the form's miles). */
-fun logHoursFieldErrors(reply: org.json.JSONObject?): Map<String, String> =
-    (serverFieldErrors(reply) ?: emptyMap()).mapKeys { (k, _) -> if (k == "mileage") "miles" else k }
+/**
+ * 4.34.0: log_hours' errors keys on the form's fields (the server's mileage is the form's miles).
+ * 4.35.0: a refusal without a map is tied by its start ("Goal this session advanced: …").
+ */
+fun logHoursFieldErrors(reply: org.json.JSONObject?, message: String? = null): Map<String, String> =
+    (serverFieldErrors(reply, LOG_HOURS_ERROR_FIELDS, message) ?: emptyMap()).mapKeys { (k, _) -> if (k == "mileage") "miles" else k }
 
-/** Hours on a training track, with mileage; with no signal they are kept and sent later. */
+/** 4.35.0: log_hours' one-message refusals, by the field their words start with. */
+val LOG_HOURS_ERROR_FIELDS = listOf("Goal this session advanced" to "goal_id", "RSA category this visit" to "rsa_category",
+    "Service this visit" to "service_type", "Work date" to "date")
+
+/** The organisation's services, when the server sent none (as the iPhone app). */
+val SERVICE_TYPES_FALLBACK = listOf("Assistive Technology", "Rehab Teaching", "Counseling", "Pre-ETS", "Other")
+
+/**
+ * Hours on a training track, with mileage; with no signal they are kept and sent later.
+ * 4.35.0: as the website's Record a session and the iPhone app: the service this visit, the RSA
+ * category, the goal advanced, and a session note saved with the hours (or on its own, hours blank).
+ */
 @Composable
 fun LogHoursScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
     val tracks = rememberLoaded(trackId) { parseTracks(api.call("tracks")) }
+    val goals = rememberLoaded(trackId) {
+        try { org.casemanagement.app.parseGoals(api.call("goals", mapOf("track_id" to trackId.toString()))).filter { it.status != "Achieved" } } catch (e: ApiException) { emptyList() }
+    }
     var date by rememberSaveable { mutableStateOf(today()) }
     var hours by rememberSaveable { mutableStateOf("") }
     var miles by rememberSaveable { mutableStateOf("") }
     var description by rememberSaveable { mutableStateOf("") }
     var category by rememberSaveable { mutableStateOf("") }
+    // Null until chosen here: the server then uses the track's own service.
+    var serviceType by rememberSaveable { mutableStateOf<String?>(null) }
+    var goal by rememberSaveable { mutableStateOf("0") }
+    var sessionNote by rememberSaveable { mutableStateOf("") }
     // The drawn signature too is kept across rotation and process death (4.28.0).
     val signature = rememberSignatureState()
     var signedName by rememberSaveable { mutableStateOf("") }
@@ -538,38 +768,52 @@ fun LogHoursScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int
     Page {
         val t = tracks.data?.firstOrNull { it.id == trackId }
         Heading(t?.let { it.client + ": " + it.title } ?: "Training track")
+        val services = api.formList("service_types", SERVICE_TYPES_FALLBACK)
+        val svc = serviceType ?: t?.serviceType ?: services.first()
+        Choice("Service this visit", svc, (services + listOfNotNull(svc.takeIf { it !in services })).map { it to it }, error = fieldErrors["service_type"]) { serviceType = it }
         val cats = t?.visitCategories ?: emptyList()
-        if (cats.isNotEmpty()) Choice("Kind of visit", category, listOf("" to "Not chosen") + cats.map { it to it }) { category = it }
+        if (cats.size > 1) Choice("Rehabilitation Services Administration (RSA) category this visit", category.ifEmpty { cats.first() }, cats.map { it to it }, error = fieldErrors["rsa_category"]) { category = it }
+        else if (cats.size == 1) ListRow(listOf("Rehabilitation Services Administration (RSA) category: " + cats.first()))
+        val open = goals.data ?: emptyList()
+        if (open.isNotEmpty()) Choice("Goal this session advanced", goal, listOf("0" to "None") + open.map { it.id.toString() to it.specificGoal }, error = fieldErrors["goal_id"]) { goal = it }
         Field("Date", date, { date = it }, hint = "year-month-day, such as ${today()}", error = fieldErrors["date"], required = true)
-        Field("Hours", hours, { hours = it }, hint = "such as 1.5, or 0 with miles for travel only", keyboard = KeyboardType.Decimal, error = fieldErrors["hours"], required = true)
+        Field("Hours", hours, { hours = it }, hint = "0 with miles for travel only; blank to save only the session note", keyboard = KeyboardType.Decimal, error = fieldErrors["hours"])
         Field("Miles driven", miles, { miles = it }, hint = "0 if none", keyboard = KeyboardType.Decimal, error = fieldErrors["miles"])
-        Field("What was done", description, { description = it }, singleLine = false, minLines = 4, error = fieldErrors["description"], required = true)
+        Field("What did you work on?", description, { description = it }, hint = "required with hours", singleLine = false, minLines = 4, error = fieldErrors["description"])
+        Field("Session note", sessionNote, { sessionNote = it }, hint = "optional", singleLine = false, minLines = 4, error = fieldErrors["session_note"])
         SignaturePad(signature)
         Field("Client's typed name", signedName, { signedName = it }, hint = "optional; counts as their acknowledgement")
         ErrorText(error, focusKey = presses)
         PrimaryButton("Log hours", busy = busy) {
             presses++
-            val h = number(hours)
+            val noteOnly = hours.isBlank()
+            val h = if (noteOnly) 0.0 else number(hours)
             val m = number(miles.ifBlank { "0" })
             fieldErrors = listOfNotNull(
-                if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date.trim())) "date" to "Enter the date as year-month-day, such as ${today()}." else null,
-                hoursRule(h, m)?.let { "hours" to it },
+                // 4.35.0: a real date, not in the future (the server's words).
+                if (!realDate(date)) "date" to "Work date must be a valid date (YYYY-MM-DD)."
+                else if (date.trim() > today()) "date" to "Work date: ${dayText(date.trim())} is in the future. Hours are logged once a session has taken place: enter the session date, today or earlier."
+                else null,
+                hoursRule(hours, m, sessionNote)?.let { "hours" to it },
                 if (m == null || m < 0 || m > 1000) "miles" to "Enter the miles as a number from 0 to 1000." else null,
-                if (description.isBlank()) "description" to "Say what was done." else null,
+                if (!noteOnly && description.isBlank()) "description" to "Describe the activity, for the hours on the invoice." else null,
             ).toMap()
             when {
                 busy -> {}
                 h == null || m == null || fieldErrors.isNotEmpty() -> error = errorSummary(fieldErrors.values)
                 else -> scope.launchSave({ busy = it }, { error = it }) {
-                    val payload = org.json.JSONObject().put("track_id", trackId).put("hours", h).put("date", date.trim())
-                        .put("mileage", m).put("description", description.trim()).put("idem_key", idem)
-                    if (category.isNotEmpty()) payload.put("rsa_category", category)
+                    val payload = logHoursPayload(trackId, hours, date, m, description, serviceType ?: "",
+                        if (cats.size > 1) category.ifEmpty { cats.first() } else "", goal.toIntOrNull() ?: 0, sessionNote, idem)
                     signature.png(density)?.let { payload.put("signature_b64", it) }
                     if (signedName.isNotBlank()) payload.put("signed_name", signedName.trim().take(120))
-                    val saved = try { saveOrQueue(api, "log_hours", payload, "Hours: ${hoursText(h)} on " + (t?.client ?: "track $trackId"), "Hours logged.") }
-                    catch (e: ApiException) { fieldErrors = logHoursFieldErrors(e.reply); throw e }
+                    val who = t?.client ?: "track $trackId"
+                    val saved = try { saveOrQueue(api, "log_hours", payload, if (noteOnly) "Session note: $who" else "Hours: ${hoursText(h)} on $who", "Hours logged.") }
+                    catch (e: ApiException) { fieldErrors = logHoursFieldErrors(e.reply, e.message); throw e }
+                    val r = saved.reply
+                    val said = if (r == null || r.optBoolean("deduplicated")) saved.message
+                        else logHoursMessage(h, sessionNote.isNotBlank(), noteOnly || (r.optBoolean("note_saved") && r.has("hours_logged") && !r.optBoolean("hours_logged")))
                     // 4.34.0: the website's reminder when the track has no homework.
-                    Flash.pending = listOfNotNull(saved.message, saved.reply?.str("reminder")).joinToString(" ")
+                    Flash.pending = listOfNotNull(said, r?.str("reminder")).joinToString(" ")
                     nav.popBackStack()
                 }
             }

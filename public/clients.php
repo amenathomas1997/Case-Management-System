@@ -52,9 +52,10 @@ $showArchived = isset($_GET['archived']) && can('admin');
 // saved, staff limited to their own caseload start on "My clients"; everyone
 // else on "Everyone's clients".
 // Named instructors too (3.0.50), for anyone who sees every caseload.
-$instructors = caseload_scoped() ? [] : array_values(array_filter(db()->query("SELECT DISTINCT u.id, u.name FROM users u JOIN clients c ON c.assigned_to = u.id WHERE u.is_active = 1 AND c.archived_at IS NULL ORDER BY u.name")->fetchAll(), fn($i) => (int)$i['id'] !== (int)$user['id']));
-$whoChoices = array_merge(['', 'me', 'unassigned'], array_map(fn($i) => 'u' . (int)$i['id'], $instructors));
-$whoKey = 'clients_filter_' . (int)$user['id'];
+// The choices, the remembered caseload and the filter SQL are shared with the apps (inc/client_list.php, 4.35.0).
+$instructors = client_list_instructors($user);
+$whoChoices = array_column(client_list_who_choices($user), 0);
+$whoKey = client_list_who_key($user);
 // The filter form is sent as a CSRF-checked POST (4.28.0): only it remembers the caseload, and it
 // then opens the list at a plain address. A link, even one with save=1, shows that caseload
 // without replacing the user's remembered choice.
@@ -72,8 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['filter_clients'])) {
 if (is_string($_GET['who'] ?? null)) {
     $who = in_array($_GET['who'], $whoChoices, true) ? $_GET['who'] : '';
 } else {
-    $savedWho = setting($whoKey);
-    $who = $savedWho !== null && in_array($savedWho, $whoChoices, true) ? $savedWho : (caseload_scoped() ? 'me' : '');
+    $who = client_list_who($user, null);
 }
 
 $sql = 'SELECT c.*, u.name AS instructor, (SELECT COUNT(*) FROM training_tracks t WHERE t.client_id = c.id AND t.status = "Active") AS active_tracks
@@ -81,21 +81,14 @@ $sql = 'SELECT c.*, u.name AS instructor, (SELECT COUNT(*) FROM training_tracks 
 $params = [];
 $sql .= $showArchived ? ' AND c.archived_at IS NOT NULL' : ' AND c.archived_at IS NULL';
 if ($q !== '') { $sql .= " AND (c.name LIKE ? ESCAPE '!' OR c.email LIKE ? ESCAPE '!' OR c.counselor_name LIKE ? ESCAPE '!')"; $like = '%' . strtr($q, ['!' => '!!', '%' => '!%', '_' => '!_']) . '%'; array_push($params, $like, $like, $like); }
-if (in_array($statusFilter, client_statuses(), true)) { $sql .= ' AND c.status = ?'; $params[] = $statusFilter; }
-if ($who === 'me') { $sql .= ' AND c.assigned_to = ?'; $params[] = $user['id']; }
-elseif ($who === 'unassigned') { $sql .= ' AND c.assigned_to IS NULL'; }
-elseif (str_starts_with($who, 'u')) { $sql .= ' AND c.assigned_to = ?'; $params[] = (int)substr($who, 1); }
-// Client type, funding agency (any of the client's tracks) and school (3.0.50).
+// Client type, funding agency (any of the client's tracks) and school (3.0.50), and one office's clients (4.22.0).
 $typeFilter = in_array($_GET['type'] ?? '', cms_list_items('client_types'), true) ? $_GET['type'] : '';
 $agencyFilter = is_string($_GET['agency'] ?? null) ? trim($_GET['agency']) : '';
 $schoolFilter = is_string($_GET['school'] ?? null) ? trim($_GET['school']) : '';
-if ($typeFilter !== '') { $sql .= ' AND c.client_type = ?'; $params[] = $typeFilter; }
-if ($agencyFilter !== '') { $sql .= ' AND EXISTS (SELECT 1 FROM training_tracks ft WHERE ft.client_id = c.id AND ft.funding_agency = ?)'; $params[] = $agencyFilter; }
-if ($schoolFilter !== '') { $sql .= ' AND c.school LIKE ?'; $params[] = '%' . $schoolFilter . '%'; }
-// One office's clients (4.22.0).
-$officeFilter = offices_on() && is_string($_GET['office'] ?? null) && ctype_digit($_GET['office']) && office_get((int)$_GET['office']) ? (int)$_GET['office'] : 0;
-if ($officeFilter > 0) { $sql .= ' AND c.office_id = ?'; $params[] = $officeFilter; }
-if (caseload_scoped()) { $sql .= ' AND c.assigned_to = ?'; $params[] = $user['id']; }
+$officeFilter = client_list_office($_GET);
+[$filterSql, $filterParams] = client_list_where(['status' => $statusFilter, 'who' => $who, 'type' => $typeFilter, 'agency' => $agencyFilter, 'school' => $schoolFilter, 'office' => (string)$officeFilter], $user);
+$sql .= $filterSql;
+$params = array_merge($params, $filterParams);
 // The download has every match, past the screen's 500 rows (3.0.50).
 if (isset($_GET['export'])) {
     $ex = db()->prepare($sql . ' ORDER BY c.name');
@@ -154,7 +147,7 @@ page_header($showArchived ? 'Archived clients' : 'Clients', $user, 'clients');
       <label for="type">Client type</label>
       <select id="type" name="type"><option value="">All types</option><?= select_options(cms_list_items('client_types'), $typeFilter) ?></select>
     </div>
-    <?php $agencies = db()->query("SELECT DISTINCT funding_agency FROM training_tracks WHERE funding_agency NOT IN ('', 'Private pay', 'No charge') ORDER BY funding_agency")->fetchAll(PDO::FETCH_COLUMN); ?>
+    <?php $agencies = client_list_filters($user)['agencies']; ?>
     <div class="field">
       <label for="agency">Funding agency</label>
       <select id="agency" name="agency"><option value="">All agencies</option><?= select_options(array_map('strval', $agencies), $agencyFilter) ?></select>

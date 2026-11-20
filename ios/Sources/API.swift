@@ -150,6 +150,61 @@ struct ClientsResponse: Decodable {
     let clients: [ClientRow]
     /// How many clients matched in all (4.34.0); nil from an older server.
     var total: Int?
+    /// The website's client-list filters (4.35.0, sent for with_filters=1); nil from an older
+    /// server, which hides the Filters button.
+    var filters: ClientListFilters?
+    private enum CodingKeys: String, CodingKey { case clients, total, filters }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        clients = try c.decode([ClientRow].self, forKey: .clients)
+        total = try? c.decodeIfPresent(Int.self, forKey: .total)
+        filters = (try? c.decodeIfPresent(ClientListFilters.self, forKey: .filters)) ?? nil
+    }
+}
+
+/// A choice of the client list's Caseload filter ("" everyone's, "me", "none", "u<id>").
+struct ClientListChoice: Decodable, Hashable {
+    let value: String
+    let label: String
+    private enum CodingKeys: String, CodingKey { case value, label }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        value = (try? c.decode(String.self, forKey: .value)) ?? ""
+        label = (try? c.decode(String.self, forKey: .label)) ?? value
+    }
+}
+
+/// An office the client list can be filtered by.
+struct ClientListOffice: Decodable, Hashable {
+    let id: Int
+    let name: String
+    private enum CodingKeys: String, CodingKey { case id, name }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = SessionNoteTarget.int(c, .id) ?? 0
+        name = (try? c.decode(String.self, forKey: .name)) ?? ""
+    }
+}
+
+/// clients' `filters` (4.35.0): the caseload in use (the remembered one unless another was
+/// sent) and each filter's choices, as clients.php offers them.
+struct ClientListFilters: Decodable {
+    let who: String
+    let statuses: [String]
+    let whoChoices: [ClientListChoice]
+    let types: [String]
+    let agencies: [String]
+    let offices: [ClientListOffice]
+    private enum CodingKeys: String, CodingKey { case who, statuses, whoChoices, types, agencies, offices }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        who = (try? c.decode(String.self, forKey: .who)) ?? ""
+        statuses = (try? c.decode([String].self, forKey: .statuses)) ?? []
+        whoChoices = LenientList.decode(ClientListChoice.self, from: c, forKey: .whoChoices)
+        types = (try? c.decode([String].self, forKey: .types)) ?? []
+        agencies = (try? c.decode([String].self, forKey: .agencies)) ?? []
+        offices = LenientList.decode(ClientListOffice.self, from: c, forKey: .offices).filter { $0.id > 0 }
+    }
 }
 
 struct ClientInfo: Decodable {
@@ -218,6 +273,14 @@ enum FormOptions {
         let stored = cache.lists?[name] ?? []
         if stored.isEmpty || (fixedLength.contains(name) && stored.count != builtIn.count) { return builtIn }
         return stored
+    }
+    /// Whether the server has sent this list (form_options has loaded it).
+    static func has(_ name: String) -> Bool {
+        cache.lock.lock(); defer { cache.lock.unlock() }
+        if cache.lists == nil {
+            cache.lists = UserDefaults.standard.dictionary(forKey: key) as? [String: [String]] ?? [:]
+        }
+        return !(cache.lists?[name] ?? []).isEmpty
     }
     static func save(_ lists: [String: [String]]) {
         cache.lock.lock(); defer { cache.lock.unlock() }
@@ -386,7 +449,10 @@ struct ClientDetail: Decodable {
     /// Office, custom fields, device counts and documents waiting to be signed (4.25.0), read
     /// from the same client object; empty from an older server.
     var extras = ClientExtras()
-    private enum CodingKeys: String, CodingKey { case client, notes, tracks, notesTotal, releases, texting, updatedAt }
+    /// After closure (4.35.0): the outcome surveys and the 30, 60 and 90-day follow-up checks,
+    /// nil when the website would not show the section (or from an older server).
+    var afterClosure: AfterClosureState?
+    private enum CodingKeys: String, CodingKey { case client, notes, tracks, notesTotal, releases, texting, updatedAt, afterClosure, attendance }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         var info = try c.decode(ClientInfo.self, forKey: .client)
@@ -399,6 +465,67 @@ struct ClientDetail: Decodable {
         releases = (try? c.decodeIfPresent([ClientRelease].self, forKey: .releases)) ?? []
         texting = try? c.decodeIfPresent(ClientTexting.self, forKey: .texting)
         extras = (try? c.decode(ClientExtras.self, forKey: .client)) ?? ClientExtras()
+        // Sent beside the client object or inside it: either is read.
+        if extras.attendance == nil { extras.attendance = try? c.decodeIfPresent(ClientAttendance.self, forKey: .attendance) }
+        afterClosure = (try? c.decodeIfPresent(AfterClosureState.self, forKey: .afterClosure)) ?? nil
+        if afterClosure == nil, let inner = try? c.nestedContainer(keyedBy: CodingKeys.self, forKey: .client) {
+            afterClosure = (try? inner.decodeIfPresent(AfterClosureState.self, forKey: .afterClosure)) ?? nil
+        }
+    }
+}
+
+/// One outcome survey in the After closure section (4.35.0), with the website's line for it.
+struct ClosureSurvey: Decodable, Identifiable {
+    let id: Int
+    let text: String
+    private enum CodingKeys: String, CodingKey { case id, text, sentAt, completedAt, satisfaction, goalsMet }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = SessionNoteTarget.int(c, .id) ?? 0
+        if let t = try? c.decode(String.self, forKey: .text), !t.isEmpty { text = t }
+        else if let done = try? c.decode(String.self, forKey: .completedAt) {
+            text = "Answered \(done.prefix(10)): satisfaction \(SessionNoteTarget.int(c, .satisfaction) ?? 0) of 10, goals met \(SessionNoteTarget.int(c, .goalsMet) ?? 0) of 10"
+        } else {
+            text = "Emailed \(((try? c.decode(String.self, forKey: .sentAt)) ?? "").prefix(10)), not answered yet"
+        }
+    }
+}
+
+/// One 30, 60 or 90-day follow-up check (4.35.0): recorded, not due yet, or due now.
+struct ClosureFollowup: Decodable, Identifiable {
+    let id: Int
+    let intervalDays: Int
+    let dueOn: String
+    let status: String
+    let dueNow: Bool
+    let text: String
+    private enum CodingKeys: String, CodingKey { case id, intervalDays, dueOn, status, dueNow, text }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = SessionNoteTarget.int(c, .id) ?? 0
+        intervalDays = SessionNoteTarget.int(c, .intervalDays) ?? 0
+        dueOn = String(((try? c.decode(String.self, forKey: .dueOn)) ?? "").prefix(10))
+        status = (try? c.decode(String.self, forKey: .status)) ?? "Pending"
+        dueNow = SessionNoteTarget.flag(c, .dueNow) ?? false
+        let t = (try? c.decode(String.self, forKey: .text)) ?? ""
+        text = t.isEmpty ? "\(intervalDays)-day check, \(status == "Pending" ? "due \(dueOn)" : status.lowercased())" : t
+    }
+    /// "30-day check", the website's name for it.
+    var label: String { "\(intervalDays)-day check" }
+}
+
+/// The client record's after_closure (4.35.0).
+struct AfterClosureState: Decodable {
+    let surveys: [ClosureSurvey]
+    let followups: [ClosureFollowup]
+    /// The client prefers phone or post, so the survey is not emailed.
+    let byPhone: Bool
+    private enum CodingKeys: String, CodingKey { case surveys, followups, byPhone }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        surveys = LenientList.decode(ClosureSurvey.self, from: c, forKey: .surveys)
+        followups = LenientList.decode(ClosureFollowup.self, from: c, forKey: .followups)
+        byPhone = SessionNoteTarget.flag(c, .byPhone) ?? false
     }
 }
 
@@ -416,7 +543,20 @@ struct ClientExtras: Decodable {
     /// The server has the 4.25.0 features (message files, document sharing, documents to sign,
     /// release requests): its client record carries device_counts. An older server would ignore them.
     var supports425 = false
-    private enum CodingKeys: String, CodingKey { case officeId, office, customFields, customFieldsEdit, offices, deviceCounts, signaturesWaiting }
+    /// 4.35.0: the portal language ("en" or "es"), vision status and age of onset, the On Hold
+    /// reason and expected return date (yyyy-MM-dd), when the record was created, and the
+    /// session attendance counts, as the website's client page shows them. `supports435` is
+    /// false from an older server, which neither sends nor saves them.
+    var preferredLanguage: String?
+    var visionStatus: String?
+    var visionOnsetAge: Int?
+    var onHoldReason: String?
+    var onHoldUntil: String?
+    var createdAt: String?
+    var attendance: ClientAttendance?
+    var supports435 = false
+    private enum CodingKeys: String, CodingKey { case officeId, office, customFields, customFieldsEdit, offices, deviceCounts, signaturesWaiting,
+                                                     preferredLanguage, visionStatus, visionOnsetAge, onHoldReason, onHoldUntil, createdAt, attendance }
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -428,7 +568,37 @@ struct ClientExtras: Decodable {
         deviceCounts = (try? c.decodeIfPresent(DeviceCounts.self, forKey: .deviceCounts)) ?? DeviceCounts()
         signaturesWaiting = (try? c.decodeIfPresent(Int.self, forKey: .signaturesWaiting)) ?? 0
         supports425 = c.contains(.deviceCounts)
+        func text(_ key: CodingKeys) -> String? {
+            let t = ((try? c.decodeIfPresent(String.self, forKey: key)) ?? nil)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (t?.isEmpty ?? true) ? nil : t
+        }
+        preferredLanguage = text(.preferredLanguage)
+        visionStatus = text(.visionStatus)
+        visionOnsetAge = SessionNoteTarget.int(c, .visionOnsetAge)
+        onHoldReason = text(.onHoldReason)
+        onHoldUntil = text(.onHoldUntil).map { String($0.prefix(10)) }
+        createdAt = text(.createdAt)
+        attendance = try? c.decodeIfPresent(ClientAttendance.self, forKey: .attendance)
+        supports435 = c.contains(.preferredLanguage)
     }
+}
+
+/// The client's sessions by outcome (4.35.0), as the website's "Attendance: …" line.
+struct ClientAttendance: Decodable {
+    let completed: Int
+    let noShow: Int
+    let cancelled: Int
+    private enum CodingKeys: String, CodingKey { case completed, noShow, cancelled }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        completed = SessionNoteTarget.int(c, .completed) ?? 0
+        noShow = SessionNoteTarget.int(c, .noShow) ?? 0
+        cancelled = SessionNoteTarget.int(c, .cancelled) ?? 0
+    }
+    init(completed: Int, noShow: Int, cancelled: Int) { self.completed = completed; self.noShow = noShow; self.cancelled = cancelled }
+    var any: Bool { completed + noShow + cancelled > 0 }
+    /// "N completed, N no-shows, N cancelled", the website's words.
+    var text: String { "\(completed) completed, \(noShow) no-show\(noShow == 1 ? "" : "s"), \(cancelled) cancelled" }
 }
 
 /// Whether the server has the 4.25.0 features, read from a client record alone (the message

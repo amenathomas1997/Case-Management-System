@@ -336,3 +336,53 @@ function offer_withdraw_for_staff(int $userId, string $why): int {
     }
     return count($ids);
 }
+
+/**
+ * The offer form's field an offer_times_save() refusal is about (4.35.0: moved from
+ * portal_requests.php, shared with the app's offer_times): staff (With), minutes (Length),
+ * track_id (Training track), times (the first time), or null for one about the request itself
+ * (closed, no portal link), which is said as a message.
+ */
+function offer_times_error_field(array $res): ?string {
+    $err = (string)($res['error'] ?? '');
+    return match (true) {
+        ($res['field'] ?? '') === 'staff' => 'staff',
+        str_starts_with($err, 'Choose a length') => 'minutes',
+        str_starts_with($err, 'Choose one of this client') => 'track_id',
+        str_starts_with($err, 'Enter at least one'), str_starts_with($err, 'Offer at most'), str_starts_with($err, 'None of the times') => 'times',
+        default => null,
+    };
+}
+
+/** What is said once times are offered (portal_requests.php's message, shared since 4.35.0). */
+function offer_times_message(array $res, string $clientName): string {
+    return $res['offered'] . ' time' . ($res['offered'] === 1 ? '' : 's') . ' offered to ' . $clientName . '. They choose one in their portal.'
+        . (empty($res['emailed']) ? ' They were not emailed (they prefer phone or post, or have no confirmed email): tell them the times are waiting.' : '')
+        . ($res['refused'] ? ' Not offered: ' . implode(' ', $res['refused']) : '');
+}
+
+/**
+ * The offer form's starting values for a request (4.35.0, moved from portal_requests.php).
+ * $request needs type, session_id and client_id. With: the client's instructor, else $userId;
+ * a reschedule starts from the session's own instructor and place (what is offered is what the
+ * session becomes when the client chooses a time) and keeps its length. tracks: the client's
+ * active tracks, newest first.
+ */
+function offer_form_defaults(array $request, int $userId): array {
+    $clientId = (int)($request['client_id'] ?? $request['cid'] ?? 0);
+    $trq = db()->prepare("SELECT id, title FROM training_tracks WHERE client_id = ? AND status = 'Active' ORDER BY id DESC");
+    $trq->execute([$clientId]);
+    $tracks = $trq->fetchAll();
+    $assignedQ = db()->prepare('SELECT assigned_to FROM clients WHERE id = ?');
+    $assignedQ->execute([$clientId]);
+    $defStaff = (int)$assignedQ->fetchColumn() ?: $userId;
+    $defRemote = false; $defLoc = '';
+    if (($request['type'] ?? '') === 'reschedule' && !empty($request['session_id'])) {
+        $msq = db()->prepare("SELECT user_id, is_remote, location FROM scheduled_sessions WHERE id = ?");
+        $msq->execute([(int)$request['session_id']]);
+        if ($ms = $msq->fetch()) { $defStaff = (int)$ms['user_id'] ?: $defStaff; $defRemote = (int)$ms['is_remote'] === 1; $defLoc = (string)($ms['location'] ?? ''); }
+    }
+    return ['staff_id' => $defStaff, 'remote' => $defRemote, 'location' => $defLoc, 'minutes' => 60, 'tracks' => $tracks,
+        'keeps_length' => ($request['type'] ?? '') === 'reschedule'];
+}
+

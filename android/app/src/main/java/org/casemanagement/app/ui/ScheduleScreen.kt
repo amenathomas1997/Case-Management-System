@@ -27,6 +27,8 @@ import org.casemanagement.app.SessionItem
 import org.casemanagement.app.parseNoteToWrite
 import org.casemanagement.app.parseNotesToWrite
 import org.casemanagement.app.parseSchedule
+import org.casemanagement.app.parseGoals
+import org.casemanagement.app.parseTracks
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
 import org.json.JSONObject
@@ -43,23 +45,37 @@ fun checkInWindow(startMs: Long?, endMs: Long?, nowMs: Long): Boolean {
  * no-show only once it has started, move and cancel while it is scheduled; "hours" (the hours and
  * the signature on completing) only for a session on a training track.
  */
-fun sessionActions(status: String, startMs: Long?, endMs: Long?, nowMs: Long, hasTrack: Boolean, checkedIn: Boolean = false): List<String> {
+fun sessionActions(status: String, startMs: Long?, endMs: Long?, nowMs: Long, hasTrack: Boolean, checkedIn: Boolean = false,
+                   inSeries: Boolean = false, groupUid: String? = null): List<String> {
     if (status != "Scheduled") return emptyList()
     val started = startMs != null && nowMs >= startMs
+    val group = !groupUid.isNullOrBlank()
     return listOfNotNull(
         if (!checkedIn && checkInWindow(startMs, endMs, nowMs)) "check_in" else null,
+        // 4.35.0: a group's attendance is recorded for all its clients at once, once it has started.
+        if (started && group) "group" else null,
         if (started) "complete" else null,
         "move",
         if (started) "no_show" else null,
         "cancel",
+        // 4.35.0: as the website's "Move or cancel more".
+        if (inSeries) "cancel_series" else null,
+        if (group) "cancel_group" else null,
         if (hasTrack) "hours" else null,
     )
 }
 
-/** 4.34.0: complete_session's body: "completed_logged" sends no hours or miles (those already logged are this session's). */
-fun completionBody(sessionId: Int, outcome: String, hours: Double, miles: Double): JSONObject {
+/**
+ * 4.34.0: complete_session's body: "completed_logged" sends no hours or miles (those already logged are this session's).
+ * 4.35.0: the goal worked on and the service delivered, only when chosen (otherwise the website's defaults).
+ */
+fun completionBody(sessionId: Int, outcome: String, hours: Double, miles: Double, goalId: Int = 0, category: String = ""): JSONObject {
     val b = JSONObject().put("session_id", sessionId).put("outcome", outcome)
-    if (outcome != "completed_logged") { b.put("hours", hours); if (miles > 0) b.put("mileage", miles) }
+    if (outcome != "completed_logged") {
+        b.put("hours", hours); if (miles > 0) b.put("mileage", miles)
+        if (goalId > 0) b.put("goal_id", goalId)
+        if (category.isNotEmpty()) b.put("rsa_category", category)
+    }
     return b
 }
 
@@ -92,6 +108,10 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
     var error by remember { mutableStateOf<String?>(null) }
     // 4.34.0: Cancel and No-show are asked about first (they cannot be changed back).
     var confirmStatus by remember { mutableStateOf<Pair<JSONObject, String>?>(null) }
+    // 4.35.0: Cancel the series or the whole group, asked about first ("series" or "group").
+    var confirmMore by remember { mutableStateOf<Pair<JSONObject, String>?>(null) }
+    // 4.35.0: the group whose attendance is being recorded, kept across rotation.
+    var groupUid by rememberSaveable { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -101,6 +121,8 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
             OfflineCopyNotice(savedAt)
             NoticeText(notice)
             PrimaryButton("Schedule a session") { nav.navigate("newSession") }
+            // 4.35.0: a group session, as the website's schedule page (an older server has no such action).
+            if (serverAtLeast(api.serverVersion, "4.35")) SecondaryButton("Schedule a group session") { nav.navigate("newGroupSession") }
             ErrorText(error)
             toWrite.data?.takeIf { it.items.isNotEmpty() && api.can("clients") }?.let { w ->
                 Heading("Notes not written yet (${w.total})")
@@ -129,7 +151,8 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
         val zone = api.serverZone
         val offered = sessionActions(s.optString("status"), org.casemanagement.app.serverTimeMillis(s.str("start_at"), zone),
             org.casemanagement.app.serverTimeMillis(s.str("end_at"), zone), System.currentTimeMillis(),
-            hasTrack = !s.isNull("track_id") && s.optInt("track_id") > 0, checkedIn = s.str("checked_in_at") != null)
+            hasTrack = !s.isNull("track_id") && s.optInt("track_id") > 0, checkedIn = s.str("checked_in_at") != null,
+            inSeries = s.optBoolean("in_series"), groupUid = s.str("group_uid"))
         fun act(block: suspend () -> String) {
             chosen = null; error = null
             scope.launch {
@@ -150,11 +173,14 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
                                 "Checked in.") { it.put("checked_in_at", pressedAt) }.message
                         }
                     }) { Text("Check in now") }
+                    if ("group" in offered && serverAtLeast(api.serverVersion, "4.35")) TextButton(onClick = { chosen = null; groupUid = s.str("group_uid") }) { Text("Record attendance for the group") }
                     if ("complete" in offered) TextButton(onClick = { chosen = null; completingJson = s.toString() }) { Text("Complete the session") }
                     // 4.34.0: Move is offered on an ended session too, as on the website.
                     if ("move" in offered) TextButton(onClick = { chosen = null; movingJson = s.toString() }) { Text("Move to another time") }
                     if ("no_show" in offered) TextButton(onClick = { chosen = null; confirmStatus = s to "No Show" }) { Text("Record a no-show") }
                     if ("cancel" in offered) TextButton(onClick = { chosen = null; confirmStatus = s to "Cancelled" }) { Text("Cancel the session") }
+                    if ("cancel_series" in offered) TextButton(onClick = { chosen = null; confirmMore = s to "series" }) { Text("Cancel this and later sessions in the series") }
+                    if ("cancel_group" in offered) TextButton(onClick = { chosen = null; confirmMore = s to "group" }) { Text("Cancel the whole group") }
                     s.str("meeting_url")?.takeIf { it.startsWith("https://", ignoreCase = true) }?.let { url ->
                         TextButton(onClick = {
                             chosen = null
@@ -180,6 +206,28 @@ fun ScheduleScreen(api: Api, nav: androidx.navigation.NavHostController) {
                     } catch (e: ApiException) { error = e.message }
                 }
             }, { confirmStatus = null })
+    }
+
+    confirmMore?.let { (s, kind) ->
+        val who = s.optString("client")
+        val day = whenText(s.str("start_at"))
+        Confirm(cancelMoreConfirm(kind, who, day), "$who, $day. This cannot be changed back.", "Cancel them", {
+            error = null
+            scope.launch {
+                try {
+                    val r = api.call(if (kind == "group") "cancel_group" else "cancel_series", body = JSONObject().put("session_id", s.optInt("id")))
+                    notice = r.optString("message").ifEmpty { "Sessions cancelled." }
+                } catch (e: ApiException) { error = e.message }
+                state.reload()
+            }
+        }, { confirmMore = null }, no = "Keep them")
+    }
+
+    groupUid?.let { uid ->
+        GroupAttendanceDialog(api, uid, onDone = { msg, note ->
+            groupUid = null; state.reload(); toWrite.reload()
+            if (note != null && api.can("clients")) { Flash.pending = msg; nav.navigate(note.route) } else notice = msg
+        }, onCancel = { groupUid = null })
     }
 
     moving?.let { s -> MoveDialog(api, s, onDone = { m -> movingJson = null; notice = m; state.reload() }, onCancel = { movingJson = null }) }
@@ -232,6 +280,23 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String, NoteToWrite
     var logged by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     val signature = rememberSignatureState(id)
     var signedName by rememberSaveable(id) { mutableStateOf("") }
+    // 4.35.0: the goal worked on and the service delivered (the website's "Hours, miles and goal"). With no
+    // signal the lists cannot be read: the choices are then absent and the website's defaults apply.
+    val trackId = s.optInt("track_id")
+    val visit = rememberLoaded(id, trackId) {
+        if (!hasTrack) null else try {
+            val cats = parseTracks(api.call("tracks")).firstOrNull { it.id == trackId }?.visitCategories ?: emptyList()
+            val goals = parseGoals(api.call("goals", mapOf("track_id" to trackId.toString()))).filter { it.status != "Achieved" }
+            goals to cats
+        } catch (e: ApiException) { null }
+    }
+    var goal by rememberSaveable(id) { mutableStateOf("0") }
+    var category by rememberSaveable(id) { mutableStateOf("") }
+    var goalError by remember { mutableStateOf<String?>(null) }
+    var categoryError by remember { mutableStateOf<String?>(null) }
+    val openGoals = visit.data?.first ?: emptyList()
+    val cats = visit.data?.second ?: emptyList()
+    val (goalShown, serviceShown) = visitChoicesShown(openGoals.size, cats.size)
     val density = androidx.compose.ui.platform.LocalDensity.current.density
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -249,7 +314,9 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String, NoteToWrite
         scope.launchSave({ busy = it }, { }) {
             try {
                 // 4.34.0: hours already logged are those hours: none are sent again (the website's rule).
-                val body = completionBody(s.optInt("id"), outcome, h, m)
+                val body = completionBody(s.optInt("id"), outcome, h, m,
+                    goalId = if (goalShown) goal.toIntOrNull() ?: 0 else 0,
+                    category = if (serviceShown) category.ifEmpty { cats.first() } else "")
                 if (hasTrack) signature.png(density)?.let { body.put("signature_b64", it) }
                 if (hasTrack && signedName.isNotBlank()) body.put("signed_name", signedName.trim().take(120))
                 workLogId?.let { body.put("work_log_id", it) }
@@ -263,6 +330,9 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String, NoteToWrite
             } catch (e: ApiException) {
                 // Hours are already logged for that day: say which, and ask whether they are these.
                 logged = e.reply?.optJSONArray("logged_hours").objects()
+                // 4.35.0: a goal or service no longer on the track is refused on its choice.
+                val fe = serverFieldErrors(e.reply) ?: emptyMap()
+                goalError = fe["goal_id"]; categoryError = fe["rsa_category"]
                 error = e.message
             }
         }
@@ -278,6 +348,8 @@ private fun CompleteDialog(api: Api, s: JSONObject, onDone: (String, NoteToWrite
                 if (hasTrack) {
                     Field("Hours", hours, { hours = it }, keyboard = KeyboardType.Decimal, error = hoursError, required = true)
                     Field("Miles driven", miles, { miles = it }, hint = "0 if none", keyboard = KeyboardType.Decimal, error = milesError)
+                    if (goalShown) Choice("Goal worked on", goal, listOf("0" to "None") + openGoals.map { it.id.toString() to it.specificGoal }, error = goalError) { goal = it; goalError = null }
+                    if (serviceShown) Choice("Service delivered", category.ifEmpty { cats.first() }, cats.map { it to it }, error = categoryError) { category = it; categoryError = null }
                     SignaturePad(signature)
                     Field("Client's typed name", signedName, { signedName = it }, hint = "optional; counts as their acknowledgement")
                 } else Text("This session is not on a training track, so no hours are logged.")

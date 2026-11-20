@@ -237,7 +237,9 @@ fun <T> mergeReloaded(current: T, was: T, now: T): T = if (current == was) now e
 /** The client fields the app's form edits, and when the record was read (save_client's loaded_at, 4.28.0). */
 val CLIENT_FORM_KEYS = listOf("name", "status", "client_type", "dob", "phone", "email", "address", "state", "assigned_to", "office_id",
     "counselor_name", "counselor_agency", "counselor_email", "counselor_phone", "a11y_format", "a11y_contact", "a11y_primary_tech",
-    "a11y_notes", "a11y_screen_reader", "guardian_name", "guardian_phone", "guardian_email", "school", "vr_case_number", "ipe_goal", "updated_at")
+    "a11y_notes", "a11y_screen_reader", "guardian_name", "guardian_phone", "guardian_email", "school", "vr_case_number", "ipe_goal",
+    // 4.35.0: language and vision, as the website's client form.
+    "preferred_language", "vision_status", "vision_onset_age", "updated_at")
 
 /** The part of a client record the form was filled from, small enough to keep across process death. */
 fun clientSnapshot(c: JSONObject): JSONObject = JSONObject().also { o -> CLIENT_FORM_KEYS.forEach { k -> if (c.has(k)) o.put(k, c.opt(k)) } }

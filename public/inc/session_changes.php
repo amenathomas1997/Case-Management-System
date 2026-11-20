@@ -285,3 +285,57 @@ function schedule_review_message(bool $authorization, array $lines, bool $group 
 function schedule_bookable_statuses(): array {
     return array_values(array_diff(client_open_statuses(), ['Waitlist']));
 }
+
+/**
+ * Read and check the fields the single and group booking forms share (4.35.0: schedule.php's
+ * schedule_input(), moved unchanged, so the website and the app's group booking read them the
+ * same way). $src is what was posted ($_POST, or the app's input); $p is the group form's "g_"
+ * name prefix, so a refused group post never refills the single form ('' for the app). Returns
+ * [field errors, values]: nothing is cut, coerced or dropped, and the rules match the app's
+ * schedule_session.
+ */
+function session_booking_input(array $src, string $p, array $user): array {
+    $in = fn(string $k): string => is_string($src[$p . $k] ?? null) ? trim($src[$p . $k]) : '';
+    $e = [];
+    // A year from 2000 to five years ahead, as the app's api_date() and track.php:
+    // a year typed as 26 (0026) or 2062 would book, invite and later bill that date.
+    $date = valid_date($in('date'), 2000, (int)date('Y') + 5);
+    $time = $in('time');
+    if ($date === null) $e[$p . 'date'] = 'Enter a valid date with a four-digit year from 2000 to ' . ((int)date('Y') + 5) . '.';
+    if (!preg_match('/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/', $time)) $e[$p . 'time'] = 'Enter a valid start time.';
+    $startTs = ($date !== null && !isset($e[$p . 'time'])) ? strtotime($date . ' ' . substr($time, 0, 5) . ':00') : false;
+    if ($startTs === false && !isset($e[$p . 'date']) && !isset($e[$p . 'time'])) $e[$p . 'date'] = 'Enter a valid date.';
+    $duration = $in('duration');
+    if (!is_numeric($duration) || (float)$duration < 0.25 || (float)$duration > 12) {
+        $e[$p . 'duration'] = 'Enter a duration between 0.25 and 12 hours.';
+    }
+    $location = $in('location');
+    $notes = $in('notes');
+    if (mb_strlen($location) > 190) $e[$p . 'location'] = 'Location is too long (190 characters maximum).';
+    if (mb_strlen($notes) > 255) $e[$p . 'notes'] = 'Notes are too long (255 characters maximum).';
+    $url = $in('meeting_url');
+    [$isRemote, $meetingUrl] = session_remote_input(['is_remote' => $in('is_remote'), 'meeting_url' => $url]);
+    // A typed link that would otherwise be dropped is refused, so it is never lost unseen.
+    if ($url !== '' && $meetingUrl === null) {
+        $e[$p . 'meeting_url'] = $isRemote
+            ? 'Enter the meeting link as a full web address starting with https:// (500 characters maximum).'
+            : 'A meeting link was entered but "Remote / telepractice session" is not ticked. Tick it, or clear the link.';
+    }
+    // The session must belong to a real, active staff member or nobody would see it.
+    $s = db()->prepare('SELECT * FROM users WHERE id = ? AND is_active = 1');
+    $s->execute([(int)$in('staff_id') ?: (int)$user['id']]);
+    $staff = $s->fetch() ?: null;
+    if (!$staff) $e[$p . 'staff_id'] = 'Choose an active instructor.';
+    return [$e, [
+        'start' => $startTs ?: 0,
+        'end' => $startTs ? $startTs + (int)round((float)$duration * 3600) : 0,
+        'location' => $location,
+        'notes' => $notes,
+        'is_remote' => $isRemote,
+        'meeting_url' => $meetingUrl,
+        'staff' => $staff,
+        // An instructor limited to their own caseload never sees (or can complete)
+        // a session for a client assigned to someone else.
+        'staff_scoped' => $staff ? resolve_perms($staff)['scoped'] : false,
+    ]];
+}

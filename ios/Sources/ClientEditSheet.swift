@@ -121,6 +121,20 @@ struct ClientEditSheet: View {
     @State private var school = ""
     @State private var ipeDate = ""
     @State private var ipeAmendedOn = ""
+    /// 4.35.0: the portal language, vision status and age of onset, and the expected return
+    /// date from On Hold, as the website's client form. Sent only to a server that reports them
+    /// (a 4.34.0 server neither sends nor saves them).
+    @State private var language = "en"
+    @State private var visionStatus = ""
+    @State private var onsetText = ""
+    @State private var holdUntilSet = false
+    @State private var holdUntil = Date()
+    /// The values the form opened with (or Reload brought in), for hasChanges, `orig` and to
+    /// send the return date only when changed.
+    @State private var opened435: [String]
+    @State private var storedHoldUntil: String
+    /// The record's 4.35.0 fields as last loaded (`extras`, or Reload's).
+    @State private var baseExtras: ClientExtras?
     /// A new client matches one already on file (4.34.0): saving waits for "This is a different person".
     @State private var duplicateRefused = false
     @State private var notDuplicate = false
@@ -178,6 +192,21 @@ struct ClientEditSheet: View {
         _smsConsent = State(initialValue: texting?.agreed ?? false)
         _smsSource = State(initialValue: texting?.source ?? "In person")
         if existing == nil { _officeId = State(initialValue: -1) }
+        let ex = existing == nil ? nil : extras
+        let lang = ex?.preferredLanguage == "es" ? "es" : "en"
+        let vision = ex?.visionStatus ?? ""
+        let onset = ex?.visionOnsetAge.map(String.init) ?? ""
+        let until = ex?.onHoldUntil ?? ""
+        _language = State(initialValue: lang)
+        _visionStatus = State(initialValue: vision)
+        _onsetText = State(initialValue: onset)
+        if let day = APIDate.strictDay(until) {
+            _holdUntilSet = State(initialValue: true)
+            _holdUntil = State(initialValue: day)
+        }
+        _storedHoldUntil = State(initialValue: until)
+        _opened435 = State(initialValue: [lang, vision, onset, until])
+        _baseExtras = State(initialValue: ex)
         emailUnconfirmed = emailVerified == false
             && !(existing?.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         guard let existing else { return }
@@ -262,8 +291,38 @@ struct ClientEditSheet: View {
     private var closureTyped: Bool {
         ![closureJobTitle, closureHours, closureWage, closureIndependence, closureAtInUse, closureAtNote].allSatisfy(\.isEmpty) || closureJobStartSet
     }
+    /// The 4.35.0 fields as the form holds them (the return date as yyyy-MM-dd, "" when off).
+    private var values435: [String] {
+        [language, visionStatus, onsetText.trimmingCharacters(in: .whitespaces), holdUntilSet ? APIDate.day(holdUntil) : ""]
+    }
+    /// Whether the server takes the 4.35.0 fields: a new client always offers them (an older
+    /// server ignores unknown keys); an existing one only when its record reported them.
+    private var sends435: Bool { existing == nil || extras?.supports435 == true }
+    /// Vision statuses: the organisation's list once form_options has sent it (none before, so a
+    /// built-in list never stands in for the organisation's), always with the client's current
+    /// one, so it is never cleared without a word.
+    private var visionChoices: [String] {
+        let list = FormOptions.has("vision_statuses") ? FormOptions.list("vision_statuses", []) : []
+        return visionStatus.isEmpty || list.contains(visionStatus) ? list : list + [visionStatus]
+    }
+
+    /// The server's today (its time zone), as a day on this phone's calendar: the earliest
+    /// expected return date the server accepts.
+    static var serverToday: Date {
+        Calendar.current.startOfDay(for: APIDate.parseDay(APIDate.dayCentral(Date())) ?? Date())
+    }
+    /// The website's rule for the age of onset: blank, or a whole number from 0 to 120.
+    static func onsetAgeProblem(_ raw: String) -> String? {
+        let t = raw.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty { return nil }
+        guard t.count <= 3, t.allSatisfy(\.isASCII), t.allSatisfy(\.isNumber), let n = Int(t), n <= 120 else {
+            return "Age when vision loss began: enter a whole number of years from 0 to 120, or leave it blank."
+        }
+        return nil
+    }
+
     private var hasChanges: Bool {
-        values != Self.values(of: existing) || smsConsent != (texting?.agreed ?? false)
+        values != Self.values(of: existing) || smsConsent != (texting?.agreed ?? false) || values435 != opened435
             || officeId != originalOffice || !changedCustom.isEmpty || closureTyped
     }
     private var offices: [OfficeChoice] { existing == nil ? newClientOffices : (extras?.offices ?? []) }
@@ -297,6 +356,14 @@ struct ClientEditSheet: View {
                     }
                     OptionalDayField(title: "Date of birth", text: $dob, latest: Date())
                         .errorField("Date of birth")
+                    if sends435 {
+                        Picker("Vision status", selection: $visionStatus) {
+                            Text("Not recorded").tag("")
+                            ForEach(visionChoices, id: \.self) { Text($0).tag($0) }
+                        }
+                        CaptionedField(label: "Age when vision loss began (0 to 120, optional)", text: $onsetText,
+                                       keyboard: .numberPad, errorName: "Age when vision loss began")
+                    }
                     CaptionedField(label: "Phone", text: $phone, keyboard: .phonePad)
                         // A new number needs the client's agreement again (the server clears it too).
                         // 4.29.0: compared with the record as last loaded (Reload's after a conflict), and
@@ -353,6 +420,16 @@ struct ClientEditSheet: View {
                         CaptionedField(label: status == "On Hold" ? "Reason for status change (required for On Hold)" : "Reason for status change",
                                        text: $statusNote, errorName: "Reason for status change")
                         Text("Recorded in the audit history.").font(.caption).foregroundStyle(Color.secondaryText)
+                    }
+                    // 4.35.0: as the website, under the reason; shown while the status is On Hold.
+                    if status == "On Hold" && sends435 {
+                        Toggle("Expected return date (On Hold only, optional)", isOn: $holdUntilSet)
+                            .errorField("Expected return date")
+                        if holdUntilSet {
+                            DatePicker("Expected return date", selection: $holdUntil, in: Self.serverToday..., displayedComponents: .date)
+                        }
+                    }
+                    if statusChanged {
                         // Said before Save: the email can't be called back once it has gone.
                         if status == "Closed - Rehabilitated" {
                             Label("Saving with this status emails the client an outcome survey, if they have a confirmed email address and were not sent one in the last 30 days.",
@@ -481,6 +558,12 @@ struct ClientEditSheet: View {
                         ForEach(a11yContacts, id: \.self) { Text($0).tag($0) }
                     }
                     CaptionedField(label: "Access notes", text: $a11yNotes, lines: 2...5)
+                    if sends435 {
+                        Picker("Preferred language (the client's portal and emails use it)", selection: $language) {
+                            Text("English").tag("en")
+                            Text("Spanish").tag("es")
+                        }
+                    }
                     // As on the website: the client reads (and can change) these on the portal.
                     Text("Shown to the client on their portal, where they can also change it. Keep internal remarks in case notes.")
                         .font(.caption).foregroundStyle(Color.secondaryText)
@@ -585,6 +668,10 @@ struct ClientEditSheet: View {
                     showFormError("\(label): the date cannot be in the future.", in: &error); return
                 }
             }
+            if sends435, let problem = Self.onsetAgeProblem(onsetText) {
+                showFormError(problem, in: &error, field: "Age when vision loss began")
+                return
+            }
             if status.hasPrefix("Closed") && (base?.status ?? "") != status && closureReason.isEmpty {
                 showFormError("Closing reason: choose why the case is closing.", in: &error)
                 return
@@ -613,6 +700,16 @@ struct ClientEditSheet: View {
                 "dob": dob, "ipe_date": ipeDate, "ipe_amended_on": ipeAmendedOn,
             ]
             if clientType == "Pre-ETS" { body["school"] = school }
+            if sends435 {
+                // 4.35.0: as the website's form (blank clears the vision fields).
+                body["preferred_language"] = language
+                body["vision_status"] = visionStatus
+                body["vision_onset_age"] = onsetText.trimmingCharacters(in: .whitespaces)
+                // Blank keeps a stored return date (on_hold_input); a date is sent when it is new,
+                // so an overdue one already stored never blocks saving other changes.
+                let until = status == "On Hold" && holdUntilSet ? APIDate.day(holdUntil) : ""
+                body["on_hold_until"] = until == storedHoldUntil && (base?.status ?? "") == status ? "" : until
+            }
             if existing == nil {
                 // 4.34.0: a possible duplicate is refused until "This is a different person".
                 body["dup_check"] = 1
@@ -667,7 +764,7 @@ struct ClientEditSheet: View {
                 body["loaded_at"] = loadedAt
                 // The values the form opened with (4.28.0), for the keys sent: a conflict then
                 // names the fields the other person changed.
-                if let base { body["orig"] = Self.openedValues(of: base).filter { body[$0.key] != nil } }
+                if let base { body["orig"] = Self.openedValues(of: base, extras: baseExtras).filter { body[$0.key] != nil } }
             }
             // A new client: a retry after a lost reply is recognised and not created twice.
             if existing == nil { body["idem_key"] = idem.key(for: body) }
@@ -737,7 +834,9 @@ struct ClientEditSheet: View {
     /// The form field a save_client refusal is about when its words differ from the field's
     /// name ("IPE amendment date: …" is IPE amended on; the future date of birth; On Hold).
     static func refusalField(_ message: String, keys: [String]) -> String? {
-        let byKey = ["ipe_amended_on": "IPE amended on", "ipe_date": "IPE date", "dob": "Date of birth", "school": "School"]
+        let byKey = ["ipe_amended_on": "IPE amended on", "ipe_date": "IPE date", "dob": "Date of birth", "school": "School",
+                     "vision_onset_age": "Age when vision loss began", "on_hold_until": "Expected return date",
+                     "status_note": "Reason for status change"]
         if let key = keys.sorted().first(where: { byKey[$0] != nil }) { return byKey[key] }
         if message.hasPrefix("IPE amendment date") { return "IPE amended on" }
         if message.hasPrefix("The date of birth") || message.hasPrefix("Date of birth") { return "Date of birth" }
@@ -746,7 +845,19 @@ struct ClientEditSheet: View {
     }
 
     /// The record's values under the keys save_client takes (sent as `orig`, 4.28.0).
-    private static func openedValues(of c: ClientInfo) -> [String: Any] {
+    private static func openedValues(of c: ClientInfo, extras: ClientExtras?) -> [String: Any] {
+        var values: [String: Any] = [
+            // 4.35.0: as the record reported them.
+            "preferred_language": extras?.preferredLanguage == "es" ? "es" : "en",
+            "vision_status": extras?.visionStatus ?? "",
+            "vision_onset_age": extras?.visionOnsetAge.map(String.init) ?? "",
+            "on_hold_until": extras?.onHoldUntil ?? "",
+        ]
+        values.merge(openedCoreValues(of: c)) { a, _ in a }
+        return values
+    }
+
+    private static func openedCoreValues(of c: ClientInfo) -> [String: Any] {
         [
             "name": c.name, "phone": c.phone ?? "", "email": c.email ?? "", "address": c.address ?? "",
             "status": c.status, "assigned_to": c.assignedTo ?? 0,
@@ -800,6 +911,21 @@ struct ClientEditSheet: View {
             take(&a11yPrimaryTech, old.a11yPrimaryTech ?? "", now.a11yPrimaryTech ?? "")
             take(&a11yContact, old.a11yContact ?? "", now.a11yContact ?? "")
             take(&a11yNotes, old.a11yNotes ?? "", now.a11yNotes ?? "")
+            // 4.35.0: language, vision and the return date, the same way.
+            let ex = fresh.extras
+            let freshLang = ex.preferredLanguage == "es" ? "es" : "en"
+            let freshVision = ex.visionStatus ?? ""
+            let freshOnset = ex.visionOnsetAge.map(String.init) ?? ""
+            let freshUntil = ex.onHoldUntil ?? ""
+            take(&language, opened435[0], freshLang)
+            take(&visionStatus, opened435[1], freshVision)
+            take(&onsetText, opened435[2], freshOnset)
+            if values435[3] == opened435[3] {
+                if let day = APIDate.strictDay(freshUntil) { holdUntilSet = true; holdUntil = day } else { holdUntilSet = false }
+            }
+            opened435 = [freshLang, freshVision, freshOnset, freshUntil]
+            storedHoldUntil = freshUntil
+            baseExtras = ex
             // The texting agreement too: kept only when changed here.
             take(&smsConsent, textingBase?.agreed ?? false, fresh.texting?.agreed ?? false)
             take(&smsSource, textingBase?.source ?? "In person", fresh.texting?.source ?? "In person")
@@ -840,7 +966,11 @@ struct Assessment: Decodable, Identifiable {
     }
 }
 
-struct AssessmentsResponse: Decodable { let assessments: [Assessment] }
+struct AssessmentsResponse: Decodable {
+    let assessments: [Assessment]
+    /// The organisation's technology list (4.35.0), for the form; nil from an older server.
+    var techTypes: [String]?
+}
 
 struct AssessmentsSection: View {
     @EnvironmentObject var api: API
@@ -848,6 +978,8 @@ struct AssessmentsSection: View {
     /// Changed by the client screen when it refreshes, so this section reloads with it.
     var reloadToken = 0
     @State private var assessments: [Assessment] = []
+    /// The technology list the server sent with the assessments (4.35.0).
+    @State private var techChoices: [String]?
     @State private var loaded = false
     @State private var loadError: String?
     @State private var retrying = false
@@ -914,14 +1046,14 @@ struct AssessmentsSection: View {
                     .compactMap { $0 }.filter { !$0.isEmpty && $0 != "Hardware: " && $0 != "Software: " }
                     .joined(separator: ", "))
             }
-            Button { showingAdd = true } label: { Label("Record assessment", systemImage: "plus") }
+            Button { showingAdd = true } label: { Label("Record a tech assessment", systemImage: "plus") }
         }
         .task(id: reloadToken) { await load() }
         .sheet(isPresented: $showingAdd, onDismiss: {
             if let message = sheetResult { announceAfterDismiss(message) }
             sheetResult = nil
         }) {
-            AddAssessmentSheet(clientId: clientId) {
+            AddAssessmentSheet(clientId: clientId, techChoices: techChoices ?? techTypes) {
                 sheetResult = "Assessment saved."
                 Task { await load() }
             }
@@ -937,6 +1069,7 @@ struct AssessmentsSection: View {
         do {
             let response: AssessmentsResponse = try await api.call("assessments", query: ["client_id": String(clientId)])
             assessments = response.assessments
+            if let list = response.techTypes, !list.isEmpty { techChoices = list }
             loaded = true
             loadError = nil
             if retry { announce("Assessments loaded.") }
@@ -957,11 +1090,13 @@ struct AddAssessmentSheet: View {
     @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let clientId: Int
+    /// The technology choices (the server's tech_types, else the list kept on the phone).
+    var techChoices: [String] = techTypes
     let onSaved: () -> Void
 
     @State private var date = Date()
     @State private var disability = ""
-    @State private var tech = "Screen Reader"
+    @State private var tech = ""
     @State private var hardware = ""
     @State private var software = ""
     @State private var summary = ""
@@ -970,22 +1105,39 @@ struct AddAssessmentSheet: View {
     @State private var askingDiscard = false
 
     private var hasChanges: Bool {
-        !disability.isEmpty || tech != "Screen Reader" || !hardware.isEmpty || !software.isEmpty || !summary.isEmpty
+        !disability.isEmpty || (!tech.isEmpty && tech != techChoices.first) || !hardware.isEmpty || !software.isEmpty || !summary.isEmpty
     }
+
+    /// 2000 through today, as the website's form (it refuses a date in the future).
+    private static var dateRange: ClosedRange<Date> {
+        let start = Calendar.current.date(from: DateComponents(year: 2000, month: 1, day: 1)) ?? .distantPast
+        return start...Date()
+    }
+
+    /// The form field each add_assessment `errors` key is about (4.35.0), in the form's order.
+    static let errorFields: [(key: String, field: String)] = [
+        ("assessment_date", "Assessment date"), ("primary_disability", "Primary disability / needs"),
+        ("primary_tech", "Primary focus / tech recommended"), ("hardware_details", "Hardware details"),
+        ("software_version", "Software & version"), ("summary", "Assessment summary"),
+    ]
 
     var body: some View {
         NavigationStack {
             ErrorFocusForm(inNavigationStack: true, error: error) {
-                DatePicker("Assessment date", selection: $date, displayedComponents: .date)
-                CaptionedField(label: "Primary disability / needs", text: $disability)
-                Picker("Primary tech recommended", selection: $tech) {
-                    ForEach(techTypes, id: \.self) { Text($0) }
+                DatePicker("Assessment date (required)", selection: $date, in: Self.dateRange, displayedComponents: .date)
+                    .errorField("Assessment date")
+                CaptionedField(label: "Primary disability / needs", text: $disability, errorName: "Primary disability / needs")
+                // The website's labels (client.php's Record a tech assessment).
+                Picker("Primary focus / tech recommended", selection: $tech) {
+                    // The current choice stays choosable if the list has changed since.
+                    ForEach(techChoices.contains(tech) || tech.isEmpty ? techChoices : techChoices + [tech], id: \.self) { Text($0).tag($0) }
                 }
-                CaptionedField(label: "Hardware details", text: $hardware)
-                CaptionedField(label: "Software & version", text: $software)
-                CaptionedField(label: "Summary", text: $summary, lines: 4...10)
+                .errorField("Primary focus / tech recommended")
+                CaptionedField(label: "Hardware details", text: $hardware, errorName: "Hardware details")
+                CaptionedField(label: "Software & version", text: $software, errorName: "Software & version")
+                CaptionedField(label: "Assessment summary", text: $summary, lines: 4...10, errorName: "Assessment summary")
             }
-            .navigationTitle("Record assessment")
+            .navigationTitle("Record a tech assessment")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -998,6 +1150,7 @@ struct AddAssessmentSheet: View {
             }
             .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this assessment?",
                                  asking: $askingDiscard) { dismiss() }
+            .onAppear { if tech.isEmpty { tech = techChoices.first ?? "Other" } }
         }
     }
 
@@ -1010,7 +1163,19 @@ struct AddAssessmentSheet: View {
                 "hardware_details": hardware, "software_version": software, "summary": summary,
             ]
             body["idem_key"] = idem.key(for: body)
-            let _: OKResponse = try await api.call("add_assessment", body: body)
+            // 4.35.0: the website's checks, each refusal tied to its field (errors).
+            var refusedFields: [String: String] = [:]
+            do {
+                let _: OKResponse = try await api.call("add_assessment", body: body, refusal: { reply in
+                    refusedFields = (reply["errors"] as? [String: String]) ?? [:]
+                })
+            } catch APIError.server(let message) where !refusedFields.isEmpty {
+                idem.failed(APIError.server(message))
+                let first = Self.errorFields.first { refusedFields[$0.key] != nil }
+                showFormError(first.flatMap { refusedFields[$0.key] } ?? message, in: &self.error, field: first?.field)
+                busy = false
+                return
+            }
             idem.answered()
             // "Assessment saved." is said by the section once this sheet has closed.
             onSaved()

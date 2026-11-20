@@ -206,6 +206,10 @@ fun ClientAiScreen(api: Api, nav: NavHostController, clientId: Int) {
     val idem = rememberSaveable { UUID.randomUUID().toString() }
     // 4.28.0: the assessment's own retry key (see sendOnce).
     var assessKey by rememberSaveable { mutableStateOf("") }
+    // 4.35.0: the assessment's date is asked (today to start with), as the website's intake.
+    var assessDate by rememberSaveable { mutableStateOf(today()) }
+    var assessDateError by remember { mutableStateOf<String?>(null) }
+    var assessPresses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     HoldBackWhileSaving(busy)
     Page {
@@ -216,7 +220,8 @@ fun ClientAiScreen(api: Api, nav: NavHostController, clientId: Int) {
             Field("Limitations", limits, { limits = it }, hint = "optional", singleLine = false)
             Field("What they have tried", tried, { tried = it }, hint = "optional", singleLine = false)
         }
-        ErrorText(error)
+        // 4.35.0: the one summary (the assessment date refusal too), taking focus on each Save press.
+        ErrorText(error, focusKey = assessPresses)
         // 4.29.0: asking has its own busy state, so Back is never held while the AI works.
         PrimaryButton("Ask the AI", busy = asking || busy, busyText = if (asking) AI_WORKING else "Please wait…", announceBusy = asking,
             missing = if (tool == "intake" && listOf(goals, limits, tried).all { it.isBlank() }) "Still needed: Goals, Limitations or What they have tried." else null) {
@@ -252,11 +257,17 @@ fun ClientAiScreen(api: Api, nav: NavHostController, clientId: Int) {
                 Field("Software and version", fields["software_version"] ?: "", { fields = fields + ("software_version" to it) })
                 Field("Summary", fields["summary"] ?: "", { fields = fields + ("summary" to it) }, singleLine = false, minLines = 6)
                 r.str("instruments")?.let { Text("Suggested instruments: $it") }
+                if (!saved) Field("Assessment date", assessDate, { assessDate = it; assessDateError = null }, hint = "year-month-day", error = assessDateError, required = true)
                 if (saved) NoticeText("Assessment saved.") else PrimaryButton("Save the assessment", busy = busy) {
+                    assessPresses++
+                    assessDateError = assessmentDateRule(assessDate)
+                    if (assessDateError != null) { error = assessDateError; return@PrimaryButton }
                     scope.launchSave({ busy = it }, { error = it }) {
-                        val b = JSONObject().put("client_id", clientId).put("assessment_date", today())
+                        val b = JSONObject().put("client_id", clientId)
                         fields.forEach { (k, v) -> b.put(k, v.trim()) }
-                        api.callOnce("add_assessment", b, assessKey, { assessKey = it }, "the assessment"); saved = true
+                        b.put("assessment_date", assessDate.trim())
+                        try { api.callOnce("add_assessment", b, assessKey, { assessKey = it }, "the assessment"); saved = true }
+                        catch (e: ApiException) { serverFieldErrors(e.reply)?.get("assessment_date")?.let { assessDateError = it }; throw e }
                     }
                 }
             }

@@ -11,6 +11,8 @@ struct SessionNoteRequest: Identifiable {
     /// Said once VoiceOver is on the first field: after a completion, its result and then where
     /// the person is ("Session completed. Case note for Jane Doe, session on Oct 20.").
     let arrival: String
+    /// The editor's way out: "Cancel", or "Skip for now" while a group's notes are walked through (4.35.0).
+    var cancelLabel = "Cancel"
     var id: Int { target.sessionId }
 }
 
@@ -35,7 +37,7 @@ struct SessionNoteSheet: View {
             AddNoteSheet(clientId: target.clientId, tracks: tracks, initialTrackId: target.trackId ?? 0,
                          existing: nil, initialSubject: target.noteSubject, sessionId: target.sessionId,
                          sessionContext: target.contextLine, arrivalAnnouncement: request.arrival,
-                         onSaved: onSaved)
+                         cancelLabel: request.cancelLabel, onSaved: onSaved)
         } else {
             NavigationStack {
                 ProgressView("Opening the case note…")
@@ -44,7 +46,7 @@ struct SessionNoteSheet: View {
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         // Never stuck here: Cancel goes back (the note stays under Notes to write).
-                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                        ToolbarItem(placement: .cancellationAction) { Button(request.cancelLabel) { dismiss() } }
                     }
             }
             .interactiveDismissDisabled()

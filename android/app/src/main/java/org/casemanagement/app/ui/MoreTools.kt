@@ -182,6 +182,11 @@ fun CounselorsScreen(api: Api) {
 fun PortalRequestsScreen(api: Api, nav: NavHostController) {
     var all by rememberSaveable { mutableStateOf(false) }
     val state = rememberLoaded(all) { api.call("portal_requests", if (all) mapOf("all" to "1") else emptyMap()) }
+    // 4.35.0: times offered on the Offer times screen: the list is read again (keeping what it shows meanwhile).
+    var offersSeen by remember { mutableIntStateOf(RequestOffers.count) }
+    androidx.compose.runtime.LaunchedEffect(RequestOffers.count) {
+        if (RequestOffers.count != offersSeen) { offersSeen = RequestOffers.count; state.reload() }
+    }
     var chosen by remember { mutableStateOf<JSONObject?>(null) }
     // 4.29.0: the request whose outcome is being written (its id and the status), kept across rotation.
     var outcomeId by rememberSaveable { mutableIntStateOf(0) }
@@ -208,7 +213,8 @@ fun PortalRequestsScreen(api: Api, nav: NavHostController) {
             val list = r.optJSONArray("requests").objects()
             Heading("Requests (${list.size})" + if (r.optInt("new_count") > 0) ", ${r.optInt("new_count")} new" else "")
             if (list.isEmpty()) Text("No requests.")
-            list.forEach { q -> ListRow(listOf(q.optString("client_name") + ": " + q.optString("type_label"), q.optString("status") + ", " + whenText(q.str("created_at")), q.str("details") ?: ""), action = "change its status", onClick = { chosen = q }) }
+            // 4.35.0: the linked session, the due date and the times offered, as on the iPhone.
+            list.forEach { q -> ListRow(requestRowLines(q), action = "change its status", onClick = { chosen = q }) }
         }
     }
     chosen?.let { q ->
@@ -217,6 +223,10 @@ fun PortalRequestsScreen(api: Api, nav: NavHostController) {
             text = { Column(Modifier.verticalScroll(rememberScrollState())) {
                 listOf("New", "In Progress", "Done", "Declined").filter { it != q.optString("status") }.forEach { s ->
                     TextButton(onClick = { chosen = null; if (needsOutcome && (s == "Done" || s == "Declined")) { outcomeId = q.optInt("id"); outcomeTo = s } else set(q, s, null) }) { Text("Mark it $s") }
+                }
+                // 4.35.0: times offered for an open appointment or reschedule request (the client chooses one in their portal).
+                if (q.optBoolean("can_offer") && api.can("clients")) TextButton(onClick = { chosen = null; nav.navigate("offerTimes/${q.optInt("id")}") }) {
+                    Text(if ((q.optJSONArray("offered")?.length() ?: 0) > 0) "Offer different times" else "Offer times")
                 }
                 if (api.can("clients")) TextButton(onClick = { chosen = null; nav.navigate("client/${q.optInt("client_id")}") }) { Text("Open the client record") }
             } },

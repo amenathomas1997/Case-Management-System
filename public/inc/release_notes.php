@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.35.0' => [
+        'Field casework in both phone apps: book a group session and record its attendance (one note per client who attended), choose the goal worked on and the service delivered when completing a session, offer times on a client request, and use Move, Cancel the series and Cancel the whole group as visible buttons.',
+        'Clients in the apps: list filters (status, caseload, type, agency, school, office) that follow your choice on the website, preferred language, vision and the On Hold return date on the client form, more of the record shown, and the after-closure work: email the survey again, enter survey answers taken by phone, and record the follow-up checks.',
+        'Android also gets tech assessments, older notes on request, the full note editor (track, Generate structured note, homework details) and homework editing.',
+    ],
     '4.34.0' => [
         'The iPhone and Android apps now give the same results as the website. Completing a session credits the hours to its instructor (a group sitting is billed as a group), a session can be completed when hours were already logged that day, a progress report covers the period since the last one with barriers, recommendations and AI drafts, and loans use your usual loan period.',
         'Notes, clients and tracks: section text is never lost, Android can edit a note or add an addendum, the client form has date of birth and IPE dates on both apps, a possible duplicate client is stopped until you say it is a different person, and track edits offer Who pays and the authorized amount.',
