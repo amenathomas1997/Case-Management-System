@@ -426,7 +426,7 @@ function invoice_aging(?int $scopeUid): array {
             SUM(CASE WHEN i.due_date < CURDATE() THEN $owedSql ELSE 0 END) overdue
         FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id
         WHERE " . INVOICE_OPEN_SQL . ($scopeUid !== null ? ' AND c.assigned_to = ?' : '') . "
-        GROUP BY COALESCE(i.funding_agency, t.funding_agency) ORDER BY amt DESC");
+        GROUP BY COALESCE(i.funding_agency, t.funding_agency) ORDER BY amt DESC, funding_agency");   // ties in a fixed order, so the page and the apps list them alike
     $ag->execute($scopeUid !== null ? [$scopeUid] : []);
     return $ag->fetchAll();
 }
