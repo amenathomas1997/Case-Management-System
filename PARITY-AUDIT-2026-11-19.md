@@ -1620,6 +1620,7 @@ Read-only comparison of the website (public/*.php), the app API (public/api.php,
 - **4.35.0 (2026-11-19):** the 4.35.0 field casework section below (14 items, see DEPLOYMENT-4.35.0.md).
 - **4.36.0 (2026-11-19):** the 4.36.0 daily workspace and safety section below (28 items, see DEPLOYMENT-4.36.0.md).
 - **4.37.0 (2026-11-19):** the 4.37.0 services, equipment and reports section below (27 items, see DEPLOYMENT-4.37.0.md).
+- **4.38.0 (2026-11-20):** the 4.38.0 billing and administration section below (15 items, see DEPLOYMENT-4.38.0.md). The parity work is complete; signing in with Microsoft inside the apps stays deferred to its own release.
 
 ### Parity findings left for releases after 4.34.0
 

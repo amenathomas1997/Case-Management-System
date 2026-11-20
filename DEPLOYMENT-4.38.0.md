@@ -101,3 +101,25 @@ The new API actions are in inc/api_438.php.
 - **What 4.34.0 to 4.38.0 covered:** every High and Medium finding of the audit, and every Low one except those marked website-only (each with its reason in the audit and the plans).
 - **What stays website-only:** administration settings, payments and write-offs, invoice PDFs and batch billing, imports, and the large period reports.
 - **Still deferred:** signing in with Microsoft inside the apps. It needs its own release and security review.
+
+## Published (not deployed)
+
+2026-11-20, from tag v4.38.0 (2e5b9cd). The push waited about 19 hours because this Mac could not reach GitHub.
+
+**A fix after the first CI run:**
+- CI's first run on af01530 failed one check, T3 in tests/v438_cases.php.
+- The cause: the outstanding summary sorted only by amount owed, so two agencies owing the same amount could come back in a different order on each query.
+- invoice_aging() now sorts ties by agency name, so the invoices page and both apps list them in the same order.
+- The full suite then passed twice locally (3,484 checks), and CI passed all three jobs on 2e5b9cd.
+
+**The GitHub release v4.38.0 (latest, not a pre-release) carries:**
+- the install bundle, built from a clean checkout of the tag
+- the signed update package: 366 files, signature verified
+- Neither package has private files or former brand text.
+
+**Rehearsed:** installed with the 4.37.0 updater onto a copy of a 4.37.0 site.
+- The signature verified, the plan showed no problems, and the backup was made first.
+- 32 files were replaced, with no database change.
+- The sign-in page then served 4.38.0.
+
+The live site stays as it is until an administrator installs it with Software update. The 4.38.0 phone apps are built from this tag.
