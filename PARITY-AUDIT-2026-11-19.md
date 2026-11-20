@@ -1619,6 +1619,7 @@ Read-only comparison of the website (public/*.php), the app API (public/api.php,
 - **4.34.0 (2026-11-19):** every High finding and every Medium behaviour difference (43 items, see DEPLOYMENT-4.34.0.md), plus the Android app lock (C2b).
 - **4.35.0 (2026-11-19):** the 4.35.0 field casework section below (14 items, see DEPLOYMENT-4.35.0.md).
 - **4.36.0 (2026-11-19):** the 4.36.0 daily workspace and safety section below (28 items, see DEPLOYMENT-4.36.0.md).
+- **4.37.0 (2026-11-19):** the 4.37.0 services, equipment and reports section below (27 items, see DEPLOYMENT-4.37.0.md).
 
 ### Parity findings left for releases after 4.34.0
 

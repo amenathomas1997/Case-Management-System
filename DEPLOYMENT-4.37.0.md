@@ -98,3 +98,16 @@ The new API actions are in inc/api_437.php. The API's own copies of the recommen
   - AI audit entries written only when the AI was asked
   - unique, cleaned-up shared files
   - the website's wording and order on the new screens
+
+## Published (not deployed)
+
+2026-11-19, after CI passed all three jobs on b3b84e9. The GitHub release v4.37.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag, including the seven new shared files
+- the signed update package: 360 files, verified
+
+**Rehearsed:** installed with the 4.36.0 updater onto a copy of a 4.36.0 site.
+- The signature verified, the plan showed no problems, and the backup was made first.
+- 45 files were replaced or added (the new shared files are present), with no database change.
+- The sign-in page then served 4.37.0.
+
+The live site stays as it is until an administrator installs it with Software update. The 4.37.0 phone apps are built from this tag.
