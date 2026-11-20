@@ -21,6 +21,7 @@ import org.casemanagement.app.Api
 import org.casemanagement.app.ApiException
 import org.casemanagement.app.objects
 import org.casemanagement.app.str
+import org.casemanagement.app.strings
 import org.json.JSONObject
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -136,47 +137,52 @@ fun KnowledgeEditScreen(api: Api, nav: NavHostController, id: Int) {
 @Composable
 fun CounselorsScreen(api: Api) {
     val state = rememberLoaded(api.userId) { api.call("counselors").optJSONArray("counselors").objects() }
-    var chosen by remember { mutableStateOf<JSONObject?>(null) }
-    var ask by remember { mutableStateOf<Pair<JSONObject, Boolean>?>(null) }
+    // 4.38.0 (T9): the counselor whose buttons are shown, and the confirmation asked (kind "send" or "off"), by email, kept across rotation.
+    var chosenEmail by rememberSaveable { mutableStateOf("") }
+    var askEmail by rememberSaveable { mutableStateOf("") }
+    var askKind by rememberSaveable { mutableStateOf("") }
     // 4.28.0: the link is emailed once even when a reply was lost (see sendOnce).
     var sendKey by rememberSaveable { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var presses by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
+    fun who(c: JSONObject) = c.optString("name").ifEmpty { c.optString("email") }
     Show(state, "counselors") { list ->
         Page {
             NoticeText(notice)
-            ErrorText(error)
+            ErrorText(error, focusKey = presses)
             Heading("VR counselors (${list.size})")
             list.forEach { c ->
-                val badge = when { c.optBoolean("portal_active") -> "Portal active"; c.optBoolean("portal_expired") -> "Portal expired"; else -> "Not invited" }
-                ListRow(listOf(c.optString("name").ifEmpty { c.optString("email") }, listOfNotNull(badge, c.str("agency"), "${c.optInt("clients")} clients").joinToString(", "), c.optString("email")),
-                    action = "send or turn off the portal link", onClick = { chosen = c })
+                ListRow(listOf(who(c)) + counselorLines(c) + c.optString("email"), action = "send or turn off the portal link", onClick = { chosenEmail = c.optString("email") })
             }
         }
     }
-    chosen?.let { c ->
-        val name = c.optString("name").ifEmpty { c.optString("email") }
-        AlertDialog(onDismissRequest = { chosen = null }, title = { Text(name, modifier = Modifier.semantics { heading() }) },
+    val list = state.data ?: emptyList()
+    list.firstOrNull { chosenEmail.isNotEmpty() && it.optString("email") == chosenEmail }?.let { c ->
+        AlertDialog(onDismissRequest = { chosenEmail = "" }, title = { Text(who(c), modifier = Modifier.semantics { heading() }) },
             text = { Column(Modifier.verticalScroll(rememberScrollState())) {
-                TextButton(onClick = { chosen = null; ask = c to true }) { Text(if (c.optBoolean("portal_active")) "Resend or reset the link" else if (c.optBoolean("portal_expired")) "Send a new link" else "Send the portal link") }
-                if (c.optBoolean("portal_active")) TextButton(onClick = { chosen = null; ask = c to false }) { Text("Turn off the link") }
+                counselorButtons(c).forEach { (kind, label) -> TextButton(onClick = { chosenEmail = ""; askEmail = c.optString("email"); askKind = kind }) { Text(label) } }
             } },
-            confirmButton = { TextButton(onClick = { chosen = null }) { Text("Close") } })
+            confirmButton = { TextButton(onClick = { chosenEmail = "" }) { Text("Close") } })
     }
-    ask?.let { (c, send) ->
-        val name = c.optString("name").ifEmpty { c.optString("email") }
-        Confirm(if (send) "Email a portal link to $name?" else "Turn off the portal link for $name?",
-            if (send) "Any previous link stops working." else "It stops working at once, and they need a new link to get back in.",
-            if (send) "Send link" else "Turn off link", {
-                scope.launch {
-                    try {
-                        if (send) { api.callOnce("send_vrc_portal", JSONObject().put("email", c.optString("email")).put("name", c.optString("name")), sendKey, { sendKey = it }, "the portal link"); notice = "Portal link emailed to $name." }
-                        else { api.call("revoke_vrc_portal", body = JSONObject().put("email", c.optString("email"))); notice = "Portal link turned off for $name. Send a new link when they need access again." }
-                        state.reload()
-                    } catch (e: ApiException) { error = e.message }
-                }
-            }, { ask = null })
+    list.firstOrNull { askEmail.isNotEmpty() && it.optString("email") == askEmail }?.let { c ->
+        val (title, text, yes) = counselorConfirm(askKind, who(c))
+        val send = askKind != "off"
+        Confirm(title, text, yes, {
+            if (busy) return@Confirm
+            presses++
+            scope.launchSave({ busy = it }, { error = it; if (it != null) notice = null }) {
+                val r = if (send) api.callOnce("send_vrc_portal", JSONObject().put("email", c.optString("email")).put("name", c.optString("name")), sendKey, { sendKey = it }, "the portal link")
+                    else api.call("revoke_vrc_portal", body = JSONObject().put("email", c.optString("email")))
+                // The website's sentence; an older server sends none.
+                error = null
+                notice = r.str("message") ?: if (send) "Portal link emailed to ${who(c)}. Any previous link no longer works."
+                    else "Portal link turned off for ${c.optString("email")}. It no longer opens, even in a portal session that is already open; send a new link when they need access again."
+                state.reload()
+            }
+        }, { askEmail = ""; askKind = "" })
     }
 }
 
@@ -265,26 +271,51 @@ fun PortalRequestsScreen(api: Api, nav: NavHostController) {
 
 @Composable
 fun UtilizationScreen(api: Api) {
+    // 4.38.0 (T13): the website's period presets, remembered in the same setting the website uses
+    // (the server remembers a chosen period); an empty choice opens on the remembered period.
+    var preset by rememberSaveable { mutableStateOf("") }
     var from by rememberSaveable { mutableStateOf("") }
     var to by rememberSaveable { mutableStateOf("") }
-    var run by rememberSaveable { mutableStateOf(0) }
-    val state = rememberLoaded(run) { api.call("utilization", listOfNotNull(from.trim().takeIf { it.isNotEmpty() }?.let { "from" to it }, to.trim().takeIf { it.isNotEmpty() }?.let { "to" to it }).toMap()) }
+    var query by rememberSaveable(stateSaver = StringMapSaver) { mutableStateOf(emptyMap<String, String>()) }
+    var run by rememberSaveable { mutableIntStateOf(0) }
+    val state = rememberLoaded(run, query) { api.call("utilization", query) }
+    // The period the server used is shown as chosen when the screen opens.
+    androidx.compose.runtime.LaunchedEffect(state.data) {
+        val r = state.data ?: return@LaunchedEffect
+        if (preset.isEmpty()) r.str("period")?.let { p -> preset = p; if (p == "custom") { from = r.optString("from"); to = r.optString("to") } }
+    }
     Page {
-        Field("From", from, { from = it }, hint = "year-month-day; empty for the last 28 days")
-        Field("To", to, { to = it }, hint = "year-month-day")
-        SecondaryButton("Show") { run++ }
-        Show(state, "utilization") { r ->
-            Heading("${dayText(r.str("from"))} to ${dayText(r.str("to"))}")
-            ListRow(listOf((if (r.optBoolean("caseload_scoped")) "Caseload / capacity: " else "Organisation: ") + "${r.optInt("org_util")}%", "${hoursText(r.optDouble("total_delivered", 0.0))} hours delivered, worth " + money(r.optDouble("total_value", 0.0))))
-            val rows = r.optJSONArray("rows").objects()
-            val band = { u: Int -> when { u >= 85 -> "on target"; u >= 60 -> "below target"; else -> "well below target" } }
-            rows.filter { !it.optBoolean("no_target") }.forEach { s -> ListRow(listOf(s.optString("name") + ": ${s.optInt("util")}%, ${band(s.optInt("util"))}", "${hoursText(s.optDouble("delivered", 0.0))} of ${hoursText(s.optDouble("expected", 0.0))} expected hours, ${s.optInt("clients")} clients")) }
-            val none = rows.filter { it.optBoolean("no_target") }
-            if (none.isNotEmpty()) {
-                Heading("No weekly target")
-                none.forEach { s -> ListRow(listOf(s.optString("name"), "${hoursText(s.optDouble("delivered", 0.0))} hours, ${s.optInt("clients")} clients")) }
+        val presets = periodChoices(state.data?.optJSONArray("presets").objects())
+        if (presets.isNotEmpty()) {
+            Choice("Period", preset, presets) { preset = it }
+            if (preset == "custom") {
+                Field("From", from, { from = it }, hint = "year-month-day")
+                Field("To", to, { to = it }, hint = "year-month-day")
             }
-            if (r.optDouble("former_staff_delivered", 0.0) > 0) Text("Former staff delivered ${hoursText(r.optDouble("former_staff_delivered", 0.0))} hours in this period, counted in the totals.")
+        } else {
+            // An older server: dates only.
+            Field("From", from, { from = it }, hint = "year-month-day; empty for the last 28 days")
+            Field("To", to, { to = it }, hint = "year-month-day")
+        }
+        SecondaryButton("Run report") {
+            query = if (presets.isNotEmpty()) utilizationQuery(preset, from, to) else utilizationQuery("custom", from, to) - "period"
+            run++
+        }
+        Show(state, "utilization") { r ->
+            Heading("Summary for ${shortDate(r.str("from"))} to ${shortDate(r.str("to"))}")
+            r.optJSONArray("notes").strings().forEach { Text(it) }
+            ListRow(listOf("Team utilization ${r.optInt("org_util")}%"))
+            ListRow(listOf("Billable hours delivered ${hoursWords(r.optDouble("total_delivered", 0.0))}"))
+            ListRow(listOf("Billable value ${money(r.optDouble("total_value", 0.0))}"))
+            if (r.has("weeks")) ListRow(listOf("Weeks in period ${weeksText(r.optDouble("weeks", 0.0))}"))
+            (r.str("scoped_note") ?: if (r.optBoolean("caseload_scoped") && !r.has("scoped_note")) "Activity is limited to your assigned clients. Expected hours remain the staff members’ full capacity targets." else null)?.let { Text(it) }
+            Heading("Staff utilization")
+            val rows = r.optJSONArray("rows").objects()
+            if (rows.isEmpty()) Text("No active staff.")
+            rows.forEach { s -> ListRow(utilizationRowText(s)) }
+            if (r.optDouble("former_staff_delivered", 0.0) > 0) ListRow(listOf("Former or unrecorded staff",
+                "${hoursText(r.optDouble("former_staff_delivered", 0.0))} hours · ${money(r.optDouble("former_staff_value", 0.0))} value"))
+            r.str("footer")?.let { Text(it) }
         }
     }
 }

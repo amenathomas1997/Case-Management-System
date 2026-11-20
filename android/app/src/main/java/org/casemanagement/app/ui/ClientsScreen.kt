@@ -416,7 +416,8 @@ val NOTE_LABELS = mapOf(
 @Composable
 fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int = 0, sessionId: Int = 0, presetSubject: String = "",
                   editNoteId: Int = 0, addendumTo: Int = 0) {
-    val baseTypes = api.formList("note_types", listOf("Case Note", "Progress Report", "Monthly Summary", "Intake", "Addendum"))
+    // 4.38.0 (T16): the website's built-in list (with Phone Call) when the server sent none.
+    val baseTypes = api.formList("note_types", noteTypeFallback())
     var type by rememberSaveable { mutableStateOf(if (addendumTo > 0) "Addendum" else baseTypes.first()) }
     var format by rememberSaveable { mutableStateOf("free") }
     // 4.31.0: a session's note starts with its subject ("Session on Oct 20") and is linked to the session.

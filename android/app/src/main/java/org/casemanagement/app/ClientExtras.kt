@@ -163,6 +163,8 @@ suspend fun <T> sendOnce(saved: String, keep: (String) -> Unit, fingerprint: Str
     } catch (e: ApiException) {
         // 4.29.0: "still being processed" keeps the key, so trying again later finds the first try.
         if (stillProcessing(e)) throw e
+        // 4.38.0: used before with other details: the key goes (the next deliberate send is a new one), and the server's sentence is said.
+        if (idemConflict(e)) { keep(""); throw ApiException(e.message?.takeIf { it.isNotBlank() } ?: IDEM_CONFLICT, e.status, reply = e.reply) }
         if (!e.network) { keep(""); throw e }
         // No answer at all (status 0): sent or not, nobody knows. A redirect (3xx) was not taken, so its own words stay.
         if (e.status == 0) throw ApiException(unknownOutcome(what), 0, network = true)
@@ -272,7 +274,17 @@ fun scaleStrokes(strokes: List<List<Pair<Float, Float>>>, fromW: Int, fromH: Int
  * says it only in words): the first try is still running, so the retry key must be kept.
  */
 fun stillProcessing(e: ApiException): Boolean =
-    e.status == 409 && (e.reply?.optBoolean("processing") == true || (e.message ?: "").contains("still being processed", ignoreCase = true))
+    e.status == 409 && !idemConflict(e) && (e.reply?.optBoolean("processing") == true || (e.message ?: "").contains("still being processed", ignoreCase = true))
+
+/** 4.38.0: the server's sentence when a retry key was reused with a different body (409 idem_conflict). */
+const val IDEM_CONFLICT = "This was already sent once with different details, and that earlier send may have been saved. Reload to check what was saved, then make your change again."
+
+/** 4.38.0: the retry key was already used with other details: never a success, never "still processing". */
+fun idemConflict(e: ApiException): Boolean = e.status == 409 && e.reply?.optBoolean("idem_conflict") == true
+
+/** 4.38.0: an offline entry the server answered with idem_conflict is kept, with the server's sentence as its reason. */
+fun idemConflictReason(status: Int, reply: JSONObject?): String? =
+    if (status == 409 && reply?.optBoolean("idem_conflict") == true) reply.optString("error").ifEmpty { IDEM_CONFLICT } else null
 
 /**
  * The key that keeps a dialog's typed fields with the item it was opened for (4.29.0): fields are

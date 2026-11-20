@@ -709,6 +709,25 @@ function session_make_meeting(array $sessionIds, string $provider, int $instruct
     return ['ok' => false, 'url' => null, 'why' => $why ?? (MEETING_PROVIDERS[$provider] . ' could not be reached, so the session is booked without a link; add one by moving the session.')];
 }
 
+/**
+ * Why a meeting link cannot be made for this booking, or null (4.38.0: moved from schedule.php, shared
+ * with the apps' schedule_session). Only for a remote session with no typed link, a provider still set
+ * up, and only in the instructor's own connected account unless the booker is an administrator.
+ */
+function session_meeting_make_error(string $provider, bool $isRemote, ?string $typedUrl, int $staffId, string $staffName, array $user): ?string {
+    if (!isset(MEETING_PROVIDERS[$provider])) return 'Choose Zoom or Microsoft Teams for the meeting link.';
+    $name = MEETING_PROVIDERS[$provider];
+    if (!$isRemote) return 'A ' . $name . ' link is only for a remote session: tick Remote / telepractice, or choose No.';
+    if ($typedUrl !== null) return 'A meeting link is typed above and ' . $name . ' would make another: clear the link, or choose No.';
+    if (!meeting_app($provider)) return $name . ' is not set up here any more. Choose No, or type a link.';
+    if ($staffId <= 0) return null;
+    // Only your own account, unless you are an administrator booking for someone (owner rule, 4.10.0).
+    if ($staffId !== (int)$user['id'] && !can('admin')) return 'A meeting can be made only in your own ' . $name . ' account. ' . $staffName . ' can make it, or an administrator; otherwise choose No and type a link.';
+    if (!meeting_connected($staffId, $provider)) return $staffName . (meeting_account($staffId, $provider) ? '\'s ' . $name . ' connection has ended' : ' has not connected ' . $name)
+        . ($staffId === (int)$user['id'] ? '. Connect it on My Account, Online meetings, then schedule again.' : '. They connect it on their My Account page; until then choose No, or type a link.');
+    return null;
+}
+
 /** First name + last initial, as the calendar feed shows a client: an emailed invite or a meeting
  *  title ends up in the calendar or meeting provider's storage too (moved from schedule.php, 4.37.0). */
 function schedule_short_name(string $n): string {

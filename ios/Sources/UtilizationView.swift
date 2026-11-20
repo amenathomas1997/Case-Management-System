@@ -1,58 +1,132 @@
 import SwiftUI
 
-/// The utilization report plus the work by former or unrecorded staff, which the server counts
-/// in the hour and value totals but lists in no row (0 when an older server does not say).
-private struct UtilizationReport: Decodable {
-    let report: UtilizationResponse
-    let formerStaffDelivered: Double
-    let formerStaffValue: Double
-    /// Hours by active staff with no weekly target: counted in Hours delivered, left out of the
-    /// team percentage.
-    let noTargetDelivered: Double
-    /// Per row, in the report's order: the staff member has no weekly target, so the row's 0%
-    /// is not a measurement (from the row's weekly hours when an older server does not say).
-    let noTarget: [Bool]
-    private enum CodingKeys: String, CodingKey { case formerStaffDelivered, formerStaffValue, noTargetDelivered, rows }
-    private struct RowFlag: Decodable {
-        let noTarget: Bool?
-        private enum CodingKeys: String, CodingKey { case noTarget }
-        init(from d: Decoder) throws {
-            noTarget = try? d.container(keyedBy: CodingKeys.self).decodeIfPresent(Bool.self, forKey: .noTarget)
-        }
-    }
+/// One staff row of the utilization report, as the server sends it (4.38.0: at_or_above).
+struct UtilStaffRow: Decodable {
+    let name: String
+    let weekly: Double
+    let delivered: Double
+    let value: Double
+    let clients: Int
+    let expected: Double
+    let util: Int
+    /// No weekly hours are set, so `util` is not a measurement.
+    let noTarget: Bool
+    /// 100% or more of the expected hours (the website's "at or above target").
+    let atOrAbove: Bool
+    private enum CodingKeys: String, CodingKey { case name, weekly, delivered, value, clients, expected, util, noTarget, atOrAbove }
     init(from d: Decoder) throws {
-        let rep = try UtilizationResponse(from: d)
-        report = rep
         let c = try d.container(keyedBy: CodingKeys.self)
-        formerStaffDelivered = (try? c.decodeIfPresent(Double.self, forKey: .formerStaffDelivered)) ?? 0
-        formerStaffValue = (try? c.decodeIfPresent(Double.self, forKey: .formerStaffValue)) ?? 0
-        noTargetDelivered = (try? c.decodeIfPresent(Double.self, forKey: .noTargetDelivered)) ?? 0
-        let flags = (try? c.decodeIfPresent([RowFlag].self, forKey: .rows)) ?? []
-        noTarget = rep.rows.indices.map { i in (i < flags.count ? flags[i].noTarget : nil) ?? (rep.rows[i].weekly <= 0) }
+        name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        weekly = (try? c.decode(Double.self, forKey: .weekly)) ?? 0
+        delivered = (try? c.decode(Double.self, forKey: .delivered)) ?? 0
+        value = (try? c.decode(Double.self, forKey: .value)) ?? 0
+        clients = (try? c.decode(Int.self, forKey: .clients)) ?? 0
+        expected = (try? c.decode(Double.self, forKey: .expected)) ?? 0
+        util = (try? c.decode(Int.self, forKey: .util)) ?? 0
+        noTarget = (try? c.decode(Bool.self, forKey: .noTarget)) ?? (weekly <= 0)
+        atOrAbove = (try? c.decode(Bool.self, forKey: .atOrAbove)) ?? (!noTarget && util >= 100)
     }
 }
 
-/// A staff row and whether it has a weekly target to measure against.
-private struct StaffUtil { let row: UtilRow; let noTarget: Bool }
+struct UtilPreset: Decodable { let key: String; let label: String }
 
-/// Staff billable utilization (web v2.56 parity): delivered service hours vs
-/// expected capacity (weekly target × weeks in the period).
+/// The utilization report (4.38.0: the website's helper, period and wording). Every figure is
+/// the server's; an older server sends no presets, notes, weeks or footer.
+struct UtilizationReply: Decodable {
+    let from: String
+    let to: String
+    let orgUtil: Int
+    let totalDelivered: Double
+    let totalValue: Double
+    let formerStaffDelivered: Double
+    let formerStaffValue: Double
+    let noTargetDelivered: Double
+    let caseloadScoped: Bool
+    let rows: [UtilStaffRow]
+    let period: String?
+    let presets: [UtilPreset]
+    let notes: [String]
+    let weeks: Double?
+    let footer: String?
+    let scopedNote: String?
+    private enum CodingKeys: String, CodingKey {
+        case from, to, orgUtil, totalDelivered, totalValue, formerStaffDelivered, formerStaffValue, noTargetDelivered, caseloadScoped, rows
+        case period, presets, notes, weeks, footer, scopedNote
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        from = (try? c.decode(String.self, forKey: .from)) ?? ""
+        to = (try? c.decode(String.self, forKey: .to)) ?? ""
+        orgUtil = (try? c.decode(Int.self, forKey: .orgUtil)) ?? 0
+        totalDelivered = (try? c.decode(Double.self, forKey: .totalDelivered)) ?? 0
+        totalValue = (try? c.decode(Double.self, forKey: .totalValue)) ?? 0
+        formerStaffDelivered = (try? c.decode(Double.self, forKey: .formerStaffDelivered)) ?? 0
+        formerStaffValue = (try? c.decode(Double.self, forKey: .formerStaffValue)) ?? 0
+        noTargetDelivered = (try? c.decode(Double.self, forKey: .noTargetDelivered)) ?? 0
+        caseloadScoped = (try? c.decode(Bool.self, forKey: .caseloadScoped)) ?? false
+        rows = LenientList.decode(UtilStaffRow.self, from: c, forKey: .rows)
+        period = try? c.decodeIfPresent(String.self, forKey: .period)
+        presets = LenientList.decode(UtilPreset.self, from: c, forKey: .presets)
+        notes = (try? c.decode([String].self, forKey: .notes)) ?? []
+        weeks = try? c.decodeIfPresent(Double.self, forKey: .weeks)
+        footer = try? c.decodeIfPresent(String.self, forKey: .footer)
+        scopedNote = try? c.decodeIfPresent(String.self, forKey: .scopedNote)
+    }
+}
+
+/// Hours as the website prints them: up to two decimals, no trailing zeros ("12.5").
+func utilHours(_ h: Double) -> String {
+    let f = NumberFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.minimumFractionDigits = 0
+    f.maximumFractionDigits = 2
+    f.usesGroupingSeparator = false
+    return f.string(from: NSNumber(value: h)) ?? String(h)
+}
+
+/// A staff row's first line: "{name}: {util}%[ at or above target]" or "{name}: no target".
+func utilizationRowTitle(_ r: UtilStaffRow) -> String {
+    r.noTarget ? "\(r.name): no target" : "\(r.name): \(r.util)%\(r.atOrAbove ? " at or above target" : "")"
+}
+
+/// A staff row's second line: "{d} of {e} expected hours · {n} clients · {$v} value".
+func utilizationRowDetail(_ r: UtilStaffRow) -> String {
+    "\(utilHours(r.delivered)) of \(utilHours(r.expected)) expected hours · \(r.clients) client\(r.clients == 1 ? "" : "s") · \(money(r.value)) value"
+}
+
+/// The rows in the website's order: the server sorts them (4.38.0); an older server mixed the
+/// rows with no target in, so they are put last here, as the website lists them.
+func utilizationShownRows(_ d: UtilizationReply) -> [UtilStaffRow] {
+    d.presets.isEmpty ? d.rows.filter { !$0.noTarget } + d.rows.filter { $0.noTarget } : d.rows
+}
+
+/// utilization's query: the preset, with the dates only for Custom dates.
+func utilizationQuery(preset: String, from: Date, to: Date) -> [String: String] {
+    if preset.isEmpty || preset == "custom" {
+        var q = ["from": APIDate.day(from), "to": APIDate.day(to)]
+        if preset == "custom" { q["period"] = "custom" }
+        return q
+    }
+    return ["period": preset]
+}
+
+/// Staff billable utilization (the website's utilization.php): delivered service hours against
+/// expected capacity (weekly target × weeks in the period), for the period remembered with the
+/// website's (4.38.0).
 struct UtilizationView: View {
     @EnvironmentObject var api: API
-    @State private var data: UtilizationResponse?
-    @State private var formerHours = 0.0
-    @State private var formerValue = 0.0
-    /// The rows to list: staff with a weekly target first, then those with none, as on the website.
-    @State private var staff: [StaffUtil] = []
-    @State private var noTargetHours = 0.0
+    @State private var data: UtilizationReply?
     @State private var error: String?
     /// The latest run failed, so the figures shown are from an earlier period.
     @State private var stale = false
     /// Only the newest request may fill the screen: an older run answering late must not put
     /// another period's figures under the dates chosen.
     @State private var loadSeq = 0
+    /// The period preset chosen ("" until the server has said which it used).
+    @State private var preset = ""
     @State private var from = Calendar.current.date(byAdding: .day, value: -28, to: Date()) ?? Date()
     @State private var to = Date()
+    @State private var firstLoad = true
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -60,102 +134,81 @@ struct UtilizationView: View {
             if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
 
             Section("Period") {
-                // Date pickers, not typed text: a mistyped date used to fall back to the last 28 days unannounced.
-                DatePicker("From", selection: $from, displayedComponents: .date)
-                DatePicker("To", selection: $to, displayedComponents: .date)
+                if let presets = data?.presets, !presets.isEmpty {
+                    Picker("Period", selection: $preset) {
+                        ForEach(presets, id: \.key) { p in Text(p.label).tag(p.key) }
+                    }
+                }
+                if (data?.presets ?? []).isEmpty || preset == "custom" {
+                    // Date pickers, not typed text: a mistyped date used to fall back to the last 28 days unannounced.
+                    DatePicker("From", selection: $from, displayedComponents: .date)
+                    DatePicker("To", selection: $to, displayedComponents: .date)
+                }
                 Button("Run report") { Task { await load(announceResult: true) } }
-                    .accessibilityLabel("Run report for the chosen dates")
+                    .accessibilityLabel("Run report for the chosen period")
                     .accessibilityInputLabels(["Run report", "Run"])
             }
 
             if let d = data {
-                if d.caseloadScoped == true {
-                    Text("Activity is limited to your assigned clients. Expected hours remain the staff members’ full capacity targets.").font(.callout)
+                if !d.notes.isEmpty { Text(d.notes.joined(separator: " ")).font(.callout) }
+                if d.caseloadScoped {
+                    Text(d.scopedNote ?? "Activity is limited to your assigned clients. Expected hours remain the staff members’ full capacity targets.")
+                        .font(.callout)
                 }
                 Section {
                     if stale {
-                        Text("Could not refresh — these figures are still for \(formatDate(d.from)) to \(formatDate(d.to)), not the dates chosen above.")
+                        Text("Could not refresh — these figures are still for \(formatDate(d.from)) to \(formatDate(d.to)), not the period chosen above.")
                             .font(.callout)
                     }
                     // Side by side, or one under another at the accessibility text sizes, where
-                    // three columns would break the figures and labels mid-word.
+                    // the columns would break the figures and labels mid-word.
                     let tiles = typeSize.isAccessibilitySize
                         ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout())
                     tiles {
-                        stat("\(d.orgUtil)%", d.caseloadScoped == true ? "Caseload / capacity" : "Org utilization")
-                        stat(String(format: "%.1f", d.totalDelivered), "Hours delivered")
-                        stat(String(format: "$%.0f", d.totalValue), "Billable value")
-                    }
-                    if formerHours > 0 || formerValue > 0 {
-                        // Otherwise the rows below would not add up to these totals, unexplained.
-                        Text(String(format: "Includes %.1f hours ($%.0f) by former or unrecorded staff, not listed below.", formerHours, formerValue))
-                            .font(.caption).foregroundStyle(Color.secondaryText)
-                    }
-                    if noTargetHours > 0 {
-                        // Otherwise Hours delivered and the percentage would not agree, unexplained.
-                        Text(String(format: "Hours delivered includes %.1f hours by staff with no weekly target, listed last below; %@ leaves them out.",
-                                    noTargetHours, d.caseloadScoped == true ? "Caseload / capacity" : "Org utilization"))
-                            .font(.caption).foregroundStyle(Color.secondaryText)
+                        stat("\(d.orgUtil)%", "Team utilization")
+                        stat(utilHours(d.totalDelivered), "Billable hours delivered")
+                        stat(money(d.totalValue), "Billable value")
+                        if let w = d.weeks { stat(utilHours(w), "Weeks in period") }
                     }
                 } header: {
                     // The period the figures cover, which may differ from the pickers until Run succeeds.
-                    Text("Figures for \(formatDate(d.from)) to \(formatDate(d.to))")
+                    Text("Summary for \(formatDate(d.from)) to \(formatDate(d.to))").font(.headline).foregroundStyle(.primary).textCase(nil)
+                        .accessibilityAddTraits(.isHeader)
                 }
                 Section {
-                    // The 7:1 secondary-text colour throughout (system secondary is about 3.4:1).
-                    if staff.isEmpty { Text("No activity in this period.").foregroundStyle(Color.secondaryText) }
-                    ForEach(Array(staff.enumerated()), id: \.offset) { _, s in
-                        let r = s.row
+                    if d.rows.isEmpty { Text("No active staff.").foregroundStyle(Color.secondaryText) }
+                    ForEach(Array(utilizationShownRows(d).enumerated()), id: \.offset) { _, r in
                         VStack(alignment: .leading, spacing: 3) {
-                            HStack {
-                                Text(r.name).font(.body.weight(.semibold))
-                                Spacer()
-                                if s.noTarget {
-                                    // No weekly hours are set: a 0% "well below target" would be wrong.
-                                    Text("No weekly target").font(.body.bold()).foregroundStyle(.primary)
-                                } else {
-                                    // The band is said in words as well as by the bar's colour.
-                                    Text(verbatim: "\(r.util)% · \(utilBand(r.util))").font(.body.bold().monospacedDigit())
-                                        .foregroundStyle(.primary)
-                                }
-                            }
-                            // Hidden from VoiceOver: the text above says the exact figure, while the
-                            // bar stops at 100 and would contradict it for anyone over capacity.
-                            if !s.noTarget {
-                                ProgressView(value: Double(min(r.util, 100)), total: 100).tint(utilColor(r.util))
-                                    .accessibilityHidden(true)
-                            }
-                            Text(s.noTarget
-                                 ? String(format: "%.1f hours delivered · %d client%@ · $%.0f value",
-                                          r.delivered, r.clients, r.clients == 1 ? "" : "s", r.value)
-                                 : String(format: "%.1f of %.1f expected hours · %d client%@ · $%.0f value",
-                                          r.delivered, r.expected, r.clients, r.clients == 1 ? "" : "s", r.value))
+                            Text(utilizationRowTitle(r)).font(.body.weight(.semibold))
+                            Text(utilizationRowDetail(r)).font(.caption).foregroundStyle(Color.secondaryText)
+                        }
+                        .padding(.vertical, 1)
+                        .accessibilityElement(children: .combine)
+                    }
+                    if d.formerStaffDelivered > 0 || d.formerStaffValue > 0 {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Former or unrecorded staff").font(.body.weight(.semibold))
+                            Text("\(utilHours(d.formerStaffDelivered)) hours delivered · \(money(d.formerStaffValue)) value")
                                 .font(.caption).foregroundStyle(Color.secondaryText)
-                        }.padding(.vertical, 1)
-                        // One element read in words, without the separators the visible text uses.
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(s.noTarget
-                            ? String(format: "%@, no weekly target, %.1f hours delivered, %d client%@, %.0f dollars",
-                                     r.name, r.delivered, r.clients, r.clients == 1 ? "" : "s", r.value)
-                            : String(format: "%@, %d percent, %@, %.1f of %.1f expected hours, %d client%@, %.0f dollars",
-                                     r.name, r.util, utilBand(r.util), r.delivered, r.expected, r.clients, r.clients == 1 ? "" : "s", r.value))
+                        }
+                        .accessibilityElement(children: .combine)
                     }
                 } header: {
-                    Text("By staff")
+                    Text("Staff utilization").font(.headline).foregroundStyle(.primary).textCase(nil).accessibilityAddTraits(.isHeader)
                 } footer: {
-                    Text(verbatim: "On target is 85% or more of expected hours; below target is 60–84%; well below target is under 60%.")
-                        .foregroundStyle(Color.secondaryText)
+                    if let footer = d.footer, !footer.isEmpty {
+                        Text(footer).foregroundStyle(Color.secondaryText)
+                    } else if d.noTargetDelivered > 0 {
+                        Text("Billable hours delivered includes \(utilHours(d.noTargetDelivered)) hours by staff with no weekly target; Team utilization leaves them out.")
+                            .foregroundStyle(Color.secondaryText)
+                    }
                 }
             } else if error == nil { ProgressView() }
         }
         .navigationTitle("Utilization")
+        .modifier(ReadablePickers(inNavigationStack: true))
         .refreshable { await load() }
         .task { await load() }
-    }
-
-    /// The band the bar's colour shows, in words.
-    private func utilBand(_ u: Int) -> String {
-        u >= 85 ? "on target" : (u >= 60 ? "below target" : "well below target")
     }
 
     private func stat(_ n: String, _ label: String) -> some View {
@@ -167,33 +220,24 @@ struct UtilizationView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(label): \(n)")
     }
-    /// Bar colours with at least 3:1 against the row in both appearances (system green and
-    /// orange are about 2.2:1 on white): dark green #1E7B34, amber #8A4B00 and red #B3261E in
-    /// light mode, and the brighter #30D158, #FF9F0A and #FF6B60 in dark mode.
-    private func utilColor(_ u: Int) -> Color {
-        let (light, dark): (UInt32, UInt32) = u >= 85 ? (0x1E7B34, 0x30D158) : (u >= 60 ? (0x8A4B00, 0xFF9F0A) : (0xB3261E, 0xFF6B60))
-        func ui(_ hex: UInt32) -> UIColor {
-            UIColor(red: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
-        }
-        return Color(UIColor { $0.userInterfaceStyle == .dark ? ui(dark) : ui(light) })
-    }
 
     private func load(announceResult: Bool = false) async {
         loadSeq += 1
         let mine = loadSeq
+        // On open nothing is sent: the server uses the period remembered with the website's.
+        let query = firstLoad ? [:] : utilizationQuery(preset: preset, from: from, to: to)
         do {
-            error = nil
-            let r: UtilizationReport = try await api.call("utilization", query: ["from": APIDate.day(from), "to": APIDate.day(to)])
+            let r: UtilizationReply = try await api.call("utilization", query: query)
             guard mine == loadSeq else { return }
-            let d = r.report
-            data = d; stale = false
-            formerHours = r.formerStaffDelivered; formerValue = r.formerStaffValue
-            // Staff with no weekly target last, as on the website: their 0% is not a measurement.
-            let rows = zip(d.rows, r.noTarget).map { StaffUtil(row: $0, noTarget: $1) }
-            staff = rows.filter { !$0.noTarget } + rows.filter { $0.noTarget }
-            noTargetHours = r.noTargetDelivered
+            error = nil
+            data = r; stale = false; firstLoad = false
+            // The period the server used is the one selected (its dates fill Custom dates).
+            if let p = r.period, r.presets.contains(where: { $0.key == p }) { preset = p }
+            else if r.presets.contains(where: { $0.key == "custom" }) { preset = "custom" }
+            if let f = APIDate.strictDay(r.from) { from = f }
+            if let t = APIDate.strictDay(r.to) { to = t }
             // Run only swaps the figures below the button: say that it happened, and for which period.
-            if announceResult { announce("Utilization for \(formatDate(d.from)) to \(formatDate(d.to)): \(d.orgUtil) percent.") }
+            if announceResult { announce("Summary for \(formatDate(r.from)) to \(formatDate(r.to)): team utilization \(r.orgUtil) percent.") }
         }
         catch {
             guard mine == loadSeq else { return }

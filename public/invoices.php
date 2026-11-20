@@ -11,8 +11,6 @@ $uid = (int)$user['id'];
 $scopeCond = $scoped ? ' AND c.assigned_to = ?' : '';
 $scopeArg = $scoped ? [$uid] : [];
 
-const INVOICE_STATUSES = ['Draft', 'Submitted', 'Paid', 'Denied', 'Void'];
-
 /** Cents in a typed amount ("1250.00", "$1,250", "125.5"), or null when it is not
  *  dollars and cents. A leading $ and thousands commas are accepted as typed. */
 function invoice_amount_cents(string $raw): ?int {
@@ -21,26 +19,7 @@ function invoice_amount_cents(string $raw): ?int {
     return preg_match('/^\d{1,7}(\.\d{1,2})?$/D', $amt) ? (int)round((float)$amt * 100) : null;
 }
 
-/** The list filters — status, agency, month (YYYY-MM of the invoice date) and text
- *  (invoice number or client name) — read from the page's GET, or from the list_*
- *  hidden fields a row's form carries ($prefix 'list_'), so a refused entry returns
- *  to the list as it was filtered. Anything unreadable is blank (no filter). */
-function invoice_list_filters(array $src, string $prefix = ''): array {
-    $get = fn(string $k): string => is_string($src[$prefix . $k] ?? null) ? trim($src[$prefix . $k]) : '';
-    $status = in_array($get('status'), INVOICE_STATUSES, true) ? $get('status') : '';
-    $month = preg_match('/^\d{4}-(0[1-9]|1[0-2])$/D', $get('month')) ? $get('month') : '';
-    return ['status' => $status, 'agency' => mb_substr($get('agency'), 0, 190), 'month' => $month, 'q' => mb_substr($get('q'), 0, 120)];
-}
-/** The SQL for a filter set, against the list's aliases (i, t, c); binds into $params. */
-function invoice_filter_sql(array $f, array &$params): string {
-    $sql = '';
-    if ($f['status'] !== '') { $sql .= ' AND i.status = ?'; $params[] = $f['status']; }
-    // 4.28.0: every spelling of the agency, including a name it had before a rename (agency_spellings()).
-    if ($f['agency'] !== '') { [$agCond, $agArgs] = agency_match_sql('COALESCE(i.funding_agency, t.funding_agency)', $f['agency']); $sql .= ' AND ' . $agCond; array_push($params, ...$agArgs); }
-    if ($f['month'] !== '') { $sql .= ' AND i.created_at >= ? AND i.created_at < ?'; $params[] = $f['month'] . '-01'; $params[] = date('Y-m-01', strtotime($f['month'] . '-01 +1 month')); }
-    if ($f['q'] !== '') { $sql .= ' AND (i.invoice_number LIKE ? OR c.name LIKE ?)'; $like = '%' . addcslashes($f['q'], '%_\\') . '%'; $params[] = $like; $params[] = $like; }
-    return $sql;
-}
+// INVOICE_STATUSES, invoice_list_filters() and invoice_filter_sql() are in inc/billing.php (4.38.0), shared with the apps.
 /** invoices.php?… for a filter set and page, as the pagination and the forms link back. */
 function invoice_list_url(array $f, int $page = 1, string $anchor = 'inv-list-h'): string {
     $qs = http_build_query(array_filter($f + ['page' => $page > 1 ? (string)$page : ''], fn($v) => $v !== ''));
@@ -128,30 +107,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_shown'])) {
 /* Every action on one invoice shares the caseload check */
 /* Several Draft invoices marked submitted at once (4.0.0), each with the same date. */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_submit'])) {
-    $raw = is_string($_POST['bulk_submitted_on'] ?? null) ? trim($_POST['bulk_submitted_on']) : '';
-    $bulkIds = array_slice(array_values(array_unique(array_filter(array_map('intval', (array)($_POST['bulk_ids'] ?? []))))), 0, 200);
+    // 4.38.0: through invoice_bulk_submit() (inc/billing.php), shared with the apps' submit_invoices.
+    $bulk = invoice_bulk_submit((array)($_POST['bulk_ids'] ?? []), is_string($_POST['bulk_submitted_on'] ?? null) ? $_POST['bulk_submitted_on'] : '', $user);
     // 4.30.0: a refusal is tied to the boxes or the date (not a flash), and what was chosen is kept.
-    $bulkErrors = [];
-    if (!$bulkIds) $bulkErrors['bulk_ids'] = 'Tick at least one draft invoice.';
-    $rawDate = $raw === '' ? null : valid_date($raw, 2000, (int)date('Y'));
-    if ($raw !== '' && ($rawDate === null || $rawDate > date('Y-m-d'))) $bulkErrors['bulk_submitted_on'] = 'Enter the date they were sent as a full date, not after today.';
-    if ($bulkErrors) { keep_input(); keep_field_errors($bulkErrors); redirect('invoices.php#bulk-h'); }
-    $n = 0; $refused = [];
-    foreach ($bulkIds as $bid) {
-        $bq = db()->prepare("SELECT i.id, i.invoice_number, i.created_at FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id WHERE i.id = ? AND i.status = 'Draft'" . $scopeCond);
-        $bq->execute(array_merge([$bid], $scopeArg));
-        $bi = $bq->fetch();
-        if (!$bi) continue;
-        $on = $raw === '' ? date('Y-m-d') : billing_date_in($raw, (string)$bi['created_at']);
-        if ($on === null) { $refused[] = $bi['invoice_number']; continue; }
-        if (invoice_submit((int)$bi['id'], $on)) { audit($user['id'], 'invoice.submit', 'invoice', (int)$bi['id'], 'submitted ' . $on . ' (several at once)'); $n++; }
+    if (!$bulk['ok']) {
+        $bulkErrors = [];
+        foreach ($bulk['errors'] as $k => $v) $bulkErrors[$k === 'invoice_ids' ? 'bulk_ids' : 'bulk_submitted_on'] = $v;
+        keep_input(); keep_field_errors($bulkErrors); redirect('invoices.php#bulk-h');
     }
-    if (!$n && $refused) {
-        keep_input();
-        keep_field_errors(['bulk_submitted_on' => 'The date is before these invoices were created: ' . implode(', ', $refused) . '. Choose a later date.']);
-        redirect('invoices.php#bulk-h');
-    }
-    flash(($n ? $n . ' invoice' . ($n === 1 ? '' : 's') . ' marked submitted.' : 'No invoice was marked submitted.') . ($refused ? ' Not changed, because the date is before they were created: ' . implode(', ', $refused) . '.' : ''), $n ? 'success' : 'error');
+    flash($bulk['message'], $bulk['changed'] ? 'success' : 'error');
     redirect('invoices.php#inv-list-h');
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['set_status']) || isset($_POST['void_draft']) || isset($_POST['apply_payment'])
@@ -350,9 +314,7 @@ else $filter = invoice_filter_sql($filters, $params);
 $statusFilter = $filters['status'];
 $filtered = $filters !== invoice_list_filters([]);
 // The agencies on the invoices this user can see, for the agency filter.
-$fa = db()->prepare('SELECT DISTINCT COALESCE(i.funding_agency, t.funding_agency) AS agency' . $listFrom . ' ORDER BY agency');
-$fa->execute($scopeArg);
-$invoiceAgencies = array_values(array_filter($fa->fetchAll(PDO::FETCH_COLUMN), fn($a) => $a !== null && $a !== ''));
+$invoiceAgencies = invoice_agency_choices($scoped ? $uid : null);
 // 300 invoices to a page, newest first; the page says how many there are in all
 // and links to the older ones, so none is silently left off.
 $perPage = 300;
@@ -385,15 +347,7 @@ if ($refusedId > 0 && array_filter($refusedKeys, 'has_field_error')
 // Outstanding: submitted invoices awaiting payment, and invoices marked paid with
 // less than their total (short-paid), at the balance still owed, so a short
 // payment never drops out of the receivables.
-$owedSql = 'i.total_amount - COALESCE(i.paid_amount, 0) - i.written_off';
-$ag = db()->prepare("SELECT COALESCE(i.funding_agency, t.funding_agency) AS funding_agency, COUNT(*) n,
-        SUM($owedSql) amt, SUM(COALESCE(i.paid_amount, 0) > 0) part_paid, MAX(DATEDIFF(CURDATE(), i.submitted_at)) oldest,
-        SUM(CASE WHEN i.due_date < CURDATE() THEN $owedSql ELSE 0 END) overdue
-    FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id
-    WHERE " . INVOICE_OPEN_SQL . $scopeCond . "
-    GROUP BY COALESCE(i.funding_agency, t.funding_agency) ORDER BY amt DESC");
-$ag->execute($scopeArg);
-$aging = $ag->fetchAll();
+$aging = invoice_aging($scoped ? $uid : null);   // inc/billing.php (4.38.0), as the apps' invoices
 
 // Same helper as the dashboard and the app, so all three show the same figure.
 $unbilled = unbilled_totals($scoped ? $uid : null)['total'];
@@ -490,12 +444,7 @@ if (array_filter(array_keys($payLabels), 'has_field_error')) echo form_error_sum
 $payDraftId = old_in('id');
 $listHidden = invoice_list_hidden($filters);
 // What the list shows, in words, for its heading and caption.
-$listWhat = [];
-if ($filters['status'] !== '') $listWhat[] = $filters['status'];
-$listTitle = ($listWhat ? implode(' ', $listWhat) . ' invoices' : 'All invoices')
-    . ($filters['agency'] !== '' ? ' for ' . $filters['agency'] : '')
-    . ($filters['month'] !== '' ? ' created in ' . date('F Y', strtotime($filters['month'] . '-01')) : '')
-    . ($filters['q'] !== '' ? ' matching "' . $filters['q'] . '"' : '');
+$listTitle = invoice_list_heading($filters, false);
 // The drafts listed (the list is already caseload-scoped), for Mark all shown drafts submitted.
 $draftIds = array_map(fn($i) => (int)$i['id'], array_filter($invoices, fn($i) => $i['status'] === 'Draft'));
 // More invoices than one page: say which are shown, and link to the others.
@@ -539,15 +488,12 @@ $pageNote = $invTotal > $perPage && $onlyId === 0
       <td><?php $bm = ['Draft' => 'badge-pending', 'Submitted' => 'badge-active', 'Paid' => 'badge-closed', 'Denied' => 'badge-pending', 'Void' => 'badge-closed'];
           $iid = (int)$i['id']; $bal = invoice_balance($i); $invName = '<span class="visually-hidden"> — invoice ' . h($i['invoice_number']) . '</span>'; ?>
           <span class="badge <?= $bm[$i['status']] ?? 'badge-pending' ?>"><?= h($i['status']) ?></span>
-          <?php if (in_array($i['status'], ['Submitted', 'Paid'], true) && $bal > 0): ?>
-            <br><span class="muted"><?= fmt_money($bal) ?> owed<?= (float)($i['paid_amount'] ?? 0) > 0 ? ' (part-paid)' : '' ?><?= $i['days_overdue'] !== null && (int)$i['days_overdue'] > 0 ? ', ' . (int)$i['days_overdue'] . ' days past due' : '' ?></span>
+          <?php if (($owedText = invoice_owed_text($i)) !== null): ?>
+            <br><span class="muted"><?= h($owedText) ?></span>
           <?php elseif (in_array($i['status'], ['Denied', 'Void'], true) && $i['closed_reason']): ?>
             <br><span class="muted"><?= h($i['closed_reason']) ?></span>
           <?php endif; ?></td>
-      <td class="muted">Created <?= fmt_date($i['created_at']) ?>
-          <?= $i['submitted_at'] ? '<br>Submitted ' . fmt_date($i['submitted_at']) : '' ?>
-          <?= $i['due_date'] && in_array($i['status'], ['Submitted', 'Paid'], true) ? '<br>Due ' . fmt_date($i['due_date']) : '' ?>
-          <?= $i['paid_at'] ? '<br>Last payment ' . fmt_date($i['paid_at']) : '' ?></td>
+      <td class="muted"><?= implode('<br>', array_map('h', invoice_date_lines($i))) ?></td>
       <td>
         <a class="btn btn-secondary btn-sm" href="invoice_pdf.php?invoice=<?= $iid ?>&amp;format=html">Accessible HTML<?= $invName ?></a>
         <a class="btn btn-secondary btn-sm" href="invoice_pdf.php?invoice=<?= $iid ?>">PDF<?= $invName ?></a>

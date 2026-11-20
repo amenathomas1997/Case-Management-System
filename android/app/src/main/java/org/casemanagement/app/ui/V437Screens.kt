@@ -102,7 +102,7 @@ fun placeholderNote(text: String): String? =
  * downloads, and copied. [note] says what to change first; the release warning comes first.
  */
 @Composable
-fun ServerDocument(api: Api, title: String, r: JSONObject, prefix: String, shareLabel: String, copyLabel: String, note: String? = null) {
+fun ServerDocument(api: Api, title: String, r: JSONObject, prefix: String, shareLabel: String, copyLabel: String, note: String? = null, copied: String = COPIED_NOTE) {
     val context = LocalContext.current
     val files = rememberScreenFiles()
     var notice by remember { mutableStateOf<String?>(null) }
@@ -122,7 +122,7 @@ fun ServerDocument(api: Api, title: String, r: JSONObject, prefix: String, share
             scope.launch { try { error = shareHtml(api, context, html, prefix, r.str("file"), shareLabel, files) } finally { sharing = false } }
         }
     }
-    SecondaryButton(copyLabel, enabled = r.optString("text").isNotEmpty()) { copyText(context, r.optString("text")); error = null; notice = COPIED_NOTE }
+    SecondaryButton(copyLabel, enabled = r.optString("text").isNotEmpty()) { copyText(context, r.optString("text")); error = null; notice = copied }
     SelectionContainer { Text(r.optString("text")) }
 }
 

@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.38.0' => [
+        'Billing in the phone apps, as on the website: invoices with paging, filters by agency, month, number or client, what is owed and past due, unbilled work, marking several drafts submitted at once, and each invoice opened as an accessible page; the outstanding summary by agency.',
+        'Also in the apps: incoming authorization emails (read, start the track, or dismiss), booking several sessions at once with a preview, making the Zoom or Teams link while booking, the counselor portal, contracts (budget, close or reopen, notes, removing entries), access bookings, utilization with the website\'s periods, service profitability, data quality and the documentation audit.',
+        'On the website, a new contract can have notes, weekly repeats go up to 52 weeks, and the documentation audit\'s all-clear no longer ends with an emoji that screen readers read aloud.',
+    ],
     '4.37.0' => [
         'Services and reports in the phone apps, as on the website: the evaluation report with its AI narrative, emailed signed to the counselor; letters (all seven) with AI drafts, saved to the client\'s documents or kept as a case note; amendment requests recorded as sent with VR\'s reply; releases on paper and withdrawals; the privacy notice; and the client timeline.',
         'Equipment and services: mark an item in repair, back in service or retired; new items with AT Act type, purchase date and useful life; device requests with deny and cancel reasons, the justification letter and AI-drafted justifications; worksite recommendations and suggested goals with AI; assessment templates and attachments; referral filters; cohort coordinators, dates and notes; instructor matches; and the knowledge base, translation and accessible documents as on the website.',

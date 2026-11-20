@@ -17,8 +17,9 @@ function out(array $data, int $status = 200): never {
     // successful reply, so the same idem_key sent again gets it back (inc/api_parity.php).
     if (isset($GLOBALS['API_IDEM_OPEN'])) {
         [$idemAction, $idemUid, $idemKey] = $GLOBALS['API_IDEM_OPEN'];
+        $idemBody = $GLOBALS['API_IDEM_OPEN'][3] ?? null;   // 4.38.0: the request's fingerprint
         unset($GLOBALS['API_IDEM_OPEN']);
-        if ($status === 200 && ($data['ok'] ?? null) === true && empty($data['repeat']) && function_exists('api_idem_end')) api_idem_end($idemAction, $idemUid, $idemKey, $data);
+        if ($status === 200 && ($data['ok'] ?? null) === true && empty($data['repeat']) && function_exists('api_idem_end')) api_idem_end($idemAction, $idemUid, $idemKey, $data, $idemBody);
     }
     http_response_code($status);
     echo json_encode($data);
@@ -34,6 +35,11 @@ function api_numeric_fields(array $row, array $fields): array {
 
 function fail(string $msg, int $status = 400): never {
     out(['ok' => false, 'error' => $msg], $status);
+}
+
+/** A refusal tied to several fields (4.38.0): the first sentence is the summary, each its field's error. */
+function api_fail_fields(array $errors, int $status = 422): never {
+    out(['ok' => false, 'error' => (string)reset($errors), 'errors' => $errors], $status);
 }
 
 /** A refusal tied to one form field (4.34.0): the sentence is both the summary and that field's error. */
@@ -353,7 +359,8 @@ if ($postMax > 0 && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $postMax) {
 // array can never be cast to "Array" or to 1 and written to a record.
 const API_ARRAY_INPUT_KEYS = ['scores', 'levels', 'present', 'homework', 'values', 'history', 'params', 'sections', 'answers', 'custom', 'info', 'orig',
     'client_ids', 'tracks', 'listed', 'attended', 'times', 'task_ids',
-    'attachment'];   // 4.37.0: a tech assessment's report attachment ({name, data})   // custom and info: 4.25.0 (custom fields, release requests); orig: 4.28.0 (a stale save's opened values); 4.35.0: a group's clients and tracks, its attendance, the times offered (inc/api_435.php)
+    'attachment',   // 4.37.0: a tech assessment's report attachment ({name, data})
+    'invoice_ids', 'plan_days'];   // 4.38.0: several drafts submitted at once; the days of the week of a booking plan   // custom and info: 4.25.0 (custom fields, release requests); orig: 4.28.0 (a stale save's opened values); 4.35.0: a group's clients and tracks, its attendance, the times offered (inc/api_435.php)
 // A decoded JSON body takes many times its own size in memory, so a body larger than
 // this is decoded only once the caller's token has been checked (below): only the
 // app's own uploads (documents, signatures) need more, and an anonymous caller can
@@ -717,7 +724,8 @@ $API_ACTION_PERMS = [
     // 4.36.0 (inc/api_436.php), checked here too so a retry after losing the permission is refused
     // before the retry guard answers it. Its other actions need only a sign-in.
     'privacy_incident_choices' => 'clients', 'report_privacy_incident' => 'clients',
-] + API_437_PERMS;   // 4.37.0 (inc/api_437.php), so a retry after losing the permission is refused too
+] + API_437_PERMS   // 4.37.0 (inc/api_437.php), so a retry after losing the permission is refused too
+  + API_438_PERMS;   // and 4.38.0 (inc/api_438.php)
 /* Account settings (inc/api_account.php) and the 3.0.22 parity actions (inc/api_parity.php)
    live in their own files; each re-checks what it needs. */
 const API_ACCOUNT_ACTIONS = ['account', 'change_password', 'totp_begin', 'totp_confirm', 'totp_disable', 'cal_feed_show', 'cal_feed_regen', 'remove_passkey', 'logout_all',
@@ -837,7 +845,10 @@ const API_IDEM_ACTIONS = ['send_report', 'schedule_session', 'add_incident', 'up
     'delete_task',
     // 4.37.0 (inc/api_437.php): the signed evaluation report emailed, an amendment request recorded
     // as sent, and a letter saved (a repeat rebuilds its message, api_437_repeat).
-    'send_eval_report', 'record_amendment', 'save_letter'];
+    'send_eval_report', 'record_amendment', 'save_letter',
+    // 4.38.0 (inc/api_438.php): several invoices submitted, an authorization email read, its track
+    // started or the email dismissed (a repeat rebuilds its message, api_438_repeat).
+    'submit_invoices', 'read_authorization_email', 'start_authorization_track', 'dismiss_authorization'];
 // The retry guard (api_idem_begin / api_idem_end) is opened inside inc/api_parity.php
 // before any action runs, the parity actions included (4.29.0: save_task, save_track and
 // request_consent are parity actions, and before this they ran before the guard).
@@ -2851,6 +2862,8 @@ switch ($action) {
              'timezone' => date_default_timezone_get(),
              // What must be finished before client records open (4.16.0); the apps say so.
              'access_hold' => $GLOBALS['ACCESS_HOLD'] ?? [],
+             // The organisation's name as its letters and reports are headed (Branding, 4.38.0).
+             'org' => brand('org'),
              'server_version' => APP_VERSION]);
 
     case 'schedule_session':
@@ -2858,13 +2871,21 @@ switch ($action) {
         $clientId = (int)($input['client_id'] ?? 0);
         $trackId = (int)($input['track_id'] ?? 0) ?: null;
         $staffId = (int)($input['staff_id'] ?? 0) ?: $userId;
-        // A missing value is one session; any other must be a whole number of weeks from
-        // 1 to 26 (as schedule.php), refused rather than clamped to a different series.
-        $repeatIn = api_number($input, 'repeat_weeks', 'Repeat weekly') ?? 1.0;
-        if ($repeatIn < 1 || $repeatIn > 26 || floor($repeatIn) !== $repeatIn) {
-            fail('Repeat weekly: enter a whole number of weeks from 1 to 26 (1 is a single session).', 422);
+        // 4.38.0: several sessions at once, as schedule.php (inc/session_plan.php): once or weekly, on
+        // several days each week, on a list of dates, or spread over the authorization.
+        $planPattern = is_string($input['plan_pattern'] ?? null) && isset(PLAN_PATTERNS[$input['plan_pattern']]) ? $input['plan_pattern'] : 'weekly';
+        if (array_key_exists('plan_pattern', $input) && $input['plan_pattern'] !== '' && $input['plan_pattern'] !== $planPattern) {
+            fail_field('plan_pattern', 'How often: choose once or weekly, several days each week, a list of dates, or spread over the authorization.');
         }
-        $repeatWeeks = (int)$repeatIn;
+        // A missing value is one session; any other must be a whole number of weeks from
+        // 1 to 26 (as schedule.php; 1 to 52 for several days each week), refused rather than clamped.
+        $repeatIn = api_number($input, 'repeat_weeks', 'Repeat weekly') ?? 1.0;
+        if ($planPattern === 'weekly' && ($repeatIn < 1 || $repeatIn > 26 || floor($repeatIn) !== $repeatIn)) {
+            fail_field('repeat_weeks', 'Repeat weekly: enter a whole number of weeks from 1 to 26 (1 is a single session).');
+        }
+        if (floor($repeatIn) !== $repeatIn || $repeatIn < 0) fail_field('repeat_weeks', 'Repeat weekly: enter a whole number of weeks.');
+        $meetMake = is_string($input['meeting_make'] ?? null) ? trim($input['meeting_make']) : '';
+        if ($meetMake !== '' && !isset(MEETING_PROVIDERS[$meetMake])) fail_field('meeting_make', 'Choose Zoom or Microsoft Teams for the meeting link.');
         $duration = api_number($input, 'duration', 'Duration') ?? 0.0;
         // A real calendar date and a 24-hour HH:MM time — never free text handed to strtotime().
         $sessionDate = api_date($input, 'date', 'Session date');
@@ -2911,19 +2932,63 @@ switch ($action) {
         }
         // A remote session keeps the location typed (4.34.0, as schedule.php): it goes in the
         // invite's LOCATION beside the meeting link.
-        $occurrences = [];
-        for ($w = 0; $w < $repeatWeeks; $w++) {
-            // "+N week" keeps the local start time across daylight-saving changes
-            $occurrences[] = [$w === 0 ? $startTs : strtotime("+{$w} week", $startTs), $w === 0 ? $endTs : strtotime("+{$w} week", $endTs)];
-        }
+        // The plan read exactly as the page reads its form: the weeks as text, the days a list.
+        $planIn = ['plan_pattern' => $planPattern, 'repeat_weeks' => (string)(int)$repeatIn,
+            'plan_days' => is_array($input['plan_days'] ?? null) ? array_values(array_filter($input['plan_days'], fn($d) => is_int($d) || (is_string($d) && ctype_digit($d)))) : [],
+            'plan_until' => is_string($input['plan_until'] ?? null) ? $input['plan_until'] : '',
+            'plan_dates' => is_string($input['plan_dates'] ?? null) ? $input['plan_dates'] : ''];
+        api_bytes_fit($planIn['plan_dates'], 20000, 'Dates');
+        // Only this client's own track (its hours are not read for anyone else's), as schedule.php.
+        $planTrack = null;
+        if ($trackId) { $pt = db()->prepare('SELECT * FROM training_tracks WHERE id = ? AND client_id = ?'); $pt->execute([$trackId, $clientId]); $planTrack = $pt->fetch() ?: null; }
+        [$occurrences, $planErr, $planField] = session_plan($planIn, $startTs, $endTs, $planTrack);
+        if ($planErr !== null) fail_field($planField, $planErr);
+        $count = count($occurrences);
+        $repeatWeeks = $planPattern === 'weekly' ? max(1, $count) : 1;
+        // Make the meeting link in the instructor's own Zoom or Teams (4.10.0 on the website), checked before anything is saved.
+        if ($meetMake !== '' && ($meetErr = session_meeting_make_error($meetMake, (bool)$isRemote, $meetingUrl, $staffId, (string)$staff['name'], ['id' => $userId])) !== null) fail_field('meeting_make', $meetErr);
         $warnings=[];
-        if ($trackId) $warnings=workflow_authorization($trackId,$startTs,$endTs,$repeatWeeks);
+        if ($trackId) $warnings=workflow_authorization($trackId,$startTs,$endTs,$repeatWeeks,$occurrences);
         $authorizationRaised = (bool)$warnings;
         // The instructor's calendar (4.20.0), approved like an authorization question, named and
         // dated as schedule.php says it (4.34.0).
         $busyDays = [];
         foreach ($occurrences as [$s0, $e0]) if (calendar_busy_overlaps($staffId, $s0, $e0)) $busyDays[] = date('D, M j g:i A', $s0);
         if ($busyDays) $warnings[] = $staff['name'] . '\'s calendar shows them busy then (' . implode('; ', array_slice($busyDays, 0, 5)) . (count($busyDays) > 5 ? '; and ' . (count($busyDays) - 5) . ' more' : '') . ').';
+        // The approval covers exactly the warnings shown (4.27.0), as on the website
+        // (schedule.php schedule_auth_hash): the refusal carries a hash of them, and the
+        // booking goes ahead only when the app sends that hash back as
+        // authorization_ack_hash. Older builds send only authorization_ack true; that
+        // counts only when this user was shown these same warnings for this same booking
+        // in the last hour, so a warning that appeared since is shown before it is approved.
+        $shownKeyFor = fn(string $authHash): string => 'authshown:' . substr(hash('sha256', json_encode([$userId, $clientId, $trackId, $staffId, $startTs, $endTs, $repeatWeeks, $authHash]
+            + ($planPattern !== 'weekly' ? [8 => $planPattern, 9 => $occurrences] : []))), 0, 48);
+        $approvedFor = function (array $w) use ($input, $shownKeyFor): bool {
+            $authHash = schedule_auth_hash($w);
+            $ackHash = $input['authorization_ack_hash'] ?? null;
+            $ackTrue = in_array($input['authorization_ack'] ?? null, [true, 1, '1'], true);
+            return is_string($ackHash) && $ackHash !== ''
+                ? hash_equals($authHash, $ackHash) && ($input['authorization_ack'] ?? true) !== false
+                : $ackTrue && api_throttle_count($shownKeyFor($authHash), 3600) > 0;
+        };
+        // A plan of several days, dates or the whole authorization is shown first, and booked only once
+        // the app sends back its hash (plan_ok), as the website's "Book these" box. Any warnings come
+        // with it, so both are approved in one step.
+        if ($planPattern !== 'weekly') {
+            $planHash = session_plan_hash($occurrences, $clientId, $staffId, (int)$trackId, $planPattern);
+            if (!is_string($input['plan_ok'] ?? null) || !hash_equals($planHash, $input['plan_ok'])) {
+                $pre = array_values(array_merge($warnings, session_instructor_overlaps($staffId, (string)$staff['name'], $occurrences, [$clientId])));
+                $msg = session_plan_check_message($occurrences);
+                $extra = ['plan_preview' => ['hash' => $planHash, 'hours' => (float)session_plan_hours($occurrences), 'sessions' => session_plan_lines($occurrences)]];
+                $errs = ['plan_ok' => $msg];
+                if ($pre && !$approvedFor($pre)) {
+                    api_throttle_record($shownKeyFor(schedule_auth_hash($pre)));
+                    $errs['authorization_ack'] = schedule_review_message($authorizationRaised, $pre);
+                    $extra += ['authorization_warnings' => $pre, 'authorization_hash' => schedule_auth_hash($pre)];
+                }
+                out(['ok' => false, 'error' => $msg] + $extra + ['errors' => $errs], 422);
+            }
+        }
         $ins = db()->prepare('INSERT INTO scheduled_sessions (client_id, track_id, user_id, start_at, end_at, location, notes, is_remote, meeting_url) VALUES (?,?,?,?,?,?,?,?,?)');
         $firstId = 0;
         $newSessionIds = [];
@@ -2958,19 +3023,11 @@ switch ($action) {
             // approval hash are the same for the same booking. An overlap is approved like the others.
             $warnings = array_values(array_merge($warnings, session_instructor_overlaps($staffId, (string)$staff['name'], $occurrences, [$clientId])));
             if ($warnings) {
-                // The approval covers exactly the warnings shown (4.27.0), as on the website
-                // (schedule.php schedule_auth_hash): the refusal carries a hash of them, and the
-                // booking goes ahead only when the app sends that hash back as
-                // authorization_ack_hash. Older builds send only authorization_ack true; that
-                // counts only when this user was shown these same warnings for this same booking
-                // in the last hour, so a warning that appeared since is shown before it is approved.
-                $authHash = hash('sha256', json_encode(array_values($warnings)));
-                $shownKey = 'authshown:' . substr(hash('sha256', json_encode([$userId, $clientId, $trackId, $staffId, $startTs, $endTs, $repeatWeeks, $authHash])), 0, 48);
+                $authHash = schedule_auth_hash($warnings);
                 $ackHash = $input['authorization_ack_hash'] ?? null;
                 $ackTrue = in_array($input['authorization_ack'] ?? null, [true, 1, '1'], true);
-                $approved = is_string($ackHash) && $ackHash !== ''
-                    ? hash_equals($authHash, $ackHash) && ($input['authorization_ack'] ?? true) !== false
-                    : $ackTrue && api_throttle_count($shownKey, 3600) > 0;
+                $approved = $approvedFor($warnings);
+                $shownKey = $shownKeyFor($authHash);
                 if (!$approved) {
                     db()->rollBack();
                     api_throttle_record($shownKey);
@@ -2991,7 +3048,6 @@ switch ($action) {
             }
             if (count($newSessionIds) > 1) db()->prepare('UPDATE scheduled_sessions SET series_uid = ? WHERE id IN (' . implode(',', $newSessionIds) . ')')->execute([bin2hex(random_bytes(16))]);
             db()->commit();
-            client_session_notice($newSessionIds, 'booked'); // 3.0.41: the client's calendar invite
         } catch (Throwable $e) {
             if (db()->inTransaction()) db()->rollBack();
             throw $e;
@@ -2999,33 +3055,45 @@ switch ($action) {
         $c = db()->prepare('SELECT name FROM clients WHERE id = ?');
         $c->execute([$clientId]);
         $clientName = (string)$c->fetchColumn();
+        // The meeting is made once the sessions are saved, so a refused booking never leaves one
+        // behind; every session of the series gets its one link (as schedule.php).
+        $made = null;
+        if ($meetMake !== '') {
+            $made = session_make_meeting($newSessionIds, $meetMake, $staffId, (string)$staff['name'], $clientId, $clientName, $occurrences[0][0], $occurrences[$count - 1][1], $userId, 'mobile');
+            if ($made['ok']) $meetingUrl = $made['url'];
+        }
+        // 3.0.41: the client's calendar invite, sent once the meeting is made so it carries the link (as schedule.php).
+        client_session_notice($newSessionIds, 'booked');
+        $seriesWords = session_series_words($count, $planPattern);
         $inviteSent = false;
         if ($staff) {
-            $seriesNote = $repeatWeeks > 1 ? " (repeats weekly, {$repeatWeeks} sessions)" : '';
+            $seriesNote = $count > 1 ? " ({$seriesWords})" : '';
             // As schedule.php: the invite is stored by the calendar provider, so it carries
             // what the calendar feed does: the client's first name and last initial, no
             // session notes, and a link to the session in the app for the rest.
-            $nameParts = preg_split('/\s+/u', trim($clientName)) ?: [];
-            $calName = count($nameParts) < 2 ? trim($clientName) : $nameParts[0] . ' ' . mb_substr(end($nameParts), 0, 1) . '.';
+            $calName = schedule_short_name($clientName);
             // The UID host is this install's own (as calfeed.php), so two installs'
             // session #42 are never taken for one invite by a shared calendar.
             $ics = build_ics(ics_uid('session', $firstId),
                 ($isRemote ? 'Remote AT Training: ' : 'AT Training: ') . $calName,
                 // build_ics() adds the "Join online" line itself from the link below.
                 "Training session with {$calName}.{$seriesNote}\nDetails: " . cfg('base_url') . '/schedule.php#s-' . $firstId,
-                $location, $startTs, $endTs, cfg('mail_from'), $staff['email'], $occurrences,
+                $location, $occurrences[0][0], $occurrences[0][1], cfg('mail_from'), $staff['email'], $occurrences,
                 $isRemote && $meetingUrl ? $meetingUrl : '');
             // The website's invite email (schedule.php, 4.34.0): the time zone said, the format named.
             $inviteSent = send_app_mail_attach($staff['email'],
-                ($isRemote ? 'Remote session' : 'Session') . ($repeatWeeks > 1 ? ' series' : '') . ' scheduled — ' . date('D, M j g:i A T', $startTs),
-                "A " . ($isRemote ? 'remote ' : '') . "training session{$seriesNote} has been scheduled.\n\nClient: {$clientName}\nWhen: " . date('l, F j, Y g:i A T', $startTs)
-                . ' to ' . date('g:i A T', $endTs)
+                ($isRemote ? 'Remote session' : 'Session') . ($count > 1 ? ' series' : '') . ' scheduled — ' . date('D, M j g:i A T', $occurrences[0][0]),
+                "A " . ($isRemote ? 'remote ' : '') . "training session{$seriesNote} has been scheduled.\n\nClient: {$clientName}\nWhen: " . date('l, F j, Y g:i A T', $occurrences[0][0])
+                . ' to ' . date('g:i A T', $occurrences[0][1])
                 . ($isRemote ? "\nFormat: Remote / telepractice" . ($meetingUrl ? "\nJoin online: {$meetingUrl}" : '') : ($location !== '' ? "\nWhere: {$location}" : ''))
-                . "\n\nOpen the attached invite to add it to your calendar" . ($repeatWeeks > 1 ? ': it holds every session in the series.' : '.') . "\n",
+                . "\n\nOpen the attached invite to add it to your calendar" . ($count > 1 ? ': it holds every session in the series.' : '.') . "\n",
                 [['name' => 'invite.ics', 'mime' => 'text/calendar; method=REQUEST', 'bytes' => $ics]]);
         }
-        audit($userId, 'session.schedule', 'client', $clientId, ($repeatWeeks > 1 ? "series of {$repeatWeeks} (mobile)" : 'single session (mobile)').($warnings ? ' — authorization exception approved: ' . implode(' ', $warnings) : ''));
-        out(['ok' => true, 'invite_sent' => $inviteSent, 'sessions_created' => $repeatWeeks]);
+        audit($userId, 'session.schedule', 'client', $clientId, ($count > 1 ? "series of {$seriesWords} (mobile)" : 'single session (mobile)').($warnings ? ' — authorization exception approved: ' . implode(' ', $warnings) : ''));
+        out(['ok' => true, 'invite_sent' => (bool)$inviteSent, 'sessions_created' => $count, 'series_words' => $seriesWords,
+            'message' => session_booked_message($count, $planPattern, (string)$staff['name'], (bool)$inviteSent, $meetMake, $made, $staffId === $userId),
+            'meeting_made' => $made !== null && $made['ok'], 'meeting_url' => $made !== null && $made['ok'] ? (string)$made['url'] : null,
+            'meeting_why' => $made !== null && !$made['ok'] ? (string)$made['why'] : null]);
 
     case 'equipment':
         $s = db()->query("SELECT e.id, e.name, e.category, e.serial, e.item_condition, e.status,
@@ -3125,65 +3193,34 @@ switch ($action) {
             $row['portal_expires_at'] = $t2['expires_at'] ?? null;
             $row['expires_at'] = $t2['expires_at'] ?? null;
             $row['last_used_at'] = $t2['last_used_at'] ?? null;
+            // 4.38.0: the page's portal column (inc/counselor_portal.php).
+            $row['status_lines'] = vrc_portal_status_lines($t2);
         }
         unset($row);
         out(['ok' => true, 'counselors' => $rows]);
 
-    case 'send_vrc_portal':
+    case 'send_vrc_portal': {
+        // 4.38.0: counselors.php's own send (inc/counselor_portal.php): the same checks, guard, email,
+        // store and audits, a failure after sending included; the website's sentences.
         $email = strtolower(api_text($input, 'email', 190, 'Email'));
         $name = api_text($input, 'name', 120, 'Counselor name');
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) fail('A valid counselor email is required.');
-        // As counselors.php: a link is never sent to an address that is only on clients
-        // whose counselor email has not been confirmed by staff (counselor_verified = 0).
-        $ver = db()->prepare('SELECT COUNT(*) AS n, COALESCE(SUM(counselor_verified = 1), 0) AS ok FROM clients WHERE counselor_email = ? AND archived_at IS NULL');
-        $ver->execute([$email]);
-        $ver = $ver->fetch();
-        if ((int)$ver['n'] > 0 && (int)$ver['ok'] === 0) {
-            fail('No link was sent: ' . $email . ' has not been confirmed as the counselor on any client. Confirm the counselor on the client\'s record first.', 422);
+        $res = vrc_portal_send($email, $name, ['id' => $userId], ' (mobile)');
+        if (!$res['ok']) {
+            if (isset($res['field'])) fail_field($res['field'], $res['message'], $res['status']);
+            fail($res['message'], $res['status']);
         }
-        if ($name === '') {
-            // The counselor list shows counselors recorded with an email but no name,
-            // and the app has nowhere to type one: keep the name an earlier link was
-            // sent under, else greet them as "Counselor".
-            $kn = db()->prepare('SELECT counselor_name FROM vrc_tokens WHERE counselor_email = ?');
-            $kn->execute([$email]);
-            $name = trim((string)$kn->fetchColumn()) ?: 'Counselor';
-        }
-        // Each send replaces the counselor's link, so a second send within a minute
-        // (a double tap or a retry) would kill the link that was just emailed. The
-        // key ends in digits so audit.php hides it from the sign-in attempts table.
-        $portalKey = 'vrc-portal-' . sprintf('%u', crc32($email));
-        if (api_throttle_count($portalKey, 60) >= 1) fail('A portal link was just sent to that counselor. Wait a minute before sending another.', 429);
-        api_throttle_record($portalKey);
-        $ptoken = bin2hex(random_bytes(24));
-        // Email first and store the new link only once it has gone out: storing it
-        // replaces (and so revokes) the counselor's current link.
-        $sent = send_app_mail($email, 'Your ' . brand('short') . ' counselor portal',
-            "Hello {$name},\n\nYou can now view your clients' progress with " . brand('org') . " at your private portal:\n\n"
-            . cfg('base_url') . '/vrc.php?t=' . $ptoken
-            . "\n\nEach new browser session asks for a 6-digit code emailed to you. Keep this link private.\n");
-        if (!$sent) {
-            // Nothing went out, so an immediate retry is allowed.
-            db()->prepare('DELETE FROM login_attempts WHERE email = ?')->execute([$portalKey]);
-            fail('The email could not be sent, so nothing was changed: the counselor\'s current portal link, if they have one, still works. Try again later.', 500);
-        }
-        // last_used_at is cleared (as counselors.php): it described the link just replaced.
-        db()->prepare('INSERT INTO vrc_tokens (counselor_email, counselor_name, token, expires_at) VALUES (?,?,?, DATE_ADD(NOW(), INTERVAL ' . cms_number('counselor_link_days') . ' DAY))
-            ON DUPLICATE KEY UPDATE token = VALUES(token), counselor_name = VALUES(counselor_name), created_at = NOW(), expires_at = DATE_ADD(NOW(), INTERVAL ' . cms_number('counselor_link_days') . ' DAY), last_used_at = NULL')
-            ->execute([$email, $name, $ptoken]);
-        audit($userId, 'vrcportal.send', 'counselor', null, $email . ' (mobile)');
-        out(['ok' => true]);
+        out(['ok' => true, 'message' => $res['message'], 'expires_at' => $res['expires_at']]);
+    }
 
-    case 'revoke_vrc_portal':
-        // Turn off a counselor's portal link (as on counselors.php). vrc.php looks the
-        // link up on every request, so even an open portal session ends now.
+    case 'revoke_vrc_portal': {
+        // Turn off a counselor's portal link (counselors.php's, inc/counselor_portal.php). vrc.php
+        // looks the link up on every request, so even an open portal session ends now.
         $email = strtolower(api_text($input, 'email', 190, 'Email'));
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) fail('A valid counselor email is required.');
-        $del = db()->prepare('DELETE FROM vrc_tokens WHERE counselor_email = ?');
-        $del->execute([$email]);
-        if ($del->rowCount() === 0) fail('That counselor has no portal link to turn off.', 404);
-        audit($userId, 'vrcportal.revoke', 'counselor', null, $email . ' (mobile)');
-        out(['ok' => true]);
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) fail_field('email', 'A valid counselor email is required.');
+        $res = vrc_portal_revoke($email, ['id' => $userId], ' (mobile)');
+        if (!$res['ok']) fail($res['message'], $res['status']);
+        out(['ok' => true, 'message' => $res['message']]);
+    }
 
     case 'referrals':
         $sql = " FROM referrals r LEFT JOIN users u ON u.id = r.assigned_to WHERE 1=1";
@@ -4253,66 +4290,106 @@ switch ($action) {
     }
     /* ========================= Grants & contracts ========================= */
     case 'contracts': {
-        $q = db()->query("SELECT c.id, c.name, c.funder, c.amount, c.end_date, c.status,
-                (SELECT COALESCE(SUM(amount),0) FROM contract_spend s WHERE s.contract_id = c.id) AS spent
-            FROM contracts c WHERE c.status='Active' ORDER BY c.end_date IS NULL, c.end_date, c.name");
-        out(['ok' => true, 'contracts' => array_map(fn($r) => api_numeric_fields($r, ['amount', 'spent']), $q->fetchAll())]);
+        // show: active (default, as before) or closed, as contracts.php's "Show closed" (4.38.0).
+        $show = ($_GET['show'] ?? $input['show'] ?? 'active') === 'closed' ? 'Closed' : 'Active';
+        $q = db()->prepare("SELECT c.id, c.name, c.funder, c.amount, c.end_date, c.status,
+                (SELECT COALESCE(SUM(amount),0) FROM contract_spend s WHERE s.contract_id = c.id) AS spent,
+                (SELECT COUNT(*) FROM contract_deliverables d WHERE d.contract_id = c.id AND d.status <> 'Accepted') AS open_deliv
+            FROM contracts c WHERE c.status = ? ORDER BY c.end_date IS NULL, c.end_date, c.name");
+        $q->execute([$show]);
+        // The page's figures (inc/contracts.php): the percent in exact cents (null with no budget),
+        // the open deliverables and the end-date warning.
+        out(['ok' => true, 'show' => strtolower($show), 'contracts' => array_map(function ($r) {
+            $open = (int)$r['open_deliv']; unset($r['open_deliv']);
+            $r = api_numeric_fields($r, ['amount', 'spent']);
+            return $r + ['pct' => (float)$r['amount'] > 0 ? contract_pct((float)$r['spent'], (float)$r['amount']) : null, 'open_deliverables' => $open,
+                'ends_text' => contract_ends_text($r['end_date'] ?: null)];
+        }, $q->fetchAll())]);
     }
     case 'contract': {
         $id = (int)($_GET['id'] ?? 0);
         $c = db()->prepare('SELECT * FROM contracts WHERE id = ?'); $c->execute([$id]); $con = $c->fetch();
         if (!$con) fail('This contract no longer exists. It may have been deleted on the website. Go back to the list and refresh it.', 404);
-        $spent = db()->prepare('SELECT COALESCE(SUM(amount),0) FROM contract_spend WHERE contract_id = ?'); $spent->execute([$id]);
-        $deliv = db()->prepare('SELECT id, title, due_date, status FROM contract_deliverables WHERE contract_id = ? ORDER BY due_date IS NULL, due_date, id'); $deliv->execute([$id]);
-        $sp = db()->prepare('SELECT id, spent_on, amount, memo FROM contract_spend WHERE contract_id = ? ORDER BY spent_on DESC, id DESC LIMIT 100'); $sp->execute([$id]);
+        $spentTotal = contract_spent($id);
+        $today = date('Y-m-d');
+        $deliv = db()->prepare('SELECT id, title, due_date, status, notes FROM contract_deliverables WHERE contract_id = ? ORDER BY due_date IS NULL, due_date, id'); $deliv->execute([$id]);
+        $sp = db()->prepare('SELECT s.id, s.spent_on, s.amount, s.memo, u.name AS by_name FROM contract_spend s LEFT JOIN users u ON u.id = s.created_by WHERE s.contract_id = ? ORDER BY s.spent_on DESC, s.id DESC LIMIT 100'); $sp->execute([$id]);
         // The list holds the latest 100 entries; spend_total says how many there are in
         // all, so the app can say when it shows only part of them ('spent' is the full sum).
         $spc = db()->prepare('SELECT COUNT(*) FROM contract_spend WHERE contract_id = ?'); $spc->execute([$id]);
-        out(['ok' => true, 'contract' => api_numeric_fields($con, ['amount']), 'spent' => (float)$spent->fetchColumn(), 'deliverables' => $deliv->fetchAll(), 'spend' => array_map(fn($r) => api_numeric_fields($r, ['amount']), $sp->fetchAll()),
-             'spend_total' => (int)$spc->fetchColumn(), 'spend_limit' => 100]);
+        $amount = (float)$con['amount'];
+        // 4.38.0: what contracts.php shows: the percent (null with no budget), what remains, the end-date phrase,
+        // each deliverable's notes and whether it is overdue (due before today and not Accepted), and who recorded each spend.
+        $remaining = round($amount - $spentTotal, 2);
+        out(['ok' => true, 'contract' => api_numeric_fields($con, ['amount']), 'spent' => $spentTotal,
+            'deliverables' => array_map(fn($d) => ['id' => (int)$d['id'], 'title' => (string)$d['title'], 'due_date' => $d['due_date'], 'status' => (string)$d['status'],
+                'notes' => $d['notes'] !== null && $d['notes'] !== '' ? (string)$d['notes'] : null,
+                'overdue' => $d['due_date'] && $d['due_date'] < $today && $d['status'] !== 'Accepted'], $deliv->fetchAll()),
+            'spend' => array_map(function ($r) { $by = $r['by_name']; unset($r['by_name']); return api_numeric_fields($r, ['amount']) + ['by' => $by !== null && $by !== '' ? (string)$by : null]; }, $sp->fetchAll()),
+            'spend_total' => (int)$spc->fetchColumn(), 'spend_limit' => 100,
+            'pct' => $amount > 0 ? contract_pct($spentTotal, $amount) : null, 'remaining' => $remaining, 'over_budget' => $remaining < 0,
+            'days_text' => contract_days_text($con['end_date'] ?: null), 'statuses' => DELIVERABLE_STATUSES]);
     }
     case 'add_contract': {
+        // A change needs POST (4.38.0), as the api_438 actions.
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') fail('Use POST for changes.', 405);
+        // 4.38.0: name, budget and notes read by contracts.php's own contract_input() (inc/contracts.php).
         $name = api_text($input, 'name', 190, 'Contract name');
-        if ($name === '') fail('Contract name is required.');
+        [$cErrs, $cv] = contract_input($input);
+        if (isset($cErrs['name'])) fail_field('name', $cErrs['name']);
         $startDate = api_date($input, 'start_date', 'Start date');
         $endDate = api_date($input, 'end_date', 'End date', 2000, (int)date('Y') + 25);
-        if ($startDate !== null && $endDate !== null && $endDate < $startDate) fail('The end date cannot be before the start date.', 422);
-        db()->prepare('INSERT INTO contracts (name, funder, contract_number, amount, start_date, end_date) VALUES (?,?,?,?,?,?)')
+        if ($startDate !== null && $endDate !== null && $endDate < $startDate) fail_field('end_date', 'The end date cannot be before the start date.');
+        if ($cErrs) api_fail_fields($cErrs);
+        db()->prepare('INSERT INTO contracts (name, funder, contract_number, amount, start_date, end_date, notes) VALUES (?,?,?,?,?,?,?)')
             ->execute([$name, api_text($input, 'funder', 190, 'Funder') ?: null, api_text($input, 'contract_number', 120, 'Contract number') ?: null,
-                api_money($input, 'amount', 'Contract amount', 10) ?? 0.0, $startDate, $endDate]);
+                $cv['amount'], $startDate, $endDate, $cv['notes'] !== '' ? $cv['notes'] : null]);
         $createdId = (int)db()->lastInsertId();
-        audit($userId, 'contract.add', 'contract', $createdId, '(mobile)');
-        out(['ok' => true, 'id' => $createdId]);
+        audit($userId, 'contract.add', 'contract', $createdId, $name . ' (mobile)');
+        out(['ok' => true, 'id' => $createdId, 'message' => 'Contract created.']);
     }
     case 'contract_update': {
+        // A change needs POST (4.38.0), as the api_438 actions.
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') fail('Use POST for changes.', 405);
         $id = (int)($input['contract_id'] ?? 0);
         $c = db()->prepare('SELECT id FROM contracts WHERE id = ?'); $c->execute([$id]);
         if (!$c->fetchColumn()) fail('This contract no longer exists, so your changes were not saved. It may have been deleted on the website. Copy anything you typed, then go back to the list.', 404);
         $op = (string)($input['op'] ?? '');
-        // The website's codes and details (contracts.php): spend is contract.spend with
-        // its amount, and a deliverable entry names the deliverable.
+        // The website's codes, details and sentences (contracts.php, inc/contracts.php): spend is
+        // contract.spend with its amount, and a deliverable entry names the deliverable.
+        $done = fn(array $r) => $r['ok'] ? out(['ok' => true, 'message' => $r['message'], 'changed' => $r['changed']])
+            : (isset($r['errors']) ? api_fail_fields($r['errors']) : fail($r['message'], (int)($r['status'] ?? 422)));
         if ($op === 'add_deliverable') {
-            $title = api_text($input, 'title', 255, 'Deliverable title'); if ($title === '') fail('Deliverable title is required.');
+            $title = api_text($input, 'title', 255, 'Deliverable title'); if ($title === '') fail_field('title', 'Enter a deliverable title.');
             db()->prepare('INSERT INTO contract_deliverables (contract_id, title, due_date, notes) VALUES (?,?,?,?)')
                 ->execute([$id, $title, api_date($input, 'due_date', 'Due date', 2000, (int)date('Y') + 25), api_text($input, 'notes', 500, 'Notes') ?: null]);
+            $newId = (int)db()->lastInsertId();
             audit($userId, 'contract.add_deliverable', 'contract', $id, $title . ' (mobile)');
+            out(['ok' => true, 'id' => $newId, 'message' => 'Deliverable added.']);
         } elseif ($op === 'set_deliverable') {
-            $st = ['Pending','In Progress','Submitted','Accepted'];
             // An unrecognised status is refused — it must never quietly reset the deliverable to Pending.
-            $deliverableStatus = api_choice($input, 'status', $st, 'Status', null);
+            $deliverableStatus = api_choice($input, 'status', DELIVERABLE_STATUSES, 'Status', null);
             if ($deliverableStatus === null) fail('Status is not a valid choice.', 422);
-            $did = (int)($input['deliverable_id'] ?? 0);
-            $dq = db()->prepare('SELECT title FROM contract_deliverables WHERE id = ? AND contract_id = ?'); $dq->execute([$did, $id]);
-            $deliverableTitle = $dq->fetchColumn();
-            if ($deliverableTitle === false) fail('Deliverable not found.', 404);
-            db()->prepare('UPDATE contract_deliverables SET status=? WHERE id=? AND contract_id=?')->execute([$deliverableStatus, $did, $id]);
-            audit($userId, 'contract.set_deliverable', 'contract', $id, $deliverableTitle . ' → ' . $deliverableStatus . ' (mobile)');
+            // Unchanged: nothing is updated or audited (as contracts.php).
+            $done(contract_set_deliverable($id, (int)($input['deliverable_id'] ?? 0), $deliverableStatus, $userId, ' (mobile)'));
         } elseif ($op === 'add_spend') {
-            $spendAmount = api_money($input, 'amount', 'Amount spent', 10);
-            if ($spendAmount === null || $spendAmount <= 0) fail('Enter the amount as digits, for example 1250.00.', 422);
+            $spendAmount = contract_money_in($input['amount'] ?? '');
+            if (!is_float($spendAmount) || $spendAmount <= 0) fail_field('amount', CONTRACT_SPEND_HINT);
+            $spentOn = api_date($input, 'spent_on', 'Spend date') ?? date('Y-m-d');
             db()->prepare('INSERT INTO contract_spend (contract_id, spent_on, amount, memo, created_by) VALUES (?,?,?,?,?)')
-                ->execute([$id, api_date($input, 'spent_on', 'Spend date') ?? date('Y-m-d'), $spendAmount, api_text($input, 'memo', 255, 'Memo') ?: null, $userId]);
+                ->execute([$id, $spentOn, $spendAmount, api_text($input, 'memo', 255, 'Memo') ?: null, $userId]);
+            $newId = (int)db()->lastInsertId();
             audit($userId, 'contract.spend', 'contract', $id, fmt_money($spendAmount) . ' (mobile)');
+            out(['ok' => true, 'id' => $newId, 'message' => 'Spend of ' . fmt_money($spendAmount) . ' recorded for ' . fmt_date($spentOn) . '.']);
+        } elseif ($op === 'set_budget') {
+            $done(contract_set_budget($id, $input['amount'] ?? '', $userId, ' (mobile)'));
+        } elseif ($op === 'set_active') {
+            if (!array_key_exists('active', $input)) fail_field('active', 'Say whether the contract is to be active or closed.');
+            $done(contract_set_active($id, api_bool($input['active']), $userId, ' (mobile)'));
+        } elseif ($op === 'delete_deliverable') {
+            $done(contract_delete_deliverable($id, (int)($input['deliverable_id'] ?? 0), $userId, ' (mobile)'));
+        } elseif ($op === 'delete_spend') {
+            $done(contract_delete_spend($id, (int)($input['spend_id'] ?? 0), $userId, ' (mobile)'));
         } else { fail('Unknown operation.'); }
         out(['ok' => true]);
     }
@@ -4322,20 +4399,34 @@ switch ($action) {
         $scoped = caseload_scoped();
         // As on the website, the default list is what is still to come (needed within the
         // last day, later, or not dated yet), soonest first, so accumulated history can
-        // never push upcoming bookings past the limit. ?past=1 is the history alone, most
-        // recent first, so the newest past bookings are the ones within the limit.
+        // never push upcoming bookings past the limit. ?past=1 (4.37.0 apps) is the history
+        // alone, most recent first. 4.38.0: view=upcoming|past|cancelled is access_bookings.php's
+        // own views: past is every booking not cancelled, cancelled the ones that can be restored.
         // An undated booking stays upcoming until it is Completed, then moves to history.
-        $past = !empty($_GET['past']);
-        $whenSql = $past ? " AND (ab.needed_at < DATE_SUB(NOW(), INTERVAL 1 DAY) OR (ab.needed_at IS NULL AND ab.status = 'Completed'))"
-            : " AND ((ab.needed_at IS NULL AND ab.status <> 'Completed') OR ab.needed_at >= DATE_SUB(NOW(), INTERVAL 1 DAY))";
+        $view = $_GET['view'] ?? $input['view'] ?? null;
+        $view = is_string($view) && in_array($view, ['upcoming', 'past', 'cancelled'], true) ? $view : null;
+        $past = $view === null && !empty($_GET['past']);
+        if ($view !== null) {
+            $whenSql = ['upcoming' => " AND ab.status <> 'Cancelled' AND ((ab.needed_at IS NULL AND ab.status <> 'Completed') OR ab.needed_at >= DATE_SUB(NOW(), INTERVAL 1 DAY))",
+                'past' => " AND ab.status <> 'Cancelled'", 'cancelled' => " AND ab.status = 'Cancelled'"][$view];
+            $orderSql = $view === 'upcoming' ? ' ORDER BY ab.needed_at IS NULL, ab.needed_at, ab.id DESC' : ' ORDER BY ab.needed_at IS NULL, ab.needed_at DESC, ab.id DESC';
+        } else {
+            $whenSql = " AND ab.status <> 'Cancelled'" . ($past ? " AND (ab.needed_at < DATE_SUB(NOW(), INTERVAL 1 DAY) OR (ab.needed_at IS NULL AND ab.status = 'Completed'))"
+                : " AND ((ab.needed_at IS NULL AND ab.status <> 'Completed') OR ab.needed_at >= DATE_SUB(NOW(), INTERVAL 1 DAY))");
+            $orderSql = $past ? ' ORDER BY ab.needed_at DESC, ab.id DESC' : ' ORDER BY ab.needed_at IS NULL, ab.needed_at';
+        }
         // notes: what was typed with the booking (null when none), as the website lists it.
         $q = db()->prepare("SELECT ab.id, ab.service_type, ab.provider, ab.needed_at, ab.duration_min, ab.location, ab.status, ab.cost, ab.notes, c.name AS client_name, c.id AS client_id
-            FROM access_bookings ab JOIN clients c ON c.id = ab.client_id WHERE ab.status <> 'Cancelled'" . $whenSql . ($scoped ? ' AND c.assigned_to = ?' : '')
-            . ($past ? ' ORDER BY ab.needed_at DESC, ab.id DESC' : ' ORDER BY ab.needed_at IS NULL, ab.needed_at') . ' LIMIT 300');
+            FROM access_bookings ab JOIN clients c ON c.id = ab.client_id WHERE 1=1" . $whenSql . ($scoped ? ' AND c.assigned_to = ?' : '')
+            . $orderSql . ' LIMIT 300');
         $q->execute($scoped ? [$userId] : []);
-        out(['ok' => true, 'bookings' => array_map(fn($r) => api_numeric_fields($r, ['cost']), $q->fetchAll())]);
+        // type_label and when_text: what the page shows (inc/lists.php, inc/bookings.php).
+        out(['ok' => true, 'view' => $view ?? ($past ? 'history' : 'upcoming'), 'bookings' => array_map(fn($r) => api_numeric_fields($r, ['cost'])
+            + ['type_label' => booking_type_label((string)$r['service_type']), 'when_text' => booking_when($r['needed_at'])], $q->fetchAll())]);
     }
     case 'add_booking': {
+        // A change needs POST (4.38.0), as the api_438 actions.
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') fail('Use POST for changes.', 405);
         $cid = (int)($input['client_id'] ?? 0); api_require_client($cid, $userId);
         // The organisation's own list (Lists and time limits), as the website's booking form offers (4.14.0).
         $types = array_values(array_unique(array_merge(cms_list_items('booking_types'), ['Other'])));
@@ -4344,27 +4435,29 @@ switch ($action) {
         // rather than clamped, so the provider is never booked for another length.
         $bookingMinutes = api_number($input, 'duration_min', 'Duration') ?? 0.0;
         if ($bookingMinutes < 0 || $bookingMinutes > 1440 || floor($bookingMinutes) !== $bookingMinutes) {
-            fail('Enter the duration as whole minutes, from 0 to 1440.', 422);
+            fail_field('duration_min', 'Enter the duration as whole minutes, from 0 to 1440.');
         }
+        // 4.38.0: the page's 8-digit cost rule and sentence (inc/bookings.php), "$" and commas accepted.
+        $cost = booking_cost_in($input['cost'] ?? '');
+        if ($cost === false) fail_field('cost', BOOKING_COST_HINT);
+        $serviceType = api_choice($input, 'service_type', $types, 'Service type', 'Other');
         db()->prepare('INSERT INTO access_bookings (client_id, service_type, provider, needed_at, duration_min, location, status, cost, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)')
-            ->execute([$cid, api_choice($input, 'service_type', $types, 'Service type', 'Other'), api_text($input, 'provider', 190, 'Provider') ?: null, $neededAt,
+            ->execute([$cid, $serviceType, api_text($input, 'provider', 190, 'Provider') ?: null, $neededAt,
                 (int)$bookingMinutes, api_text($input, 'location', 255, 'Location') ?: null, 'Requested',
-                api_money($input, 'cost', 'Cost'), api_text($input, 'notes', 500, 'Notes') ?: null, $userId]);
+                $cost, api_text($input, 'notes', 500, 'Notes') ?: null, $userId]);
         $createdId = (int)db()->lastInsertId();
-        audit($userId, 'booking.add', 'access_booking', $createdId, '(mobile)');
-        out(['ok' => true, 'id' => $createdId]);
+        audit($userId, 'booking.add', 'access_booking', $createdId, $serviceType . ' (mobile)');
+        $cn = db()->prepare('SELECT name FROM clients WHERE id = ?'); $cn->execute([$cid]);
+        out(['ok' => true, 'id' => $createdId, 'message' => booking_created_message(['service_type' => $serviceType, 'needed_at' => $neededAt], (string)$cn->fetchColumn())]);
     }
     case 'booking_status': {
-        $bid = (int)($input['booking_id'] ?? 0);
-        $b = db()->prepare('SELECT c.assigned_to FROM access_bookings ab JOIN clients c ON c.id = ab.client_id WHERE ab.id = ?'); $b->execute([$bid]); $row = $b->fetch();
-        if (!$row) fail('Booking not found.', 404);
-        if (caseload_scoped() && (int)$row['assigned_to'] !== $userId) fail('Not your caseload.', 403);
-        $st = ['Requested','Confirmed','Completed','Cancelled'];
-        $bookingStatus = api_choice($input, 'to', $st, 'Status', null);
-        if ($bookingStatus === null) fail('Status is not a valid choice.', 422);
-        db()->prepare('UPDATE access_bookings SET status=? WHERE id=?')->execute([$bookingStatus, $bid]);
-        audit($userId, 'booking.status', 'access_booking', $bid, $bookingStatus . ' (mobile)');
-        out(['ok' => true]);
+        // A change needs POST (4.38.0), as the api_438 actions.
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') fail('Use POST for changes.', 405);
+        // 4.38.0: access_bookings.php's own change (inc/bookings.php): scope, the audit "{old} → {new}"
+        // and the sentence; a cancelled booking can be set back from the cancelled list.
+        $res = booking_set_status((int)($input['booking_id'] ?? 0), is_string($input['to'] ?? null) ? $input['to'] : '', ['id' => $userId], ' (mobile)');
+        if (!$res['ok']) $res['status'] === 422 ? fail_field('to', $res['message']) : fail($res['message'], $res['status']);
+        out(['ok' => true, 'message' => $res['message']]);
     }
 
     /* ========================= Knowledge base ========================= */
@@ -5056,54 +5149,27 @@ switch ($action) {
 
     /* ---------- Staff billable utilization (v2.56 parity) ---------- */
     case 'utilization': {
-        $rt = report_table('training_tracks', $userId);
-        $from = api_date($_GET, 'from', 'From date') ?? date('Y-m-d', strtotime('-28 days'));
-        $to = api_date($_GET, 'to', 'To date') ?? date('Y-m-d');
-        if ($to < $from) [$from, $to] = [$to, $from];
-        // Calendar days, inclusive: seconds divided by 86400 would be a fraction across a
-        // daylight-saving change, putting every expected-hours figure off by an hour.
-        $days = (int)(new DateTime($from))->diff(new DateTime($to))->days + 1;
-        $weeks = max(0.1, $days / 7);
-        $staff = db()->query('SELECT id, name, weekly_hours FROM users WHERE is_active = 1 ORDER BY name')->fetchAll();
-        // Logs by a deactivated user (or with no recorded user) are grouped under 0, so
-        // the totals still include them and reconcile with invoices and track hours.
-        // Each log's value (its hours and its mileage) is rounded to the cent line by line
-        // first, as invoices and track_rollup() do. As utilization.php (4.34.0): every track's
-        // hours count, but no-charge work that was never invoiced has no value (it is never billed).
-        $dq = db()->prepare("SELECT COALESCE(u.id, 0) AS uid, COALESCE(SUM(w.hours),0) AS hrs,
-                COALESCE(SUM(CASE WHEN w.invoice_id IS NULL AND t.billing_mode = 'none' THEN 0 ELSE
-                    ROUND(w.hours * COALESCE(w.hourly_rate, t.hourly_rate), 2) + ROUND(w.mileage * COALESCE(w.mileage_rate, t.mileage_rate), 2) END),0) AS val, COUNT(DISTINCT t.client_id) AS clients
-            FROM work_logs w JOIN {$rt} t ON t.id = w.track_id
-            LEFT JOIN users u ON u.id = w.created_by AND u.is_active = 1
-            WHERE w.work_date BETWEEN ? AND ? GROUP BY COALESCE(u.id, 0)");
-        $dq->execute([$from, $to]);
-        $byUser = []; foreach ($dq->fetchAll() as $r) $byUser[(int)$r['uid']] = $r;
-        $rows = []; $totDeliv = 0.0; $totExp = 0.0; $totVal = 0.0; $activeDeliv = 0.0; $noTargetDeliv = 0.0;
-        foreach ($staff as $s) {
-            $d = $byUser[(int)$s['id']] ?? ['hrs' => 0, 'val' => 0, 'clients' => 0];
-            $expected = (float)$s['weekly_hours'] * $weeks;
-            $util = $expected > 0 ? (int)round((float)$d['hrs'] / $expected * 100) : 0;
+        // 4.38.0: utilization.php's own period (the shared picker, remembered in the same setting) and
+        // its own figures (inc/utilization.php): an unreadable date is said in notes and the remembered
+        // or default period is used, as the website does, instead of a refusal.
+        require_once __DIR__ . '/inc/utilization.php';
+        $period = report_period(['id' => $userId], date('Y-m-d', strtotime('-28 days')), date('Y-m-d'));
+        $from = $period['from']; $to = $period['to'];
+        $u = utilization_report(['id' => $userId], $from, $to);
+        // Rounded only here, as the page shows them: value to the cent, expected hours to the tenth.
+        $rows = array_map(fn($r) => ['name' => $r['name'], 'weekly' => $r['weekly'], 'delivered' => $r['delivered'], 'value' => round($r['value'], 2),
+            'clients' => $r['clients'], 'expected' => round($r['expected'], 1), 'util' => $r['util'] === null ? 0 : (int)$r['util'],
             // no_target: no weekly hours are set, so util (0) is not a measurement.
-            $rows[] = ['name' => $s['name'], 'weekly' => (float)$s['weekly_hours'], 'delivered' => (float)$d['hrs'],
-                'value' => round((float)$d['val'], 2), 'clients' => (int)$d['clients'], 'expected' => round($expected, 1), 'util' => $util,
-                'no_target' => $expected <= 0];
-            $totDeliv += (float)$d['hrs']; $totExp += $expected; $totVal += (float)$d['val'];
-            if ($expected > 0) $activeDeliv += (float)$d['hrs']; else $noTargetDeliv += (float)$d['hrs'];
-        }
-        usort($rows, fn($a, $b) => $b['util'] <=> $a['util']);
-        // Team utilization compares the hours of active staff WITH a weekly target with
-        // that capacity (as utilization.php); hours by staff with no target are reported
-        // beside it (no_target_delivered) instead of inflating the percentage.
-        $orgUtil = $totExp > 0 ? (int)round($activeDeliv / $totExp * 100) : 0;
-        // Former or unrecorded staff: their work counts in the hour and value totals but
-        // has no capacity target, so it is reported beside the rows rather than as a row
-        // (the app's rows always carry a utilization percentage).
-        $former = $byUser[0] ?? ['hrs' => 0, 'val' => 0];
-        $totDeliv += (float)$former['hrs']; $totVal += (float)$former['val'];
-        out(['ok' => true, 'from' => $from, 'to' => $to, 'org_util' => $orgUtil,
-             'caseload_scoped' => caseload_scoped(), 'total_delivered' => round($totDeliv, 2), 'total_value' => round($totVal, 2),
-             'former_staff_delivered' => round((float)$former['hrs'], 2), 'former_staff_value' => round((float)$former['val'], 2),
-             'no_target_delivered' => round($noTargetDeliv, 2), 'rows' => $rows]);
+            'no_target' => $r['util'] === null, 'at_or_above' => $r['util'] !== null && $r['util'] >= 100], $u['rows']);
+        $former = $u['former'] ?? ['delivered' => 0.0, 'value' => 0.0];
+        out(['ok' => true, 'from' => $from, 'to' => $to, 'period' => $period['preset'],
+             'presets' => array_map(fn($k, $l) => ['key' => $k, 'label' => $l], array_keys(REPORT_PERIOD_PRESETS), REPORT_PERIOD_PRESETS),
+             'notes' => array_values(array_merge($period['notes'], array_values($period['errors']))),
+             'org_util' => $u['team_util'], 'weeks' => round($u['weeks'], 1),
+             'caseload_scoped' => $u['scoped'], 'scoped_note' => $u['scoped'] ? UTILIZATION_SCOPED_NOTE : null, 'footer' => UTILIZATION_FOOTER,
+             'total_delivered' => round($u['delivered'], 2), 'total_value' => round($u['value'], 2), 'total_expected' => round($u['expected'], 1),
+             'former_staff_delivered' => round($former['delivered'], 2), 'former_staff_value' => round($former['value'], 2),
+             'no_target_delivered' => round($u['no_target_delivered'], 2), 'rows' => $rows]);
     }
 
     /* ---------- Authorization burn-down + amendment letter (v2.52 parity) ---------- */
@@ -5264,7 +5330,8 @@ switch ($action) {
         $more = api_more($action, $input, $userId) ?? api_425($action, $input, $userId)   // and the 4.25.0 ones (inc/api_425.php)
             ?? api_435($action, $input, $userId)   // and the 4.35.0 ones (inc/api_435.php)
             ?? api_436($action, $input, $userId)   // and the 4.36.0 ones (inc/api_436.php)
-            ?? api_437($action, $input, $userId);   // and the 4.37.0 ones (inc/api_437.php)
+            ?? api_437($action, $input, $userId)   // and the 4.37.0 ones (inc/api_437.php)
+            ?? api_438($action, $input, $userId);   // and the 4.38.0 ones (inc/api_438.php)
         if ($more === null) fail('Unknown action.', 404);
         // A refusal keeps its other fields (4.27.0: fields, signed), without the status.
         if (empty($more['ok'])) { $st = (int)($more['status'] ?? 400); unset($more['status']); out(['ok' => false, 'error' => (string)$more['error']] + $more, $st); }

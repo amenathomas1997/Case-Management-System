@@ -62,6 +62,8 @@ struct AlertsUndoOffer {
 enum AlertDestination: Hashable {
     case client(Int), referral(Int), tasks(String), portalRequests, incidents, messages, counselors
     case thread(Int, String), followups, schedule, referrals
+    /// 4.38.0 (T6): Incoming authorizations, or one email's review.
+    case authorizations, authorization(Int)
 
     /// The app screen for a website link, when the account may open it here.
     @MainActor static func from(_ link: String, api: API) -> AlertDestination? {
@@ -87,6 +89,12 @@ enum AlertDestination: Hashable {
         case "counselors.php": if api.can("admin") { return .counselors }
         case "followups.php": if api.can("clients") { return .followups }
         case "schedule.php": if api.can("schedule") { return .schedule }
+        case "authorizations.php":
+            // 4.38.0: "A new authorization email (…) is waiting on Incoming authorizations."
+            if api.can("clients") && api.serverAtLeast(4, 38) {
+                if let id = Int(query["id"] ?? ""), id > 0 { return .authorization(id) }
+                return .authorizations
+            }
         default: break
         }
         return nil
@@ -105,6 +113,8 @@ enum AlertDestination: Hashable {
         case .followups: FollowupsView()
         case .schedule: ScheduleView()
         case .referrals: ReferralsView()
+        case .authorizations: AuthorizationsView()
+        case .authorization(let id): AuthorizationReviewView(emailId: id)
         }
     }
 }

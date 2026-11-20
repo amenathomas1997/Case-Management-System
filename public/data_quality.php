@@ -7,11 +7,10 @@ require __DIR__ . '/inc/layout.php';
 $user = require_login();
 require_perm('clients');
 $checks = data_quality_checks(caseload_scoped() ? (int)$user['id'] : null);
-$total = array_sum(array_map(fn($c) => count($c[3]), $checks));
 page_header('Data quality', $user, 'analytics');
 ?>
 <h1>Data quality</h1>
-<p><?= $total ? $total . ' item' . ($total === 1 ? '' : 's') . ' to check' : 'Nothing to check: the records are tidy' ?><?= caseload_scoped() ? ' on your caseload' : '' ?>.</p>
+<p><?= h(data_quality_summary($checks, caseload_scoped())) ?></p>
 <?php foreach ($checks as [$key, $heading, $what, $rows]): ?>
 <section class="card" aria-labelledby="dq-<?= $key ?>">
   <h2 id="dq-<?= $key ?>"><?= h($heading) ?> (<?= count($rows) ?>)</h2>

@@ -32,6 +32,8 @@ fun AtServicesScreen(api: Api, nav: NavHostController) {
         Page {
             // 4.30.0: no heading repeating the title bar's "AT services".
             modules.filter { it.optString("id") !in CHILD_KIND.values }.forEach { m -> ListRow(listOf(m.optString("label"), m.optString("description")), action = "open the list", onClick = { nav.navigate("at/${m.optString("id")}") }) }
+            // 4.38.0 (T14): the website's Service profitability report (read-only, the server's totals).
+            if (api.can("billing")) ListRow(listOf("Service profitability"), action = "open the report", onClick = { nav.navigate("profitability") })
         }
     }
 }

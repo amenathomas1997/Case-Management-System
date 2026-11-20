@@ -9,15 +9,8 @@ csrf_check();
 $user = require_login();
 require_perm('schedule');
 
-// The booking types are on Lists and time limits (inc/lists.php, 4.4.0).
-const BOOKING_STATUSES = ['Requested', 'Confirmed', 'Completed', 'Cancelled'];
-// What each stored service type is called on screen (CART is spelled out).
-const BOOKING_TYPE_LABELS = ['CART captioning' => 'CART (real-time captioning)'];
-
-/** When a booking is needed, as spoken in labels and messages. */
-function booking_when(?string $neededAt): string {
-    return $neededAt ? date('D M j, Y g:i A', strtotime($neededAt)) : 'no date set';
-}
+// The booking types are on Lists and time limits (inc/lists.php, 4.4.0), with BOOKING_TYPE_LABELS.
+// BOOKING_STATUSES, booking_when(), the cost rule and the status change are in inc/bookings.php (4.38.0).
 
 function booking_badge(string $s): string {
     $map = ['Requested' => 'badge-pending', 'Confirmed' => 'badge-active', 'Completed' => 'badge-closed', 'Cancelled' => 'badge-hold'];
@@ -59,8 +52,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_booking'])) {
         $errors['duration_min'] = 'Enter the duration as whole minutes, from 0 to 1440, or leave it blank.';
     }
     $costIn = $in('cost');
-    if (!empty($_POST['cost_bad']) || ($costIn !== '' && (!preg_match('/^\d{1,8}(\.\d{1,2})?$/', $costIn)))) {
-        $errors['cost'] = 'Enter the estimated cost in dollars and cents, for example 125.50 (no more than 99,999,999.99), or leave it blank.';
+    if (!empty($_POST['cost_bad']) || booking_cost_in($costIn) === false) {
+        $errors['cost'] = BOOKING_COST_HINT;
     }
     foreach (['provider' => [190, 'Provider / agency'], 'location' => [255, 'Location'], 'notes' => [500, 'Notes']] as $k => [$max, $label]) {
         if (mb_strlen($in($k)) > $max) $errors[$k] = $label . ' is too long (' . $max . ' characters maximum).';
@@ -71,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_booking'])) {
     $location = $in('location') !== '' ? $in('location') : null;
     $notes = $in('notes') !== '' ? $in('notes') : null;
     $duration = $durIn !== '' ? (int)$durIn : 0;
-    $cost = $costIn !== '' ? $costIn : null;
+    $cost = booking_cost_in($costIn);
     // A repeated submit (Create booking pressed again while the first was still
     // saving) finds the booking it already made and adds nothing: the same booking,
     // field for field, made by this user in the last 10 minutes and not cancelled.
@@ -90,7 +83,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_booking'])) {
     // throw after the booking was written.
     audit($user['id'], 'booking.add', 'access_booking', (int)db()->lastInsertId(), $serviceType);
     // Name what was booked, and when, so a missing date is noticed at once.
-    flash((BOOKING_TYPE_LABELS[$serviceType] ?? $serviceType) . ' booking created for ' . $clientName . ': ' . booking_when($neededAt) . '.');
+    flash(booking_created_message(['service_type' => $serviceType, 'needed_at' => $neededAt], (string)$clientName));
     redirect('access_bookings.php');
 }
 
@@ -98,21 +91,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_booking'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     $bid = (int)($_POST['booking_id'] ?? 0);
     $back = 'access_bookings.php' . (in_array($_POST['view'] ?? '', ['past', 'cancelled'], true) ? '?view=' . $_POST['view'] : '');
-    $b = db()->prepare('SELECT ab.id, ab.service_type, ab.needed_at, ab.status, c.name AS client_name, c.assigned_to FROM access_bookings ab JOIN clients c ON c.id = ab.client_id WHERE ab.id = ?');
-    $b->execute([$bid]);
-    if ($row = $b->fetch()) {
-        if (caseload_scoped() && (int)$row['assigned_to'] !== (int)$user['id']) { flash('Not your caseload.', 'error'); redirect('access_bookings.php'); }
-        $to = in_array($_POST['to'] ?? '', BOOKING_STATUSES, true) ? $_POST['to'] : null;
-        if ($to) {
-            db()->prepare('UPDATE access_bookings SET status = ? WHERE id = ?')->execute([$to, $bid]);
-            audit($user['id'], 'booking.status', 'access_booking', $bid, $row['status'] . ' → ' . $to);
-            // Name the booking and the change, and say where a cancelled one went.
-            flash($row['service_type'] . ' booking for ' . $row['client_name'] . ' (' . booking_when($row['needed_at']) . ') set to ' . $to . '.'
-                . ($to === 'Cancelled' ? ' It is now listed under "Show cancelled", where it can be restored.' : ''));
-        } else {
-            flash('Choose a status for the booking.', 'error');
-        }
-    }
+    $res = booking_set_status($bid, is_string($_POST['to'] ?? null) ? $_POST['to'] : '', $user);
+    // A booking that is gone says nothing, as before; another caseload's returns to the list.
+    if ($res['status'] === 403) { flash($res['message'], 'error'); redirect('access_bookings.php'); }
+    if ($res['status'] !== 404) flash($res['message'], $res['ok'] ? 'success' : 'error');
     redirect($back . '#bookings-h');
 }
 

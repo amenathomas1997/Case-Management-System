@@ -10,7 +10,9 @@ import UIKit
 // `error` is optional so an `ok: false` reply with no message is still treated as a failure
 // (never decoded as a successful, tolerant result further down).
 /// `processing` (4.29.0): the server's 409 "still being processed" (the same retry key is still running).
-struct APIErrorResponse: Decodable { let ok: Bool; let error: String?; let processing: Bool? }
+/// `idemConflict` (4.38.0): the server's 409 when a retry key is sent again with a different body
+/// (an earlier send with that key may have been saved, its reply lost, then the form changed).
+struct APIErrorResponse: Decodable { let ok: Bool; let error: String?; let processing: Bool?; let idemConflict: Bool? }
 
 struct LoginStep: Decodable {
     let ok: Bool
@@ -1198,6 +1200,8 @@ struct MeResponse: Decodable {
     let timezone: String?
     /// The server's release, such as "3.0.21"; nil from a server that does not report it.
     let serverVersion: String?
+    /// The organisation's name (4.38.0: brand('org'), the letterhead name); nil from an older server.
+    let org: String?
 }
 
 var serviceTypes: [String] { FormOptions.list("service_types", ["Assistive Technology", "Rehab Teaching", "Counseling", "Pre-ETS", "Other"]) }
@@ -1583,6 +1587,13 @@ enum APIError: LocalizedError {
     /// The server is still working on an earlier try with the same retry key (4.29.0, its 409
     /// with processing true): the key must be kept, so trying again is recognised.
     case processing(String)
+    /// The retry key was already used for different details (4.38.0, the server's 409 with
+    /// idem_conflict true): never a success; the form takes a fresh key (IdemKey.failed), so the
+    /// next deliberate send is a new one.
+    case idemConflict(String)
+
+    /// The server's sentence when it sends none.
+    static let idemConflictMessage = "This was already sent once with different details, and that earlier send may have been saved. Reload to check what was saved, then make your change again."
 
     var errorDescription: String? {
         switch self {
@@ -1590,6 +1601,7 @@ enum APIError: LocalizedError {
         case .network: return "Could not reach the server. Check your connection."
         case .outcomeUnknown: return "The server's reply was lost, so it isn't known whether that was saved. Check before trying again."
         case .processing(let message): return message
+        case .idemConflict(let message): return message
         }
     }
 }
@@ -1741,6 +1753,8 @@ final class API: ObservableObject {
     @Published var accessHold: [String] = []
     /// The website's release (4.0.0), to say when this app is older than it.
     @Published var serverVersion: String?
+    /// The organisation's name from `me` (4.38.0), shown on Account; nil from an older server.
+    @Published var org: String?
     /// "Please update" when the website is a newer major release than this app.
     var updateNotice: String? {
         guard let server = serverVersion,
@@ -1803,6 +1817,7 @@ final class API: ObservableObject {
             aiRedaction = me.aiRedaction
             accessHold = me.accessHold ?? []
             serverVersion = me.serverVersion
+            org = me.org
             permsLoaded = true
             // Appointment times are sent and shown in the server's zone (APIDate); a server that
             // does not report it keeps the zone known before (America/Chicago by default).
@@ -1964,6 +1979,9 @@ final class API: ObservableObject {
             if errorBody.processing == true {
                 throw APIError.processing(errorBody.error ?? "This is still being processed. Try again in a moment.")
             }
+            if errorBody.idemConflict == true {
+                throw APIError.idemConflict(errorBody.error ?? APIError.idemConflictMessage)
+            }
             throw APIError.server(errorBody.error ?? "Something went wrong.")
         }
         do {
@@ -2020,6 +2038,9 @@ final class API: ObservableObject {
             // 4.29.0: still being processed (the same key is running): the caller keeps its key.
             if (obj["processing"] as? Bool) == true {
                 throw APIError.processing((obj["error"] as? String) ?? "This is still being processed. Try again in a moment.")
+            }
+            if (obj["idem_conflict"] as? Bool) == true {
+                throw APIError.idemConflict((obj["error"] as? String) ?? APIError.idemConflictMessage)
             }
             throw APIError.server((obj["error"] as? String) ?? "Something went wrong.")
         }
@@ -2298,6 +2319,11 @@ final class API: ObservableObject {
                         transient = "“\(item.label)” is still being processed by the server and is still saved on this phone. It will be checked again automatically."
                         reachedServer = false
                         break
+                    } else if http.statusCode == 409,
+                              let body = try? decoder.decode(APIErrorResponse.self, from: data), body.idemConflict == true {
+                        // 4.38.0: its retry key was already used for different details: not a
+                        // success, so the entry is kept here with the server's reason, never dropped.
+                        refused[item.id] = body.error ?? APIError.idemConflictMessage
                     } else if http.statusCode == 409, item.action == "check_in_session" {
                         // Already checked in (from another phone, or an earlier try whose reply
                         // was lost): the check-in is recorded, so the entry is done.
@@ -2468,6 +2494,7 @@ final class API: ObservableObject {
         aiEnabled = false
         aiFeatures = []; aiRedaction = nil
         accessHold = []
+        org = nil
         syncError = nil
         syncNoticeDismissed = false
         sessionNotice = nil

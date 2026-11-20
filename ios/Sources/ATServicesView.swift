@@ -165,7 +165,7 @@ struct ATModuleView: View {
                     Text("To add a trial option, open its device trial comparison and choose Add trial option under Related records.").font(.callout)
                 }
                 if module.id == "staff_profile" { NavigationLink("Find instructor matches") { ATMatchingView() } }
-                if module.id == "cost" && (api.can("admin") || api.can("billing")) { NavigationLink("View profitability") { ATProfitabilityView() } }
+                if module.id == "cost" && (api.can("admin") || api.can("billing")) { NavigationLink("Service profitability") { ATProfitabilityView() } }
                 ForEach(shown) { record in
                     NavigationLink { ATRecordView(id: record.id) } label: {
                         VStack(alignment: .leading) {
@@ -745,59 +745,161 @@ func atHoursText(_ h: Double) -> String {
     return rounded == rounded.rounded() ? String(Int(rounded)) : String(format: "%g", rounded)
 }
 
+/// One group of the profitability report (by service or by linked contract): the server's
+/// totals (4.38.0, at_profit_groups), never added up on the phone.
+struct ATProfitGroup: Decodable {
+    let label: String
+    let invoiced: Double
+    let received: Double
+    let cost: Double
+    let margin: Double
+    let unpricedHours: Double
+    private enum CodingKeys: String, CodingKey { case label, name, service, contract, invoiced, received, cost, margin, unpricedHours }
+    init(label: String, invoiced: Double, received: Double, cost: Double, margin: Double, unpricedHours: Double) {
+        self.label = label; self.invoiced = invoiced; self.received = received; self.cost = cost; self.margin = margin; self.unpricedHours = unpricedHours
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        label = (try? c.decode(String.self, forKey: .label)) ?? (try? c.decode(String.self, forKey: .name))
+            ?? (try? c.decode(String.self, forKey: .service)) ?? (try? c.decode(String.self, forKey: .contract)) ?? ""
+        invoiced = (try? c.decode(Double.self, forKey: .invoiced)) ?? 0
+        received = (try? c.decode(Double.self, forKey: .received)) ?? 0
+        cost = (try? c.decode(Double.self, forKey: .cost)) ?? 0
+        margin = (try? c.decode(Double.self, forKey: .margin)) ?? 0
+        unpricedHours = (try? c.decode(Double.self, forKey: .unpricedHours)) ?? 0
+    }
+}
+
+/// at_profitability's group totals: each kind sent as a list of rows, or as an object keyed by
+/// the group's name (at_profit_groups' own shape), read either way.
+struct ATProfitGroups: Decodable {
+    let service: [ATProfitGroup]
+    let contract: [ATProfitGroup]
+    private enum CodingKeys: String, CodingKey { case service, contract }
+    private struct Figures: Decodable {
+        let invoiced: Double?; let received: Double?; let cost: Double?; let margin: Double?; let unpricedHours: Double?
+    }
+    private static func read(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> [ATProfitGroup] {
+        if let list = try? c.decode([ATProfitGroup].self, forKey: key) { return list }
+        guard let byName = try? c.decode([String: Figures].self, forKey: key) else { return [] }
+        return byName.keys.sorted().compactMap { name in
+            byName[name].map { ATProfitGroup(label: name, invoiced: $0.invoiced ?? 0, received: $0.received ?? 0, cost: $0.cost ?? 0,
+                                             margin: $0.margin ?? 0, unpricedHours: $0.unpricedHours ?? 0) }
+        }
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        service = Self.read(c, .service)
+        contract = Self.read(c, .contract)
+    }
+}
+
+/// at_profitability's reply (4.38.0: the website's group totals, intro and footer).
+struct ATProfitReport: Decodable {
+    let rows: [ATProfit]
+    let groups: ATProfitGroups?
+    let intro: String?
+    let footer: String?
+    private enum CodingKeys: String, CodingKey { case rows, groups, intro, footer }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        rows = LenientList.decode(ATProfit.self, from: c, forKey: .rows)
+        groups = try? c.decodeIfPresent(ATProfitGroups.self, forKey: .groups)
+        intro = try? c.decodeIfPresent(String.self, forKey: .intro)
+        footer = try? c.decodeIfPresent(String.self, forKey: .footer)
+    }
+}
+
+/// The figures of a track or group in the website's words, as one sentence.
+func profitFigures(invoiced: Double, received: Double, cost: Double, margin: Double, unpricedHours: Double) -> String {
+    var text = "submitted to funder \(money(invoiced)), received \(money(received)), direct cost \(money(cost)), margin \(money(margin))"
+    if unpricedHours > 0 { text += ", \(atHours(unpricedHours)) hours missing cost rate" }
+    return text
+}
+
+/// A track's row: "{client} / {track}: submitted to funder …".
+func profitRowText(_ r: ATProfit) -> String {
+    "\(r.client) / \(r.title): " + profitFigures(invoiced: r.invoiced, received: r.received, cost: r.cost, margin: r.margin, unpricedHours: r.unpricedHours)
+}
+
+/// Hours as the website prints them (no trailing zeros).
+private func atHours(_ h: Double) -> String {
+    let rounded = (h * 100).rounded() / 100
+    return rounded == rounded.rounded() ? String(Int(rounded)) : String(format: "%g", rounded)
+}
+
 struct ATProfitabilityView: View {
     @EnvironmentObject var api: API
-    @State private var rows: [ATProfit] = []
+    @State private var report: ATProfitReport?
     @State private var error: String?
-    @State private var grouping = "Track"
+    @State private var grouping = "track"
     /// Set once the report has answered, so "loading" and "nothing to report" are never confused.
     @State private var loaded = false
+    private var rows: [ATProfit] { report?.rows ?? [] }
     var body: some View {
         List {
-            Text("Submitted and paid invoice totals minus recorded expenses and labor. Missing cost rates make margins incomplete; unrecorded overhead and unbilled revenue are excluded.").font(.callout)
+            Text(report?.intro ?? "Submitted and paid invoice totals minus recorded expenses and labor cost. Missing labor rates make the margin incomplete. This excludes unrecorded overhead and unbilled revenue.")
+                .font(.callout)
             if let error { ErrorBanner(message: error) }
-            Picker("Group by", selection: $grouping) { ForEach(["Track", "Service", "Contract"], id: \.self) { Text($0).tag($0) } }
+            Picker("Group by", selection: $grouping) {
+                Text("Training track").tag("track")
+                Text("Service").tag("service")
+                Text("Linked contract").tag("contract")
+            }
             if !loaded && error == nil { ProgressView("Loading profitability…") }
             if loaded && rows.isEmpty { Text("No invoiced tracks to report yet.") }
-            if grouping != "Track" {
-                ForEach(groupLabels, id: \.self) { label in
-                    let members = rows.filter { (grouping == "Service" ? $0.service : $0.contract) == label }
-                    Section(label) {
-                        // One VoiceOver stop for the group's figures.
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Invoiced: \(members.reduce(0) { $0 + $1.invoiced }, specifier: "%.2f")")
-                            Text("Received: \(members.reduce(0) { $0 + $1.received }, specifier: "%.2f")")
-                            Text("Direct cost: \(members.reduce(0) { $0 + $1.cost }, specifier: "%.2f")")
-                            Text("Margin: \(members.reduce(0) { $0 + $1.margin }, specifier: "%.2f")")
-                            Text("Hours without labor rates: \(members.reduce(0) { $0 + $1.unpricedHours }, specifier: "%.1f")")
+            if grouping == "track" {
+                Section {
+                    ForEach(rows) { row in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(row.client) / \(row.title)").font(.body.weight(.semibold))
+                            Text("\(row.service) · \(row.funder)").font(.caption)
+                            Text(profitFigures(invoiced: row.invoiced, received: row.received, cost: row.cost, margin: row.margin, unpricedHours: row.unpricedHours))
+                                .font(.callout)
                         }
-                        .accessibilityElement(children: .combine)
+                        // One VoiceOver stop for the track's figures.
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(profitRowText(row) + ". \(row.service), \(row.funder)")
+                    }
+                } header: {
+                    if !rows.isEmpty { Text("Profitability by training track").font(.headline).foregroundStyle(.primary).textCase(nil).accessibilityAddTraits(.isHeader) }
+                }
+            } else {
+                Section {
+                    ForEach(Array(groups.enumerated()), id: \.offset) { _, g in
+                        Text("\(g.label.isEmpty ? "Not set" : g.label): " + profitFigures(invoiced: g.invoiced, received: g.received, cost: g.cost, margin: g.margin, unpricedHours: g.unpricedHours))
+                    }
+                } header: {
+                    if !rows.isEmpty {
+                        Text(grouping == "service" ? "By service" : "By linked contract").font(.headline).foregroundStyle(.primary).textCase(nil)
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                } footer: {
+                    if grouping == "contract" {
+                        Text(report?.footer ?? "Tracks linked to multiple contracts are grouped as unallocated rather than counted against each contract.")
                     }
                 }
-            } else { ForEach(rows) { row in
-                Section(row.client + " / " + row.title) {
-                    // One VoiceOver stop for the track's figures.
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(row.service + " · " + row.funder)
-                        Text("Invoiced: \(row.invoiced, specifier: "%.2f") · Received: \(row.received, specifier: "%.2f")")
-                        Text("Direct cost: \(row.cost, specifier: "%.2f") · Margin: \(row.margin, specifier: "%.2f")")
-                        // In words with an icon in the text colour: system orange text is about 2.2:1.
-                        if row.unpricedHours > 0 {
-                            Label { Text("Missing labor rates for \(row.unpricedHours, specifier: "%.1f") hours") } icon: { Image(systemName: "exclamationmark.triangle").accessibilityHidden(true) }
-                        }
-                    }
-                    .accessibilityElement(children: .combine)
-                }
-            } }
-        }.navigationTitle("Profitability")
+            }
+        }.navigationTitle("Service profitability")
         .modifier(ReadablePickers(inNavigationStack: true))   // choices not cut short at large text sizes
         .task { await load() }.refreshable { await load() }
     }
-    private var groupLabels: [String] { Array(Set(rows.map { grouping == "Service" ? $0.service : $0.contract })).sorted() }
+    /// The server's group totals (4.38.0); only for an older server, which sends none, are they
+    /// added up here.
+    private var groups: [ATProfitGroup] {
+        if let g = report?.groups { return grouping == "service" ? g.service : g.contract }
+        let labels = Array(Set(rows.map { grouping == "service" ? $0.service : $0.contract })).sorted()
+        return labels.map { label in
+            let m = rows.filter { (grouping == "service" ? $0.service : $0.contract) == label }
+            return ATProfitGroup(label: label, invoiced: m.reduce(0) { $0 + $1.invoiced }, received: m.reduce(0) { $0 + $1.received },
+                                 cost: m.reduce(0) { $0 + $1.cost }, margin: m.reduce(0) { $0 + $1.margin },
+                                 unpricedHours: m.reduce(0) { $0 + $1.unpricedHours })
+        }
+    }
     private func load() async {
         do {
-            let r: ATProfitResponse = try await api.call("at_profitability"); rows = r.rows; error = nil
-            if !loaded { announce(rows.isEmpty ? "No invoiced tracks to report yet." : "Profitability loaded for \(rows.count) track\(rows.count == 1 ? "" : "s").") }
+            let r: ATProfitReport = try await api.call("at_profitability"); report = r; error = nil
+            if !loaded { announce(r.rows.isEmpty ? "No invoiced tracks to report yet." : "Profitability loaded for \(r.rows.count) track\(r.rows.count == 1 ? "" : "s").") }
             loaded = true
         }
         catch { showFormError(error.localizedDescription, in: &self.error) }

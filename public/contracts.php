@@ -8,7 +8,8 @@ csrf_check();
 $user = require_login();
 require_perm('billing');
 
-const DELIVERABLE_STATUSES = ['Pending', 'In Progress', 'Submitted', 'Accepted'];
+// DELIVERABLE_STATUSES, CONTRACT_MONEY_HINT, contract_load(), contract_spent(), contract_pct(),
+// contract_money_in() and each change below are in inc/contracts.php (4.38.0), shared with the apps.
 
 /** A text field as posted, trimmed; a value that is not a string (an array from
  *  name[]=x, say) reads as blank, so it is refused on its field, never a 400. */
@@ -17,39 +18,6 @@ function contract_text(string $key, string $default = ''): string {
     return is_string($v) ? trim($v) : '';
 }
 
-function contract_load(int $id): ?array {
-    $s = db()->prepare('SELECT * FROM contracts WHERE id = ?');
-    $s->execute([$id]);
-    return $s->fetch() ?: null;
-}
-function contract_spent(int $id): float {
-    $s = db()->prepare('SELECT COALESCE(SUM(amount),0) FROM contract_spend WHERE contract_id = ?');
-    $s->execute([$id]);
-    return (float)$s->fetchColumn();
-}
-/** Whole percent of budget spent, rounded DOWN (99.5% must not read as an over-budget
- *  "100%" while funds remain), worked in exact cents: float division can floor an
- *  exact 29% to 28. */
-function contract_pct(float $spent, float $amount): int {
-    $amountCents = (int)round($amount * 100);
-    return $amountCents > 0 ? intdiv((int)round($spent * 100) * 100, $amountCents) : 0;
-}
-/** A dollar amount typed on a form. "$50,000", "50000" and "1250.5" are read as typed
- *  (the $ sign and spaces are dropped, and commas that separate thousands); null when
- *  blank; false when it is not a plain non-negative amount with at most 2 decimals that
- *  fits DECIMAL(12,2). A comma anywhere else ("50,00", "1,2,3") is refused, never read
- *  as a thousands separator that makes the amount 100 times too large. */
-function contract_money_in(mixed $raw): float|false|null {
-    if (!is_string($raw)) return false;
-    $v = str_replace(['$', ' '], '', trim($raw));
-    if ($v === '') return null;
-    if (str_contains($v, ',')) {
-        if (!preg_match('/^\d{1,3}(,\d{3})+(\.\d{1,2})?$/', $v)) return false;
-        $v = str_replace(',', '', $v);
-    }
-    return preg_match('/^\d{1,10}(\.\d{1,2})?$/', $v) ? (float)$v : false;
-}
-const CONTRACT_MONEY_HINT = 'Enter a dollar amount of 0 or more, for example 50000 or 50,000.00, with a period before the cents.';
 /** True when a date field was typed but cannot be read: a value that is not a real
  *  date, one with a year outside 2000 to $yearsAhead years from now (the app's range,
  *  api.php api_date: 5 years, or 25 for a contract end or deliverable due date), or one
@@ -74,14 +42,12 @@ function contract_date_script(): string {
 
 /* ---- Create contract ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_contract'])) {
-    $name = contract_text('name');
+    // 4.38.0: name, budget and notes read by contract_input() (inc/contracts.php), as the apps' add_contract.
+    [$errs, $cv] = contract_input($_POST);
+    $name = $cv['name'];
     $startDate = valid_date($_POST['start_date'] ?? '');
     $endDate = valid_date($_POST['end_date'] ?? '');
-    // A budget the page cannot read is refused with the field named, never stored as $0.00.
-    $budget = contract_money_in($_POST['amount'] ?? '');
-    $errs = [];
-    if ($name === '') $errs['name'] = 'Contract name is required.';
-    if ($budget === false) $errs['amount'] = 'Budget: ' . CONTRACT_MONEY_HINT;
+    $budget = $cv['amount'];
     if (contract_date_bad('start_date')) $errs['start_date'] = 'Start date: ' . contract_date_hint();
     if (contract_date_bad('end_date', 25)) $errs['end_date'] = 'End date: ' . contract_date_hint(25);
     // Same rule as the app (api.php add_contract), once both dates are in range.
@@ -96,9 +62,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_contract'])) {
     }
     db()->prepare('INSERT INTO contracts (name, funder, contract_number, amount, start_date, end_date, notes) VALUES (?,?,?,?,?,?,?)')
         ->execute([mb_substr($name, 0, 190), mb_substr(contract_text('funder'), 0, 190) ?: null,
-            mb_substr(contract_text('contract_number'), 0, 120) ?: null, $budget ?? 0.0,
-            $startDate, $endDate,
-            mb_substr(contract_text('notes'), 0, 2000) ?: null]);
+            mb_substr(contract_text('contract_number'), 0, 120) ?: null, $budget,
+            $startDate, $endDate, $cv['notes'] !== '' ? $cv['notes'] : null]);
     // Capture the id before audit() inserts its own row and replaces it.
     $id = (int)db()->lastInsertId();
     web_once_set($contractKey, $id);
@@ -137,44 +102,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['contract_id'])) {
         flash('Deliverable added.');
     } elseif (isset($_POST['set_deliverable'])) {
         $back .= '#del-h';
-        $did = (int)($_POST['deliverable_id'] ?? 0);
         // An unrecognised status is refused (as in the app) — never quietly reset to Pending.
-        $to = $_POST['status'] ?? '';
-        if (!is_string($to) || !in_array($to, DELIVERABLE_STATUSES, true)) { flash('Choose a status from the list.', 'error'); redirect($back); }
-        $dq = db()->prepare('SELECT title, status FROM contract_deliverables WHERE id = ? AND contract_id = ?');
-        $dq->execute([$did, $cid]);
-        $d = $dq->fetch();
-        if (!$d) { flash('Deliverable not found.', 'error'); redirect($back); }
-        if ($d['status'] !== $to) {
-            db()->prepare('UPDATE contract_deliverables SET status = ? WHERE id = ? AND contract_id = ?')->execute([$to, $did, $cid]);
-            audit($user['id'], 'contract.set_deliverable', 'contract', $cid, $d['title'] . ' → ' . $to);
-        }
-        flash('Deliverable updated.');
+        $res = contract_set_deliverable($cid, (int)($_POST['deliverable_id'] ?? 0), is_string($_POST['status'] ?? null) ? $_POST['status'] : '', (int)$user['id']);
+        if (!$res['ok']) { flash($res['message'], 'error'); redirect($back); }
+        flash($res['message']);
     } elseif (isset($_POST['del_deliverable'])) {
-        $delivId = (int)($_POST['deliverable_id'] ?? 0);
-        $delivRow = db()->prepare('SELECT title FROM contract_deliverables WHERE id = ? AND contract_id = ?');
-        $delivRow->execute([$delivId, $cid]);
-        $delivTitle = $delivRow->fetchColumn();
-        $delivDel = db()->prepare('DELETE FROM contract_deliverables WHERE id = ? AND contract_id = ?');
-        $delivDel->execute([$delivId, $cid]);
-        if ($delivDel->rowCount() === 1) audit($user['id'], 'contract.deliverable_delete', 'contract', $cid, is_string($delivTitle) ? $delivTitle : null);
+        contract_delete_deliverable($cid, (int)($_POST['deliverable_id'] ?? 0), (int)$user['id']);
+        // As before 4.38.0: one already gone reads as removed.
         flash('Deliverable removed.');
     } elseif (isset($_POST['set_budget'])) {
-        $budget = contract_money_in($_POST['budget'] ?? '');
-        if ($budget === null || $budget === false) { keep_input(); keep_field_errors(['budget' => 'Budget: ' . CONTRACT_MONEY_HINT]); redirect($back); }
-        $was = (float)$c['amount'];
-        if (round($was, 2) === round($budget, 2)) {
-            flash('The budget is already ' . fmt_money($budget) . '.');
-        } else {
-            db()->prepare('UPDATE contracts SET amount = ? WHERE id = ?')->execute([$budget, $cid]);
-            audit($user['id'], 'contract.budget', 'contract', $cid, fmt_money($was) . ' → ' . fmt_money($budget));
-            flash('Budget changed to ' . fmt_money($budget) . '.');
-        }
+        $res = contract_set_budget($cid, $_POST['budget'] ?? '', (int)$user['id']);
+        if (!$res['ok']) { keep_input(); keep_field_errors(['budget' => $res['message']]); redirect($back); }
+        flash($res['message']);
     } elseif (isset($_POST['add_spend'])) {
         // As in the app, a spend entry must be a positive amount; it is never stored as $0.00.
         $spendAmount = contract_money_in($_POST['amount'] ?? '');
         $sErrs = [];
-        if (!is_float($spendAmount) || $spendAmount <= 0) $sErrs['spend_amount'] = 'Amount: enter a dollar amount above 0, for example 1250 or 1,250.00, with a period before the cents.';
+        if (!is_float($spendAmount) || $spendAmount <= 0) $sErrs['spend_amount'] = CONTRACT_SPEND_HINT;
         if (contract_date_bad('spent_on')) $sErrs['spent_on'] = 'Date: ' . contract_date_hint();
         if ($sErrs) { keep_input(); keep_field_errors($sErrs); redirect($back); }
         // A date left blank on purpose is today's; the confirmation names the date used.
@@ -193,31 +137,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['contract_id'])) {
         audit($user['id'], 'contract.spend', 'contract', $cid, fmt_money($spendAmount));
         flash('Spend of ' . fmt_money($spendAmount) . ' recorded for ' . fmt_date($spentOn) . '.');
     } elseif (isset($_POST['del_spend'])) {
-        $spendId = (int)($_POST['spend_id'] ?? 0);
-        $spendRow = db()->prepare('SELECT amount, spent_on, memo FROM contract_spend WHERE id = ? AND contract_id = ?');
-        $spendRow->execute([$spendId, $cid]);
-        $spendWas = $spendRow->fetch();
-        $spendDel = db()->prepare('DELETE FROM contract_spend WHERE id = ? AND contract_id = ?');
-        $spendDel->execute([$spendId, $cid]);
-        if ($spendDel->rowCount() === 1) {
-            audit($user['id'], 'contract.spend_delete', 'contract', $cid, $spendWas
-                ? fmt_money((float)$spendWas['amount']) . ' on ' . $spendWas['spent_on'] . ($spendWas['memo'] ? ' — ' . $spendWas['memo'] : '')
-                : null);
-        }
+        contract_delete_spend($cid, (int)($_POST['spend_id'] ?? 0), (int)$user['id']);
         flash('Spend entry removed.');
     } elseif (isset($_POST['toggle_contract'])) {
         // The form posts the state its button offers, so a repeated or stale submit
         // cannot flip the contract back to the state the user just left.
         $target = $_POST['to_status'] ?? '';
         if (!is_string($target) || !in_array($target, ['Active', 'Closed'], true)) { flash('The contract was not changed. Reload the page and try again.', 'error'); redirect($back); }
-        $upd = db()->prepare('UPDATE contracts SET status = ? WHERE id = ? AND status <> ?');
-        $upd->execute([$target, $cid, $target]);
-        if ($upd->rowCount() === 1) {
-            audit($user['id'], $target === 'Closed' ? 'contract.close' : 'contract.reopen', 'contract', $cid, $c['name']);
-            flash($target === 'Closed' ? 'Contract closed.' : 'Contract reopened.');
-        } else {
-            flash($target === 'Closed' ? 'That contract is already closed.' : 'That contract is already active.');
-        }
+        flash(contract_set_active($cid, $target === 'Active', (int)$user['id'])['message']);
         redirect('contracts.php');
     }
     redirect($back);
@@ -244,13 +171,7 @@ if (isset($_GET['id'])) {
     // daylight-saving change falls in between; dividing seconds by 86400 does not.
     // A past end date is said as "Ended N days ago" (the list says "— ended"), never
     // as 0 days to end.
-    $daysToEnd = null;
-    $ended = false;
-    if ($c['end_date']) {
-        $endDiff = (new DateTime($today))->diff(new DateTime((string)$c['end_date']));
-        $ended = (bool)$endDiff->invert;
-        $daysToEnd = (int)$endDiff->days;
-    }
+    [$daysToEnd, $ended] = contract_end_days($c['end_date'] ?: null);
     page_header('Grant or contract: ' . $c['name'], $user, 'contracts', [['contracts.php', 'Grants & contracts']]);
     ?>
     <p><a href="contracts.php"><span aria-hidden="true">&larr; </span>All contracts</a></p>
@@ -399,7 +320,7 @@ page_header($showClosed ? 'Closed contracts' : 'Contracts', $user, 'contracts');
   <thead><tr><th scope="col">Contract</th><th scope="col">Funder</th><th scope="col" class="num">Budget</th><th scope="col" class="num">Spent</th><th scope="col">Ends</th><th scope="col" class="num">Open deliverables</th></tr></thead>
   <tbody>
   <?php if (!$contracts): ?><tr><td colspan="6" class="muted">No <?= $showClosed ? 'closed' : 'active' ?> contracts.</td></tr><?php endif; ?>
-  <?php foreach ($contracts as $c): $pct = contract_pct((float)$c['spent'], (float)$c['amount']); $endingSoon = $c['end_date'] && $c['end_date'] <= $soon; ?>
+  <?php foreach ($contracts as $c): $pct = contract_pct((float)$c['spent'], (float)$c['amount']); ?>
     <tr>
       <th scope="row"><a href="contracts.php?id=<?= (int)$c['id'] ?>"><?= h($c['name']) ?></a></th>
       <td><?= ($c['funder'] ?? '') !== '' ? h($c['funder']) : no_date_mark(true) ?></td>
@@ -410,7 +331,7 @@ page_header($showClosed ? 'Closed contracts' : 'Contracts', $user, 'contracts');
       <?php else: ?>
       <td class="num"><?= fmt_money((float)$c['spent']) ?> <strong<?= $pct >= 100 ? ' class="field-error"' : '' ?>>(<?= $pct ?>%)<?= $pct >= 100 ? ((float)$c['spent'] > (float)$c['amount'] ? ' over budget' : ' fully spent') : '' ?></strong></td>
       <?php endif; ?>
-      <td><?= $c['end_date'] ? ($endingSoon ? '<strong class="field-error">' . fmt_date($c['end_date']) . ($c['end_date'] < $today ? ' — ended' : ' — ending soon') . '</strong>' : fmt_date($c['end_date'])) : no_date_mark(true) ?></td>
+      <td><?= $c['end_date'] ? (($endsText = contract_ends_text($c['end_date'])) !== null ? '<strong class="field-error">' . fmt_date($c['end_date']) . ' ' . $endsText . '</strong>' : fmt_date($c['end_date'])) : no_date_mark(true) ?></td>
       <td class="num"><?= (int)$c['open_deliv'] ?></td>
     </tr>
   <?php endforeach; ?>
@@ -419,12 +340,12 @@ page_header($showClosed ? 'Closed contracts' : 'Contracts', $user, 'contracts');
 </div>
 <?php // The list comes first; the new-contract form opens itself after a refused submit. ?>
 <h2 class="visually-hidden">New contract or grant</h2>
-<details class="card mt-1"<?= array_intersect_key(form_errors(), array_flip(['name', 'amount', 'start_date', 'end_date'])) !== [] ? ' open' : '' ?>>
+<details class="card mt-1"<?= array_intersect_key(form_errors(), array_flip(['name', 'amount', 'start_date', 'end_date', 'notes'])) !== [] ? ' open' : '' ?>>
   <summary accesskey="n" id="new-h">New contract or grant</summary>
   <?php // After a rejected submission the form comes back filled in, with the error on its field.
   $old = fn(string $k): string => old_in('add_contract') !== '' ? h(old_in($k)) : ''; ?>
   <form method="post" action="contracts.php" class="stacked" novalidate><?= csrf_field() ?><?= web_idem_field() ?>
-    <?= form_error_summary(['name' => '', 'amount' => '', 'start_date' => '', 'end_date' => '']) ?>
+    <?= form_error_summary(['name' => '', 'amount' => '', 'start_date' => '', 'end_date' => '', 'notes' => ''], ['notes' => 'c_notes']) ?>
     <p class="hint">Fields marked * are required.</p>
     <div class="grid grid-4">
       <div class="field"><label for="name">Name <?= required_mark() ?></label><input type="text" id="name" name="name" required maxlength="190" value="<?= $old('name') ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
@@ -436,6 +357,8 @@ page_header($showClosed ? 'Closed contracts' : 'Contracts', $user, 'contracts');
       <div class="field"><label for="start_date">Start</label><input type="date" id="start_date" name="start_date" value="<?= $old('start_date') ?>" <?= field_aria('start_date') ?>><?= field_error('start_date') ?></div>
       <div class="field"><label for="end_date">End</label><input type="date" id="end_date" name="end_date" value="<?= $old('end_date') ?>" <?= field_aria('end_date') ?>><?= field_error('end_date') ?></div>
     </div>
+    <div class="field"><label for="c_notes">Notes (optional; up to 2,000 characters)</label>
+      <textarea id="c_notes" name="notes" rows="3" maxlength="2000" <?= field_aria('notes') ?>><?= $old('notes') ?></textarea><?= field_error('notes') ?></div>
     <button type="submit" name="add_contract" value="1" class="btn btn-primary">Create contract</button>
   </form>
 </details>

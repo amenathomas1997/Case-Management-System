@@ -167,13 +167,13 @@ elseif($matches!==null):?><p id="match-results" tabindex="-1"><strong><?=$matche
 <?php foreach($matches as $m):?><article><h4><?=h($m['name'])?></h4><p>Matched: <?=h($m['matched']?:'None specified')?>. Missing: <?=h($m['missing']?:'None')?>.</p><p><?=h((string)$m['available_hours'])?> estimated hours available of <?=h((string)$m['capacity_hours'])?> this week. <?=h($m['availability'])?></p><a href="schedule.php">Open scheduling<span class="visually-hidden"> to book <?=h($m['name'])?></span></a></article><?php endforeach;endif;?></section>
 <?php endif;?>
 <?php if($kind==='cost'): $profit=at_profitability($actor);?>
-<h3>Profitability by training track</h3><p>Submitted and paid invoice totals minus recorded expenses and labor cost. Missing labor rates make the margin incomplete. This excludes unrecorded overhead and unbilled revenue.</p>
+<h3>Profitability by training track</h3><p><?=h(AT_PROFIT_INTRO)?></p>
 <div class="table-scroll" tabindex="0" role="region" aria-labelledby="at-profit-cap"><table><caption id="at-profit-cap">Service profitability</caption><thead><tr><?php foreach(['Client / track','Service / funder','Submitted to funder','Received','Direct cost','Margin','Hours missing cost rate'] as $h):?><th scope="col"><?=h($h)?></th><?php endforeach;?></tr></thead><tbody>
 <?php foreach($profit as $p):?><tr><th scope="row"><?=h($p['client'].' / '.$p['title'])?></th><td><?=h($p['service'].' / '.$p['funder'])?></td><?php foreach(['invoiced','received','cost','margin'] as $k):?><td><?=h(fmt_money($p[$k]))?></td><?php endforeach;?><td><?=h((string)$p['unpriced_hours'])?></td></tr><?php endforeach;?></tbody></table></div>
 <?php foreach(['service'=>'By service','contract'=>'By linked contract'] as $groupKey=>$heading):?>
 <h3><?=h($heading)?></h3><div class="table-scroll" tabindex="0" role="region" aria-labelledby="at-profit-<?=$groupKey?>-cap"><table><caption id="at-profit-<?=$groupKey?>-cap">Profitability <?=h(lcfirst($heading))?></caption><thead><tr><th scope="col">Group</th><th scope="col">Submitted to funder</th><th scope="col">Received</th><th scope="col">Direct cost</th><th scope="col">Margin</th><th scope="col">Hours missing cost rate</th></tr></thead><tbody>
 <?php foreach(at_profit_groups($profit,$groupKey) as $label=>$totals):?><tr><th scope="row"><?=h($label)?></th><?php foreach(['invoiced','received','cost','margin'] as $metric):?><td><?=h(fmt_money($totals[$metric]))?></td><?php endforeach;?><td><?=h((string)$totals['unpriced_hours'])?></td></tr><?php endforeach;?></tbody></table></div>
-<?php endforeach;?><p>Tracks linked to multiple contracts are grouped as unallocated rather than counted against each contract.</p>
+<?php endforeach;?><p><?=h(AT_PROFIT_FOOTER)?></p>
 <?php endif;?>
 <?php endif;?>
 <?php if($record && !$edit):?>

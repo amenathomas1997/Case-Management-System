@@ -39,6 +39,8 @@ fun MoreScreen(api: Api, nav: NavHostController) {
         if (api.can("referrals")) ListRow(listOf("Referrals"), onClick = { nav.navigate("referrals") })
         if (api.can("clients")) ListRow(listOf("Messages"), onClick = { nav.navigate("messages") })
         if (api.can("clients")) ListRow(listOf("Client portal requests"), onClick = { nav.navigate("portalRequests") })
+        // 4.38.0 (T6): the website's Incoming authorizations.
+        if (api.can("clients")) ListRow(listOf("Incoming authorizations", AUTH_MENU_SUBTITLE), onClick = { nav.navigate("authorizations") })
         if (api.aiHas("voice") && api.can("clients")) ListRow(listOf("Voice assistant"), onClick = { nav.navigate("voice/0/-") })
         if (api.aiEnabled) ListRow(listOf("AI tools"), onClick = { nav.navigate("aiTools") })
         val waiting = api.pendingSync + api.keptSignatures.size
@@ -59,6 +61,9 @@ fun MoreScreen(api: Api, nav: NavHostController) {
         if (api.can("referrals")) ListRow(listOf("Waitlist"), onClick = { nav.navigate("waitlist") })
         if (api.can("clients")) ListRow(listOf("Compliance"), onClick = { nav.navigate("compliance") })
         if (api.can("clients")) ListRow(listOf("Documentation review"), onClick = { nav.navigate("docReview") })
+        // 4.38.0 (T15): read-only, as the website's pages.
+        if (api.can("clients")) ListRow(listOf("Data quality", DATA_QUALITY_SUBTITLE), onClick = { nav.navigate("dataQuality") })
+        if (api.can("clients")) ListRow(listOf("Documentation audit"), onClick = { nav.navigate("docAudit") })
         if (api.can("clients")) ListRow(listOf("Incidents"), onClick = { nav.navigate("incidents") })
         if (api.can("billing")) ListRow(listOf("Invoices"), onClick = { nav.navigate("invoices") })
         if (api.can("billing")) ListRow(listOf("Grants and contracts"), onClick = { nav.navigate("contracts") })
@@ -94,6 +99,8 @@ fun AccountScreen(api: Api, nav: NavHostController) {
     Page {
         Heading(api.userName, large = true)
         Show(state, "your account") { a ->
+            // 4.38.0 (T16): the organisation first, as the website's letterhead names it.
+            accountSummary(api.orgName, null).forEach { ListRow(listOf(it)) }
             ListRow(listOf("Email: " + a.optString("email")))
             ListRow(listOf("Server: " + ServerAddress.host(api.base)))
             ListRow(listOf("App version: " + BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")"))

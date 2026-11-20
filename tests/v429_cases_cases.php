@@ -23,7 +23,8 @@ check($err==='' && $v429count()===1,'A booking that double-books the instructor 
 check($err==='' && $v429count()===2,'Approved in the warnings box, the overlapping booking is saved'.($err?": $err":''));
 
 // ---- P10: making a meeting in someone else's account follows the admin permission ----
-$v429sched=(string)file_get_contents(dirname(__DIR__).'/public/schedule.php');
+// 4.38.0: the check moved to session_meeting_make_error() (inc/meetings.php), which schedule.php calls.
+$v429sched=(string)file_get_contents(dirname(__DIR__).'/public/schedule.php').(string)file_get_contents(dirname(__DIR__).'/public/inc/meetings.php');
 check(str_contains($v429sched,"!== (int)\$user['id'] && !can('admin')") && !str_contains($v429sched,"(\$user['role'] ?? '') !== 'admin'"),'The meeting link in another person\'s account checks the administrator permission, not the role column');
 
 // ---- P11: a merge moves the duplicate's audit entries; a purge clears older merges' entries ----

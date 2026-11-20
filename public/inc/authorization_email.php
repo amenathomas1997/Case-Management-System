@@ -206,3 +206,159 @@ function incoming_authorization_handled(int $id, string $status, ?int $trackId, 
     audit($actor, 'authorization.email', 'incoming_authorization', $id, $status . ($trackId ? ' (track #' . $trackId . ')' : ''));
     return true;
 }
+
+/* ---- Incoming authorizations page (4.38.0): moved from authorizations.php, so the page and the
+   apps' incoming_authorizations, incoming_authorization, read_authorization_email,
+   start_authorization_track and dismiss_authorization share one copy. ---- */
+
+/** The email, if this user may see it: a caseload-scoped user sees an email matched to their own
+ *  client, and an unmatched one only when they pasted it. */
+function incoming_authorization_for(int $id, array $user): ?array {
+    $a = incoming_authorization($id);
+    if (!$a) return null;
+    if (caseload_scoped()) {
+        // An email not yet matched is the scoped user's own to place when they pasted it.
+        if (!$a['client_id']) return (int)$a['created_by'] === (int)$user['id'] ? $a : null;
+        $c = db()->prepare('SELECT assigned_to FROM clients WHERE id = ?');
+        $c->execute([(int)$a['client_id']]);
+        if ((int)$c->fetchColumn() !== (int)$user['id']) return null;
+    }
+    return $a;
+}
+
+/** The waiting (New) emails this user may see, newest first, 200 at most; each with matched_name. */
+function incoming_authorizations_waiting(array $user): array {
+    $scoped = caseload_scoped();
+    $wq = db()->prepare("SELECT a.*, c.name AS matched_name FROM incoming_authorizations a LEFT JOIN clients c ON c.id = a.client_id WHERE a.status = 'New'"
+        . ($scoped ? ' AND (c.assigned_to = ? OR (a.client_id IS NULL AND a.created_by = ?))' : '') . ' ORDER BY a.created_at DESC LIMIT 200');
+    $wq->execute($scoped ? [(int)$user['id'], (int)$user['id']] : []);
+    return $wq->fetchAll();
+}
+
+/** A waiting row after its number: "{name or 'no client name'}[ (not matched to a client yet)][, $amount], received {date}". */
+function incoming_authorization_row_rest(array $w): string {
+    return (string)($w['matched_name'] ?? $w['client_name'] ?? 'no client name') . ($w['matched_name'] ? '' : ' (not matched to a client yet)')
+        . ($w['amount'] !== null ? ', ' . fmt_money((float)$w['amount']) : '') . ', received ' . fmt_date($w['created_at']);
+}
+
+/** A waiting row as the page lists it: "{auth_number}: …". */
+function incoming_authorization_row_text(array $w): string {
+    return $w['auth_number'] . ': ' . incoming_authorization_row_rest($w);
+}
+
+/**
+ * What the review shows for an email: its status sentence (once handled), whether it says it was not
+ * approved, the tracks already holding its number (in scope), its details, the client choices
+ * (matches, then "another client"), the client preset, the other clients and the counselor offer.
+ * The *_rows keys hold the rows the page links from.
+ */
+function incoming_authorization_review(array $a, array $user): array {
+    $scoped = caseload_scoped();
+    $uid = (int)$user['id'];
+    $p = authorization_email_parse((string)$a['email_text']) ?? ['not_approved' => false];
+    $matches = authorization_email_clients((string)$a['client_name'], (string)$a['counselor_email']);
+    $already = array_values(array_filter(authorization_email_tracks((string)$a['auth_number']), fn($t) => !$scoped || (int)$t['assigned_to'] === $uid));
+    $matches = array_values(array_filter($matches, fn($m) => empty($m['archived_at']) && (!$scoped || (int)$m['assigned_to'] === $uid)));
+    $preset = $a['client_id'] ? (int)$a['client_id'] : (count($matches) === 1 ? (int)$matches[0]['id'] : 0);
+    $yn = fn($v) => $v === null || $v === '' ? 'not given' : (string)$v;
+    $alreadyAmounts = fn(array $t): string => $t['authorized_amount'] !== null && $a['amount'] !== null && (float)$t['authorized_amount'] !== (float)$a['amount']
+        ? ' (authorized ' . fmt_money((float)$t['authorized_amount']) . ' there, ' . fmt_money((float)$a['amount']) . ' in this email: if it changed, record an amendment on the track)' : '';
+    $details = [
+        ['Client name in the email', $yn($a['client_name'])],
+        ['Service category', $yn($a['service_category'])],
+        ['Amount', $a['amount'] !== null ? fmt_money((float)$a['amount']) : 'not given'],
+        ['Hours', $a['hours'] !== null ? fmt_hours((float)$a['hours']) : 'not given (worked out from the amount at the client\'s last hourly rate, if there is one)'],
+        ['Approved', $a['approved_on'] ? fmt_date($a['approved_on']) : 'not given'],
+        ['Dates', $a['start_date'] || $a['end_date'] ? ($a['start_date'] ? fmt_date($a['start_date']) : 'no start') . ' to ' . ($a['end_date'] ? fmt_date($a['end_date']) : 'no end date') : 'not given (the approval date is used as the start)'],
+        ['Counselor', trim(($a['counselor_name'] ?? '') . ($a['counselor_email'] ? ', ' . $a['counselor_email'] : '')) ?: 'not given'],
+        ['Funding agency', $yn($a['agency'])],
+        ['Received', fmt_date($a['created_at']) . ', ' . ($a['source'] === 'Mailbox' ? 'forwarded to the CMS mailbox' : 'pasted')],
+    ];
+    $matchText = fn(array $m): string => $m['name'] . ' (' . $m['status'] . ($m['dob'] ? ', born ' . fmt_date($m['dob']) : '') . ($m['instructor'] ? ', ' . $m['instructor'] . '\'s caseload' : '')
+        . ($m['same_counselor'] ? ', same counselor' : '') . ')';
+    $oq = db()->prepare('SELECT id, name FROM clients WHERE archived_at IS NULL' . ($scoped ? ' AND assigned_to = ?' : '') . ' ORDER BY name LIMIT 2000');
+    $oq->execute($scoped ? [$uid] : []);
+    $counselor = null;
+    if ($a['counselor_email']) {
+        // 4.27.0: pre-ticked only when the counselor sent it themselves and the preset client has no counselor email.
+        $confirmed = authorization_counselor_confirmed($a);
+        $pm = array_values(array_filter($matches, fn($m) => (int)$m['id'] === $preset));
+        $counselor = ['text' => trim(($a['counselor_name'] ?: '') . ' ' . $a['counselor_email']), 'confirmed' => $confirmed,
+            'preticked' => $confirmed && $preset && $pm && trim((string)$pm[0]['counselor_email']) === ''];
+    }
+    return [
+        'status_text' => $a['status'] !== 'New' ? $a['status'] . ($a['track_id'] ? ': open the track.' : '.') : null,
+        'not_approved' => !empty($p['not_approved']),
+        'already' => array_map(fn($t) => 'Already on a track: ' . $t['title'] . ' for ' . $t['client_name'] . $alreadyAmounts($t) . '.', $already),
+        'already_rows' => array_map(fn($t) => $t + ['amounts_text' => $alreadyAmounts($t)], $already),
+        'details' => $details,
+        'matches' => array_map(fn($m) => [(int)$m['id'], $matchText($m)], $matches),
+        'match_rows' => $matches,
+        'preset_client_id' => $preset,
+        'other_clients' => array_map(fn($o) => [(int)$o['id'], (string)$o['name']], $oq->fetchAll()),
+        'counselor' => $counselor,
+    ];
+}
+
+/** "Read the email": a pasted email stored as New. errors on email_text, or the id (null with the
+ *  page's sentence when its client is not on a scoped user's caseload). */
+function incoming_authorization_paste(string $text, array $user, string $auditTail = ''): array {
+    $text = trim($text);
+    $p = $text !== '' ? authorization_email_parse($text) : null;
+    if (!$p) return ['ok' => false, 'errors' => ['email_text' => $text === '' ? 'Paste the authorization email first.' : 'No authorization number was found in that text. Paste the whole email, including the line "Authorization Number:".']];
+    $id = authorization_email_store($p, $text, 'Pasted', null, (int)$user['id']);
+    if (!incoming_authorization_for($id, $user)) {
+        return ['ok' => true, 'id' => null, 'message' => 'Authorization ' . $p['auth_number'] . ' was read, but its client is not on your caseload. An administrator can place it.'];
+    }
+    audit((int)$user['id'], 'authorization.email', 'incoming_authorization', $id, 'pasted ' . $p['auth_number'] . $auditTail);
+    return ['ok' => true, 'id' => $id, 'message' => null];
+}
+
+/** The new-track form's heading for a track started from an email (track_edit.php's). */
+function incoming_authorization_heading(string $clientName, string $authNumber): string {
+    return 'New training track for ' . $clientName . ', filled in from authorization ' . $authNumber . ': check each field before saving';
+}
+
+/**
+ * "Start the track from this authorization": the client chosen (not archived, in scope) is recorded on
+ * the email; the counselor is recorded when asked (never replacing a different one; confirmed only
+ * as authorization_counselor_confirmed() says); then the track form's prefill. $a must be New.
+ * notices are the page's information sentences, in order.
+ */
+function incoming_authorization_start(array $a, int $clientId, bool $setCounselor, array $user, string $auditTail = ''): array {
+    $uid = (int)$user['id'];
+    $c = db()->prepare('SELECT id, name, assigned_to, counselor_name, counselor_email FROM clients WHERE id = ? AND archived_at IS NULL');
+    $c->execute([$clientId]);
+    $client = $c->fetch();
+    if (!$client || (caseload_scoped() && (int)$client['assigned_to'] !== $uid)) return ['ok' => false, 'errors' => ['client_id' => 'Choose the client this authorization is for.']];
+    db()->prepare('UPDATE incoming_authorizations SET client_id = ? WHERE id = ?')->execute([$clientId, (int)$a['id']]);
+    $counselorKept = $setCounselor && trim((string)$client['counselor_email']) !== '' && strcasecmp(trim((string)$client['counselor_email']), (string)$a['counselor_email']) !== 0;
+    $unconfirmed = false;
+    if ($setCounselor && $a['counselor_email'] && !$counselorKept) {
+        // 4.27.0: confirmed only when the counselor sent it to the mailbox themselves; an address read
+        // from the email's text is recorded unconfirmed (an already-confirmed same address stays confirmed).
+        $confirmed = authorization_counselor_confirmed($a) ? 1 : 0;
+        db()->prepare('UPDATE clients SET counselor_verified = IF(LOWER(COALESCE(counselor_email, \'\')) = LOWER(?), GREATEST(counselor_verified, ?), ?), counselor_name = ?, counselor_email = ? WHERE id = ?')
+            ->execute([$a['counselor_email'], $confirmed, $confirmed, $a['counselor_name'] ?: $client['counselor_name'], $a['counselor_email'], $clientId]);
+        audit($uid, 'client.counselor', 'client', $clientId, 'from authorization ' . $a['auth_number'] . ': ' . ($client['counselor_email'] ?: 'none') . ' -> ' . $a['counselor_email'] . ($confirmed ? '' : ' (unconfirmed)') . $auditTail);
+        $unconfirmed = !$confirmed && strcasecmp(trim((string)$client['counselor_email']), (string)$a['counselor_email']) !== 0;
+    }
+    return ['ok' => true, 'client' => $client, 'notices' => incoming_authorization_start_notices($a, $client, $counselorKept, $unconfirmed),
+        'counselor_kept' => $counselorKept, 'counselor_unconfirmed' => $unconfirmed, 'prefill' => authorization_track_prefill($a, $clientId),
+        'heading' => incoming_authorization_heading((string)$client['name'], (string)$a['auth_number'])];
+}
+
+/** The page's information sentences after a start, in order: the client's different counselor was
+ *  kept ($client as it was before the start), or the email's counselor was recorded unconfirmed. */
+function incoming_authorization_start_notices(array $a, array $client, bool $kept, bool $unconfirmed): array {
+    $out = [];
+    if ($kept) $out[] = $client['name'] . ' already has a different VR counselor (' . $client['counselor_email'] . '), so it was not changed. Change it on the client\'s edit page if the counselor has changed.';
+    if ($unconfirmed) $out[] = $a['counselor_email'] . ' is recorded as ' . $client['name'] . '\'s VR counselor, unconfirmed: no report goes to it until it is confirmed on the client\'s edit page.';
+    return $out;
+}
+
+/** "Dismiss": the email is handled without a track. $a must be New. */
+function incoming_authorization_dismiss(array $a, array $user): array {
+    $ok = incoming_authorization_handled((int)$a['id'], 'Dismissed', null, (int)$user['id']);
+    return $ok ? ['ok' => true, 'message' => 'Authorization ' . $a['auth_number'] . ' dismissed.'] : ['ok' => false, 'message' => 'That authorization email was already handled.'];
+}

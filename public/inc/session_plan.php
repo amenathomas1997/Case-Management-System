@@ -105,3 +105,37 @@ function session_plan_hash(array $occurrences, int $clientId, int $staffId, int 
 function session_plan_hours(array $occurrences): float {
     return array_sum(array_map(fn($o) => round(($o[1] - $o[0]) / 3600 * 4) / 4, $occurrences));
 }
+
+/* ---- 4.38.0: the preview, the series wording and the booked sentence, moved from schedule.php so
+   the apps' schedule_session says exactly what the page says. ---- */
+
+/** The preview's lines: "Tuesday, November 3, 2026 2:30 PM to 3:30 PM". */
+function session_plan_lines(array $occurrences): array {
+    return array_map(fn($o) => date('l, F j, Y g:i A', $o[0]) . ' to ' . date('g:i A', $o[1]), $occurrences);
+}
+
+/** The preview's refusal: "Check the 4 sessions listed below (4 hours), then tick Book these 4 sessions and schedule again." */
+function session_plan_check_message(array $occurrences): string {
+    $n = count($occurrences);
+    return 'Check the ' . $n . ' session' . ($n === 1 ? '' : 's') . ' listed below (' . rtrim(rtrim(number_format(session_plan_hours($occurrences), 2), '0'), '.') . ' hours), then tick Book these ' . $n . ' sessions and schedule again.';
+}
+
+/** How a series is described in the invite, the flash and the audit: "3 weekly sessions", "4 sessions
+ *  (on several days each week)", or '' for one session. */
+function session_series_words(int $n, string $pattern): string {
+    $pattern = isset(PLAN_PATTERNS[$pattern]) ? $pattern : 'weekly';
+    return $n <= 1 ? '' : ($pattern === 'weekly' ? "{$n} weekly sessions" : "{$n} sessions (" . mb_strtolower(PLAN_PATTERNS[$pattern]) . ')');
+}
+
+/**
+ * The sentence after a booking: "Series of … scheduled." / "Session scheduled.", the meeting link made
+ * ($provider '' when none was asked for; $meeting session_make_meeting()'s answer; $self when it was
+ * made in the booker's own account), whether the invite went to the instructor, and why there is no link.
+ */
+function session_booked_message(int $n, string $pattern, string $instructor, bool $inviteSent, string $provider = '', ?array $meeting = null, bool $self = true): string {
+    $why = $provider !== '' && $meeting !== null && empty($meeting['ok']) ? (string)$meeting['why'] : null;
+    return ($n > 1 ? 'Series of ' . session_series_words($n, $pattern) . ' scheduled.' : 'Session scheduled.')
+        . ($provider !== '' && $meeting !== null && $why === null ? ' The ' . MEETING_PROVIDERS[$provider] . ' link was made in ' . ($self ? 'your' : $instructor . "'s") . ' account.' : '')
+        . ($inviteSent ? ' A calendar invite was emailed to ' . $instructor . '.' : ' (Calendar invite email could not be sent.)')
+        . ($why !== null ? ' ' . $why : '');
+}

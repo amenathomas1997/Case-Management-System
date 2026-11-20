@@ -1133,12 +1133,36 @@ struct NewSessionSheet: View {
     /// so completing it would log no hours. Said, with a retry, instead of hiding the picker.
     @State private var tracksError: String?
     @State private var askingDiscard = false
+    /// 4.38.0 (T7, T8): the website's plan patterns, weekdays and meeting providers, from
+    /// booking_options (nil from an older server: weekly only, and no meeting link made).
+    @State private var options: BookingOptions?
+    @State private var planPattern = "weekly"
+    @State private var planDays: Set<Int> = []
+    @State private var planUntilSet = false
+    @State private var planUntil = Date()
+    @State private var planDates = ""
+    /// The sessions a plan would book, as the server listed them, and whether they are approved.
+    @State private var planPreview: PlanPreview?
+    @State private var planApproved = false
+    @State private var meetingMake = ""
 
     /// Anything chosen or typed that closing the sheet would throw away.
     private var hasChanges: Bool {
         selectedClient != nil || selectedTrack != nil || repeatWeeks != 1 || isRemote
             || !location.isEmpty || !notes.isEmpty || !meetingUrl.isEmpty || authorizationAcknowledged
+            || planPattern != "weekly" || !planDays.isEmpty || !planDates.isEmpty || planUntilSet
     }
+
+    /// Everything that can change the warnings or the sessions a plan books: a change withdraws
+    /// an approval and a preview, so each only ever covers what was seen for the booking as sent.
+    private var reviewKey: String {
+        [String(selectedClient ?? 0), String(selectedTrack ?? 0), String(selectedStaff ?? 0), APIDate.dateTimeCentral(date),
+         String(duration), String(repeatWeeks), planPattern, planDays.sorted().map(String.init).joined(separator: ","),
+         planUntilSet ? APIDate.day(planUntil) : "", planDates].joined(separator: "|")
+    }
+
+    /// The Repeats range: 26 weeks for weekly, 52 for several days a week (session_plan's rule).
+    private var weeksLimit: Int { sessionPlanWeeksLimit(planPattern) }
 
     private var clientTracks: [TrackOption] {
         guard let clientId = selectedClient else { return [] }
@@ -1164,11 +1188,24 @@ struct NewSessionSheet: View {
                     }
                 }
                 // Offered only after the server has named the warnings, next to them, and just
-                // after the error banner (the next thing VoiceOver reaches from it).
+                // after the error banner (the next thing VoiceOver reaches from it). 4.38.0: for
+                // any refusal that carries warnings ("Authorization review:" or "Check before
+                // booking:"), with the website's prefix-neutral label.
                 if let authorizationWarning {
-                    Section("Authorization review") {
+                    Section("Check before booking") {
                         Text(authorizationWarning).font(.callout)
-                        Toggle("I reviewed these authorization warnings and approve booking despite them", isOn: $authorizationAcknowledged)
+                        Toggle("I reviewed these warnings and approve this booking despite them.", isOn: $authorizationAcknowledged)
+                    }
+                }
+                // 4.38.0 (T7): the sessions a plan books, listed by the server before anything is booked.
+                if let planPreview {
+                    Section {
+                        ForEach(Array(planPreview.sessions.enumerated()), id: \.offset) { _, line in Text(line).font(.callout) }
+                        Toggle("Book these \(planPreview.sessions.count) sessions", isOn: $planApproved)
+                            .errorField("Book these sessions")
+                    } header: {
+                        Text(sessionPlanPreviewHeading(planPreview.sessions.count)).font(.headline).foregroundStyle(.primary).textCase(nil)
+                            .accessibilityAddTraits(.isHeader)
                     }
                 }
                 Picker("Client (required)", selection: $selectedClient) {
@@ -1185,6 +1222,7 @@ struct NewSessionSheet: View {
                             Text(track.title).tag(track.id as Int?)
                         }
                     }
+                    .errorField("Training track")
                     Text("Link a track so completing the session logs hours automatically.")
                         .font(.caption).foregroundStyle(Color.secondaryText)
                 }
@@ -1200,20 +1238,33 @@ struct NewSessionSheet: View {
                     Text(String(format: "Duration: %.2f hours", duration))
                 }
                 .voiceOverAdjustable("Duration", value: hoursSpoken(duration), binding: $duration, in: 0.25...12, step: 0.25)
-                Stepper(value: $repeatWeeks, in: 1...26) {
-                    Text(repeatWeeks == 1 ? "One session" : "Repeats weekly ×\(repeatWeeks)")
+                if planPattern == "weekly" || planPattern == "days" {
+                    Stepper(value: $repeatWeeks, in: 1...weeksLimit) {
+                        Text(repeatWeeks == 1 ? (planPattern == "days" ? "One week" : "One session")
+                             : (planPattern == "days" ? "For \(repeatWeeks) weeks" : "Repeats weekly ×\(repeatWeeks)"))
+                    }
+                    .voiceOverAdjustable("Repeats", value: repeatWeeks == 1 ? (planPattern == "days" ? "One week" : "One session only")
+                                         : (planPattern == "days" ? "\(repeatWeeks) weeks" : "Weekly, \(repeatWeeks) sessions"),
+                                         binding: $repeatWeeks, in: 1...weeksLimit, step: 1)
+                    .errorField("Repeats")
                 }
-                .voiceOverAdjustable("Repeats", value: repeatWeeks == 1 ? "One session only" : "Weekly, \(repeatWeeks) sessions",
-                                     binding: $repeatWeeks, in: 1...26, step: 1)
+                if let options, !options.planPatterns.isEmpty { planSection(options) }
                 Toggle("Remote session", isOn: $isRemote)
+                // 4.38.0 (T8): the link made in the instructor's own connected account.
+                if isRemote, let providers = options?.meetingProviders, !providers.isEmpty {
+                    Picker("Make the meeting link (in the instructor's own connected account, instead of typing one)", selection: $meetingMake) {
+                        ForEach(sessionMeetingChoices(providers), id: \.key) { c in Text(c.label).tag(c.key) }
+                    }
+                    .errorField("Make the meeting link")
+                }
                 // Each name (and the link's format) stays visible above its field once it holds text.
-                if isRemote {
+                if isRemote && meetingMake.isEmpty {
                     CaptionedField(label: "Meeting link (optional, starts with https://)", text: $meetingUrl, prompt: "https://…", keyboard: .URL, errorName: "Meeting link")
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                } else {
-                    CaptionedField(label: "Location (optional)", text: $location)
                 }
+                // 4.38.0: kept for a remote session too, as the website and Android do.
+                CaptionedField(label: "Location (optional)", text: $location)
                 CaptionedField(label: "Notes (optional)", text: $notes)
             }
             .navigationTitle("New session")
@@ -1235,13 +1286,41 @@ struct NewSessionSheet: View {
             .task { await loadPickers() }
             // Switching client must clear a track chosen for the previous client,
             // or a completed session would auto-log hours against the wrong client.
-            .onChange(of: selectedClient) { _ in selectedTrack = nil; clearAuthorizationReview() }
-            // The warnings were for the booking as it was: any change that can alter them
-            // withdraws the approval (the server is asked again on the next Schedule).
-            .onChange(of: selectedTrack) { _ in clearAuthorizationReview() }
-            .onChange(of: date) { _ in clearAuthorizationReview() }
-            .onChange(of: duration) { _ in clearAuthorizationReview() }
-            .onChange(of: repeatWeeks) { _ in clearAuthorizationReview() }
+            .onChange(of: selectedClient) { _ in selectedTrack = nil }
+            // The warnings and a plan's sessions were for the booking as it was: any change that
+            // can alter them withdraws the approval and the preview (the server is asked again on
+            // the next Schedule).
+            .onChange(of: reviewKey) { _ in clearAuthorizationReview() }
+            .onChange(of: planPattern) { now in repeatWeeks = min(repeatWeeks, sessionPlanWeeksLimit(now)) }
+            .onChange(of: isRemote) { now in if !now { meetingMake = "" } }
+        }
+    }
+
+    /// The website's "More than one session" part of the form (4.38.0, T7).
+    @ViewBuilder private func planSection(_ options: BookingOptions) -> some View {
+        DisclosureGroup("More than one session: several days a week, a list of dates, or the whole authorization") {
+            Picker("How often", selection: $planPattern) {
+                ForEach(options.planPatterns, id: \.key) { p in Text(p.label).tag(p.key) }
+            }
+            if planPattern == "days" || planPattern == "fill" {
+                Text("Days of the week (several days, or the whole authorization) (required)").font(.subheadline.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                ForEach(Array(options.weekdays.enumerated()), id: \.element.n) { index, day in
+                    let toggle = Toggle(day.label, isOn: Binding(get: { planDays.contains(day.n) },
+                                                                 set: { on in if on { planDays.insert(day.n) } else { planDays.remove(day.n) } }))
+                    if index == 0 { toggle.errorField("Days of the week") } else { toggle }
+                }
+            }
+            if planPattern == "days" {
+                Toggle("Last date (or a number of weeks in Repeat weekly)", isOn: $planUntilSet)
+                    .errorField("Last date")
+                if planUntilSet {
+                    DatePicker("Last date", selection: $planUntil, in: date..., displayedComponents: .date)
+                }
+            }
+            if planPattern == "dates" {
+                CaptionedField(label: "Dates, one per line (2026-11-03, or 2026-11-03 2:30 PM)", text: $planDates, lines: 3...12, errorName: "Dates")
+            }
         }
     }
 
@@ -1249,11 +1328,15 @@ struct NewSessionSheet: View {
         authorizationWarning = nil
         authorizationAcknowledged = false
         authorizationHash = nil
+        planPreview = nil
+        planApproved = false
     }
 
-    /// The server's refusal when a booking needs the authorization warnings approved
-    /// (api.php schedule_session).
-    private static let authorizationReviewPrefix = "Authorization review:"
+    /// The form's field each of schedule_session's `errors` keys is about (4.38.0), in the form's order.
+    private static let errorOrder = ["client_id", "track_id", "date", "repeat_weeks", "plan_days", "plan_until", "plan_dates", "meeting_make", "plan_ok"]
+    private static let errorFields = ["client_id": "Client", "track_id": "Training track", "date": "Starts", "repeat_weeks": "Repeats",
+                                      "plan_days": "Days of the week", "plan_until": "Last date", "plan_dates": "Dates",
+                                      "meeting_make": "Make the meeting link", "plan_ok": "Book these sessions"]
 
     private func loadPickers() async {
         // client_choices is open to scheduling groups without the clients permission (such as
@@ -1267,6 +1350,8 @@ struct NewSessionSheet: View {
             showFormError(problem, in: &self.error)
         }
         await loadTracks()
+        // 4.38.0: a server without booking_options keeps the weekly form, as before.
+        if api.serverAtLeast(4, 38) { options = try? await api.call("booking_options") }
         do {
             let staffResponse: StaffResponse = try await api.call("staff")
             staff = staffResponse.staff
@@ -1311,6 +1396,21 @@ struct NewSessionSheet: View {
             showFormError("Instructor: choose who leads the session. If the list is empty, close this form and open it again to reload it.", in: &error)
             return
         }
+        // 4.38.0: session_plan.php's own sentences, tied to their fields, before anything is sent.
+        if options != nil {
+            if planPattern == "weekly" && !(1...26).contains(repeatWeeks) {
+                showFormError("Enter a number of weeks from 1 to 26 (1 is a single session).", in: &error, field: "Repeats"); return
+            }
+            if planPattern == "days" && !planUntilSet && !(1...52).contains(repeatWeeks) {
+                showFormError("Give the last date, or a number of weeks from 1 to 52.", in: &error, field: "Last date"); return
+            }
+            if (planPattern == "days" || planPattern == "fill") && planDays.isEmpty {
+                showFormError("Choose at least one day of the week.", in: &error, field: "Days of the week"); return
+            }
+            if planPattern == "dates" && planDates.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                showFormError("Write at least one date, one per line.", in: &error, field: "Dates"); return
+            }
+        }
         let link = meetingUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         if isRemote && !link.isEmpty && !Self.isMeetingLink(link) {
             showFormError("Meeting link: enter the whole address, starting with https://, or leave it blank.", in: &error)
@@ -1326,7 +1426,10 @@ struct NewSessionSheet: View {
             struct Result: Decodable {
                 let inviteSent: Bool
                 let sessionsCreated: Int
-                private enum CodingKeys: String, CodingKey { case ok, inviteSent, sessionsCreated }
+                /// 4.38.0: the website's sentence, and the meeting link's outcome.
+                let message: String?
+                let meetingWhy: String?
+                private enum CodingKeys: String, CodingKey { case ok, inviteSent, sessionsCreated, message, meetingWhy }
                 init(from decoder: Decoder) throws {
                     let c = try decoder.container(keyedBy: CodingKeys.self)
                     guard (try? c.decode(Bool.self, forKey: .ok)) == true else {
@@ -1334,6 +1437,8 @@ struct NewSessionSheet: View {
                     }
                     inviteSent = (try? c.decode(Bool.self, forKey: .inviteSent)) ?? false
                     sessionsCreated = (try? c.decode(Int.self, forKey: .sessionsCreated)) ?? 1
+                    message = try? c.decodeIfPresent(String.self, forKey: .message)
+                    meetingWhy = try? c.decodeIfPresent(String.self, forKey: .meetingWhy)
                 }
             }
             var request: [String: Any] = [
@@ -1345,12 +1450,19 @@ struct NewSessionSheet: View {
                 "duration": duration,
                 "repeat_weeks": repeatWeeks,
                 "authorization_ack": authorizationAcknowledged,
-                // Hidden while Remote is on: a location typed before switching is not sent.
-                "location": isRemote ? "" : location,
+                // 4.38.0: kept for a remote session too, as the website and Android.
+                "location": location,
                 "notes": notes,
                 "is_remote": isRemote ? 1 : 0,
-                "meeting_url": isRemote ? link : "",
+                "meeting_url": isRemote && meetingMake.isEmpty ? link : "",
             ]
+            // 4.38.0 (T7, T8): only what is used is sent, so a weekly booking reads as before.
+            for (key, value) in sessionPlanBody(pattern: options == nil ? "weekly" : planPattern, days: planDays.sorted(),
+                                                until: planUntilSet ? APIDate.day(planUntil) : nil, dates: planDates,
+                                                ok: planApproved ? planPreview?.hash : nil) {
+                request[key] = value
+            }
+            if isRemote && !meetingMake.isEmpty { request["meeting_make"] = meetingMake }
             if authorizationAcknowledged, let authorizationHash { request["authorization_ack_hash"] = authorizationHash }
             // 4.28.0: a retry after a lost reply is recognised, so the session is not booked twice.
             request["idem_key"] = idem.key(for: request)
@@ -1358,6 +1470,7 @@ struct NewSessionSheet: View {
             var refusedWarnings: [String]?
             var refusedDuplicate = false
             var refusedFields: [String: String] = [:]
+            var refusedPreview: PlanPreview?
             let result: Result
             do {
                 result = try await api.call("schedule_session", body: request,
@@ -1366,6 +1479,7 @@ struct NewSessionSheet: View {
                                                 refusedWarnings = $0["authorization_warnings"] as? [String]
                                                 refusedDuplicate = ($0["duplicate"] as? Bool) == true
                                                 refusedFields = ($0["errors"] as? [String: String]) ?? [:]
+                                                refusedPreview = ($0["plan_preview"] as? [String: Any]).flatMap(PlanPreview.init(reply:))
                                             })
             } catch {
                 authorizationHash = refusedHash
@@ -1378,42 +1492,41 @@ struct NewSessionSheet: View {
                     dismiss()
                     return
                 }
-                // Some weeks of a series are already booked (errors.date), or the client is on
-                // the waitlist or closed (errors.client_id): tied to the field to change.
-                if case APIError.server = error {
-                    if let dateError = refusedFields["date"] {
-                        showFormError(dateError, in: &self.error, field: "Starts"); busy = false; return
+                if case APIError.server(let message) = error {
+                    // 4.38.0: the warnings (either kind) and a plan's sessions, shown together so
+                    // both are approved in one step; the approval is offered only now.
+                    let hasWarnings = !(refusedWarnings ?? []).isEmpty
+                    if hasWarnings {
+                        authorizationWarning = (refusedWarnings ?? []).joined(separator: " ")
+                        authorizationAcknowledged = false
                     }
-                    if let clientError = refusedFields["client_id"] {
-                        showFormError(clientError, in: &self.error, field: "Client"); busy = false; return
+                    if let refusedPreview {
+                        planPreview = refusedPreview
+                        planApproved = false
+                    }
+                    if hasWarnings || refusedPreview != nil {
+                        let field = refusedPreview != nil ? "Book these sessions" : nil
+                        let advice = hasWarnings ? " To book it anyway, turn on the approval just below this message, then tap Schedule again." : ""
+                        showFormError(message + advice, in: &self.error, field: field)
+                        busy = false; return
+                    }
+                    // Some weeks of a series are already booked (errors.date), the client is on
+                    // the waitlist or closed (errors.client_id), or a plan field is refused:
+                    // tied to the field to change.
+                    if let key = Self.errorOrder.first(where: { refusedFields[$0] != nil }) {
+                        showFormError(message, in: &self.error, field: Self.errorFields[key]); busy = false; return
                     }
                 }
                 throw error
             }
             idem.answered()
             let base = result.sessionsCreated > 1 ? "Series of \(result.sessionsCreated) sessions scheduled." : "Session scheduled."
-            let msg = base + (result.inviteSent ? " Calendar invite emailed." : "")
+            var msg = result.message ?? (base + (result.inviteSent ? " Calendar invite emailed." : ""))
+            // The meeting link could not be made: said after the booking sentence (once).
+            if let why = result.meetingWhy, !why.isEmpty, !msg.contains(why) { msg += " " + why }
             // Said by the schedule once this sheet has closed (closing it would cut it off).
             onDone(msg)
             dismiss()
-        } catch APIError.server(let message) where message.hasPrefix(Self.authorizationReviewPrefix) {
-            // The warnings are shown with the approval switch, which is offered only now.
-            // 4.28.0: the warnings themselves, from the refusal's authorization_warnings, never the
-            // server's instruction sentences parsed out of its message.
-            var warnings = message.dropFirst(Self.authorizationReviewPrefix.count).trimmingCharacters(in: .whitespaces)
-            if let list = serverWarnings, !list.isEmpty {
-                warnings = list.joined(separator: " ")
-            } else {
-                for sentence in [" These warnings are not the ones you approved", " Review the track and explicitly approve"] {
-                    if let instruction = warnings.range(of: sentence, options: .backwards) {
-                        warnings = String(warnings[..<instruction.lowerBound])
-                    }
-                }
-            }
-            authorizationWarning = warnings
-            authorizationAcknowledged = false
-            showFormError(message + " To book it anyway, turn on the approval just below this message, then tap Schedule again.", in: &self.error)
-            busy = false
         } catch APIError.network {
             // The request may have reached the server: the session (or the whole series) may be
             // booked and the invite sent, and scheduling it again would book it twice.
@@ -1425,6 +1538,68 @@ struct NewSessionSheet: View {
             busy = false
         }
     }
+}
+
+// MARK: - 4.38.0 several sessions at once and the meeting link (plan-4380 T7, T8)
+
+struct PlanPatternOption: Decodable { let key: String; let label: String }
+struct PlanWeekday: Decodable { let n: Int; let label: String }
+
+/// booking_options' reply: the website's plan patterns, weekdays, the most sessions at once and
+/// the meeting providers set up here.
+struct BookingOptions: Decodable {
+    let planPatterns: [PlanPatternOption]
+    let weekdays: [PlanWeekday]
+    let maxSessions: Int
+    let meetingProviders: [PlanPatternOption]
+    private enum CodingKeys: String, CodingKey { case planPatterns, weekdays, maxSessions, meetingProviders }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        planPatterns = LenientList.decode(PlanPatternOption.self, from: c, forKey: .planPatterns)
+        weekdays = LenientList.decode(PlanWeekday.self, from: c, forKey: .weekdays)
+        maxSessions = (try? c.decode(Int.self, forKey: .maxSessions)) ?? 100
+        meetingProviders = LenientList.decode(PlanPatternOption.self, from: c, forKey: .meetingProviders)
+    }
+}
+
+/// The sessions a plan books, from a schedule_session refusal's plan_preview.
+struct PlanPreview: Equatable {
+    let hash: String
+    let hours: Double
+    let sessions: [String]
+    init?(reply: [String: Any]) {
+        guard let hash = reply["hash"] as? String, !hash.isEmpty else { return nil }
+        self.hash = hash
+        hours = (reply["hours"] as? Double) ?? (reply["hours"] as? Int).map(Double.init) ?? 0
+        sessions = (reply["sessions"] as? [String]) ?? []
+    }
+}
+
+/// schedule_session's plan fields: nothing for weekly (the request reads as a 4.37.0 one), and
+/// for the other patterns only the fields that pattern uses, plus the preview's hash once approved.
+func sessionPlanBody(pattern: String, days: [Int], until: String?, dates: String, ok: String?) -> [String: Any] {
+    var body: [String: Any] = [:]
+    switch pattern {
+    case "days":
+        body = ["plan_pattern": "days", "plan_days": days]
+        if let until, !until.isEmpty { body["plan_until"] = until }
+    case "fill": body = ["plan_pattern": "fill", "plan_days": days]
+    case "dates": body = ["plan_pattern": "dates", "plan_dates": dates]
+    default: return [:]
+    }
+    if let ok, !ok.isEmpty { body["plan_ok"] = ok }
+    return body
+}
+
+/// "The sessions this books (4)".
+func sessionPlanPreviewHeading(_ n: Int) -> String { "The sessions this books (\(n))" }
+
+/// Weeks a plan can repeat for: 52 for several days a week, 26 weekly (session_plan's limits).
+func sessionPlanWeeksLimit(_ pattern: String) -> Int { pattern == "days" ? 52 : 26 }
+
+/// The meeting picker's choices: "No" first, then the providers set up ("In Zoom", …).
+func sessionMeetingChoices(_ providers: [PlanPatternOption]) -> [PlanPatternOption] {
+    [PlanPatternOption(key: "", label: "No")] + providers
 }
 
 /// What the Complete session step records with the outcome.
@@ -2011,7 +2186,7 @@ struct GroupSessionSheet: View {
                 }
                 // Offered only once the server has named the warnings, just after the error.
                 if !warnings.isEmpty {
-                    Section("Warnings to review") {
+                    Section("Check before booking") {
                         ForEach(warnings, id: \.self) { Text($0).font(.callout) }
                         Toggle("I reviewed these warnings and approve this group booking despite them", isOn: $approved)
                     }

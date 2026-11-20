@@ -59,6 +59,9 @@ class Api(context: Context) {
         private set
     var serverVersion by mutableStateOf<String?>(null)
         private set
+    /** 4.38.0 (T16): the organisation's name from me (brand('org')); null from an older server. */
+    var orgName by mutableStateOf<String?>(null)
+        private set
     /** Why the app went back to Sign in by itself (an expired session), shown there once. */
     var sessionNotice by mutableStateOf<String?>(null)
     /**
@@ -695,6 +698,7 @@ class Api(context: Context) {
         aiRedaction = m.aiRedaction
         accessHold = m.accessHold
         serverVersion = m.serverVersion
+        orgName = m.org
         m.timezone?.takeIf { java.util.TimeZone.getAvailableIDs().contains(it) }?.let { serverZone = it; store.put("serverZone", it); org.casemanagement.app.ui.serverZoneId = it }
         permsLoaded = true; store.put("userPermsLoaded", true)
         try {
@@ -889,7 +893,8 @@ class Api(context: Context) {
                         json.optString("error").ifEmpty { "It will retry automatically when you reconnect." }
                     break
                 }
-                else -> refused[item.optString("id")] = json.optString("error").ifEmpty { "The server did not accept it." }
+                // 4.38.0: its key was used before with other details: kept, with the server's reason, never counted as sent.
+                else -> refused[item.optString("id")] = idemConflictReason(status, json) ?: json.optString("error").ifEmpty { "The server did not accept it." }
             }
         }
         if (userId != owner) return@withLock

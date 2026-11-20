@@ -266,3 +266,82 @@ function data_quality_checks(?int $scopeUser): array {
             AND NOT EXISTS (SELECT 1 FROM consent_forms f WHERE f.client_id = c.id) ORDER BY c.name")];
     return $checks;
 }
+
+/* ---- The documentation audit (4.38.0): moved from doc_audit.php, so the page and the apps'
+   doc_audit list the same findings for the same clients. ---- */
+
+/** The page's empty sentence (the emoji it once had is read as "thumbs up sign"). */
+const DOC_AUDIT_EMPTY = 'No documentation gaps found.';
+
+/**
+ * Documentation gaps across Active Training clients ($scopeUid: one instructor's caseload): case notes
+ * not in a structured format, training logged without homework, stale or missing progress notes, no
+ * tech assessment, goals with no recent progress. Returns the number of active clients, a row per
+ * client with findings, what is checked (each [before, emphasised, after]), the plain intro and the
+ * footnote on which notes count.
+ */
+function doc_audit_findings(?int $scopeUid): array {
+    $scoped = $scopeUid !== null;
+    // Only notes staff wrote count as documentation. System-written notes are left out:
+    // those with no author (cron monthly summaries, filed emails, client portal practice,
+    // guardian consent, survey and VRC acknowledgment) and the automatic notes logged by
+    // staff actions (report and evaluation sends, record merges, referral intake, device
+    // follow-ups). They would otherwise hide stale documentation, and raise "not in a
+    // structured format" findings no one can fix. Subjects as written in report.php,
+    // api.php send_report, eval_report.php, client_merge.php, referrals.php / api.php
+    // and followups.php / api.php.
+    $staffNote = "n.author_id IS NOT NULL
+            AND n.subject NOT IN ('Training report emailed to VRC', 'AT evaluation report emailed', 'Duplicate record merged')
+            AND n.subject NOT LIKE '[Referral] %' AND n.subject NOT LIKE 'Device no longer in use: %'";
+    $sql = "SELECT c.id, c.name,
+            (SELECT COUNT(*) FROM client_notes n WHERE n.client_id = c.id AND {$staffNote} AND n.note_type IN ('Case Note','Progress Report') AND n.created_at > DATE_SUB(NOW(), INTERVAL " . cms_number('doc_audit_note_days') . " DAY)) AS notes_recent,
+            (SELECT COUNT(*) FROM client_notes n WHERE n.client_id = c.id AND {$staffNote} AND n.note_type IN ('Case Note','Progress Report') AND n.created_at > DATE_SUB(NOW(), INTERVAL " . cms_number('doc_audit_note_days') . " DAY) AND n.note_format <> 'free') AS notes_birp,
+            (SELECT MAX(n.created_at) FROM client_notes n WHERE n.client_id = c.id AND {$staffNote}) AS last_note,
+            (SELECT COUNT(*) FROM work_logs w JOIN training_tracks t ON t.id = w.track_id WHERE t.client_id = c.id AND w.work_date > DATE_SUB(CURDATE(), INTERVAL " . cms_number('doc_audit_activity_days') . " DAY)) AS sessions_recent,
+            (SELECT COUNT(*) FROM homework h JOIN training_tracks t ON t.id = h.track_id WHERE t.client_id = c.id) AS homework_total,
+            (SELECT COUNT(*) FROM tech_assessments a WHERE a.client_id = c.id) AS assessments,
+            (SELECT COUNT(*) FROM smart_goals sg JOIN training_tracks t ON t.id = sg.track_id WHERE t.client_id = c.id AND sg.status <> 'Achieved'
+                AND t.status = 'Active' AND sg.created_at < DATE_SUB(NOW(), INTERVAL " . cms_number('doc_audit_activity_days') . " DAY)
+                AND NOT EXISTS (SELECT 1 FROM goal_progress gp WHERE gp.goal_id = sg.id AND gp.created_at > DATE_SUB(NOW(), INTERVAL " . cms_number('doc_audit_activity_days') . " DAY))) AS goals_stale
+        FROM clients c WHERE c.status = 'Active Training'" . ($scoped ? ' AND c.assigned_to = ?' : '') . ' ORDER BY c.name';
+    $st = db()->prepare($sql);
+    $st->execute($scoped ? [$scopeUid] : []);
+    $clients = $st->fetchAll();
+
+    $today = new DateTime('today');
+    $findingsFor = function (array $c) use ($today): array {
+        $f = [];
+        $nonBirp = (int)$c['notes_recent'] - (int)$c['notes_birp'];
+        if ($nonBirp > 0) $f[] = $nonBirp . ' recent case note' . ($nonBirp === 1 ? '' : 's') . ' not in a structured format (BIRP/PAIP/SOAP)';
+        if ((int)$c['sessions_recent'] > 0 && (int)$c['homework_total'] === 0) $f[] = 'Active training logged, but no homework assigned';
+        if (empty($c['last_note'])) $f[] = 'No progress notes on file';
+        elseif ((int)$today->diff(new DateTime(substr((string)$c['last_note'], 0, 10)))->days > cms_number('doc_audit_activity_days')) $f[] = 'No progress note in ' . cms_number('doc_audit_activity_days') . '+ days';
+        if ((int)$c['assessments'] === 0) $f[] = 'No tech assessment on file';
+        if ((int)$c['goals_stale'] > 0) $f[] = (int)$c['goals_stale'] . ' active goal' . ((int)$c['goals_stale'] === 1 ? '' : 's') . ' with no progress in ' . cms_number('doc_audit_activity_days') . ' days';
+        return $f;
+    };
+
+    $rows = [];
+    foreach ($clients as $c) { $f = $findingsFor($c); if ($f) $rows[] = ['client_id' => (int)$c['id'], 'name' => (string)$c['name'], 'findings' => $f]; }
+    $nd = cms_number('doc_audit_note_days'); $ad = cms_number('doc_audit_activity_days');
+    $fmt = fn(string $k): string => implode(', ', NOTE_FORMATS[$k]);
+    return [
+        'active' => count($clients), 'rows' => $rows,
+        'checks' => [
+            ['Case notes (Case Note / Progress Report) in the last ' . $nd . ' days that aren\'t in a ', 'structured format', ': BIRP (' . $fmt('BIRP') . '), PAIP (' . $fmt('PAIP') . ') or SOAP (' . $fmt('SOAP') . ').'],
+            ['Clients with a training session logged in the last ' . $ad . ' days but ', 'no homework', ' assigned.'],
+            ['Active clients with ', 'no progress note', ' in ' . $ad . '+ days.'],
+            ['Active clients with ', 'no tech assessment', ' on file.'],
+            ['Goals on active tracks, open for over ' . $ad . ' days, with ', 'no progress recorded', ' in the last ' . $ad . ' days.'],
+        ],
+        'intro' => 'Documentation gaps across active clients' . ($scoped ? ' on your caseload' : '') . '. A prompt to tidy records, not a judgement. A structured case note uses one of the formats BIRP ('
+            . $fmt('BIRP') . '), PAIP (' . $fmt('PAIP') . ') or SOAP (' . $fmt('SOAP') . ').',
+        'footnote' => 'Only notes written by staff count. Notes the system adds by itself — monthly summaries, filed emails, client portal entries, consent, survey and acknowledgment records, and the automatic notes for sent reports, merges, referrals and device follow-ups — are ignored.',
+    ];
+}
+
+/** The data-quality page's first line: "3 items to check on your caseload." / "Nothing to check: the records are tidy." */
+function data_quality_summary(array $checks, bool $scoped): string {
+    $total = array_sum(array_map(fn($c) => count($c[3]), $checks));
+    return ($total ? $total . ' item' . ($total === 1 ? '' : 's') . ' to check' : 'Nothing to check: the records are tidy') . ($scoped ? ' on your caseload' : '') . '.';
+}

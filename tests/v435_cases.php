@@ -85,7 +85,8 @@ $rows = $groupRows435((string)$r['group_uid']);
 check($r['sessions_created'] === 2 && count($rows) === 2 && (int)$rows[0]['track_id'] === $gaOld && (int)$rows[1]['track_id'] === $gbT && (int)$rows[0]['user_id'] === $u435
     && str_starts_with($r['message'], 'Group session scheduled for 2 clients.') && $r['no_track'] === [],
     'Q1: schedule_group books one row per client under one group_uid, a tracks pick used and the newest active track otherwise');
-$again = $call('schedule_group', ['client_ids' => [$ga, $gb], 'staff_id' => $u435, 'date' => $gDate, 'time' => '07:15', 'duration' => 1.5, 'idem_key' => $k1]);
+// 4.38.0: a retry is the identical request (a key reused for a different body is refused).
+$again = $call('schedule_group', ['client_ids' => [$ga, $gb], 'tracks' => [(string)$ga => $gaOld], 'staff_id' => $u435, 'date' => $gDate, 'time' => '07:15', 'duration' => 1.5, 'location' => 'V435 room', 'is_remote' => false, 'idem_key' => $k1]);
 check(!empty($again['repeat']) && $again['group_uid'] === $r['group_uid'] && count($groupRows435((string)$r['group_uid'])) === 2
     && (int)$db->query("SELECT COUNT(*) FROM scheduled_sessions WHERE client_id=$ga AND start_at=" . $db->quote("$gDate 07:15:00"))->fetchColumn() === 1,
     'Q1: the same idem_key sent again answers the first booking and books nothing more');
@@ -283,7 +284,8 @@ check(isset($r['errors']['time1']) && str_contains($r['refused'][0] ?? '', 'less
 $ko = $key435();
 $mailBefore = (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action='portal_request.offer'")->fetchColumn();
 $r = $call('offer_times', ['id' => $req1, 'times' => [$t1, $t2], 'staff_id' => $u435, 'minutes' => 60, 'track_id' => $ocT, 'remote' => false, 'location' => 'V435 room', 'idem_key' => $ko]);
-$r2 = $call('offer_times', ['id' => $req1, 'times' => [$t1, $t2], 'staff_id' => $u435, 'minutes' => 60, 'track_id' => $ocT, 'idem_key' => $ko]);
+// 4.38.0: a retry is the identical request (a key reused for a different body is refused).
+$r2 = $call('offer_times', ['id' => $req1, 'times' => [$t1, $t2], 'staff_id' => $u435, 'minutes' => 60, 'track_id' => $ocT, 'remote' => false, 'location' => 'V435 room', 'idem_key' => $ko]);
 check($r['offered'] === 2 && str_starts_with($r['message'], '2 times offered to V435 Offer Client. They choose one in their portal.') && !empty($r2['repeat'])
     && (int)$db->query("SELECT COUNT(*) FROM portal_request_offers WHERE request_id=$req1 AND status='Offered'")->fetchColumn() === 2
     && $db->query("SELECT status FROM portal_requests WHERE id=$req1")->fetchColumn() === 'In Progress'

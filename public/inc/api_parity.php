@@ -38,8 +38,23 @@ if (!function_exists('api_idem_begin')) {
         return 'idem:' . substr(hash('sha256', $action . '|' . $uid . '|' . strtoupper($k)), 0, 40);
     }
 
-    /** The earlier reply to send again (with repeat true), or null to go ahead. */
-    function api_idem_begin(string $action, int $uid, ?string $key): ?array {
+    /** A fingerprint of the request (4.38.0): the body without its idem_key and the query without
+     *  the action, keys in order, so a key reused for a different request is told apart. */
+    function api_idem_body_hash(array $input, array $query = []): string {
+        // Values as text, so 7 and "7" (the same to every action) are one request.
+        $sort = function ($v) use (&$sort) {
+            if (!is_array($v)) return is_bool($v) ? ($v ? '1' : '0') : ($v === null ? '' : (string)$v);
+            if (!array_is_list($v)) ksort($v);
+            return array_map($sort, $v);
+        };
+        unset($input['idem_key'], $query['action']);
+        return substr(hash('sha256', (string)json_encode([$sort($input), $sort($query)])), 0, 16);
+    }
+
+    /** The earlier reply to send again (with repeat true), or null to go ahead. A key already used
+     *  for a different request ($bodyHash differs from the one kept) is refused with 409. Markers
+     *  kept before 4.38.0 carry no fingerprint and are answered as before. */
+    function api_idem_begin(string $action, int $uid, ?string $key, ?string $bodyHash = null): ?array {
         $m = api_idem_marker($action, $uid, $key);
         if ($m === null) return null;
         // A copy arriving while the first is still working (a slow upload or email) waits for it.
@@ -51,16 +66,25 @@ if (!function_exists('api_idem_begin')) {
         $q->execute([$m . ':%']);
         $e = $q->fetchColumn();
         if ($e === false) return null;
-        $raw = base64_decode(strtr(substr((string)$e, strlen($m) + 1), '-_', '+/'), true);
+        $kept = substr((string)$e, strlen($m) + 1);
+        // 4.38.0: "{fingerprint}:{reply}" (base64url never holds a colon).
+        if (preg_match('/^([0-9a-f]{16}):/', $kept, $fp)) {
+            if ($bodyHash !== null && !hash_equals($fp[1], $bodyHash)) {
+                out(['ok' => false, 'error' => 'This was already sent once with different details, and that earlier send may have been saved. Reload to check what was saved, then make your change again.', 'idem_conflict' => true], 409);
+            }
+            $kept = substr($kept, 17);
+        }
+        $raw = base64_decode(strtr($kept, '-_', '+/'), true);
         $reply = $raw === false ? null : json_decode($raw, true);
         if (!is_array($reply)) $reply = ['ok' => true];
         return ['ok' => true] + $reply + ['repeat' => true];
     }
 
     /** Keep a successful reply for 24 hours, so a copy sent again gets it instead of doing the action twice. */
-    function api_idem_end(string $action, int $uid, ?string $key, array $reply): void {
+    function api_idem_end(string $action, int $uid, ?string $key, array $reply, ?string $bodyHash = null): void {
         $m = api_idem_marker($action, $uid, $key);
         if ($m === null || ($reply['ok'] ?? null) !== true) return;
+        if ($bodyHash !== null) $m .= ':' . $bodyHash;
         $room = 190 - strlen($m) - 1;
         $enc = fn(array $r): string => rtrim(strtr(base64_encode((string)json_encode($r)), '+/', '-_'), '=');
         // Short values only, ids first, so the most useful part of the reply always fits.
@@ -87,7 +111,7 @@ if (!function_exists('api_idem_begin')) {
  * The guard itself (4.29.0): opened here, before any action runs. It used to sit in api.php
  * after this file's parity actions, so save_task, save_track and request_consent (parity
  * actions that are also in API_IDEM_ACTIONS) were done again on a retry. An action that
- * saves or edits is guarded only when it creates; contract_update only for its two adds.
+ * saves or edits is guarded only when it creates; contract_update only for its adds, deletes, budget and status.
  */
 if (in_array($action ?? '', API_IDEM_ACTIONS, true) && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $idemCreates = match ($action) {
@@ -95,22 +119,27 @@ if (in_array($action ?? '', API_IDEM_ACTIONS, true) && ($_SERVER['REQUEST_METHOD
         'save_track' => (int)($input['id'] ?? $_GET['id'] ?? 0) <= 0,
         'device_request_update' => ($input['op'] ?? '') === 'add_quote',
         'cohort_member' => ($input['op'] ?? '') !== 'remove',
-        'contract_update' => in_array($input['op'] ?? '', ['add_spend', 'add_deliverable'], true),
+        // 4.38.0: and its deletes, budget and close or reopen, so a retry answers the first reply.
+        'contract_update' => in_array($input['op'] ?? '', ['add_spend', 'add_deliverable', 'set_budget', 'set_active', 'delete_deliverable', 'delete_spend'], true),
         default => true,
     };
     $idemKey = is_string($input['idem_key'] ?? null) ? $input['idem_key'] : null;
     if ($idemCreates && $idemKey !== null) {
-        $idemPrev = api_idem_begin($action, $userId, $idemKey);
+        // 4.38.0: the request's fingerprint, so a key reused for a different request is refused.
+        $idemBody = api_idem_body_hash($input, $_GET);
+        $idemPrev = api_idem_begin($action, $userId, $idemKey, $idemBody);
         // 4.35.0: a repeat of a group booking, a group's attendance or offered times rebuilds its lists (inc/api_435.php).
         // 4.36.0: and a phone's sign-out or wipe, a privacy incident and hours added (inc/api_436.php).
         if ($idemPrev !== null && function_exists('api_435_repeat')) $idemPrev = api_435_repeat($action, $input, $userId, $idemPrev);
         if ($idemPrev !== null && function_exists('api_436_repeat')) $idemPrev = api_436_repeat($action, $input, $userId, $idemPrev);
         // 4.37.0: and an evaluation report emailed, an amendment request recorded and a letter saved (inc/api_437.php).
         if ($idemPrev !== null && function_exists('api_437_repeat')) $idemPrev = api_437_repeat($action, $input, $userId, $idemPrev);
+        // 4.38.0: and several invoices submitted, an authorization email read, started or dismissed (inc/api_438.php).
+        if ($idemPrev !== null && function_exists('api_438_repeat')) $idemPrev = api_438_repeat($action, $input, $userId, $idemPrev);
         if ($idemPrev !== null) out($idemPrev);
-        $GLOBALS['API_IDEM_OPEN'] = [$action, $userId, $idemKey];
+        $GLOBALS['API_IDEM_OPEN'] = [$action, $userId, $idemKey, $idemBody];
     }
-    unset($idemCreates, $idemKey, $idemPrev);
+    unset($idemCreates, $idemKey, $idemPrev, $idemBody);
 }
 
 if (!in_array($action ?? '', API_PARITY_ACTIONS, true)) return;
@@ -988,23 +1017,32 @@ case 'client_history': {
 /* ---------- Invoices, read only (invoices.php's list) ---------- */
 
 case 'invoices': {
+    // 4.38.0: invoices.php's own filters, row text and aging (inc/billing.php), so the apps list and
+    // say exactly what the page does. A 4.37.0 app sends only status (and page) and sees the same rows.
     $scoped = caseload_scoped();
     $scopeCond = $scoped ? ' AND c.assigned_to = ?' : '';
     $scopeArg = $scoped ? [$userId] : [];
-    $statusFilter = is_string($_GET['status'] ?? null) && in_array($_GET['status'], ['Draft', 'Submitted', 'Paid', 'Denied', 'Void'], true) ? $_GET['status'] : '';
+    $filters = invoice_list_filters($input + $_GET);
     $listFrom = " FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id
         WHERE 1=1" . $scopeCond;
-    $filter = $statusFilter !== '' ? ' AND i.status = ?' : '';
-    $params = array_merge($scopeArg, $statusFilter !== '' ? [$statusFilter] : []);
+    $params = $scopeArg;
+    // id: one invoice, whatever its status or age, other filters reset (invoices.php?id=).
+    $rawId = $input['id'] ?? $_GET['id'] ?? null;
+    $onlyId = is_int($rawId) ? max(0, $rawId) : (is_string($rawId) && ctype_digit($rawId) ? (int)$rawId : 0);
+    if ($onlyId > 0) { $filter = ' AND i.id = ?'; $params[] = $onlyId; $filters = invoice_list_filters([]); }
+    else $filter = invoice_filter_sql($filters, $params);
+    $statusFilter = $filters['status'];
     $perPage = 300;
     $cq = db()->prepare('SELECT COUNT(*)' . $listFrom . $filter);
     $cq->execute($params);
     $invTotal = (int)$cq->fetchColumn();
     $pages = max(1, (int)ceil($invTotal / $perPage));
-    $page = is_string($_GET['page'] ?? null) && ctype_digit($_GET['page']) ? min(max(1, (int)$_GET['page']), $pages) : 1;
+    $rawPage = $input['page'] ?? $_GET['page'] ?? null;
+    $rawPage = is_int($rawPage) ? (string)$rawPage : $rawPage;
+    $page = is_string($rawPage) && ctype_digit($rawPage) ? min(max(1, (int)$rawPage), $pages) : 1;
     $stmt = db()->prepare("SELECT i.*, t.title AS track_title, COALESCE(i.auth_number, t.auth_number) AS auth_number,
             COALESCE(i.funding_agency, t.funding_agency) AS funding_agency, c.name AS client_name, c.id AS client_id,
-            DATEDIFF(CURDATE(), i.submitted_at) AS days_outstanding" . $listFrom . $filter
+            DATEDIFF(CURDATE(), i.submitted_at) AS days_outstanding, DATEDIFF(CURDATE(), i.due_date) AS days_overdue" . $listFrom . $filter
         . ' ORDER BY i.created_at DESC, i.id DESC LIMIT ' . $perPage . ' OFFSET ' . (($page - 1) * $perPage));
     $stmt->execute($params);
     $items = [];
@@ -1012,28 +1050,29 @@ case 'invoices': {
         $total = round((float)$i['total_amount'], 2);
         // Payments and write-offs are running totals on the invoice (3.0.34, inc/billing.php).
         $paid = $i['paid_amount'] !== null ? round((float)$i['paid_amount'], 2) : null;
-        $balance = in_array($i['status'], ['Submitted', 'Paid'], true) ? invoice_balance($i) : ($i['status'] === 'Draft' ? $total : 0.0);
+        // The website's balance: 0 unless Submitted or Paid (invoice_balance()).
+        $balance = invoice_balance($i);
         $items[] = ['id' => (int)$i['id'], 'invoice_number' => (string)$i['invoice_number'], 'status' => (string)$i['status'],
             'client_id' => (int)$i['client_id'], 'client_name' => (string)$i['client_name'], 'track_title' => (string)$i['track_title'],
             'auth_number' => $i['auth_number'], 'funding_agency' => $i['funding_agency'],
             'hours' => (float)$i['hours'], 'total_amount' => $total, 'paid_amount' => $paid, 'balance' => $balance,
-            'short_paid' => in_array($i['status'], ['Submitted', 'Paid'], true) && $paid !== null && $balance > 0,
+            // Part-paid as the page says it: something was paid and something is still owed.
+            'short_paid' => in_array($i['status'], ['Submitted', 'Paid'], true) && (float)($i['paid_amount'] ?? 0) > 0 && $balance > 0,
             'written_off' => round((float)$i['written_off'], 2), 'due_date' => $i['due_date'], 'closed_reason' => $i['closed_reason'],
             'days_outstanding' => $i['status'] === 'Submitted' && $i['days_outstanding'] !== null ? (int)$i['days_outstanding'] : null,
+            'days_overdue' => $i['days_overdue'] !== null ? (int)$i['days_overdue'] : null,
+            'owed_text' => invoice_owed_text($i), 'date_lines' => invoice_date_lines($i),
             'created_at' => substr((string)$i['created_at'], 0, 10), 'submitted_at' => $i['submitted_at'], 'paid_at' => $i['paid_at'],
             'payment_ref' => $i['payment_ref'], 'can_open_client' => can('clients')];
     }
-    // The page's outstanding-by-agency summary and unbilled figure, same scope.
-    $ag = db()->prepare("SELECT COALESCE(i.funding_agency, t.funding_agency) AS funding_agency, COUNT(*) n,
-            SUM(i.total_amount - COALESCE(i.paid_amount, 0) - i.written_off) amt, MAX(DATEDIFF(CURDATE(), i.submitted_at)) oldest
-        FROM invoices i JOIN training_tracks t ON t.id = i.track_id JOIN clients c ON c.id = t.client_id
-        WHERE " . INVOICE_OPEN_SQL . $scopeCond . "
-        GROUP BY COALESCE(i.funding_agency, t.funding_agency) ORDER BY amt DESC");
-    $ag->execute($scopeArg);
+    // The page's outstanding-by-agency summary (not filtered by the list filters) and unbilled figure, same scope.
     $aging = array_map(fn($a) => ['funding_agency' => (string)($a['funding_agency'] ?? ''), 'count' => (int)$a['n'],
-        'amount' => round((float)$a['amt'], 2), 'oldest_days' => $a['oldest'] !== null ? (int)$a['oldest'] : null], $ag->fetchAll());
+        'amount' => round((float)$a['amt'], 2), 'oldest_days' => $a['oldest'] !== null ? (int)$a['oldest'] : null,
+        'overdue' => round((float)$a['overdue'], 2), 'part_paid' => (int)$a['part_paid']], invoice_aging($scoped ? $userId : null));
     out(['ok' => true, 'invoices' => $items, 'status' => $statusFilter, 'total' => $invTotal, 'page' => $page, 'pages' => $pages,
-        'outstanding' => $aging, 'unbilled' => round((float)unbilled_totals($scoped ? $userId : null)['total'], 2)]);
+        'outstanding' => $aging, 'unbilled' => round((float)unbilled_totals($scoped ? $userId : null)['total'], 2),
+        'filters' => $filters, 'agencies' => invoice_agency_choices($scoped ? $userId : null), 'heading' => invoice_list_heading($filters, $onlyId > 0),
+        'requested' => $onlyId > 0, 'found' => $onlyId > 0 ? $items !== [] : null]);
 }
 
 /* ---------- Referral waitlist (workflows.php?view=waitlist, inc/workflows.php) ---------- */

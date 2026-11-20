@@ -12,9 +12,12 @@ struct CounselorRow: Decodable, Identifiable {
     let portalExpired: Bool
     let portalExpiresAt: String?
     let lastUsedAt: String?
+    /// 4.38.0: the website's status sentences ("Expires …" / "Does not expire", "Last used …" /
+    /// "Never opened", "Expired …; the counselor needs a new link"); nil from an older server.
+    let statusLines: [String]?
     /// The counselor's name, or their email when no name is on file.
     var displayName: String { name.isEmpty ? email : name }
-    private enum CodingKeys: String, CodingKey { case email, name, agency, clients, portalActive, portalExpired, portalExpiresAt, lastUsedAt }
+    private enum CodingKeys: String, CodingKey { case email, name, agency, clients, portalActive, portalExpired, portalExpiresAt, lastUsedAt, statusLines }
     // Tolerant decode: a counselor email with no name on any client (the column is nullable)
     // must not blank the whole Counselors screen. Only the email (the row's identity) is required.
     init(from d: Decoder) throws {
@@ -27,10 +30,28 @@ struct CounselorRow: Decodable, Identifiable {
         portalExpired = (try? c.decode(Bool.self, forKey: .portalExpired)) ?? false
         portalExpiresAt = try? c.decodeIfPresent(String.self, forKey: .portalExpiresAt)
         lastUsedAt = try? c.decodeIfPresent(String.self, forKey: .lastUsedAt)
+        statusLines = try? c.decodeIfPresent([String].self, forKey: .statusLines)
     }
 }
 
 struct CounselorsResponse: Decodable { let counselors: [CounselorRow] }
+
+/// The link-status lines under a counselor: the server's (4.38.0), or for an older server the
+/// same built from its dates.
+func counselorStatusLines(_ c: CounselorRow) -> [String] {
+    if let lines = c.statusLines { return lines }
+    var out: [String] = []
+    if c.portalActive, let expires = c.portalExpiresAt {
+        out.append("Link expires \(formatDate(expires))")
+    } else if c.portalExpired {
+        out.append("Link expired\(c.portalExpiresAt.map { " \(formatDate($0))" } ?? ""); the counselor needs a new link")
+    }
+    if let used = c.lastUsedAt { out.append("Last opened \(formatDateTime(used))") }
+    return out
+}
+
+/// send_vrc_portal's reply (4.38.0: the website's sentence and the new link's expiry).
+struct PortalSendReply: Decodable { let message: String?; let expiresAt: String? }
 
 struct CounselorsView: View {
     @EnvironmentObject var api: API
@@ -92,15 +113,25 @@ struct CounselorsView: View {
                         Text("\(counselor.agency ?? "—") · \(counselor.clients) client\(counselor.clients == 1 ? "" : "s")")
                             .font(.callout)
                         Text(counselor.email).font(.caption)
-                        if counselor.portalActive, let expires = counselor.portalExpiresAt {
-                            Text("Link expires \(formatDate(expires))").font(.caption)
-                        } else if counselor.portalExpired {
-                            Text("Link expired\(counselor.portalExpiresAt.map { " \(formatDate($0))" } ?? ""); the counselor needs a new link")
-                                .font(.caption)
+                        ForEach(Array(counselorStatusLines(counselor).enumerated()), id: \.offset) { _, line in
+                            Text(line).font(.caption)
                         }
-                        if let used = counselor.lastUsedAt {
-                            Text("Last opened \(formatDateTime(used))").font(.caption)
+                    }
+                    .padding(.vertical, 4)
+                    // One VoiceOver stop per counselor: the details read in order. The link
+                    // buttons are on its Actions rotor and also visible after it, each its own
+                    // stop (4.38.0: nothing only on the rotor).
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(counselorSpoken(counselor))
+                    .accessibilityActions {
+                        Button(counselor.portalActive ? "Resend / reset link" : (counselor.portalExpired ? "Send a new link" : "Send portal link")) {
+                            pendingSend = counselor
                         }
+                        if counselor.portalActive && !revoking.contains(counselor.email) {
+                            Button("Turn off link") { pendingRevoke = counselor }
+                        }
+                    }
+                    VStack(alignment: .leading) {
                         let action = counselor.portalActive ? "Resend / reset link" : (counselor.portalExpired ? "Send a new link" : "Send portal link")
                         // Large controls (at least 44 points tall), spaced apart so a slip does not
                         // land on the neighbouring button.
@@ -127,20 +158,6 @@ struct CounselorsView: View {
                                 .accessibilityLabel("Turn off link for \(counselor.displayName)")
                             }
                         }
-                        .padding(.top, 4)
-                    }
-                    .padding(.vertical, 4)
-                    // One VoiceOver stop per counselor: the details read in order, and the
-                    // link buttons in the Actions rotor (the same code, so each still asks first).
-                    .accessibilityElement(children: VoiceOverRows.children)
-                    .accessibilityLabel(counselorSpoken(counselor))
-                    .accessibilityActions {
-                        Button(counselor.portalActive ? "Resend / reset link" : (counselor.portalExpired ? "Send a new link" : "Send portal link")) {
-                            pendingSend = counselor
-                        }
-                        if counselor.portalActive && !revoking.contains(counselor.email) {
-                            Button("Turn off link") { pendingRevoke = counselor }
-                        }
                     }
                 }
             }
@@ -161,7 +178,7 @@ struct CounselorsView: View {
         .refreshable { confirmation = nil; await load() }
         .task { await load() }
         .confirmationDialog(
-            "Email a portal link to \(pendingSend?.displayName ?? "")? Any previous link stops working.",
+            "Email a portal link to \(pendingSend?.displayName ?? "")?",
             isPresented: Binding(get: { pendingSend != nil }, set: { if !$0 { pendingSend = nil } }),
             titleVisibility: .visible
         ) {
@@ -169,9 +186,11 @@ struct CounselorsView: View {
                 if let counselor = pendingSend { Task { await send(counselor) } }
             }
             Button("Cancel", role: .cancel) { pendingSend = nil }
+        } message: {
+            Text("Any previous link stops working.")
         }
         .confirmationDialog(
-            "Turn off the portal link for \(pendingRevoke?.displayName ?? "")? It stops working at once, and they need a new link to get back in.",
+            "Turn off the portal link for \(pendingRevoke?.displayName ?? "")?",
             isPresented: Binding(get: { pendingRevoke != nil }, set: { if !$0 { pendingRevoke = nil } }),
             titleVisibility: .visible
         ) {
@@ -180,6 +199,8 @@ struct CounselorsView: View {
                 pendingRevoke = nil
             }
             Button("Keep link", role: .cancel) { pendingRevoke = nil }
+        } message: {
+            Text("It stops working at once, and they need a new link to get back in.")
         }
     }
 
@@ -189,12 +210,7 @@ struct CounselorsView: View {
                      counselor.portalActive ? "Portal active" : (counselor.portalExpired ? "Portal expired" : "Not invited"),
                      "\(counselor.agency ?? "No agency"), \(counselor.clients) client\(counselor.clients == 1 ? "" : "s")"]
         if counselor.displayName != counselor.email { parts.append(counselor.email) }
-        if counselor.portalActive, let expires = counselor.portalExpiresAt {
-            parts.append("Link expires \(formatDate(expires))")
-        } else if counselor.portalExpired {
-            parts.append("Link expired\(counselor.portalExpiresAt.map { " \(formatDate($0))" } ?? ""); the counselor needs a new link")
-        }
-        if let used = counselor.lastUsedAt { parts.append("Last opened \(formatDateTime(used))") }
+        parts += counselorStatusLines(counselor)
         return parts.joined(separator: ", ")
     }
 
@@ -215,9 +231,10 @@ struct CounselorsView: View {
             error = nil; confirmation = nil
             var body: [String: Any] = ["email": counselor.email, "name": counselor.name]
             body["idem_key"] = idem.key(for: body)
-            let _: OKResponse = try await api.call("send_vrc_portal", body: body)
+            let r: PortalSendReply = try await api.call("send_vrc_portal", body: body)
             idem.answered()
-            confirmation = "Portal link emailed to \(counselor.displayName)."
+            // 4.38.0: the website's sentence ("Portal link emailed to …. Any previous link no longer works.").
+            confirmation = r.message ?? "Portal link emailed to \(counselor.displayName). Any previous link no longer works."
             announce(confirmation!)
             await load()
         } catch {
@@ -233,12 +250,12 @@ struct CounselorsView: View {
         defer { revoking.remove(counselor.email) }
         do {
             error = nil; confirmation = nil
-            let _: OKResponse = try await api.call("revoke_vrc_portal", body: ["email": counselor.email])
+            let r: MessageReply = try await api.call("revoke_vrc_portal", body: ["email": counselor.email])
             // Reload first (it removes the Turn off link button VoiceOver was on), then show the
             // confirmation and put VoiceOver on it once the list has settled; an announcement
             // made before that focus move would be cut off by it.
             await load()
-            confirmation = "Portal link turned off for \(counselor.displayName). Send a new link when they need access again."
+            confirmation = r.message ?? "Portal link turned off for \(counselor.displayName). Send a new link when they need access again."
             revealConfirmation += 1
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 500_000_000)

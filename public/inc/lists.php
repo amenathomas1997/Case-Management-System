@@ -7,6 +7,11 @@ declare(strict_types=1);
 // The built-in lists that once lived in their own pages.
 const INCIDENT_TYPES = ['Injury', 'Near miss', 'Equipment failure', 'Behavioral', 'Property damage', 'Medical', 'Safety concern', 'Other'];
 const BOOKING_TYPES = ['Interpreter', 'CART captioning', 'Transportation', 'Note-taker', 'Other'];
+// What each stored booking service type is called on screen (CART is spelled out; 4.38.0: moved from
+// access_bookings.php, so the apps say it too).
+const BOOKING_TYPE_LABELS = ['CART captioning' => 'CART (real-time captioning)'];
+/** A booking's service type as it is shown ("CART (real-time captioning)"). */
+function booking_type_label(string $type): string { return BOOKING_TYPE_LABELS[$type] ?? $type; }
 const COMPETENCY_LEVELS = [0 => 'Not started', 1 => 'Introduced', 2 => 'Practicing', 3 => 'Proficient', 4 => 'Mastered'];
 // Equipment lists (4.5.0; once in equipment.php and inc/access.php).
 const EQUIP_CATEGORIES = ['Braille Display','Screen Reader License','Magnifier','Tablet/Phone','Computer','Keyboard/Input','Audio','Other'];

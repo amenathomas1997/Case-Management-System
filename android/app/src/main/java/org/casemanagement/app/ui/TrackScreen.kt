@@ -618,7 +618,7 @@ private fun ExpenseDialog(api: Api, trackId: Int, onDone: (String) -> Unit, onCa
 }
 
 /** The track fields the edit form sends, and the form's own defaults for each. */
-private val TRACK_FORM_KEYS = listOf("title", "service_type", "status", "report_cadence", "auth_number", "funding_agency", "authorized_hours",
+internal val TRACK_FORM_KEYS = listOf("title", "service_type", "status", "report_cadence", "auth_number", "funding_agency", "authorized_hours",
     "hourly_rate", "mileage_rate", "start_date", "expiration_date", "billing_mode", "authorized_amount", "bundle_id", "rsa_category")
 
 /**
@@ -654,12 +654,19 @@ private fun trackOpened(f: JSONObject): JSONObject {
 
 /** The track's details (title, status, authorization, rates, dates, report schedule), as on the website. */
 @Composable
-fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int, amendRequest: Int = 0, reasonPrefill: String = "") {
+fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int, amendRequest: Int = 0, reasonPrefill: String = "", authId: Int = 0) {
+    // 4.38.0 (T6): a new track started from an authorization email: the server's prefill and heading,
+    // taken once from the holder and then kept across rotation and process death with the form.
+    var authJson by rememberSaveable(authId) { mutableStateOf(if (authId > 0 && trackId == 0) AuthPrefill.take(authId) ?: "" else "") }
+    val auth = remember(authJson) { try { if (authJson.isEmpty()) null else JSONObject(authJson) } catch (e: Exception) { null } }
     val state = rememberLoaded(trackId) {
         api.call("save_track", if (trackId > 0) mapOf("id" to trackId.toString()) else mapOf("client_id" to clientId.toString()))
     }
     Show(state, "the track form") { f ->
-        val values = rememberSaveable(trackId) { mutableStateOf(trackOpened(f).let { o -> TRACK_FORM_KEYS.map { it to o.optString(it) } }) }
+        val values = rememberSaveable(trackId) {
+            val filled = prefillToTrackForm(auth?.optJSONObject("prefill"))
+            mutableStateOf(trackOpened(f).let { o -> TRACK_FORM_KEYS.map { it to (filled[it] ?: o.optString(it)) } })
+        }
         val map = values.value.toMap()
         fun v(k: String) = map[k] ?: ""
         fun set(k: String, x: String) { values.value = (map + (k to x)).toList() }
@@ -692,7 +699,7 @@ fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: In
         // A reload that failed leaves Reload usable again.
         LaunchedEffect(state.loading, state.error) { if (reloading && !state.loading && state.error != null) reloading = false }
         Page {
-            Heading(if (trackId > 0) "Edit the track" else "New track for " + f.optString("client_name"), large = true)
+            Heading(if (trackId > 0) "Edit the track" else auth?.str("heading") ?: ("New track for " + f.optString("client_name")), large = true)
             NoticeText(notice)
             val modes = f.optJSONArray("billing_modes").objects().map { it.optString("value") to it.optString("label") }
             val mode = v("billing_mode").ifEmpty { "vr" }
@@ -746,10 +753,15 @@ fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: In
                         base.str("updated_at")?.let { b.put("loaded_at", it) }
                         b.put("id", trackId).put("amendment_reason", reason.trim())
                         if (amendRequest > 0) b.put("amend_request", amendRequest)
-                    } else b.put("client_id", clientId)
+                    } else {
+                        b.put("client_id", clientId)
+                        // 4.38.0 (T6): the email it came from, marked "Track created" by the server.
+                        if (auth != null && authId > 0) b.put("incoming_auth", authId)
+                    }
                     try {
                         val saved = if (trackId > 0) api.call("save_track", body = b) else api.callOnce("save_track", b, newKey, { newKey = it }, "the new track")
                         Flash.pending = saved.optString("message").ifEmpty { "Track saved." }
+                        if (auth != null) authJson = ""
                         nav.popBackStack()
                     } catch (e: ApiException) {
                         // Someone else saved it since it was opened (4.29.0): the message names what changed; Reload is offered.

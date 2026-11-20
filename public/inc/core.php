@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.37.0';
+const APP_VERSION = '4.38.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1822,6 +1822,14 @@ require_once __DIR__ . '/kb_search.php';
 require_once __DIR__ . '/programs.php';
 require_once __DIR__ . '/remediate.php';
 require_once __DIR__ . '/api_437.php'; // the apps' 4.37.0 actions (services, equipment and reports)
+// 4.38.0: helpers moved from their pages so the apps share them (the invoice document, the counselor
+// portal link, contracts, accommodation bookings, utilization), then the apps' 4.38.0 actions.
+require_once __DIR__ . '/invoice_document.php';
+require_once __DIR__ . '/counselor_portal.php';
+require_once __DIR__ . '/contracts.php';
+require_once __DIR__ . '/bookings.php';
+require_once __DIR__ . '/utilization.php';
+require_once __DIR__ . '/api_438.php'; // the apps' 4.38.0 actions (billing and administration)
 // Funding agencies in other states, client time zones (4.1.0).
 require_once __DIR__ . '/agencies.php';
 // Pricing rules set on screen (4.2.0).

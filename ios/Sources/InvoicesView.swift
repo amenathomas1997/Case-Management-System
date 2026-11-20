@@ -13,7 +13,7 @@ struct InvoiceItem: Decodable, Identifiable {
     let hours: Double
     let totalAmount: Double
     let paidAmount: Double?
-    /// What is still owed: the total until it is paid, then any short-paid remainder.
+    /// What is still owed (4.38.0: the website's invoice_balance(), 0 for a draft).
     let balance: Double
     let shortPaid: Bool
     let daysOutstanding: Int?
@@ -26,10 +26,15 @@ struct InvoiceItem: Decodable, Identifiable {
     let writtenOff: Double
     let dueDate: String?
     let closedReason: String?
+    /// 4.38.0 servers: the website row's sentence ("$1,149.99 owed (part-paid), 3 days past
+    /// due"), its date lines in order, and the days past the due date.
+    let owedText: String?
+    let dateLines: [String]?
+    let daysOverdue: Int?
     private enum CodingKeys: String, CodingKey {
         case id, invoiceNumber, status, clientId, clientName, trackTitle, authNumber, fundingAgency, hours, totalAmount
         case paidAmount, balance, shortPaid, daysOutstanding, createdAt, submittedAt, paidAt, canOpenClient
-        case writtenOff, dueDate, closedReason
+        case writtenOff, dueDate, closedReason, owedText, dateLines, daysOverdue
     }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -54,10 +59,40 @@ struct InvoiceItem: Decodable, Identifiable {
         writtenOff = (try? c.decode(Double.self, forKey: .writtenOff)) ?? 0
         dueDate = try? c.decodeIfPresent(String.self, forKey: .dueDate)
         closedReason = try? c.decodeIfPresent(String.self, forKey: .closedReason)
+        owedText = try? c.decodeIfPresent(String.self, forKey: .owedText)
+        dateLines = try? c.decodeIfPresent([String].self, forKey: .dateLines)
+        daysOverdue = try? c.decodeIfPresent(Int.self, forKey: .daysOverdue)
     }
 }
 
-struct InvoiceAgingRow: Decodable { let fundingAgency: String; let count: Int; let amount: Double; let oldestDays: Int? }
+/// What one funding agency still owes (the website's Outstanding table). `overdue` and
+/// `partPaid` come from 4.38.0 servers.
+struct InvoiceAgingRow: Decodable {
+    let fundingAgency: String
+    let count: Int
+    let amount: Double
+    let oldestDays: Int?
+    let overdue: Double?
+    let partPaid: Int?
+    private enum CodingKeys: String, CodingKey { case fundingAgency, count, amount, oldestDays, overdue, partPaid }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        fundingAgency = (try? c.decode(String.self, forKey: .fundingAgency)) ?? ""
+        count = (try? c.decode(Int.self, forKey: .count)) ?? 0
+        amount = (try? c.decode(Double.self, forKey: .amount)) ?? 0
+        oldestDays = try? c.decodeIfPresent(Int.self, forKey: .oldestDays)
+        overdue = try? c.decodeIfPresent(Double.self, forKey: .overdue)
+        partPaid = try? c.decodeIfPresent(Int.self, forKey: .partPaid)
+    }
+}
+
+/// The filters the server used (4.38.0), as it read them.
+struct InvoiceFilters: Decodable, Equatable {
+    var status: String?
+    var agency: String?
+    var month: String?
+    var q: String?
+}
 
 struct InvoicesResponse: Decodable {
     let invoices: [InvoiceItem]
@@ -66,91 +101,216 @@ struct InvoicesResponse: Decodable {
     let pages: Int
     let outstanding: [InvoiceAgingRow]
     let unbilled: Double
-}
-
-extension InvoiceItem {
-    var statusText: String {
-        if status == "Denied" || status == "Void" { return status + ((closedReason ?? "").isEmpty ? "" : ": \(closedReason!)") }
-        if shortPaid { return "\(status == "Paid" ? "Paid" : "Part-paid"): \(String(format: "$%.2f", balance)) still owed" }
-        if status == "Submitted", let days = daysOutstanding { return "Submitted, \(days) day\(days == 1 ? "" : "s") outstanding" }
-        return status
-    }
-    var datesText: String {
-        var parts = ["Created \(formatDate(createdAt))"]
-        if let submittedAt { parts.append("submitted \(formatDate(submittedAt))") }
-        if let dueDate, status == "Submitted" { parts.append("due \(formatDate(dueDate))") }
-        if let paidAt { parts.append("last payment \(formatDate(paidAt))") }
-        if writtenOff > 0 { parts.append(String(format: "$%.2f written off", writtenOff)) }
-        return parts.joined(separator: ", ")
-    }
-    var spoken: String {
-        var parts = ["Invoice \(invoiceNumber)", clientName, String(format: "$%.2f", totalAmount), statusText]
-        if balance > 0 && status != "Paid" { parts.append(String(format: "balance $%.2f", balance)) }
-        parts.append("\(trackTitle), authorization \(authNumber ?? "none")")
-        if let fundingAgency, !fundingAgency.isEmpty { parts.append(fundingAgency) }
-        parts.append(hoursSpoken(hours))
-        parts.append(datesText)
-        return parts.joined(separator: ". ")
+    /// 4.38.0 servers: the filters as read, the agencies on the list, the website's heading,
+    /// and whether one invoice was asked for (and found).
+    let filters: InvoiceFilters?
+    let agencies: [String]?
+    let heading: String?
+    let requested: Bool?
+    let found: Bool?
+    private enum CodingKeys: String, CodingKey { case invoices, total, page, pages, outstanding, unbilled, filters, agencies, heading, requested, found }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        invoices = LenientList.decode(InvoiceItem.self, from: c, forKey: .invoices)
+        total = (try? c.decode(Int.self, forKey: .total)) ?? 0
+        page = (try? c.decode(Int.self, forKey: .page)) ?? 1
+        pages = (try? c.decode(Int.self, forKey: .pages)) ?? 1
+        outstanding = LenientList.decode(InvoiceAgingRow.self, from: c, forKey: .outstanding)
+        unbilled = (try? c.decode(Double.self, forKey: .unbilled)) ?? 0
+        filters = try? c.decodeIfPresent(InvoiceFilters.self, forKey: .filters)
+        agencies = try? c.decodeIfPresent([String].self, forKey: .agencies)
+        heading = try? c.decodeIfPresent(String.self, forKey: .heading)
+        requested = try? c.decodeIfPresent(Bool.self, forKey: .requested)
+        found = try? c.decodeIfPresent(Bool.self, forKey: .found)
     }
 }
 
-/// The invoice list: status, amount, balance and dates, filtered by status, with what each
-/// funding agency still owes. A draft can be marked submitted today (4.0.0); other billing
-/// actions stay on the website.
+// MARK: - 4.38.0 invoice text (plan-4380 T1-T5): the server's sentences, money only formatted
+
+/// The row's status line: the website's owed sentence when the server sends one; otherwise the
+/// status, with the reason a Denied or Void invoice was closed (an older server: part-paid too).
+func invoiceStatusLine(_ inv: InvoiceItem) -> String {
+    if let owed = inv.owedText, !owed.isEmpty { return owed }
+    if inv.status == "Denied" || inv.status == "Void" {
+        return inv.status + ((inv.closedReason ?? "").isEmpty ? "" : ": \(inv.closedReason ?? "")")
+    }
+    if inv.dateLines == nil, inv.shortPaid { return "\(inv.status == "Paid" ? "Paid" : "Part-paid"): \(money(inv.balance)) still owed" }
+    return inv.status
+}
+
+/// The row's dates: the website's date lines joined ("Created Nov 3, 2026, Submitted …"); for an
+/// older server, the same built from the row's dates.
+func invoiceDatesLine(_ inv: InvoiceItem) -> String {
+    if let lines = inv.dateLines { return lines.joined(separator: ", ") }
+    var parts = ["Created \(formatDate(inv.createdAt))"]
+    if let s = inv.submittedAt { parts.append("Submitted \(formatDate(s))") }
+    if let due = inv.dueDate, inv.status == "Submitted" || inv.status == "Paid" { parts.append("Due \(formatDate(due))") }
+    if let p = inv.paidAt { parts.append("Last payment \(formatDate(p))") }
+    if inv.writtenOff > 0 { parts.append("\(money(inv.writtenOff)) written off") }
+    return parts.joined(separator: ", ")
+}
+
+/// The row's amount line, as the website's Amount cell: "$1,250.00, 12.5 hours".
+func invoiceAmountLine(_ inv: InvoiceItem) -> String {
+    "\(money(inv.totalAmount)), \(utilHours(inv.hours)) hour\(inv.hours == 1 ? "" : "s")"
+}
+
+/// One invoice read as one VoiceOver stop.
+func invoiceSpoken(_ inv: InvoiceItem) -> String {
+    var parts = ["Invoice \(inv.invoiceNumber)", inv.clientName, "\(inv.trackTitle), authorization \(inv.authNumber ?? "none")"]
+    parts.append(invoiceAmountLine(inv))
+    parts.append(invoiceStatusLine(inv))
+    if let agency = inv.fundingAgency, !agency.isEmpty { parts.append(agency) }
+    parts.append(invoiceDatesLine(inv))
+    return parts.joined(separator: ". ")
+}
+
+/// One agency of the Outstanding table, as one stop: "Synthetic VR: $1,250.00 owed, $0.00 past
+/// due. 2 invoices (1 part-paid), oldest 40 days." The past-due amount is always said, as the
+/// page always shows its column (an older server sends none, so it is left out there).
+func invoiceAgingLine(_ a: InvoiceAgingRow) -> String {
+    let agency = a.fundingAgency.isEmpty ? "No agency" : a.fundingAgency
+    var text = "\(agency): \(money(a.amount)) owed"
+    if let overdue = a.overdue { text += ", \(money(overdue)) past due" }
+    text += ". \(a.count) invoice\(a.count == 1 ? "" : "s")"
+    if let k = a.partPaid, k > 0 { text += " (\(k) part-paid)" }
+    if let d = a.oldestDays { text += ", oldest \(d) day\(d == 1 ? "" : "s")" }
+    return text + "."
+}
+
+/// The list's query: the page, and only the filters that are set; one invoice asked for by id
+/// leaves the other filters out, as the website's ?id= does.
+func invoicesQuery(status: String, agency: String, month: String, q: String, page: Int, invoiceId: Int?) -> [String: String] {
+    if let invoiceId { return ["id": String(invoiceId)] }
+    var query = ["page": String(page)]
+    let pairs = [("status", status), ("agency", agency), ("month", month), ("q", q)]
+    for (key, value) in pairs {
+        let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !v.isEmpty { query[key] = v }
+    }
+    return query
+}
+
+/// The Agency picker's choices after "All agencies": the agencies on the list, and a kept agency
+/// that is not among them as "{agency} (no invoices)" (the website's wording). Pairs of tag, label.
+func invoiceAgencyChoices(_ agencies: [String], kept: String) -> [(tag: String, label: String)] {
+    var out = agencies.map { (tag: $0, label: $0) }
+    if !kept.isEmpty, !agencies.contains(kept) { out.append((tag: kept, label: "\(kept) (no invoices)")) }
+    return out
+}
+
+/// The drafts the several-at-once sheet offers: oldest first, at most 200 (the website's form).
+func invoiceFirstDrafts(_ rows: [InvoiceItem]) -> [InvoiceItem] {
+    Array(rows.filter { $0.status == "Draft" }
+        .sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt }
+        .prefix(200))
+}
+
+/// The question before several drafts are marked submitted (names the count and the date).
+func invoiceBulkConfirmTitle(_ n: Int, date: String) -> String {
+    "Mark \(n) invoice\(n == 1 ? "" : "s") submitted as sent on \(date)?"
+}
+
+/// submit_invoices' body (the idem_key is added by the sheet).
+func invoiceBulkBody(ids: [Int], submittedOn: String) -> [String: Any] {
+    ["invoice_ids": ids, "submitted_on": submittedOn]
+}
+
+/// The field of the sheet a submit_invoices refusal is about.
+let invoiceBulkFields = ["invoice_ids": "Draft invoices", "submitted_on": "Date they were sent"]
+
+/// The invoice list: status, amount, balance and dates, with the website's filters and what each
+/// funding agency still owes. A draft can be marked submitted (one, or several at once); the
+/// invoice opens as its accessible document; other billing actions stay on the website.
 struct InvoicesView: View {
     @EnvironmentObject var api: API
+    /// One invoice asked for (a search result, 4.38.0), as the website's invoices.php?id=.
+    @State private var invoiceId: Int?
     @State private var data: InvoicesResponse?
     @State private var error: String?
+    // The filters being chosen, and the ones the shown list was loaded with.
     @State private var status = ""
+    @State private var agency = ""
+    @State private var month = ""
+    @State private var q = ""
+    @State private var applied = InvoiceFilters(status: "", agency: "", month: "", q: "")
     @State private var page = 1
+    @State private var loadSerial = 0
     /// The draft waiting for a yes before it is marked submitted (4.0.0).
     @State private var pendingSubmit: InvoiceItem?
     /// The submit sheet's result, said (or shown, for a refusal) once the sheet has gone.
     @State private var submitResult: String?
     @State private var submitRefused: String?
+    /// 4.38.0: several drafts at once.
+    @State private var bulkDrafts: BulkDrafts?
+    /// The last submit's result, shown on the screen as well as said (4.38.0: the bulk sentence
+    /// names the invoices not changed).
+    @State private var notice: String?
+    /// The list is being reloaded after a bulk submit: the bulk button waits for it.
+    @State private var reloadingAfterBulk = false
+
+    init(invoiceId: Int? = nil) {
+        _invoiceId = State(initialValue: invoiceId)
+    }
+
+    /// Whether the server is 4.38.0 or later (it sends the website's heading): the filters
+    /// beyond Show, the invoice document and several-at-once are offered only then.
+    private var newServer: Bool { data?.heading != nil }
+
+    private var anyFilter: Bool {
+        [applied.status, applied.agency, applied.month, applied.q].contains { !($0 ?? "").isEmpty }
+    }
 
     var body: some View {
         List {
             if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
-            Section {
-                Picker("Show", selection: $status) {
-                    Text("All invoices").tag("")
-                    Text("Draft").tag("Draft")
-                    Text("Submitted").tag("Submitted")
-                    Text("Paid").tag("Paid")
-                    Text("Denied").tag("Denied")
-                    Text("Void").tag("Void")
+            if let notice { Text(notice).font(.callout.weight(.semibold)) }
+            if invoiceId != nil {
+                Section {
+                    if let d = data, d.requested == true {
+                        Text(d.found == true ? "Showing one invoice." : "That invoice was not found, or it is not on your caseload.")
+                    }
+                    Button("Show all invoices") { invoiceId = nil; page = 1; Task { await load(announceView: true) } }
+                        .frame(minHeight: 44)
                 }
-                Text("A draft can be marked submitted here (its Mark submitted button, a swipe, or the Actions rotor). Recording payments and write-offs, and closing denied invoices, are on the website.")
-                    .font(.callout).foregroundStyle(Color.secondaryText)
+            } else {
+                filterSection
             }
             if let d = data {
-                Section {
-                    LabeledContent("Unbilled work", value: String(format: "$%.2f", d.unbilled))
-                    ForEach(Array(d.outstanding.enumerated()), id: \.offset) { _, a in
-                        LabeledContent(a.fundingAgency.isEmpty ? "No agency" : a.fundingAgency,
-                                       value: String(format: "$%.2f, %d invoice%@%@", a.amount, a.count, a.count == 1 ? "" : "s",
-                                                     a.oldestDays.map { ", oldest \($0) days" } ?? ""))
+                if invoiceId == nil {
+                    Section {
+                        LabeledContent("Unbilled work", value: money(d.unbilled))
+                        ForEach(Array(d.outstanding.enumerated()), id: \.offset) { _, a in
+                            Text(invoiceAgingLine(a))
+                        }
+                        if d.outstanding.isEmpty { Text("Nothing is outstanding.").foregroundStyle(Color.secondaryText) }
+                    } header: {
+                        Text("Outstanding (submitted and not yet settled)").font(.headline).foregroundStyle(.primary).textCase(nil)
+                            .accessibilityAddTraits(.isHeader)
                     }
-                    if d.outstanding.isEmpty { Text("Nothing is outstanding.").foregroundStyle(Color.secondaryText) }
-                } header: {
-                    Text("Outstanding by funding agency").font(.headline).foregroundStyle(.primary).textCase(nil)
-                        .accessibilityAddTraits(.isHeader)
+                }
+                if newServer, invoiceId == nil, invoiceFirstDrafts(d.invoices).count > 1 {
+                    Section {
+                        Button {
+                            bulkDrafts = BulkDrafts(rows: invoiceFirstDrafts(d.invoices))
+                        } label: {
+                            Label("Mark several drafts submitted", systemImage: "paperplane").frame(minHeight: 44)
+                        }
+                        .disabled(reloadingAfterBulk)
+                    }
                 }
                 Section {
+                    if d.pages > 1 { Text("Invoices (page \(d.page) of \(d.pages), \(d.total) in all)").font(.callout) }
                     if d.invoices.isEmpty { Text("No invoices.").foregroundStyle(Color.secondaryText) }
                     ForEach(d.invoices) { inv in invoiceRow(inv) }
                     if d.pages > 1 {
-                        HStack {
-                            Button("Newer") { page = max(1, page - 1); Task { await load() } }.disabled(page <= 1)
-                            Spacer()
-                            Button("Older") { page = min(d.pages, page + 1); Task { await load() } }.disabled(page >= d.pages)
-                        }
-                        .buttonStyle(.borderless)
-                        .frame(minHeight: 44)
+                        Button("Newer invoices") { page = max(1, page - 1); Task { await load() } }
+                            .disabled(page <= 1).frame(minHeight: 44)
+                        Button("Older invoices") { page = min(d.pages, page + 1); Task { await load() } }
+                            .disabled(page >= d.pages).frame(minHeight: 44)
                     }
                 } header: {
-                    Text(d.pages > 1 ? "Invoices (page \(d.page) of \(d.pages), \(d.total) in all)" : "Invoices (\(d.total))")
+                    Text(d.heading ?? "Invoices (\(d.total))")
                         .font(.headline).foregroundStyle(.primary).textCase(nil)
                         .accessibilityAddTraits(.isHeader)
                 }
@@ -159,7 +319,7 @@ struct InvoicesView: View {
             }
         }
         .navigationTitle("Invoices")
-        // The Show picker's choice is not cut short at the accessibility text sizes.
+        // The pickers' choices are not cut short at the accessibility text sizes.
         .modifier(ReadablePickers(inNavigationStack: true))
         // 4.34.0: asks for the date it was sent, as the website does (the due date follows from it).
         .sheet(item: $pendingSubmit, onDismiss: afterSubmitSheet) { inv in
@@ -169,27 +329,78 @@ struct InvoicesView: View {
                 Task { await load() }
             }
         }
-        .onChange(of: status) { _ in page = 1; Task { await load(announceView: true) } }
+        .sheet(item: $bulkDrafts, onDismiss: afterSubmitSheet) { drafts in
+            BulkSubmitInvoicesSheet(drafts: drafts.rows) { message in
+                submitResult = message
+                reloadingAfterBulk = true
+                Task { await load(); reloadingAfterBulk = false }
+            }
+        }
         .refreshable { await load() }
-        .task { await load() }
+        .task { if data == nil { await load() } }
     }
 
-    /// One invoice, opening the client's record when allowed; a draft offers Mark submitted.
+    /// The website's filter form, in its order: Show, Agency, Invoice month, Invoice number or
+    /// client; Apply filters and (when a filter is set) Clear filters.
+    @ViewBuilder private var filterSection: some View {
+        Section {
+            Picker("Show", selection: $status) {
+                Text("All invoices").tag("")
+                Text("Draft").tag("Draft")
+                Text("Submitted").tag("Submitted")
+                Text("Paid").tag("Paid")
+                Text("Denied").tag("Denied")
+                Text("Void").tag("Void")
+            }
+            if newServer {
+                Picker("Agency", selection: $agency) {
+                    Text("All agencies").tag("")
+                    ForEach(invoiceAgencyChoices(data?.agencies ?? [], kept: agency), id: \.tag) { choice in
+                        Text(choice.label).tag(choice.tag)
+                    }
+                }
+                TextField("Invoice month (year and month it was created, as YYYY-MM)", text: $month)
+                    .keyboardType(.numbersAndPunctuation)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("Invoice number or client", text: $q)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .onSubmit { applyFilters() }
+            }
+            Button("Apply filters") { applyFilters() }.frame(minHeight: 44)
+            if anyFilter {
+                Button("Clear filters") {
+                    status = ""; agency = ""; month = ""; q = ""
+                    applyFilters()
+                }
+                .frame(minHeight: 44)
+            }
+            Text("A draft can be marked submitted here. Recording payments and write-offs, and closing denied invoices, are on the website.")
+                .font(.callout).foregroundStyle(Color.secondaryText)
+        }
+    }
+
+    private func applyFilters() {
+        notice = nil
+        applied = InvoiceFilters(status: status, agency: agency, month: month, q: String(q.prefix(120)))
+        page = 1
+        Task { await load(announceView: true) }
+    }
+
+    /// One invoice, opening the client's record when allowed; then, outside its one VoiceOver
+    /// stop, Open invoice and (for a draft) Mark submitted.
     @ViewBuilder
     private func invoiceRow(_ inv: InvoiceItem) -> some View {
         let row = VStack(alignment: .leading, spacing: 3) {
-            HStack {
-                Text(inv.invoiceNumber).font(.body.weight(.semibold))
-                Spacer()
-                Text(String(format: "$%.2f", inv.totalAmount)).font(.body.monospacedDigit())
-            }
-            Text(inv.clientName).font(.callout)
-            Text(inv.statusText).font(.caption).foregroundStyle(inv.shortPaid ? Color.alertRed : Color.secondaryText)
+            Text("\(inv.invoiceNumber): \(inv.clientName)").font(.body.weight(.semibold))
             Text("\(inv.trackTitle) · Authorization \(inv.authNumber ?? "none")").font(.caption).foregroundStyle(Color.secondaryText)
-            Text(inv.datesText).font(.caption).foregroundStyle(Color.secondaryText)
+            // The website's Amount cell (as Android): the total and the hours.
+            Text(invoiceAmountLine(inv)).font(.callout.monospacedDigit())
+            Text(invoiceStatusLine(inv)).font(.caption)
+                .foregroundStyle((inv.daysOverdue ?? 0) > 0 || inv.shortPaid ? Color.alertRed : Color.secondaryText)
+            Text(invoiceDatesLine(inv)).font(.caption).foregroundStyle(Color.secondaryText)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(inv.spoken)
+        .accessibilityLabel(invoiceSpoken(inv))
         Group {
             if inv.canOpenClient {
                 NavigationLink { ClientDetailView(clientId: inv.clientId) } label: { row }
@@ -198,9 +409,17 @@ struct InvoicesView: View {
             }
         }
         .modifier(DraftSubmitActions(isDraft: inv.status == "Draft") { pendingSubmit = inv })
-        // A visible single-tap way (4.30.0), as well as the swipe: Switch Control, Voice Control
-        // and anyone who never finds the swipe had none. VoiceOver has it on the row's Actions
-        // rotor, so it is not a second stop there.
+        // 4.38.0 (T5): the invoice as the website's accessible HTML, to read, share or copy.
+        if newServer {
+            NavigationLink {
+                BuiltDocumentView(navigationTitle: "Invoice \(inv.invoiceNumber)", action: "invoice_document",
+                                  query: ["invoice_id": String(inv.id)], noun: "invoice", note: nil)
+            } label: {
+                Label("Open invoice \(inv.invoiceNumber)", systemImage: "doc.text").frame(minHeight: 44)
+            }
+        }
+        // A visible single-tap way, as well as the swipe and the Actions rotor: its own stop
+        // after the row's one stop, so it is reached by swiping with VoiceOver too (4.38.0).
         if inv.status == "Draft" {
             Button { pendingSubmit = inv } label: {
                 Label("Mark submitted", systemImage: "paperplane").frame(minHeight: 44)
@@ -209,7 +428,6 @@ struct InvoicesView: View {
             .controlSize(.large)
             .accessibilityLabel("Mark invoice \(inv.invoiceNumber) submitted")
             .accessibilityInputLabels(["Mark submitted", "Mark invoice \(inv.invoiceNumber) submitted"])
-            .accessibilityHidden(UIAccessibility.isVoiceOverRunning)
         }
     }
 
@@ -217,26 +435,124 @@ struct InvoicesView: View {
     private func afterSubmitSheet() {
         if let refused = submitRefused {
             submitRefused = nil; submitResult = nil
+            notice = nil
             showFormError(refused, in: &error)
             return
         }
-        if let message = submitResult { announceAfterDismiss(message) }
+        if let message = submitResult { error = nil; notice = message; announceAfterDismiss(message) }
         submitResult = nil
     }
 
     private func load(announceView: Bool = false) async {
-        let wanted = status
-        var query = ["page": String(page)]
-        if !wanted.isEmpty { query["status"] = wanted }
+        loadSerial += 1
+        let serial = loadSerial
+        let query = invoicesQuery(status: applied.status ?? "", agency: applied.agency ?? "", month: applied.month ?? "",
+                                  q: applied.q ?? "", page: page, invoiceId: invoiceId)
         do {
-            error = nil
             let r: InvoicesResponse = try await api.call("invoices", query: query)
-            guard wanted == status else { return }
+            guard serial == loadSerial else { return }
+            error = nil
             data = r
-            if announceView { announce("\(r.total) \(wanted.isEmpty ? "" : wanted.lowercased() + " ")invoice\(r.total == 1 ? "" : "s").") }
+            if let f = r.filters, invoiceId == nil {
+                // What the server used (an unreadable month is ignored there, as on the website).
+                applied = InvoiceFilters(status: f.status ?? "", agency: f.agency ?? "", month: f.month ?? "", q: f.q ?? "")
+                month = f.month ?? ""
+            }
+            if announceView {
+                announce("\(r.heading ?? "Invoices"): \(r.total) invoice\(r.total == 1 ? "" : "s").")
+            }
         } catch {
-            guard wanted == status else { return }
+            guard serial == loadSerial else { return }
+            notice = nil
             showFormError(error.localizedDescription, in: &self.error)
+        }
+    }
+}
+
+/// submit_invoices' reply: how many were marked, the numbers refused, and the website's sentence.
+struct BulkSubmitReply: Decodable { let changed: Int?; let refused: [String]?; let message: String? }
+
+/// The drafts offered to the several-at-once sheet.
+struct BulkDrafts: Identifiable {
+    let id = UUID()
+    let rows: [InvoiceItem]
+}
+
+/// Mark several drafts submitted (4.38.0, T4), with the website's bulk form: the drafts to tick,
+/// the date they were sent (today or earlier), and a confirmation naming the count and the date.
+struct BulkSubmitInvoicesSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let drafts: [InvoiceItem]
+    let onDone: (String) -> Void
+    @State private var chosen: Set<Int> = []
+    @State private var sentOn = Date()
+    @State private var busy = false
+    @State private var confirming = false
+    @State private var error: String?
+    @State private var idem = IdemKey()
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
+                Section {
+                    ForEach(Array(drafts.enumerated()), id: \.element.id) { index, inv in
+                        let toggle = Toggle("\(inv.invoiceNumber), \(inv.clientName), \(money(inv.totalAmount))", isOn: Binding(
+                            get: { chosen.contains(inv.id) },
+                            set: { on in if on { chosen.insert(inv.id) } else { chosen.remove(inv.id) } }))
+                        if index == 0 { toggle.errorField("Draft invoices") } else { toggle }
+                    }
+                    Button("Choose all shown drafts") { chosen = Set(drafts.map(\.id)) }.frame(minHeight: 44)
+                    Button("Choose none") { chosen = [] }.frame(minHeight: 44)
+                } header: {
+                    Text("Draft invoices").font(.headline).foregroundStyle(.primary).textCase(nil).accessibilityAddTraits(.isHeader)
+                }
+                Section {
+                    DatePicker("Date they were sent", selection: $sentOn, in: ...Date(), displayedComponents: .date)
+                        .errorField("Date they were sent")
+                    Button(busy ? "Saving…" : "Mark the chosen invoices submitted") {
+                        if chosen.isEmpty {
+                            showFormError("Tick at least one draft invoice.", in: &error, field: "Draft invoices")
+                        } else {
+                            confirming = true
+                        }
+                    }
+                    .disabled(busy).frame(minHeight: 44)
+                }
+            }
+            .navigationTitle("Mark several drafts submitted")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) }
+            }
+            .confirmationDialog(invoiceBulkConfirmTitle(chosen.count, date: formatDate(APIDate.day(sentOn))),
+                                isPresented: $confirming, titleVisibility: .visible) {
+                Button("Mark them submitted") { Task { await submit() } }
+                Button("Keep them as drafts", role: .cancel) {}
+            } message: {
+                Text("This starts the aging clock on each and cannot be undone.")
+            }
+        }
+    }
+
+    private func submit() async {
+        busy = true; error = nil
+        announce("Saving…")
+        // In the list's order, so the same choice always sends the same body (one retry key).
+        let ids = drafts.map(\.id).filter { chosen.contains($0) }
+        var body = invoiceBulkBody(ids: ids, submittedOn: APIDate.day(sentOn))
+        body["idem_key"] = idem.key(for: body)
+        var fields: [String: String] = [:]
+        do {
+            let r: BulkSubmitReply = try await api.call("submit_invoices", method: "POST", body: body, refusal: { fields = refusalFields($0) })
+            idem.answered()
+            onDone(r.message ?? "\(r.changed ?? 0) invoice\((r.changed ?? 0) == 1 ? "" : "s") marked submitted.")
+            dismiss()
+        } catch {
+            idem.failed(error)
+            busy = false
+            showFormError(fields.isEmpty ? IdemKey.message(for: error, what: "the change") : error.localizedDescription, in: &self.error,
+                          field: refusedFieldName(fields, order: ["invoice_ids", "submitted_on"], names: invoiceBulkFields))
         }
     }
 }

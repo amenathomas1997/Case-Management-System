@@ -384,9 +384,15 @@ struct AccountView: View {
 
     private func accountSection(_ s: AccountSummary) -> some View {
         Section {
-            LabeledContent("Name", value: s.name)
-            LabeledContent("Email", value: s.email)
-            LabeledContent("Role", value: roleText(s))
+            // 4.38.0 (T16): the organisation's name, as the website's letterhead (me.org), read
+            // in one stop with the name, email and role.
+            VStack(alignment: .leading, spacing: 8) {
+                if let org = api.org, !org.isEmpty { Text("Organisation: \(org)") }
+                LabeledContent("Name", value: s.name)
+                LabeledContent("Email", value: s.email)
+                LabeledContent("Role", value: roleText(s))
+            }
+            .accessibilityElement(children: .combine)
         } header: { sectionHeader("Your account") }
     }
 

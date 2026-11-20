@@ -146,8 +146,8 @@ dashboard_swift = swift_sources['DashboardView.swift']
 static_check('notesToWrite = await loadNotesToWrite(api)' in dashboard_swift and 'NoteToWriteRow(item: item)' in dashboard_swift,
              'the Dashboard shows Notes to write with Write it now')
 project_yml = (root / 'ios/project.yml').read_text()
-static_check(project_yml.count('MARKETING_VERSION: "4.37.0"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "68"') == 2,
-             'the app and widget are version 4.37.0 (68)')
+static_check(project_yml.count('MARKETING_VERSION: "4.38.0"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "69"') == 2,
+             'the app and widget are version 4.38.0 (69)')
 
 # 4.34.0: the iPhone app behaves as the website does (PARITY-AUDIT-2026-11-19, plan P1-P43; static).
 api_swift = swift_sources['API.swift']
@@ -205,8 +205,11 @@ static_check('body["billing_mode"] = billingMode' in track_swift and 'body["auth
              and 'showFormError(message, in: &self.error, field: Self.errorFields[key])' in track_swift
              and re.search(r'\.onChange\(of: serviceType\) \{ now in.*?rsaCategory = form\.rsaDefault\(for: now\)', track_swift, re.S),
              'P11: the track form offers Who pays and the dollar amount, starts from the website\'s defaults and ties the rate error')
-static_check('refusedDuplicate = ($0["duplicate"] as? Bool) == true' in schedule_swift and 'refusedFields["date"]' in schedule_swift
-             and 'field: "Starts"' in schedule_swift and '.errorField("Starts")' in schedule_swift,
+# 4.38.0: the date refusal is tied through NewSessionSheet's errors map ("date": "Starts").
+static_check('refusedDuplicate = ($0["duplicate"] as? Bool) == true' in schedule_swift
+             and (('refusedFields["date"]' in schedule_swift and 'field: "Starts"' in schedule_swift)
+                  or ('"date": "Starts"' in schedule_swift and 'Self.errorOrder.first(where: { refusedFields[$0] != nil })' in schedule_swift))
+             and '.errorField("Starts")' in schedule_swift,
              'P12: a session already booked is said as information; a series overlapping one is tied to the date')
 static_check('if forSchedule, let bookable = row.bookable { return bookable }' in api_swift and 'var bookable: Bool?' in api_swift
              and 'clientPickerChoices(forSchedule: true)' in schedule_swift,
@@ -1778,6 +1781,427 @@ with tempfile.TemporaryDirectory(prefix='cms-437-') as tmp437:
     run = subprocess.run([str(Path(tmp437) / 't')], capture_output=True, text=True)
     print(run.stdout, end='')
     static_check(run.returncode == 0, '4.37.0: the cohort decode, draft merges and placeholder rules run as the app runs them')
+
+# 4.38.0: billing and administration in the iPhone app (plan-4380, IPHONE parts of T1-T16;
+# static). Each check reads what the app sends and the reply keys it decodes, and that the server
+# files read and send the same keys; the page calls the shared helper the API uses and the API
+# holds no copy; and the owner's structure rules (buttons outside a row's one stop, confirmations
+# that name the item, no hints in new views, money only formatted).
+api_438_php = php('inc/api_438.php')
+api_php = (root / 'public/api.php').read_text()
+api_parity_php = php('inc/api_parity.php')
+billing_php = php('inc/billing.php')
+
+
+def act438(name):
+    return php_case(api_438_php, name)
+
+
+def perm438(action, perm):
+    return ("'%s' => '%s'" % (action, perm)) in api_438_php
+
+
+def api_case438(name):
+    return php_case(api_php, name)
+
+
+invoices_swift = swift_sources['InvoicesView.swift']
+auth_swift = swift_sources['AuthorizationsView.swift']
+dq_swift = swift_sources['DataQualityView.swift']
+counselors_swift = swift_sources['CounselorsView.swift']
+contracts_swift = swift_sources['ContractsView.swift']
+bookings_swift = swift_sources['BookingsView.swift']
+util_swift = swift_sources['UtilizationView.swift']
+at_swift = swift_sources['ATServicesView.swift']
+search_swift = swift_sources['SearchView.swift']
+notifications_swift = swift_sources['NotificationsView.swift']
+account_swift = swift_sources['AccountView.swift']
+dashboard_swift = swift_sources['DashboardView.swift']
+schedule_swift = swift_sources['ScheduleView.swift']
+track_swift = swift_sources['TrackDetailView.swift']
+invoices_case = php_case(api_parity_php, 'invoices')
+new_sheet = between(schedule_swift, 'struct NewSessionSheet: View {', '/// What the Complete session step records with the outcome.')
+new_views_438 = {'AuthorizationsView.swift': auth_swift, 'DataQualityView.swift': dq_swift, 'InvoicesView.swift': invoices_swift,
+                 # The shared client picker after BookingsView's screens (NewRecordClientPicker) is not this release's.
+                 'ContractsView.swift': contracts_swift, 'BookingsView.swift': bookings_swift.split('// MARK: - Client choice for new records')[0],
+                 'UtilizationView.swift': util_swift,
+                 'CounselorsView.swift': counselors_swift}
+static_check(all(no_hint(t) for t in new_views_438.values()),
+             '4.38.0: the new and rewritten views carry no accessibilityHint (hints sit inside the labels)')
+
+# T1: the website's row text, money formatted only.
+static_check(decodes(invoices_swift, 'InvoiceItem', 'owedText', 'dateLines', 'daysOverdue')
+             and 'if let owed = inv.owedText, !owed.isEmpty { return owed }' in invoices_swift
+             and 'if let lines = inv.dateLines { return lines.joined(separator: ", ") }' in invoices_swift
+             and '"$%.2f"' not in invoices_swift and 'String(format: "$' not in invoices_swift and 'money(inv.totalAmount)' in invoices_swift
+             and '"\\(inv.trackTitle) · Authorization \\(inv.authNumber ?? "none")"' in invoices_swift
+             and '"Newer invoices"' in invoices_swift and '"Older invoices"' in invoices_swift
+             and '"Invoices (page \\(d.page) of \\(d.pages), \\(d.total) in all)"' in invoices_swift
+             and 'days outstanding' not in invoices_swift
+             and sends(invoices_case, 'owed_text', 'date_lines', 'days_overdue')
+             and 'invoice_owed_text(' in invoices_case and 'invoice_balance(' in invoices_case and 'invoice_owed_text(' in php('invoices.php'),
+             'T1: invoice rows show the server\'s owed sentence and date lines, money through money(); the API and the page share invoice_owed_text()')
+inv_row = swift_func(invoices_swift, 'private func invoiceRow(_ inv: InvoiceItem) -> some View {')
+static_check(outside_one_stop(inv_row, 'let row = VStack(alignment: .leading, spacing: 3) {', ['Open invoice \\(inv.invoiceNumber)', 'Button { pendingSubmit = inv }'])
+             and 'accessibilityHidden(UIAccessibility.isVoiceOverRunning)' not in inv_row,
+             'T1, T5: Open invoice and Mark submitted are visible buttons after the row\'s one stop, reachable by swiping with VoiceOver')
+
+# T2: filters and one invoice.
+inv_query = swift_decl(invoices_swift, 'func invoicesQuery(')
+static_check(all('("%s", ' % k in inv_query for k in ('status', 'agency', 'month', 'q')) and 'return ["id": String(invoiceId)]' in inv_query
+             and '"Invoice month (year and month it was created, as YYYY-MM)"' in invoices_swift and '"Invoice number or client"' in invoices_swift
+             and '"Apply filters"' in invoices_swift and '"Clear filters"' in invoices_swift and '"All agencies"' in invoices_swift
+             and '"\\(kept) (no invoices)"' in invoices_swift
+             and '"Showing one invoice."' in invoices_swift and '"That invoice was not found, or it is not on your caseload."' in invoices_swift
+             and '"Show all invoices"' in invoices_swift
+             and decodes(invoices_swift, 'InvoicesResponse', 'filters', 'agencies', 'heading', 'requested', 'found')
+             and sends(invoices_case, 'filters', 'agencies', 'heading', 'requested', 'found') and 'invoice_list_filters(' in invoices_case
+             and 'InvoicesView(invoiceId: hit.id)' in search_swift and 'Invoices are worked on the Invoices screen' not in search_swift
+             and 'function invoice_filter_sql' not in php('invoices.php') and 'function invoice_filter_sql' in billing_php,
+             'T2: the website\'s filters and one invoice by id; a search result opens it; the filter helpers live in billing.php')
+
+# T3: outstanding.
+static_check(decodes(invoices_swift, 'InvoiceAgingRow', 'overdue', 'partPaid')
+             and '"Outstanding (submitted and not yet settled)"' in invoices_swift and '"Nothing is outstanding."' in invoices_swift
+             and 'text += ", \\(money(overdue)) past due"' in invoices_swift
+             and sends(invoices_case, 'overdue', 'part_paid') and 'invoice_aging(' in invoices_case and 'invoice_aging(' in php('invoices.php'),
+             'T3: each agency says owed, past due and part-paid from the server\'s invoice_aging(), as the page')
+
+# T4: several drafts.
+bulk = between(invoices_swift, 'struct BulkSubmitInvoicesSheet: View {', '\n}\n')
+static_check('"submit_invoices"' in bulk and '"invoice_ids": ids' in invoices_swift and '"submitted_on": submittedOn' in invoices_swift
+             and 'body["idem_key"] = idem.key(for: body)' in bulk
+             and all(t in bulk for t in ('"Choose all shown drafts"', '"Choose none"', '"Date they were sent"', '"Mark the chosen invoices submitted"',
+                                          '"Mark them submitted"', '"Keep them as drafts"', '"This starts the aging clock on each and cannot be undone."',
+                                          '.errorField("Draft invoices")', '.errorField("Date they were sent")'))
+             and '"Mark \\(n) invoice\\(n == 1 ? "" : "s") submitted as sent on \\(date)?"' in invoices_swift
+             and 'confirmationDialog(invoiceBulkConfirmTitle(chosen.count, date:' in bulk
+             and '"Mark several drafts submitted"' in invoices_swift and '.prefix(200)' in invoices_swift
+             and 'notice = message; announceAfterDismiss(message)' in invoices_swift and 'if let notice { Text(notice)' in invoices_swift
+             and '.disabled(reloadingAfterBulk)' in invoices_swift and 'Task { await load(); reloadingAfterBulk = false }' in invoices_swift
+             and '"A draft can be marked submitted here. Recording payments and write-offs, and closing denied invoices, are on the website."' in invoices_swift
+             and perm438('submit_invoices', 'billing') and reads_input(act438('submit_invoices'), 'invoice_ids', 'submitted_on')
+             and sends(act438('submit_invoices'), 'changed', 'refused', 'message')
+             and "'submit_invoices'" in api_php[api_php.index('API_IDEM_ACTIONS'):api_php.index('API_IDEM_ACTIONS') + 4000]
+             and "'invoice_ids'" in api_php[api_php.index('API_ARRAY_INPUT_KEYS'):api_php.index('API_ARRAY_INPUT_KEYS') + 1500]
+             and 'invoice_bulk_submit(' in php('invoices.php') and 'invoice_bulk_submit(' in act438('submit_invoices'),
+             'T4: several drafts are marked with the website\'s bulk rules, a retry key and a confirmation naming the count and date')
+
+# T5: the invoice document.
+static_check('action: "invoice_document"' in invoices_swift and 'query: ["invoice_id": String(inv.id)], noun: "invoice"' in invoices_swift
+             and 'noun.prefix(1).uppercased() + noun.dropFirst() + " copied."' in swift_sources['Parity437.swift']
+             and perm438('invoice_document', 'billing') and sends(act438('invoice_document'), 'title', 'text', 'html', 'file')
+             and reads_input(act438('invoice_document'), 'invoice_id') and 'invoice_document(' in php('invoice_pdf.php')
+             and 'invoice_document(' in act438('invoice_document'),
+             'T5: an invoice opens as the website\'s accessible document, to share or copy ("Invoice copied.")')
+
+# T6: incoming authorizations.
+start_fn = swift_func(auth_swift, 'private func start(_ r: IncomingAuthReview) async {')
+static_check(all(('"%s"' % a) in auth_swift for a in ('incoming_authorizations', 'incoming_authorization', 'read_authorization_email',
+                                                      'start_authorization_track', 'dismiss_authorization'))
+             and '"Keep it waiting"' in auth_swift and '"Another client, chosen below"' in auth_swift
+             and 'confirmationDialog("Dismiss authorization \\(review?.authNumber ?? "") without starting a track?"' in auth_swift
+             and '"The authorization email, including the line Authorization Number (required)"' in auth_swift
+             and '"Which client is this for? (required)"' in auth_swift and '"No authorization emails are waiting."' in auth_swift
+             and '"Read the email"' in auth_swift and '"Start the track from this authorization"' in auth_swift and '"The email as received"' in auth_swift
+             and '["id": id, "client_id": choice != 0 ? choice : other, "set_counselor": setCounselor]' in auth_swift
+             and 'body["idem_key"] = startIdem.key(for: body)' in start_fn
+             and 'announce(reply.notices' not in start_fn and 'notices: reply.notices)' in start_fn and 'notices: s.notices)' in auth_swift
+             and 'ForEach(Array(notices.enumerated()), id: \\.offset) { _, n in Text(n)' in track_swift
+             and '.onAppear { if !notices.isEmpty { announceAfterDismiss(notices.joined(separator: " ")) } }' in track_swift
+             and '.errorField("Another client")' in auth_swift
+             and 'AuthorizationReviewView(emailId: row.id, onDismissed: dismissedHere)' in auth_swift
+             and re.search(r'if let onDismissed \{\s*onDismissed\(message\)\s*dismissView\(\)', auth_swift) is not None
+             and 'notice = message' in swift_func(auth_swift, 'private func dismissedHere(_ message: String) {')
+             and 'Text("The budget is now \\(money(current)).")' in contracts_swift
+             and 'current: data?.contract.amount ?? 0' in contracts_swift and 'choice == 0 ? "Another client" : "Which client is this for?"' in auth_swift
+             and 'prefill: s.prefill, incomingAuth: emailId' in auth_swift
+             and 'if let incomingAuth, trackId == nil { body["incoming_auth"] = incomingAuth }' in track_swift
+             and 'if trackId == nil, let prefill { apply(prefill)' in track_swift
+             and decodes(auth_swift, 'IncomingAuthReview', 'statusText', 'notApproved', 'already', 'details', 'matches', 'presetClientId',
+                         'otherClients', 'counselor', 'emailText')
+             and sends(api_438_php, 'status_text', 'not_approved', 'already', 'details', 'matches', 'preset_client_id', 'other_clients',
+                       'counselor', 'email_text', 'notices', 'prefill', 'heading')
+             and reads_input(act438('start_authorization_track'), 'id', 'client_id', 'set_counselor')
+             and reads_input(act438('read_authorization_email'), 'email_text')
+             and all(perm438(a, 'clients') for a in ('incoming_authorizations', 'incoming_authorization', 'read_authorization_email',
+                                                      'start_authorization_track', 'dismiss_authorization'))
+             and 'case "authorizations.php":' in notifications_swift and 'case .authorization(let id): AuthorizationReviewView(emailId: id)' in notifications_swift
+             and 'MoreToolLink(title: "Incoming authorizations"' in dashboard_swift
+             and 'incoming_authorization_start(' in php('authorizations.php') and 'UPDATE incoming_authorizations' not in php('authorizations.php'),
+             'T6: authorization emails are listed, pasted, reviewed, started with the prefill (incoming_auth sent) or dismissed; the alert opens them')
+
+# T7, T8: several sessions at once and the meeting link.
+plan_body = swift_decl(schedule_swift, 'func sessionPlanBody(')
+schedule_case = api_case438('schedule_session')
+static_check(all('"%s"' % k in plan_body for k in ('plan_pattern', 'plan_days', 'plan_until', 'plan_dates', 'plan_ok'))
+             and 'default: return [:]' in plan_body and '"plan_preview"' in new_sheet and 'request["meeting_make"] = meetingMake' in new_sheet
+             and 'hasPrefix("Authorization review:")' not in schedule_swift and 'authorizationReviewPrefix' not in schedule_swift
+             and '"I reviewed these warnings and approve this booking despite them."' in new_sheet and 'Section("Check before booking")' in new_sheet
+             and '"location": location,' in new_sheet and '"location": isRemote ? "" : location' not in new_sheet
+             and '"More than one session: several days a week, a list of dates, or the whole authorization"' in new_sheet
+             and '"Last date (or a number of weeks in Repeat weekly)"' in new_sheet and '"Dates, one per line (2026-11-03, or 2026-11-03 2:30 PM)"' in new_sheet
+             and '"Book these \\(planPreview.sessions.count) sessions"' in new_sheet and '"The sessions this books (\\(n))"' in schedule_swift
+             and '"Make the meeting link (in the instructor\'s own connected account, instead of typing one)"' in new_sheet
+             and '[PlanPatternOption(key: "", label: "No")] + providers' in schedule_swift
+             and 'if isRemote && meetingMake.isEmpty {' in new_sheet and '.errorField("Training track")' in new_sheet
+             and '"Days of the week (several days, or the whole authorization) (required)"' in new_sheet and '"meeting_url": isRemote && meetingMake.isEmpty ? link : ""' in new_sheet
+             and 'result.meetingWhy' in new_sheet and 'result.message ??' in new_sheet
+             and all(s in new_sheet for s in ('"Enter a number of weeks from 1 to 26 (1 is a single session)."', '"Give the last date, or a number of weeks from 1 to 52."',
+                                               '"Choose at least one day of the week."', '"Write at least one date, one per line."'))
+             and decodes(schedule_swift, 'BookingOptions', 'planPatterns', 'weekdays', 'maxSessions', 'meetingProviders')
+             and sends(act438('booking_options'), 'plan_patterns', 'weekdays', 'max_sessions', 'meeting_providers') and perm438('booking_options', 'schedule')
+             and 'session_plan(' in schedule_case and "'+' . $w . ' week'" not in schedule_case
+             and "'plan_preview' =>" in schedule_case and sends(schedule_case, 'meeting_why', 'series_words', 'message')
+             and reads_input(schedule_case, 'meeting_make') and "'mobile')" in schedule_case and 'session_make_meeting(' in schedule_case
+             and 'session_plan_lines(' in php('schedule.php') and 'session_meeting_make_error(' in php('schedule.php')
+             and "'plan_days'" in api_php[api_php.index('API_ARRAY_INPUT_KEYS'):api_php.index('API_ARRAY_INPUT_KEYS') + 1500],
+             'T7, T8: the booking form sends the website\'s plan fields and the meeting provider, shows the preview, approves either kind of warning, and keeps a remote location')
+
+# T9: the counselor portal.
+static_check(decodes(counselors_swift, 'CounselorRow', 'statusLines') and 'if let lines = c.statusLines { return lines }' in counselors_swift
+             and 'confirmation = r.message ??' in counselors_swift and decodes(counselors_swift, 'PortalSendReply', 'message', 'expiresAt')
+             and '"Email a portal link to \\(pendingSend?.displayName ?? "")?"' in counselors_swift and 'Text("Any previous link stops working.")' in counselors_swift
+             and '"Turn off the portal link for \\(pendingRevoke?.displayName ?? "")?"' in counselors_swift
+             and 'Text("It stops working at once, and they need a new link to get back in.")' in counselors_swift
+             and 'VoiceOverRows.children' not in counselors_swift
+             and "'status_lines'" in api_php and 'vrc_portal_send(' in api_case438('send_vrc_portal') and 'vrc_portal_send(' in php('counselors.php')
+             and sends(api_case438('send_vrc_portal'), 'message', 'expires_at')
+             and 'Each new browser session asks for a 6-digit code emailed to you. Keep this link private.' not in api_php,
+             'T9: counselors show the server\'s status lines and sentences; the link buttons sit outside the row\'s one stop; one shared send helper')
+
+# T10, T11: contracts.
+detail = between(contracts_swift, 'struct ContractDetail: View {', '\nstruct ContractDeliverableSheet')
+static_check('moneyInput(raw)' in contracts_swift and 'checkedAmount(' not in contracts_swift and '{1,10}' in contracts_swift
+             and '"Budget in dollars (for example 50000 or 50,000.00)"' in contracts_swift
+             and '"Amount in dollars (required; for example 1250 or 1,250.00)"' in contracts_swift
+             and '"Notes (optional; up to 500 characters)"' in contracts_swift and '"Notes (optional; up to 2,000 characters)"' in contracts_swift
+             and 'deliverableStatuses.filter { $0 != current }' in contracts_swift and 'deliverableStatusChoices(del.status)' in detail
+             and decodes(contracts_swift, 'ContractResponse', 'pct', 'remaining', 'overBudget', 'daysText')
+             and decodes(contracts_swift, 'ContractRow', 'pct', 'openDeliverables', 'endsText')
+             and decodes(contracts_swift, 'ContractDeliverable', 'notes', 'overdue') and decodes(contracts_swift, 'ContractSpend', 'by')
+             and sends(api_case438('contract'), 'pct', 'remaining', 'over_budget', 'days_text') and sends(api_case438('contracts'), 'pct', 'open_deliverables', 'ends_text')
+             and 'function contract_money_in' not in php('contracts.php'),
+             'T10: contract money as the website types it (10 digits, $ and commas), the server\'s percent, remainder and end phrase, deliverable notes')
+static_check(all('"op": "%s"' % op in contracts_swift for op in ('set_budget', 'set_active', 'delete_deliverable', 'delete_spend'))
+             and '["show": wanted]' in contracts_swift and '"Active contracts"' in contracts_swift and '"Closed contracts"' in contracts_swift
+             and '"Change budget"' in contracts_swift and '"Budget in dollars (required)"' in contracts_swift and '"Save budget"' in contracts_swift
+             and '"Close contract"' in detail and '"Reopen contract"' in detail and 'Button("Keep it", role: .cancel)' in detail
+             and '"Remove the deliverable \\(title)?"' in contracts_swift and '"Remove the spend entry \\(money(amount)) on \\(formatDate(date))?"' in contracts_swift
+             and 'confirmationDialog(contractRemoveTitle(deliverable:' in detail and 'confirmationDialog(contractRemoveTitle(spendAmount:' in detail
+             and 'b["idem_key"] = opIdem.key(for: b)' in detail
+             and all("'%s'" % op in api_case438('contract_update') for op in ('set_budget', 'set_active', 'delete_deliverable', 'delete_spend'))
+             and reads_input(api_case438('contracts'), 'show') and reads_input(api_case438('add_contract') + php('inc/contracts.php'), 'notes')
+             and 'contract_set_budget(' in php('contracts.php'),
+             'T11: change budget, close and reopen, remove a deliverable or spend (named in the question), the closed list and contract notes')
+del_row = swift_func(contracts_swift, '@ViewBuilder private func deliverableRow(_ del: ContractDeliverable) -> some View {')
+static_check(outside_one_stop(del_row, 'VStack(alignment: .leading, spacing: 2) {', ['Menu {', 'Button("Remove", role: .destructive)']),
+             'T10, T11: a deliverable\'s status menu and Remove are visible after its one stop')
+
+# T12: bookings.
+book_row = swift_func(bookings_swift, '@ViewBuilder private func row(_ b: Booking) -> some View {')
+static_check('["view": "cancelled"]' in bookings_swift and 'case "past": return ["past": "1"]' in bookings_swift
+             and 'pastList = p.bookings.filter { !upcomingIds.contains($0.id) }' in bookings_swift
+             and '.disabled(busy)' in book_row and 'guard !busy else { return }' in swift_func(bookings_swift, 'private func setStatus(_ b: Booking, _ to: String) async {')
+             and decodes(bookings_swift, 'Booking', 'typeLabel', 'whenText') and 'Cancelled bookings are removed from this list.' not in bookings_swift
+             and '"Upcoming"' in bookings_swift and '"Including past"' in bookings_swift and '"Cancelled bookings"' in bookings_swift
+             and '"No cancelled bookings."' in bookings_swift and '"Cancel the \\(label) booking for \\(client)?"' in bookings_swift
+             and 'Text(newServer ? "It moves to the cancelled list, where it can be restored."' in bookings_swift
+             and '"Date and time known"' in bookings_swift and 'if whenKnown { body["needed_at"]' in bookings_swift
+             and '"Estimated cost in dollars (optional; up to 99,999,999.99)"' in bookings_swift and '{1,8}' in bookings_swift
+             and 'checkedAmount(' not in bookings_swift and '"booking_type_labels"' in bookings_swift
+             and outside_one_stop(book_row, 'VStack(alignment: .leading, spacing: 3) {', ['Menu {'])
+             and sends(api_case438('bookings'), 'type_label', 'when_text') and reads_input(api_case438('bookings'), 'view')
+             and "'booking_type_labels' =>" in php('inc/api_more.php')
+             and 'booking_set_status(' in php('access_bookings.php') and 'const BOOKING_TYPE_LABELS' not in php('access_bookings.php'),
+             'T12: bookings show the cancelled list with restore, the website\'s label and wording, an 8-digit cost and an optional date')
+
+# T13: utilization.
+util_case = api_case438('utilization')
+static_check('"Team utilization"' in util_swift and '" at or above target"' in util_swift and '["period": preset]' in util_swift
+             and 'on target is 85%' not in util_swift.lower() and 'utilBand' not in util_swift
+             and all(t in util_swift for t in ('"Billable hours delivered"', '"Billable value"', '"Weeks in period"', '"Staff utilization"',
+                                                '"Summary for \\(formatDate(d.from)) to \\(formatDate(d.to))"', ': no target"'))
+             and 'String(format: "$' not in util_swift and 'money(r.value)' in util_swift
+             and decodes(util_swift, 'UtilizationReply', 'period', 'presets', 'notes', 'weeks', 'footer', 'scopedNote')
+             and decodes(util_swift, 'UtilStaffRow', 'atOrAbove')
+             and sends(util_case, 'period', 'presets', 'notes', 'weeks', 'footer', 'scoped_note', 'at_or_above')
+             and 'utilization_report(' in util_case and 'report_period(' in util_case and 'SUM(CASE WHEN w.invoice_id IS NULL' not in util_case,
+             'T13: utilization uses the remembered period and the website\'s wording and figures; the API calls the shared helper')
+
+# T14: service profitability.
+static_check('"submitted to funder \\(money(invoiced))' in at_swift and 'hours missing cost rate' in at_swift
+             and 'groups: ATProfitGroups?' in at_swift and 'if let g = report?.groups' in at_swift
+             and 'specifier: "%.2f"' not in at_swift and '"Training track"' in at_swift and '"Linked contract"' in at_swift
+             and '"No invoiced tracks to report yet."' in at_swift
+             # at_api.php writes its arrays without spaces ('groups'=>).
+             and all(re.search(r"'%s'\s*=>" % k, php('inc/at_api.php')) for k in ('groups', 'intro', 'footer', 'label', 'unpriced_hours'))
+             and 'at_profit_groups(' in php('inc/at_api.php'),
+             'T14: profitability uses the server\'s group totals and the website\'s words, money through money()')
+
+# T15: data quality and the documentation audit.
+static_check('"data_quality"' in dq_swift and '"doc_audit"' in dq_swift and '"None."' in dq_swift and '"What this checks"' in dq_swift
+             and all(t in dq_swift for t in ('"Active clients"', '"With gaps"', '"Total findings"'))
+             and '"\\(heading) (\\(n))"' in dq_swift and '👍' not in dq_swift
+             and decodes(dq_swift, 'DocAuditReply', 'intro', 'active', 'withGaps', 'totalFindings', 'rows', 'checks', 'footnote', 'empty')
+             and sends(act438('doc_audit'), 'intro', 'active', 'with_gaps', 'total_findings', 'rows', 'checks', 'footnote', 'empty')
+             and sends(act438('data_quality'), 'scoped', 'summary', 'sections') and perm438('data_quality', 'clients') and perm438('doc_audit', 'clients')
+             and 'MoreToolLink(title: "Data quality", subtitle: "Likely duplicate clients and records to tidy before a report is due."' in dashboard_swift
+             and 'doc_audit_findings(' in php('doc_audit.php'),
+             'T15: data quality and the documentation audit are listed read-only as the website, each row opening its client')
+
+# T16: the organisation's name.
+static_check('org = me.org' in swift_sources['API.swift'] and 'let org: String?' in swift_sources['API.swift']
+             and 'Text("Organisation: \\(org)")' in account_swift
+             and '.accessibilityElement(children: .combine)' in between(account_swift, 'private func accountSection(', 'header: { sectionHeader("Your account") }')
+             and account_swift.index('Text("Organisation: \\(org)")') < account_swift.index('LabeledContent("Name", value: s.name)')
+             and "'org' => brand('org')" in api_case438('me'),
+             'T16: Account shows the organisation\'s name from me first')
+
+# T4, T6, T11, T12: every new confirmation names the item.
+static_check(titles_name_item(auth_swift, ['Dismiss']) and titles_name_item(counselors_swift, ['Email', 'Turn off']),
+             '4.38.0: every new confirmation names the item it acts on')
+
+# 4.38.0: a retry key reused with different details (the server's 409 with idem_conflict true) is
+# never a success: call and callDict throw it with the server's sentence, the form's IdemKey takes a
+# fresh key (only network and processing keep it), and an offline entry that gets it is kept with
+# the reason (checked before the check-in 409 that counts as done).
+api_swift_438 = swift_sources['API.swift']
+call_fn = swift_func(api_swift_438, 'func call<T: Decodable>(_ action: String, method: String = "GET",')
+dict_fn = swift_func(api_swift_438, 'func callDict(_ action: String, method: String = "GET",')
+keeps_fn = swift_func(swift_sources['DocumentsToSign.swift'], 'static func keeps(_ error: Error) -> Bool {')
+queue_src = api_swift_438[api_swift_438.index('var refused: [UUID: String] = [:]'):]
+static_check('let idemConflict: Bool? }' in api_swift_438 and 'case idemConflict(String)' in api_swift_438
+             and 'throw APIError.idemConflict(errorBody.error ?? APIError.idemConflictMessage)' in call_fn
+             and call_fn.index('throw APIError.idemConflict') < call_fn.index('return try decoder.decode(T.self, from: data)')
+             and '(obj["idem_conflict"] as? Bool) == true' in dict_fn and 'throw APIError.idemConflict(' in dict_fn
+             and 'idemConflict' not in keeps_fn and 'case APIError.network, APIError.processing: return true' in keeps_fn
+             and 'refused[item.id] = body.error ?? APIError.idemConflictMessage' in queue_src
+             and queue_src.index('body.idemConflict == true') < queue_src.index('item.action == "check_in_session"')
+             and 'done.insert(item.id)' not in between(queue_src, 'body.idemConflict == true', 'item.action == "check_in_session"')
+             and "'idem_conflict' => true" in php('inc/api_parity.php')
+             and 'This was already sent once with different details, and that earlier send may have been saved.' in api_swift_438,
+             '4.38.0: a retry key reused with different details is said with the server\'s sentence, never a success; the form gets a fresh key; an offline entry keeps it as its reason')
+
+# Run for real: the app's own models and helpers, compiled on the server's reply shapes.
+run438 = 'import Foundation\n' + '\n'.join([
+    'func formatDate(_ raw: String?) -> String { raw ?? "—" }',
+    'func formatDateTime(_ raw: String) -> String { raw }',
+    'func hoursSpoken(_ h: Double) -> String { "\\(h) hours" }',
+    swift_decl(swift_sources['API.swift'], 'struct LenientList:'),
+    swift_decl(swift_sources['ProcurementView.swift'], 'func money('),
+    swift_decl(track_swift, 'func moneyInput('),
+    swift_decl(util_swift, 'func utilHours('),
+    swift_decl(util_swift, 'struct UtilStaffRow:'), swift_decl(util_swift, 'struct UtilPreset:'), swift_decl(util_swift, 'struct UtilizationReply:'),
+    swift_decl(util_swift, 'func utilizationRowTitle('), swift_decl(util_swift, 'func utilizationRowDetail('),
+    swift_decl(invoices_swift, 'struct InvoiceItem:'), swift_decl(invoices_swift, 'struct InvoiceAgingRow:'),
+    swift_decl(invoices_swift, 'struct InvoiceFilters:'), swift_decl(invoices_swift, 'struct InvoicesResponse:'),
+    swift_decl(invoices_swift, 'func invoiceStatusLine('), swift_decl(invoices_swift, 'func invoiceDatesLine('),
+    swift_decl(invoices_swift, 'func invoiceAmountLine('),
+    swift_decl(invoices_swift, 'func invoiceAgingLine('), swift_decl(invoices_swift, 'func invoicesQuery('),
+    swift_decl(invoices_swift, 'func invoiceAgencyChoices('), swift_decl(invoices_swift, 'func invoiceFirstDrafts('),
+    swift_decl(invoices_swift, 'func invoiceBulkConfirmTitle('),
+    swift_decl(auth_swift, 'struct AuthDetail:'), swift_decl(auth_swift, 'struct AuthMatch:'), swift_decl(auth_swift, 'struct AuthOtherClient:'),
+    swift_decl(auth_swift, 'struct AuthCounselor:'), swift_decl(auth_swift, 'struct IncomingAuthReview:'), swift_decl(auth_swift, 'struct StartAuthReply:'),
+    swift_decl(auth_swift, 'func authClientChoices('), swift_decl(auth_swift, 'func startAuthBody('),
+    swift_decl(schedule_swift, 'struct PlanPatternOption:'), swift_decl(schedule_swift, 'struct PlanWeekday:'),
+    swift_decl(schedule_swift, 'struct BookingOptions:'), swift_decl(schedule_swift, 'func sessionPlanBody('),
+    swift_decl(schedule_swift, 'func sessionPlanWeeksLimit('),
+    swift_decl(contracts_swift, 'func contractMoneyText('), swift_decl(contracts_swift, 'struct ContractRow:'),
+    swift_decl(contracts_swift, 'func contractRowLines('), swift_decl(bookings_swift, 'func bookingCostText('),
+    swift_decl(bookings_swift, 'func bookingsQuery('), swift_decl(auth_swift, 'func authNoMatchText('),
+    swift_decl(at_swift, 'struct ATProfitGroup:'), swift_decl(at_swift, 'struct ATProfitGroups:'),
+]) + r'''
+func check(_ ok: Bool, _ label: String) { if !ok { print("FAIL: " + label); exit(1) }; print("PASS: " + label) }
+let d = JSONDecoder(); d.keyDecodingStrategy = .convertFromSnakeCase
+let invJSON = """
+{"ok":true,"invoices":[{"id":9,"invoice_number":"INV-0009","status":"Submitted","client_id":3,"client_name":"Synthetic Client","track_title":"Synthetic Track",
+ "auth_number":null,"funding_agency":"Synthetic VR","hours":12.5,"total_amount":1250.01,"paid_amount":100.0,"balance":1149.99,"short_paid":true,
+ "written_off":0.01,"due_date":"2026-11-16","closed_reason":null,"days_outstanding":40,"created_at":"2026-10-01","submitted_at":"2026-10-10","paid_at":"2026-10-20",
+ "can_open_client":true,"owed_text":"$1,149.99 owed (part-paid), 3 days past due","date_lines":["Created Oct 1, 2026","Submitted Oct 10, 2026","Due Nov 16, 2026"],"days_overdue":3},
+ {"id":10,"invoice_number":"INV-0010","status":"Draft","created_at":"2026-09-01","owed_text":null,"date_lines":["Created Sep 1, 2026"],"days_overdue":null},
+ {"id":11,"invoice_number":"INV-0011","status":"Draft","created_at":"2026-08-01","date_lines":[]}, {"id":"odd"}],
+ "status":"","total":3,"page":1,"pages":1,
+ "outstanding":[{"funding_agency":"Synthetic VR","count":2,"amount":12500000.0,"oldest_days":40,"overdue":0,"part_paid":1},
+                {"funding_agency":"","count":1,"amount":50.5,"oldest_days":null,"overdue":50.5,"part_paid":0}],
+ "unbilled":10.0,"filters":{"status":"","agency":"Synthetic VR","month":"","q":""},"agencies":["Synthetic VR"],"heading":"All invoices for Synthetic VR","requested":false,"found":null}
+"""
+let inv = try! d.decode(InvoicesResponse.self, from: Data(invJSON.utf8))
+check(inv.invoices.count == 3 && inv.heading == "All invoices for Synthetic VR" && inv.filters?.agency == "Synthetic VR" && inv.agencies == ["Synthetic VR"],
+      "T1, T2: the invoices reply decodes as the server sends it (one odd row skipped)")
+check(invoiceStatusLine(inv.invoices[0]) == "$1,149.99 owed (part-paid), 3 days past due"
+      && invoiceDatesLine(inv.invoices[0]) == "Created Oct 1, 2026, Submitted Oct 10, 2026, Due Nov 16, 2026"
+      && invoiceStatusLine(inv.invoices[1]) == "Draft" && invoiceAmountLine(inv.invoices[0]) == "$1,250.01, 12.5 hours",
+      "T1: the row shows the server's sentence and date lines; the amount line only formats the server's total and hours")
+check(invoiceAgingLine(inv.outstanding[0]) == "Synthetic VR: $12,500,000.00 owed, $0.00 past due. 2 invoices (1 part-paid), oldest 40 days."
+      && invoiceAgingLine(try! d.decode(InvoiceAgingRow.self, from: Data(#"{"funding_agency":"B","count":1,"amount":1,"oldest_days":1,"overdue":0}"#.utf8))) == "B: $1.00 owed, $0.00 past due. 1 invoice, oldest 1 day."
+      && invoiceAgingLine(inv.outstanding[1]) == "No agency: $50.50 owed, $50.50 past due. 1 invoice.",
+      "T3: each agency's line says the past-due amount ($0.00 too), part-paid only when there is some, 1 invoice")
+let olderJSON = #"{"invoices":[{"id":1,"invoice_number":"INV-1","status":"Paid","balance":5,"short_paid":true,"created_at":"2026-01-01"}],"total":1,"page":1,"pages":1,"outstanding":[{"funding_agency":"A","count":1,"amount":5}],"unbilled":0}"#
+let older = try! d.decode(InvoicesResponse.self, from: Data(olderJSON.utf8))
+check(older.heading == nil && invoiceStatusLine(older.invoices[0]) == "Paid: $5.00 still owed" && invoiceAgingLine(older.outstanding[0]) == "A: $5.00 owed. 1 invoice.",
+      "T1, T3: a 4.37.0 server's reply still reads (no filters, its own part-paid line)")
+check(invoicesQuery(status: "Draft", agency: " ", month: "2026-10", q: "", page: 2, invoiceId: nil) == ["page": "2", "status": "Draft", "month": "2026-10"]
+      && invoicesQuery(status: "Draft", agency: "X", month: "", q: "", page: 1, invoiceId: 7) == ["id": "7"],
+      "T2: blank filters are left out; one invoice by id sends only the id")
+let choices = invoiceAgencyChoices(["Synthetic VR"], kept: "Old Agency")
+check(choices.count == 2 && choices[1].label == "Old Agency (no invoices)" && invoiceAgencyChoices(["A"], kept: "A").count == 1,
+      "T2: a kept agency not on the list reads \"(no invoices)\"")
+let drafts = invoiceFirstDrafts(inv.invoices)
+check(drafts.map(\.id) == [11, 10] && invoiceBulkConfirmTitle(2, date: "Nov 19, 2026") == "Mark 2 invoices submitted as sent on Nov 19, 2026?",
+      "T4: drafts oldest first; the confirmation names the count and the date")
+let reviewJSON = """
+{"ok":true,"id":5,"auth_number":"A-123","status":"New","track_id":null,"status_text":null,"not_approved":true,"already":["Already on a track: X for Y."],
+ "details":[{"label":"Client name in the email","value":"Synthetic Client"},{"label":"Amount","value":"$1,000.00"}],
+ "matches":[{"id":3,"text":"Synthetic Client (Active)"}],"preset_client_id":3,"other_clients":[{"id":3,"name":"Synthetic Client"},{"id":4,"name":"Other Client"}],
+ "counselor":{"text":"Synthetic Counselor c@example.test","confirmed":false,"preticked":false},"email_text":"Authorization Number: A-123"}
+"""
+let review = try! d.decode(IncomingAuthReview.self, from: Data(reviewJSON.utf8))
+check(review.notApproved && review.details.count == 2 && review.presetClientId == 3 && review.counselor?.confirmed == false && review.otherClients.count == 2,
+      "T6: the review decodes as api_438 sends it")
+let started = try! d.decode(StartAuthReply.self, from: Data(#"{"ok":true,"client_id":3,"notices":["n"],"prefill":{"title":"AT","authorized_hours":"10","incoming_auth":"5"},"heading":"New training track for Synthetic Client"}"#.utf8))
+check(started.clientId == 3 && started.prefill["authorized_hours"] == "10" && started.prefill["incoming_auth"] == "5",
+      "T6: the start reply's prefill reads as strings")
+let ch = authClientChoices(review.matches)
+check(ch.last?.label == "Another client, chosen below" && ch.last?.tag == 0
+      && (startAuthBody(id: 5, choice: 0, other: 4, setCounselor: true)["client_id"] as? Int) == 4
+      && (startAuthBody(id: 5, choice: 3, other: 4, setCounselor: false)["client_id"] as? Int) == 3,
+      "T6: \"Another client, chosen below\" is last; the other client is sent only when it is chosen")
+let opts = try! d.decode(BookingOptions.self, from: Data(#"{"ok":true,"plan_patterns":[{"key":"weekly","label":"Once, or weekly on the same day"},{"key":"days","label":"On several days each week"}],"weekdays":[{"n":1,"label":"Monday"}],"max_sessions":100,"meeting_providers":[{"key":"zoom","label":"In Zoom"}]}"#.utf8))
+check(opts.planPatterns.count == 2 && opts.weekdays[0].n == 1 && opts.meetingProviders[0].label == "In Zoom", "T7, T8: booking_options decodes")
+check(sessionPlanBody(pattern: "weekly", days: [1], until: "2026-12-01", dates: "x", ok: "h").isEmpty
+      && (sessionPlanBody(pattern: "days", days: [1, 3], until: nil, dates: "", ok: nil)["plan_days"] as? [Int]) == [1, 3]
+      && sessionPlanBody(pattern: "days", days: [1], until: nil, dates: "", ok: nil)["plan_until"] == nil
+      && (sessionPlanBody(pattern: "dates", days: [1], until: nil, dates: "2026-11-03", ok: "abc")["plan_ok"] as? String) == "abc"
+      && sessionPlanBody(pattern: "dates", days: [1], until: nil, dates: "2026-11-03", ok: nil)["plan_days"] == nil
+      && sessionPlanWeeksLimit("days") == 52 && sessionPlanWeeksLimit("weekly") == 26,
+      "T7: weekly sends no plan fields (a 4.37.0 body); each pattern only its own; 52 weeks only for several days")
+check(contractMoneyText("$12,500,000.00") == "12500000.00" && contractMoneyText("12,50") == nil && contractMoneyText("12345678901") == nil
+      && contractMoneyText("") == "" && bookingCostText("12,345,678.90") == "12345678.90" && bookingCostText("123,456,789.00") == nil,
+      "T10, T12: contract money takes $ and commas up to 10 digits, refuses 12,50; a booking cost up to 8 digits")
+let crow = try! d.decode(ContractRow.self, from: Data(#"{"id":1,"name":"C","amount":10000,"spent":2900,"status":"Active","end_date":"2026-12-01","pct":29,"open_deliverables":1,"ends_text":"— ending soon"}"#.utf8))
+check(contractRowLines(crow) == ["$2,900.00 of $10,000.00 (29%)", "ends 2026-12-01 — ending soon", "1 open deliverable"],
+      "T10: a contract's list lines use the server's percent and end phrase")
+check(bookingsQuery("past") == ["past": "1"] && bookingsQuery("upcoming")["view"] == "upcoming" && bookingsQuery("cancelled") == ["view": "cancelled"],
+      "T12: the history is asked for with past=1 and no view (view=past would list the upcoming bookings again)")
+check(authNoMatchText("not given") == "Add the client first, or choose another client below."
+      && authNoMatchText("") == "Add the client first, or choose another client below."
+      && authNoMatchText("Synthetic Client") == "No client record is named Synthetic Client. Add the client first, or choose another client below.",
+      "T6: no \"named not given\": the name is said only when the email gives one")
+let util = try! d.decode(UtilizationReply.self, from: Data(#"{"ok":true,"from":"2026-10-01","to":"2026-12-31","period":"this_quarter","presets":[{"key":"this_quarter","label":"This quarter"}],"notes":[],"org_util":100,"weeks":13.1,"caseload_scoped":false,"scoped_note":null,"footer":"F","total_delivered":10,"total_value":1250.005,"former_staff_delivered":0,"former_staff_value":0,"no_target_delivered":0,"rows":[{"name":"Synthetic Instructor","weekly":10,"delivered":131,"value":1250.01,"clients":1,"expected":131,"util":100,"no_target":false,"at_or_above":true},{"name":"No Target","weekly":0,"delivered":2,"value":0,"clients":1,"expected":0,"util":0,"no_target":true,"at_or_above":false}]}"#.utf8))
+check(utilizationRowTitle(util.rows[0]) == "Synthetic Instructor: 100% at or above target" && utilizationRowTitle(util.rows[1]) == "No Target: no target"
+      && utilizationRowDetail(util.rows[0]) == "131 of 131 expected hours · 1 client · $1,250.01 value" && util.weeks == 13.1 && util.period == "this_quarter",
+      "T13: utilization rows read as the website's, the server's value formatted")
+let groups = try! d.decode(ATProfitGroups.self, from: Data(#"{"service":[{"label":"Assistive Technology","invoiced":1250.01,"received":100,"cost":50,"margin":1200.01,"unpriced_hours":2}],"contract":{"Unallocated":{"invoiced":5,"received":0,"cost":0,"margin":5,"unpriced_hours":0}}}"#.utf8))
+check(groups.service.first?.label == "Assistive Technology" && groups.service.first?.margin == 1200.01 && groups.contract.first?.label == "Unallocated",
+      "T14: the server's group totals read as a list or keyed by name, never added here")
+'''
+with tempfile.TemporaryDirectory(prefix='cms-438-') as tmp438:
+    (Path(tmp438) / 'main.swift').write_text(run438)
+    subprocess.run(['swiftc', '-module-cache-path', str(Path(tmp438) / 'm'), str(Path(tmp438) / 'main.swift'), '-o', str(Path(tmp438) / 't')], check=True)
+    run = subprocess.run([str(Path(tmp438) / 't')], capture_output=True, text=True)
+    print(run.stdout, end='')
+    static_check(run.returncode == 0, '4.38.0: the invoice, authorization, booking, contract, utilization and profitability models and helpers run as the app runs them')
 
 source = (root / 'ios/Sources/API.swift').read_text()
 source = source.split('extension Color {')[0]

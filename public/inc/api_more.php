@@ -29,7 +29,9 @@ function api_more(string $action, array $input, int $userId): ?array {
             $offices = offices_on() ? array_map(fn($o) => ['id' => (int)$o['id'], 'name' => (string)$o['name']], offices_all(true)) : [];
             // The administrator's time limits the forms start from (4.34.0): a loan's return date.
             return ['ok' => true, 'lists' => $lists, 'custom_fields' => $cf, 'offices' => $offices,
-                'numbers' => ['loan_due_days' => (int)cms_number('loan_due_days')]];
+                'numbers' => ['loan_due_days' => (int)cms_number('loan_due_days')],
+                // 4.38.0: what each booking service type is called on screen ("CART (real-time captioning)").
+                'booking_type_labels' => (object)array_combine($bt = array_values(array_unique(array_merge(cms_list_items('booking_types'), array_keys(BOOKING_TYPE_LABELS), ['Other']))), array_map('booking_type_label', $bt))];
         }
         // Staff agreements (4.15.0): this person's own, to read and sign by typing their name.
         case 'agreements': {

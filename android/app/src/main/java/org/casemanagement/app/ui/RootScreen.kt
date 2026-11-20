@@ -305,6 +305,8 @@ private val titles = mapOf(
     "evalReport" to "Evaluation report", "deviceLetter" to "Justification letter", "worksiteReport" to "Recommendation report",
     "amendment" to "Burn-down", "letters" to "Write a letter", "timeline" to "Timeline", "atMatches" to "Find instructor matches",
     "tasksBulk" to "Complete several tasks", "taskList" to "Tasks", "availability" to "My availability", "privacyIncident" to "Report a privacy incident",
+    "invoiceDocument" to "Invoice", "authorizations" to "Incoming authorizations", "authorization" to "Authorization email",
+    "profitability" to "Service profitability", "dataQuality" to "Data quality", "docAudit" to "Documentation audit",
 )
 
 /** 4.36.0: an optional text argument of a route's query. */
@@ -360,9 +362,11 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("track/{clientId}/{trackId}") { TrackScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0) }
         composable("report/{clientId}/{trackId}") { SendReportScreen(api, nav, n0(it, "clientId"), n0(it, "trackId")) }
         // 4.37.0 (S13): an approved amendment request linked to the edit, with its reason filled in.
-        composable("trackEdit/{clientId}/{trackId}?amend={amend}&reason={reason}", arguments = listOf(textArg("amend", "0"), textArg("reason", ""))) {
+        // 4.38.0 (T6): a new track from an authorization email (auth = the email's id).
+        composable("trackEdit/{clientId}/{trackId}?amend={amend}&reason={reason}&auth={auth}", arguments = listOf(textArg("amend", "0"), textArg("reason", ""), textArg("auth", "0"))) {
             TrackEditScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0,
-                amendRequest = it.arguments?.getString("amend")?.toIntOrNull() ?: 0, reasonPrefill = it.arguments?.getString("reason") ?: "")
+                amendRequest = it.arguments?.getString("amend")?.toIntOrNull() ?: 0, reasonPrefill = it.arguments?.getString("reason") ?: "",
+                authId = it.arguments?.getString("auth")?.toIntOrNull() ?: 0)
         }
         composable("newSession") { NewSessionScreen(api, nav) }
         // 4.35.0: a group session, times offered for a client's request, a client's tech assessments.
@@ -394,7 +398,15 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("pipeline") { PipelineScreen(api, nav) }
         composable("waitlist") { WaitlistScreen(api) }
         composable("compliance") { ComplianceScreen(api, nav) }
-        composable("invoices") { InvoicesScreen(api) }
+        // 4.38.0 (T2, T5): one invoice (from search), and the invoice itself.
+        composable("invoices?id={id}", arguments = listOf(textArg("id", "0"))) { InvoicesScreen(api, nav, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
+        composable("invoiceDocument/{id}") { InvoiceDocumentScreen(api, n0(it, "id")) }
+        // 4.38.0 (T6, T14, T15).
+        composable("authorizations") { AuthorizationsScreen(api, nav) }
+        composable("authorization/{id}") { AuthorizationReviewScreen(api, nav, n0(it, "id")) }
+        composable("profitability") { ProfitabilityScreen(api) }
+        composable("dataQuality") { DataQualityScreen(api, nav) }
+        composable("docAudit") { DocAuditScreen(api, nav) }
         composable("incidents") { IncidentsScreen(api, nav) }
         val n = { e: androidx.navigation.NavBackStackEntry, k: String -> e.arguments?.getString(k)?.toIntOrNull() ?: 0 }
         composable("voice/{clientId}/{name}") { VoiceScreen(api, nav, n(it, "clientId"), it.arguments?.getString("name") ?: "") }

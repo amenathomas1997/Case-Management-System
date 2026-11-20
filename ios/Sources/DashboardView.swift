@@ -210,6 +210,14 @@ struct DashboardView: View {
                     }
                     if api.can("clients") { MoreToolLink(title: "Client portal requests", subtitle: "Appointments, changes and device help clients asked for", systemImage: "tray.full") { PortalRequestsView() } }
                     if api.can("clients") { MoreToolLink(title: "Intake progress", subtitle: "Referrals and clients by stage", systemImage: "chart.bar.doc.horizontal") { PipelineView() } }
+                    // 4.38.0 (T6, T15): shown by a server that has them.
+                    if api.can("clients") && api.serverAtLeast(4, 38) {
+                        MoreToolLink(title: "Incoming authorizations", subtitle: "Approved authorization emails: paste or forward one, match the client and start the track.",
+                                     systemImage: "envelope.open") { AuthorizationsView() }
+                        MoreToolLink(title: "Data quality", subtitle: "Likely duplicate clients and records to tidy before a report is due.",
+                                     systemImage: "checkmark.seal") { DataQualityView() }
+                        MoreToolLink(title: "Documentation audit", systemImage: "doc.badge.ellipsis") { DocAuditView() }
+                    }
                     if api.can("billing") { MoreToolLink(title: "Invoices", subtitle: "Status, balances, and marking drafts submitted", systemImage: "doc.plaintext") { InvoicesView() } }
                     // AT services offers only modules the user holds a permission for, so the link
                     // is shown only when at least one of them is available.

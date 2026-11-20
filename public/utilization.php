@@ -5,68 +5,25 @@
 // forward-looking Capacity page.
 require __DIR__ . '/inc/bootstrap.php';
 require_once __DIR__ . '/inc/report_period.php';
+require_once __DIR__ . '/inc/utilization.php';
 require __DIR__ . '/inc/layout.php';
 $user = require_login();
 require_perm('analytics');
-$rt = report_table('training_tracks', (int)$user['id']);
-
 // The shared period picker (remembered per user); the last four weeks when nothing is
 // chosen. A repeated parameter (from[]=…) arrives as an array; it falls back to the default.
 $period = report_period($user, date('Y-m-d', strtotime('-28 days')), date('Y-m-d'));
 $from = $period['from']; $to = $period['to'];
-// Calendar days, counted as equipment.php and contracts.php count them: subtracting two
-// local midnights gives a fractional day across a daylight-saving change.
-$days = (new DateTime($from))->diff(new DateTime($to))->days + 1;
-$weeks = max(0.1, $days / 7);
-
-$staff = db()->query('SELECT id, name, weekly_hours FROM users WHERE is_active = 1 ORDER BY name')->fetchAll();
-
-// Delivered billable hours + value per staff, from the work logs they recorded.
-// Logs by a deactivated user (or with no recorded user) are grouped under 0, so the
-// totals still include them and reconcile with invoices and track hours.
-// Each log's value is its hours and mileage, each rounded to the cent first, as
-// generate_invoice(), unbilled_totals() and track_rollup() price it.
-// 4.29.0: this is a staff view, so every track's hours count (VR, private pay and no charge
-// alike: it is all staff time); no-charge work that was never invoiced has no value, as it is
-// never billed. No hours are attributed to a funding agency here.
-$dq = db()->prepare("SELECT COALESCE(u.id, 0) AS uid, COALESCE(SUM(w.hours),0) AS hrs,
-        COALESCE(SUM(CASE WHEN w.invoice_id IS NULL AND t.billing_mode = 'none' THEN 0 ELSE
-            ROUND(w.hours * COALESCE(w.hourly_rate, t.hourly_rate), 2) + ROUND(w.mileage * COALESCE(w.mileage_rate, t.mileage_rate), 2) END),0) AS val,
-        COUNT(DISTINCT t.client_id) AS clients
-    FROM work_logs w JOIN {$rt} t ON t.id = w.track_id
-    LEFT JOIN users u ON u.id = w.created_by AND u.is_active = 1
-    WHERE w.work_date BETWEEN ? AND ? GROUP BY COALESCE(u.id, 0)");
-$dq->execute([$from, $to]);
-$byUser = [];
-foreach ($dq->fetchAll() as $r) $byUser[(int)$r['uid']] = $r;
-
-$rows = [];
-$totDeliv = 0.0; $totExp = 0.0; $totVal = 0.0;
-// Hours by active staff who have a weekly target (the utilization numerator), and by
-// active staff whose target is 0 (no target: like former staff, their hours count in
-// the totals but not in the percentage).
-$activeDeliv = 0.0; $noTargetDeliv = 0.0;
-foreach ($staff as $s) {
-    $d = $byUser[(int)$s['id']] ?? ['hrs' => 0, 'val' => 0, 'clients' => 0];
-    $expected = (float)$s['weekly_hours'] * $weeks;
-    $util = $expected > 0 ? round((float)$d['hrs'] / $expected * 100) : null;
-    $rows[] = ['name' => $s['name'], 'weekly' => (float)$s['weekly_hours'], 'delivered' => (float)$d['hrs'],
-        'value' => (float)$d['val'], 'clients' => (int)$d['clients'], 'expected' => $expected, 'util' => $util];
-    $totDeliv += (float)$d['hrs']; $totExp += $expected; $totVal += (float)$d['val'];
-    if ($expected > 0) $activeDeliv += (float)$d['hrs']; else $noTargetDeliv += (float)$d['hrs'];
-}
-// Highest utilization first; staff with no target last.
-usort($rows, fn($a, $b) => [$a['util'] === null, $b['util'] ?? 0] <=> [$b['util'] === null, $a['util'] ?? 0]);
-// Team utilization compares the delivered hours of active staff who have a target
-// with their own capacity.
-$orgUtil = $totExp > 0 ? round($activeDeliv / $totExp * 100) : 0;
-// Former / unattributed staff: their delivered work counts in the hour and value
-// totals, but there is no capacity target to measure it against. Listed last.
-if (isset($byUser[0])) {
-    $d = $byUser[0];
-    $rows[] = ['name' => 'Former or unrecorded staff', 'weekly' => 0.0, 'delivered' => (float)$d['hrs'],
-        'value' => (float)$d['val'], 'clients' => (int)$d['clients'], 'expected' => 0.0, 'util' => null];
-    $totDeliv += (float)$d['hrs']; $totVal += (float)$d['val'];
+// 4.38.0: the hours, value and percentages from inc/utilization.php, shared with the apps.
+$u = utilization_report($user, $from, $to);
+$weeks = $u['weeks'];
+$rows = $u['rows'];
+$totDeliv = $u['delivered']; $totExp = $u['expected']; $totVal = $u['value'];
+$activeDeliv = $u['active_delivered']; $noTargetDeliv = $u['no_target_delivered'];
+$orgUtil = $u['team_util'];
+// Former / unattributed staff, listed last.
+if ($u['former'] !== null) {
+    $rows[] = ['name' => 'Former or unrecorded staff', 'weekly' => 0.0, 'delivered' => $u['former']['delivered'],
+        'value' => $u['former']['value'], 'clients' => $u['former']['clients'], 'expected' => 0.0, 'util' => null];
 }
 
 if (isset($_GET['export'])) {
@@ -82,10 +39,10 @@ if (isset($_GET['export'])) {
     write_csv_row($out, ['TOTAL', '', round($totExp, 1), round($totDeliv, 2), $orgUtil . '%', round($totVal, 2), '']);
     // Same explanation as the page: Delivered includes former staff and staff with no
     // weekly target, the utilization % does not.
-    if (isset($byUser[0]) || $noTargetDeliv > 0) {
+    if ($u['former'] !== null || $noTargetDeliv > 0) {
         $left = [];
         if ($noTargetDeliv > 0) $left[] = round($noTargetDeliv, 2) . ' hours by active staff with no weekly target';
-        if (isset($byUser[0])) $left[] = round((float)$byUser[0]['hrs'], 2) . ' hours by former or unrecorded staff';
+        if ($u['former'] !== null) $left[] = round($u['former']['delivered'], 2) . ' hours by former or unrecorded staff';
         write_csv_row($out, ['NOTE', 'Utilization % compares the ' . round($activeDeliv, 2) . ' hours delivered by active staff with a weekly target with their expected hours. The '
             . implode(' and the ', $left) . ' are included in Delivered hours and Billable value but not in Utilization %.']);
     }
@@ -95,7 +52,7 @@ if (isset($_GET['export'])) {
 page_header('Utilization', $user, 'analytics');
 ?>
 <h1>Staff billable utilization</h1>
-<?php if (caseload_scoped()): ?><p>Activity is limited to your assigned clients. Expected hours remain the staff members’ full capacity targets.</p><?php endif;?>
+<?php if (caseload_scoped()): ?><p><?= h(UTILIZATION_SCOPED_NOTE) ?></p><?php endif;?>
 <p class="muted">Billable service hours delivered against expected capacity (weekly target × weeks in the period). A companion to <a href="capacity.php">Capacity planning</a>.</p>
 
 <?= report_period_form('utilization.php', $period, '', '<a class="btn btn-secondary btn-sm" href="utilization.php?from=' . h($from) . '&amp;to=' . h($to) . '&amp;export=1">Download utilization report (CSV)</a>') ?>
@@ -133,7 +90,5 @@ page_header('Utilization', $user, 'analytics');
   </tbody>
 </table>
 </div>
-<p class="muted">Billable hours are the service hours each staff member recorded in their work logs; value is those hours and their logged mileage at the logged rates, as invoiced (no-charge work has no value). Utilization over 100% means more was delivered than the weekly target implies.
-   Hours logged by staff who are no longer active (or with no recorded staff member) are shown as “Former or unrecorded staff”: they are included in the hours and value totals, but not in team utilization, which compares active staff with their own targets.
-   Staff whose weekly target is 0 show “no target”: their hours are likewise in the totals but not in team utilization.</p>
+<p class="muted"><?= h(UTILIZATION_FOOTER) ?></p>
 <?php page_footer();

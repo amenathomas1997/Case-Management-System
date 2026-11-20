@@ -373,6 +373,8 @@ fun alertRoute(link: String?, can: (String) -> Boolean): String? {
         "counselors.php" -> if (can("admin")) "counselors" else null
         "followups.php" -> if (can("clients")) "followups" else null
         "schedule.php" -> if (can("schedule")) "schedule" else null
+        // 4.38.0 (T6): "A new authorization email (N) is waiting on Incoming authorizations."
+        "authorizations.php" -> if (!can("clients")) null else id("id")?.let { "authorization/$it" } ?: "authorizations"
         else -> null
     }
 }

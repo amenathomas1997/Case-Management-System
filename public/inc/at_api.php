@@ -68,7 +68,14 @@ try {
             audit($userId,'at.report','at_record',(int)$r['id'],'mobile');
             out(['ok'=>true,'title'=>$reportTitle,'text'=>implode("\n",$lines)]);
         case 'at_matches':out(['ok'=>true,'matches'=>at_matches($_GET,$userId)]);
-        case 'at_profitability':out(['ok'=>true,'rows'=>at_profitability($userId)]);
+        case 'at_profitability':
+            // 4.38.0: the website's group totals (at_profit_groups(), as at_services.php's "By service" and
+            // "By linked contract"), so no app adds money, and the page's intro and footer. Without the cost
+            // report's permission (billing) it is a 403, as the website's page refuses it.
+            if(!at_can(at_catalog()['cost']['perm']))fail('Your account does not have access to that area. Ask an administrator if you need it.',403);
+            $profit=at_profitability($userId);
+            $grouped=fn(string $k):array=>array_map(fn($label,$t)=>['label'=>(string)$label,'invoiced'=>round($t['invoiced'],2),'received'=>round($t['received'],2),'cost'=>round($t['cost'],2),'margin'=>round($t['margin'],2),'unpriced_hours'=>$t['unpriced_hours']],array_keys($g=at_profit_groups($profit,$k)),$g);
+            out(['ok'=>true,'rows'=>$profit,'groups'=>['service'=>$grouped('service'),'contract'=>$grouped('contract')],'intro'=>AT_PROFIT_INTRO,'footer'=>AT_PROFIT_FOOTER]);
         case 'at_save':case 'at_issue':case 'at_return':
             if($_SERVER['REQUEST_METHOD']!=='POST')fail('Use POST for changes.',405);
             if($action==='at_save'){

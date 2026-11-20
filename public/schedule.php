@@ -155,15 +155,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
     $repeatWeeks = $planPattern === 'weekly' ? max(1, count($occurrences)) : 1;
     // Make the meeting link in the instructor's own Zoom or Teams (4.10.0).
     $meetMake = is_string($_POST['meeting_make'] ?? null) && isset(MEETING_PROVIDERS[$_POST['meeting_make']]) ? $_POST['meeting_make'] : '';
-    if ($meetMake !== '') {
-        if (!$f['is_remote']) $errors['meeting_make'] = 'A ' . MEETING_PROVIDERS[$meetMake] . ' link is only for a remote session: tick Remote / telepractice, or choose No.';
-        elseif ($f['meeting_url'] !== null) $errors['meeting_make'] = 'A meeting link is typed above and ' . MEETING_PROVIDERS[$meetMake] . ' would make another: clear the link, or choose No.';
-        elseif (!meeting_app($meetMake)) $errors['meeting_make'] = MEETING_PROVIDERS[$meetMake] . ' is not set up here any more. Choose No, or type a link.';
-        // Only your own account, unless you are an administrator booking for someone (owner rule, 4.10.0).
-        elseif ($f['staff'] && (int)$f['staff']['id'] !== (int)$user['id'] && !can('admin')) $errors['meeting_make'] = 'A meeting can be made only in your own ' . MEETING_PROVIDERS[$meetMake]
-            . ' account. ' . $f['staff']['name'] . ' can make it, or an administrator; otherwise choose No and type a link.';
-        elseif ($f['staff'] && !meeting_connected((int)$f['staff']['id'], $meetMake)) $errors['meeting_make'] = $f['staff']['name'] . (meeting_account((int)$f['staff']['id'], $meetMake) ? '\'s ' . MEETING_PROVIDERS[$meetMake] . ' connection has ended' : ' has not connected ' . MEETING_PROVIDERS[$meetMake])
-            . ((int)$f['staff']['id'] === (int)$user['id'] ? '. Connect it on My Account, Online meetings, then schedule again.' : '. They connect it on their My Account page; until then choose No, or type a link.');
+    if ($meetMake !== '' && ($meetErr = session_meeting_make_error($meetMake, (bool)$f['is_remote'], $f['meeting_url'], $f['staff'] ? (int)$f['staff']['id'] : 0, $f['staff'] ? (string)$f['staff']['name'] : '', $user)) !== null) {
+        $errors['meeting_make'] = $meetErr;   // inc/meetings.php (4.38.0), shared with the apps
     }
     if ($client && $f['staff'] && $f['staff_scoped'] && (int)$client['assigned_to'] !== (int)$f['staff']['id']) {
         $errors['staff_id'] = $f['staff']['name'] . ' only sees clients on their own caseload, and ' . $client['name']
@@ -203,8 +196,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
     if (!array_diff_key($errors, ['authorization_ack' => 1]) && $planPattern !== 'weekly') {
         $planHash = session_plan_hash($occurrences, $clientId, (int)$f['staff']['id'], (int)$trackId, $planPattern);
         if (($_POST['plan_ok'] ?? '') !== $planHash) {
-            $errors['plan_ok'] = 'Check the ' . count($occurrences) . ' session' . (count($occurrences) === 1 ? '' : 's') . ' listed below (' . rtrim(rtrim(number_format(session_plan_hours($occurrences), 2), '0'), '.') . ' hours), then tick Book these ' . count($occurrences) . ' sessions and schedule again.';
-            $_SESSION['plan_preview'] = ['hash' => $planHash, 'list' => array_map(fn($o) => date('l, F j, Y g:i A', $o[0]) . ' to ' . date('g:i A', $o[1]), $occurrences)];
+            $errors['plan_ok'] = session_plan_check_message($occurrences);
+            $_SESSION['plan_preview'] = ['hash' => $planHash, 'list' => session_plan_lines($occurrences)];
         }
     }
     if ($errors) {
@@ -232,7 +225,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
     unset($_SESSION['plan_preview']);
     $count = count($occurrences);
     // How the series is described in the invite, the flash and the audit log.
-    $seriesWords = $count <= 1 ? '' : ($planPattern === 'weekly' ? "{$count} weekly sessions" : "{$count} sessions (" . mb_strtolower(PLAN_PATTERNS[$planPattern]) . ')');
+    $seriesWords = session_series_words($count, $planPattern);
     $startTs = $occurrences[0][0] ?? $startTs; $endTs = $occurrences[0][1] ?? $endTs;
     // The whole series is saved or none of it: a failure part-way through must
     // not leave a partial series that a retry would then duplicate.
@@ -285,7 +278,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         db()->commit();
         // The meeting is made once the sessions are saved, so a refused booking never leaves
         // one behind; every session of the series gets its one link (4.10.0).
-        $meetWhy = null;
+        $meetWhy = null; $made = null;
         if ($meetMake !== '') {
             // Shared with voice booking (inc/meetings.php session_make_meeting(), 4.37.0).
             $made = session_make_meeting($newSessionIds, $meetMake, $staffId, (string)$f['staff']['name'], $clientId, (string)$client['name'],
@@ -325,10 +318,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
             . ($isRemote ? "\nFormat: Remote / telepractice" . ($meetingUrl ? "\nJoin online: {$meetingUrl}" : '') : ($location !== '' ? "\nWhere: {$location}" : ''))
             . "\n\nOpen the attached invite to add it to your calendar" . ($count > 1 ? ': it holds every session in the series.' : '.') . "\n",
             [['name' => 'invite.ics', 'mime' => 'text/calendar; method=REQUEST', 'bytes' => $ics]]);
-        flash(($count > 1 ? 'Series of ' . $seriesWords . ' scheduled.' : 'Session scheduled.')
-            . ($meetMake !== '' && $meetWhy === null ? ' The ' . MEETING_PROVIDERS[$meetMake] . ' link was made in ' . ($staffId === (int)$user['id'] ? 'your' : $staff['name'] . "'s") . ' account.' : '')
-            . ($sent ? ' A calendar invite was emailed to ' . $staff['name'] . '.' : ' (Calendar invite email could not be sent.)')
-            . ($meetWhy !== null ? ' ' . $meetWhy : ''), $meetWhy !== null ? 'error' : 'success');
+        flash(session_booked_message($count, $planPattern, (string)$staff['name'], (bool)$sent, $meetMake, $made, $staffId === (int)$user['id']), $meetWhy !== null ? 'error' : 'success');
     }
     redirect('schedule.php');
 }
@@ -820,8 +810,9 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
         <input type="time" id="time" name="time" required value="<?= h(old_in('time', '10:00')) ?>" <?= field_aria('time') ?>><?= field_error('time') ?></div>
       <div class="field"><label for="duration">Duration (hours) <?= required_mark() ?></label>
         <input type="number" id="duration" name="duration" step="0.25" min="0.25" max="12" required value="<?= h(old_in('duration', '1.5')) ?>" <?= field_aria('duration') ?>><?= field_error('duration') ?></div>
-      <div class="field"><label for="repeat_weeks">Repeat weekly <span class="hint">1 = single session; e.g., 8 = every week for 8 weeks</span></label>
-        <input type="number" id="repeat_weeks" name="repeat_weeks" min="1" max="26" value="<?= h(old_in('repeat_weeks', '1')) ?>" <?= field_aria('repeat_weeks') ?>><?= field_error('repeat_weeks') ?></div>
+      <?php // The box stops at 26 weeks for a weekly repeat and at 52 for several days each week (4.38.0, session_plan()'s limits); the pattern chosen below switches it. ?>
+      <div class="field"><label for="repeat_weeks">Repeat weekly <span class="hint">1 = single session; e.g., 8 = every week for 8 weeks; up to 26 weeks, or 52 for several days each week</span></label>
+        <input type="number" id="repeat_weeks" name="repeat_weeks" min="1" max="<?= old_in('plan_pattern', 'weekly') === 'days' ? 52 : 26 ?>" value="<?= h(old_in('repeat_weeks', '1')) ?>" <?= field_aria('repeat_weeks') ?>><?= field_error('repeat_weeks') ?></div>
       <div class="field"><label for="location">Location</label>
         <input type="text" id="location" name="location" maxlength="190" value="<?= h(old_in('location')) ?>" <?= field_aria('location') ?>><?= field_error('location') ?></div>
       <div class="field"><label for="notes">Notes</label>
@@ -832,7 +823,7 @@ $groupOpen = old_in('add_group_session') !== '' || array_filter(array_keys(form_
     $planOpen = $planIn !== 'weekly' || has_field_error('plan_days') || has_field_error('plan_until') || has_field_error('plan_dates') || has_field_error('plan_ok'); ?>
     <details<?= $planOpen ? ' open' : '' ?>><summary>More than one session: several days a week, a list of dates, or the whole authorization</summary>
       <div class="field"><label for="plan_pattern">How often</label>
-        <select id="plan_pattern" name="plan_pattern"><?php foreach (PLAN_PATTERNS as $pk => $pl): ?><option value="<?= $pk ?>"<?= $planIn === $pk ? ' selected' : '' ?>><?= h($pl) ?></option><?php endforeach; ?></select></div>
+        <select id="plan_pattern" name="plan_pattern" onchange="var r=document.getElementById('repeat_weeks');if(r)r.max=this.value==='days'?'52':'26';"><?php foreach (PLAN_PATTERNS as $pk => $pl): ?><option value="<?= $pk ?>"<?= $planIn === $pk ? ' selected' : '' ?>><?= h($pl) ?></option><?php endforeach; ?></select></div>
       <fieldset id="plan_days"<?= has_field_error('plan_days') ? ' aria-describedby="err-plan_days"' : '' ?>><legend>Days of the week (several days, or the whole authorization)</legend>
         <?= field_error('plan_days') ?>
         <?php foreach (PLAN_WEEKDAYS as $dn => $dl): ?><label class="check"><input type="checkbox" id="plan-day-<?= $dn ?>" name="plan_days[]" value="<?= $dn ?>"<?= in_array($dn, $planDays, true) ? ' checked' : '' ?>> <?= $dl ?></label><?php endforeach; ?>

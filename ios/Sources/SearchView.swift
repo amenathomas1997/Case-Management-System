@@ -63,8 +63,13 @@ struct SearchView: View {
                                 hitRow(hit)
                             }
                         } else if hit.kind == "invoice" {
-                            // Invoices are worked on the Invoices screen: shown, not opened here.
-                            hitRow(hit)
+                            // 4.38.0 (T2): the invoice opens on the Invoices screen, alone, as the
+                            // website's invoices.php?id=; without billing it is shown only.
+                            if api.can("billing") {
+                                NavigationLink { InvoicesView(invoiceId: hit.id) } label: { hitRow(hit) }
+                            } else {
+                                hitRow(hit)
+                            }
                         } else if let clientId = hit.clientId {
                             NavigationLink(value: clientId) {
                                 hitRow(hit)

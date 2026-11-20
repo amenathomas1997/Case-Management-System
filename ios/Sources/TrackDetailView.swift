@@ -2137,6 +2137,15 @@ struct TrackEditSheet: View {
     /// change is linked to it, with the amendment reason filled in as track_edit.php does.
     var amendRequest: Int? = nil
     var reasonPrefill: String? = nil
+    /// Started from an incoming authorization email (4.38.0, T6): the fields start_authorization_track
+    /// filled in, the email's id (sent as incoming_auth, so the email is marked "Track created"),
+    /// and the website's heading ("New training track for …, filled in from authorization …").
+    var prefill: [String: String]? = nil
+    var incomingAuth: Int? = nil
+    var heading: String? = nil
+    /// The counselor notices from start_authorization_track (4.38.0): shown at the top of the
+    /// form and said once it has opened.
+    var notices: [String] = []
     let onSaved: (String, TrackFormValues?) -> Void
 
     @State private var form: TrackFormResponse?
@@ -2229,6 +2238,8 @@ struct TrackEditSheet: View {
                 DraftStore.save(draft, key: draftKey, owner: api.userId)
             }
             .task { if form == nil { await load() } }
+            // Said once the sheet is up (a message said while it opens is cut off).
+            .onAppear { if !notices.isEmpty { announceAfterDismiss(notices.joined(separator: " ")) } }
         }
     }
 
@@ -2247,6 +2258,10 @@ struct TrackEditSheet: View {
             }
         }
         Section {
+            ForEach(Array(notices.enumerated()), id: \.offset) { _, n in Text(n).font(.callout.weight(.semibold)) }
+            if let heading, !heading.isEmpty, trackId == nil {
+                Text(heading).font(.callout.weight(.semibold))
+            }
             Text("For \(form.clientName ?? clientName). Fields marked required must be filled in.").font(.callout)
         }
         Section("Track") {
@@ -2407,6 +2422,9 @@ struct TrackEditSheet: View {
             original = fields
             form = r
             restoreDraft()
+            // From an authorization email (4.38.0): the server's prefill, after the defaults, so
+            // it counts as typed here (the discard question asks before it is lost).
+            if trackId == nil, let prefill { apply(prefill); defaultedFor = serviceType }
             // From an approved amendment request (4.37.0): the reason as track_edit.php fills it.
             if let reasonPrefill, reason.isEmpty { reason = reasonPrefill }
         } catch { showFormError(error.localizedDescription, in: &loadError) }
@@ -2481,6 +2499,7 @@ struct TrackEditSheet: View {
                                    "start_date": startDate, "expiration_date": expirationDate, "rsa_category": rsaCategory]
         if let trackId { body["id"] = trackId; body["amendment_reason"] = reason } else if let clientId { body["client_id"] = clientId }
         if let amendRequest, trackId != nil { body["amend_request"] = amendRequest }
+        if let incomingAuth, trackId == nil { body["incoming_auth"] = incomingAuth }
         // 4.34.0: Who pays and the dollar authorization (blank clears it), on a server that offers them.
         if offersBilling {
             body["billing_mode"] = billingMode

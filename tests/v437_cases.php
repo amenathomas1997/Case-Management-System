@@ -311,7 +311,11 @@ check(count($mails437()) === $mailsBefore + 1 && str_contains($flash437(), 'Eval
     'S7: eval_report.php emails the signed report and redirects with the logged sentence');
 $db->exec("CREATE TRIGGER v437_eval_note BEFORE INSERT ON client_notes FOR EACH ROW BEGIN IF NEW.subject = 'AT evaluation report emailed' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Synthetic note failure'; END IF; END");
 try {
+    // The page logs the failed note on purpose, so it is rendered directly; old sessions are
+    // cleared first so the flash read back is this page's, not the previous send's.
+    foreach (glob($tmp . '/sess_*') ?: [] as $f) @unlink($f);
     [$code, , $err2] = $renderPage('eval_report', ['assessment' => (string)$as437id], $webSend + ['recipient' => 'v437-web2@example.invalid']);
+    check(str_contains((string)$err2, 'eval_send: report note not recorded'), 'S7: the failed case note is logged for the administrator');
     check(str_contains($flash437(), 'so do not send it again. It could not be logged on the client'), 'S7: eval_report.php warns when the report went but could not be logged');
     $k = $key437();
     $u1 = $post437('send_eval_report', ['assessment_id' => $as437id, 'sections' => $good, 'to' => 'v437-web3@example.invalid', 'signature' => $adminName437, 'idem_key' => $k]);
@@ -418,8 +422,10 @@ check(str_starts_with($r['message'], 'Recorded: amendment requested.') && (int)$
     && $one437("SELECT status FROM tasks WHERE auto_key='amend-$reqId'") === 'Open' && $audits437('auth.amend_request', '%10%') >= 1 && $r['history'][0]['awaiting'] === true
     && !empty($again['repeat']) && $again['id'] === $reqId && $again['message'] === $r['message'], 'S13: record_amendment keeps one request, a note and a follow-up task; the same idem_key answers the first reply');
 $tOther437 = $track437($cOther437);
-$crossed = $post437('record_amendment', ['track_id' => $tOther437, 'requested_on' => date('Y-m-d'), 'hours' => '10', 'idem_key' => $k]);
-check(!empty($crossed['repeat']) && $crossed['id'] === $reqId && array_column($crossed['history'], 'id') === [$reqId], 'S13: a repeat rebuilds the history from the stored request\'s own track, whatever track_id it names');
+// 4.38.0: the same key for a different request (another track) is refused, and says nothing of either.
+[$stX, $crossed] = $req437('POST', 'record_amendment', ['track_id' => $tOther437, 'requested_on' => date('Y-m-d'), 'hours' => '10', 'idem_key' => $k]);
+check($stX === 409 && $crossed['error'] === 'This was already sent once with different details, and that earlier send may have been saved. Reload to check what was saved, then make your change again.' && !isset($crossed['history']) && !isset($crossed['id'])
+    && (int)$one437("SELECT COUNT(*) FROM amendment_requests WHERE track_id=$tOther437") === 0, 'S13: the same idem_key for another track is refused 409, with no history and nothing recorded');
 [$st, $d] = $req437('POST', 'record_amendment', ['track_id' => $t437, 'requested_on' => date('Y-m-d'), 'idem_key' => $key437()]);
 [$st2, $d2] = $req437('POST', 'record_amendment', ['track_id' => $t437, 'requested_on' => date('Y-m-d', strtotime('+1 day')), 'hours' => '5', 'idem_key' => $key437()]);
 check($st === 422 && isset($d['errors']['hours']) && $st2 === 422 && isset($d2['errors']['requested_on']), 'S13: nothing asked for is errors.hours; tomorrow is errors.requested_on');

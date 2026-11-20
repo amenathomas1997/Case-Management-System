@@ -11,6 +11,7 @@
 		03BA16B2A7DB45857278DA5C /* VoiceAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82064AFC87AE7D44C909E040 /* VoiceAssistant.swift */; };
 		04ED9876B301B86953FF6591 /* AgreementsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCB322F2F5ADA8BF6BE23371 /* AgreementsView.swift */; };
 		0612A222E7C702D0B6F6B6C2 /* NotificationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC0E9051E4DDC540B9B70A62 /* NotificationsView.swift */; };
+		06A5696BC55D842DE8165B11 /* DataQualityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB75A8746C8D2BA8C988A4E8 /* DataQualityView.swift */; };
 		089DF3AC2C18FB99546A2ABA /* TrainingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A49CC6F2860B172D25C650B /* TrainingView.swift */; };
 		12495DCC9ABA56B309EE4C57 /* DocumentsToSign.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F96B0589979EC119DCC1DD5 /* DocumentsToSign.swift */; };
 		1506D55BED84AED93A0988A6 /* CaseManagementWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 06C3502EAABB6652D9E395DF /* CaseManagementWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -38,6 +39,7 @@
 		7E4217EA819E7743CD97CBEF /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 6AEDE781345A6CDD04D9067A /* PrivacyInfo.xcprivacy */; };
 		7F1AE868B19628B92ECD14BE /* PortalRequestsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BE4C2932D30505C1BDCF0FE /* PortalRequestsView.swift */; };
 		8320FCEFE6A78DFB4B2D4D55 /* AIToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C57D26A74CC127D65DAF3415 /* AIToolsView.swift */; };
+		8533339FDA71C65D82A85267 /* AuthorizationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D3920057E85603B0EB7B1E1 /* AuthorizationsView.swift */; };
 		8B8AD0EEF4146FD723087522 /* MessagesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECAD1A6DA67437F6DBDC4D61 /* MessagesView.swift */; };
 		8DFF619A5990339A475412F6 /* FollowupsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 272B16858E24A340708ED922 /* FollowupsView.swift */; };
 		944122D91CF4F2E824043D13 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D1A7986945811FF2413C5C1 /* AccountView.swift */; };
@@ -133,6 +135,7 @@
 		722B9AF7A6A07CDAD653D9EC /* UploadDocumentSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadDocumentSheet.swift; sourceTree = "<group>"; };
 		786B3B2E12EF94DDFCF3DB75 /* DocReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocReviewView.swift; sourceTree = "<group>"; };
 		78DD8D71FB466EB5480D6828 /* CaseManagementUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CaseManagementUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7D3920057E85603B0EB7B1E1 /* AuthorizationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthorizationsView.swift; sourceTree = "<group>"; };
 		7F28B3D387EF471D14C082A8 /* SignatureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignatureView.swift; sourceTree = "<group>"; };
 		801A145993CCABD8636947D2 /* KnowledgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnowledgeView.swift; sourceTree = "<group>"; };
 		82064AFC87AE7D44C909E040 /* VoiceAssistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAssistant.swift; sourceTree = "<group>"; };
@@ -150,6 +153,7 @@
 		A09CF6E66E070C14E48168FF /* ComplianceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComplianceView.swift; sourceTree = "<group>"; };
 		A1707D47244E1A525CE0A8C5 /* TasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasksView.swift; sourceTree = "<group>"; };
 		A3944A970EA20AC54BE1176C /* CaseManagementApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaseManagementApp.swift; sourceTree = "<group>"; };
+		AB75A8746C8D2BA8C988A4E8 /* DataQualityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataQualityView.swift; sourceTree = "<group>"; };
 		B8BA626AEC0E9F5611122B63 /* ProcurementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcurementView.swift; sourceTree = "<group>"; };
 		B9D58B5A84194BD2F873BF73 /* Overrides.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Overrides.xcconfig; sourceTree = "<group>"; };
 		BC0E9051E4DDC540B9B70A62 /* NotificationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationsView.swift; sourceTree = "<group>"; };
@@ -214,6 +218,7 @@
 				3598066DC1CE20643C4AC1CA /* AppIntents.swift */,
 				2D29A90B3D9E23313AA55986 /* Assets.xcassets */,
 				00465D47F907FA4D237E75CE /* ATServicesView.swift */,
+				7D3920057E85603B0EB7B1E1 /* AuthorizationsView.swift */,
 				3430F81327B99B9A13B0F4BC /* BookingsView.swift */,
 				A3944A970EA20AC54BE1176C /* CaseManagementApp.swift */,
 				2EE14633379F7CA3374C0727 /* ClientEditSheet.swift */,
@@ -223,6 +228,7 @@
 				55A7F19899A487E67EB1DB73 /* ContractsView.swift */,
 				99D02BABBBF34687EEC69CF1 /* CounselorsView.swift */,
 				842E7AD3D382BF326274B64E /* DashboardView.swift */,
+				AB75A8746C8D2BA8C988A4E8 /* DataQualityView.swift */,
 				786B3B2E12EF94DDFCF3DB75 /* DocReviewView.swift */,
 				826BC7C581EAC69F398F9C61 /* DocumentsAndHomework.swift */,
 				3F96B0589979EC119DCC1DD5 /* DocumentsToSign.swift */,
@@ -419,6 +425,7 @@
 				944122D91CF4F2E824043D13 /* AccountView.swift in Sources */,
 				04ED9876B301B86953FF6591 /* AgreementsView.swift in Sources */,
 				9C86E219847C4E411351DF0E /* AppIntents.swift in Sources */,
+				8533339FDA71C65D82A85267 /* AuthorizationsView.swift in Sources */,
 				B24C5A05F10C3950B5ABA0E9 /* BookingsView.swift in Sources */,
 				FA8AAB9F68AE27D7C3E41800 /* CaseManagementApp.swift in Sources */,
 				FE2172AF0E8075C5B301E077 /* ClientEditSheet.swift in Sources */,
@@ -428,6 +435,7 @@
 				ACEFD354F239FA89447034ED /* ContractsView.swift in Sources */,
 				9C736934ACCA191C39DE31AA /* CounselorsView.swift in Sources */,
 				1F700718F4ABE8335CE56EE5 /* DashboardView.swift in Sources */,
+				06A5696BC55D842DE8165B11 /* DataQualityView.swift in Sources */,
 				01C54577BEE3C4FD04CB2A76 /* DocReviewView.swift in Sources */,
 				A632711C2F503E5AA864D462 /* DocumentsAndHomework.swift in Sources */,
 				12495DCC9ABA56B309EE4C57 /* DocumentsToSign.swift in Sources */,
@@ -510,14 +518,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 69;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.37.0;
+				MARKETING_VERSION = 4.38.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -533,14 +541,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 69;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.37.0;
+				MARKETING_VERSION = 4.38.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -574,7 +582,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 69;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -582,7 +590,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.37.0;
+				MARKETING_VERSION = 4.38.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -750,7 +758,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 68;
+				CURRENT_PROJECT_VERSION = 69;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -758,7 +766,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.37.0;
+				MARKETING_VERSION = 4.38.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;

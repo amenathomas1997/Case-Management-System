@@ -16,7 +16,6 @@ import org.casemanagement.app.ui.duplicateRefusal
 import org.casemanagement.app.ui.followupRecordedWords
 import org.casemanagement.app.ui.hoursRule
 import org.casemanagement.app.ui.incidentDateNotFuture
-import org.casemanagement.app.ui.invoiceDueShownOnlySubmitted
 import org.casemanagement.app.ui.loanConditionOptions
 import org.casemanagement.app.ui.moneyText
 import org.casemanagement.app.ui.passwordErrorKeys
@@ -279,13 +278,6 @@ class V434Test {
         assertEquals("Request the client's own consent", adult.last())
         val expired = consentRowWords(JSONObject("""{"client":"Synthetic Client","kind":"Expired","label":"Expired","date":"2026-10-01","action":"Renew consent"}"""))
         assertEquals("Expired, ended Thursday, October 1, 2026", expired[1])
-    }
-
-    @Test fun invoiceDueShownOnlySubmitted() {
-        assertEquals("2026-12-19", invoiceDueShownOnlySubmitted("Submitted", "2026-12-19"))
-        assertNull(invoiceDueShownOnlySubmitted("Draft", "2026-12-19"))
-        assertNull(invoiceDueShownOnlySubmitted("Paid", "2026-12-19"))
-        assertNull(invoiceDueShownOnlySubmitted("Submitted", null))
     }
 
     /* ---------- P26: My Account ---------- */

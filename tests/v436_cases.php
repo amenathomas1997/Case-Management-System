@@ -263,7 +263,8 @@ $r = $post436('add_availability', ['weekday' => '1', 'from' => '09:00', 'to' => 
 check($r['message'] === 'Hours added.' && count($r['hours']) === 1 && $r['hours'][0]['from'] === '09:00' && $r['hours'][0]['to'] === '12:00' && $r['hours'][0]['weekday'] === 1 && $r['hours'][0]['remote'] === true
     && $r['hours'][0]['text'] === 'Mondays 9:00 AM to 12:00 PM, online' && $audits436('availability.add', '1 09:00-12:00') >= 1
     && !$db->query("SELECT COUNT(*) FROM staff_availability WHERE user_id=$u436")->fetchColumn(), 'R6: add_availability adds the caller\'s own hours (a user input is ignored), audited');
-$again = $post436('add_availability', ['weekday' => '1', 'from' => '09:00', 'to' => '12:00', 'mode' => 'online', 'idem_key' => $k]);
+// 4.38.0: a retry is the identical request (a key reused for a different body is refused).
+$again = $post436('add_availability', ['weekday' => '1', 'from' => '09:00', 'to' => '12:00', 'mode' => 'online', 'location' => '', 'user' => $u436, 'idem_key' => $k]);
 check(!empty($again['repeat']) && count($again['hours']) === 1 && (int)$db->query('SELECT COUNT(*) FROM staff_availability WHERE user_id=1')->fetchColumn() === 1, 'R6: the same idem_key adds one row and answers the list again');
 [$st, $d] = $req436('POST', 'add_availability', ['weekday' => '1', 'from' => '10:00', 'to' => '11:00', 'mode' => 'online']);
 check($st === 422 && str_contains($d['errors']['from'] ?? '', 'overlap'), 'R6: overlapping hours are 422 on errors.from');
@@ -394,7 +395,8 @@ try {
     $r = $post436('complete_tasks', ['task_ids' => [$ta, $tb, $tc, $tHidden], 'idem_key' => $k]);
     check($r['completed'] === 2 && $r['message'] === '2 tasks completed.' && $db->query("SELECT status FROM tasks WHERE id=$tHidden")->fetchColumn() === 'Open'
         && $db->query("SELECT status FROM tasks WHERE id=$tb")->fetchColumn() === 'Done', 'R15: complete_tasks completes the two open ones the user can see; a colleague\'s task stays open');
-    $again = $post436('complete_tasks', ['task_ids' => [$ta, $tb], 'idem_key' => $k]);
+    // 4.38.0: a retry is the identical request (a key reused for a different body is refused).
+    $again = $post436('complete_tasks', ['task_ids' => [$ta, $tb, $tc, $tHidden], 'idem_key' => $k]);
     check(!empty($again['repeat']) && $again['completed'] === 2 && $again['message'] === '2 tasks completed.', 'R15: the same idem_key answers the first reply');
     [$st, $d] = $req436('POST', 'complete_tasks', ['task_ids' => []]);
     check($st === 422 && $d['error'] === 'Nothing was completed: choose at least one open task.', 'R15: nothing to complete is 422 with the website\'s text');

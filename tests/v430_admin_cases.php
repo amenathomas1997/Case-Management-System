@@ -134,7 +134,8 @@ check($err==='' && (int)$db->query('SELECT COUNT(*) FROM incoming_authorizations
 [$code,$html,$err]=$renderWith430a('authorizations',[],['field_errors'=>['email_text'=>'Paste the authorization email first.']]);
 check($code===0 && $err==='' && str_contains($html,'id="form-error-summary"') && str_contains($html,'href="#email_text"'),'A refused pasted email is announced by a summary'.($err?": $err":''));
 $a430=$src430a('authorizations.php');
-check(!str_contains($a430,"flash('Choose the client this authorization is for.'") && str_contains($a430,"keep_field_errors(['client_id' =>"),'A missing client choice is on the client choice, not a flash');
+// 4.38.0: the choice is checked by incoming_authorization_start() (inc/authorization_email.php), whose errors the page keeps on their fields.
+check(!str_contains($a430,"flash('Choose the client this authorization is for.'") && str_contains($a430,"keep_field_errors(\$res['errors'])") && str_contains((string)file_get_contents($root.'/public/inc/authorization_email.php'),"'errors' => ['client_id' => 'Choose the client this authorization is for.']]"),'A missing client choice is on the client choice, not a flash');
 
 // ---- Users, My account: the summaries cover every field error ----
 [$code,$html,$err]=$renderWith430a('users',['id'=>1],['field_errors'=>['privacy_training_on'=>'Privacy training date: enter a date that has passed, or leave it empty.']]);
@@ -194,7 +195,8 @@ check($err==='' && (int)$db->query("SELECT COUNT(*) FROM invoices WHERE invoice_
 [$code,$html,$err]=$renderWith430a('invoices',[],['field_errors'=>['bulk_ids'=>'Tick at least one draft invoice.']]);
 check($code===0 && $err==='' && str_contains($html,'<details open><summary id="bulk-h">') && preg_match('~href="#bulk-\d+"~',$html) && str_contains($html,'id="err-bulk_ids"'),
     'Nothing ticked is said on the draft invoice boxes, in a summary, with the form open'.($err?": $err":''));
-check(str_contains($src430a('invoices.php'),"keep_field_errors(['bulk_submitted_on' => 'The date is before"),
+// 4.38.0: the rule moved to invoice_bulk_submit() (inc/billing.php); the page maps its submitted_on to bulk_submitted_on.
+check(str_contains((string)file_get_contents($root.'/public/inc/billing.php'),"'errors' => ['submitted_on' => \$msg]") && str_contains($src430a('invoices.php'),"'bulk_submitted_on'] = \$v"),
     'A date before every chosen invoice was created is on the date field');
 $db->exec("INSERT INTO portal_requests(client_id,type,status,details) VALUES($c430a,'appointment','New','V430-ADMIN one'),($c430a,'message','New','V430-ADMIN two')");
 $pr430a=(int)$db->query("SELECT COUNT(*) FROM portal_requests WHERE details LIKE 'V430-ADMIN%' AND status='New'")->fetchColumn();

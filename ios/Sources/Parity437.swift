@@ -118,7 +118,8 @@ struct BuiltDocumentView: View {
                     }
                     Button {
                         api.copyProtected(reply.text ?? "")
-                        announce(noun == "letter" ? "Letter copied." : "Report copied.")
+                        // "Letter copied.", "Report copied.", "Invoice copied." (4.38.0, T5).
+                        announce(noun.prefix(1).uppercased() + noun.dropFirst() + " copied.")
                     } label: { Label("Copy \(noun)", systemImage: "doc.on.doc") }
                 }
             }

@@ -479,6 +479,9 @@ function at_repair_inventory(int $equipment,int $client,string $status,int $id,?
     if($state==='Available'&&$current!=='Available')promote_equipment_waitlist($equipment,$actor);
     return $current;
 }
+/** The profitability report's intro and footer (4.38.0: shared with the apps' at_profitability). */
+const AT_PROFIT_INTRO='Submitted and paid invoice totals minus recorded expenses and labor cost. Missing labor rates make the margin incomplete. This excludes unrecorded overhead and unbilled revenue.';
+const AT_PROFIT_FOOTER='Tracks linked to multiple contracts are grouped as unallocated rather than counted against each contract.';
 function at_profit_groups(array $rows,string $key): array {
     $groups=[];
     foreach($rows as $r){$label=$r[$key];if(!isset($groups[$label]))$groups[$label]=array_fill_keys(['invoiced','received','cost','margin','unpriced_hours'],0.0);

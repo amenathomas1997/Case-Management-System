@@ -51,14 +51,9 @@ fun SearchScreen(api: Api, nav: NavHostController) {
                 items.forEach { i ->
                     val client = if (i.isNull("client_id")) 0 else i.optInt("client_id")
                     val track = if (i.isNull("track_id")) 0 else i.optInt("track_id")
-                    ListRow(listOf(i.optString("title"), i.optString("subtitle")), action = "open it", onClick = when (i.optString("kind")) {
-                        "referral" -> ({ nav.navigate("referral/${i.optInt("id")}") })
-                        "client" -> ({ nav.navigate("client/${i.optInt("id")}") })
-                        "track" -> if (client > 0) ({ nav.navigate("track/$client/${i.optInt("id")}") }) else null
-                        "goal" -> if (client > 0 && track > 0) ({ nav.navigate("track/$client/$track") }) else if (client > 0) ({ nav.navigate("client/$client") }) else null
-                        "invoice" -> null
-                        else -> if (client > 0) ({ nav.navigate("client/$client") }) else null
-                    })
+                    // 4.38.0 (T2): an invoice opens on the Invoices screen, for billing staff.
+                    val route = searchRoute(i.optString("kind"), i.optInt("id"), api.can("billing"), client, track)
+                    ListRow(listOf(i.optString("title"), i.optString("subtitle")), action = "open it", onClick = route?.let { r -> { nav.navigate(r) } })
                 }
             }
         }
@@ -87,9 +82,6 @@ fun consentRowWords(o: JSONObject): List<String> {
 
 /** 4.34.0: an incident date after today is refused, as the website refuses it. */
 fun incidentDateNotFuture(date: String, todayIs: String): Boolean = date.trim() <= todayIs
-
-/** 4.34.0: an invoice's due date is shown only once it has been submitted (a draft's is not set yet). */
-fun invoiceDueShownOnlySubmitted(status: String, due: String?): String? = if (status == "Submitted" && !due.isNullOrBlank()) due else null
 
 /** Where every referral and client sits, and for how long. */
 @Composable
@@ -204,46 +196,12 @@ private fun WaitlistDialog(api: Api, w: JSONObject, statuses: List<String>, onDo
     )
 }
 
-/** Invoices by status, what each agency owes, and marking a draft submitted. */
-@Composable
-fun InvoicesScreen(api: Api) {
-    var status by rememberSaveable { mutableStateOf("") }
-    val state = rememberLoaded(status) { api.call("invoices", if (status.isEmpty()) emptyMap() else mapOf("status" to status)) }
-    var submit by remember { mutableStateOf<JSONObject?>(null) }
-    var notice by remember { mutableStateOf<String?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    Page {
-        Choice("Show", status, listOf("" to "All invoices", "Draft" to "Drafts", "Submitted" to "Submitted", "Paid" to "Paid", "Denied" to "Denied", "Void" to "Void")) { status = it; error = null }
-        NoticeText(notice)
-        ErrorText(error)
-        Show(state, "invoices") { r ->
-            val owed = r.optJSONArray("outstanding").objects()
-            if (owed.isNotEmpty()) {
-                Heading("Owed by each agency")
-                owed.forEach { o -> ListRow(listOf(o.optString("funding_agency"), "${o.optInt("count")} invoices, " + money(o.optDouble("amount", 0.0)) + (o.optInt("oldest_days").takeIf { it > 0 }?.let { ", oldest $it days" } ?: ""))) }
-            }
-            val list = r.optJSONArray("invoices").objects()
-            Heading("Invoices (${r.optInt("total", list.size)})")
-            if (r.optInt("total", list.size) > list.size) Text("Showing the newest ${list.size}. Choose a status above, or see them all on the website.")
-            list.forEach { i ->
-                ListRow(listOf("${i.optString("invoice_number")}: ${i.optString("client_name")}", i.optString("status") + ", " + money(i.optDouble("total_amount", 0.0)) +
-                    (if (i.optDouble("balance", 0.0) > 0 && i.optString("status") != "Draft") ", balance " + money(i.optDouble("balance", 0.0)) else "") +
-                    (invoiceDueShownOnlySubmitted(i.optString("status"), i.str("due_date"))?.let { ", due " + dayText(it) } ?: ""), i.optString("funding_agency")),
-                    action = "mark it submitted", onClick = if (i.optString("status") == "Draft") ({ submit = i }) else null)
-            }
-        }
-    }
-    submit?.let { i -> key(dialogKey("submit", i.optInt("id"))) { SubmitInvoiceDialog(api, i, onDone = { m -> submit = null; error = null; notice = m; state.reload() },
-        onRefused = { m -> submit = null; notice = null; error = m; state.reload() }, onCancel = { submit = null }) } }
-}
-
 /**
  * 4.34.0: marking a draft submitted asks the date it was sent to the funder (today by default),
  * as the website does; the due date follows from that day and the payment terms.
  */
 @Composable
-private fun SubmitInvoiceDialog(api: Api, i: JSONObject, onDone: (String) -> Unit, onRefused: (String) -> Unit, onCancel: () -> Unit) {
+internal fun SubmitInvoiceDialog(api: Api, i: JSONObject, onDone: (String) -> Unit, onRefused: (String) -> Unit, onCancel: () -> Unit) {
     val number = i.optString("invoice_number")
     var date by rememberSaveable { mutableStateOf(today()) }
     var dateError by remember { mutableStateOf<String?>(null) }

@@ -22,12 +22,15 @@ data class Me(
     val aiFeatures: List<String>, val accessHold: List<String>, val serverVersion: String?, val timezone: String?,
     /** 4.34.0: whether client identifiers are stripped before AI (null: an older server does not say). */
     val aiRedaction: Boolean? = null,
+    /** 4.38.0 (T16): the organisation's name (brand('org')); null from an older server. */
+    val org: String? = null,
 )
 
 fun parseMe(r: JSONObject) = Me(
     r.optInt("id"), r.text("name"), r.optJSONArray("perms").strings(), r.optBoolean("scoped"), r.optBoolean("ai_enabled"),
     r.optJSONArray("ai_features").strings(), r.optJSONArray("access_hold").strings(), r.str("server_version"), r.str("timezone"),
     if (r.has("ai_redaction") && !r.isNull("ai_redaction")) r.optBoolean("ai_redaction") else null,
+    r.str("org"),
 )
 
 /* ---------- form_options ---------- */
@@ -560,3 +563,45 @@ fun sitePage(apiUrl: String, path: String): String? {
     if (!base.startsWith("https://") && !base.startsWith("http://")) return null
     return "$base/$p"
 }
+
+/* ---------- invoices (4.38.0, T1-T3) ---------- */
+
+/**
+ * One invoice of the `invoices` reply. Money is the server's (already rounded there); [owedText]
+ * and [dateLines] are the website row's own sentences (null and empty from a 4.37.0 server).
+ */
+data class InvoiceRow(
+    val id: Int, val number: String, val status: String, val clientId: Int, val clientName: String,
+    val trackTitle: String, val authNumber: String?, val fundingAgency: String?, val hours: Double,
+    val totalAmount: Double, val balance: Double, val owedText: String?, val dateLines: List<String>,
+    val daysOverdue: Int?, val closedReason: String?, val createdAt: String, val submittedAt: String?,
+    val dueDate: String?, val paidAt: String?, val canOpenClient: Boolean,
+)
+
+/** What each funding agency owes (the `outstanding` rows); [overdue] and [partPaid] are null from a 4.37.0 server. */
+data class InvoiceAging(val agency: String, val count: Int, val amount: Double, val overdue: Double?, val partPaid: Int, val oldestDays: Int?)
+
+data class InvoiceList(
+    val rows: List<InvoiceRow>, val page: Int, val pages: Int, val total: Int, val unbilled: Double?,
+    val outstanding: List<InvoiceAging>, val agencies: List<String>, val heading: String?,
+    val requested: Boolean, val found: Boolean?,
+)
+
+fun parseInvoiceRow(i: JSONObject) = InvoiceRow(
+    i.optInt("id"), i.text("invoice_number"), i.text("status"), i.optInt("client_id"), i.text("client_name"),
+    i.text("track_title"), i.str("auth_number"), i.str("funding_agency"), i.num("hours"),
+    i.num("total_amount"), i.num("balance"), i.str("owed_text"), i.optJSONArray("date_lines").strings(),
+    i.intOrNull("days_overdue"), i.str("closed_reason"), i.text("created_at").take(10), i.str("submitted_at"),
+    i.str("due_date"), i.str("paid_at"), i.optBoolean("can_open_client"),
+)
+
+fun parseInvoices(r: JSONObject) = InvoiceList(
+    r.optJSONArray("invoices").objects().map { parseInvoiceRow(it) },
+    r.optInt("page", 1).coerceAtLeast(1), r.optInt("pages", 1).coerceAtLeast(1),
+    r.intOrNull("total") ?: (r.optJSONArray("invoices")?.length() ?: 0), r.numOrNull("unbilled"),
+    r.optJSONArray("outstanding").objects().map { a ->
+        InvoiceAging(a.text("funding_agency"), a.optInt("count"), a.num("amount"), a.numOrNull("overdue"), a.optInt("part_paid"), a.intOrNull("oldest_days"))
+    },
+    r.optJSONArray("agencies").strings(), r.str("heading"), r.optBoolean("requested"),
+    if (r.has("found") && !r.isNull("found")) r.optBoolean("found") else null,
+)
