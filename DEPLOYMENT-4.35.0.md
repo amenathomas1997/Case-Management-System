@@ -77,3 +77,16 @@ The new API actions are in inc/api_435.php:
   - the right reason is given when a group can't be recorded
   - a passed On Hold date no longer blocks saving
 - **Both apps:** the wording, the order of answers and the confirmations now match each other and the website.
+
+## Published (not deployed)
+
+2026-11-19, after CI passed all three jobs on 60cc40d. The GitHub release v4.35.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag, including the five new shared files
+- the signed update package: 347 files, verified
+
+**Rehearsed:** installed with the 4.34.0 updater onto a copy of a 4.34.0 site.
+- The signature verified, the plan showed no problems, and the backup was made first.
+- 20 files were replaced or added (the new shared files are present), with no database change.
+- The sign-in page then served 4.35.0.
+
+The live site stays as it is until an administrator installs it with Software update. The 4.35.0 phone apps are built from this tag.
