@@ -504,7 +504,7 @@ page_header(($errors ? 'Error — ' : '') . ($track ? 'Edit ' . $track['title'] 
       $amendReqRow = null;
       if ($amendReqId > 0) { $aq = db()->prepare("SELECT * FROM amendment_requests WHERE id = ? AND track_id = ? AND status IN ('Approved','Partly approved')"); $aq->execute([$amendReqId, (int)$track['id']]); $amendReqRow = $aq->fetch() ?: null; }
       if ($amendReqRow): ?><input type="hidden" name="amend_request" value="<?= (int)$amendReqRow['id'] ?>"><?php endif; ?>
-      <input type="text" id="amendment_reason" name="amendment_reason" maxlength="255" value="<?= $amendReqRow && $v('amendment_reason') === '' ? h('VR ' . strtolower($amendReqRow['status']) . ' the amendment requested ' . fmt_date($amendReqRow['requested_on']) . ($amendReqRow['replied_on'] ? ' (reply ' . fmt_date($amendReqRow['replied_on']) . ')' : '')) : $v('amendment_reason') ?>" <?= field_aria('amendment_reason') ?>>
+      <input type="text" id="amendment_reason" name="amendment_reason" maxlength="255" value="<?= $amendReqRow && $v('amendment_reason') === '' ? h(amendment_reason_prefill($amendReqRow)) : $v('amendment_reason') ?>" <?= field_aria('amendment_reason') ?>>
       <?= field_error('amendment_reason') ?>
     </div>
     <?php endif; ?>

@@ -140,3 +140,85 @@ function letter_values(int $clientId, string $key = ''): array {
 function letter_render(string $key, int $clientId): string {
     return strtr(letter_template($key), letter_values($clientId, $key));
 }
+
+/** A letter's file name: its title in lower case with dashes, or "letter". */
+function letter_file_name(string $title): string {
+    return (trim((string)preg_replace('/[^A-Za-z0-9-]+/', '-', strtolower($title)), '-') ?: 'letter') . '.html';
+}
+
+/**
+ * A letter written for a client, saved to their documents ($how 'doc'; as a Resource the client can
+ * read in their portal when $toPortal) or kept as a case note ('note'). 4.37.0: moved from
+ * letters.php, shared with the apps' save_letter; the page keeps its own guard against the same form
+ * sent twice. The title is cut at 150 characters (the built-in letter's name when blank), the letter
+ * is marked with its language. Returns ['ok' => true, 'message', 'id' (document or note), 'how'],
+ * or ['ok' => false, 'error', 'field' ('body', or null when the document could not be stored)].
+ */
+function letter_save(int $cid, string $how, string $key, string $title, string $body, string $lang, bool $toPortal, int $actor, string $channel = 'web'): array {
+    $title = trim($title) !== '' ? trim($title) : (LETTER_TEMPLATES[$key][0] ?? 'Letter');
+    $body = trim(str_replace("\r\n", "\n", $body));
+    if ($body === '') return ['ok' => false, 'error' => 'The letter is empty. Write the letter, or open it again to start from the filled-in wording.', 'field' => 'body'];
+    $title = mb_substr($title, 0, 150);
+    $mobile = $channel === 'mobile' ? ' (mobile)' : '';
+    if ($how === 'note') {
+        db()->prepare("INSERT INTO client_notes (client_id, note_type, subject, body, author_id) VALUES (?, 'Case Note', ?, ?, ?)")->execute([$cid, mb_substr('Letter: ' . $title, 0, 255), $body, $actor]);
+        $noteId = (int)db()->lastInsertId();
+        audit($actor, 'letter.note', 'client', $cid, $title . $mobile);
+        return ['ok' => true, 'how' => 'note', 'id' => $noteId, 'message' => 'The letter was kept as a case note.'];
+    }
+    // The page is marked with the letter's language (4.30.0), so a letter written in Spanish is read
+    // with a Spanish voice; the built-in wording is English.
+    $html = plain_document_html($title, $body, $lang === 'es' ? 'es' : 'en');
+    try {
+        $docId = client_document_save_html($cid, $toPortal ? 'Resource' : 'Other', $title . ', ' . date('F j, Y'), letter_file_name($title), $html, $actor);
+    } catch (Throwable $e) {
+        error_log('letter_save: letter not saved: ' . get_class($e));
+        $docId = 0;
+    }
+    if (!$docId) return ['ok' => false, 'error' => 'The letter could not be saved. Your wording is kept below; try again, or download it.', 'field' => null];
+    audit($actor, 'letter.save', 'client', $cid, $title . ' (doc #' . $docId . ($toPortal ? ', in the portal' : '') . ')' . $mobile);
+    return ['ok' => true, 'how' => 'doc', 'id' => (int)$docId, 'message' => letter_saved_message($toPortal)];
+}
+
+/** The confirmation once a letter is in the client's documents. */
+function letter_saved_message(bool $toPortal): string {
+    return 'The letter was saved to the client\'s documents' . ($toPortal ? ', and the client can read it in their portal.' : '.');
+}
+
+/** What each merge field is, as the AI is told it. */
+const LETTER_FACT_LABELS = ['{date}' => 'Date', '{client}' => 'Client', '{first_name}' => 'Client', '{counselor}' => 'VR counselor', '{counselor_agency}' => 'Counselor\'s agency',
+    '{instructor}' => 'Instructor (the sender)', '{track}' => 'Training plan', '{auth_number}' => 'Authorization number', '{authorized_hours}' => 'Hours authorized',
+    '{hours_used}' => 'Hours used', '{expiration}' => 'Authorization ends', '{next_session}' => 'Next session', '{last_missed}' => 'Missed session',
+    '{item}' => 'Equipment', '{loan_due}' => 'Equipment due back', '{org}' => 'Agency'];
+
+/**
+ * "Draft the letter with AI" (4.37.0, letters.php and the apps' ai_letter): a short letter of that
+ * kind from the facts its wording uses (letter_values()), with the client, counselor and sender named
+ * only as [CLIENT], [COUNSELOR] and [STAFF] and put back here, as amendment_request.php does. What
+ * was typed is not sent. Returns ['ok', 'text', 'error', 'truncated'].
+ */
+function letter_ai_draft(int $cid, string $key, int $uid): array {
+    if (!isset(LETTER_TEMPLATES[$key])) return ['ok' => false, 'text' => '', 'error' => 'Choose a letter.', 'truncated' => false];
+    $vals = letter_values($cid, $key);
+    $names = ['{client}' => '[CLIENT]', '{first_name}' => '[CLIENT]', '{counselor}' => '[COUNSELOR]', '{instructor}' => '[STAFF]'];
+    preg_match_all('/\{[a-z_]+\}/', letter_template($key), $m);
+    $used = array_values(array_unique(array_merge(['{client}', '{instructor}'], $m[0])));
+    $facts = [];
+    $seen = [];
+    foreach ($used as $f) {
+        if (!isset(LETTER_FACT_LABELS[$f]) || isset($seen[LETTER_FACT_LABELS[$f]])) continue;
+        $seen[LETTER_FACT_LABELS[$f]] = true;
+        $val = isset($names[$f]) ? ($vals[$f] === '[not on file]' ? '[not on file]' : $names[$f]) : (string)($vals[$f] ?? '[not on file]');
+        $facts[] = '- ' . LETTER_FACT_LABELS[$f] . ': ' . $val;
+    }
+    $c = db()->prepare('SELECT * FROM clients WHERE id = ?');
+    $c->execute([$cid]);
+    $clientRow = $c->fetch() ?: [];
+    $res = ai_run('draft', ai_system_base() . ' Write a short, warm, professional ' . strtolower(LETTER_TEMPLATES[$key][0]) . ' from an assistive technology agency, in plain language, from the facts given. Use only these facts; where a fact is "[not on file]", leave it out. Bracketed tags such as [CLIENT] stand for names that were withheld: keep them exactly as written.' . ai_plain_text_rule(),
+        "Facts for the letter:\n" . implode("\n", $facts), 600, $clientRow, $uid);
+    // asked: the facts reached the provider (ai_run() logged the call), so the use is audited.
+    $asked = array_key_exists('usage_id', $res);
+    if (!$res['ok']) return ['ok' => false, 'text' => '', 'error' => (string)$res['error'], 'truncated' => false, 'asked' => $asked];
+    $restore = array_filter(['[CLIENT]' => $vals['{client}'], '[COUNSELOR]' => $vals['{counselor}'], '[STAFF]' => $vals['{instructor}']], fn($v) => $v !== '[not on file]' && $v !== '');
+    return ['ok' => true, 'text' => strtr(trim((string)$res['text']), $restore), 'error' => null, 'truncated' => !empty($res['truncated']), 'asked' => $asked];
+}

@@ -146,8 +146,8 @@ dashboard_swift = swift_sources['DashboardView.swift']
 static_check('notesToWrite = await loadNotesToWrite(api)' in dashboard_swift and 'NoteToWriteRow(item: item)' in dashboard_swift,
              'the Dashboard shows Notes to write with Write it now')
 project_yml = (root / 'ios/project.yml').read_text()
-static_check(project_yml.count('MARKETING_VERSION: "4.36.0"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "67"') == 2,
-             'the app and widget are version 4.36.0 (67)')
+static_check(project_yml.count('MARKETING_VERSION: "4.37.0"') == 2 and project_yml.count('CURRENT_PROJECT_VERSION: "68"') == 2,
+             'the app and widget are version 4.37.0 (68)')
 
 # 4.34.0: the iPhone app behaves as the website does (PARITY-AUDIT-2026-11-19, plan P1-P43; static).
 api_swift = swift_sources['API.swift']
@@ -1082,6 +1082,702 @@ static_check(all(k in cred_save for k in ('"type": type', '"other_name": type ==
              and all("'%s'" % k in php('inc/staff_credentials.php') for k in ('type', 'other_name', 'issued_on', 'expires_on', 'number', 'issuer', 'notes'))
              and 'staff_credential_input(' in php('credentials.php') and 'staff_credential_input(' in php('inc/api_more.php'),
              'R26: a credential sends type, other_name and notes with a retry key, checks dates as the website, and ties refusals to fields')
+
+# 4.37.0: services, equipment and reports in the iPhone app (plan-4370, IPHONE parts of S1-S11,
+# S13-S19, S21-S26; static). Each check reads the request the app sends and the reply keys it
+# decodes, and that the server files read and send the same keys; the page calls the shared
+# helper the API uses; and the structure the owner's rules need (buttons outside a row's one
+# stop, one announcement, confirmations that name the item, no hints in new views).
+def struct_keys(text, name):
+    """The decoded keys of a struct, one-line or not: its CodingKeys cases, or its stored
+    let/var names at the struct's own level (nested types left out)."""
+    m = re.search(r'\n(?:private )?struct %s: [^\n{]*\{' % re.escape(name), '\n' + text)
+    if not m:
+        return set()
+    i = m.end() - 1   # in '\n' + text: index of '{' is one more in text
+    src = '\n' + text
+    depth, j = 0, i
+    while True:
+        if src[j] == '{':
+            depth += 1
+        elif src[j] == '}':
+            depth -= 1
+            if depth == 0:
+                break
+        j += 1
+    body = src[i + 1:j]
+    ck = re.search(r'enum CodingKeys: String, CodingKey \{\s*case ([^}]*)\}', body)
+    if ck:
+        return set(k.strip() for k in re.sub(r'\bcase\b', ',', ck.group(1)).replace('\n', ' ').split(',') if k.strip())
+    flat, d = [], 0
+    for ch in body:
+        if ch == '{':
+            d += 1
+        elif ch == '}':
+            d -= 1
+        elif d == 0:
+            flat.append(ch)
+    return set(re.findall(r'\b(?:let|var) `?(\w+)`?\s*:', ''.join(flat)))
+
+
+def snake(name):
+    return re.sub(r'([A-Z])', lambda m: '_' + m.group(1).lower(), name)
+
+
+def decodes(text, struct, *keys):
+    """The struct decodes every key (camelCase, as convertFromSnakeCase gives them)."""
+    return set(keys) <= struct_keys(text, struct)
+
+
+def reads_input(php_src, *keys):
+    """The server source names every key the app sends ($input['k'], $_GET['k'], or a key list
+    or reader such as $in('k') the action reads its input through)."""
+    return all("'%s'" % k in php_src for k in keys)
+
+
+def titles_name_item(text, first_words):
+    """Every confirmationDialog whose title starts with one of `first_words` interpolates the item."""
+    found = re.findall(r'confirmationDialog\(\s*"([^"\n]*(?:\\\([^)]*\)[^"\n]*)*)"', text)
+    picked = [f for f in found if any(f.startswith(w) for w in first_words)]
+    return bool(picked) and all('\\(' in f for f in picked)
+
+
+api_437_php = php('inc/api_437.php')
+equipment_status_php = php('inc/equipment_status.php')
+
+
+def act437(name):
+    return php_case(api_437_php, name)
+
+
+def perm437(action, perm):
+    return ("'%s' => '%s'" % (action, perm)) in api_437_php
+
+
+equipment_swift = swift_sources['EquipmentView.swift']
+procurement_swift = swift_sources['ProcurementView.swift']
+parity_swift = swift_sources['Parity437.swift']
+eval_swift = swift_sources['EvalReportView.swift']
+letters_swift = swift_sources['LettersView.swift']
+accommodations_swift = swift_sources['AccommodationsView.swift']
+programs_swift = swift_sources['ProgramsView.swift']
+referrals_swift = swift_sources['ReferralsView.swift']
+knowledge_swift = swift_sources['KnowledgeView.swift']
+upload_swift = swift_sources['UploadDocumentSheet.swift']
+documents_swift = swift_sources['DocumentsAndHomework.swift']
+sign_swift = swift_sources['DocumentsToSign.swift']
+at_swift = swift_sources['ATServicesView.swift']
+new_views_437 = {'EvalReportView.swift': eval_swift, 'LettersView.swift': letters_swift, 'Parity437.swift': parity_swift}
+
+static_check(all(no_hint(t) for t in new_views_437.values()),
+             '4.37.0: the new views carry no accessibilityHint (hints sit inside the labels)')
+
+# S1: equipment status.
+status_section = swift_func(equipment_swift, '@ViewBuilder private func statusSection(_ d: EquipmentDetailResponse) -> some View {')
+set_status = swift_func(equipment_swift, 'private func setStatus(_ to: String, confirmRetire: Bool) async {')
+static_check(decodes(equipment_swift, 'EquipmentDetailResponse', 'onLoan', 'inWorkflow', 'holds', 'statusActions', 'retireText', 'manageable')
+             and decodes(equipment_swift, 'EquipmentStatusReply', 'status', 'message')
+             and 'try await api.call("set_equipment_status", method: "POST",' in set_status
+             and 'body: ["equipment_id": itemId, "to": to, "confirm_retire": confirmRetire]' in set_status
+             and announced_once(set_status) and 'showFormError(error.localizedDescription, in: &self.error)' in set_status
+             and all(s in equipment_swift for s in ('case "Repair": return (to, "Mark in repair")', 'case "Available": return (to, "Back in service")',
+                                                    'case "Retired": return (to, "Retire \\(name)")'))
+             and 'if b.to == "Retired" { confirmingRetire = true } else { Task { await setStatus(b.to, confirmRetire: false) } }' in status_section
+             and 'Button("Retire \\(data?.item.name ?? itemName)", role: .destructive) { Task { await setStatus("Retired", confirmRetire: true) } }' in equipment_swift
+             and 'Button("Keep \\(data?.item.name ?? itemName) in service", role: .cancel) {}' in equipment_swift
+             and titles_name_item(equipment_swift, ['Retire '])
+             and 'A retired item can no longer be loaned out or reserved. It returns to service only through a Device reuse intake, which records its inspection, sanitizing and data wipe.' in equipment_swift
+             and 'This item is retired. Start a Device reuse intake for it in AT services to put it back into service.' in status_section
+             and 'ATReuseModuleView()' in status_section and 'module = r.modules.first { $0.id == "reuse" }' in at_swift
+             and perm437('set_equipment_status', 'equipment') and reads_input(act437('set_equipment_status') + equipment_status_php, 'equipment_id', 'to', 'confirm_retire')
+             and sends(act437('set_equipment_status'), 'status', 'message', 'item')
+             and 'status_actions' in api_case('equipment_detail')
+             and sends(api_case('equipment_detail') + equipment_status_php, 'on_loan', 'in_workflow', 'holds', 'status_actions', 'retire_text', 'manageable')
+             and 'equipment_set_status(' in php('equipment.php') and 'equipment_retire_preview(' in php('equipment.php')
+             and 'equipment_set_status(' in act437('set_equipment_status'),
+             'S1: Mark in repair, Back in service and Retire (asked first, naming the item) send set_equipment_status as the server reads it; the page and the API share equipment_set_status()')
+static_check('Section {\n                ForEach(buttons, id: \\.to) { b in' in status_section and '.accessibilityElement(' not in status_section
+             and 'LabeledContent("Status", value: d.item.status)' in equipment_swift
+             and equipment_swift.index('LabeledContent("Status", value: d.item.status)') < equipment_swift.index('statusSection(d)'),
+             'S1: the status buttons are separate stops in a section after the status rows, none rotor-only')
+
+# S2: retired items listed under Not available.
+item_groups = between(equipment_swift, 'private var itemGroups:', '\n    }\n')
+static_check('api.call("equipment", query: ["include_retired": "1"])' in equipment_swift
+             and 'retired' in struct_keys(equipment_swift, 'EquipmentItem')
+             and 'buckets[3] = buckets[3].filter { !$0.item.retired } + buckets[3].filter { $0.item.retired }' in item_groups
+             and 'zip(["Overdue", "On loan", "Available", "Not available"], buckets)' in item_groups
+             and '"\\(item.name), retired"' in equipment_swift and 'if item.retired { parts.append("retired") }' in equipment_swift
+             and 'Text("Not scheduled (retired)")' in equipment_swift
+             and '$0.status != "Retired"' in equipment_swift
+             and reads_input(api_case('equipment'), 'include_retired') and "'retired' =>" in api_case('equipment') + equipment_status_php
+             and 'equipment_list_status_sql(' in api_case('equipment') and 'equipment_list_status_sql(' in php('equipment.php'),
+             'S2: the list asks for retired items, lists them last under "Not available" ending ", retired", and the reservation picker still leaves them out')
+
+# S3: purchase date, useful life and AT type.
+add_eq = between(equipment_swift, 'struct AddEquipmentSheet: View {', '\n}\n')
+static_check(all(s in add_eq for s in ('Picker("AT Act type", selection: $atType)', 'Text("Guessed from the category").tag("")',
+                                       'Toggle("Purchase date, if known", isOn: $knowsPurchaseDate)', '.errorField("Purchase date")',
+                                       'label: "Useful life in months (optional; 1 to 600, default 36)"', 'errorName: "Useful life"',
+                                       'refusal: { refused = refusalFields($0) }', '"useful_life_months": "Useful life"', '"purchase_date": "Purchase date"'))
+             and add_eq.index('"Value in USD') < add_eq.index('"AT Act type"') < add_eq.index('"Purchase date, if known"') < add_eq.index('"Useful life in months')
+             and 'var extras: [String: Any] = ["at_type": atType, "purchase_date": purchaseDate]' in equipment_swift
+             and 'if !life.isEmpty { extras["useful_life_months"] = life }' in equipment_swift
+             and 'FormOptions.list("at_types",' in equipment_swift
+             and 'equipment_input(' in api_case('add_equipment') and 'equipment_input(' in php('equipment.php')
+             and "'at_types'" in php('inc/api_more.php')
+             and all("'%s'" % k in equipment_status_php for k in ('useful_life_months', 'purchase_date', 'at_type')),
+             'S3: a new item sends the AT type, purchase date and useful life in the website\'s order, and ties the server\'s equipment_input() refusals to their fields')
+
+# S4: device requests.
+close_sheet = between(procurement_swift, 'struct DeviceCloseSheet: View {', '\n}\n')
+close_submit = swift_func(close_sheet, 'private func submit() async {')
+update_case = api_case('device_request_update')
+static_check('notes' in struct_keys(procurement_swift, 'DeviceRequest') and 'Text("Note: \\(n)")' in procurement_swift
+             and decodes(procurement_swift, 'DeviceUpdateReply', 'status', 'message', 'notes')
+             and 'body: ["id": request.id, "op": "status", "to": to, "notes": reason]' in close_submit
+             and 'if reason.unicodeScalars.count > 500 { showFormError("Reason: use 500 characters or fewer.", in: &error, field: "Reason"); return }' in close_submit
+             and 'field: refused["notes"] != nil ? "Reason" : nil' in close_submit
+             and 'label: "Reason (optional; up to 500 characters)"' in close_sheet and 'Text("It is closed until someone reopens it.")' in close_sheet
+             and 'Button("Keep request open")' in close_sheet and '"Close \\(device) as \\(to == "Denied" ? "denied" : "cancelled")?"' in procurement_swift
+             and 'reason = request.notes ?? ""' in close_sheet
+             and 'Toggle("Also add to the loaner inventory", isOn: $addToInventory)' in procurement_swift
+             and 'canEquipment ? ["add_to_inventory": addToInventory] : [:]' in procurement_swift
+             and 'onDone(r.message)' in procurement_swift and 'sheetResult = message ?? act.savedMessage' in procurement_swift
+             and 'action: "device_letter", query: ["id": String(id)], noun: "letter"' in procurement_swift
+             and 'Change the justification on the request, then open the letter again.' in procurement_swift
+             and 'Label("Share the \\(noun) (HTML file)"' in parity_swift and 'Label("Copy \\(noun)"' in parity_swift
+             and decodes(parity_swift, 'BuiltDocumentReply', 'title', 'text', 'html', 'file', 'releaseWarning')
+             and reads_input(update_case, 'add_to_inventory') and 'device_delivery_inventory(' in update_case and 'device_close_note(' in update_case
+             and "'message' =>" in update_case
+             and perm437('device_letter', 'procurement') and sends(act437('device_letter'), 'title', 'text', 'html', 'file')
+             and 'device_delivery_inventory(' in php('procurement.php') and 'device_letter_doc(' in php('procurement.php'),
+             'S4: deny and cancel send the reason (500 characters), delivery offers the loaner inventory with the equipment permission, and the justification letter is shared as the website\'s HTML')
+
+# S5: Draft justification with AI.
+new_request = between(procurement_swift, 'struct DeviceNewSheet: View {', '\n}\n')
+draft_just = swift_func(new_request, 'private func draftJustification() async {')
+static_check('Button(drafting ? "Drafting…" : "Draft justification with AI")' in new_request
+             and 'api.aiHas("draft") && selectedClient != nil && !deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty' in new_request
+             and '"type": "justification", "client_id": cid, "device_name": deviceName' in draft_just and '"category": category, "text": justification' in draft_just
+             and decodes(procurement_swift, 'JustificationDraftReply', 'text', 'draft', 'truncated', 'shortened')
+             and 'Justification drafted. Review and edit it before creating the request.' in draft_just
+             and 'justification = mergeDraft(justification, r.draft ?? r.text)' in draft_just and 'aiDraftIncomplete' in draft_just
+             and 'justification =' not in draft_just.replace('justification = mergeDraft(justification, r.draft ?? r.text)', '')
+             and '.accessibilityLabel("Justification of need")\n                        .disabled(drafting)' in new_request
+             and len(re.findall(r'\bannounce\(', draft_just)) == 2 and 'announce("Drafting…")' in draft_just
+             and 'Section("Justification of need")' in new_request
+             and 'Justification of need: use 4,000 characters or fewer (you entered' in new_request
+             and "'justification'" in api_case('ai_draft') and 'device_justification_ai(' in api_case('ai_draft')
+             and 'device_justification_ai(' in php('procurement.php') and 'device_justification_ai(' in php('recommend.php')
+             and 'device_request_input(' in api_case('add_device_request'),
+             'S5: Draft justification with AI sends the typed fields as ai_draft justification, keeps typed text and says "Drafting…" and the result once; the website shares device_justification_ai()')
+
+# S6: recommendations.
+ai_swift = swift_sources['AIToolsView.swift']
+recommend_view = between(ai_swift, 'struct AIRecommendView: View {', '\n}\n')
+static_check('Label("Start a device request for \\(clientName.isEmpty ? "this client" : clientName)"' in recommend_view
+             and 'if api.can("procurement")' in recommend_view
+             and 'DeviceNewSheet(client: clientId, justification: startRequestPrefill(result ?? ""))' in recommend_view
+             and 'Review the recommendations, then start a device request for any you want to pursue.' in ai_swift
+             and 'guard scalars.count > 4000 else { return t }' in ai_swift and 'incomplete = r.truncated' in recommend_view
+             and 'Create a device request on the website' not in ai_swift
+             and 'recommend_context(' in api_case('ai_recommend') and 'Current AT:' not in api_case('ai_recommend')
+             and 'recommend_context(' in php('recommend.php'),
+             'S6: the recommendations offer "Start a device request for <client>" with the text prefilled (4,000 characters); the API uses recommend.php\'s recommend_context()')
+
+# S7: the formal AT evaluation report.
+eval_send = swift_func(eval_swift, 'private func send() async {')
+eval_draft = swift_func(eval_swift, 'private func draft() async {')
+static_check(all(s in eval_swift for s in ('try await api.call("eval_report", query: ["assessment_id": String(assessmentId)])',
+                                           'try await api.call("ai_eval_draft", method: "POST"', '"sections": evalSectionsBody(texts)',
+                                           'Button(drafting ? "Drafting…" : "Draft narrative with AI")',
+                                           'Button(sending ? "Sending…" : "Email signed report to counselor")',
+                                           'label: "Email to (required to email)"', 'Electronic signature: type your full name (\\(reply.signer ?? api.userName)) (required to email)',
+                                           'Button("Email signed report") { Task { await send() } }', 'Text("It is signed by you and logged on the client\'s file.")',
+                                           '"Email the signed evaluation report to \\(to.trimmingCharacters(in: .whitespacesAndNewlines))?"',
+                                           '“Draft narrative with AI” fills only the sections above that are empty or still hold the prefilled text; a section you have written in is kept as it is. To have it drafted, clear it first. Review and edit every section before sending.',
+                                           'Button(sharing ? "Preparing…" : "Share accessible HTML")', '"html": true]',
+                                           '("background", "Background"), ("findings", "Evaluation findings")',
+                                           '("recommendations", "Recommendations"), ("justification", "Justification of need")'))
+             and 'try await api.call("send_eval_report", method: "POST", body: body, refusal: { refused = refusalFields($0) })' in eval_send
+             and eval_send.index('body["idem_key"] = idem.key(for: body)') < eval_send.index('api.call("send_eval_report"')
+             and 'onSent(r.message' in eval_send and 'announce(' not in eval_send and 'idem.failed(error)' in eval_send
+             and len(re.findall(r'\bannounce\(', eval_draft)) == 2
+             and decodes(eval_swift, 'EvalReportReply', 'assessment', 'sections', 'to', 'counselorVerified', 'signer', 'releaseWarning', 'ai')
+             and decodes(eval_swift, 'EvalSection', 'key', 'label', 'text', 'default')
+             and decodes(eval_swift, 'EvalDraftReply', 'sections', 'message', 'truncated')
+             and perm437('eval_report', 'reports') and perm437('ai_eval_draft', 'reports') and perm437('send_eval_report', 'reports')
+             and sends(act437('eval_report'), 'assessment', 'sections', 'to', 'counselor_verified', 'signer', 'release_warning', 'ai', 'html', 'file')
+             and reads_input(act437('send_eval_report') + php_function(api_437_php, 'api_437_eval_posted') + php_function(api_437_php, 'api_437_eval_load'), 'assessment_id', 'sections', 'to', 'signature')
+             and 'eval_send(' in act437('send_eval_report') and 'eval_ai_draft(' in act437('ai_eval_draft')
+             and 'eval_ai_draft(' in php('eval_report.php') and 'eval_send(' in php('eval_report.php')
+             and "'send_eval_report'" in api_php[api_php.index('const API_IDEM_ACTIONS'):api_php.index(';', api_php.index('const API_IDEM_ACTIONS'))],
+             'S7: the evaluation report loads, drafts, emails (asked first, naming the recipient, with a retry key) and shares as eval_report.php; the page and the API share eval_send() and eval_ai_draft()')
+
+# S8: worksite AI and the recommendation report.
+worksite_draft = swift_func(accommodations_swift, 'private func draftRecommendations() async {')
+static_check('Button(drafting ? "Drafting…" : "Draft recommendations with AI")' in accommodations_swift
+             and 'try await api.call("ai_worksite", method: "POST", body: worksiteAIBody(' in worksite_draft
+             and '["id": id, "job_title": jobTitle, "job_tasks": jobTasks, "barriers": barriers, "recommendations": recommendations]' in accommodations_swift
+             and 'Recommendations drafted. Read and edit them, then save the assessment.' in worksite_draft
+             and len(re.findall(r'\bannounce\(', worksite_draft)) == 2 and 'save_worksite' not in worksite_draft
+             and 'NavigationLink("Recommendation report")' in accommodations_swift and 'action: "worksite_report", query: ["id": String(id)]' in accommodations_swift
+             and 'Save the assessment first so the report includes your changes.' in accommodations_swift
+             and decodes(accommodations_swift, 'WorksiteDraftReply', 'text', 'draft', 'truncated', 'message')
+             and perm437('ai_worksite', 'clients') and perm437('worksite_report', 'clients')
+             and sends(act437('worksite_report'), 'title', 'text', 'html', 'file', 'release_warning')
+             and reads_input(act437('ai_worksite'), 'id', 'job_title', 'job_tasks', 'barriers', 'recommendations')
+             and 'worksite_report_doc(' in php('accommodations.php') and 'worksite_report_doc(' in act437('worksite_report'),
+             'S8: Draft recommendations with AI sends the typed fields and saves nothing; the recommendation report is the website\'s worksite_report_doc()')
+
+# S9: goal suggestions per assessment; Format with AI.
+assess_section = between(edit_sheet, 'struct AssessmentsSection: View {', '\nstruct AddAssessmentSheet: View {')
+goals_sheet = between(edit_sheet, 'struct GoalSuggestionsSheet: View {', '\n}\n')
+format_fn = swift_func(clients_swift, 'private func formatWithAI() async {')
+static_check('Label("Suggest goals with AI for the assessment of \\(date)"' in assess_section and 'if api.aiHas("draft")' in assess_section
+             and '["type": "goals", "assessment_id": assessmentId, "client_id": clientId]' in goals_sheet
+             and all(s in goals_sheet for s in ('caption: "AI goal suggestions (draft)"', 'Copy any of these into a training track\'s goal form and edit as needed.',
+                                                'Label("Copy suggestions"')) and 'api.copyProtected(text)' in goals_sheet
+             and 'Label(formatBusy ? "Formatting…" : "Format with AI"' in clients_swift
+             and 'noteFormatBody(clientId: clientId, format: noteFormat, body: body_, sections: sections)' in format_fn
+             and '["type": "format", "client_id": clientId, "format": format, "body": body,' in parity_swift
+             and 'showFormError("Type the session notes first, then format them.", in: &error, field: "Narrative")' in format_fn
+             and 'sections = applyFormatted(sentSections, r.sections)' in format_fn and 'return drafted.isEmpty ? (i < old.count ? old[i] : "") : new[i]' in parity_swift
+             and 'Formatted as \\(noteFormat) — review each section, then save.' in format_fn
+             and decodes(parity_swift, 'NoteFormatReply', 'sections', 'message')
+             and 'LIMIT 8' not in api_case('ai_draft') and 'assessment_goals_ai(' in api_case('ai_draft') and 'note_format_ai(' in api_case('ai_draft')
+             and 'case_summary_context(' in php('client.php') and 'assessment_goals_ai(' in php('client.php'),
+             'S9: each assessment has "Suggest goals with AI for the assessment of <date>"; the note editor\'s Format with AI fills only the sections the AI gives; the API uses client.php\'s helpers')
+
+# S7/S9/S11 structure: the assessment buttons sit after the row's one stop, never inside it.
+assess_row = swift_func(assess_section, '@ViewBuilder private func assessmentRow(_ a: Assessment) -> some View {')
+assess_buttons = swift_func(assess_section, '@ViewBuilder private func assessmentButtons(_ a: Assessment) -> some View {')
+static_check('.accessibilityElement(children: .ignore)' in assess_row
+             and not any(s in assess_row for s in ('Evaluation report for', 'Suggest goals with AI', 'Download attachment'))
+             and 'assessmentRow(a)\n                // 4.37.0: each assessment\'s buttons are rows of their own, after its one stop.\n                assessmentButtons(a)' in assess_section
+             and all(s in assess_buttons for s in ('Evaluation report for the assessment of \\(date)', 'Suggest goals with AI for the assessment of \\(date)',
+                                                    '"Download attachment: \\(name)"'))
+             and 'if api.can("reports")' in assess_buttons,
+             'S7, S9, S11: the evaluation report, goal suggestions and attachment buttons are rows after the assessment\'s one stop, each naming the assessment')
+
+# S10: record progress per goal from the review.
+progress_view = between(ai_swift, 'struct AIProgressReviewView: View {', '\n}\n')
+static_check('Reviews recent notes and sessions against each active goal. Record any progress below.' in progress_view
+             and 'Section("Record progress")' in progress_view and 'Button("Record progress for \\(String(g.text.prefix(60)))")' in progress_view
+             and '"\\(g.text), \\(g.track ?? ""): \\(g.pct ?? 0)% (\\(g.status))"' in ai_swift
+             and 'GoalProgressSheet(goal: goal)' in progress_view and 'announceAfterDismiss(recorded)' in progress_view
+             and decodes(ai_swift, 'ReviewGoal', 'id', 'text', 'trackId', 'track', 'status', 'pct')
+             and decodes(ai_swift, 'ProgressReviewReply', 'text', 'truncated', 'goals')
+             and 'Incomplete: this review was cut short, so goals after the last one it mentions were not reviewed.' in ai_swift
+             and "'goals' =>" in api_case('ai_progress') and 'goal_progress_record(' in api_case('update_goal')
+             and 'goal_progress_record(' in php('progress_review.php')
+             and 'onDone(stored.message ??' in swift_sources['TrackDetailView.swift'],
+             'S10: the progress review lists each goal with "Record progress for <goal>", recorded through update_goal with the website\'s message')
+
+# S11: assessment templates and attachments.
+add_assess = between(edit_sheet, 'struct AddAssessmentSheet: View {', '\n}\n')
+static_check('try? await api.call("assessment_templates")' in add_assess and 'Picker("Start from a template", selection: $templateId)' in add_assess
+             and 'Text("None").tag(0)' in add_assess and 'if typedTemplateFields { pendingTemplate = chosen } else { applyTemplate(chosen, replacing: true) }' in add_assess
+             and '"Replace what you typed with the template \\(pendingTemplate?.name ?? "")?"' in add_assess
+             and 'Button("Replace")' in add_assess and 'Button("Keep mine", role: .cancel) { pendingTemplate = nil }' in add_assess
+             and 'Label("Report attachment (optional; PDF, Word, text, or image, 15 MB max)"' in add_assess
+             and 'Button("Remove attachment")' in add_assess
+             and 'body["attachment"] = ["name": attachmentName, "data": attachmentData.base64EncodedString()]' in add_assess
+             and add_assess.index('body["attachment"]') < add_assess.index('body["idem_key"] = idem.key(for: body)')
+             and '("attachment", "Report attachment")' in add_assess
+             and 'Attachment type not allowed. Use PDF, Word, text, or image files.' in edit_sheet and 'Attachment is too large (15 MB maximum).' in edit_sheet
+             and 'try await api.call("download_assessment_attachment", query: ["id": String(assessmentId)])' in edit_sheet
+             and decodes(edit_sheet, 'AssessmentTemplate', 'id', 'name', 'primaryTech', 'hardwareDetails', 'softwareVersion', 'summary')
+             and decodes(edit_sheet, 'AssessmentAttachmentReply', 'name', 'mime', 'data') and 'attachmentName' in struct_keys(edit_sheet, 'Assessment')
+             and perm437('assessment_templates', 'clients') and perm437('download_assessment_attachment', 'clients')
+             and sends(act437('download_assessment_attachment'), 'name', 'mime', 'data') and "'templates' =>" in act437('assessment_templates')
+             and "'attachment'" in api_php[api_php.index('const API_ARRAY_INPUT_KEYS'):api_php.index(';', api_php.index('const API_ARRAY_INPUT_KEYS'))]
+             and 'tech_assessment_attachment_store(' in api_case('add_assessment') and 'tech_assessment_attachment_store(' in php('client.php')
+             and "'attachment_name'" in api_case('assessments'),
+             'S11: the assessment form starts from a template (asking before replacing typed text) and sends the attachment as the server reads it; rows download it')
+
+# S13: the amendment request recorded and its reply.
+track_swift = swift_sources['TrackDetailView.swift']
+amend_view = between(track_swift, 'struct AmendmentView: View {', '\n}\n')
+record_fn = swift_func(amend_view, 'private func recordRequest() async {')
+reply_fn = swift_func(amend_view, 'private func recordReply(_ row: AmendmentHistoryRow) async {')
+redraft = between(amend_view, '.confirmationDialog("Replace the letter with a new AI draft? Your edits to it will be lost.",', 'Button("Keep my letter", role: .cancel) {}')
+static_check(all(s in amend_view for s in ('Section("Record the request as sent")',
+                                           'After you send the letter, record it here. It is kept on the track as a case note, and a follow-up task reminds you if no reply comes.',
+                                           'DatePicker("Date sent (required)"', 'label: "Sent to"', 'label: "Additional hours requested"',
+                                           'label: "Additional dollars requested"', 'Toggle("New end date requested"',
+                                           'Button(recording ? "Recording…" : "Record request as sent")', 'Section("Requests and replies (\\(rows.count))")',
+                                           'Picker("Reply (required)"', 'Text("Choose the reply").tag("")', 'DatePicker("Date of the reply"',
+                                           'Button(replying == row.id ? "Recording…" : "Record reply")', 'Button("Enter the approved change on the track")',
+                                           'Section("AI draft")', 'Button("Use the AI draft as the letter")', 'Button("Restore my letter")',
+                                           'amendRequest: change.requestId, reasonPrefill: change.reason'))
+             and 'try await api.call("record_amendment", method: "POST", body: body, refusal:' in record_fn
+             and record_fn.index('body["idem_key"] = recordIdem.key(for: body)') < record_fn.index('api.call("record_amendment"')
+             and '"track_id": trackId, "request_id": row.id, "status": replyStatus[row.id] ?? ""' in reply_fn and 'api.call("amendment_reply", method: "POST"' in reply_fn
+             and '["track_id": trackId, "requested_on": requestedOn, "sent_to":' in track_swift and '"new_end": newEnd, "letter": letter]' in track_swift
+             and 'if edited { body["letter"] = letter }' in amend_view
+             and re.search(r'if aiDraftText == nil \{\s*Button\("Replace with a new draft", role: \.destructive\)', redraft)
+             and track_swift.count('Replace with a new draft') == 1
+             and 'if let amendRequest, trackId != nil { body["amend_request"] = amendRequest }' in track_swift
+             and decodes(swift_sources['API.swift'], 'AmendmentResponse', 'history', 'waitingText', 'replyStatuses', 'sentToDefault', 'today', 'aiDraftText')
+             and decodes(swift_sources['API.swift'], 'AmendmentHistoryRow', 'id', 'requestedOn', 'status', 'text', 'awaiting', 'needsChange')
+             and decodes(track_swift, 'AmendmentReplyResult', 'message', 'needsChange', 'reasonPrefill', 'requestId')
+             and perm437('record_amendment', 'clients') and perm437('amendment_reply', 'clients')
+             and reads_input(act437('record_amendment') + php('inc/amendments.php'), 'track_id', 'requested_on', 'sent_to', 'hours', 'amount', 'new_end', 'letter')
+             and reads_input(act437('amendment_reply') + php('inc/amendments.php'), 'track_id', 'request_id', 'status', 'replied_on', 'note')
+             and sends(act437('amendment_reply'), 'message', 'needs_change', 'reason_prefill', 'request_id')
+             and sends(api_case('amendment'), 'history', 'waiting_text', 'reply_statuses', 'sent_to_default', 'today', 'ai_draft_text')
+             and 'amendment_ai_draft(' in api_case('amendment')
+             and 'amendment_ai_draft(' in php('amendment_request.php') and 'amendment_row_text(' in php('amendment_request.php')
+             and "'record_amendment'" in api_php[api_php.index('const API_IDEM_ACTIONS'):api_php.index(';', api_php.index('const API_IDEM_ACTIONS'))],
+             'S13: the request is recorded as sent (retry key) and its reply recorded; an edited letter keeps its words with the AI draft in a separate box ("Replace with a new draft" only for an older server); the approved change opens the track edit with amend_request')
+
+# S14: letters.
+letter_save = swift_func(letters_swift, 'private func save(_ how: String) async {')
+letter_draft = swift_func(letters_swift, 'private func draft() async {')
+static_check(all(s in letters_swift for s in ('try await api.call("letters", query: query)', 'Picker("Letter", selection: letterKey)',
+                                              'Filled in from the record. Check it and change anything before saving; \\"[not on file]\\" marks details the record does not have.',
+                                              'label: "Title (optional; blank uses the letter\'s name)"', 'Text("English").tag("en")', 'Text("Spanish").tag("es")',
+                                              '"Language of the letter (this client prefers Spanish; the wording below is in English, so choose Spanish if you write it in Spanish)"',
+                                              'label: "Letter (required)"', 'Button(drafting ? "Drafting…" : "Draft the letter with AI")',
+                                              'Toggle("Let the client read it in their portal", isOn: $toPortal)',
+                                              'Button(saving ? "Saving…" : "Save to the client\'s documents") { Task { await save("doc") } }',
+                                              'Button("Keep as a case note") { Task { await save("note") } }', 'ShareLink(item: file) { Label("Share the letter"',
+                                              'api.copyProtected(letterBody)', 'Label("Copy letter"', '.navigationTitle("Write a letter")',
+                                              '"Language of the letter (the wording below is in English)"',
+                                              '"Open the \\(name) instead? Your changes to this letter are lost."', 'Button("Open it", role: .destructive)',
+                                              'Button("Keep my letter", role: .cancel)', 'Button("Use the AI draft as the letter")'))
+             and '["client_id": clientId, "how": how, "key": key, "title": title.trimmingCharacters(in: .whitespacesAndNewlines), "body": body,' in letters_swift
+             and 'ShareLink(item: letterBody' not in letters_swift
+             and letters_swift.index('Toggle("Let the client read it in their portal"') < letters_swift.index('"Save to the client\'s documents"')
+                 < letters_swift.index('Label("Copy letter"') < letters_swift.index('"Draft the letter with AI"')
+             and '"lang": lang, "to_portal": how == "doc" && toPortal]' in letters_swift
+             and 'try await api.call("save_letter", method: "POST", body: body, refusal:' in letter_save
+             and letter_save.index('body["idem_key"] = idem.key(for: body)') < letter_save.index('api.call("save_letter"')
+             and 'The letter is empty. Write the letter, or open it again to start from the filled-in wording.' in letter_save
+             and '["client_id": clientId, "key": key, "body": letterBody, "edited": wasEdited]' in letter_draft and 'api.call("ai_letter", method: "POST"' in letter_draft
+             and 'if r.separate == true || wasEdited {' in letter_draft and len(re.findall(r'\bannounce\(', letter_draft)) == 2
+             and decodes(letters_swift, 'LettersReply', 'letters', 'key', 'title', 'body', 'lang', 'prefersSpanish', 'ai')
+             and decodes(letters_swift, 'LetterDraftReply', 'text', 'separate', 'message', 'truncated')
+             and decodes(letters_swift, 'LetterSaveReply', 'message', 'documentId')
+             and 'LetterView(clientId: clientId' in clients_swift and 'Label("Write a letter", systemImage: "envelope.open")' in clients_swift
+             and perm437('letters', 'clients') and perm437('ai_letter', 'clients') and perm437('save_letter', 'clients')
+             and sends(act437('letters'), 'letters', 'key', 'title', 'body', 'lang', 'prefers_spanish', 'ai')
+             and sends(act437('ai_letter'), 'text', 'separate', 'message', 'truncated')
+             and reads_input(act437('save_letter') + php('inc/portal_history.php'), 'client_id', 'how', 'title', 'body', 'lang', 'to_portal')
+             and 'letter_save(' in act437('save_letter') and 'letter_ai_draft(' in act437('ai_letter')
+             and 'letter_ai_draft(' in php('letters.php') and 'letter_save(' in php('letters.php')
+             and "'save_letter'" in api_php[api_php.index('const API_IDEM_ACTIONS'):api_php.index(';', api_php.index('const API_IDEM_ACTIONS'))],
+             'S14: Write a letter opens the website\'s seven letters, drafts with AI (a separate box once edited), and saves to the documents or as a note with a retry key')
+
+# S15: paper release, withdrawals and the privacy notice.
+release_sheet = between(sign_swift, 'struct ReleaseRequestSheet: View {', '\n}\n')
+static_check(all(s in release_sheet for s in ('Picker("How", selection: $method)', 'Text("Email it to sign").tag("Email")',
+                                              'Text("Record a paper release").tag("Paper")', 'DatePicker("Date signed (paper releases only) (required)"',
+                                              '"Record paper release"', 'if method == "Paper" { Task { await send() } } else { confirming = true }'))
+             and 'method == "Paper" ? ["method": "Paper", "signed_on": signedOn] : ["method": "Email"]' in sign_swift
+             and all(s in clients_swift for s in ('"withdraw_release", ["client_id": clientId, "release_id": r.id]',
+                                                  '"withdraw_consent", ["client_id": clientId, "consent_id": id]',
+                                                  '"record_privacy_notice", ["client_id": clientId, "how": privacyHow]',
+                                                  'Button("Record consent withdrawn", role: .destructive) { confirmingConsentWithdraw = true }',
+                                                  'Button("Record withdrawn: \\(r.recipientName)", role: .destructive)',
+                                                  '"Record that the release for \\(withdrawingRelease?.recipientName ?? "this recipient") is withdrawn?"',
+                                                  'Text("Nothing more is shared under it.")', 'Button("Record withdrawn", role: .destructive)',
+                                                  '"Record that \\(name) has withdrawn the guardian consent signed on \\(date)?"',
+                                                  'Text("The consent stops counting as current, and a new one can then be requested.")',
+                                                  'Section("Privacy notice")', 'Picker("Privacy notice given", selection: $privacyHow)',
+                                                  'Text("Choose how").tag("")', 'Button(recordsBusy ? "Recording…" : "Record notice given")'))
+             and decodes(swift_sources['API.swift'], 'ClientRelease', 'text', 'canWithdraw', 'withdrawnAt')
+             and decodes(swift_sources['API.swift'], 'ClientPrivacyNotice', 'givenAt', 'how', 'text')
+             and {'privacyNotice', 'privacyNoticeMethods', 'portalLink'} <= coding_keys(swift_sources['API.swift'], 'ClientDetail')
+             and 'signedId' in struct_keys(clients_swift, 'ConsentState')
+             and reads_input(php('inc/api_425.php') + records_privacy_php, 'method', 'signed_on')
+             and perm437('withdraw_release', 'clients') and perm437('withdraw_consent', 'clients') and perm437('record_privacy_notice', 'clients')
+             and reads_input(act437('withdraw_consent'), 'client_id', 'consent_id') and reads_input(act437('withdraw_release'), 'client_id', 'release_id')
+             and sends(api_case('client') + records_privacy_php, 'can_withdraw', 'withdrawn_at', 'privacy_notice', 'privacy_notice_methods')
+             and "'signed_id' =>" in php('inc/api_parity.php')
+             and 'consent_withdraw(' in php('client.php') and 'privacy_notice_record(' in php('client.php'),
+             'S15: a paper release is recorded with its date, releases and the guardian consent are recorded withdrawn (asked first, naming them), and the privacy notice is recorded as the website does')
+releases_block = between(clients_swift, 'ForEach(detail.releases) { r in', 'if detail.extras.supports425 {')
+static_check('Text(r.text ?? r.summary).font(.callout)' in releases_block and '.accessibilityElement(' not in releases_block
+             and '.accessibilityActions' not in releases_block,
+             'S15: each release\'s withdraw button is a visible stop after its line, none rotor-only')
+
+# S16: documents to the trash, share on upload, no HEIC.
+allowed = re.search(r'static let allowedExtensions = \[([^\]]*)\]', upload_swift).group(1)
+upload_fn = swift_func(upload_swift, 'private func upload() async {')
+trash_fn = swift_func(documents_swift, 'private func moveToTrash(_ document: ClientDocument) async {')
+static_check('heic' not in allowed and 'static let pickTypes: [UTType] = importTypes + [.heic, .heif]' in upload_swift
+             and 'UIImage(data: data)?.jpegData(compressionQuality: 0.9)' in upload_swift and '+ ".jpg"' in upload_swift
+             and 'Toggle("Share it on the client\'s portal", isOn: $sharePortal)' in upload_swift
+             and 'Toggle("Share it with their VR counselor on the counselor portal", isOn: $shareCounselor)' in upload_swift
+             and '["share_portal": category == "Resource" || portal, "share_counselor": counselor]' in upload_swift
+             and 'body.merge(share) { $1 }' in upload_fn and 'keyed.merge(share) { $1 }' in upload_fn
+             and 'That file type is not allowed. Use PDF, Office, text, or image files.' in upload_swift
+             and 'canDelete' in struct_keys(documents_swift, 'ClientDocument')
+             and 'try await api.call("delete_document", method: "POST", body: ["id": document.id])' in trash_fn and announced_once(trash_fn)
+             and 'Label(deleting == document.id ? "Moving to the trash…" : "Move \\(document.title) to the trash"' in documents_swift
+             and 'confirmationDialog("Move the document \\"\\(trashing?.title ?? "")\\" to the trash?"' in documents_swift
+             and 'Button("Move to trash", role: .destructive)' in documents_swift and 'Button("Keep it", role: .cancel)' in documents_swift
+             and 'Text("An administrator can restore it for 30 days.")' in documents_swift
+             and perm437('delete_document', 'clients') and 'document_delete(' in act437('delete_document')
+             and reads_input(api_case('upload_document'), 'share_portal', 'share_counselor') and 'DOCUMENT_UPLOAD_EXTENSIONS' in api_case('upload_document')
+             and "'heic'" not in api_case('upload_document') and "'can_delete' =>" in api_case('documents')
+             and 'document_delete(' in php('client.php'),
+             'S16: HEIC is not sent (a HEIC photo goes as a JPEG), uploads share as client.php\'s ticks, and a document moves to the trash after the website\'s question')
+
+# S17: the portal link's state and turning it off.
+static_check('if let link = detail.portalLink, !link.text.isEmpty { Text(link.text) }' in clients_swift
+             and 'portalConfirmText(detail.portalLink, fallback:' in clients_swift and 'link?.confirmText' in clients_swift
+             and 'if detail.portalLink?.state == "active" {' in clients_swift
+             and '.confirmationDialog("Turn off \\(detail.client.name)\'s portal link?", isPresented: $confirmingPortalOff' in clients_swift
+             and 'Button("Turn off portal link", role: .destructive) { Task { await revokePortalLink() } }' in clients_swift
+             and 'Text("Every link already sent stops working.")' in clients_swift
+             and 'await recordWrite("revoke_portal_link", ["client_id": clientId], place: "portal")' in clients_swift
+             and decodes(swift_sources['API.swift'], 'PortalLinkState', 'state', 'until', 'text', 'confirmText')
+             and perm437('revoke_portal_link', 'clients') and 'portal_link_revoke(' in act437('revoke_portal_link')
+             and "'portal_link' =>" in api_case('client') and 'portal_link_sent_message(' in api_case('send_portal_link')
+             and 'portal_link_confirm_text(' in php('client.php') + php('inc/client_notices.php'),
+             'S17: the portal link\'s state and the website\'s confirmation words are shown, and "Turn off portal link" asks first, naming the client')
+record_write = swift_func(clients_swift, 'private func recordWrite(_ action: String, _ body: [String: Any], place: String) async -> Bool {')
+privacy_fn = swift_func(clients_swift, 'private func recordPrivacyNotice() async {')
+static_check(announced_once(record_write) and 'showActionError(error.localizedDescription, at: place)' in record_write
+             and 'showFormError' not in record_write and 'try await api.call(action, method: "POST", body: body)' in record_write
+             and '.accessibilityFocused($actionErrorFocus, equals: place)' in clients_swift
+             and all('actionErrorRow("%s")' % p in clients_swift for p in ('consent', 'portal', 'release', 'privacy'))
+             and all('place: "%s")' % p in clients_swift for p in ('consent', 'portal', 'release', 'privacy'))
+             and clients_swift.index('Picker("Privacy notice given"') < clients_swift.index('actionErrorRow("privacy")') < clients_swift.index('"Record notice given"')
+             and 'if await recordWrite("record_privacy_notice", ["client_id": clientId, "how": privacyHow], place: "privacy") { privacyHow = "" }' in privacy_fn,
+             'S15, S17: each record write says the server\'s sentence once; a refusal is shown and focused beside its action, and the privacy method is cleared only once recorded')
+
+# S18: the review message and the timeline.
+review_fn = swift_func(referrals_swift, 'private func review() async {')
+timeline_view = between(clients_swift, 'struct ClientTimelineView: View {', '\n}\n')
+static_check('let reply: MessageReply = try await api.call("review_referral", body: ["id": referralId])' in review_fn
+             and 'confirmation = reply.message ?? "Marked as reviewed."' in review_fn
+             and 'reply = try await api.call("client_timeline", query: ["client_id": String(clientId)])' in timeline_view
+             and 'Section("Time in each status")' in timeline_view and 'Text("Events (\\(reply.total ?? reply.events.count)), newest first")' in timeline_view
+             and 'ForEach(Array(timelineGroups(reply.events).enumerated()), id: \\.offset) { _, group in\n                    Section(group.month) {' in timeline_view
+             and decodes(clients_swift, 'ClientTimelineReply', 'statusDays', 'events', 'total')
+             and decodes(clients_swift, 'TimelineEvent', 'date', 'month', 'kind', 'text')
+             and 'NavigationLink { ClientTimelineView(clientId: clientId, clientName: detail.client.name) }' in clients_swift
+             and perm437('client_timeline', 'clients') and sends(act437('client_timeline'), 'status_days', 'events', 'total')
+             and sends(api_case('review_referral'), 'changed', 'message') and 'referral_mark_reviewed(' in api_case('review_referral')
+             and 'referral_mark_reviewed(' in php('referrals.php'),
+             'S18: Mark as reviewed says the server\'s sentence; Timeline shows "Time in each status" and the events under month headings, read-only')
+
+# S19: referral filters and the contact date.
+ref_load = swift_func(referrals_swift, 'private func load(announcing: Bool = false) async {')
+static_check(all(s in referrals_swift for s in ('Picker("Status", selection: $statusFilter)', 'Picker("Show", selection: $whoFilter)',
+                                                '("open", "Open (New or Reviewed)"), ("converted", "Converted"), ("closed", "Closed without a client"), ("all", "All statuses")',
+                                                '("all", "All referrals"), ("me", "Assigned to me"), ("unassigned", "Unassigned")',
+                                                '["status": status, "who": who]', '@State private var statusFilter = "open"',
+                                                'Showing the newest \\(shown) of \\(total) matching referrals. Narrow the filters to find older ones.'))
+             and 'api.call("referrals", query: referralsQuery(status: statusFilter, who: whoFilter))' in ref_load
+             and announced_once(ref_load) and 'if announcing {' in ref_load
+             and 'the rest are on the website\'s Referrals page' not in referrals_swift
+             and 'Text(heading).font(.headline)' in referrals_swift and '(\\(total ?? referrals.count))' not in referrals_swift
+             and decodes(referrals_swift, 'ReferralRow', 'contactText', 'contactOverdue') and decodes(referrals_swift, 'ReferralsResponse', 'heading')
+             and '.onChange(of: statusFilter)' in referrals_swift and '.pickerStyle(' not in referrals_swift
+             and reads_input(api_case('referrals'), 'who') and sends(api_case('referrals'), 'heading', 'limit')
+             and 'contact_text' in api_case('referrals') + php('inc/referral_request.php')
+             and 'referral_who_sql(' in api_case('referrals') and 'referral_who_sql(' in php('referrals.php'),
+             'S19: Referrals has the website\'s Status (open first) and Show filters, quiet, says the new count once, and shows each referral\'s contact date')
+
+# S21: Pre-ETS cohorts.
+new_cohort = between(programs_swift, 'struct CohortNewSheet: View {', '\n}\n')
+cohort_change = swift_func(programs_swift, 'private func cohortChange(_ action: String, _ body: [String: Any]) async {')
+static_check(all(s in new_cohort for s in ('label: "Cohort name (required)"', 'label: "School / district"', 'Picker("Coordinator", selection: $coordinatorId)',
+                                           'Text("None").tag(0)', 'Toggle("Start date", isOn: $hasStart)', 'Toggle("End date", isOn: $hasEnd)',
+                                           'label: "Notes (optional)"', 'Button("Create cohort")', 'try? await api.call("cohort_choices")',
+                                           'coordinatorId: coordinators == nil ? nil : coordinatorId', 'Notes: use 2,000 characters or fewer.',
+                                           'The end date cannot be before the start date.'))
+             and 'if let coordinatorId { body["coordinator_id"] = coordinatorId }' in programs_swift
+             and '["name": name, "school": school, "start_date": startDate, "end_date": endDate, "notes": notes]' in programs_swift
+             and all(s in programs_swift for s in ('Button("Delete session: \\(s.activity), \\(formatDate(s.sessionDate))", role: .destructive) { deletingSession = s }',
+                                                   '"Delete the session \\(activity), \\(date), and its attendance?"', 'Text("Its hours come out of the report.")',
+                                                   'Button("Delete session", role: .destructive)', 'Button("Keep it", role: .cancel)',
+                                                   'Button(active ? "Archive cohort" : "Reactivate cohort")', 'Text("Active cohorts").tag("active")',
+                                                   'Text("Archived cohorts").tag("archived")', '"No archived cohorts." : "No active cohorts."',
+                                                   'api.call("cohorts", query: ["show": show])', '"Coordinator: \\(n)"',
+                                                   '["cohort_id": id, "session_id": s.id]', '["cohort_id": id, "active": active]'))
+             and announced_once(cohort_change)
+             and decodes(programs_swift, 'CohortSession', 'text', 'canDelete') and decodes(programs_swift, 'CohortDetailResponse', 'coordinatorName', 'notes', 'active')
+             and decodes(programs_swift, 'CohortRow', 'coordinator', 'startDate', 'endDate')
+             and perm437('cohort_choices', 'programs') and perm437('delete_cohort_session', 'programs') and perm437('set_cohort_active', 'programs')
+             and reads_input(act437('delete_cohort_session') + php('inc/programs.php'), 'cohort_id', 'session_id') and reads_input(act437('set_cohort_active') + php('inc/programs.php'), 'cohort_id', 'active')
+             and sends(act437('cohort_choices'), 'coordinators', 'activities')
+             and 'cohort_input(' in api_case('add_cohort') and 'cohort_input(' in php('programs.php')
+             and '$acts = [' not in api_case('log_cohort_session'),
+             'S21: a new cohort has the coordinator, dates and notes; a logged session is deleted after the website\'s question; cohorts are archived or reactivated and listed by Show')
+sessions_block = between(programs_swift, 'Section("Recent sessions") {', 'if let active = d.active {')
+static_check('.accessibilityElement(children: .combine)\n                            // 4.37.0 (S21): a visible button after the session\'s one stop.\n                            if s.canDelete {' in sessions_block,
+             'S21: each session\'s Delete button is its own stop after the session\'s one stop')
+
+# S22: instructor matching.
+matching = between(at_swift, 'struct ATMatchingView: View {', '\n}\n')
+static_check(all(s in matching for s in ('label: "Expertise needed"', 'label: "Language / communication"', 'label: "Service area"',
+                                         'DatePicker("Week starting", selection: $weekStarting, displayedComponents: .date)',
+                                         'Picker("Delivery mode", selection: $modality)', '"date": APIDate.day(weekStarting)'))
+             and 'estimated hours available of \\(atHoursText(m.capacityHours)) this week.' in at_swift
+             and '"Matched: \\(m.matched.isEmpty ? "None specified" : m.matched). Missing: \\(m.missing.isEmpty ? "None" : m.missing)."' in at_swift
+             and 'n == 0 ? "No available instructor profiles." : "\\(n) matching instructor\\(n == 1 ? "" : "s")"' in at_swift
+             and announced_once(swift_func(matching, 'private func search() async {'))
+             and 'Suggestions for the next 7 days' not in at_swift
+             and "$need['date']" in php('inc/at_services.php') and "'capacity_hours'" in php('inc/at_services.php'),
+             'S22: matching has the website\'s fields with Week starting (sent as date), its row sentences and its count, said once')
+
+# S23: knowledge base general knowledge.
+kb_view = between(ai_swift, 'struct KBAskView: View {', '\n}\n')
+static_check('Toggle("If no article covers it, answer from general knowledge (marked as not agency procedure)", isOn: $general)' in kb_view
+             and 'body: ["question": question, "general": general]' in kb_view and 'steps = (reply["steps"] as? [String]) ?? []' in kb_view
+             and 'let message = ([error.localizedDescription] + steps).joined(separator: " ")' in kb_view
+             and 'general ? "Answer (general knowledge, not from your articles)" : "Answer"' in ai_swift
+             and 'showFormError("Type a question to ask.", in: &error, field: "Your question")' in kb_view
+             and decodes(ai_swift, 'KBAnswerReply', 'text', 'sources', 'general')
+             and reads_input(api_case('ai_kb'), 'general') and "'steps' =>" in api_case('ai_kb') and 'kb_general_answer(' in api_case('ai_kb')
+             and 'kb_general_answer(' in php('kb_ask.php'),
+             'S23: the knowledge-base assistant can answer from general knowledge (captioned so), and a question no article covers says the website\'s three steps as one message')
+
+# S24: translate into another language.
+translate_view = between(ai_swift, 'struct TranslateView: View {', '\n}\n')
+static_check('static let other = "Other (type below)"' in translate_view and 'Text(Self.other).tag(Self.other)' in translate_view
+             and 'label: "Other language (letters, spaces, hyphens, apostrophes, periods and parentheses; up to 40 characters)"' in translate_view
+             and 'errorName: "Other language"' in translate_view and '.errorField("Text to translate")' in translate_view
+             and 'choice == TranslateView.other ? typed.trimmingCharacters(in: .whitespacesAndNewlines) : choice' in ai_swift
+             and all(s in ai_swift for s in ('"Paste the text to translate."', '"Type the language to translate into."',
+                                              '"The language name can use only letters, spaces, hyphens, apostrophes, periods and parentheses (40 characters maximum)."',
+                                              'content.unicodeScalars.count'))
+             and 'translate_input_errors(' in api_case('ai_translate') and 'translate_input_errors(' in php('translate.php'),
+             'S24: Translate offers "Other (type below)" with the typed language, checks as translate.php does and ties errors to their fields')
+
+# S25: remediation for a client's preferred format.
+remediate_view = between(ai_swift, 'struct RemediateView: View {', '\n}\n')
+static_check(all(s in ai_swift for s in ('("plain", "Plain language (6th–8th grade)")', '("simplify", "Simplify (shorter sentences)")',
+                                         '("largeprint", "Format for large print / low vision")', '("alt", "Alt text for an image (describe it below)")',
+                                         '"Targeting the client\'s preferred format: \\(f)."', 'if let clientId, clientId > 0 { body["client_id"] = clientId }',
+                                         '"Paste some content first."', 'Shorten the content to 20,000 characters or fewer (it has'))
+             and 'remediateBody(mode: mode, content: content, clientId: clientId)' in remediate_view and '.errorField("Content")' in remediate_view
+             and decodes(ai_swift, 'RemediateReply', 'text', 'truncated', 'format')
+             and 'Label("Make a document accessible for \\(detail.client.name)"' in clients_swift
+             and 'RemediateView(clientId: clientId, clientFormat: detail.client.a11yFormat)' in clients_swift
+             and 'Provide content.' not in api_case('ai_remediate') and 'remediate_prompt(' in api_case('ai_remediate')
+             and reads_input(api_case('ai_remediate'), 'client_id') and 'remediate_prompt(' in php('remediate.php'),
+             'S25: remediation uses the website\'s modes and refusals, and from a client targets the client\'s preferred format')
+
+# S26: knowledge base screens.
+static_check(all(s in knowledge_swift for s in ('Text(kbMeta(category: a.category, updated: a.updatedAt, author: a.author))',
+                                                'updated.flatMap { $0.isEmpty ? nil : "updated " + formatDate($0) }',
+                                                '"Article (plain text; blank lines separate paragraphs; start a line with ## for a heading, - for a bullet, 1. for a numbered step; up to 60,000 characters)"',
+                                                'Toggle("Publish to client portals (visible to clients)", isOn: $isPublic)',
+                                                'Button("Delete permanently", role: .destructive)', '.confirmationDialog("Delete this article permanently?"',
+                                                'Text("It does not go to the trash, so this cannot be undone.")',
+                                                'Label("Ask the knowledge base", systemImage: "book.closed")', 'if api.aiHas("kb") {',
+                                                '"No articles yet." : "No articles match your search."', 'Text("Shared with clients")'))
+             and 'separator: " · "' in knowledge_swift,
+             'S26: the knowledge base shows "<category> · updated <date> · <author>", the website\'s editor label, tick and delete words, and Ask the knowledge base')
+
+# Confirmations in the new code name the item (S1, S7, S13, S15, S16, S17, S21).
+static_check(titles_name_item(equipment_swift, ['Retire'])
+             and titles_name_item(clients_swift, ['Record that the release', 'Turn off'])
+             and 'confirmationDialog("Move the document \\"\\(trashing?.title ?? "")\\" to the trash?"' in documents_swift
+             and 'confirmationDialog(evalConfirmTitle(to)' in eval_swift
+             and 'confirmationDialog(consentWithdrawTitle(name: c.signedName ?? "the guardian", date: formatDate(c.signedAt))' in clients_swift
+             and 'confirmationDialog(deleteSessionTitle(activity: deletingSession?.activity ?? "", date: formatDate(deletingSession?.sessionDate))' in programs_swift
+             and 'confirmationDialog(switchLetterQuestion(name(pendingKey ?? ""))' in letters_swift,
+             '4.37.0: every new confirmation names the item it acts on')
+
+static_check('.confirmationDialog("Discard this letter?", isPresented: $askingDiscard, titleVisibility: .visible)' in letters_swift
+             and 'Text("What you changed in this letter is not saved.")' in letters_swift
+             and 'Button("Discard", role: .destructive) { dismiss() }' in letters_swift and 'Button("Keep editing", role: .cancel) {}' in letters_swift
+             and 'Enter the date the request was sent (today or earlier).' in record_fn
+             and record_fn.index('today or earlier') < record_fn.index('api.call("record_amendment"')
+             and 'Enter the date of the reply (today or earlier).' in reply_fn
+             and 'This photo is too large for the phone to convert. Save it as a JPEG first, or upload it from the website.' in upload_swift
+             and 'That photo is larger than 25 MB, the most that can be uploaded.' in upload_swift,
+             '4.37.0: the letter discard question, the amendment date sentences and the photo conversion message read as Android and the website')
+
+# 4.37.0 review fixes, run for real: the app's own models and helpers are compiled and run on
+# the server's reply shapes (no simulator needed).
+def swift_decl(text, head):
+    """A top-level Swift declaration starting with `head` ("struct X:", "func f("), braces matched."""
+    i = text.index('\n' + head) + 1
+    j = text.index('{', i)
+    depth = 0
+    while True:
+        if text[j] == '{':
+            depth += 1
+        elif text[j] == '}':
+            depth -= 1
+            if depth == 0:
+                return text[i:j + 1]
+        j += 1
+
+
+# Item 2 (edited letter): with no separate draft the typed letter and serverLetter are kept, so
+# it still counts as edited; show(reply) is not reached on that path.
+draft_ai = swift_func(amend_view, 'private func draftAI() async {')
+edited_path = between(draft_ai, '} else if edited && recordsRequests {', '} else {')
+static_check('let typed = letter, kept = serverLetter' in edited_path and 'letter = typed; serverLetter = kept' in edited_path
+             and 'show(reply)' not in edited_path
+             and draft_ai.index('if edited, let draft = reply.data.aiDraftText, !draft.isEmpty {') < draft_ai.index('} else if edited && recordsRequests {')
+             and 'if editing || aiLetterKept { letter = typed; serverLetter = kept }' in amend_view,
+             'S13: an edited letter whose AI draft did not come is kept and still counts as edited; a reload keeps a letter being edited or an AI letter')
+
+run_src = 'import Foundation\n' + '\n'.join([
+    swift_decl(swift_sources['API.swift'], 'struct LenientList:'),
+    swift_decl(programs_swift, 'struct CohortMember:'),
+    swift_decl(programs_swift, 'struct CohortSession:'),
+    swift_decl(programs_swift, 'struct CohortInfo:'),
+    swift_decl(programs_swift, 'struct CohortDetailResponse:'),
+    swift_decl(eval_swift, 'struct EvalSection:'),
+    swift_decl(eval_swift, 'func evalApplyDraft('),
+    swift_decl(parity_swift, 'func mergeDraft('),
+    swift_decl(parity_swift, 'func firstPlaceholder('),
+    swift_decl(ai_swift, 'func startRequestPrefill('),
+]) + r'''
+func check(_ ok: Bool, _ label: String) { if !ok { print("FAIL: " + label); exit(1) }; print("PASS: " + label) }
+let d = JSONDecoder(); d.keyDecodingStrategy = .convertFromSnakeCase
+// Item 1: the cohort reply as api.php sends it: the raw row (active 1, dates as text) inside
+// cohort, the coordinator, notes and a bool active beside it; one odd session row.
+let cohortJSON = """
+{"ok":true,"cohort":{"id":4,"name":"Synthetic Cohort","school":null,"coordinator_id":2,"start_date":"2026-09-01","end_date":null,"notes":"Synthetic note","active":1},
+ "members":[{"id":7,"name":"Synthetic Client"}],
+ "sessions":[{"id":9,"session_date":"2026-10-01","activity":"Workplace Readiness","topic":null,"duration_min":60,"present_n":"1","present_names":["Synthetic Client"],"absent_names":[],"text":"Oct 1, 2026, 60 min","can_delete":true},
+             {"id":"odd"}],
+ "available":[],"sessions_total":51,"total":51,"limit":50,"coordinator_name":"Synthetic Instructor","notes":"Synthetic note","active":true}
+"""
+let cohort = try! d.decode(CohortDetailResponse.self, from: Data(cohortJSON.utf8))
+check(cohort.active == true && cohort.coordinatorName == "Synthetic Instructor" && cohort.notes == "Synthetic note"
+      && cohort.cohort.startDate == "2026-09-01" && cohort.sessions.count == 1 && cohort.sessions[0].canDelete
+      && cohort.sessions[0].presentN == 1 && cohort.sessionsTotal == 51,
+      "S21: the cohort reply decodes as the server sends it (coordinator, notes and active beside the raw row; an odd session row skipped)")
+let archived = try! d.decode(CohortDetailResponse.self, from: Data(#"{"cohort":{"id":4,"name":"X","active":"0"},"members":[],"sessions":[],"available":[],"active":0}"#.utf8))
+check(archived.active == false, "S21: active sent as 0 reads as archived")
+let older = try! d.decode(CohortDetailResponse.self, from: Data(#"{"cohort":{"id":4,"name":"X"},"members":[],"sessions":[],"available":[]}"#.utf8))
+check(older.active == nil && older.coordinatorName == nil, "S21: a 4.36.0 cohort reply still decodes (no archive offered)")
+// Item 4: drafts never cut or replace typed text.
+check(mergeDraft("", "Draft") == "Draft" && mergeDraft("Typed text  \n", "Draft") == "Typed text\nDraft",
+      "S5, S8: a draft fills an empty field, or goes below typed text after one line break")
+let long = String(repeating: "x", count: 3990)
+check(mergeDraft(long, String(repeating: "y", count: 50)).count == 3990 + 1 + 50, "S5: a merged justification is never cut (the save refuses over 4,000)")
+let drafted = try! d.decode([EvalSection].self, from: Data(#"[{"key":"background","label":"Background","text":"AI background","default":false},{"key":"findings","label":"Evaluation findings","text":"AI findings","default":false},{"key":"recommendations","label":"Recommendations","text":"AI recs","default":false}]"#.utf8))
+let applied = evalApplyDraft(current: ["background": "Prefilled background", "findings": "My own findings", "recommendations": ""],
+                             defaults: ["background": "Prefilled background"], drafted: drafted)
+check(applied["background"] == "AI background" && applied["findings"] == "My own findings" && applied["recommendations"] == "AI recs",
+      "S7: the AI fills only empty or prefilled sections; a section written in keeps exactly what was typed")
+check(firstPlaceholder("Dear [not on file], see [CLIENT].") == "[CLIENT]" && firstPlaceholder("Only [not on file] here.") == nil,
+      "AI drafts: any bracketed tag but [not on file] is named as a placeholder")
+let rec = startRequestPrefill(String(repeating: "a", count: 3000) + "\n" + String(repeating: "b", count: 2000))
+check(rec.unicodeScalars.count == 3000 && !rec.contains("b"), "S6: the request prefill is at most 4,000 characters, cut at a line end")
+'''
+with tempfile.TemporaryDirectory(prefix='cms-437-') as tmp437:
+    (Path(tmp437) / 'main.swift').write_text(run_src)
+    subprocess.run(['swiftc', '-module-cache-path', str(Path(tmp437) / 'm'), str(Path(tmp437) / 'main.swift'), '-o', str(Path(tmp437) / 't')], check=True)
+    run = subprocess.run([str(Path(tmp437) / 't')], capture_output=True, text=True)
+    print(run.stdout, end='')
+    static_check(run.returncode == 0, '4.37.0: the cohort decode, draft merges and placeholder rules run as the app runs them')
 
 source = (root / 'ios/Sources/API.swift').read_text()
 source = source.split('extension Color {')[0]

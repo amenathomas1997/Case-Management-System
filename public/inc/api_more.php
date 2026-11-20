@@ -21,6 +21,8 @@ function api_more(string $action, array $input, int $userId): ?array {
                 'competency_levels', 'score_labels', 'client_statuses', 'referral_sources'];
             $lists = [];
             foreach ($keys as $k) $lists[$k] = array_values(array_map('strval', cms_list_items($k)));
+            // A new item's AT Act type (4.37.0), as equipment.php's Add item offers them (inc/at_act.php).
+            $lists['at_types'] = array_values(AT_ACT_TYPES);
             // For a new client's form (4.25.0): the custom fields in use and the offices (empty when none).
             $cf = array_map(fn($f) => ['id' => (int)$f['id'], 'label' => (string)$f['label'], 'hint' => (string)($f['hint'] ?? ''), 'type' => (string)$f['type'],
                 'options' => $f['type'] === 'yesno' ? ['Yes', 'No'] : custom_field_options($f), 'required' => (int)$f['required'] === 1, 'value' => ''], custom_fields_all(true));

@@ -211,9 +211,12 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
                 SecondaryButton("Request a release") { nav.navigate("release/$id") }
             }
             if (detail.email != null) SecondaryButton("Email a new portal link") { portalAsk = true }
+            // 4.37.0 (S14, S18): letters from the record, and its timeline (from a server that has them).
+            if (api.can("clients") && (c.has("portal_link") || r.has("portal_link"))) SecondaryButton("Write a letter") { nav.navigate("letters/$id") }
             SecondaryButton("Request guardian consent") { consentAsk = true }
             SecondaryButton("Status history") { nav.navigate("history/$id") }
-            if (listOf("recommend", "progress", "intake", "draft").any { api.aiHas(it) }) SecondaryButton("AI help for this client") { nav.navigate("clientAi/$id") }
+            if (c.has("portal_link") || r.has("portal_link")) ListRow(listOf("Timeline"), action = "open it", onClick = { nav.navigate("timeline/$id") })
+            if (listOf("recommend", "progress", "intake", "draft", "remediate").any { api.aiHas(it) }) SecondaryButton("AI help for this client") { nav.navigate("clientAi/$id") }
             if (api.can("clients") && api.aiHas("briefing")) SecondaryButton("AI case briefing") { nav.navigate("briefing/$id") }
             if (api.aiHas("voice") && api.can("clients")) SecondaryButton("Voice assistant") { nav.navigate("voice/$id/" + android.net.Uri.encode(detail.name.ifEmpty { "-" })) }
             SecondaryButton("Tech assessments") { nav.navigate("assessments/$id") }
@@ -235,13 +238,10 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
             }
             SecondaryButton("Add a training track") { nav.navigate("trackEdit/$id/0") }
 
-            val releases = detail.releases
-            Heading("Releases of information (${releases.size})")
-            if (releases.isEmpty()) Text("No releases.")
-            releases.forEach { rel ->
-                ListRow(listOf(rel.recipientName + (rel.recipientType?.let { " ($it)" } ?: ""),
-                    listOfNotNull(rel.status, rel.expiresOn?.let { "ends " + dayText(it) }).joinToString(", "), rel.infoScope ?: ""))
-            }
+            // 4.37.0 (S15, S17): each release's state and Record withdrawn, the privacy notice, and the portal link.
+            ReleasesSection(api, id, r) { m -> notice = m; state.reload() }
+            PrivacyNoticeSection(api, id, r) { m -> notice = m; state.reload() }
+            PortalLinkSection(api, id, detail.name, r) { m -> notice = m; state.reload() }
 
             // 4.35.0: after closure, the outcome survey and the follow-up checks (from a server that sends them).
             (r.optJSONObject("after_closure") ?: c.optJSONObject("after_closure"))?.let { a ->
@@ -270,10 +270,10 @@ fun ClientScreen(api: Api, nav: NavHostController, id: Int) {
                 ErrorText(olderError)
             }
         }
-        if (portalAsk) Confirm("Email a new portal link?", "A new link to the client portal is emailed to ${detail.email ?: ""}. Any earlier link stops working.", "Email the link", {
+        if (portalAsk) Confirm("Email a new portal link?", portalConfirm(r, "A new link to the client portal is emailed to ${detail.email ?: ""}. Any earlier link stops working."), "Email the link", {
             notice = null; linkError = null
             scope.launch {
-                try { notice = api.callOnce("send_portal_link", org.json.JSONObject().put("client_id", id), portalKey, { portalKey = it }, "the portal link").optString("message").ifEmpty { "Portal link emailed." } }
+                try { notice = api.callOnce("send_portal_link", org.json.JSONObject().put("client_id", id), portalKey, { portalKey = it }, "the portal link").optString("message").ifEmpty { "Portal link emailed." }; state.reload() }
                 catch (e: ApiException) { linkError = e.message }
             }
         }, { portalAsk = false })
@@ -292,6 +292,7 @@ private fun ConsentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onC
     // 4.34.0: each refusal on its field (guardian_name, guardian_email).
     var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var idem by rememberSaveable { mutableStateOf("") }
+    var withdrawing by rememberSaveable { mutableStateOf(false) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val r = loaded.data
     val consent = r?.optJSONObject("consent")
@@ -327,6 +328,20 @@ private fun ConsentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onC
                 "Withdrawn" -> "The consent was withdrawn."
                 else -> "No consent on record."
             })
+            // 4.37.0 (S15): the signed consent shown can be recorded as withdrawn (only that one).
+            val signedId = if (r.has("signed_id") && !r.isNull("signed_id")) r.optInt("signed_id") else consent?.let { if (it.has("signed_id") && !it.isNull("signed_id")) it.optInt("signed_id") else null }
+            if (st == "Signed" && signedId != null && signedId > 0) SecondaryButton("Record consent withdrawn") { withdrawing = true }
+            if (withdrawing && signedId != null) {
+                val who = consent?.str("signed_name") ?: "the guardian"
+                val on = shortDate(consent?.str("signed_at"))
+                Confirm(consentWithdrawTitle(who, on), CONSENT_WITHDRAW_TEXT, "Record consent withdrawn", {
+                    scope.launch {
+                        try { onDone(api.call("withdraw_consent", body = org.json.JSONObject().put("client_id", clientId).put("consent_id", signedId)).optString("message")
+                            .ifEmpty { "Guardian consent recorded as withdrawn. Request a new consent below when the guardian agrees again." }) }
+                        catch (e: ApiException) { error = e.message; loaded.reload() }
+                    }
+                }, { withdrawing = false })
+            }
             if (!canRequest) Text("A new request is offered 30 days before the consent ends.")
             else {
                 Field("Guardian name", name ?: "", { name = it }, required = true, error = fieldErrors["guardian_name"])
@@ -597,6 +612,27 @@ fun AddNoteScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int 
                         if (homework.isNotEmpty()) summary += " ${homework.size} homework ${if (homework.size == 1) "item" else "items"} found."
                         notice = "$summary Review before saving."
                     } catch (e: ApiException) { error = e.message } finally { aiBusy = false }
+                }
+            }
+        }
+        // 4.37.0 (S9): "Format with AI" splits the narrative into the chosen format's sections, as the website.
+        if (api.aiHas("draft") && structured) {
+            SecondaryButton(if (aiBusy) "Formatting… this can take up to a minute" else "Format with AI") {
+                if (aiBusy) return@SecondaryButton
+                presses++
+                if (body.isBlank()) { error = "Type the session notes first, then format them."; return@SecondaryButton }
+                val before = sections
+                val fmt = format
+                scope.launch {
+                    aiBusy = true; error = null
+                    try {
+                        val r = api.call("ai_draft", body = formatBody(clientId, fmt, body, before))
+                        if (sections != before) { error = "The $fmt sections changed while the note was being formatted, so it was not applied. Choose Format with AI again."; return@launch }
+                        val got = r.optJSONArray("sections").let { a -> List(a?.length() ?: 0) { a!!.optString(it) } }
+                        if (before.any { it.isNotBlank() }) sectionsBefore = before
+                        sections = applyFormatted(before, got)
+                        notice = r.str("message") ?: formattedMessage(fmt)
+                    } catch (e: ApiException) { error = replyErrors(e.reply)["body"] ?: e.message } finally { aiBusy = false }
                 }
             }
         }

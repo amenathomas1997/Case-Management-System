@@ -44,7 +44,7 @@ enum AINotice {
     static let caseloadCut = "Note: only part of the caseload fit in one question — narrow the question for larger caseloads."
     static let riskIncomplete = "Incomplete: the AI stopped before finishing this list, so the clients after the last item were not assessed."
     static let curriculumIncomplete = "Incomplete: the AI stopped before finishing this lesson plan, so the last lessons are missing. Narrow the focus and draft again."
-    static let progressIncomplete = "Incomplete: the AI stopped before finishing this review, so the last goals may be missing. Generate the review again."
+    static let progressIncomplete = "Incomplete: this review was cut short, so goals after the last one it mentions were not reviewed."
 
     /// Ask your caseload's notices, joined into one (said as one stop with the result).
     static func ask(truncated: Bool, caseloadCut: Bool) -> String? {
@@ -311,6 +311,11 @@ struct AIToolsView: View {
 
 struct RemediateView: View {
     @EnvironmentObject var api: API
+    /// From a client's AI tools (4.37.0, S25): the client whose preferred format the result
+    /// targets, as remediate.php?client=. Nil from the general AI tools.
+    var clientId: Int? = nil
+    /// The client's preferred format as the client screen knows it, until the server says.
+    var clientFormat: String? = nil
     @State private var mode = "plain"
     @State private var content = ""
     @State private var result: String?
@@ -319,12 +324,19 @@ struct RemediateView: View {
     @State private var reveal = false
     @State private var busy = false
     @State private var error: String?
-    private let modes = [("plain", "Plain language"), ("simplify", "Simplify"), ("summary", "Summarize"), ("largeprint", "Large print format"), ("alt", "Alt text")]
+    /// The preferred format the server targeted (its reply's format).
+    @State private var targetFormat: String?
+    /// remediate.php's mode labels (4.37.0, S25).
+    private let modes = [("plain", "Plain language (6th–8th grade)"), ("simplify", "Simplify (shorter sentences)"), ("summary", "Summarize"),
+                         ("largeprint", "Format for large print / low vision"), ("alt", "Alt text for an image (describe it below)")]
 
     var body: some View {
         // ErrorFocusForm: Transform sits below a long text box, so a failure is scrolled to and
         // given VoiceOver focus rather than left in a banner row that is off screen.
         ErrorFocusForm(inNavigationStack: true, error: error) {
+            if let format = remediateTargetText(targetFormat ?? clientFormat) {
+                Text(format).font(.callout)
+            }
             // Inputs are locked while a request runs, and a result is cleared when they change,
             // so the result on screen always matches the choice and text shown above it.
             Picker("What to do", selection: $mode) { ForEach(modes, id: \.0) { Text($0.1).tag($0.0) } }
@@ -332,11 +344,12 @@ struct RemediateView: View {
             Section("Content (for alt text, describe the image)") {
                 TextEditor(text: $content).frame(minHeight: 160)
                     .accessibilityLabel("Content. For alt text, describe the image.")
+                    .errorField("Content")
                     .disabled(busy)
             }
             Text("The text you enter is sent to the AI provider as-is.").font(.caption)
             Button { Task { await run() } } label: { Label(busy ? "Working…" : "Transform", systemImage: "wand.and.stars") }
-                .accessibilityValue(busy ? "In progress" : "").disabled(busy || content.isEmpty)
+                .accessibilityValue(busy ? "In progress" : "").disabled(busy)
             if let result { AIResultCard(text: result, caption: resultCaption, incomplete: resultIncomplete, reveal: $reveal) }
         }
         .onChange(of: mode) { _ in if !busy { result = nil } }
@@ -344,23 +357,53 @@ struct RemediateView: View {
         .navigationTitle("Remediation").navigationBarTitleDisplayMode(.inline)
     }
     private func run() async {
+        // remediate.php's two refusals, said on the field before anything is sent.
+        let length = content.unicodeScalars.count
+        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            showFormError("Paste some content first.", in: &error, field: "Content"); return
+        }
+        if length > 20000 {
+            showFormError("Shorten the content to 20,000 characters or fewer (it has \(websiteCount(length))), or split it into smaller parts.", in: &error, field: "Content"); return
+        }
         busy = true; error = nil; result = nil
         announceAIWork("Working")
         let label = modes.first(where: { $0.0 == mode })?.1 ?? mode
+        var refused: [String: String] = [:]
         do {
-            let r: AITextResponse = try await api.call("ai_remediate", body: ["mode": mode, "content": content])
-            resultIncomplete = r.truncated
-            resultCaption = "\(label) result" + (r.truncated ? " (incomplete)" : ""); result = r.text; revealAIResult(&reveal)
+            let r: RemediateReply = try await api.call("ai_remediate", body: remediateBody(mode: mode, content: content, clientId: clientId),
+                                                       refusal: { refused = refusalFields($0) })
+            if let f = r.format { targetFormat = f }
+            resultIncomplete = r.truncated == true
+            resultCaption = "\(label) result" + (r.truncated == true ? " (incomplete)" : ""); result = r.text; revealAIResult(&reveal)
         }
-        catch { showFormError(error.localizedDescription, in: &self.error) }
+        catch { showFormError(error.localizedDescription, in: &self.error, field: refused["content"] != nil ? "Content" : nil) }
         busy = false
     }
+}
+
+/// ai_remediate's reply (4.37.0 adds the client's preferred format it targeted).
+struct RemediateReply: Decodable { let text: String; let truncated: Bool?; let format: String? }
+
+/// ai_remediate's body (4.37.0, S25): the client only when the tool was opened from a client.
+func remediateBody(mode: String, content: String, clientId: Int?) -> [String: Any] {
+    var body: [String: Any] = ["mode": mode, "content": content]
+    if let clientId, clientId > 0 { body["client_id"] = clientId }
+    return body
+}
+
+/// remediate.php's line for the client's preferred format, or nil when none is set.
+func remediateTargetText(_ format: String?) -> String? {
+    guard let f = format?.trimmingCharacters(in: .whitespacesAndNewlines), !f.isEmpty else { return nil }
+    return "Targeting the client's preferred format: \(f)."
 }
 
 struct TranslateView: View {
     @EnvironmentObject var api: API
     private static let contentHelp = "Pasted text is sent to the provider as-is. Review before sending to a client. Up to 6,000 characters at a time; split longer text into parts."
+    /// The list's last choice (4.37.0, S24): the language is typed in "Other language".
+    static let other = "Other (type below)"
     @State private var lang = "Spanish"
+    @State private var otherLanguage = ""
     @State private var content = ""
     @State private var result: String?
     @State private var resultCaption = ""
@@ -383,47 +426,79 @@ struct TranslateView: View {
         ErrorFocusForm(inNavigationStack: true, error: error) {
             // Locked while translating, and a change clears the result, so a translation is
             // never shown under a language it was not made in.
-            Picker("Into", selection: $lang) { ForEach(langs, id: \.name) { Text($0.name).tag($0.name) } }
-                .disabled(busy)
+            Picker("Into", selection: $lang) {
+                ForEach(langs, id: \.name) { Text($0.name).tag($0.name) }
+                Text(Self.other).tag(Self.other)
+            }
+            .disabled(busy)
+            if lang == Self.other {
+                CaptionedField(label: "Other language (letters, spaces, hyphens, apostrophes, periods and parentheses; up to 40 characters)",
+                               text: $otherLanguage, errorName: "Other language")
+                    .disabled(busy)
+            }
             // The server refuses more than 6,000 characters at once (ai_translate), so the limit
             // is stated up front and checked here before anything is sent. 4.29.0: said as the
             // field's hint, so it is not a stop of its own.
             Section("Content") {
-                TextEditor(text: $content).frame(minHeight: 160).accessibilityLabel("Content to translate")
+                TextEditor(text: $content).frame(minHeight: 160).accessibilityLabel("Text to translate")
                     .accessibilityHint(Self.contentHelp).disabled(busy)
+                    .errorField("Text to translate")
             }
             Text(Self.contentHelp).font(.caption).accessibilityHidden(true)
             Button { Task { await run() } } label: { Label(busy ? "Translating…" : "Translate", systemImage: "character.bubble") }
-                .accessibilityValue(busy ? "In progress" : "").disabled(busy || content.isEmpty)
+                .accessibilityValue(busy ? "In progress" : "").disabled(busy)
             if let result {
                 AIResultCard(text: result, caption: resultCaption, language: resultLanguage, rightToLeft: resultRightToLeft,
                              incomplete: resultIncomplete, reveal: $reveal)
             }
         }
         .onChange(of: lang) { _ in if !busy { result = nil } }
+        .onChange(of: otherLanguage) { _ in if !busy { result = nil } }
         .onChange(of: content) { _ in if !busy { result = nil } }
         .navigationTitle("Translate").navigationBarTitleDisplayMode(.inline)
     }
     private func run() async {
-        let length = content.count
-        guard length <= 6000 else {
-            showFormError("The content is too long to translate at once (maximum 6,000 characters; it has \(length)). Split it into parts and translate each one.", in: &error)
-            return
+        let requested = translateTarget(choice: lang, typed: otherLanguage)
+        if let problem = translateInputProblem(content: content, language: requested, typed: lang == Self.other) {
+            showFormError(problem.message, in: &error, field: problem.field); return
         }
         busy = true; error = nil; result = nil
         announceAIWork("Translating")
-        let requested = lang
+        var refused: [String: String] = [:]
         do {
-            let r: AITextResponse = try await api.call("ai_translate", body: ["lang": requested, "content": content])
+            let r: AITextResponse = try await api.call("ai_translate", body: ["lang": requested, "content": content],
+                                                       refusal: { refused = refusalFields($0) })
             let code = r.lang ?? langs.first(where: { $0.name == requested })?.code
             resultLanguage = code
             resultRightToLeft = r.dir.map { $0 == "rtl" } ?? (code == "ar")
             resultIncomplete = r.truncated
             resultCaption = "\(requested) translation" + (r.truncated ? " (incomplete)" : ""); result = r.text; revealAIResult(&reveal)
         }
-        catch { showFormError(error.localizedDescription, in: &self.error) }
+        catch {
+            let field = refused["content"] != nil ? "Text to translate" : (refused["language"] != nil && lang == Self.other ? "Other language" : nil)
+            showFormError(error.localizedDescription, in: &self.error, field: field)
+        }
         busy = false
     }
+}
+
+/// The language sent to ai_translate (4.37.0, S24): the typed one for "Other (type below)".
+func translateTarget(choice: String, typed: String) -> String {
+    choice == TranslateView.other ? typed.trimmingCharacters(in: .whitespacesAndNewlines) : choice
+}
+
+/// translate.php's refusals, checked before sending, with the field each is about.
+func translateInputProblem(content: String, language: String, typed: Bool) -> (message: String, field: String?)? {
+    if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return ("Paste the text to translate.", "Text to translate") }
+    let length = content.unicodeScalars.count
+    if length > 6000 {
+        return ("That is too much text to translate at once: shorten it to 6,000 characters or fewer (it has \(websiteCount(length))), or split it into parts and translate each one.", "Text to translate")
+    }
+    if language.isEmpty { return ("Type the language to translate into.", typed ? "Other language" : nil) }
+    if language.unicodeScalars.count > 40 || language.range(of: #"^[\p{L}\p{M} ()'’.-]+$"#, options: .regularExpression) == nil {
+        return ("The language name can use only letters, spaces, hyphens, apostrophes, periods and parentheses (40 characters maximum).", typed ? "Other language" : nil)
+    }
+    return nil
 }
 
 struct CurriculumGenView: View {
@@ -512,32 +587,67 @@ struct AskCaseloadView: View {
 struct KBAskView: View {
     @EnvironmentObject var api: API
     @State private var question = ""
+    /// 4.37.0 (S23): kb_ask.php's tick, answering from general knowledge when no article covers it.
+    @State private var general = false
     @State private var result: String?
+    @State private var resultGeneral = false
     @State private var reveal = false
     @State private var sources: [AIKBSource] = []
     @State private var busy = false
     @State private var error: String?
 
     var body: some View {
-        Form {
-            if let error { ErrorBanner(message: error) }
+        ErrorFocusForm(inNavigationStack: true, error: error) {
             TextField("Your question", text: $question, axis: .vertical).lineLimit(1...3).disabled(busy)
+                .errorField("Your question")
+            Toggle("If no article covers it, answer from general knowledge (marked as not agency procedure)", isOn: $general).disabled(busy)
             Button { Task { await run() } } label: { Label(busy ? "Searching…" : "Ask", systemImage: "book.closed") }
-                .accessibilityValue(busy ? "In progress" : "").disabled(busy || question.isEmpty)
+                .accessibilityValue(busy ? "In progress" : "").disabled(busy)
             if let result {
-                AIResultCard(text: result, footer: sources.isEmpty ? nil : "Grounded in: " + sources.map { $0.title }.joined(separator: ", "), reveal: $reveal)
+                AIResultCard(text: result, caption: kbCaption(general: resultGeneral),
+                             footer: sources.isEmpty ? nil : "Grounded in: " + sources.map { $0.title }.joined(separator: ", "), reveal: $reveal)
             }
         }
         .onChange(of: question) { _ in if !busy { result = nil; sources = [] } }
+        .onChange(of: general) { _ in if !busy { result = nil; sources = [] } }
         .navigationTitle("Knowledge-base assistant").navigationBarTitleDisplayMode(.inline)
     }
     private func run() async {
+        if question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            showFormError("Type a question to ask.", in: &error, field: "Your question"); return
+        }
+        let length = question.unicodeScalars.count
+        if length > 2000 {
+            showFormError("Shorten the question to 2,000 characters or fewer (it has \(websiteCount(length))).", in: &error, field: "Your question"); return
+        }
         busy = true; error = nil; result = nil; sources = []
         announceAIWork("Searching")
-        do { let r: AIKBResponse = try await api.call("ai_kb", body: ["question": question]); result = r.text; sources = r.sources; revealAIResult(&reveal) }
-        catch { showFormError(error.localizedDescription, in: &self.error) }
+        var steps: [String] = []
+        var refused: [String: String] = [:]
+        do {
+            let r: KBAnswerReply = try await api.call("ai_kb", body: ["question": question, "general": general], refusal: { reply in
+                refused = refusalFields(reply)
+                steps = (reply["steps"] as? [String]) ?? []
+            })
+            resultGeneral = r.general == true
+            result = r.text; sources = r.sources ?? []; revealAIResult(&reveal)
+        }
+        catch {
+            // A question no article covers: the server's sentence and kb_ask.php's three steps,
+            // as one message (one stop).
+            let message = ([error.localizedDescription] + steps).joined(separator: " ")
+            showFormError(message, in: &self.error, field: refused["question"] != nil ? "Your question" : nil)
+        }
         busy = false
     }
+}
+
+/// ai_kb's reply (4.37.0 says when the answer is from general knowledge).
+struct KBAnswerReply: Decodable { let text: String; let sources: [AIKBSource]?; let general: Bool? }
+
+/// The knowledge-base answer's caption, as kb_ask.php's heading.
+func kbCaption(general: Bool) -> String {
+    general ? "Answer (general knowledge, not from your articles)" : "Answer"
 }
 
 struct RiskView: View {
@@ -592,10 +702,15 @@ struct RiskView: View {
 struct AIRecommendView: View {
     @EnvironmentObject var api: API
     let clientId: Int
+    var clientName = ""
     @State private var result: String?
+    @State private var incomplete = false
     @State private var reveal = false
     @State private var busy = false
     @State private var error: String?
+    /// 4.37.0 (S6): "Start a device request for <client>" from the result.
+    @State private var startingRequest = false
+    @State private var requestCreated = false
 
     var body: some View {
         Form {
@@ -603,17 +718,69 @@ struct AIRecommendView: View {
             Text("Drafts assistive-technology recommendations from the client's disability, goals and job tasks. Review before acting.").font(.caption)
             Button { Task { await run() } } label: { Label(busy ? "Thinking…" : "Recommend assistive technology", systemImage: "lightbulb") }
                 .accessibilityValue(busy ? "In progress" : "").disabled(busy)
-            if let result { AIResultCard(text: result, footer: "Create a device request on the website to pursue a recommendation.", reveal: $reveal) }
+            if let result {
+                AIResultCard(text: result, footer: recommendFooter(canProcurement: api.can("procurement")),
+                             notice: incomplete ? aiDraftIncomplete : nil, reveal: $reveal)
+                if api.can("procurement") {
+                    Button { startingRequest = true } label: {
+                        Label("Start a device request for \(clientName.isEmpty ? "this client" : clientName)", systemImage: "cart.badge.plus")
+                    }
+                }
+            }
         }
         .navigationTitle("Assistive technology recommendations").navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $startingRequest, onDismiss: {
+            if requestCreated { requestCreated = false; announceAfterDismiss("Request created.") }
+        }) {
+            DeviceNewSheet(client: clientId, justification: startRequestPrefill(result ?? "")) { requestCreated = true }
+        }
     }
     private func run() async {
         busy = true; error = nil; result = nil
         announceAIWork("Thinking")
-        do { let r: AITextResponse = try await api.call("ai_recommend", body: ["client_id": clientId]); result = r.text; revealAIResult(&reveal) }
+        do {
+            let r: AITextResponse = try await api.call("ai_recommend", body: ["client_id": clientId])
+            incomplete = r.truncated
+            result = r.text; revealAIResult(&reveal)
+        }
         catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
     }
+}
+
+/// The recommendation result's footer (4.37.0, S6).
+func recommendFooter(canProcurement: Bool) -> String {
+    canProcurement ? "Review the recommendations, then start a device request for any you want to pursue."
+        : "Recommendations drafted — review them before using any."
+}
+
+/// The justification a request started from the recommendations begins with: at most 4,000
+/// characters, cut at a line end (4.37.0, S6).
+func startRequestPrefill(_ text: String) -> String {
+    let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let scalars = Array(t.unicodeScalars)
+    guard scalars.count > 4000 else { return t }
+    var cut = String(String.UnicodeScalarView(scalars[0..<4000]))
+    if let end = cut.lastIndex(of: "\n"), end > cut.startIndex { cut = String(cut[..<end]) }
+    return cut.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+/// One active goal under the progress review (4.37.0, S10), as ai_progress lists them.
+struct ReviewGoal: Decodable, Identifiable {
+    let id: Int
+    let text: String
+    let trackId: Int?
+    let track: String?
+    let status: String
+    let pct: Int?
+}
+
+/// ai_progress's reply with its goals (4.37.0; none from an older server).
+struct ProgressReviewReply: Decodable { let text: String; let truncated: Bool?; let goals: [ReviewGoal]? }
+
+/// A goal's row under the review: "<goal>, <track>: <pct>% (<status>)".
+func reviewGoalRowText(_ g: ReviewGoal) -> String {
+    "\(g.text), \(g.track ?? ""): \(g.pct ?? 0)% (\(g.status))"
 }
 
 struct AIProgressReviewView: View {
@@ -624,27 +791,59 @@ struct AIProgressReviewView: View {
     @State private var reveal = false
     @State private var busy = false
     @State private var error: String?
+    /// 4.37.0 (S10): the active goals, each with Record progress.
+    @State private var goals: [ReviewGoal] = []
+    @State private var recording: Goal?
+    @State private var recorded: String?
 
     var body: some View {
         Form {
             if let error { ErrorBanner(message: error) }
-            Text("Reviews recent notes and sessions against each active goal. Record any progress from the goal in its track.").font(.caption)
+            Text("Reviews recent notes and sessions against each active goal. Record any progress below.").font(.caption)
             Button { Task { await run() } } label: { Label(busy ? "Reviewing…" : "Generate review", systemImage: "chart.bar.doc.horizontal") }
                 .accessibilityValue(busy ? "In progress" : "").disabled(busy)
             if let result { AIResultCard(text: result, notice: notice, reveal: $reveal) }
+            if result != nil && !goals.isEmpty {
+                Section("Record progress") {
+                    ForEach(goals) { g in
+                        Text(reviewGoalRowText(g))
+                        Button("Record progress for \(String(g.text.prefix(60)))") {
+                            recording = Goal(id: g.id, specificGoal: g.text, status: g.status, progressPct: g.pct)
+                        }
+                    }
+                }
+            }
         }
         .navigationTitle("Progress review").navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $recording, onDismiss: {
+            if let recorded { announceAfterDismiss(recorded) }
+            recorded = nil
+        }) { goal in
+            GoalProgressSheet(goal: goal) { message in
+                recorded = message
+                Task { await refreshGoal(goal.id) }
+            }
+        }
     }
     private func run() async {
         busy = true; error = nil; result = nil
         announceAIWork("Reviewing")
         do {
-            let r: AITextResponse = try await api.call("ai_progress", body: ["client_id": clientId])
-            notice = r.truncated ? AINotice.progressIncomplete : nil
+            let r: ProgressReviewReply = try await api.call("ai_progress", body: ["client_id": clientId])
+            notice = r.truncated == true ? AINotice.progressIncomplete : nil
+            goals = r.goals ?? []
             result = r.text; revealAIResult(&reveal)
         }
         catch { showFormError(error.localizedDescription, in: &self.error) }
         busy = false
+    }
+    /// After a recording, the goal's row says its new status and percent.
+    private func refreshGoal(_ id: Int) async {
+        guard let i = goals.firstIndex(where: { $0.id == id }), let track = goals[i].trackId,
+              let r: GoalsResponse = try? await api.call("goals", query: ["track_id": String(track)]),
+              let g = r.goals.first(where: { $0.id == id }), let j = goals.firstIndex(where: { $0.id == id }) else { return }
+        let old = goals[j]
+        goals[j] = ReviewGoal(id: old.id, text: old.text, trackId: old.trackId, track: old.track, status: g.status, pct: g.progressPct)
     }
 }
 

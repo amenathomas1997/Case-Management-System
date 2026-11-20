@@ -42,7 +42,7 @@ import org.casemanagement.app.countLabel
 @Composable
 fun EquipmentScreen(api: Api, nav: NavHostController) {
     var q by rememberSaveable { mutableStateOf("") }
-    val state = rememberLoaded(api.userId) { parseEquipment(api.call("equipment")) }
+    val state = rememberLoaded(api.userId) { parseEquipment(api.call("equipment", mapOf("include_retired" to "1"))) }
     var chosen by remember { mutableStateOf<EquipmentItem?>(null) }
     // The item being lent, by its number, so rotation and process death keep the form open (4.28.0).
     var lendingId by rememberSaveable { mutableStateOf<Int?>(null) }
@@ -62,9 +62,11 @@ fun EquipmentScreen(api: Api, nav: NavHostController) {
             Field("Find equipment", q, { q = it }, hint = "name, category, serial or borrower")
             if (all.isEmpty()) Text("No equipment tracked yet. Use Add equipment to add an item.")
             else if (list.isEmpty()) Text("No equipment matches “${q.trim()}”.")
-            val onLoan = list.filter { it.status == "On Loan" }.sortedByDescending { it.overdue }
-            val available = list.filter { it.status == "Available" }
-            val other = list - onLoan.toSet() - available.toSet()
+            // 4.37.0 (S2): retired items too, under Not available (last), as the website and the iPhone.
+            val groups = equipmentGroups(list)
+            val onLoan = groups.onLoan
+            val available = groups.available
+            val other = groups.notAvailable
             Heading("On loan (${onLoan.size})")
             onLoan.forEach { e ->
                 ListRow(listOf(e.name, listOfNotNull(e.borrower, e.dueDate?.let { (if (e.overdue) "overdue since " else "due ") + dayText(it) }).joinToString(", ")),
@@ -76,8 +78,8 @@ fun EquipmentScreen(api: Api, nav: NavHostController) {
                     action = "see what you can do", onClick = { chosen = e })
             }
             if (other.isNotEmpty()) {
-                Heading("Other (${other.size})")
-                other.forEach { e -> ListRow(listOf(e.name, e.status), action = "see what you can do", onClick = { chosen = e }) }
+                Heading("Not available (${other.size})")
+                other.forEach { e -> ListRow(notAvailableLines(e), action = "see what you can do", onClick = { chosen = e }) }
             }
         }
     }
@@ -89,12 +91,14 @@ fun EquipmentScreen(api: Api, nav: NavHostController) {
                 // Scrolls (4.29.0), so the last button is reachable at a large text size.
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text(when (e.status) { "On Loan" -> e.borrower?.let { "On loan to $it." } ?: "On loan."; else -> e.status + "." })
-                    if (e.status == "Available") TextButton(onClick = { chosen = null; lendingId = e.id }) { Text("Lend it") }
+                    // 4.37.0 (S2): a retired item offers only its service details.
+                    if (e.retired) retiredRowActions().forEach { label -> TextButton(onClick = { chosen = null; nav.navigate("equipmentItem/${e.id}") }) { Text(label) } }
+                    else if (e.status == "Available") TextButton(onClick = { chosen = null; lendingId = e.id }) { Text("Lend it") }
                     if (e.status == "On Loan") {
                         if (e.canReturn) TextButton(onClick = { chosen = null; returning = e }) { Text("Mark it returned") }
                         else Text("This loan is not on your caseload.")
                     }
-                    TextButton(onClick = { chosen = null; nav.navigate("equipmentItem/${e.id}") }) { Text("Service and details") }
+                    if (!e.retired) TextButton(onClick = { chosen = null; nav.navigate("equipmentItem/${e.id}") }) { Text("Service and details") }
                 }
             },
             confirmButton = { TextButton(onClick = { chosen = null }) { Text("Close") } },
@@ -156,7 +160,7 @@ private const val INTERVAL_MESSAGE = "Service interval: enter a whole number of 
 
 /** One item's details (4.26.0): value, its service schedule, the service log; log a service or reserve it. */
 @Composable
-fun EquipmentDetailScreen(api: Api, id: Int) {
+fun EquipmentDetailScreen(api: Api, id: Int, nav: NavHostController? = null) {
     val state = rememberLoaded(id) { parseEquipmentDetail(api.call("equipment_detail", mapOf("id" to id.toString()))) ?: throw ApiException("The item could not be read.") }
     var interval by rememberSaveable { mutableStateOf<String?>(null) }
     var intervalNote by remember { mutableStateOf<String?>(null) }
@@ -165,13 +169,40 @@ fun EquipmentDetailScreen(api: Api, id: Int) {
     var logging by rememberSaveable { mutableStateOf(false) }
     var reserving by rememberSaveable { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
+    // 4.37.0 (S1): the status change, its refusal and the Retire question.
+    var statusError by remember { mutableStateOf<String?>(null) }
+    var statusBusy by remember { mutableStateOf(false) }
+    var askRetire by rememberSaveable { mutableStateOf(false) }
+    var statusPresses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
+    fun setStatus(to: String, confirm: Boolean) {
+        if (statusBusy) return
+        statusPresses++; notice = null
+        scope.launchSave({ statusBusy = it }, { statusError = it }) {
+            val r = api.call("set_equipment_status", body = statusBody(id, to, confirm))
+            notice = r.optString("message").ifEmpty { "Status updated." }
+            state.reload()
+        }
+    }
     Show(state, "the item") { d ->
         val shown = interval ?: (d.intervalDays ?: 0).toString()
         Page {
             Heading(d.name, large = true)
             NoticeText(notice)
             ListRow(listOf("Status: " + d.status))
+            d.statusActions?.let { actions ->
+                if (!d.manageable) Text("This item is managed by the assigned staff.")
+                else statusButtons(actions, d.name).forEach { (to, label) ->
+                    SecondaryButton(if (statusBusy) "Please wait…" else label) { if (to == "Retired") askRetire = true else setStatus(to, false) }
+                }
+                if (d.status == "Retired") {
+                    Text(RETIRED_ROW_TEXT)
+                    if (nav != null && api.can("clients")) SecondaryButton("Device reuse in AT services") { nav.navigate("at/reuse") }
+                }
+                ErrorText(statusError, focusKey = statusPresses)
+                if (askRetire) Confirm(retireConfirmTitle(d.name), retireConfirmText(d.name, d.retireText), "Retire ${d.name}",
+                    { askRetire = false; setStatus("Retired", true) }, { askRetire = false }, no = "Keep ${d.name} in service")
+            }
             ListRow(listOf("Condition: " + d.condition))
             d.category?.let { ListRow(listOf("Category: $it")) }
             d.serial?.let { ListRow(listOf("Serial: $it")) }
@@ -185,8 +216,9 @@ fun EquipmentDetailScreen(api: Api, id: Int) {
                 d.bookValue?.let { ListRow(listOf("Current book value: " + money(it))) }
             }
             Heading("Maintenance schedule")
-            Field("Service every so many days", shown, { interval = it; intervalNote = null; intervalError = null }, hint = "0 for no schedule", keyboard = KeyboardType.Number, error = intervalError)
-            PrimaryButton("Save the interval", busy = savingInterval) {
+            if (d.status == "Retired") ListRow(listOf("Next service: Not scheduled (retired)"))
+            if (d.status != "Retired") Field("Service every so many days", shown, { interval = it; intervalNote = null; intervalError = null }, hint = "0 for no schedule", keyboard = KeyboardType.Number, error = intervalError)
+            if (d.status != "Retired") PrimaryButton("Save the interval", busy = savingInterval) {
                 val days = intervalDays(shown)
                 if (days == null) { intervalNote = null; intervalError = INTERVAL_MESSAGE; return@PrimaryButton }
                 scope.launchSave({ savingInterval = it }, { intervalError = it?.let { m -> "Service interval not saved. $m" } }) {
@@ -261,6 +293,11 @@ private fun AddEquipmentDialog(api: Api, onDone: (String) -> Unit, onCancel: () 
     var value by rememberSaveable { mutableStateOf("") }
     var interval by rememberSaveable { mutableStateOf("") }
     var notes by rememberSaveable { mutableStateOf("") }
+    // 4.37.0 (S3): the website's AT Act type, purchase date and useful life.
+    val atTypes = api.formList("at_types", AT_TYPES_BUILT_IN)
+    var atType by rememberSaveable { mutableStateOf("") }
+    var purchase by rememberSaveable { mutableStateOf("") }
+    var life by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var fieldErrors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var busy by remember { mutableStateOf(false) }
@@ -278,21 +315,29 @@ private fun AddEquipmentDialog(api: Api, onDone: (String) -> Unit, onCancel: () 
         ).toMap()
         when {
             fieldErrors.isNotEmpty() || v == null || days == null -> error = errorSummary(fieldErrors.values)
-            else -> scope.launchSave({ busy = it }, { error = it }) {
-                api.callOnce("add_equipment", JSONObject().put("name", name.trim()).put("category", category).put("serial", serial.trim())
-                    .put("condition", condition).put("value", v).put("maintenance_interval_days", days).put("notes", notes.trim()),
-                    idem, { idem = it }, "“${name.trim()}”")
-                onDone(name.trim() + " added.")
-            }
+            else -> { busy = true; error = null; scope.launch {
+                try {
+                    api.callOnce("add_equipment", equipmentBody(name, category, serial, condition, v, days, notes, purchase, life, atType),
+                        idem, { idem = it }, "“${name.trim()}”")
+                    onDone(name.trim() + " added.")
+                } catch (e: ApiException) {
+                    // The website's messages, each on its own field.
+                    fieldErrors = mapErrors(e.reply, ::equipmentFieldFor)
+                    error = errorSummary(fieldErrors.values) ?: e.message
+                } finally { busy = false }
+            } }
         }
     }, onCancel = onCancel) {
         Field("Item name", name, { name = it }, required = true, error = fieldErrors["name"])
         Choice("Category", category, categories.map { it to it }) { category = it }
-        Field("Serial number", serial, { serial = it }, hint = "optional")
+        Field("Serial number", serial, { serial = it }, hint = "optional", error = fieldErrors["serial"])
         Choice("Condition", condition, conditions.map { it to it }) { condition = it }
         Field("Value in dollars", value, { value = it }, hint = "optional, like 12.50", keyboard = KeyboardType.Decimal, error = fieldErrors["value"])
+        Choice("AT Act type", atType, atTypeChoices(atTypes)) { atType = it }
+        Field("Purchase date", purchase, { purchase = it }, hint = "year-month-day; optional", error = fieldErrors["purchase"])
+        Field("Useful life in months", life, { life = it }, hint = "optional; 1 to 600, default 36", keyboard = KeyboardType.Number, error = fieldErrors["life"])
         Field("Service interval in days", interval, { interval = it }, hint = "optional, 0 to 3650", keyboard = KeyboardType.Number, error = fieldErrors["interval"])
-        Field("Notes", notes, { notes = it }, hint = "optional")
+        Field("Notes", notes, { notes = it }, hint = "optional", error = fieldErrors["notes"])
         ErrorText(error)
     }
 }

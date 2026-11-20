@@ -4,7 +4,9 @@ declare(strict_types=1);
 // it lives, and the days spent in each status. Only for staff who can open the client.
 
 /** The client's events: each ['at' => datetime, 'what' => sentence, 'link' => page or null]. */
-function client_timeline(int $cid): array {
+function client_timeline(int $cid, ?int $viewerId = null): array {
+    // The person looking (4.37.0: the apps pass theirs; the website's is the signed-in user).
+    $viewerId ??= function_exists('current_user') ? (int)(current_user()['id'] ?? 0) : 0;
     $ev = [];
     $add = function (string $sql, callable $fmt) use (&$ev, $cid) {
         try {
@@ -39,7 +41,7 @@ function client_timeline(int $cid): array {
     // Incidents as the incidents page shows them: to an administrator, the person who reported
     // it, or the client's instructor.
     $add('SELECT i.incident_date at, i.type, i.severity FROM incidents i JOIN clients c ON c.id = i.client_id WHERE i.client_id = ?'
-        . (can('admin') ? '' : ' AND (i.reported_by = ' . (int)(current_user()['id'] ?? 0) . ' OR c.assigned_to = ' . (int)(current_user()['id'] ?? 0) . ')'),
+        . (can('admin') ? '' : ' AND (i.reported_by = ' . $viewerId . ' OR c.assigned_to = ' . $viewerId . ')'),
         fn($r) => ['what' => 'Incident: ' . $r['type'] . ' (' . $r['severity'] . ')', 'link' => null]);
     $add('SELECT created_at at, type FROM portal_requests WHERE client_id = ?', fn($r) => ['what' => 'Portal request: ' . $r['type'], 'link' => null]);
     $add('SELECT sent_at at, channel FROM surveys WHERE client_id = ? AND channel = \'Email\'', fn($r) => ['what' => 'Outcome survey emailed', 'link' => $client . '#after-h']);

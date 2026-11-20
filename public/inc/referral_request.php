@@ -246,3 +246,40 @@ function referral_intake_note(array $ref): array {
     }
     return ['subject'=>mb_substr('[Referral] ' . $ref['subject'], 0, 255), 'body'=>$body];
 }
+
+/** Mark a New referral as reviewed (4.37.0: moved from referrals.php, shared with the apps'
+ *  review_referral). A stale screen (someone reviewed or converted it meanwhile) changes nothing and
+ *  says why. Returns ['changed' => bool, 'message']. */
+function referral_mark_reviewed(int $id, int $actor, string $channel = 'web'): array {
+    $rv = db()->prepare("UPDATE referrals SET status = 'Reviewed' WHERE id = ? AND status = 'New'");
+    $rv->execute([$id]);
+    if ($rv->rowCount() === 1) {
+        audit($actor, 'referral.review', 'referral', $id, $channel === 'mobile' ? 'mobile' : null);
+        return ['changed' => true, 'message' => 'Referral marked as reviewed.'];
+    }
+    $cur = db()->prepare('SELECT status FROM referrals WHERE id = ?');
+    $cur->execute([$id]);
+    return ['changed' => false, 'message' => 'Nothing was changed: this referral is no longer New (its status is now ' . ($cur->fetchColumn() ?: 'unknown') . ').'];
+}
+
+/** The open contact task's due date for a referral (the agency's deadline to reach the person), as a
+ *  column on the alias r (4.37.0: shared by referrals.php and the apps' referrals). */
+function referral_contact_due_sql(): string {
+    return "(SELECT MIN(tk.due_date) FROM tasks tk WHERE tk.auto_key = CONCAT('ref-contact-', r.id) AND tk.status = 'Open')";
+}
+
+/** The "Show" filter on the alias r: [sql, params] for all, me (assigned to the caller) or unassigned. */
+function referral_who_sql(string $who, int $uid): array {
+    if ($who === 'me') return [' AND r.assigned_to = ?', [$uid]];
+    if ($who === 'unassigned') return [' AND r.assigned_to IS NULL', []];
+    return ['', []];
+}
+
+/** A referral's contact line: "Contact overdue since <date>" or "Contact by <date>", or null. */
+function referral_contact_text(?string $due): ?string {
+    if ($due === null || $due === '') return null;
+    return ($due < date('Y-m-d') ? 'Contact overdue since ' : 'Contact by ') . fmt_date($due);
+}
+
+/** The list heading for a status filter. */
+const REFERRAL_LIST_HEADINGS = ['open' => 'Open referrals', 'converted' => 'Converted referrals', 'closed' => 'Closed referrals', 'all' => 'All referrals'];

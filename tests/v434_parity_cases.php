@@ -342,7 +342,7 @@ check(true, 'P39: a service date after tomorrow is refused; tomorrow passes (tim
 $call('equipment_service', ['equipment_id' => $eqA, 'service_date' => $today434, 'service_type' => 'Maintenance', 'cost' => '$2,995.00', 'idem_key' => bin2hex(random_bytes(8))]);
 check((float)$db->query("SELECT cost FROM equipment_maintenance WHERE equipment_id=$eqA ORDER BY id DESC LIMIT 1")->fetchColumn() === 2995.0
     && $audits434('equipment.service', 'Maintenance on ' . $today434 . ' (mobile)') === 1, 'P39: a service date is required, never future; "$2,995.00" is accepted; the audit names type and date');
-$call('add_equipment', ['name' => 'V434 bad money', 'value' => '12,50', 'idem_key' => bin2hex(random_bytes(8))], [], false, 'Value: enter the amount as digits');
+$call('add_equipment', ['name' => 'V434 bad money', 'value' => '12,50', 'idem_key' => bin2hex(random_bytes(8))], [], false, 'Value: enter one amount in dollars');   // 4.37.0: equipment.php's sentence (shared equipment_input)
 $db->exec("INSERT INTO assessment_instruments (name,scale_min,scale_max,active) VALUES ('V434 retired instrument',0,3,0)"); $inst434 = (int)$db->lastInsertId();
 $db->prepare("INSERT INTO assessment_instrument_items (instrument_id,label) VALUES (?,'V434 item')")->execute([$inst434]); $item434 = (int)$db->lastInsertId();
 $call('save_scored', ['client_id' => $c434, 'instrument_id' => $inst434, 'assessed_on' => '', 'scores' => [(string)$item434 => 2], 'idem_key' => bin2hex(random_bytes(8))], [], false, 'Assessment date is required.');

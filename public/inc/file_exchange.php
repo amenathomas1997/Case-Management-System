@@ -157,3 +157,41 @@ function document_set_shared(int $docId, int $clientId, string $with, bool $on, 
     audit($actor, 'document.' . ($on ? 'share_' : 'unshare_') . $with, 'client', $clientId, 'document #' . $docId);
     return true;
 }
+
+/** The file types staff can add to a client's documents (client.php's upload; 4.37.0: the apps'
+ *  upload_document too, so a .heic photo is refused there as on the website). */
+const DOCUMENT_UPLOAD_EXTENSIONS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'csv', 'png', 'jpg', 'jpeg'];
+
+/** The refusal for a file type staff cannot upload, or null. */
+function document_type_error(string $ext): ?string {
+    $ext = strtolower($ext);
+    if (in_array($ext, DOCUMENT_UPLOAD_EXTENSIONS, true)) return null;
+    // An iPhone photo (HEIC) is said how to send it instead: an upload from an older app waiting
+    // offline is refused with this sentence too (4.37.0).
+    return 'That file type is not allowed. Use PDF, Office, text, or image files.'
+        . (in_array($ext, ['heic', 'heif'], true) ? ' Save the photo as a JPEG or PDF, then upload it again.' : '');
+}
+
+/** Whether the caller may move a document to the trash: authorizations, IPEs and releases only by an
+ *  administrator (3.0.37). */
+function document_can_delete(array $doc): bool {
+    return !in_array($doc['category'] ?? '', KEY_DOCUMENT_CATEGORIES, true) || can('admin');
+}
+
+/**
+ * Move a client's document to the 30-day trash (4.37.0: moved from client.php, shared with the apps'
+ * delete_document). The stored file stays on disk until the entry is restored or purged. Returns
+ * ['ok' => true, 'message'], or ['ok' => false, 'error', 'code' (403 key document, 404 not found)].
+ */
+function document_delete(int $docId, int $clientId, array $user, string $channel = 'web'): array {
+    $d = db()->prepare('SELECT d.id, d.title, d.category, c.name AS client_name FROM client_documents d JOIN clients c ON c.id = d.client_id WHERE d.id = ? AND d.client_id = ?');
+    $d->execute([$docId, $clientId]);
+    $doc = $d->fetch();
+    if (!$doc) return ['ok' => false, 'error' => 'That document is no longer on file. It may already be in the trash.', 'code' => 404];
+    if (!document_can_delete($doc)) {
+        return ['ok' => false, 'error' => 'Only an administrator can delete ' . ['Authorization' => 'an authorization', 'IPE' => 'an IPE', 'Release' => 'a release'][$doc['category']] . ' document.', 'code' => 403];
+    }
+    trash_row('client_documents', (int)$doc['id'], (int)$user['id'], 'Document: ' . $doc['title'] . ' (' . $doc['client_name'] . ')');
+    audit((int)$user['id'], 'document.delete', 'client', $clientId, 'doc #' . (int)$doc['id'] . ' (to trash)' . ($channel === 'mobile' ? ' (mobile)' : ''));
+    return ['ok' => true, 'message' => 'Document moved to the trash — an administrator can restore it for 30 days.'];
+}

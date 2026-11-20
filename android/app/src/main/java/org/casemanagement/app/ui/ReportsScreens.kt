@@ -107,6 +107,8 @@ fun PipelineScreen(api: Api, nav: NavHostController) {
                 Heading(s.optString("name") + " (${clients.size})")
                 clients.forEach { c -> ListRow(listOf(c.optString("name"), "${c.optInt("days_in_stage")} days in stage" + (if (c.optBoolean("over_30")) ", over 30 days" else "") + (c.str("instructor")?.let { ", $it" } ?: "")), action = "open it", onClick = { nav.navigate("client/${c.optInt("id")}") }) }
             }
+            // 4.37.0 (S20): as the website and the iPhone.
+            PipelineClosedSection(r, nav)
         }
     }
 }

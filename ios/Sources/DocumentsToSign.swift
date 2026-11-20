@@ -930,6 +930,10 @@ struct ReleaseRequestSheet: View {
     @State private var info: Set<String> = []
     @State private var infoOther = ""
     @State private var purpose = ""
+    /// 4.37.0 (S15): "Email" (a link to sign) or "Paper" (a release signed on paper, recorded
+    /// with the date it was signed), as client.php's release form.
+    @State private var method = "Email"
+    @State private var signedOn = Date()
     @State private var busy = false
     @State private var error: String?
     @State private var started = false
@@ -952,13 +956,24 @@ struct ReleaseRequestSheet: View {
                             Text("The signer gets a private link by email. Once signed, the release is in force for \(days) days.").font(.callout)
                         }
                     }
+                    Section {
+                        Picker("How", selection: $method) {
+                            Text("Email it to sign").tag("Email")
+                            Text("Record a paper release").tag("Paper")
+                        }
+                        if method == "Paper" {
+                            DatePicker("Date signed (paper releases only) (required)", selection: $signedOn, in: ...Date(), displayedComponents: .date)
+                                .errorField("Date signed")
+                        }
+                    }
                     Section("Who signs") {
                         Picker("Who signs", selection: $signerRole) {
                             Text("The client").tag("Client")
                             Text("Parent or guardian").tag("Guardian")
                         }
                         CaptionedField(label: "Signer's name (required)", text: $signerName, errorName: "Signer's name").autocorrectionDisabled()
-                        CaptionedField(label: "Signer's email (required)", text: $signerEmail, keyboard: .emailAddress, errorName: "Signer's email")
+                        CaptionedField(label: method == "Paper" ? "Signer's email (optional)" : "Signer's email (required)", text: $signerEmail,
+                                       keyboard: .emailAddress, errorName: "Signer's email")
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
                     Section("Who may receive the information") {
@@ -985,14 +1000,15 @@ struct ReleaseRequestSheet: View {
                     ProgressView("Loading the release form…")
                 }
             }
-            .navigationTitle("Request a release")
+            .navigationTitle(method == "Paper" ? "Record a paper release" : "Request a release")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { if hasChanges { askingDiscard = true } else { dismiss() } }.disabled(busy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(busy ? "Sending…" : "Send") { check() }.disabled(busy || choices == nil)
+                    Button(busy ? (method == "Paper" ? "Recording…" : "Sending…") : (method == "Paper" ? "Record paper release" : "Send")) { check() }
+                        .disabled(busy || choices == nil)
                 }
             }
             .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this release request?", asking: $askingDiscard) { dismiss() }
@@ -1025,14 +1041,18 @@ struct ReleaseRequestSheet: View {
 
     private func check() {
         if signerName.trimmingCharacters(in: .whitespaces).isEmpty { showFormError("Signer's name: enter the name of the person who signs.", in: &error); return }
-        if !signerEmail.contains("@") { showFormError("Signer's email: enter an email address in the form name@example.com.", in: &error); return }
+        let typedEmail = signerEmail.trimmingCharacters(in: .whitespaces)
+        if !(method == "Paper" && typedEmail.isEmpty) && !typedEmail.contains("@") {
+            showFormError("Signer's email: enter an email address in the form name@example.com.", in: &error); return
+        }
         if recipientType.isEmpty { showFormError("Recipient type: choose who receives the information.", in: &error); return }
         if recipientName.trimmingCharacters(in: .whitespaces).isEmpty { showFormError("Recipient's name: enter who receives the information.", in: &error); return }
         if info.isEmpty && infoOther.trimmingCharacters(in: .whitespaces).isEmpty {
             showFormError("Information to share: choose at least one, or describe it under Other information.", in: &error); return
         }
         if purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { showFormError("Purpose: say why the information is shared.", in: &error); return }
-        confirming = true
+        // A paper release emails nothing, so it is recorded without the email question.
+        if method == "Paper" { Task { await send() } } else { confirming = true }
     }
 
     private func send() async {
@@ -1047,10 +1067,17 @@ struct ReleaseRequestSheet: View {
         ]
         if !recipientEmail.trimmingCharacters(in: .whitespaces).isEmpty { body["recipient_email"] = recipientEmail.trimmingCharacters(in: .whitespaces) }
         if !infoOther.trimmingCharacters(in: .whitespaces).isEmpty { body["info_other"] = infoOther }
+        body.merge(releaseMethodBody(method: method, signedOn: APIDate.day(signedOn))) { $1 }
         body["idem_key"] = idem.key(for: body)
+        var refused: [String: String] = [:]
         do {
-            let result: ReleaseResult = try await api.call("request_release", body: body)
+            let result: ReleaseResult = try await api.call("request_release", body: body, refusal: { refused = refusalFields($0) })
             idem.answered()
+            if method == "Paper" {
+                onSent(result.message ?? "Paper release recorded for \(recipientName.trimmingCharacters(in: .whitespaces)).")
+                dismiss()
+                return
+            }
             // Saved, but whether the email went is not known (4.27.0): the server says what to do.
             if result.unknown == true, let message = result.message, !message.isEmpty {
                 onSent(message)
@@ -1061,9 +1088,17 @@ struct ReleaseRequestSheet: View {
         } catch {
             busy = false
             idem.failed(error)
-            showFormError(error.localizedDescription, in: &self.error)
+            let names = ["signed_on": "Date signed", "signer_name": "Signer's name", "signer_email": "Signer's email",
+                         "recipient_type": "Recipient type", "recipient_name": "Recipient's name", "info": "Information to share", "purpose": "Purpose"]
+            showFormError(error.localizedDescription, in: &self.error,
+                          field: refusedFieldName(refused, order: ["signed_on", "signer_name", "signer_email", "recipient_type", "recipient_name", "info", "purpose"], names: names))
         }
     }
+}
+
+/// request_release's 4.37.0 keys (S15): the method, and the date signed for a paper release only.
+func releaseMethodBody(method: String, signedOn: String) -> [String: Any] {
+    method == "Paper" ? ["method": "Paper", "signed_on": signedOn] : ["method": "Email"]
 }
 
 /// The idem_key for a request that creates or emails something (4.27.0): the same key while

@@ -365,6 +365,18 @@ struct ClientDetailView: View {
     /// Asking before a new portal link is emailed (3.0.40).
     @State private var confirmingPortalLink = false
     @State private var sendingPortalLink = false
+    /// 4.37.0 (S14, S15, S17): Write a letter; the release, the consent and the portal link
+    /// waiting for their confirmation; the privacy notice method chosen; a write in flight.
+    @State private var writingLetter = false
+    @State private var withdrawingRelease: ClientRelease?
+    @State private var confirmingConsentWithdraw = false
+    @State private var confirmingPortalOff = false
+    @State private var privacyHow = ""
+    @State private var recordsBusy = false
+    /// A refused record write's sentence, shown under the action it came from (4.37.0), and
+    /// VoiceOver put on it there rather than on the banner at the top of the record.
+    @State private var actionError: [String: String] = [:]
+    @AccessibilityFocusState private var actionErrorFocus: String?
     /// The guardian consent as the website's client page shows it (request_consent); nil until
     /// loaded, or from a server that does not have it.
     @State private var consent: ConsentStatusResponse?
@@ -564,20 +576,51 @@ struct ClientDetailView: View {
                                 Label(c.requestLabel, systemImage: "envelope")
                             }
                         }
+                        // 4.37.0 (S15): client.php's "Record consent withdrawn", for the signed
+                        // consent the page shows (its id is sent, so a changed one is refused).
+                        if c.state == "Signed", consentSignedId != nil {
+                            Button("Record consent withdrawn", role: .destructive) { confirmingConsentWithdraw = true }
+                                .disabled(recordsBusy)
+                        }
+                        actionErrorRow("consent")
+                    }
+                    .confirmationDialog(consentWithdrawTitle(name: c.signedName ?? "the guardian", date: formatDate(c.signedAt)),
+                                        isPresented: $confirmingConsentWithdraw, titleVisibility: .visible) {
+                        Button("Record consent withdrawn", role: .destructive) { Task { await withdrawConsent() } }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("The consent stops counting as current, and a new one can then be requested.")
                     }
                 }
 
                 Section("Client portal") {
+                    // 4.37.0 (S17): the link's state in the website's words.
+                    if let link = detail.portalLink, !link.text.isEmpty { Text(link.text) }
                     Button {
                         confirmingPortalLink = true
                     } label: {
                         Label(sendingPortalLink ? "Sending…" : "Email a new portal link", systemImage: "link")
                     }
                     .disabled(sendingPortalLink || (detail.client.email ?? "").isEmpty)
-                    .confirmationDialog("Email a new portal link to \(detail.client.email ?? "the client")? Any earlier link stops working.",
+                    .confirmationDialog(portalConfirmText(detail.portalLink, fallback: "Email a new portal link to \(detail.client.email ?? "the client")? Any earlier link stops working."),
                                         isPresented: $confirmingPortalLink, titleVisibility: .visible) {
                         Button("Email portal link") { Task { await sendPortalLink() } }
                         Button("Cancel", role: .cancel) {}
+                    }
+                    if detail.portalLink?.state == "active" {
+                        Button("Turn off portal link", role: .destructive) { confirmingPortalOff = true }
+                            .disabled(recordsBusy)
+                            .confirmationDialog("Turn off \(detail.client.name)'s portal link?", isPresented: $confirmingPortalOff, titleVisibility: .visible) {
+                                Button("Turn off portal link", role: .destructive) { Task { await revokePortalLink() } }
+                                Button("Cancel", role: .cancel) {}
+                            } message: {
+                                Text("Every link already sent stops working.")
+                            }
+                    }
+                    actionErrorRow("portal")
+                    // 4.37.0 (S14): the website's letters, filled in from the record.
+                    if detail.extras.supports425 && api.serverAtLeast(4, 37) {
+                        Button { confirmation = nil; writingLetter = true } label: { Label("Write a letter", systemImage: "envelope.open") }
                     }
                 }
 
@@ -585,13 +628,35 @@ struct ClientDetailView: View {
                     if detail.releases.isEmpty {
                         Text("No release of information on file.").font(.callout)
                     } else {
-                        ForEach(detail.releases) { r in Text(r.summary).font(.callout) }
+                        ForEach(detail.releases) { r in
+                            Text(r.text ?? r.summary).font(.callout)
+                            // 4.37.0 (S15): a visible button after the release's line.
+                            if r.canWithdraw {
+                                Button("Record withdrawn: \(r.recipientName)", role: .destructive) { withdrawingRelease = r }
+                                    .disabled(recordsBusy)
+                            }
+                        }
+                        actionErrorRow("release")
                     }
                     // Only on a server that has it (4.25.0).
                     if detail.extras.supports425 {
                         Button { confirmation = nil; showingReleaseRequest = true } label: {
                             Label("Request a release", systemImage: "envelope")
                         }
+                    }
+                }
+
+                // 4.37.0 (S15): the privacy notice, as client.php's "Privacy notice given".
+                if let notice = detail.privacyNotice {
+                    Section("Privacy notice") {
+                        Text(notice.text)
+                        Picker("Privacy notice given", selection: $privacyHow) {
+                            Text("Choose how").tag("")
+                            ForEach(detail.privacyNoticeMethods ?? ["In person", "By email", "By mail", "In the portal", "Read aloud by phone"], id: \.self) { Text($0).tag($0) }
+                        }
+                        actionErrorRow("privacy")
+                        Button(recordsBusy ? "Recording…" : "Record notice given") { Task { await recordPrivacyNotice() } }
+                            .disabled(recordsBusy)
                     }
                 }
 
@@ -613,11 +678,23 @@ struct ClientDetailView: View {
                     NavigationLink { ClientHistoryView(clientId: clientId, clientName: detail.client.name) } label: {
                         Label("Status history", systemImage: "clock.arrow.circlepath")
                     }
+                    // 4.37.0 (S18): client_timeline.php, read-only.
+                    if api.serverAtLeast(4, 37) {
+                    NavigationLink { ClientTimelineView(clientId: clientId, clientName: detail.client.name) } label: {
+                        Label("Timeline", systemImage: "calendar.day.timeline.left")
+                    }
+                    }
                 }
 
-                if api.aiEnabled && (api.aiHas("recommend") || api.aiHas("intake") || api.aiHas("progress")) {
+                if api.aiEnabled && (api.aiHas("recommend") || api.aiHas("intake") || api.aiHas("progress") || api.aiHas("remediate")) {
                     Section("AI tools") {
-                        if api.aiHas("recommend") { NavigationLink { AIRecommendView(clientId: clientId) } label: { Label("Assistive technology recommendations", systemImage: "lightbulb") } }
+                        if api.aiHas("recommend") { NavigationLink { AIRecommendView(clientId: clientId, clientName: detail.client.name) } label: { Label("Assistive technology recommendations", systemImage: "lightbulb") } }
+                        // 4.37.0 (S25): remediation aimed at this client's preferred format.
+                        if api.aiHas("remediate") {
+                            NavigationLink { RemediateView(clientId: clientId, clientFormat: detail.client.a11yFormat) } label: {
+                                Label("Make a document accessible for \(detail.client.name)", systemImage: "text.badge.checkmark")
+                            }
+                        }
                         if api.aiHas("intake") { NavigationLink { AIIntakeView(clientId: clientId) { Task { await load() } } } label: { Label("Guided intake", systemImage: "wand.and.stars") } }
                         if api.aiHas("progress") { NavigationLink { AIProgressReviewView(clientId: clientId) } label: { Label("Progress review", systemImage: "chart.bar.doc.horizontal") } }
                     }
@@ -809,6 +886,23 @@ struct ClientDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $writingLetter, onDismiss: announceSheetResult) {
+            LetterView(clientId: clientId, clientName: detail?.client.name ?? "this client") { message in
+                confirmation = message; sheetResult = message
+                Task { await reload() }
+            }
+        }
+        .confirmationDialog("Record that the release for \(withdrawingRelease?.recipientName ?? "this recipient") is withdrawn?",
+                            isPresented: Binding(get: { withdrawingRelease != nil }, set: { if !$0 { withdrawingRelease = nil } }),
+                            titleVisibility: .visible) {
+            Button("Record withdrawn", role: .destructive) {
+                if let r = withdrawingRelease { Task { await withdrawRelease(r) } }
+                withdrawingRelease = nil
+            }
+            Button("Cancel", role: .cancel) { withdrawingRelease = nil }
+        } message: {
+            Text("Nothing more is shared under it.")
+        }
         .sheet(isPresented: $showingReleaseRequest, onDismiss: announceSheetResult) {
             if let client = detail?.client {
                 ReleaseRequestSheet(clientId: clientId, client: client) { message in
@@ -832,7 +926,8 @@ struct ClientDetailView: View {
             }
         }
         .sheet(isPresented: $showingUpload, onDismiss: announceSheetResult) {
-            UploadDocumentSheet(clientId: clientId) { message in
+            UploadDocumentSheet(clientId: clientId, hasCounselor: !(detail?.client.counselorEmail ?? "").isEmpty
+                                    || !(detail?.client.counselorName ?? "").isEmpty) { message in
                 confirmation = message; sheetResult = message
                 Task { await reload() }
             }
@@ -897,6 +992,67 @@ struct ClientDetailView: View {
             idem.failed(error)
             showFormError(IdemKey.message(for: error, what: "the portal link"), in: &self.error)
         }
+    }
+
+    /// The latest signed consent's id, beside the consent or inside it (4.37.0).
+    private var consentSignedId: Int? { consent?.signedId ?? consent?.consent.signedId }
+
+    /// One of the 4.37.0 record writes (S15, S17): the server's sentence is shown and said once,
+    /// and the record reloads.
+    /// `place`: the section the action is in, where a refusal is shown and focused.
+    @discardableResult
+    private func recordWrite(_ action: String, _ body: [String: Any], place: String) async -> Bool {
+        guard !recordsBusy else { return false }
+        recordsBusy = true; error = nil; actionError[place] = nil
+        defer { recordsBusy = false }
+        do {
+            let r: MessageReply = try await api.call(action, method: "POST", body: body)
+            let message = r.message ?? "Saved."
+            confirmation = message
+            announce(message)
+            await reload()
+            await loadConsent()
+            return true
+        } catch {
+            showActionError(error.localizedDescription, at: place)
+            return false
+        }
+    }
+
+    /// Shows a refusal under its action and puts VoiceOver on it (said there, once).
+    private func showActionError(_ message: String, at place: String) {
+        actionError[place] = message
+        claimFormErrorFocus("Error: " + message)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            actionErrorFocus = place
+        }
+    }
+
+    @ViewBuilder private func actionErrorRow(_ place: String) -> some View {
+        if let message = actionError[place] {
+            Label { Text("Error: \(message)") } icon: { Image(systemName: "exclamationmark.triangle.fill").accessibilityHidden(true) }
+                .font(.callout.weight(.medium)).foregroundStyle(Color.alertRed)
+                .accessibilityFocused($actionErrorFocus, equals: place)
+        }
+    }
+
+    private func withdrawRelease(_ r: ClientRelease) async {
+        await recordWrite("withdraw_release", ["client_id": clientId, "release_id": r.id], place: "release")
+    }
+
+    private func withdrawConsent() async {
+        guard let id = consentSignedId else { return }
+        await recordWrite("withdraw_consent", ["client_id": clientId, "consent_id": id], place: "consent")
+    }
+
+    private func recordPrivacyNotice() async {
+        if privacyHow.isEmpty { showActionError("Choose how the privacy notice was given.", at: "privacy"); return }
+        if await recordWrite("record_privacy_notice", ["client_id": clientId, "how": privacyHow], place: "privacy") { privacyHow = "" }
+    }
+
+    private func revokePortalLink() async {
+        await recordWrite("revoke_portal_link", ["client_id": clientId], place: "portal")
     }
 
     /// The consent state for the Guardian consent section and the Send consent request action.
@@ -1090,6 +1246,8 @@ struct AddNoteSheet: View {
     @State private var attachTrackId = 0          // 0 = none
     @State private var busy = false
     @State private var aiBusy = false
+    /// "Format with AI" running (4.37.0, S9).
+    @State private var formatBusy = false
     @State private var error: String?
     /// One key for this note, sent on every try: a retry after a lost reply is recognised by
     /// the server instead of saving the note twice.
@@ -1208,6 +1366,29 @@ struct AddNoteSheet: View {
         if !raw.isEmpty { return raw }
         return ([body_] + sections).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
+    /// "Format with AI" (4.37.0, S9): ai_draft type format, as client.php's button.
+    private func formatWithAI() async {
+        guard structured else { return }
+        if body_.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            showFormError("Type the session notes first, then format them.", in: &error, field: "Narrative"); return
+        }
+        formatBusy = true; error = nil
+        announce("Formatting…")
+        defer { formatBusy = false }
+        let sentSections = sections
+        do {
+            let r: NoteFormatReply = try await api.call("ai_draft", body: noteFormatBody(clientId: clientId, format: noteFormat, body: body_, sections: sections))
+            guard sections == sentSections else {
+                showFormError("The \(noteFormat) sections changed while the draft was being made, so it was not applied. Tap Format with AI again.", in: &error)
+                return
+            }
+            sections = applyFormatted(sentSections, r.sections)
+            announce(r.message ?? "Formatted as \(noteFormat) — review each section, then save. Text left in the narrative box is saved after the sections under \"Narrative\" — clear that box if the sections already cover it.")
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+        }
     }
 
     /// Convert messy notes (pasted, or typed into the note itself) into the chosen structured format.
@@ -1330,8 +1511,17 @@ struct AddNoteSheet: View {
                     if structured && editNote == nil {
                         Section("Narrative (optional)") {
                             TextField("Narrative", text: $body_, axis: .vertical).lineLimit(3...12)
+                                .errorField("Narrative")
                             Text("Saved after the sections under “Narrative”. Clear it if the sections already cover it.")
                                 .font(.caption).foregroundStyle(Color.secondaryText)
+                            // 4.37.0 (S9): client.php's "Format with AI" splits the session notes
+                            // typed here into the format's sections; a section the AI leaves empty
+                            // keeps what was typed in it.
+                            if api.aiHas("draft") && api.serverAtLeast(4, 37) {
+                                Button { Task { await formatWithAI() } } label: {
+                                    Label(formatBusy ? "Formatting…" : "Format with AI", systemImage: "text.alignleft")
+                                }.disabled(formatBusy || genBusy)
+                            }
                         }
                     }
                 }
@@ -1991,11 +2181,15 @@ struct ConsentState: Decodable {
     /// The unsigned request waiting now (4.34.0; 0 for none), sent back as consent_seen so a
     /// request a colleague has just sent is not replaced unseen; nil from an older server.
     var pendingId: Int?
+    /// The latest signed consent (4.37.0, S15), sent as withdraw_consent's consent_id.
+    var signedId: Int?
 }
 struct ConsentStatusResponse: Decodable {
     let consent: ConsentState
     let guardianName: String?
     let guardianEmail: String?
+    /// The latest signed consent, when the server sends it beside the consent (4.37.0).
+    var signedId: Int?
 }
 
 extension ConsentState {
@@ -2449,6 +2643,81 @@ struct FollowupCheckSheet: View {
             idem.failed(error)
             if let text = refusedFields["notes"] { showFormError(text, in: &self.error, field: "Notes") }
             else { showFormError(IdemKey.message(for: error, what: "the follow-up check"), in: &self.error) }
+        }
+    }
+}
+
+/// client.php's confirmation for withdrawing the guardian consent (4.37.0, S15).
+func consentWithdrawTitle(name: String, date: String) -> String {
+    "Record that \(name) has withdrawn the guardian consent signed on \(date)?"
+}
+
+/// The portal-link confirmation (4.37.0, S17): the server's words (with the closed-case and
+/// contact-preference warnings), else the app's own.
+func portalConfirmText(_ link: PortalLinkState?, fallback: String) -> String {
+    guard let text = link?.confirmText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return fallback }
+    return text
+}
+
+// MARK: - Timeline (4.37.0, S18), as client_timeline.php
+
+struct TimelineStatusDays: Decodable { let status: String; let days: Int?; let text: String }
+struct TimelineEvent: Decodable { let date: String; let month: String; let kind: String?; let text: String }
+struct ClientTimelineReply: Decodable { let statusDays: [TimelineStatusDays]; let events: [TimelineEvent]; let total: Int?; let statusSummary: String? }
+
+/// The events under their month headings, in the order the server sends them (newest first).
+func timelineGroups(_ events: [TimelineEvent]) -> [(month: String, events: [TimelineEvent])] {
+    var groups: [(month: String, events: [TimelineEvent])] = []
+    for e in events {
+        if let last = groups.last, last.month == e.month { groups[groups.count - 1].events.append(e) }
+        else { groups.append((e.month, [e])) }
+    }
+    return groups
+}
+
+struct ClientTimelineView: View {
+    @EnvironmentObject var api: API
+    let clientId: Int
+    let clientName: String
+    @State private var reply: ClientTimelineReply?
+    @State private var error: String?
+
+    var body: some View {
+        List {
+            if let error { ErrorBanner(message: error) }
+            if reply == nil && error == nil { ProgressView("Loading the timeline…") }
+            if let reply {
+                Section("Time in each status") {
+                    // client_timeline.php's line: the days since the record was created, and the status now.
+                    if let summary = reply.statusSummary, !summary.isEmpty { Text(summary) }
+                    if reply.statusDays.isEmpty { Text("No status history recorded.").foregroundStyle(Color.secondaryText) }
+                    ForEach(Array(reply.statusDays.enumerated()), id: \.offset) { _, s in Text(s.text) }
+                }
+                Section {
+                    Text("Events (\(reply.total ?? reply.events.count)), newest first")
+                        .font(.headline).accessibilityAddTraits(.isHeader)
+                }
+                ForEach(Array(timelineGroups(reply.events).enumerated()), id: \.offset) { _, group in
+                    Section(group.month) {
+                        ForEach(Array(group.events.enumerated()), id: \.offset) { _, e in
+                            Text("\(formatDate(e.date)): \(e.text)")
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Timeline: \(clientName)")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await load() }
+        .task { if reply == nil { await load() } }
+    }
+
+    private func load() async {
+        do {
+            reply = try await api.call("client_timeline", query: ["client_id": String(clientId)])
+            error = nil
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 }

@@ -270,8 +270,7 @@ function api_ai_error(string $err): string {
  *  and report.php do): Unicode-normalized when the intl extension is present, spaces
  *  collapsed, case-folded for every alphabet. */
 function api_name_key(string $s): string {
-    if (class_exists('Normalizer')) $s = Normalizer::normalize($s, Normalizer::FORM_C) ?: $s;
-    return mb_convert_case(preg_replace('/\s+/u', ' ', trim($s)) ?? trim($s), MB_CASE_FOLD, 'UTF-8');
+    return person_name_key($s);   // the rule itself is in inc/eval_report.php (4.37.0)
 }
 
 /** Text searched for as typed (4.28.0, as search.php): bind as "LIKE ? ESCAPE '!'", so % and _ are matched literally. */
@@ -353,7 +352,8 @@ if ($postMax > 0 && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $postMax) {
 // code reads as a list/object. Anything else is refused up front, so a stray
 // array can never be cast to "Array" or to 1 and written to a record.
 const API_ARRAY_INPUT_KEYS = ['scores', 'levels', 'present', 'homework', 'values', 'history', 'params', 'sections', 'answers', 'custom', 'info', 'orig',
-    'client_ids', 'tracks', 'listed', 'attended', 'times', 'task_ids'];   // custom and info: 4.25.0 (custom fields, release requests); orig: 4.28.0 (a stale save's opened values); 4.35.0: a group's clients and tracks, its attendance, the times offered (inc/api_435.php)
+    'client_ids', 'tracks', 'listed', 'attended', 'times', 'task_ids',
+    'attachment'];   // 4.37.0: a tech assessment's report attachment ({name, data})   // custom and info: 4.25.0 (custom fields, release requests); orig: 4.28.0 (a stale save's opened values); 4.35.0: a group's clients and tracks, its attendance, the times offered (inc/api_435.php)
 // A decoded JSON body takes many times its own size in memory, so a body larger than
 // this is decoded only once the caller's token has been checked (below): only the
 // app's own uploads (documents, signatures) need more, and an anonymous caller can
@@ -717,7 +717,7 @@ $API_ACTION_PERMS = [
     // 4.36.0 (inc/api_436.php), checked here too so a retry after losing the permission is refused
     // before the retry guard answers it. Its other actions need only a sign-in.
     'privacy_incident_choices' => 'clients', 'report_privacy_incident' => 'clients',
-];
+] + API_437_PERMS;   // 4.37.0 (inc/api_437.php), so a retry after losing the permission is refused too
 /* Account settings (inc/api_account.php) and the 3.0.22 parity actions (inc/api_parity.php)
    live in their own files; each re-checks what it needs. */
 const API_ACCOUNT_ACTIONS = ['account', 'change_password', 'totp_begin', 'totp_confirm', 'totp_disable', 'cal_feed_show', 'cal_feed_regen', 'remove_passkey', 'logout_all',
@@ -834,7 +834,10 @@ const API_IDEM_ACTIONS = ['send_report', 'schedule_session', 'add_incident', 'up
     // hours added and several tasks completed (inc/api_436.php).
     'device_action', 'report_privacy_incident', 'add_availability', 'complete_tasks',
     // delete_task: a retry after a lost reply answers "Task deleted." again, not "no longer exists".
-    'delete_task'];
+    'delete_task',
+    // 4.37.0 (inc/api_437.php): the signed evaluation report emailed, an amendment request recorded
+    // as sent, and a letter saved (a repeat rebuilds its message, api_437_repeat).
+    'send_eval_report', 'record_amendment', 'save_letter'];
 // The retry guard (api_idem_begin / api_idem_end) is opened inside inc/api_parity.php
 // before any action runs, the parity actions included (4.29.0: save_task, save_track and
 // request_consent are parity actions, and before this they ran before the guard).
@@ -969,7 +972,9 @@ switch ($action) {
         api_require_client($cid, $userId);
         $sent = portal_link_send($cid, $userId, 'mobile');
         if ($sent['error'] !== null) fail($sent['error'], 422);
-        out(['ok' => true, 'sent_to' => $sent['sent_to'], 'message' => 'Portal link emailed to ' . $sent['sent_to'] . '. Any earlier link no longer works.']);
+        // client.php's sentence (inc/client_notices.php, 4.37.0): every six months, and a closed case's read-only portal.
+        $pc = db()->prepare('SELECT status FROM clients WHERE id = ?'); $pc->execute([$cid]);
+        out(['ok' => true, 'sent_to' => $sent['sent_to'], 'message' => portal_link_sent_message(['status' => (string)$pc->fetchColumn()], (string)$sent['sent_to'])]);
     }
 
     case 'logout':
@@ -1206,9 +1211,8 @@ switch ($action) {
         unset($track);
         // releases (3.0.36): the client's releases of information, newest first, with their
         // state today (Current, Expired, Withdrawn, Awaiting signature, Link expired).
-        $releases = array_map(fn($r) => ['id' => (int)$r['id'], 'recipient_type' => $r['recipient_type'], 'recipient_name' => $r['recipient_name'],
-            'status' => release_status($r), 'signed_name' => $r['signed_name'], 'signed_at' => $r['signed_at'], 'expires_on' => $r['expires_on'],
-            'info_scope' => $r['info_scope'], 'purpose' => $r['purpose'], 'method' => $r['method']], client_releases($id));
+        // 4.37.0: each with client.php's line, whether it can be recorded as withdrawn, and when (inc/api_437.php).
+        $releases = array_map('release_api_row', client_releases($id));   // inc/records_privacy.php
         // Texts (4.17.0): whether this client can be texted, and their agreement in words.
         $smsRow = sms_client($id);
         $texting = ['enabled' => sms_enabled(), 'agreed' => !empty($smsRow['sms_consent_at']), 'opted_out' => !empty($smsRow['sms_opted_out_at']),
@@ -1216,7 +1220,12 @@ switch ($action) {
         // after_closure (4.35.0): the website's "After closure" section (the outcome survey and the
         // follow-up checks), or null when the page does not show it.
         out(['ok' => true, 'client' => $client, 'notes' => $notes, 'notes_total' => $notesTotal, 'notes_offset' => $notesOffset, 'tracks' => $tracks, 'releases' => $releases, 'texting' => $texting,
-            'attendance' => $client['attendance'], 'after_closure' => after_closure_state($id, (string)$client['status'])]);
+            'attendance' => $client['attendance'], 'after_closure' => after_closure_state($id, (string)$client['status'])]
+            // 4.37.0: the privacy notice, the portal link's state and question, and the consent shown (inc/api_437.php).
+            + (function (array $x): array {
+                return ['privacy_notice' => $x['privacy_notice'], 'privacy_notice_methods' => $x['privacy_notice_methods'], 'portal_link' => $x['portal_link'],
+                    'consent_signed' => $x['consent_signed'], 'signed_id' => $x['signed_id']];
+            })(api_437_client_extra($id)));
 
     case 'add_note': {
         $cid = (int)($input['client_id'] ?? 0);
@@ -2332,21 +2341,6 @@ switch ($action) {
         $grow = $g->fetch();
         if (!$grow) fail('Goal not found.', 404);
         api_require_track((int)$grow['track_id'], $userId);
-        // Record progress history, mirroring the website: percent follows the
-        // status at the extremes; otherwise use what was sent (or keep current).
-        $pctIn = api_number($input, 'progress_pct', 'Progress');
-        if ($pctIn !== null && ($pctIn < 0 || $pctIn > 100)) fail('Progress must be between 0 and 100.', 422);
-        $pct = $pctIn !== null ? (int)round($pctIn) : (int)$grow['progress_pct'];
-        if ($gs === 'Achieved') $pct = 100;
-        elseif ($gs === 'Not Started' && !isset($input['progress_pct'])) $pct = 0;
-        elseif ($grow['status'] === 'Achieved' && $gs !== 'Achieved' && (int)$grow['progress_pct'] === 100
-            && $pct === 100 && empty($input['reopen_confirmed'])) {
-            // As track.php: a goal reopened from Achieved at 100% is asked once for its
-            // real percent, not the 100% it was given for being achieved; sending
-            // reopen_confirmed keeps it at 100%.
-            fail('This goal was 100% complete while Achieved. Enter how complete it is now that it is ' . $gs . ' again.', 422);
-        }
-        $note = api_text($input, 'note', API_TEXT_BYTES, 'The note', true) ?: null;
         // An entry saved on the phone without a signal (4.8.0) says what the goal was when it was
         // written, and when. If someone changed the goal since, the entry goes into the history at
         // its own time but does not overwrite the newer progress.
@@ -2354,25 +2348,39 @@ switch ($action) {
         $queuedAt = $queuedAt !== false && $queuedAt <= time() + 300 && $queuedAt >= time() - 30 * 86400 ? date('Y-m-d H:i:s', min($queuedAt, time())) : null;
         $changedSince = array_key_exists('expected_status', $input) && ((string)$input['expected_status'] !== (string)$grow['status']
             || (string)($input['expected_pct'] ?? '') !== (string)($grow['progress_pct'] ?? ''));
-        db()->beginTransaction();
         try {
-            if (!$changedSince) db()->prepare('UPDATE smart_goals SET status = ?, progress_pct = ? WHERE id = ?')->execute([$gs, $pct, $gid]);
-            db()->prepare('INSERT INTO goal_progress (goal_id, progress_pct, status, note, recorded_by, idem_key, created_at) VALUES (?,?,?,?,?,?,COALESCE(?, NOW()))')
-                ->execute([$gid, $pct, $gs, $note, $userId, $goalIdem, $queuedAt]);
-            db()->commit();
+            if ($changedSince) {
+                $pctIn = api_number($input, 'progress_pct', 'Progress');
+                if ($pctIn !== null && ($pctIn < 0 || $pctIn > 100)) fail_field('progress_pct', 'Enter the percent complete as a whole number from 0 to 100.');
+                $pct = $gs === 'Achieved' ? 100 : ($pctIn !== null ? (int)round($pctIn) : (int)$grow['progress_pct']);
+                $note = api_text($input, 'note', API_TEXT_BYTES, 'The note', true) ?: null;
+                db()->prepare('INSERT INTO goal_progress (goal_id, progress_pct, status, note, recorded_by, idem_key, created_at) VALUES (?,?,?,?,?,?,COALESCE(?, NOW()))')
+                    ->execute([$gid, $pct, $gs, $note, $userId, $goalIdem, $queuedAt]);
+                audit($userId, 'goal.status', 'goal', $gid, $gs . ' ' . $pct . '% (mobile, offline; history only, the goal had changed since)');
+                out(['ok' => true, 'progress_pct' => (int)($grow['progress_pct'] ?? 0), 'kept_newer' => true,
+                    'message' => 'Someone recorded newer progress on this goal while you were offline, so your entry was added to its history and the newer progress was kept.']);
+            }
+            // The website's rules, sentences and audit (progress_review.php and track.php, through
+            // inc/progress_ai.php, 4.37.0): percent follows the status at the extremes, a goal
+            // reopened from Achieved at 100% is asked once (409; reopen_confirmed keeps it).
+            $rec = goal_progress_record($gid, $input, ['id' => $userId], 'mobile', $goalIdem, $queuedAt);
         } catch (PDOException $e) {
             if (db()->inTransaction()) db()->rollBack();
             // The same entry, arriving twice at once: the first one counts.
-            if ($goalIdem !== null && ($e->errorInfo[0] ?? '') === '23000') out(['ok' => true, 'deduplicated' => true, 'progress_pct' => $pct]);
+            // The same entry, arriving twice at once: the first one counts, and the goal's percent after it is said.
+            if ($goalIdem !== null && ($e->errorInfo[0] ?? '') === '23000') {
+                $now = db()->prepare('SELECT progress_pct FROM smart_goals WHERE id = ?'); $now->execute([$gid]);
+                out(['ok' => true, 'deduplicated' => true, 'progress_pct' => (int)$now->fetchColumn()]);
+            }
             throw $e;
-        } catch (Throwable $e) { if (db()->inTransaction()) db()->rollBack(); throw $e; }
-        if ($changedSince) {
-            audit($userId, 'goal.status', 'goal', $gid, $gs . ' ' . $pct . '% (mobile, offline; history only, the goal had changed since)');
-            out(['ok' => true, 'progress_pct' => (int)($grow['progress_pct'] ?? 0), 'kept_newer' => true,
-                'message' => 'Someone recorded newer progress on this goal while you were offline, so your entry was added to its history and the newer progress was kept.']);
         }
-        audit($userId, 'goal.status', 'goal', $gid, $gs . ' ' . $pct . '% (mobile)');
-        out(['ok' => true, 'progress_pct' => $pct]);
+        if (!$rec['ok']) {
+            if (!isset($rec['errors'])) fail($rec['error'], (int)$rec['code']);
+            $f = api_435_fields($rec['errors'], (int)$rec['code'], !empty($rec['needs_reopen_confirm']) ? ['needs_reopen_confirm' => true] : []);
+            unset($f['status']);
+            out($f, (int)$rec['code']);
+        }
+        out(['ok' => true, 'progress_pct' => $rec['pct'], 'message' => $rec['message']]);
 
     case 'goal_progress':
         $gid = (int)($_GET['goal'] ?? 0);
@@ -2478,11 +2486,19 @@ switch ($action) {
     case 'assessments':
         $cid = (int)($_GET['client_id'] ?? 0);
         api_require_client($cid, $userId);
-        $s = db()->prepare('SELECT a.id, a.assessment_date, a.primary_disability, a.primary_tech, a.hardware_details, a.software_version, a.summary, u.name AS author
+        // attachment_name (4.37.0): the report attachment, when one is on file (download_assessment_attachment).
+        $s = db()->prepare('SELECT a.id, a.assessment_date, a.primary_disability, a.primary_tech, a.hardware_details, a.software_version, a.summary, u.name AS author,
+                a.attachment_path, a.attachment_name AS stored_attachment_name
             FROM tech_assessments a LEFT JOIN users u ON u.id = a.created_by WHERE a.client_id = ? ORDER BY a.assessment_date DESC');
         $s->execute([$cid]);
+        $asRows = array_map(function (array $a): array {
+            $has = trim((string)$a['attachment_path']) !== '';
+            unset($a['attachment_path']);
+            $name = $a['stored_attachment_name']; unset($a['stored_attachment_name']);
+            return $a + ['attachment_name' => $has ? (string)$name : null];
+        }, $s->fetchAll());
         // tech_types (4.35.0): the Primary technology choices, so the form needs no second call.
-        out(['ok' => true, 'assessments' => $s->fetchAll(), 'tech_types' => array_values(cms_list_items('tech_types'))]);
+        out(['ok' => true, 'assessments' => $asRows, 'tech_types' => array_values(cms_list_items('tech_types'))]);
 
     case 'add_assessment':
         $cid = (int)($input['client_id'] ?? 0);
@@ -2500,8 +2516,30 @@ switch ($action) {
         $software = api_text($input, 'software_version', 190, 'Software and version');
         $summary = api_text($input, 'summary', API_TEXT_BYTES, 'The summary', true);
         api_require_client($cid, $userId);
-        db()->prepare('INSERT INTO tech_assessments (client_id, assessment_date, primary_disability, primary_tech, hardware_details, software_version, summary, created_by) VALUES (?,?,?,?,?,?,?,?)')
-            ->execute([$cid, $date, $disability ?: null, $primaryTech, $hardware ?: null, $software ?: null, $summary ?: null, $userId]);
+        // The report attachment (4.37.0), checked and stored as client.php does (inc/tech_assessments.php):
+        // its type, 15 MB, name, a virus scan and its content. An oversized one is refused before decoding.
+        $attStored = null;
+        if (isset($input['attachment'])) {
+            $att = $input['attachment'];
+            $attNameIn = is_array($att) && is_string($att['name'] ?? null) ? trim($att['name']) : '';
+            $attB64 = is_array($att) && is_string($att['data'] ?? null) ? $att['data'] : '';
+            unset($input['attachment'], $att);
+            if ($attNameIn === '' || $attB64 === '') fail_field('attachment', 'Report attachment: choose the file again.');
+            if (strlen($attB64) > (int)ceil(15 * 1024 * 1024 / 3) * 4 + 4) fail_field('attachment', 'Attachment is too large (15 MB maximum).');
+            $attBytes = base64_decode($attB64, true);
+            unset($attB64);
+            if ($attBytes === false || $attBytes === '') fail_field('attachment', 'Report attachment: choose the file again.');
+            [$attErr, $attStored] = tech_assessment_attachment_store($attNameIn, $attBytes);
+            unset($attBytes);
+            if ($attErr !== null) fail_field('attachment', $attErr);
+        }
+        try {
+            db()->prepare('INSERT INTO tech_assessments (client_id, assessment_date, primary_disability, primary_tech, hardware_details, software_version, summary, attachment_path, attachment_name, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)')
+                ->execute([$cid, $date, $disability ?: null, $primaryTech, $hardware ?: null, $software ?: null, $summary ?: null, $attStored['path'] ?? null, $attStored['name'] ?? null, $userId]);
+        } catch (Throwable $e) {
+            if ($attStored !== null) api_discard_upload($attStored['path']);   // never a file on disk with no record pointing at it
+            throw $e;
+        }
         complete_task_by_key('assess-' . $cid, $userId);
         audit($userId, 'assessment.add', 'client', $cid, 'mobile');
         out(['ok' => true]);
@@ -2518,8 +2556,9 @@ switch ($action) {
         if ($cid <= 0 || $filename === '' || $data === false || $data === '') fail('Client, filename, and file data are required.');
         if (strlen($data) > 25 * 1024 * 1024) fail('File is too large (25 MB maximum).');
         $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
-        $allowed = ['pdf','doc','docx','xls','xlsx','ppt','pptx','txt','rtf','csv','png','jpg','jpeg','heic'];
-        if (!in_array($ext, $allowed, true)) fail('That file type is not allowed.');
+        // The website's types and sentence (inc/file_exchange.php, 4.37.0): a .heic photo is refused, as
+        // client.php refuses it; the apps convert photos to JPEG first.
+        if (!in_array($ext, DOCUMENT_UPLOAD_EXTENSIONS, true)) fail_field('file', (string)document_type_error($ext));
         // Confirm the client exists (and is in scope) BEFORE writing the file,
         // so a failed insert can't leave an orphaned file on disk.
         $cx = db()->prepare('SELECT id FROM clients WHERE id = ?');
@@ -2540,12 +2579,16 @@ switch ($action) {
         try {
             db()->prepare('INSERT INTO client_documents (client_id, category, title, orig_name, path, uploaded_by) VALUES (?,?,?,?,?,?)')
                 ->execute([$cid, $category, $title, $origName, $stored, $userId]);
+            $newDocId = (int)db()->lastInsertId();
         } catch (Throwable $e) {
             api_discard_upload($stored);   // never leave a client file on disk with no record pointing at it
             throw $e;
         }
         audit($userId, 'document.upload', 'client', $cid, $title . ' (mobile)');
-        out(['ok' => true]);
+        // Shared on upload (4.37.0), as client.php's two ticks: absent is off.
+        if (api_bool($input['share_portal'] ?? false)) document_set_shared($newDocId, $cid, 'portal', true, $userId);
+        if (api_bool($input['share_counselor'] ?? false)) document_set_shared($newDocId, $cid, 'counselor', true, $userId);
+        out(['ok' => true, 'id' => $newDocId]);
 
     case 'send_report':
         $tid = (int)($input['track_id'] ?? 0);
@@ -2729,12 +2772,17 @@ switch ($action) {
         $cid = (int)($_GET['client_id'] ?? 0);
         api_require_client($cid, $userId);
         // A file the client shared on the portal is labelled as the website labels it.
-        $s = db()->prepare("SELECT id, CASE WHEN category = 'Client Upload' THEN 'Shared by client' ELSE category END AS category, title, orig_name, created_at,
+        $s = db()->prepare("SELECT id, CASE WHEN category = 'Client Upload' THEN 'Shared by client' ELSE category END AS category, category AS stored_category, title, orig_name, created_at,
                 (category IN ('Resource', 'Client Upload') OR portal_shared = 1) AS portal_shared, counselor_shared, uploaded_via
             FROM client_documents WHERE client_id = ? ORDER BY created_at DESC");
         $s->execute([$cid]);
         // portal_shared / counselor_shared (4.25.0): whether the client's portal or their counselor's shows it.
-        out(['ok' => true, 'documents' => array_map(fn($d) => ['portal_shared' => (bool)$d['portal_shared'], 'counselor_shared' => (bool)$d['counselor_shared'], 'id' => (int)$d['id']] + $d, $s->fetchAll())]);
+        // can_delete (4.37.0): whether delete_document may move it to the trash (key documents: administrators only).
+        out(['ok' => true, 'documents' => array_map(function ($d) {
+            $can = document_can_delete(['category' => $d['stored_category']]);
+            unset($d['stored_category']);
+            return ['portal_shared' => (bool)$d['portal_shared'], 'counselor_shared' => (bool)$d['counselor_shared'], 'id' => (int)$d['id'], 'can_delete' => $can] + $d;
+        }, $s->fetchAll())]);
 
     case 'download_document':
         $id = (int)($_GET['id'] ?? 0);
@@ -2988,11 +3036,14 @@ switch ($action) {
             FROM equipment e
             LEFT JOIN equipment_loans l ON l.equipment_id = e.id AND l.returned_at IS NULL
             LEFT JOIN clients c ON c.id = l.client_id
-            WHERE e.status <> 'Retired'
-            ORDER BY e.status = 'On Loan' DESC, e.name")->fetchAll();
+            WHERE " . equipment_list_status_sql($includeRetired = api_bool($_GET['include_retired'] ?? $input['include_retired'] ?? false)) . "
+            ORDER BY " . ($includeRetired ? "e.status = 'Retired', " : '') . "e.status = 'On Loan' DESC, e.name")->fetchAll();
+        // include_retired (4.37.0): retired items too, last, each marked retired (equipment.php lists
+        // them under its Retired filter). Without it (4.36.0 apps) they are left out, as before.
         $scoped = caseload_scoped();
         foreach ($s as &$row) {
             $row['overdue'] = (bool)$row['overdue'];
+            if ($includeRetired) $row += ['retired' => $row['status'] === 'Retired'];
             // Held by a reservation (for any caseload): the app flags it without naming the client.
             $row['held'] = (bool)$row['held'];
             // Scoped users still see loan status, but not WHO holds an item
@@ -3148,6 +3199,10 @@ switch ($action) {
             $sql .= " AND (r.client_name LIKE ? ESCAPE '!' OR r.reason LIKE ? ESCAPE '!' OR r.counselor_name LIKE ? ESCAPE '!')";
             array_push($params, api_like($refQ), api_like($refQ), api_like($refQ));
         }
+        // who (4.37.0): all (when absent), me or unassigned, as referrals.php's Show filter.
+        $refWho = api_choice($_GET, 'who', ['all', 'me', 'unassigned'], 'Show', 'all');
+        [$whoSql, $whoParams] = referral_who_sql((string)$refWho, $userId);
+        $sql .= $whoSql; array_push($params, ...$whoParams);
         if (caseload_scoped()) { $sql .= ' AND ' . api_referral_scope_sql('r'); array_push($params, $userId, $userId); }
         // Open referrals come first, so converted ones can never push a referral still
         // waiting for review off the end of the 100; total says how many match in all.
@@ -3155,10 +3210,12 @@ switch ($action) {
         $s->execute($params);
         $refTotal = (int)$s->fetchColumn();
         $s = db()->prepare("SELECT r.id, r.client_name, r.reason, r.status, r.created_at, r.counselor_name, r.counselor_agency,
-                r.referral_source, r.income_bracket, r.quoted_fee, u.name AS assigned_name" . $sql
+                r.referral_source, r.income_bracket, r.quoted_fee, u.name AS assigned_name, " . referral_contact_due_sql() . " AS contact_due" . $sql
             . " ORDER BY r.status = 'Converted', r.created_at DESC LIMIT 100");
         $s->execute($params);
-        out(['ok' => true, 'referrals' => $s->fetchAll(), 'total' => $refTotal]);
+        // The contact deadline (4.37.0), as referrals.php shows it on each row.
+        $refRows = array_map(fn($r) => $r + ['contact_overdue' => $r['contact_due'] !== null && $r['contact_due'] < date('Y-m-d'), 'contact_text' => referral_contact_text($r['contact_due'])], $s->fetchAll());
+        out(['ok' => true, 'referrals' => $refRows, 'total' => $refTotal, 'limit' => 100, 'heading' => REFERRAL_LIST_HEADINGS[$refStatus] . ' (' . number_format($refTotal) . ')']);
 
     case 'referral':
         $id = (int)($_GET['id'] ?? 0);
@@ -3263,10 +3320,10 @@ switch ($action) {
         $rvRow = $rv->fetch();
         if (!$rvRow) fail('Referral not found.', 404);
         if (!api_referral_in_scope($rvRow, $userId)) fail('That referral is assigned to someone else.', 403);
-        $rr = db()->prepare("UPDATE referrals SET status = 'Reviewed' WHERE id = ? AND status = 'New'");
-        $rr->execute([$rid]);
-        if ($rr->rowCount() === 1) audit($userId, 'referral.review', 'referral', $rid, 'mobile');
-        out(['ok' => true]);
+        // referrals.php's rule and sentences (inc/referral_request.php, 4.37.0): a referral no longer New
+        // is left as it is and the reply says so (200, as the website says it, not an error).
+        $rev = referral_mark_reviewed($rid, $userId, 'mobile');
+        out(['ok' => true, 'changed' => $rev['changed'], 'message' => $rev['message']]);
 
     /* Referral outcomes (3.0.35, inc/case_outcomes.php): close with a reason (the referrer is
        emailed the outcome), reopen, or attach to a client already on file. */
@@ -3448,17 +3505,9 @@ switch ($action) {
             api_require_client($cid, $userId);
             $c = db()->prepare('SELECT * FROM clients WHERE id = ?'); $c->execute([$cid]); $cl = $c->fetch();
             if (!$cl) fail('Client not found.', 404);
-            $ctx = "Client: {$cl['name']} — status {$cl['status']} ({$cl['client_type']})\n";
-            $tk = db()->prepare('SELECT id, title, status, auth_number FROM training_tracks WHERE client_id = ?'); $tk->execute([$cid]);
-            foreach ($tk->fetchAll() as $t) {
-                $ctx .= "\nTrack: {$t['title']} ({$t['status']}, auth {$t['auth_number']})\n";
-                $gq = db()->prepare('SELECT specific_goal, status, progress_pct FROM smart_goals WHERE track_id = ?'); $gq->execute([(int)$t['id']]);
-                foreach ($gq->fetchAll() as $g) $ctx .= "  - {$g['specific_goal']} [{$g['status']}, {$g['progress_pct']}%]\n";
-            }
-            $nq = db()->prepare('SELECT created_at, note_type, subject, body, author_id FROM client_notes WHERE client_id = ?' . API_AI_NOTES_EXCLUDE . ' ORDER BY created_at DESC LIMIT 8'); $nq->execute([$cid]);
-            foreach ($nq->fetchAll() as $n) $ctx .= "\nNote " . fmt_date($n['created_at']) . ($n['author_id'] === null ? ' ' . API_AI_UNVERIFIED_NOTE : '')
-                . " [{$n['note_type']}] {$n['subject']}: " . mb_strimwidth((string)$n['body'], 0, 300, '…');
-            $res = ai_run('draft', ai_system_base() . ' Write a concise case summary covering background, services provided, current progress, and recommended next steps. Use short paragraphs.' . API_AI_UNTRUSTED_NOTES . API_AI_PLAIN_TEXT, "Summarize this case:\n\n" . $ctx, 1500, $cl, $userId);
+            // client.php's case summary (inc/client_ai.php, 4.37.0): the tracks with their goals, the 5
+            // newest assessments and the 10 newest notes that may go to the AI, and its prompt.
+            $res = case_summary_ai($cl, case_summary_context($cid, ['id' => $userId]), $userId);
             $auditId = $cid;
         } elseif ($type === 'goals') {
             $aid = (int)($input['assessment_id'] ?? 0);
@@ -3467,10 +3516,47 @@ switch ($action) {
             api_require_client((int)$as['cid'], $userId);
             // The assessment's free text can name the client; redact against their record.
             $c = db()->prepare('SELECT * FROM clients WHERE id = ?'); $c->execute([(int)$as['cid']]);
-            $goalClient = $c->fetch() ?: null;
-            $actx = "Client disability: " . ($as['primary_disability'] ?: '[not recorded]') . "\nPrimary technology: " . ($as['primary_tech'] ?: '[not recorded]') . "\nAssessment summary: " . ($as['summary'] ?: '[none]');
-            $res = ai_run('draft', ai_system_base() . ' Suggest 3 to 5 SMART training goals for this client. For each, give the specific objective and a measurable criterion on its own line, numbered.' . API_AI_PLAIN_TEXT, "Suggest SMART goals based on this assessment:\n\n" . $actx, 1200, $goalClient, $userId);
-            $auditId = (int)$as['cid'];
+            $goalClient = $c->fetch() ?: [];
+            // client.php's "Suggest goals with AI" (inc/client_ai.php, 4.37.0): hardware and software too.
+            $res = assessment_goals_ai($as, $goalClient, $userId);
+            if (!$res['ok']) fail(api_ai_error($res['error']));
+            audit($userId, 'ai.draft', 'client', (int)$as['cid'], 'goal suggestions (mobile)');
+            out(['ok' => true, 'text' => api_ai_plain($res['text']), 'truncated' => !empty($res['truncated'])]);
+        } elseif ($type === 'format') {
+            // client.php's "Format with AI" (inc/client_ai.php, 4.37.0): rough notes into BIRP, PAIP or
+            // SOAP; a section the reply leaves empty keeps what was typed.
+            $fcid = (int)($input['client_id'] ?? 0);
+            api_require_client($fcid, $userId);
+            $c = db()->prepare('SELECT * FROM clients WHERE id = ?'); $c->execute([$fcid]); $fcl = $c->fetch();
+            if (!$fcl) fail('Client not found.', 404);
+            $fsec = is_array($input['sections'] ?? null) ? array_values($input['sections']) : [];
+            $fsec = array_map(fn($v) => is_string($v) ? $v : '', array_pad(array_slice($fsec, 0, 4), 4, ''));
+            $fmtRes = note_format_ai(is_string($input['format'] ?? null) ? $input['format'] : '', is_string($input['body'] ?? null) ? $input['body'] : '', $fsec, $fcl, $userId);
+            if ($fmtRes['ok'] || $fmtRes['asked']) audit($userId, 'ai.draft', 'client', $fcid, $fmtRes['format'] . ' formatting (mobile)');
+            if (!$fmtRes['ok']) {
+                if ($fmtRes['field'] !== null) fail_field($fmtRes['field'], $fmtRes['error']);
+                fail(api_ai_error($fmtRes['error']), 422);
+            }
+            out(['ok' => true, 'format' => $fmtRes['format'], 'sections' => $fmtRes['sections'], 'message' => $fmtRes['message'], 'truncated' => $fmtRes['truncated']]);
+        } elseif ($type === 'justification') {
+            // "Draft justification with AI" (4.37.0, procurement.php and recommend.php): the
+            // procurement permission and the client in scope; the draft fills an empty field or goes
+            // below what was typed, fitted to the field's 4,000 characters.
+            if (!can('procurement')) fail('Your account does not have access to that area. Ask an administrator if you need it.', 403);
+            $jcid = (int)($input['client_id'] ?? 0);
+            api_require_client($jcid, $userId);
+            $device = is_string($input['device_name'] ?? null) ? trim($input['device_name']) : '';
+            if ($device === '') fail_field('device_name', 'Device / technology: enter the device first.');
+            $c = db()->prepare('SELECT * FROM clients WHERE id = ?'); $c->execute([$jcid]); $jcl = $c->fetch();
+            if (!$jcl) fail('Client not found.', 404);
+            $jcat = is_string($input['category'] ?? null) && in_array($input['category'], cms_list_items('device_request_categories'), true) ? $input['category'] : '';
+            $typedJ = is_string($input['text'] ?? null) ? trim(str_replace("\r\n", "\n", $input['text'])) : '';
+            $jr = device_justification_ai($jcl, $device, $jcat, $typedJ, $userId);
+            // Recorded only when the client's facts reached the provider (as eval_report.php).
+            if (!empty($jr['asked'])) audit($userId, 'ai.draft', 'client', $jcid, 'justification' . ($jr['ok'] ? '' : ' (AI call failed; nothing drafted)') . ' (mobile)');
+            if (!$jr['ok']) fail(api_ai_error((string)$jr['error']));
+            $jr += device_justification_fit($jr, $typedJ);
+            out(['ok' => true, 'text' => $jr['merged'], 'draft' => $jr['text'], 'truncated' => !empty($jr['truncated']), 'shortened' => $jr['shortened']]);
         } else {
             fail('Unknown draft type.');
         }
@@ -3484,28 +3570,21 @@ switch ($action) {
     /* ========================= Equipment lifecycle ========================= */
     case 'equipment_detail': {
         $eid = (int)($_GET['id'] ?? 0);
-        $e = db()->prepare('SELECT * FROM equipment WHERE id = ?'); $e->execute([$eid]);
-        $item = $e->fetch();
+        // The item as set_equipment_status returns it too (inc/api_437.php): the device request's note
+        // without the client's name for a scoped user, and the book value (0 once retired).
+        $item = api_equipment_item($eid);
         if (!$item) fail('Item not found.', 404);
-        // Items added from a delivered device request before 3.0.8 carry
-        // "From device request #N for <client name>" in their notes. Equipment is
-        // organisation-wide, so a caseload-scoped user gets the note without the name.
-        if (caseload_scoped() && $item['notes'] !== null) {
-            $item['notes'] = preg_replace('/^(From device request #\d+) for .*$/s', '$1', (string)$item['notes']);
-        }
         $h = db()->prepare('SELECT m.service_date, m.service_type, m.notes, m.cost, u.name AS by_name FROM equipment_maintenance m LEFT JOIN users u ON u.id = m.performed_by WHERE m.equipment_id = ? ORDER BY m.service_date DESC, m.id DESC LIMIT 50');
         $h->execute([$eid]);
-        // Straight-line depreciated book value (0-life = non-depreciating).
-        $item['book_value'] = equip_book_value(
-            $item['value'] !== null ? (float)$item['value'] : null,
-            $item['purchase_date'] ?? null,
-            (int)($item['useful_life_months'] ?? 36));
         // maintenance_total (also total, 4.29.0): every service entry, past the 50 listed.
         $hc = db()->prepare('SELECT COUNT(*) FROM equipment_maintenance WHERE equipment_id = ?');
         $hc->execute([$eid]);
         $maintTotal = (int)$hc->fetchColumn();
-        out(['ok' => true, 'item' => api_numeric_fields($item, ['value']), 'maintenance' => array_map(fn($r) => api_numeric_fields($r, ['cost']), $h->fetchAll()),
-            'maintenance_total' => $maintTotal, 'total' => $maintTotal, 'limit' => 50]);
+        out(['ok' => true, 'item' => $item, 'maintenance' => array_map(fn($r) => api_numeric_fields($r, ['cost']), $h->fetchAll()),
+            'maintenance_total' => $maintTotal, 'total' => $maintTotal, 'limit' => 50]
+            // 4.37.0 (inc/equipment_status.php): on_loan, in_workflow, holds, status_actions (the website row's
+            // moves), retire_text and manageable, for the status buttons.
+            + equipment_status_facts($eid, $item, $userId));
     }
     case 'equipment_service': {
         $eid = (int)($input['equipment_id'] ?? 0);
@@ -3550,18 +3629,19 @@ switch ($action) {
         out(['ok' => true]);
     }
     case 'add_equipment': {
-        $name = api_text($input, 'name', 190, 'Item name');
-        if ($name === '') fail('Item name is required.');
-        // The lists set on Lists and time limits (4.5.0), as the website uses.
-        $category = api_choice($input, 'category', cms_list_items('equipment_categories'), 'Category', 'Other');
-        $condition = api_choice($input, 'condition', cms_list_items('equipment_conditions'), 'Condition', 'Good');
-        $serial = api_text($input, 'serial', 120, 'Serial number');
-        $value = api_money($input, 'value', 'Value');
-        $itemNotes = api_text($input, 'notes', 255, 'Notes');
-        $iv = api_interval_days($input, 'maintenance_interval_days', 'Service interval');
-        db()->prepare('INSERT INTO equipment (name, category, serial, item_condition, value, notes, maintenance_interval_days) VALUES (?,?,?,?,?,?,?)')
-            ->execute([$name, $category, $serial ?: null, $condition, $value, $itemNotes ?: null, $iv ?: null]);
+        // The lists set on Lists and time limits (4.5.0), as the website uses: an unknown category
+        // or condition is refused on its field, as before.
+        api_choice($input, 'category', cms_list_items('equipment_categories'), 'Category', 'Other');
+        api_choice($input, 'condition', cms_list_items('equipment_conditions'), 'Condition', 'Good');
+        // Every field as equipment.php's Add item checks it (inc/equipment_status.php, 4.37.0): the
+        // purchase date, useful life and AT Act type too, and text longer than its column refused,
+        // not cut. A 4.36.0 app sends condition; the website's form calls it item_condition.
+        [$eqErrors, $ev] = equipment_input(['item_condition' => $input['condition'] ?? null] + $input);
+        if ($eqErrors) { $f = api_435_fields($eqErrors); unset($f['status']); out($f, 422); }
+        db()->prepare('INSERT INTO equipment (name, category, serial, item_condition, value, purchase_date, useful_life_months, notes, maintenance_interval_days, at_type) VALUES (?,?,?,?,?,?,?,?,?,?)')
+            ->execute([$ev['name'], $ev['category'], $ev['serial'], $ev['item_condition'], $ev['value'], $ev['purchase_date'], $ev['useful_life_months'], $ev['notes'], $ev['maintenance_interval_days'], $ev['at_type']]);
         $createdId = (int)db()->lastInsertId();
+        $name = $ev['name'];
         audit($userId, 'equipment.add', 'equipment', $createdId, $name . ' (mobile)');
         out(['ok' => true, 'id' => $createdId]);
     }
@@ -3925,13 +4005,14 @@ switch ($action) {
     }
     case 'add_device_request': {
         $cid = (int)($input['client_id'] ?? 0); api_require_client($cid, $userId);
-        $name = api_text($input, 'device_name', 190, 'Device name');
-        if ($name === '') fail('Device name is required.');
-        // The website's fixed list (DR_CATEGORIES in inc/access.php, which the app's
-        // picker matches): a value outside it is refused, a blank one is Other.
+        // The managed list, as the website uses: a value outside it is refused, a blank one is Other.
+        api_choice($input, 'category', cms_list_items('device_request_categories'), 'Category', 'Other');
+        // procurement.php's checks (inc/portal_devices.php, 4.37.0): the device named, and the
+        // justification no longer than 4,000 characters, refused rather than cut.
+        [$drErrors, $dv] = device_request_input($input);
+        if ($drErrors) { $f = api_435_fields($drErrors); unset($f['status']); out($f, 422); }
         db()->prepare('INSERT INTO device_requests (client_id, requested_by, device_name, category, justification, status) VALUES (?,?,?,?,?,?)')
-            ->execute([$cid, $userId, $name, api_choice($input, 'category', cms_list_items('device_request_categories'), 'Category', 'Other'),
-                api_text($input, 'justification', API_TEXT_BYTES, 'Justification', true) ?: null, 'Requested']);
+            ->execute([$cid, $userId, $dv['device_name'], $dv['category'], $dv['justification'], 'Requested']);
         $createdId = (int)db()->lastInsertId();
         audit($userId, 'device.request', 'device_request', $createdId, '(mobile)');
         out(['ok' => true, 'id' => $createdId]);
@@ -4005,9 +4086,23 @@ switch ($action) {
             if ($r['ordered_at'] && $delivered < $r['ordered_at']) {
                 fail('Delivery date cannot be before the order date (' . fmt_date($r['ordered_at']) . ').', 422);
             }
-            db()->prepare("UPDATE device_requests SET delivered_at=?, serial=?, warranty_until=?, status=" . $forward('Delivered') . " WHERE id=?")
-                ->execute([$delivered, api_text($input, 'serial', 120, 'Serial number') ?: null,
-                    api_date($input, 'warranty_until', 'Warranty date', 2000, (int)date('Y') + 25), $id]);
+            $serialIn = api_text($input, 'serial', 120, 'Serial number');
+            $warranty = api_date($input, 'warranty_until', 'Warranty date', 2000, (int)date('Y') + 25);
+            // As procurement.php (4.37.0): the request row is locked, and add_to_inventory (read only with
+            // the equipment permission) adds the device to the loaner inventory once per request.
+            db()->beginTransaction();
+            try {
+                db()->prepare('SELECT id FROM device_requests WHERE id = ? FOR UPDATE')->execute([$id]);
+                db()->prepare("UPDATE device_requests SET delivered_at=?, serial=?, warranty_until=?, status=" . $forward('Delivered') . " WHERE id=?")
+                    ->execute([$delivered, $serialIn ?: null, $warranty, $id]);
+                $inventory = device_delivery_inventory($id, $r, api_bool($input['add_to_inventory'] ?? false), $serialIn);
+                db()->commit();
+            } catch (Throwable $e) {
+                if (db()->inTransaction()) db()->rollBack();
+                throw $e;
+            }
+            audit($userId, 'device.deliver', 'device_request', $id, ($inventory['audit'] !== null ? $inventory['audit'] . ' ' : '') . '(mobile)');
+            out(['ok' => true, 'message' => $inventory['message'], 'inventory' => $inventory['state']]);
         } elseif ($op === 'train') {
             // As procurement.php: a request is closed as Trained only after its delivery
             // is recorded, and training cannot come before the delivery.
@@ -4025,15 +4120,17 @@ switch ($action) {
             if ($to === 'Requested' ? !in_array($r['status'], ['Denied', 'Cancelled'], true) : $closed) {
                 fail($to === 'Requested' ? 'Only a denied or cancelled request can be reopened.' : 'This request is already closed (' . $r['status'] . ').', 409);
             }
-            // Notes are replaced only when the app sends them; otherwise the stored note is kept.
-            $notes = array_key_exists('notes', $input) ? (api_text($input, 'notes', API_TEXT_BYTES, 'Notes', true) ?: null) : $r['notes'];
+            // Notes are replaced only when the app sends them; otherwise the stored note is kept
+            // (procurement.php's reason, inc/portal_devices.php, 4.37.0). The website's field holds 500.
+            if (array_key_exists('notes', $input) && is_string($input['notes']) && mb_strlen(trim($input['notes'])) > 500) fail_field('notes', 'Reason: use 500 characters or fewer.');
+            $notes = device_close_note(array_key_exists('notes', $input) ? $input['notes'] : null, $r['notes']);
             // Reopened at the furthest step it had recorded, as procurement.php does (4.34.0).
             $reopened = $to === 'Requested';
             if ($reopened) $to = device_request_reopen_status($r, $id);
             db()->prepare('UPDATE device_requests SET status=?, notes=? WHERE id=?')->execute([$to, $notes, $id]);
             if ($reopened) {
                 audit($userId, 'device.status', 'device_request', $id, 'reopened as ' . $to . ' (mobile)');
-                out(['ok' => true, 'status' => $to]);
+                out(['ok' => true, 'status' => $to, 'notes' => $notes, 'message' => 'Request reopened. Status updated to ' . $to . '.']);
             }
         } else { fail('Unknown operation.'); }
         // The website's codes and details (procurement.php), so a search of the audit
@@ -4042,16 +4139,18 @@ switch ($action) {
             'authorize' => (string)$r['device_name'], 'status' => $to ?? ''][$op] ?? '';
         audit($userId, ['add_quote' => 'device.quote', 'train' => 'device.trained'][$op] ?? 'device.' . $op, 'device_request', $id,
             ($auditDetail !== '' ? $auditDetail . ' ' : '') . '(mobile)');
-        out(['ok' => true] + ($op === 'status' ? ['status' => $to] : []));
+        out(['ok' => true] + ($op === 'status' ? ['status' => $to, 'notes' => $notes, 'message' => 'Status updated to ' . $to . '.'] : []));
     }
 
     /* ========================= Pre-ETS programs ========================= */
     case 'cohorts': {
-        $q = db()->query("SELECT co.id, co.name, co.school, co.active,
+        // show (4.37.0): active (when absent) or archived, as programs.php's Show archived.
+        $coShow = api_choice($_GET, 'show', ['active', 'archived'], 'Show', 'active');
+        $q = db()->query("SELECT co.id, co.name, co.school, co.active, u.name AS coordinator, co.start_date, co.end_date,
                 (SELECT COUNT(*) FROM cohort_members cm JOIN clients c ON c.id = cm.client_id WHERE cm.cohort_id = co.id AND cm.left_at IS NULL" . $studentScope . ") AS members,
                 (SELECT COUNT(*) FROM cohort_sessions s WHERE s.cohort_id = co.id) AS sessions
-            FROM cohorts co WHERE co.active = 1" . cohort_access_sql($userId) . " ORDER BY co.name");
-        out(['ok' => true, 'cohorts' => $q->fetchAll()]);
+            FROM cohorts co LEFT JOIN users u ON u.id = co.coordinator_id WHERE co.active = " . ($coShow === 'archived' ? '0' : '1') . cohort_access_sql($userId) . " ORDER BY co.name");
+        out(['ok' => true, 'cohorts' => array_map(fn($r) => ['active' => (int)$r['active'] === 1] + $r, $q->fetchAll()), 'show' => $coShow]);
     }
     case 'cohort': {
         $id = (int)($_GET['id'] ?? 0);
@@ -4061,22 +4160,36 @@ switch ($action) {
         // Current members only, as on the website: a student who left keeps the
         // attendance already recorded but is no longer listed or marked.
         $mem = db()->prepare('SELECT c.id, c.name FROM cohort_members cm JOIN clients c ON c.id = cm.client_id WHERE cm.cohort_id = ? AND cm.left_at IS NULL' . $studentScope . ' ORDER BY c.name'); $mem->execute([$id]);
-        $sess = db()->prepare('SELECT id, session_date, activity, topic, duration_min, (SELECT COUNT(*) FROM cohort_attendance a JOIN clients c ON c.id = a.client_id WHERE a.session_id = cohort_sessions.id AND a.present=1' . $studentScope . ') AS present_n FROM cohort_sessions WHERE cohort_id = ? ORDER BY session_date DESC, id DESC LIMIT 50'); $sess->execute([$id]);
+        $sess = db()->prepare('SELECT cohort_sessions.id, session_date, activity, topic, duration_min, u.name AS staff_name, (SELECT COUNT(*) FROM cohort_attendance a JOIN clients c ON c.id = a.client_id WHERE a.session_id = cohort_sessions.id AND a.present=1' . $studentScope . ') AS present_n FROM cohort_sessions LEFT JOIN users u ON u.id = cohort_sessions.staff_id WHERE cohort_id = ? ORDER BY session_date DESC, cohort_sessions.id DESC LIMIT 50'); $sess->execute([$id]);
+        // Each session's line, who ran it and who was there (4.37.0); every session can be deleted, as on programs.php.
+        $sessRows = $sess->fetchAll();
+        $names = [];
+        if ($sessRows) {
+            $an = db()->prepare('SELECT a.session_id, a.present, c.name FROM cohort_attendance a JOIN clients c ON c.id = a.client_id WHERE a.session_id IN (' . implode(',', array_map(fn($r) => (int)$r['id'], $sessRows)) . ')' . $studentScope . ' ORDER BY c.name');
+            $an->execute();
+            foreach ($an->fetchAll() as $a) $names[(int)$a['session_id']][(int)$a['present'] === 1 ? 'p' : 'a'][] = (string)$a['name'];
+        }
+        $sessRows = array_map(fn($r) => $r + ['present_names' => $names[(int)$r['id']]['p'] ?? [], 'absent_names' => $names[(int)$r['id']]['a'] ?? [],
+            'text' => cohort_session_text($r), 'can_delete' => true], $sessRows);
+        $coordName = null;
+        if (!empty($co['coordinator_id'])) { $cn = db()->prepare('SELECT name FROM users WHERE id = ?'); $cn->execute([(int)$co['coordinator_id']]); $coordName = $cn->fetchColumn() ?: null; }
         $avail = db()->prepare("SELECT c.id, c.name FROM clients c WHERE client_type='Pre-ETS' AND status NOT LIKE 'Closed%' AND c.id NOT IN (SELECT client_id FROM cohort_members WHERE cohort_id=? AND left_at IS NULL)" . $studentScope . " ORDER BY name"); $avail->execute([$id]);
         // sessions_total (also total, 4.29.0): every session of the group, past the 50 listed.
         $sc = db()->prepare('SELECT COUNT(*) FROM cohort_sessions WHERE cohort_id = ?'); $sc->execute([$id]);
         $sessTotal = (int)$sc->fetchColumn();
-        out(['ok' => true, 'cohort' => $co, 'members' => $mem->fetchAll(), 'sessions' => $sess->fetchAll(), 'available' => $avail->fetchAll(),
-            'sessions_total' => $sessTotal, 'total' => $sessTotal, 'limit' => 50]);
+        out(['ok' => true, 'cohort' => $co, 'members' => $mem->fetchAll(), 'sessions' => $sessRows, 'available' => $avail->fetchAll(),
+            'sessions_total' => $sessTotal, 'total' => $sessTotal, 'limit' => 50,
+            'coordinator_name' => $coordName, 'notes' => $co['notes'] !== null ? (string)$co['notes'] : null, 'active' => (int)$co['active'] === 1]);
     }
     case 'add_cohort': {
-        $name = api_text($input, 'name', 190, 'Cohort name');
-        if ($name === '') fail('Cohort name is required.');
-        $startDate = api_date($input, 'start_date', 'Start date');
-        $endDate = api_date($input, 'end_date', 'End date');
-        if ($startDate !== null && $endDate !== null && $endDate < $startDate) fail('The end date cannot be before the start date.', 422);
-        db()->prepare('INSERT INTO cohorts (name, school, coordinator_id, start_date, end_date) VALUES (?,?,?,?,?)')
-            ->execute([$name, api_text($input, 'school', 190, 'School') ?: null, $userId, $startDate, $endDate]);
+        // programs.php's checks (inc/programs.php, 4.37.0): the coordinator from the input when sent
+        // (0 is none), else the caller as before; notes refused over 2,000 characters.
+        [$coErrors, $cv] = cohort_input($input, [], $userId);
+        // As before 4.37.0, the app's school is refused over its column, not cut (the website's form cuts it).
+        if (is_string($input['school'] ?? null) && mb_strlen(trim($input['school'])) > 190) $coErrors['school'] = 'School / district: use 190 characters or fewer.';
+        if ($coErrors) { $f = api_435_fields($coErrors); unset($f['status']); out($f, 422); }
+        db()->prepare('INSERT INTO cohorts (name, school, coordinator_id, start_date, end_date, notes) VALUES (?,?,?,?,?,?)')
+            ->execute([$cv['name'], $cv['school'], $cv['coordinator_id'], $cv['start_date'], $cv['end_date'], $cv['notes']]);
         $createdId = (int)db()->lastInsertId();
         audit($userId, 'cohort.add', 'cohort', $createdId, '(mobile)');
         out(['ok' => true, 'id' => $createdId]);
@@ -4105,7 +4218,6 @@ switch ($action) {
         if (!cohort_accessible($cid, $userId)) fail('Group not found or unrestricted caseload access is required.', 403);
         $c = db()->prepare('SELECT id FROM cohorts WHERE id = ?'); $c->execute([$cid]);
         if (!$c->fetchColumn()) fail('Cohort not found.', 404);
-        $acts = ['Job Exploration Counseling','Work-Based Learning','Postsecondary Counseling','Workplace Readiness','Self-Advocacy Instruction','Other'];
         $present = (array)($input['present'] ?? []); // [client_id,...]
         $presentSet = array_flip(array_map('intval', array_filter($present, 'is_scalar')));
         // Checked, never defaulted (as programs.php): a missing date or activity would
@@ -4117,7 +4229,7 @@ switch ($action) {
         if ($sessionDate > date('Y-m-d')) {
             fail('Session date: ' . fmt_date($sessionDate) . ' is in the future. Log a session once it has taken place, with today\'s date or an earlier one.', 422);
         }
-        $activity = api_choice($input, 'activity', $acts, 'Activity', null);
+        $activity = api_choice($input, 'activity', PREETS_ACTIVITIES, 'Activity', null);   // inc/programs.php (4.37.0)
         if ($activity === null) fail('Activity: choose a Pre-ETS activity from the list.', 422);
         $topic = api_text($input, 'topic', 190, 'Topic');
         $sessionNotes = api_text($input, 'notes', API_TEXT_BYTES, 'Notes', true);
@@ -4137,7 +4249,7 @@ switch ($action) {
             db()->commit();
         } catch (Throwable $e) { db()->rollBack(); throw $e; }
         audit($userId, 'cohort.session', 'cohort', $cid, '(mobile)');
-        out(['ok' => true, 'id' => $sid]);
+        out(['ok' => true, 'id' => $sid, 'message' => cohort_session_logged_message($activity, $sessionDate, (int)$duration)]);
     }
     /* ========================= Grants & contracts ========================= */
     case 'contracts': {
@@ -4314,22 +4426,16 @@ switch ($action) {
         $cid = (int)($input['client_id'] ?? 0); api_require_client($cid, $userId);
         $c = db()->prepare('SELECT * FROM clients WHERE id = ?'); $c->execute([$cid]); $client = $c->fetch();
         if (!$client) fail('Client not found.', 404);
-        $ctx = '';
-        $a = db()->prepare("SELECT primary_disability, summary, primary_tech FROM tech_assessments WHERE client_id = ? ORDER BY assessment_date DESC LIMIT 1"); $a->execute([$cid]); $as = $a->fetch();
-        $ctx .= 'Primary disability / functional limitations: ' . ($as['primary_disability'] ?? '[not recorded]') . "\n";
-        if (!empty($as['summary'])) $ctx .= 'Assessment summary: ' . mb_strimwidth((string)$as['summary'], 0, 600, '…') . "\n";
-        if (!empty($client['a11y_primary_tech'])) $ctx .= 'Current AT: ' . $client['a11y_primary_tech'] . "\n";
-        $g = db()->prepare("SELECT sg.specific_goal FROM smart_goals sg JOIN training_tracks t ON t.id = sg.track_id WHERE t.client_id = ? AND sg.status <> 'Achieved' LIMIT 8"); $g->execute([$cid]);
-        $goals = $g->fetchAll(PDO::FETCH_COLUMN); if ($goals) $ctx .= "Goals:\n - " . implode("\n - ", $goals) . "\n";
+        // recommend.php's context and prompt (inc/recommend.php, 4.37.0): technology tried, a screen
+        // reader and the worksite's job too.
+        $ctx = recommend_context($client);
         // Text the user edited replaces the assembled context (same 20000-character cap as the other AI text).
         $ctxIn = api_text($input, 'context', 20000, 'The context');
         if ($ctxIn !== '') $ctx = $ctxIn;
-        $res = ai_run('recommend',
-            ai_system_base() . ' You are an assistive technology specialist for a VR provider. From the disability, goals and job tasks, recommend specific assistive technologies with a one-line rationale each and whether a trial is advisable. Order by priority; never invent facts; output a short numbered list.' . API_AI_PLAIN_TEXT,
-            "Recommend assistive technology:\n\n" . $ctx, 1600, $client, $userId);
+        $res = recommend_ai($client, $ctx, $userId);
         audit($userId, 'ai.draft', 'client', $cid, 'AT recommendations (mobile)');
-        if (!$res['ok']) fail(api_ai_error($res['error']));
-        out(['ok' => true, 'text' => api_ai_plain($res['text']), 'context' => $ctx]);
+        if (!$res['ok']) fail(api_ai_error((string)$res['error']));
+        out(['ok' => true, 'text' => api_ai_plain($res['text']), 'context' => $ctx, 'truncated' => $res['truncated']]);
     }
     case 'ai_intake': {
         if (!ai_feature_enabled('intake')) fail('That AI feature is turned off.');
@@ -4374,42 +4480,46 @@ switch ($action) {
         $res = ai_run('progress', progress_ai_system(), progress_ai_context($cid, $goals), 1400, $client, $userId);
         audit($userId, 'ai.draft', 'client', $cid, 'progress review (mobile)');
         if (!$res['ok']) fail(api_ai_error($res['error']));
-        out(['ok' => true, 'text' => api_ai_plain($res['text']), 'truncated' => !empty($res['truncated'])]);
+        // goals (4.37.0): the goals reviewed, so the app records progress on each from the review,
+        // as progress_review.php's rows do (update_goal).
+        $gt = db()->prepare('SELECT id, track_id FROM smart_goals WHERE id IN (' . implode(',', array_map(fn($g) => (int)$g['id'], $goals)) . ')');
+        $gt->execute();
+        $goalTracks = $gt->fetchAll(PDO::FETCH_KEY_PAIR);
+        out(['ok' => true, 'text' => api_ai_plain($res['text']), 'truncated' => !empty($res['truncated']),
+            'goals' => array_map(fn($g) => ['id' => (int)$g['id'], 'text' => (string)$g['specific_goal'], 'track_id' => (int)($goalTracks[(int)$g['id']] ?? 0),
+                'track' => (string)$g['track'], 'status' => (string)$g['status'], 'pct' => (int)$g['progress_pct']], $goals)]);
     }
     case 'ai_remediate': {
         if (!ai_feature_enabled('remediate')) fail('That AI feature is turned off.');
-        $content = (string)($input['content'] ?? ''); if (trim($content) === '') fail('Provide content.');
-        if (mb_strlen($content) > 20000) fail('The content is too long (maximum 20000 characters).', 422);
-        $prompts = [
-            'plain' => 'Rewrite the following content in plain language at roughly a 6th–8th grade reading level, preserving every fact and all meaning.',
-            'simplify' => 'Rewrite with shorter sentences and simpler words, keeping all facts.',
-            'summary' => 'Summarize the following content clearly and faithfully.',
-            'largeprint' => 'Reformat for large-print / low-vision reading: short lines, clear headings, bullets where helpful; keep all content.',
-            'alt' => 'Write concise descriptive alt text (one sentence, under 125 characters) for an image described below. Output only the alt text.',
-        ];
-        $mode = api_choice($input, 'mode', array_keys($prompts), 'Mode', 'plain');
+        // remediate.php's checks, modes and prompts (inc/remediate.php, 4.37.0).
+        $content = is_string($input['content'] ?? null) ? $input['content'] : '';
+        if ($remErrs = remediate_errors($content)) fail_field('content', $remErrs['content']);
+        $mode = api_choice($input, 'mode', array_keys(REMEDIATE_MODES), 'Mode', 'plain');
+        // client_id (4.37.0): aim at that client's preferred format, as remediate.php?client= does,
+        // with the clients permission and the client in scope.
+        $remFormat = null;
+        if ((int)($input['client_id'] ?? 0) > 0) {
+            if (!can('clients')) fail('Your account does not have access to that area. Ask an administrator if you need it.', 403);
+            $rcid = (int)$input['client_id'];
+            api_require_client($rcid, $userId);
+            $fq = db()->prepare('SELECT a11y_format FROM clients WHERE id = ?'); $fq->execute([$rcid]);
+            $remFormat = trim((string)$fq->fetchColumn()) ?: null;
+        }
         if (!ai_rate_limit($userId)) fail('AI usage limit reached. Please wait a few minutes.', 429);
         // Output budget scales with the content (as on the website), so a long rewrite is
         // not cut short; 'truncated' tells the app when it stopped before the end anyway.
         // Logged with its outcome, time and cut-off flag, as ai_run() logs, so the AI
         // quality page shows these calls too.
         $aiStarted = microtime(true);
-        $res = ai_generate(ai_system_base() . ' ' . $prompts[$mode], $content, ai_output_tokens($content));
+        $res = ai_generate(remediate_prompt($mode, $remFormat), $content, ai_output_tokens($content));
         ai_log_usage('remediate', mb_strlen($content), $res['ok'] ? mb_strlen($res['text']) : 0, false, $userId,
             (bool)$res['ok'], (int)round((microtime(true) - $aiStarted) * 1000), !empty($res['truncated']));
         if (!$res['ok']) fail(api_ai_error($res['error']));
-        out(['ok' => true, 'text' => $res['text'], 'truncated' => !empty($res['truncated'])]);
+        out(['ok' => true, 'text' => $res['text'], 'truncated' => !empty($res['truncated']), 'format' => $remFormat, 'format_text' => remediate_target_text($remFormat)]);
     }
     case 'ai_translate': {
         if (!ai_feature_enabled('translate')) fail('That AI feature is turned off.');
-        $content = (string)($input['content'] ?? ''); $lang = trim((string)($input['lang'] ?? ''));
-        if (trim($content) === '' || $lang === '') fail('Provide content and a target language.');
-        // translate.php's limit: the reply is capped at 4,096 tokens and a translation into
-        // a non-Latin script can take three tokens for each of the source's, so longer
-        // text would come back cut off. It is refused instead, for the user to split.
-        if (($translateLen = mb_strlen($content)) > 6000) {
-            fail('The content is too long to translate at once (maximum 6,000 characters; it has ' . number_format($translateLen) . '). Split it into parts and translate each one.', 422);
-        }
+        $content = is_string($input['content'] ?? null) ? $input['content'] : ''; $lang = is_string($input['lang'] ?? null) ? trim($input['lang']) : '';
         // The language name goes into the instructions sent to the provider, so (as on
         // the website) it is either one of the listed languages or a typed name limited
         // to letters (with their accents and marks), spaces, hyphens, apostrophes,
@@ -4420,9 +4530,10 @@ switch ($action) {
         $langCodes = ['es' => 'Spanish', 'ar' => 'Arabic', 'zh-Hans' => 'Chinese (Simplified)', 'vi' => 'Vietnamese', 'ru' => 'Russian', 'fr' => 'French',
             'ht' => 'Haitian Creole', 'so' => 'Somali', 'ne' => 'Nepali', 'ko' => 'Korean', 'tl' => 'Tagalog'];
         if (isset($langCodes[$lang])) $lang = $langCodes[$lang];
-        if (!in_array($lang, $listedLangs, true) && !preg_match('/^[\p{L}\p{M} ()\'’.-]{1,40}$/u', $lang)) {
-            fail('The language name can use only letters, spaces, hyphens, apostrophes, periods and parentheses (40 characters maximum).', 422);
-        }
+        // translate.php's checks and sentences (inc/ai.php, 4.37.0), each on its field: the text (6,000
+        // characters at most, as a longer translation would come back cut off) and the language.
+        $trErrs = translate_input_errors($content, $lang);
+        if ($trErrs) { $f = api_435_fields($trErrs); unset($f['status']); out($f, 422); }
         if (!ai_rate_limit($userId)) fail('AI usage limit reached. Please wait a few minutes.', 429);
         // Translations can need more tokens than the source (non-Latin scripts especially),
         // so the budget is three times the input's, within the cap, as on the website.
@@ -4462,14 +4573,24 @@ switch ($action) {
     }
     case 'ai_kb': {
         if (!ai_feature_enabled('kb')) fail('That AI feature is turned off.');
-        $q = api_text($input, 'question', 2000, 'The question'); if ($q === '') fail('Ask a question.');
         // Retrieval as the website's assistant does it (inc/kb_search.php, 4.34.0): the same terms,
-        // ranking and sentences, so the app finds the same articles.
+        // ranking and sentences, so the app finds the same articles; the question's checks (4.37.0).
         require_once __DIR__ . '/inc/kb_search.php';
+        $q = trim(is_string($input['question'] ?? null) ? $input['question'] : '');
+        if (($qErr = kb_question_error($q)) !== null) fail_field('question', $qErr);
         $words = kb_search_terms($q);
         if (!$words) fail_field('question', KB_NO_WORDS);
         $articles = kb_rank_articles($words, true);
-        if (!$articles) fail_field('question', kb_no_match_message($words));
+        if (!$articles) {
+            // general (4.37.0): with no article, a general-knowledge answer when asked for, marked as
+            // such (kb_ask.php's tick box); otherwise the website's sentence and its next steps.
+            if (api_bool($input['general'] ?? false)) {
+                $gres = kb_general_answer($q, $userId);
+                if (!$gres['ok']) fail(api_ai_error($gres['error']));
+                out(['ok' => true, 'text' => api_ai_plain($gres['text']), 'sources' => [], 'general' => true, 'truncated' => !empty($gres['truncated'])]);
+            }
+            fail_field('question', kb_no_match_message($words), 422, ['steps' => KB_NO_MATCH_STEPS]);
+        }
         $ctx = ''; $sources = [];
         foreach ($articles as $a) { $sources[] = ['id' => (int)$a['id'], 'title' => $a['title']]; $ctx .= kb_context_line($a); }
         $res = ai_run('kb', ai_system_base() . ' Answer the question using ONLY the knowledge-base articles provided below. Cite the article titles you used. '
@@ -4477,7 +4598,7 @@ switch ($action) {
                 . ai_plain_text_rule() . ' Number the steps of a procedure.',
             "Question: {$q}\n\nArticles:\n{$ctx}", 1200, null, $userId);
         if (!$res['ok']) fail(api_ai_error($res['error']));
-        out(['ok' => true, 'text' => api_ai_plain($res['text']), 'sources' => $sources]);
+        out(['ok' => true, 'text' => api_ai_plain($res['text']), 'sources' => $sources, 'general' => false]);
     }
     case 'ai_ask': {
         if (!ai_feature_enabled('ask')) fail('That AI feature is turned off.');
@@ -5073,34 +5194,37 @@ switch ($action) {
             'Please let me know if you need any additional information to process this amendment. Thank you for your support of ' . $track['client'] . '.', '',
             'Sincerely,', $userName . ' — ' . cfg('name')];
         $letter = implode("\n", $L); $aiNote = '';
-        // Optional AI polish (same as the website): the prompt carries only facts and
-        // the placeholders [CLIENT], [COUNSELOR] and [STAFF], which are substituted
-        // back here — no client, counselor or staff name leaves the system. The track
-        // title is free text, so with redaction on it is also scrubbed of those names.
+        // The letter the app shows, when it sends it with ai_draft (4.37.0): an edited letter is never
+        // replaced; the AI draft then comes back on its own (ai_draft_text), as amendment_request.php.
+        $sentLetter = is_string($input['letter'] ?? null) ? str_replace("\r\n", "\n", $input['letter']) : '';
+        $letterEdited = trim($sentLetter) !== '' && trim($sentLetter) !== trim($letter);
+        $aiDraftText = null;
+        // Optional AI polish (the website's facts, prompt and name restore, inc/amendments.php):
+        // the prompt carries only facts and the placeholders [CLIENT], [COUNSELOR] and [STAFF],
+        // substituted back: no client, counselor or staff name leaves the system.
         if (!empty($input['ai_draft']) && ai_feature_enabled('draft')) {
-            $facts = "Facts for an authorization amendment request to a vocational rehabilitation counselor:\n"
-                . "- Service: " . $track['title'] . "\n- Hours authorized: " . fmt_hours($auth) . "\n- Hours used: " . fmt_hours($worked) . " (" . $pct . "%)\n- Hours remaining: " . fmt_hours($remaining) . "\n"
-                . ($fundsLimit ? "- Funds authorized: " . fmt_money($fundsAuth) . "\n- Funds used: " . fmt_money($fundsUsed) . " (" . $fundsPct . "%), including " . fmt_money($otherCosts) . " of mileage and expenses\n- Funds remaining: " . fmt_money($fundsLeft) . "\n"
-                    . "- The authorized funds, not the hours, are the limit: they will run out before the hours do.\n" : '')
-                . ($runOut ? "- Projected run-out " . ($fundsLimit ? 'of funds ' : '') . "at current pace: " . $runOut . "\n"
-                    : ($outlastsExpiry ? "- At the current pace the authorization period ends before the " . ($fundsLimit ? 'funds' : 'hours') . " are used up\n" : ''))
-                . ($expDate ? ($expired ? "- Authorization already expired on: " : "- Authorization expires: ") . $expDate . "\n" : '')
-                . ($fundsLimit ? "- Requesting about " . fmt_money($suggestFunds) . " in additional authorized funds" : "- Requesting about " . $suggestAdd . " additional hours") . ($expDate ? " and a period extension" : "") . ".\n"
-                . "- Counselor: [COUNSELOR]\n- Prepared by: [STAFF] at " . cfg('name') . "\n";
-            $sys = ai_system_base() . ' Write a brief, professional authorization amendment request letter to a vocational rehabilitation counselor. '
-                . 'Use [CLIENT] wherever the individual\'s name belongs, [COUNSELOR] for the counselor\'s name and [STAFF] for the sender\'s name, exactly as written — do not invent names. '
-                . 'Facts only; no promises of outcomes. Keep it under 200 words.';
-            $res = ai_run('draft', $sys, $facts, 600,
-                ['name' => $track['client'], 'counselor_name' => $track['counselor_name'], 'counselor_email' => $track['counselor_email']], $userId);
-            if ($res['ok']) {
-                $letter = str_replace(['[CLIENT]', '[COUNSELOR]', '[STAFF]'],
-                    [$track['client'], $track['counselor_name'] ?: 'Counselor', $userName], $res['text']);
+            $facts = amendment_ai_facts($track, ['auth' => $auth, 'worked' => $worked, 'pct' => $pct, 'remaining' => $remaining, 'funds_limit' => $fundsLimit,
+                'funds_auth' => $fundsAuth, 'funds_used' => $fundsUsed, 'funds_pct' => $fundsPct, 'other_costs' => $otherCosts, 'funds_left' => $fundsLeft,
+                'run_out' => $runOut, 'outlasts_expiry' => $outlastsExpiry, 'exp_date' => $expDate, 'expired' => $expired, 'suggest_funds' => $suggestFunds, 'suggest_add' => $suggestAdd]);
+            $res = amendment_ai_draft($track, $facts, (string)$userName, $userId);
+            if ($res['ok'] && $letterEdited) {
+                $aiDraftText = $res['text'];
+                $letter = $sentLetter;
+                $aiNote = 'Your letter is unchanged. The AI draft is in a separate box below it — review it, and use it only if you want it.';
+            } elseif ($res['ok']) {
+                $letter = $res['text'];
                 $aiNote = 'AI draft — review and edit before sending.';
+            } else {
+                if ($letterEdited) $letter = $sentLetter;
+                $aiNote = 'AI draft unavailable (' . rtrim(api_ai_error($res['error']), '.') . ').' . ($letterEdited ? ' Your letter is unchanged.' : ' Showing the standard draft.');
             }
-            else { $aiNote = 'AI draft unavailable (' . rtrim(api_ai_error($res['error']), '.') . '). Showing the standard draft.'; }
             // The track's facts went to the provider: recorded as on the website.
             audit($userId, 'ai.amendment_draft', 'track', $trackId, '(mobile)');
         }
+        // The requests sent and their replies, as amendment_request.php lists them (4.37.0, inc/api_437.php).
+        $hist = api_amendment_history_reply($trackId, $track);
+        $amendExtra = ['history' => $hist['history'], 'waiting_text' => $hist['waiting_text'], 'reply_statuses' => $hist['reply_statuses'],
+            'sent_to_default' => $hist['sent_to_default'], 'today' => $hist['today'], 'ai_draft_text' => $aiDraftText];
         out(['ok' => true, 'client' => $track['client'], 'title' => $track['title'],
              'worked' => $worked, 'authorized' => $auth, 'remaining' => $remaining, 'pct' => $pct,
              // run_out_basis: whether run_out is when the funds or the hours run out, so the
@@ -5121,7 +5245,7 @@ switch ($action) {
              // the app can say why there is no address to email.
              'counselor_verified' => (int)$track['counselor_verified'],
              'counselor_email_unconfirmed' => (int)$track['counselor_verified'] !== 1 && trim((string)($track['counselor_email'] ?? '')) !== '',
-             'letter' => $letter, 'ai_note' => $aiNote]);
+             'letter' => $letter, 'ai_note' => $aiNote] + $amendExtra);
     }
 
     /* ---------- Voice assistant (v2.44–v2.52 parity; shared with ai_command.php) ---------- */
@@ -5139,7 +5263,8 @@ switch ($action) {
         // The 4.0.0 actions (inc/api_more.php): alerts, client requests, invoices and tasks.
         $more = api_more($action, $input, $userId) ?? api_425($action, $input, $userId)   // and the 4.25.0 ones (inc/api_425.php)
             ?? api_435($action, $input, $userId)   // and the 4.35.0 ones (inc/api_435.php)
-            ?? api_436($action, $input, $userId);   // and the 4.36.0 ones (inc/api_436.php)
+            ?? api_436($action, $input, $userId)   // and the 4.36.0 ones (inc/api_436.php)
+            ?? api_437($action, $input, $userId);   // and the 4.37.0 ones (inc/api_437.php)
         if ($more === null) fail('Unknown action.', 404);
         // A refusal keeps its other fields (4.27.0: fields, signed), without the status.
         if (empty($more['ok'])) { $st = (int)($more['status'] ?? 400); unset($more['status']); out(['ok' => false, 'error' => (string)$more['error']] + $more, $st); }

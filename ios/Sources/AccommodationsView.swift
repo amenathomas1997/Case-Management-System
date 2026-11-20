@@ -137,6 +137,9 @@ struct WorksiteDetailView: View {
     @State private var hasFollow = false; @State private var follow = Date()
     /// What the form held when it was loaded or last saved: anything different is unsaved.
     @State private var stored: [String]?
+    /// 4.37.0 (S8): "Draft recommendations with AI" running, and its notice (incomplete).
+    @State private var drafting = false
+    @State private var draftNotice: String?
 
     /// Every value Save sends, in a fixed order (the dates as the days the pickers show).
     private var current: [String] {
@@ -165,13 +168,31 @@ struct WorksiteDetailView: View {
                 }
                 Section("Essential job tasks") { TextEditor(text: $jobTasks).frame(minHeight: 70).accessibilityLabel("Essential job tasks") }
                 Section("Barriers identified") { TextEditor(text: $barriers).frame(minHeight: 70).accessibilityLabel("Barriers identified") }
-                Section("Recommended accommodations") { TextEditor(text: $recommendations).frame(minHeight: 90).accessibilityLabel("Recommended accommodations") }
+                Section("Recommended accommodations") {
+                    TextEditor(text: $recommendations).frame(minHeight: 90).accessibilityLabel("Recommended accommodations")
+                        .disabled(drafting)
+                    // 4.37.0 (S8): accommodations.php's AI draft, from the typed job title, tasks
+                    // and barriers; it goes into the field (below what was typed) and is saved only
+                    // with Save.
+                    if api.aiHas("draft") {
+                        Button(drafting ? "Drafting…" : "Draft recommendations with AI") { Task { await draftRecommendations() } }
+                            .disabled(drafting || busy)
+                    }
+                    if let draftNotice { Label(draftNotice, systemImage: "exclamationmark.triangle").font(.callout.weight(.semibold)) }
+                }
                 Section("Status & follow-up") {
                     Picker("Status", selection: $status) { ForEach(worksiteStatuses, id: \.self) { Text($0) } }
                     Toggle("Follow-up date", isOn: $hasFollow)
                     if hasFollow { DatePicker("Follow-up", selection: $follow, displayedComponents: .date) }
                 }
                 Section("Outcome notes") { TextEditor(text: $outcome).frame(minHeight: 60).accessibilityLabel("Outcome notes") }
+                // 4.37.0 (S8): the recommendation report, built from the saved assessment.
+                Section {
+                    NavigationLink("Recommendation report") {
+                        BuiltDocumentView(navigationTitle: "Recommendation report", action: "worksite_report", query: ["id": String(id)],
+                                          noun: "report", note: hasEdits ? "Save the assessment first so the report includes your changes." : nil)
+                    }
+                }
             } else if error == nil || loading {
                 ProgressView("Loading assessment…")
             } else {
@@ -204,6 +225,28 @@ struct WorksiteDetailView: View {
             Button("Save, then go back") { Task { if await save(leaving: true) { dismiss() } } }
             Button("Discard changes", role: .destructive) { dismiss() }
             Button("Keep editing", role: .cancel) { }
+        }
+    }
+
+    /// ai_worksite (4.37.0, S8): the typed fields are sent and nothing is saved; the field gets
+    /// the merged text, and the result is said once.
+    private func draftRecommendations() async {
+        drafting = true; error = nil; draftNotice = nil
+        announce("Drafting…")
+        defer { drafting = false }
+        do {
+            let r: WorksiteDraftReply = try await api.call("ai_worksite", method: "POST", body: worksiteAIBody(
+                id: id, jobTitle: jobTitle, jobTasks: jobTasks, barriers: barriers, recommendations: recommendations))
+            // Merged here, below what was typed; typed text is never replaced.
+            if let d = r.draft { recommendations = mergeDraft(recommendations, d) }
+            else if recommendations.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { recommendations = r.text }
+            else { recommendations = mergeDraft(recommendations, r.text) }
+            var said = r.message ?? "Recommendations drafted. Read and edit them, then save the assessment."
+            if r.truncated == true { draftNotice = aiDraftIncomplete; said += " " + aiDraftIncomplete }
+            if let left = placeholderNotice(recommendations) { said += " " + left }
+            announce(said)
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
         }
     }
 
@@ -318,3 +361,11 @@ private struct WorksiteCaptionedField: View {
 
 /// Parse a yyyy-MM-dd (possibly datetime) string into a Date.
 func ymd(_ s: String) -> Date? { APIDate.parseDay(s) }
+
+/// ai_worksite's reply (4.37.0, S8): the merged text, the draft alone, and accommodations.php's sentence.
+struct WorksiteDraftReply: Decodable { let text: String; let draft: String?; let truncated: Bool?; let message: String? }
+
+/// ai_worksite's body: the typed fields, as accommodations.php posts them.
+func worksiteAIBody(id: Int, jobTitle: String, jobTasks: String, barriers: String, recommendations: String) -> [String: Any] {
+    ["id": id, "job_title": jobTitle, "job_tasks": jobTasks, "barriers": barriers, "recommendations": recommendations]
+}

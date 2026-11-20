@@ -1,4 +1,6 @@
 import SwiftUI
+import QuickLook
+import UniformTypeIdentifiers
 
 /// The states and territories a client can live in (the server's US_STATES, 4.19.0): code and name.
 let usStates: [(code: String, name: String)] = [
@@ -951,7 +953,9 @@ struct Assessment: Decodable, Identifiable {
     let softwareVersion: String?
     let summary: String?
     let author: String?
-    private enum CodingKeys: String, CodingKey { case id, assessmentDate, primaryDisability, primaryTech, hardwareDetails, softwareVersion, summary, author }
+    /// The report attached to it (4.37.0, S11), downloaded with download_assessment_attachment.
+    let attachmentName: String?
+    private enum CodingKeys: String, CodingKey { case id, assessmentDate, primaryDisability, primaryTech, hardwareDetails, softwareVersion, summary, author, attachmentName }
     // Tolerant decode so one null field doesn't hide the whole assessments section.
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -963,6 +967,7 @@ struct Assessment: Decodable, Identifiable {
         softwareVersion = try? c.decodeIfPresent(String.self, forKey: .softwareVersion)
         summary = try? c.decodeIfPresent(String.self, forKey: .summary)
         author = try? c.decodeIfPresent(String.self, forKey: .author)
+        attachmentName = try? c.decodeIfPresent(String.self, forKey: .attachmentName)
     }
 }
 
@@ -989,6 +994,12 @@ struct AssessmentsSection: View {
     /// Assessments whose summary is shown in full rather than as a preview.
     @State private var expanded: Set<Int> = []
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// 4.37.0: the evaluation report (S7) and the AI goal suggestions (S9) for one assessment,
+    /// and its attachment being opened (S11).
+    @State private var evalFor: Assessment?
+    @State private var evalResult: String?
+    @State private var goalsFor: Assessment?
+    @StateObject private var attachment = AssessmentAttachmentOpener()
 
     var body: some View {
         // No count and no "none recorded" until the list has actually arrived: a request that
@@ -1004,7 +1015,55 @@ struct AssessmentsSection: View {
             } else if assessments.isEmpty {
                 Text("No assessments recorded.").foregroundStyle(Color.secondaryText)
             }
+            if let attachmentError = attachment.error { ErrorBanner(message: attachmentError) }
             ForEach(assessments) { a in
+                assessmentRow(a)
+                // 4.37.0: each assessment's buttons are rows of their own, after its one stop.
+                assessmentButtons(a)
+            }
+            Button { showingAdd = true } label: { Label("Record a tech assessment", systemImage: "plus") }
+        }
+        .task(id: reloadToken) { await load() }
+        .sheet(item: $evalFor, onDismiss: {
+            if let evalResult { announceAfterDismiss(evalResult) }
+            evalResult = nil
+        }) { a in
+            EvalReportView(assessmentId: a.id, assessmentDate: formatDate(a.assessmentDate)) { message in evalResult = message }
+        }
+        .sheet(item: $goalsFor) { a in
+            GoalSuggestionsSheet(clientId: clientId, assessmentId: a.id, assessmentDate: formatDate(a.assessmentDate))
+        }
+        .quickLookPreview($attachment.previewURL)
+        .sheet(isPresented: $showingAdd, onDismiss: {
+            if let message = sheetResult { announceAfterDismiss(message) }
+            sheetResult = nil
+        }) {
+            AddAssessmentSheet(clientId: clientId, techChoices: techChoices ?? techTypes) {
+                sheetResult = "Assessment saved."
+                Task { await load() }
+            }
+        }
+    }
+
+    /// The evaluation report, AI goal suggestions and attachment for one assessment (4.37.0,
+    /// S7, S9, S11): visible buttons, each naming the assessment, outside the row's one stop.
+    @ViewBuilder private func assessmentButtons(_ a: Assessment) -> some View {
+        let date = formatDate(a.assessmentDate)
+        if api.can("reports") && api.serverAtLeast(4, 37) {
+            Button { evalFor = a } label: { Label("Evaluation report for the assessment of \(date)", systemImage: "doc.richtext") }
+        }
+        if api.aiHas("draft") && api.serverAtLeast(4, 37) {
+            Button { goalsFor = a } label: { Label("Suggest goals with AI for the assessment of \(date)", systemImage: "sparkles") }
+        }
+        if let name = a.attachmentName, !name.isEmpty {
+            Button { attachment.open(a.id, name: name, api: api) } label: {
+                Label(attachment.downloading == a.id ? "Downloading…" : "Download attachment: \(name)", systemImage: "paperclip")
+            }
+            .disabled(attachment.downloading != nil)
+        }
+    }
+
+    @ViewBuilder private func assessmentRow(_ a: Assessment) -> some View {
                 let heading = "\(formatDate(a.assessmentDate)) — \(a.primaryTech)"
                 VStack(alignment: .leading, spacing: 3) {
                     Text(heading).font(.body.weight(.medium))
@@ -1045,19 +1104,6 @@ struct AssessmentsSection: View {
                                      a.summary]
                     .compactMap { $0 }.filter { !$0.isEmpty && $0 != "Hardware: " && $0 != "Software: " }
                     .joined(separator: ", "))
-            }
-            Button { showingAdd = true } label: { Label("Record a tech assessment", systemImage: "plus") }
-        }
-        .task(id: reloadToken) { await load() }
-        .sheet(isPresented: $showingAdd, onDismiss: {
-            if let message = sheetResult { announceAfterDismiss(message) }
-            sheetResult = nil
-        }) {
-            AddAssessmentSheet(clientId: clientId, techChoices: techChoices ?? techTypes) {
-                sheetResult = "Assessment saved."
-                Task { await load() }
-            }
-        }
     }
 
     private func load(retry: Bool = false) async {
@@ -1103,9 +1149,25 @@ struct AddAssessmentSheet: View {
     @State private var busy = false
     @State private var error: String?
     @State private var askingDiscard = false
+    /// 4.37.0 (S11): the organisation's assessment templates (nil until loaded or from an older
+    /// server), the one chosen, and the one waiting for "Replace what you typed…?".
+    @State private var templates: [AssessmentTemplate]?
+    @State private var templateId = 0
+    @State private var pendingTemplate: AssessmentTemplate?
+    /// The report attached (S11): its name and bytes, read when chosen.
+    @State private var attachmentName: String?
+    @State private var attachmentData: Data?
+    @State private var choosingAttachment = false
 
     private var hasChanges: Bool {
         !disability.isEmpty || (!tech.isEmpty && tech != techChoices.first) || !hardware.isEmpty || !software.isEmpty || !summary.isEmpty
+            || attachmentData != nil
+    }
+
+    /// The four fields a template fills, as typed now (the technology counts as typed once it is
+    /// changed from the list's first choice).
+    private var typedTemplateFields: Bool {
+        (!tech.isEmpty && tech != techChoices.first) || !hardware.isEmpty || !software.isEmpty || !summary.isEmpty
     }
 
     /// 2000 through today, as the website's form (it refuses a date in the future).
@@ -1119,11 +1181,23 @@ struct AddAssessmentSheet: View {
         ("assessment_date", "Assessment date"), ("primary_disability", "Primary disability / needs"),
         ("primary_tech", "Primary focus / tech recommended"), ("hardware_details", "Hardware details"),
         ("software_version", "Software & version"), ("summary", "Assessment summary"),
+        ("attachment", "Report attachment"),
     ]
 
     var body: some View {
         NavigationStack {
             ErrorFocusForm(inNavigationStack: true, error: error) {
+                if let templates, !templates.isEmpty {
+                    // client.php's "Start from a template" (4.37.0, S11).
+                    Picker("Start from a template", selection: $templateId) {
+                        Text("None").tag(0)
+                        ForEach(templates) { Text($0.name).tag($0.id) }
+                    }
+                    .onChange(of: templateId) { id in
+                        guard let chosen = templates.first(where: { $0.id == id }) else { return }
+                        if typedTemplateFields { pendingTemplate = chosen } else { applyTemplate(chosen, replacing: true) }
+                    }
+                }
                 DatePicker("Assessment date (required)", selection: $date, in: Self.dateRange, displayedComponents: .date)
                     .errorField("Assessment date")
                 CaptionedField(label: "Primary disability / needs", text: $disability, errorName: "Primary disability / needs")
@@ -1136,6 +1210,32 @@ struct AddAssessmentSheet: View {
                 CaptionedField(label: "Hardware details", text: $hardware, errorName: "Hardware details")
                 CaptionedField(label: "Software & version", text: $software, errorName: "Software & version")
                 CaptionedField(label: "Assessment summary", text: $summary, lines: 4...10, errorName: "Assessment summary")
+                Section {
+                    Button { choosingAttachment = true } label: {
+                        Label("Report attachment (optional; PDF, Word, text, or image, 15 MB max)", systemImage: "paperclip")
+                    }
+                    .errorField("Report attachment")
+                    if let attachmentName {
+                        Text("Attachment: \(attachmentName)")
+                        Button("Remove attachment") {
+                            self.attachmentName = nil; attachmentData = nil
+                            announce("Attachment removed.")
+                        }
+                    }
+                }
+            }
+            .fileImporter(isPresented: $choosingAttachment, allowedContentTypes: assessmentAttachmentTypes) { result in
+                pickAttachment(result)
+            }
+            .confirmationDialog("Replace what you typed with the template \(pendingTemplate?.name ?? "")?",
+                                isPresented: Binding(get: { pendingTemplate != nil }, set: { if !$0 { pendingTemplate = nil } }),
+                                titleVisibility: .visible) {
+                Button("Replace") { if let t = pendingTemplate { applyTemplate(t, replacing: true) }; pendingTemplate = nil }
+                // "Keep mine" leaves the form exactly as it is.
+                Button("Keep mine", role: .cancel) { pendingTemplate = nil }
+            }
+            .task {
+                if templates == nil, let r: AssessmentTemplatesReply = try? await api.call("assessment_templates") { templates = r.templates }
             }
             .navigationTitle("Record a tech assessment")
             .navigationBarTitleDisplayMode(.inline)
@@ -1154,6 +1254,35 @@ struct AddAssessmentSheet: View {
         }
     }
 
+    /// Fills the template's four fields: every one when replacing (an empty template field keeps
+    /// what is there), otherwise only the empty ones.
+    private func applyTemplate(_ t: AssessmentTemplate, replacing: Bool) {
+        let filled = assessmentTemplateFill(current: [tech, hardware, software, summary], template: t, replacing: replacing,
+                                            techUntouched: tech.isEmpty || tech == techChoices.first)
+        tech = filled[0]; hardware = filled[1]; software = filled[2]; summary = filled[3]
+        announce("Filled in from the template \(t.name).")
+    }
+
+    /// client.php's attachment checks that can be made here: the type and the 15 MB limit.
+    private func pickAttachment(_ result: Result<URL, Error>) {
+        guard case .success(let url) = result else { return }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let name = url.lastPathComponent
+        if let problem = assessmentAttachmentProblem(name: name, size: (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) {
+            showFormError(problem, in: &error, field: "Report attachment"); return
+        }
+        guard let data = try? Data(contentsOf: url) else {
+            showFormError("The attachment could not be saved. Choose it again and resend the form.", in: &error, field: "Report attachment"); return
+        }
+        // The size again from the bytes read (a file provider may not report one).
+        if let problem = assessmentAttachmentProblem(name: name, size: data.count) {
+            showFormError(problem, in: &error, field: "Report attachment"); return
+        }
+        attachmentName = name; attachmentData = data
+        announce("Attachment chosen: \(name).")
+    }
+
     private func save() async {
         busy = true; error = nil
         do {
@@ -1162,6 +1291,9 @@ struct AddAssessmentSheet: View {
                 "primary_disability": disability, "primary_tech": tech,
                 "hardware_details": hardware, "software_version": software, "summary": summary,
             ]
+            if let attachmentName, let attachmentData {
+                body["attachment"] = ["name": attachmentName, "data": attachmentData.base64EncodedString()]
+            }
             body["idem_key"] = idem.key(for: body)
             // 4.35.0: the website's checks, each refusal tied to its field (errors).
             var refusedFields: [String: String] = [:]
@@ -1522,5 +1654,128 @@ struct CustomFieldEditor: View {
             }
         }
         .id(FormFieldID(name: self.field.label.lowercased()))
+    }
+}
+
+// MARK: - 4.37.0 assessment templates, attachments and AI goal suggestions (S9, S11)
+
+/// One of the organisation's assessment templates (assessment_templates).
+struct AssessmentTemplate: Decodable, Identifiable {
+    let id: Int
+    let name: String
+    let primaryTech: String?
+    let hardwareDetails: String?
+    let softwareVersion: String?
+    let summary: String?
+}
+struct AssessmentTemplatesReply: Decodable { let templates: [AssessmentTemplate] }
+
+/// The template's four fields applied to [technology, hardware, software, summary]: replacing
+/// sets every field the template has; otherwise only empty fields are filled.
+func assessmentTemplateFill(current: [String], template t: AssessmentTemplate, replacing: Bool, techUntouched: Bool) -> [String] {
+    let offered = [t.primaryTech ?? "", t.hardwareDetails ?? "", t.softwareVersion ?? "", t.summary ?? ""]
+    return (0..<4).map { i in
+        let now = i < current.count ? current[i] : ""
+        let from = offered[i]
+        guard !from.isEmpty else { return now }
+        let empty = i == 0 ? techUntouched : now.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return replacing || empty ? from : now
+    }
+}
+
+/// The attachment types client.php accepts: PDF, Word, text, RTF and PNG or JPEG images.
+let assessmentAttachmentExtensions: Set<String> = ["pdf", "doc", "docx", "txt", "rtf", "png", "jpg", "jpeg"]
+var assessmentAttachmentTypes: [UTType] {
+    [.pdf, .plainText, .rtf, .png, .jpeg]
+        + [UTType(filenameExtension: "doc"), UTType(filenameExtension: "docx")].compactMap { $0 }
+}
+
+/// client.php's refusal for an attachment's type or size, or nil when it may be sent.
+func assessmentAttachmentProblem(name: String, size: Int) -> String? {
+    let ext = (name as NSString).pathExtension.lowercased()
+    if !assessmentAttachmentExtensions.contains(ext) { return "Attachment type not allowed. Use PDF, Word, text, or image files." }
+    if size > 15 * 1024 * 1024 { return "Attachment is too large (15 MB maximum)." }
+    if name.count > 190 { return "The attachment's file name is too long (190 characters maximum). Rename the file and choose it again." }
+    return nil
+}
+
+/// download_assessment_attachment's reply (4.37.0, S11).
+struct AssessmentAttachmentReply: Decodable { let name: String?; let mime: String?; let data: String }
+
+/// Downloads an assessment's attachment and opens it in Quick Look (from where it can be shared).
+@MainActor
+final class AssessmentAttachmentOpener: ObservableObject {
+    @Published var previewURL: URL? { didSet { if previewURL == nil, let old = oldValue { try? FileManager.default.removeItem(at: old.deletingLastPathComponent()) } } }
+    @Published private(set) var downloading: Int?
+    @Published var error: String?
+
+    func open(_ assessmentId: Int, name: String, api: API) {
+        guard downloading == nil else { return }
+        downloading = assessmentId; error = nil
+        announce("Downloading \(name).")
+        Task {
+            defer { downloading = nil }
+            do {
+                let r: AssessmentAttachmentReply = try await api.call("download_assessment_attachment", query: ["id": String(assessmentId)])
+                guard let data = Data(base64Encoded: r.data), let url = shareableFile(data: data, named: r.name ?? name) else {
+                    showFormError("Could not open the attachment \(name).", in: &error); return
+                }
+                previewURL = url
+            } catch {
+                showFormError("Could not download \(name). \(error.localizedDescription)", in: &self.error)
+            }
+        }
+    }
+}
+
+/// The AI goal suggestions for one assessment (4.37.0, S9), as client.php's card: drafted when
+/// the sheet opens, read, and copied into a track's goal form by the person.
+struct GoalSuggestionsSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let clientId: Int
+    let assessmentId: Int
+    let assessmentDate: String
+    @State private var text: String?
+    @State private var incomplete = false
+    @State private var busy = false
+    @State private var error: String?
+    @State private var reveal = false
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
+                Text("Copy any of these into a training track's goal form and edit as needed.")
+                if busy { ProgressView("Drafting…") }
+                if let text {
+                    AIResultCard(text: text, caption: "AI goal suggestions (draft)", notice: incomplete ? aiDraftIncomplete : nil, reveal: $reveal)
+                    Button {
+                        api.copyProtected(text)
+                        announce("Suggestions copied.")
+                    } label: { Label("Copy suggestions", systemImage: "doc.on.doc") }
+                }
+                if !busy && text == nil && error != nil {
+                    Button("Suggest goals again") { Task { await draft() } }
+                }
+            }
+            .navigationTitle("AI goal suggestions (draft)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .task { if text == nil { await draft() } }
+        }
+    }
+
+    private func draft() async {
+        busy = true; error = nil
+        announce("Drafting…")
+        defer { busy = false }
+        do {
+            let r: AIDraftResponse = try await api.call("ai_draft", body: ["type": "goals", "assessment_id": assessmentId, "client_id": clientId])
+            incomplete = r.truncated == true
+            text = r.text
+            revealAIResult(&reveal)
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+        }
     }
 }

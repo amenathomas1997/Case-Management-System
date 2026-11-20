@@ -27,7 +27,7 @@ foreach ($configPaths as $p) {
 }
 if (!$CONFIG) { http_response_code(500); exit('Configuration missing.'); }
 
-const APP_VERSION = '4.36.0';
+const APP_VERSION = '4.37.0';
 
 date_default_timezone_set(($CONFIG['app']['timezone'] ?? null) ?: 'America/Chicago'); // db() sets each SQL session to this offset
 
@@ -1810,6 +1810,18 @@ require_once __DIR__ . '/messages_list.php';
 require_once __DIR__ . '/device_followups.php';
 require_once __DIR__ . '/compliance_data.php';
 require_once __DIR__ . '/api_436.php'; // the apps' 4.36.0 actions (daily workspace and safety)
+// The page logic 4.37.0 shares with the apps: equipment status and new items, the AT recommendation
+// engine, the formal evaluation report, the client page's AI drafts, the progress review's recording,
+// the knowledge base's search, Pre-ETS cohorts and remediation. Then the apps' 4.37.0 actions.
+require_once __DIR__ . '/equipment_status.php';
+require_once __DIR__ . '/recommend.php';
+require_once __DIR__ . '/eval_report.php';
+require_once __DIR__ . '/client_ai.php';
+require_once __DIR__ . '/progress_ai.php';
+require_once __DIR__ . '/kb_search.php';
+require_once __DIR__ . '/programs.php';
+require_once __DIR__ . '/remediate.php';
+require_once __DIR__ . '/api_437.php'; // the apps' 4.37.0 actions (services, equipment and reports)
 // Funding agencies in other states, client time zones (4.1.0).
 require_once __DIR__ . '/agencies.php';
 // Pricing rules set on screen (4.2.0).

@@ -53,59 +53,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['apply_progress'])) {
     $own->execute([$gid, $cid]);
     $cur = $own->fetch();
     if (!$cur) { flash('Goal not found.', 'error'); redirect('progress_review.php?client=' . $cid); }
-    // The same rules as the track page's goal update (track.php update_goal).
-    $gs = in_array($_POST['goal_status'] ?? '', GOAL_STATUSES, true) ? $_POST['goal_status'] : $cur['status'];
-    $rawPct = is_string($_POST['progress_pct'] ?? null) ? trim($_POST['progress_pct']) : '';
-    $curPct = (int)$cur['progress_pct'];
-    // Refuse this one goal's row with its own error, and refill that row only. When
-    // the question is about reopening an Achieved goal, that row is shown (it is no
-    // longer in the active list) and its next Record confirms the percent typed.
-    $goalErr = function (string $msg, bool $askReopen = false, string $field = 'goal_pct_') use ($gid, $cid): never {
-        keep_input();
-        keep_field_errors([$field . $gid => $msg]);
-        if ($askReopen) $_SESSION['progress_reopen'] = ['cid' => $cid, 'gid' => $gid];
-        redirect('progress_review.php?client=' . $cid . '#goal-' . $gid);
-    };
-    // A blank percent keeps the current value, so a status-only change keeps the bar.
-    $pct = $curPct;
-    if ($rawPct !== '') {
-        $pct = filter_var($rawPct, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0, 'max_range' => 100]]);
-        if ($pct === false) $goalErr('Enter the percent complete as a whole number from 0 to 100.');
-    }
-    // Percent follows the status at the extremes. When only the status changed,
-    // Not Started means 0%; a goal reopened from Achieved at 100% is asked once
-    // for its real percent, and submitting the same percent again keeps it (as on
-    // the track page, track.php update_goal).
-    if ($gs === 'Achieved') $pct = 100;
-    elseif ($gs !== $cur['status'] && $pct === $curPct) {
-        if ($gs === 'Not Started') $pct = 0;
-        elseif ($cur['status'] === 'Achieved' && $curPct === 100 && ($_POST['reopen_confirmed'] ?? '') !== '1') {
-            $goalErr('This goal was ' . $curPct . '% complete while Achieved. Enter how complete it is now that it is ' . $gs
-                . ' again, or choose Record again to keep it at ' . $curPct . '%.', true);
-        }
-    }
-    // An empty note is stored as no note (as on the track page): this form is used
-    // with or without an AI review, so it must not claim the entry came from one.
-    $note = trim((string)($_POST['progress_note'] ?? ''));
-    $note = $note === '' ? null : $note;
-    // The note is a TEXT column (65,535 bytes), as on the track page: an over-long note is
-    // refused on its own field, with what was typed kept, instead of failing the insert.
-    if ($note !== null && strlen($note) > 65535) $goalErr('The progress note is too long to save. It can hold 65,535 bytes; shorten it.', false, 'goal_note_');
-    db()->beginTransaction();
+    // The rules, the history row, the audit and the sentence are the helper the apps' update_goal
+    // shares (inc/progress_ai.php, 4.37.0), the same as the track page's goal update.
     try {
-        db()->prepare('UPDATE smart_goals SET status = ?, progress_pct = ? WHERE id = ?')->execute([$gs, $pct, $gid]);
-        db()->prepare('INSERT INTO goal_progress (goal_id, progress_pct, status, note, recorded_by, idem_key) VALUES (?,?,?,?,?,?)')->execute([$gid, $pct, $gs, $note, $user['id'], $progKey]);
-        db()->commit();
+        $rec = goal_progress_record($gid, ['status' => $_POST['goal_status'] ?? '', 'progress_pct' => is_string($_POST['progress_pct'] ?? null) ? $_POST['progress_pct'] : '',
+            'note' => (string)($_POST['progress_note'] ?? ''), 'reopen_confirmed' => (string)($_POST['reopen_confirmed'] ?? '')], $user, 'web', $progKey);
     } catch (PDOException $e) {
-        db()->rollBack();
         if ((string)$e->getCode() === '23000' && $progKey !== null) { flash('This progress was already recorded, so it was recorded once.', 'info'); redirect('progress_review.php?client=' . $cid . '#goal-' . $gid); }
         throw $e;
-    } catch (Throwable $e) { db()->rollBack(); throw $e; }
+    }
+    if (!$rec['ok'] && isset($rec['errors'])) {
+        // Refuse this one goal's row with its own error, and refill that row only. When the question is
+        // about reopening an Achieved goal, that row is shown (it is no longer in the active list) and its
+        // next Record confirms the percent typed.
+        keep_input();
+        $field = isset($rec['errors']['note']) ? 'goal_note_' : 'goal_pct_';
+        keep_field_errors([$field . $gid => (string)reset($rec['errors'])]);
+        if (!empty($rec['needs_reopen_confirm'])) $_SESSION['progress_reopen'] = ['cid' => $cid, 'gid' => $gid];
+        redirect('progress_review.php?client=' . $cid . '#goal-' . $gid);
+    }
+    if (!$rec['ok']) { flash($rec['error'], 'error'); redirect('progress_review.php?client=' . $cid); }
     web_once_set($progKey, $gid);
-    audit($user['id'], 'goal.status', 'goal', $gid, $gs . ' ' . $pct . '%');
-    $gq = db()->prepare('SELECT specific_goal FROM smart_goals WHERE id = ?');
-    $gq->execute([$gid]);
-    $done = 'Progress recorded for goal "' . mb_strimwidth((string)$gq->fetchColumn(), 0, 80, '…') . '": ' . $pct . '% (' . $gs . ').';
+    $gs = $rec['status'];
+    $done = $rec['message'];
     if ($gs === 'Achieved') {
         // An achieved goal leaves the active list, so the confirmation goes at the top.
         flash($done);

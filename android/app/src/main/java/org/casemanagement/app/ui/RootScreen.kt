@@ -302,6 +302,8 @@ private val titles = mapOf(
     "signatures" to "Documents to sign", "release" to "Release of information", "history" to "Status history",
     "trackNote" to "Add a case note", "goal" to "Progress history", "equipmentItem" to "Equipment item", "reservations" to "Reservations",
     "actions" to "Action center", "briefing" to "AI case briefing", "help" to "Help and glossary",
+    "evalReport" to "Evaluation report", "deviceLetter" to "Justification letter", "worksiteReport" to "Recommendation report",
+    "amendment" to "Burn-down", "letters" to "Write a letter", "timeline" to "Timeline", "atMatches" to "Find instructor matches",
     "tasksBulk" to "Complete several tasks", "taskList" to "Tasks", "availability" to "My availability", "privacyIncident" to "Report a privacy incident",
 )
 
@@ -357,14 +359,26 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("clientEdit/{id}") { ClientEditScreen(api, nav, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
         composable("track/{clientId}/{trackId}") { TrackScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0) }
         composable("report/{clientId}/{trackId}") { SendReportScreen(api, nav, n0(it, "clientId"), n0(it, "trackId")) }
-        composable("trackEdit/{clientId}/{trackId}") { TrackEditScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0) }
+        // 4.37.0 (S13): an approved amendment request linked to the edit, with its reason filled in.
+        composable("trackEdit/{clientId}/{trackId}?amend={amend}&reason={reason}", arguments = listOf(textArg("amend", "0"), textArg("reason", ""))) {
+            TrackEditScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0,
+                amendRequest = it.arguments?.getString("amend")?.toIntOrNull() ?: 0, reasonPrefill = it.arguments?.getString("reason") ?: "")
+        }
         composable("newSession") { NewSessionScreen(api, nav) }
         // 4.35.0: a group session, times offered for a client's request, a client's tech assessments.
         composable("newGroupSession") { GroupSessionScreen(api, nav) }
         composable("offerTimes/{id}") { OfferTimesScreen(api, nav, n0(it, "id")) }
-        composable("assessments/{clientId}") { TechAssessmentsScreen(api, n0(it, "clientId")) }
+        composable("assessments/{clientId}") { TechAssessmentsScreen(api, n0(it, "clientId"), nav) }
+        // 4.37.0 screens.
+        composable("evalReport/{assessmentId}") { EvalReportScreen(api, nav, n0(it, "assessmentId")) }
+        composable("deviceLetter/{id}?editable={editable}", arguments = listOf(textArg("editable", "0"))) { DeviceLetterScreen(api, n0(it, "id"), it.arguments?.getString("editable") == "1") }
+        composable("worksiteReport/{id}") { WorksiteReportScreen(api, n0(it, "id")) }
+        composable("amendment/{clientId}/{trackId}") { AmendmentScreen(api, nav, n0(it, "clientId"), n0(it, "trackId")) }
+        composable("letters/{clientId}") { LettersScreen(api, nav, n0(it, "clientId")) }
+        composable("timeline/{clientId}") { ClientTimelineScreen(api, n0(it, "clientId")) }
+        composable("atMatches") { AtMatchesScreen(api) }
         composable("equipment") { EquipmentScreen(api, nav) }
-        composable("equipmentItem/{id}") { EquipmentDetailScreen(api, it.arguments?.getString("id")?.toIntOrNull() ?: 0) }
+        composable("equipmentItem/{id}") { EquipmentDetailScreen(api, it.arguments?.getString("id")?.toIntOrNull() ?: 0, nav) }
         composable("reservations") { ReservationsScreen(api) }
         composable(org.casemanagement.app.TRACK_NOTE_ROUTE, arguments = noteArgs) {
             AddNoteScreen(api, nav, it.arguments?.getString("clientId")?.toIntOrNull() ?: 0, it.arguments?.getString("trackId")?.toIntOrNull() ?: 0,
@@ -385,7 +399,7 @@ private fun Graph(api: Api, nav: NavHostController) {
         val n = { e: androidx.navigation.NavBackStackEntry, k: String -> e.arguments?.getString(k)?.toIntOrNull() ?: 0 }
         composable("voice/{clientId}/{name}") { VoiceScreen(api, nav, n(it, "clientId"), it.arguments?.getString("name") ?: "") }
         composable("clientAi/{clientId}") { ClientAiScreen(api, nav, n(it, "clientId")) }
-        composable("aiTools") { AiToolsScreen(api) }
+        composable("aiTools?tool={tool}", arguments = listOf(textArg("tool", ""))) { AiToolsScreen(api, it.arguments?.getString("tool") ?: "") }
         composable("scoredList/{clientId}") { ScoredAssessmentsScreen(api, nav, n(it, "clientId")) }
         composable("scored/{id}") { ScoredAssessmentScreen(api, n(it, "id")) }
         composable("scoredNew/{clientId}") { ScoredNewScreen(api, nav, n(it, "clientId")) }
@@ -400,7 +414,7 @@ private fun Graph(api: Api, nav: NavHostController) {
         composable("contract/{id}") { ContractScreen(api, n(it, "id")) }
         composable("bookings") { BookingsScreen(api) }
         composable("procurement") { ProcurementScreen(api, nav) }
-        composable("deviceRequest/{id}") { DeviceRequestScreen(api, n(it, "id")) }
+        composable("deviceRequest/{id}") { DeviceRequestScreen(api, n(it, "id"), nav) }
         composable("accommodations") { AccommodationsScreen(api, nav) }
         composable("worksite/{id}") { WorksiteScreen(api, nav, n(it, "id")) }
         composable("kb") { KnowledgeScreen(api, nav) }

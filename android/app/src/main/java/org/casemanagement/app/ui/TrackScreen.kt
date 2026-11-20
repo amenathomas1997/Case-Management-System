@@ -107,7 +107,8 @@ fun TrackScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
                 ListRow(listOf("${hoursText(a.optDouble("worked", 0.0))} of ${hoursText(a.optDouble("authorized", 0.0))} hours used (${a.optInt("pct")}%), ${hoursText(a.optDouble("remaining", 0.0))} left"))
                 a.str("expiration")?.let { ListRow(listOf((if (a.optBoolean("expired")) "Ended " else "Ends ") + dayText(it))) }
                 a.str("run_out")?.let { ListRow(listOf("At the recent pace the ${if (a.optString("run_out_basis") == "funds") "funds" else "hours"} run out around " + dayText(it))) }
-                if (a.optInt("suggest_add") > 0) ListRow(listOf("Suggested amendment: add ${a.optInt("suggest_add")} hours. The amendment letter is on the website."))
+                // 4.37.0 (S12): the amendment letter, its request and the reply, as the iPhone app.
+                ListRow(listOf(AMENDMENT_ROW), action = "open it", onClick = { nav.navigate("amendment/$clientId/$trackId") })
             }
             if (t.active) PrimaryButton("Log hours") { nav.navigate("hours/$clientId/$trackId") }
             else Text("This track is not active, so hours cannot be logged on it.")
@@ -528,7 +529,7 @@ private fun GoalTemplatePicker(api: Api, onPick: (GoalTemplate) -> Unit, onCance
 }
 
 @Composable
-private fun ProgressDialog(api: Api, g: Goal, onDone: (String) -> Unit, onCancel: () -> Unit) {
+internal fun ProgressDialog(api: Api, g: Goal, onDone: (String) -> Unit, onCancel: () -> Unit) {
     val oldStatus = g.status
     val oldPct = g.progressPct
     var status by rememberSaveable { mutableStateOf(oldStatus) }
@@ -653,7 +654,7 @@ private fun trackOpened(f: JSONObject): JSONObject {
 
 /** The track's details (title, status, authorization, rates, dates, report schedule), as on the website. */
 @Composable
-fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int) {
+fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: Int, amendRequest: Int = 0, reasonPrefill: String = "") {
     val state = rememberLoaded(trackId) {
         api.call("save_track", if (trackId > 0) mapOf("id" to trackId.toString()) else mapOf("client_id" to clientId.toString()))
     }
@@ -662,7 +663,8 @@ fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: In
         val map = values.value.toMap()
         fun v(k: String) = map[k] ?: ""
         fun set(k: String, x: String) { values.value = (map + (k to x)).toList() }
-        var reason by rememberSaveable { mutableStateOf("") }
+        // 4.37.0 (S13): an approved amendment starts with the website's reason.
+        var reason by rememberSaveable { mutableStateOf(reasonPrefill) }
         // 4.29.0: what the form opened with, sent as orig and loaded_at (see trackOpened).
         var baseJson by rememberSaveable(trackId) { mutableStateOf(trackOpened(f).toString()) }
         val base = remember(baseJson) { try { JSONObject(baseJson) } catch (e: Exception) { JSONObject() } }
@@ -743,6 +745,7 @@ fun TrackEditScreen(api: Api, nav: NavHostController, clientId: Int, trackId: In
                         b.put("orig", openedValues(b, base))
                         base.str("updated_at")?.let { b.put("loaded_at", it) }
                         b.put("id", trackId).put("amendment_reason", reason.trim())
+                        if (amendRequest > 0) b.put("amend_request", amendRequest)
                     } else b.put("client_id", clientId)
                     try {
                         val saved = if (trackId > 0) api.call("save_track", body = b) else api.callOnce("save_track", b, newKey, { newKey = it }, "the new track")

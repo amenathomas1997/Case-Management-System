@@ -94,31 +94,60 @@ val PRE_ETS_ACTIVITIES = listOf("Job Exploration Counseling", "Work-Based Learni
 
 @Composable
 fun ProgramsScreen(api: Api, nav: NavHostController) {
-    val state = rememberLoaded(api.userId) { api.call("cohorts").optJSONArray("cohorts").objects() }
+    // 4.37.0 (S21): active or archived cohorts, and the website's New cohort fields.
+    var show by rememberSaveable { mutableStateOf("active") }
+    val state = rememberLoaded(api.userId, show) { api.call("cohorts", if (show == "active") emptyMap() else mapOf("show" to show)).optJSONArray("cohorts").objects() }
+    val choices = rememberLoaded(api.userId) { try { api.call("cohort_choices") } catch (e: ApiException) { if (e.status == 401) throw e; null } }
     var adding by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("") }
     var school by rememberSaveable { mutableStateOf("") }
+    var coordinator by rememberSaveable { mutableStateOf(api.userId.toString()) }
+    var start by rememberSaveable { mutableStateOf("") }
+    var end by rememberSaveable { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
     var idem by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var errors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val scope = rememberCoroutineScope()
+    val coordinators = choices.data?.optJSONArray("coordinators")?.objects()
     Page {
         PrimaryButton("Add a cohort") { adding = true }
+        // An older server lists active cohorts only.
+        if (coordinators != null) Choice("Show", show, listOf("active" to "Active cohorts", "archived" to "Archived cohorts")) { show = it }
         Show(state, "cohorts") { list ->
-            Heading("Active cohorts (${list.size})")
-            if (list.isEmpty()) Text("No active cohorts.")
-            list.forEach { c -> ListRow(listOf(c.optString("name"), listOfNotNull(c.str("school"), "${c.optInt("members")} students", "${c.optInt("sessions")} sessions").joinToString(", ")), action = "open it", onClick = { nav.navigate("cohort/${c.optInt("id")}") }) }
+            Heading((if (show == "archived") "Archived cohorts" else "Active cohorts") + " (${list.size})")
+            if (list.isEmpty()) Text(if (show == "archived") "No archived cohorts." else "No active cohorts.")
+            list.forEach { c -> ListRow(listOf(c.optString("name"), listOfNotNull(c.str("school"), c.str("coordinator")?.let { "coordinator $it" }, "${c.optInt("members")} students", "${c.optInt("sessions")} sessions").joinToString(", ")), action = "open it", onClick = { nav.navigate("cohort/${c.optInt("id")}") }) }
         }
     }
-    if (adding) FormDialog("Add a cohort", "Add", busy, missing = stillNeeded(missingNames("Cohort name" to name.isBlank())), onSave = {
-        scope.launchSave({ busy = it }, { error = it }) {
-            // 4.28.0: a retry after a lost reply adds it once (see sendOnce).
-            val r = api.callOnce("add_cohort", JSONObject().put("name", name.trim()).put("school", school.trim()), idem, { idem = it }, "the cohort")
-            adding = false; name = ""; school = ""; nav.navigate("cohort/${r.optInt("id")}")
+    if (adding) FormDialog("Add a cohort", "Create cohort", busy, missing = stillNeeded(missingNames("Cohort name" to name.isBlank())), onSave = {
+        if (busy) return@FormDialog
+        if (notes.trim().length > 2000) { errors = mapOf("notes" to "Notes: use 2,000 characters or fewer."); error = errors["notes"]; return@FormDialog }
+        busy = true; error = null; errors = emptyMap()
+        scope.launch {
+            try {
+                // 4.28.0: a retry after a lost reply adds it once (see sendOnce). An older server takes name and school only.
+                val b = if (coordinators != null) cohortBody(name, school, coordinator.toIntOrNull() ?: 0, start, end, notes)
+                    else JSONObject().put("name", name.trim()).put("school", school.trim())
+                val r = api.callOnce("add_cohort", b, idem, { idem = it }, "the cohort")
+                adding = false; name = ""; school = ""; start = ""; end = ""; notes = ""
+                Flash.pending = r.optString("message").ifEmpty { "Cohort created." }
+                nav.navigate("cohort/${r.optInt("id")}")
+            } catch (e: ApiException) {
+                errors = mapErrors(e.reply, ::cohortFieldFor).filterKeys { it.isNotEmpty() }
+                error = errorSummary(errors.values) ?: e.message
+            } finally { busy = false }
         }
     }, onCancel = { adding = false }) {
-        Field("Cohort name", name, { name = it }, required = true)
-        Field("School", school, { school = it }, hint = "optional")
+        Field("Cohort name", name, { name = it }, required = true, error = errors["name"])
+        Field("School / district", school, { school = it }, hint = "optional", error = errors["school"])
+        if (coordinators != null) {
+            Choice("Coordinator", coordinator, listOf("0" to "None") + coordinators.map { it.optInt("id").toString() to it.optString("name") }, error = errors["coordinator_id"]) { coordinator = it }
+            Field("Start date", start, { start = it }, hint = "year-month-day; optional", error = errors["start_date"])
+            Field("End date", end, { end = it }, hint = "year-month-day; optional", error = errors["end_date"])
+            Field("Notes", notes, { notes = it }, hint = "optional; up to 2,000 characters", singleLine = false, error = errors["notes"])
+        }
         ErrorText(error)
     }
 }
@@ -133,6 +162,7 @@ fun CohortScreen(api: Api, id: Int) {
     // 4.28.0: adding a student is sent with a retry key (see sendOnce).
     var addKey by rememberSaveable { mutableStateOf("") }
     var logging by rememberSaveable { mutableStateOf(false) }
+    var deletingSession by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     fun run(block: suspend () -> String) { error = null; scope.launch { try { notice = block(); state.reload() } catch (e: ApiException) { error = e.message } } }
     Show(state, "the cohort") { r ->
@@ -143,6 +173,14 @@ fun CohortScreen(api: Api, id: Int) {
             NoticeText(notice)
             ErrorText(error)
             c.str("school")?.let { ListRow(listOf("School: $it")) }
+            // 4.37.0 (S21): the coordinator, dates and notes, and archive or reactivate (no confirmation, as the website).
+            (c.str("coordinator_name") ?: r.str("coordinator_name"))?.let { ListRow(listOf("Coordinator: $it")) }
+            listOfNotNull(c.str("start_date")?.let { "Starts " + shortDate(it) }, c.str("end_date")?.let { "ends " + shortDate(it) }).joinToString(", ").ifEmpty { null }?.let { ListRow(listOf(it)) }
+            c.str("notes")?.let { ListRow(listOf("Notes: $it")) }
+            val activeFlag = if (c.has("active")) flag(c, "active", true) else null
+            if (activeFlag != null) SecondaryButton(if (activeFlag) "Archive cohort" else "Reactivate cohort") {
+                run { api.call("set_cohort_active", body = JSONObject().put("cohort_id", id).put("active", !activeFlag)).optString("message").ifEmpty { if (activeFlag) "Cohort archived." else "Cohort reactivated." } }
+            }
             PrimaryButton("Log a group session", missing = if (members.isEmpty()) "Add a student to the cohort first." else null) { logging = true }
             Heading("Students (${members.size})")
             members.forEach { m -> ListRow(listOf(m.optString("name")), action = "remove from the cohort", onClick = { removing = m }) }
@@ -160,12 +198,22 @@ fun CohortScreen(api: Api, id: Int) {
             // 4.29.0: the server's total, so a cut list says "latest N of M".
             val sessionsTotal = listTotal(r, sessions.size, "sessions_total")
             Heading(countLabel("Sessions", sessions.size, sessionsTotal))
-            if (sessionsTotal > sessions.size) Text("The older sessions are on the website's cohort page.")
-            sessions.forEach { s -> ListRow(listOf(s.optString("activity") + ", " + dayText(s.str("session_date")), "${s.optInt("duration_min")} minutes, ${s.optInt("present_n")} present" + (s.str("topic")?.let { ", $it" } ?: ""))) }
+            if (sessionsTotal > sessions.size) Text(if (sessions.any { it.has("can_delete") }) SESSIONS_CUT else "The older sessions are on the website's cohort page.")
+            sessions.forEach { s ->
+                ListRow(s.str("text")?.let { listOf(it) } ?: listOf(s.optString("activity") + ", " + dayText(s.str("session_date")), "${s.optInt("duration_min")} minutes, ${s.optInt("present_n")} present" + (s.str("topic")?.let { ", $it" } ?: "")))
+                // 4.37.0 (S21): its own visible button, outside the row.
+                if (flag(s, "can_delete")) SecondaryButton(deleteSessionLabel(s.optString("activity"), shortDate(s.str("session_date")))) { deletingSession = s.optInt("id") }
+            }
         }
         if (logging) CohortSessionDialog(api, id, members, onDone = { m -> logging = false; notice = m; state.reload() }, onCancel = { logging = false })
     }
-    removing?.let { m ->
+    state.data?.optJSONArray("sessions")?.objects()?.firstOrNull { deletingSession > 0 && it.optInt("id") == deletingSession }?.let { sx ->
+        val act = sx.optString("activity"); val on = shortDate(sx.str("session_date"))
+        Confirm(deleteSessionTitle(act, on), DELETE_SESSION_TEXT, "Delete session", {
+            run { api.call("delete_cohort_session", body = JSONObject().put("cohort_id", id).put("session_id", sx.optInt("id"))).optString("message").ifEmpty { "Session deleted: $act, $on." } }
+        }, { deletingSession = 0 }, no = "Keep it")
+    }
+        removing?.let { m ->
         Confirm("Remove ${m.optString("name")} from the cohort?", "", "Remove student", {
             run { api.call("cohort_member", body = JSONObject().put("cohort_id", id).put("client_id", m.optInt("id")).put("op", "remove")); "${m.optString("name")} removed from the cohort." }
         }, { removing = null })
@@ -209,10 +257,11 @@ private fun CohortSessionDialog(api: Api, cohortId: Int, members: List<JSONObjec
         Confirm("Log $activity on ${dayText(date.trim())}, ${minutes.trim()} minutes, ${present.size} of ${members.size} present?",
             (if (absent.isNotEmpty()) "Absent: " + absent.joinToString(", ") + ". " else "") + "A logged session cannot be changed from the app.", "Log session", {
                 scope.launchSave({ busy = it }, { error = it }) {
-                    api.callOnce("log_cohort_session", JSONObject().put("cohort_id", cohortId).put("activity", activity).put("session_date", date.trim())
+                    val r = api.callOnce("log_cohort_session", JSONObject().put("cohort_id", cohortId).put("activity", activity).put("session_date", date.trim())
                         .put("duration_min", minutes.trim().toInt()).put("topic", topic.trim()).put("notes", notes.trim()).put("present", org.json.JSONArray(present.sorted())),
                         idem, { idem = it }, "the group session")
-                    onDone("Session logged.")
+                    // 4.37.0: the website's sentence ("If anything is wrong, delete it under Recent sessions…").
+                    onDone(r.optString("message").ifEmpty { "Session logged." })
                 }
             }, { confirming = false })
     }

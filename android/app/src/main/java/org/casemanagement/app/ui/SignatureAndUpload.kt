@@ -43,6 +43,7 @@ import org.casemanagement.app.scaleStrokes
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import org.casemanagement.app.str
 import kotlinx.coroutines.withContext
 import org.casemanagement.app.Api
 import org.casemanagement.app.ApiException
@@ -133,7 +134,8 @@ fun SignaturePad(state: SignatureState, caption: String = "Client signature: han
     if (state.strokes.value.isNotEmpty()) SecondaryButton(if (es) "Borrar la firma" else "Clear the signature", lang = lang) { state.clear() }
 }
 
-val UPLOAD_TYPES = setOf("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "png", "jpg", "jpeg", "heic")
+/** 4.37.0 (S16): the website's types; a HEIC photo is converted to JPEG before it is sent (heicToJpeg). */
+val UPLOAD_TYPES = DOCUMENT_TYPES
 
 /** The name of a file chosen with the phone's file picker. */
 fun pickedName(context: android.content.Context, uri: Uri): String =
@@ -174,6 +176,25 @@ fun checkCopied(copied: Long) {
     if (copied == 0L) throw ApiException("That file is empty.")
 }
 
+/** 4.37.0 (S16): turns the HEIC photo copied to [f] into a JPEG in place (Android 9 and later). */
+suspend fun heicToJpeg(f: java.io.File) = withContext(Dispatchers.IO) {
+    if (android.os.Build.VERSION.SDK_INT < 28) throw ApiException(DOCUMENT_TYPE_REFUSED)
+    // Decoded at most 4,096 pixels on its long side (a phone photo stays sharp to read), in ordinary memory.
+    val bmp = try {
+        android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(f)) { decoder, info, _ ->
+            val w = info.size.width; val h = info.size.height
+            val scale = heicScale(w, h, 4096)
+            if (scale < 1.0) decoder.setTargetSize(maxOf(1, (w * scale).toInt()), maxOf(1, (h * scale).toInt()))
+            decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+        }
+    } catch (e: OutOfMemoryError) { throw ApiException(HEIC_TOO_BIG) }
+    catch (e: Exception) { throw ApiException("The photo could not be read. Choose it again, or save it as a JPEG first.") }
+    try { f.outputStream().use { out -> bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out) } }
+    catch (e: OutOfMemoryError) { throw ApiException(HEIC_TOO_BIG) }
+    catch (e: java.io.IOException) { throw ApiException("The photo could not be converted. Try again.") }
+    finally { bmp.recycle() }
+}
+
 /** Upload a document to a client's record: chosen with the phone's file picker, up to 25 MB. */
 @Composable
 fun UploadDocumentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCancel: () -> Unit) {
@@ -185,6 +206,13 @@ fun UploadDocumentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCa
     val file = fileUri?.let { it to fileName }
     var category by rememberSaveable { mutableStateOf("Other") }
     var title by rememberSaveable { mutableStateOf("") }
+    // 4.37.0 (S16): shared on upload, as the website's ticks (the counselor's only when the client has one).
+    var sharePortal by rememberSaveable { mutableStateOf(false) }
+    var shareCounselor by rememberSaveable { mutableStateOf(false) }
+    val hasCounselor = rememberLoaded(clientId) {
+        try { api.call("client", mapOf("id" to clientId.toString())).optJSONObject("client")?.let { it.str("counselor_email") != null || it.str("counselor_name") != null } ?: false }
+        catch (e: ApiException) { false }
+    }.data == true
     var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -197,16 +225,19 @@ fun UploadDocumentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCa
     FormDialog("Upload a document", "Upload", busy, missing = if (file == null) "Still needed: a file. Choose a file first." else null, onSave = {
         val (uri, name) = file ?: return@FormDialog
         val ext = name.substringAfterLast('.', "").lowercase()
-        if (ext !in UPLOAD_TYPES) { error = "That file type is not allowed. Choose a PDF, Word, Excel, PowerPoint, text, CSV or picture file."; return@FormDialog }
+        val heic = isHeic(ext)
+        if (!uploadAllowed(ext) && !(heic && android.os.Build.VERSION.SDK_INT >= 28)) { error = DOCUMENT_TYPE_REFUSED; return@FormDialog }
         scope.launchSave({ busy = it }, { error = it }) {
             // In the documents folder, emptied at sign-out, another account and a wipe (4.27.0); made inside the try, so it always goes.
             val tmp = java.io.File(api.docsFolder, "upload.tmp")
             try {
                 checkCopied(copyPicked(context, uri, tmp))
-                val short = shortName(name)
+                // A HEIC photo goes as JPEG, which the website takes and every computer opens.
+                val sentName = if (heic) { heicToJpeg(tmp); name.substringBeforeLast('.') + ".jpg" } else name
+                val short = shortName(sentName)
                 // 4.28.0: the same key while the same file goes with the same details (see sendOnce).
-                val print = listOf("upload_document", clientId, category, title.trim(), short, tmp.length(), uri).joinToString("|")
-                sendOnce(idem, { idem = it }, print, "the document “$short”") { key -> api.uploadDocument(clientId, category, title.trim(), short, tmp, key) }
+                val print = listOf("upload_document", clientId, category, title.trim(), short, tmp.length(), uri, sharePortal, shareCounselor).joinToString("|")
+                sendOnce(idem, { idem = it }, print, "the document “$short”") { key -> api.uploadDocument(clientId, category, title.trim(), short, tmp, key, sharePortal, shareCounselor && hasCounselor) }
             } finally { tmp.delete() }
             onDone("Document uploaded.")
         }
@@ -214,6 +245,8 @@ fun UploadDocumentDialog(api: Api, clientId: Int, onDone: (String) -> Unit, onCa
         SecondaryButton(file?.let { "Chosen: ${it.second}. Choose another file" } ?: "Choose a file") { pick.launch(arrayOf("*/*")) }
         Choice("Category", category, cats.map { it to it }) { category = it }
         if (category == "Resource") Text("Resource documents are shared in the client's portal.")
+        else Tick("Share it on the client's portal", sharePortal) { sharePortal = it }
+        if (hasCounselor) Tick("Share it with their VR counselor on the counselor portal", shareCounselor) { shareCounselor = it }
         Field("Title", title, { title = it }, hint = "optional; the file name is used if empty")
         ErrorText(error)
     }

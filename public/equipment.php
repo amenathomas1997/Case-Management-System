@@ -22,49 +22,16 @@ function maint_status(?string $last, $intervalDays): array {
     return ['Next ' . fmt_date($next), 'muted', $next, $daysLeft];
 }
 
-/** A typed dollar amount, read as the CSV import reads one: a dollar sign, spaces and
- *  thousands commas are allowed. Returns the plain number, '' when blank, or null when
- *  it is not one amount from 0 to 9,999,999.99 with up to two decimal places. */
-function equip_amount(string $raw): ?string {
-    $clean = str_replace(['$', ' ', "\u{00A0}"], '', trim($raw));
-    if ($clean === '') return '';
-    if (!preg_match('/^(\d{1,3}(,\d{3})+|\d+)(\.\d{1,2})?$/D', $clean)) return null;
-    $n = str_replace(',', '', $clean);
-    return (float)$n > 9999999.99 ? null : $n;
-}
+// equip_amount() (a typed dollar amount) is in inc/equipment_status.php (4.37.0), shared with the apps.
 
 /* Add item */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_item'])) {
-    // A value that is not a string (an array from name[]=x, say) reads as blank,
-    // so it is refused on its field, never a 400.
-    $name = is_string($_POST['name'] ?? null) ? trim($_POST['name']) : '';
-    $serial = trim((string)($_POST['serial'] ?? ''));
-    $itemNotes = trim((string)($_POST['notes'] ?? ''));
-    // Each problem is shown on its own field and the form comes back filled in.
-    // Text longer than its column (name 190, serial 120, notes 255) is refused, not cut.
-    $errors = [];
-    if ($name === '') $errors['name'] = 'Item name is required.';
-    elseif (mb_strlen($name) > 190) $errors['name'] = 'Item name must be 190 characters or fewer.';
-    if (mb_strlen($serial) > 120) $errors['serial'] = 'Serial number must be 120 characters or fewer.';
-    // Money must be a non-negative amount that fits the column (decimal 9,2). The
-    // fields are text, so what was typed reaches the server and is checked here rather
-    // than dropped by the browser; whole numbers are refused, not clamped, when out of range.
-    $valueRaw = equip_amount((string)($_POST['value'] ?? ''));
-    if ($valueRaw === null) $errors['value'] = 'Value: enter one amount in dollars from 0 to 9,999,999.99, for example 2995.00.';
-    $lifeRaw = trim((string)($_POST['useful_life_months'] ?? ''));
-    if ($lifeRaw !== '' && (!preg_match('/^\d{1,3}$/D', $lifeRaw) || (int)$lifeRaw < 1 || (int)$lifeRaw > 600)) $errors['useful_life_months'] = 'Useful life: enter a whole number of months from 1 to 600, or leave it blank for 36.';
-    $ivRaw = trim((string)($_POST['maintenance_interval_days'] ?? ''));
-    if ($ivRaw !== '' && (!preg_match('/^\d{1,4}$/D', $ivRaw) || (int)$ivRaw > 3650)) $errors['maintenance_interval_days'] = 'Service interval: enter a whole number of days from 0 to 3650, or leave it blank for no schedule.';
-    if (mb_strlen($itemNotes) > 255) $errors['notes'] = 'Notes must be 255 characters or fewer.';
-    // A purchase date that cannot be read, has a mistyped year or is in the future is
-    // refused on its field (it sets the current value), not dropped.
-    $purchaseRaw = trim((string)($_POST['purchase_date'] ?? ''));
-    $purchase = valid_date($purchaseRaw, 1970, (int)date('Y'));
-    if (input_was_unreadable('purchase_date') || ($purchaseRaw !== '' && $purchase === null)) $errors['purchase_date'] = 'Purchase date: enter the full date (month, day and year) with a year from 1970 to ' . date('Y') . ', or leave it blank.';
-    elseif ($purchase !== null && $purchase > date('Y-m-d')) $errors['purchase_date'] = 'Purchase date cannot be in the future.';
+    // Every field is checked by the helper the apps' add_equipment shares (inc/equipment_status.php,
+    // 4.37.0): each problem on its own field, text longer than its column refused, not cut, and the
+    // form comes back filled in. A value that is not a string reads as blank, never a 400.
+    [$errors, $ev] = equipment_input($_POST, input_was_unreadable('purchase_date') ? ['purchase_date'] : []);
     if ($errors) { keep_input(); keep_field_errors($errors); redirect('equipment.php'); }
-    $iv = $ivRaw !== '' ? (int)$ivRaw : null;
-    $life = $lifeRaw !== '' ? (int)$lifeRaw : 36;
+    $name = $ev['name'];
     // The same form sent twice (Enter pressed again while it loads) adds the item once.
     $itemKey = web_idem_key($_POST);
     if (web_once_get($itemKey) !== null) {
@@ -72,16 +39,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_item'])) {
         redirect('equipment.php');
     }
     db()->prepare('INSERT INTO equipment (name, category, serial, item_condition, value, purchase_date, useful_life_months, notes, maintenance_interval_days, at_type) VALUES (?,?,?,?,?,?,?,?,?,?)')
-        ->execute([$name,
-            in_array($_POST['category'] ?? '', cms_list_items('equipment_categories'), true) ? $_POST['category'] : 'Other',
-            $serial ?: null,
-            in_array($_POST['item_condition'] ?? '', cms_list_items('equipment_conditions'), true) ? $_POST['item_condition'] : 'Good',
-            $valueRaw !== '' ? (float)$valueRaw : null,
-            $purchase,
-            $life,
-            $itemNotes ?: null,
-            $iv ?: null,
-            is_string($_POST['at_type'] ?? null) && in_array($_POST['at_type'], AT_ACT_TYPES, true) ? $_POST['at_type'] : null]);
+        ->execute([$ev['name'], $ev['category'], $ev['serial'], $ev['item_condition'], $ev['value'], $ev['purchase_date'], $ev['useful_life_months'], $ev['notes'], $ev['maintenance_interval_days'], $ev['at_type']]);
     // Capture the id before audit() inserts its own row and replaces it.
     $newId = (int)db()->lastInsertId();
     web_once_set($itemKey, $newId);
@@ -297,82 +255,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['return_item'])) {
 /* Set status (Repair / Retired / Available) */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_status'])) {
     $eid = (int)($_POST['equipment_id'] ?? 0);
-    $to = in_array($_POST['to'] ?? '', ['Available','Repair','Retired'], true) ? $_POST['to'] : null;
-    if (!$to) { flash('Choose Available, Repair or Retired.', 'error'); redirect('equipment.php#inv-h'); }
-    // Retiring cancels the item's reservations and waitlist entries, which setting it
-    // back to Available does not restore, so it is confirmed first on its own page.
-    if ($to === 'Retired' && ($_POST['confirm_retire'] ?? '') !== '1') {
-        $was = db()->prepare('SELECT status FROM equipment WHERE id = ?');
-        $was->execute([$eid]);
-        $wasStatus = $was->fetchColumn();
-        if ($wasStatus !== false && $wasStatus !== 'Retired') redirect('equipment.php?retire=' . $eid);
-    }
-    // The item row is locked first (the order loans and AT workflows use), then the
-    // change is refused, with the reason, when the item is out on loan or its status
-    // is owned by an active AT repair/reuse record. Only a real change is audited.
-    $pdo = db();
-    $pdo->beginTransaction();
-    try {
-        $cur = $pdo->prepare('SELECT status FROM equipment WHERE id = ? FOR UPDATE');
-        $cur->execute([$eid]);
-        $from = $cur->fetchColumn();
-        $refusal = null;
-        if ($from === false) $refusal = 'Item not found.';
-        else {
-            $open = $pdo->prepare('SELECT id FROM equipment_loans WHERE equipment_id = ? AND returned_at IS NULL LIMIT 1');
-            $open->execute([$eid]);
-            // An open loan decides (an 'On Loan' status left without one can be corrected here).
-            if ($open->fetchColumn()) $refusal = 'This item is on loan, so its status was not changed. Mark it returned first.';
-            // A retired item (one recycled through a reuse record included) goes back into
-            // service only through a reuse intake, which records the inspection,
-            // sanitizing and data wipe before the device can be Available again.
-            elseif ($from === 'Retired' && $to !== 'Retired') $refusal = 'This item is retired, so it was not put back into service here. Start a Device reuse intake for it in AT services: the inspection, sanitizing and data-wipe checks are recorded there before it becomes Available.';
-        }
-        if ($refusal === null) {
-            // try/catch: AT tables may predate the migration.
-            try {
-                $w = $pdo->prepare("SELECT id FROM at_records WHERE equipment_id = ? AND ((kind='repair' AND status NOT IN ('Resolved','Cancelled')) OR (kind='reuse' AND status NOT IN ('Redeployed','Recycled'))) LIMIT 1");
-                $w->execute([$eid]);
-                if ($w->fetchColumn()) $refusal = 'This item is in an active AT repair or reuse workflow — update its status there.';
-            } catch (PDOException $e) {
-                if (!in_array((string)$e->getCode(), ['42S02', '42S22'], true)) throw $e;
-            }
-        }
-        $cancelledHolds = 0;
-        $holders = [];
-        $promoted = null;
-        if ($refusal === null && $from !== $to) {
-            $pdo->prepare('UPDATE equipment SET status = ? WHERE id = ?')->execute([$to, $eid]);
-            // Back in service (from Repair, say): the client who has waited longest for
-            // the item gets the hold, under the lock taken above.
-            if ($to === 'Available') $promoted = promote_equipment_waitlist($eid, (int)$user['id']);
-            // A retired item never returns to service, so its holds and waitlist entries
-            // could never be met: they are cancelled with the retirement, and whoever made
-            // each one is told, so no client is left expecting the device.
-            if ($to === 'Retired') {
-                $cancelled = cancel_retired_holds($pdo, $eid);
-                $cancelledHolds = $cancelled['count'];
-                $holders = $cancelled['holders'];
-                // A retired item is no longer serviced: its open "service due" task is
-                // closed now rather than on the next daily run.
-                $pdo->prepare("UPDATE tasks SET status = 'Done', done_at = NOW(), done_by = ? WHERE auto_key LIKE ? AND status = 'Open'")
-                    ->execute([$user['id'], 'equip-maint-' . $eid . '-%']);
-            }
-        }
-        $pdo->commit();
-    } catch (Throwable $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
-        throw $e;
-    }
-    if ($refusal !== null) flash($refusal, 'error');
-    elseif ($from === $to) flash('Status is already ' . $to . '.');
-    else {
-        audit($user['id'], 'equipment.status', 'equipment', $eid, $from . ' to ' . $to
-            . ($cancelledHolds ? '; ' . $cancelledHolds . ' reservation' . ($cancelledHolds === 1 ? '' : 's') . ' cancelled' : ''));
-        notify_retired_holders($eid, $holders, (int)$user['id']);
-        flash('Status updated.' . ($cancelledHolds ? ' ' . $cancelledHolds . ' reservation' . ($cancelledHolds === 1 ? ' was' : 's were') . ' cancelled because the item is retired.' : '')
-            . ($promoted !== null ? ' The item is now held for the client who has waited longest on its waitlist.' : ''));
-    }
+    // The lock, refusals, waitlist, cancelled holds, audit and notices are the helper the apps'
+    // set_equipment_status shares (inc/equipment_status.php, 4.37.0). Retiring is confirmed first,
+    // on its own page, since it cancels holds that putting the item back does not restore.
+    $r = equipment_set_status($eid, is_string($_POST['to'] ?? null) ? $_POST['to'] : '', (int)$user['id'], ($_POST['confirm_retire'] ?? '') === '1');
+    if (!empty($r['needs_confirm'])) redirect('equipment.php?retire=' . $eid);
+    if (!$r['ok']) flash($r['error'], 'error');
+    else flash($r['message']);
     redirect('equipment.php#inv-h');
 }
 
@@ -498,23 +387,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_interval'])) {
 /* Confirm retiring an item: says how many reservations and waitlist entries will be
    cancelled (and their staff notified) before anything changes. */
 if (isset($_GET['retire'])) {
-    $rid = (int)$_GET['retire'];
-    $ri = db()->prepare('SELECT id, name, status FROM equipment WHERE id = ?');
-    $ri->execute([$rid]);
-    $ritem = $ri->fetch();
+    $ritem = equipment_retire_preview((int)$_GET['retire']);
     if (!$ritem) { flash('Item not found.', 'error'); redirect('equipment.php'); }
     if ($ritem['status'] === 'Retired') { flash('Status is already Retired.'); redirect('equipment.php'); }
-    $rc = db()->prepare("SELECT COUNT(*) FROM equipment_reservations WHERE equipment_id = ? AND status IN ('Reserved','Waitlist')");
-    $rc->execute([$rid]);
-    $holdCount = (int)$rc->fetchColumn();
+    $holdCount = $ritem['holds'];
     page_header('Retire ' . $ritem['name'] . '? — Equipment', $user, 'equipment');
     ?>
     <p class="page-actions"><a href="equipment.php"><span aria-hidden="true">&larr; </span>Back to equipment</a></p>
     <section class="card" style="max-width:40rem">
       <h1>Retire <?= h($ritem['name']) ?>?</h1>
       <p>A retired item can no longer be loaned out or reserved. It returns to service only through a Device reuse intake, which records its inspection, sanitizing and data wipe.</p>
-      <?php if ($holdCount): ?>
-      <p><strong><?= $holdCount ?> reservation<?= $holdCount === 1 ? ' or waitlist entry' : 's and waitlist entries' ?> for this item will be cancelled</strong>, and each client's instructor and the staff who made <?= $holdCount === 1 ? 'it' : 'them' ?> will be notified. Putting the item back into service later does not restore <?= $holdCount === 1 ? 'it' : 'them' ?>.</p>
+      <?php if ($holdCount): // The sentence the apps show too (equipment_retire_hold_text()), the count in bold. ?>
+      <p><?= preg_replace('/^(\d+ .*? will be cancelled)/', '<strong>$1</strong>', h($ritem['text'])) ?></p>
       <?php else: ?>
       <p>No reservations or waitlist entries are affected.</p>
       <?php endif; ?>
@@ -625,10 +509,11 @@ $items = db()->query("SELECT e.*, l.id AS loan_id, l.loaned_at, l.due_date, c.na
     FROM equipment e
     LEFT JOIN equipment_loans l ON l.equipment_id = e.id AND l.returned_at IS NULL
     LEFT JOIN clients c ON c.id = l.client_id
+    WHERE " . equipment_list_status_sql(true) . "
     ORDER BY e.status = 'Retired', e.name")->fetchAll();
 foreach ($items as &$item) {
-    $item['outside_caseload'] = caseload_scoped() && $item['borrower_id'] !== null
-        && (int)$item['borrower_assigned'] !== (int)$user['id'];
+    // "Managed by the assigned staff": the rule set_equipment_status applies too (inc/equipment_status.php).
+    $item['outside_caseload'] = !equipment_manageable($item, (int)$user['id']);
     if ($item['outside_caseload']) {
         $item['borrower'] = null;
         $item['borrower_id'] = null;

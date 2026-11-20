@@ -6,6 +6,11 @@
 // Keep the key equal to APP_VERSION when a release ships, or the Dashboard says nothing.
 // Plain text only: the pages escape each bullet.
 return [
+    '4.37.0' => [
+        'Services and reports in the phone apps, as on the website: the evaluation report with its AI narrative, emailed signed to the counselor; letters (all seven) with AI drafts, saved to the client\'s documents or kept as a case note; amendment requests recorded as sent with VR\'s reply; releases on paper and withdrawals; the privacy notice; and the client timeline.',
+        'Equipment and services: mark an item in repair, back in service or retired; new items with AT Act type, purchase date and useful life; device requests with deny and cancel reasons, the justification letter and AI-drafted justifications; worksite recommendations and suggested goals with AI; assessment templates and attachments; referral filters; cohort coordinators, dates and notes; instructor matches; and the knowledge base, translation and accessible documents as on the website.',
+        'On the website, the device-request justification and letters now have AI draft buttons, and a new cohort can have notes.',
+    ],
     '4.36.0' => [
         'Your day in the phone apps, as on the website: Today, My tasks and Your week on the dashboard, the website\'s banners for agreements, training and credentials, task search and filters, editing, deleting and completing several tasks at once, alerts that open what they are about (with Undo), message previews and unread counts, and the full Compliance list.',
         'Safety and your account in the apps: see the phones signed in to your account and sign one out or report it lost and wiped, report a privacy incident, set your mobile number and how alerts reach you, remove a passkey, set My availability, and see your calendar and meeting connections. Signing in shows the Microsoft option and a link to reset your password.',

@@ -105,6 +105,8 @@ if (in_array($action ?? '', API_IDEM_ACTIONS, true) && ($_SERVER['REQUEST_METHOD
         // 4.36.0: and a phone's sign-out or wipe, a privacy incident and hours added (inc/api_436.php).
         if ($idemPrev !== null && function_exists('api_435_repeat')) $idemPrev = api_435_repeat($action, $input, $userId, $idemPrev);
         if ($idemPrev !== null && function_exists('api_436_repeat')) $idemPrev = api_436_repeat($action, $input, $userId, $idemPrev);
+        // 4.37.0: and an evaluation report emailed, an amendment request recorded and a letter saved (inc/api_437.php).
+        if ($idemPrev !== null && function_exists('api_437_repeat')) $idemPrev = api_437_repeat($action, $input, $userId, $idemPrev);
         if ($idemPrev !== null) out($idemPrev);
         $GLOBALS['API_IDEM_OPEN'] = [$action, $userId, $idemKey];
     }
@@ -842,8 +844,13 @@ case 'request_consent': {
     // GET: the consent as the client page shows it, whether it offers a request, and the
     // guardian details it fills the form with.
     if (!$parityPost) {
-        out(['ok' => true, 'consent' => parity_consent_state($clientId),
-            'guardian_name' => $client['guardian_name'] ?? '', 'guardian_email' => $client['guardian_email'] ?? '']);
+        // signed_id (4.37.0): the latest signed consent, the one withdraw_consent must name (as client.php's form);
+        // signed_withdrawn: it is already recorded as withdrawn.
+        $latestSigned = consent_latest_signed($clientId);
+        out(['ok' => true, 'consent' => parity_consent_state($clientId) + ['signed_id' => $latestSigned ? (int)$latestSigned['id'] : null],
+            'guardian_name' => $client['guardian_name'] ?? '', 'guardian_email' => $client['guardian_email'] ?? '',
+            'signed_id' => $latestSigned ? (int)$latestSigned['id'] : null, 'signed_withdrawn' => $latestSigned ? $latestSigned['withdrawn_at'] !== null : null,
+            'signed_name' => $latestSigned ? (string)$latestSigned['signed_name'] : null, 'signed_at' => $latestSigned ? (string)$latestSigned['signed_at'] : null]);
     }
     // Each request emails someone outside the agency: at most 10 an hour per staff member.
     if (api_throttle_count('consent-mail-' . $userId, 3600) >= 10) fail('Too many consent requests in the last hour. Wait a while, then try again.', 429);

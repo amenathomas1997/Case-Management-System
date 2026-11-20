@@ -44,6 +44,8 @@ fun AtListScreen(api: Api, nav: NavHostController, kind: String) {
         Page {
             r.str("description")?.let { Text(it) }
             if (kind != "trial_option") PrimaryButton("Add one") { nav.navigate("atEdit/$kind/0/0") }
+            // 4.37.0 (S22): the website's instructor matching.
+            if (kind == "staff_profile" && api.can("schedule")) ListRow(listOf("Find instructor matches"), action = "open it", onClick = { nav.navigate("atMatches") })
             Heading("Records (${records.size})")
             if (records.isEmpty()) Text("None yet.")
             records.forEach { rec -> ListRow(listOf(rec.optString("title"), rec.optString("status") + ", updated " + whenText(rec.str("updated_at"))), action = "open it", onClick = { nav.navigate("atRecord/${rec.optInt("id")}") }) }

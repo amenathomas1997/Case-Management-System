@@ -56,7 +56,7 @@ fun ReferralScreen(api: Api, nav: NavHostController, id: Int) {
             Text(ref.optString("body"))
 
             Heading("What you can do")
-            if (status == "New") SecondaryButton("Mark as reviewed") { run { api.call("review_referral", body = JSONObject().put("id", id)); "Marked as reviewed." } }
+            if (status == "New") SecondaryButton("Mark as reviewed") { run { api.call("review_referral", body = JSONObject().put("id", id)).optString("message").ifEmpty { "Marked as reviewed." } } }
             if (open && staff.isNotEmpty()) {
                 Choice("Assigned to", (if (ref.isNull("assigned_to")) 0 else ref.optInt("assigned_to")).toString(),
                     listOf("0" to "Unassigned") + staff.map { it.optInt("id").toString() to it.optString("name") }) { v ->

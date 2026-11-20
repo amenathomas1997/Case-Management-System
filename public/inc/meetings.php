@@ -677,3 +677,41 @@ function meeting_refresh_after_move(int $sid, int $oldStart): void {
         error_log('meeting_refresh_after_move: ' . get_class($e));
     }
 }
+
+/**
+ * Make one meeting link in the instructor's own connected Zoom or Microsoft Teams account for sessions
+ * already saved, and give every one of them that link (4.37.0: moved from schedule.php, shared with
+ * voice booking; 4.38.0's booking form reuses it). Called after the booking is committed, so a refused
+ * booking never leaves a meeting behind; the sessions stay booked whatever happens here. A single
+ * session's link notes the time it was made for. Audited meeting.create. Returns ['ok', 'url' (or
+ * null), 'why' (null on success: the sentence saying why there is no link)].
+ */
+function session_make_meeting(array $sessionIds, string $provider, int $instructorId, string $instructorName, int $clientId, string $clientName,
+                              int $start, int $end, int $actor, string $channel = 'web'): array {
+    $ids = array_values(array_filter(array_map('intval', $sessionIds)));
+    if (!isset(MEETING_PROVIDERS[$provider]) || !$ids) return ['ok' => false, 'url' => null, 'why' => 'Choose Zoom or Microsoft Teams for the meeting link.'];
+    $why = null;
+    $series = count($ids) > 1;
+    try {
+        $link = meeting_create($instructorId, $provider, ($series ? 'AT Training series: ' : 'AT Training: ') . schedule_short_name($clientName), $start, $end, $series, $why);
+        if ($link !== null) {
+            db()->prepare('UPDATE scheduled_sessions SET meeting_url = ? WHERE id IN (' . implode(',', $ids) . ')')->execute([$link]);
+            // A single meeting expires some weeks after its time (4.32.0); a series' meeting has no fixed time.
+            if (!$series) meeting_note_made_for($ids, $start);
+            audit($actor, 'meeting.create', 'client', $clientId, MEETING_PROVIDERS[$provider] . ' link for ' . count($ids) . ' session(s), in ' . $instructorName . "'s account" . ($channel === 'mobile' ? ' (mobile)' : ($channel === 'voice' ? ' (voice)' : '')));
+            return ['ok' => true, 'url' => $link, 'why' => null];
+        }
+    } catch (Throwable $me) {
+        // The sessions are booked whatever happens here.
+        error_log('meeting_create: ' . get_class($me) . ' ' . $me->getMessage());
+        $why = MEETING_PROVIDERS[$provider] . ' could not be reached, so the session is booked without a link; add one by moving the session.';
+    }
+    return ['ok' => false, 'url' => null, 'why' => $why ?? (MEETING_PROVIDERS[$provider] . ' could not be reached, so the session is booked without a link; add one by moving the session.')];
+}
+
+/** First name + last initial, as the calendar feed shows a client: an emailed invite or a meeting
+ *  title ends up in the calendar or meeting provider's storage too (moved from schedule.php, 4.37.0). */
+function schedule_short_name(string $n): string {
+    $parts = preg_split('/\s+/', trim($n)) ?: [];
+    return count($parts) < 2 ? trim($n) : $parts[0] . ' ' . mb_substr(end($parts), 0, 1) . '.';
+}

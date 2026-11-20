@@ -657,3 +657,77 @@ function app_devices_html(array $devices, string $action, array $hidden): string
     }
     return $out . '</ul>';
 }
+
+/** The confirmation once a paper release is recorded (4.37.0: shared by client.php and the apps'
+ *  request_release with method Paper). $v is release_input()'s values. */
+function release_paper_message(array $v): string {
+    return 'Paper release recorded for ' . $v['recipient_name'] . '. It is valid until ' . fmt_date(date('Y-m-d', strtotime($v['signed_on'] . ' +' . release_validity_days() . ' days'))) . '.';
+}
+
+/** One release as client.php's Releases list says it (4.37.0: shared with the apps' client reply):
+ *  the recipient and kind, the state, when it was signed, expired, withdrawn or emailed, and what it
+ *  covers and why. */
+function release_row_text(array $rel): string {
+    $rs = release_status($rel);
+    $state = match ($rs) {
+        'Current' => 'signed by ' . $rel['signed_name'] . ' on ' . fmt_date($rel['signed_at']) . ($rel['method'] === 'Paper' ? ' (paper)' : '') . ', valid until ' . fmt_date($rel['expires_on']) . '.',
+        'Expired' => 'expired on ' . fmt_date($rel['expires_on']) . '.',
+        'Withdrawn' => 'on ' . fmt_date($rel['withdrawn_at']) . '.',
+        default => 'emailed to ' . $rel['signer_name'] . ' on ' . fmt_date($rel['sent_at']) . '.',
+    };
+    return $rel['recipient_name'] . ' (' . $rel['recipient_type'] . '): ' . $rs . ' ' . $state . ' Covers: ' . $rel['info_scope'] . '. Purpose: ' . $rel['purpose'] . '.';
+}
+
+/** Whether a release can still be recorded as withdrawn (Current or Awaiting signature). */
+function release_can_withdraw(array $rel): bool {
+    return in_array(release_status($rel), ['Current', 'Awaiting signature'], true);
+}
+
+/** The client's latest signed guardian consent (id, withdrawn_at, signed_name, signed_at), or null. */
+function consent_latest_signed(int $clientId): ?array {
+    $ls = db()->prepare('SELECT id, withdrawn_at, signed_name, signed_at FROM consent_forms WHERE client_id = ? AND signed_at IS NOT NULL ORDER BY signed_at DESC, id DESC LIMIT 1');
+    $ls->execute([$clientId]);
+    return $ls->fetch() ?: null;
+}
+
+/**
+ * Record that the guardian withdrew their signed consent (4.37.0: moved from client.php, shared with
+ * the apps' withdraw_consent). Only the client's latest signed consent, and only the one shown when
+ * the screen was loaded ($consentId): a stale screen never withdraws a consent signed since.
+ * Returns ['ok' => true, 'message'] or ['ok' => false, 'error'].
+ */
+function consent_withdraw(int $clientId, int $consentId, int $actor): array {
+    $latest = consent_latest_signed($clientId);
+    if (!$latest || (int)$latest['id'] !== $consentId) {
+        return ['ok' => false, 'error' => 'The guardian consent on this record has changed since the page was loaded, so nothing was withdrawn. Check the consent shown below and try again.'];
+    }
+    $wd = db()->prepare('UPDATE consent_forms SET withdrawn_at = NOW(), withdrawn_by = ? WHERE id = ? AND client_id = ? AND withdrawn_at IS NULL');
+    $wd->execute([$actor, (int)$latest['id'], $clientId]);
+    if ($wd->rowCount() === 0) return ['ok' => false, 'error' => 'That consent was already recorded as withdrawn.'];
+    audit($actor, 'consent.withdraw', 'client', $clientId, 'consent #' . (int)$latest['id']);
+    return ['ok' => true, 'message' => 'Guardian consent recorded as withdrawn. Request a new consent below when the guardian agrees again.'];
+}
+
+/** Record that the privacy notice was given, and how (4.37.0: moved from client.php, shared with the
+ *  apps' record_privacy_notice). Returns ['ok' => true, 'message'] or ['ok' => false, 'error']. */
+function privacy_notice_record(int $clientId, string $how, int $actor, string $channel = 'web'): array {
+    if (!in_array($how, PRIVACY_NOTICE_METHODS, true)) return ['ok' => false, 'error' => 'Choose how the privacy notice was given.'];
+    db()->prepare('UPDATE clients SET privacy_notice_at = NOW(), privacy_notice_by = ?, privacy_notice_how = ? WHERE id = ?')->execute([$actor, $how, $clientId]);
+    audit($actor, 'client.privacy_notice', 'client', $clientId, $how . ($channel === 'mobile' ? ' (mobile)' : ''));
+    return ['ok' => true, 'message' => 'Recorded: privacy notice given (' . mb_strtolower($how) . ').'];
+}
+
+/** The privacy notice line client.php shows, without its link. $client needs privacy_notice_at and _how. */
+function privacy_notice_text(array $client): string {
+    return !empty($client['privacy_notice_at'])
+        ? 'Given ' . fmt_date($client['privacy_notice_at']) . ' (' . mb_strtolower((string)$client['privacy_notice_how']) . ').'
+        : 'Not recorded. The notice is at the privacy notice page.';
+}
+
+/** A release as the apps' client reply sends it (4.37.0 adds text, can_withdraw, withdrawn_at, sent_at). */
+function release_api_row(array $r): array {
+    return ['id' => (int)$r['id'], 'recipient_type' => $r['recipient_type'], 'recipient_name' => $r['recipient_name'],
+        'status' => release_status($r), 'signed_name' => $r['signed_name'], 'signed_at' => $r['signed_at'], 'expires_on' => $r['expires_on'],
+        'info_scope' => $r['info_scope'], 'purpose' => $r['purpose'], 'method' => $r['method'],
+        'text' => release_row_text($r), 'can_withdraw' => release_can_withdraw($r), 'withdrawn_at' => $r['withdrawn_at'] ?? null, 'sent_at' => $r['sent_at'] ?? null];
+}

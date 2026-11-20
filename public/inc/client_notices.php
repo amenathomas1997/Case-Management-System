@@ -308,3 +308,48 @@ function client_sessions_ics(array $rows, string $attendee, string $method, bool
     $ics .= "END:VCALENDAR\r\n";
     return [$ics, $lines];
 }
+
+/** The sentence a closed client's portal link carries: their portal is read-only. */
+function portal_link_closed_sentence(array $client): string {
+    return str_starts_with((string)($client['status'] ?? ''), 'Closed') ? ' This client\'s case is closed, so their portal is read-only: they can view it but cannot send requests, messages or files. Reopen the case first if they need to send requests again.' : '';
+}
+
+/** The question asked before a portal link is emailed (4.37.0: shared by client.php and the apps):
+ *  where it goes, that the earlier link stops working, a closed case's read-only portal, and a
+ *  client who prefers phone or post. $client needs name, email, status and a11y_contact. */
+function portal_link_confirm_text(array $client): string {
+    return 'Email ' . $client['name'] . ' a private portal link' . (filter_var($client['email'] ?? '', FILTER_VALIDATE_EMAIL) ? ' at ' . $client['email'] : '') . '? Any previous link will stop working.'
+        . portal_link_closed_sentence($client)
+        // Said in the question (no extra stop on the page) when they prefer not to be emailed (3.0.40).
+        . (in_array($client['a11y_contact'] ?? '', ['Phone', 'Postal mail'], true) ? ' Note: this client prefers contact by ' . strtolower((string)$client['a11y_contact']) . '.' : '');
+}
+
+/** The confirmation once a portal link is emailed (client.php's; 4.37.0: the apps' too). */
+function portal_link_sent_message(array $client, string $email): string {
+    return 'Portal link emailed to the client at ' . $email . '. Any previous link no longer works. It stays open while it is used at least every six months.' . portal_link_closed_sentence($client);
+}
+
+/** The client's portal link as client.php describes it: none, active (until a date), expired, or a
+ *  link on an archived record (which does not open). Returns ['state' => none|active|expired|archived,
+ *  'until' => ?string (Y-m-d H:i:s), 'text']. */
+function portal_link_state(int $clientId): array {
+    $pt = db()->prepare('SELECT t.expires_at, c.archived_at FROM portal_tokens t JOIN clients c ON c.id = t.client_id WHERE t.client_id = ? ORDER BY t.expires_at DESC LIMIT 1');
+    $pt->execute([$clientId]);
+    $row = $pt->fetch();
+    if (!$row) return ['state' => 'none', 'until' => null, 'text' => 'No portal link has been sent, or the last one was turned off.'];
+    $exp = $row['expires_at'] !== null ? (string)$row['expires_at'] : null;
+    if ($row['archived_at'] !== null) return ['state' => 'archived', 'until' => $exp, 'text' => 'The record is archived, so the portal link does not open.'];
+    if ($exp && $exp < date('Y-m-d H:i:s')) return ['state' => 'expired', 'until' => $exp, 'text' => 'The portal link expired on ' . fmt_date($exp) . '.'];
+    return ['state' => 'active', 'until' => $exp, 'text' => 'A portal link is active' . ($exp ? ' until ' . fmt_date($exp) : '') . '.'];
+}
+
+/** Turn off the client's portal link: every link already sent stops working (4.37.0: moved from
+ *  client.php, shared with the apps' revoke_portal_link). Returns ['ok' => true, 'message'] or
+ *  ['ok' => false, 'error'] when there was none. */
+function portal_link_revoke(int $clientId, int $actor, string $channel = 'web'): array {
+    $del = db()->prepare('DELETE FROM portal_tokens WHERE client_id = ?');
+    $del->execute([$clientId]);
+    if ($del->rowCount() === 0) return ['ok' => false, 'error' => 'This client has no portal link to turn off.'];
+    audit($actor, 'portal.revoke', 'client', $clientId, $channel === 'mobile' ? 'mobile' : null);
+    return ['ok' => true, 'message' => 'Portal link turned off. No link sent before now works any more; send a new link when the client needs access again.'];
+}

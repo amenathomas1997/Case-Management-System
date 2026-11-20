@@ -280,6 +280,8 @@ fun parseMessageThread(r: JSONObject): MessageThread {
 data class DocumentItem(
     val id: Int, val title: String, val category: String, val createdAt: String?, val portalShared: Boolean,
     val counselorShared: Boolean, val uploadedVia: String?,
+    /** 4.37.0 (S16): this user may move it to the trash (key categories are administrators' only). */
+    val canDelete: Boolean = false,
 ) {
     /** A Resource, or a file the client sent, is always in their portal. */
     val portalFixed: Boolean get() = category in setOf("Resource", "Shared by client") || uploadedVia == "portal"
@@ -287,7 +289,7 @@ data class DocumentItem(
 
 fun parseDocuments(r: JSONObject): List<DocumentItem> = r.optJSONArray("documents").objects().map { d ->
     DocumentItem(d.optInt("id"), d.str("title") ?: d.text("orig_name"), d.text("category"), d.str("created_at"),
-        d.optBoolean("portal_shared"), d.optBoolean("counselor_shared"), d.str("uploaded_via"))
+        d.optBoolean("portal_shared"), d.optBoolean("counselor_shared"), d.str("uploaded_via"), org.casemanagement.app.ui.flag(d, "can_delete"))
 }
 
 /** Who can see a document besides staff, in words. */
@@ -370,10 +372,12 @@ fun parseReferralDeadlines(r: JSONObject) = ReferralDeadlines(
     r.optInt("assessed_on_time"), r.optInt("assessed_late"),
 )
 
-data class ReferralItem(val id: Int, val clientName: String, val reason: String?, val status: String, val createdAt: String?, val counselorAgency: String?, val assignedName: String?)
+data class ReferralItem(val id: Int, val clientName: String, val reason: String?, val status: String, val createdAt: String?, val counselorAgency: String?, val assignedName: String?,
+    /** 4.37.0 (S19): "Contact overdue since <date>" / "Contact by <date>", from the open contact task. */
+    val contactText: String? = null)
 
 fun parseReferrals(r: JSONObject): List<ReferralItem> = r.optJSONArray("referrals").objects().map { x ->
-    ReferralItem(x.optInt("id"), x.text("client_name"), x.str("reason"), x.text("status"), x.str("created_at"), x.str("counselor_agency"), x.str("assigned_name"))
+    ReferralItem(x.optInt("id"), x.text("client_name"), x.str("reason"), x.text("status"), x.str("created_at"), x.str("counselor_agency"), x.str("assigned_name"), x.str("contact_text"))
 }
 
 data class TaskItem(
@@ -462,13 +466,15 @@ fun parseDashboard(r: JSONObject): Dashboard {
 data class EquipmentItem(
     val id: Int, val name: String, val category: String?, val serial: String?, val condition: String?, val status: String,
     val loanId: Int?, val borrower: String?, val borrowerId: Int?, val dueDate: String?, val overdue: Boolean, val held: Boolean,
+    /** 4.37.0: a retired item (listed with include_retired, under Not available). */
+    val retired: Boolean = false,
 ) {
     val canReturn: Boolean get() = loanId != null && borrowerId != null
 }
 
 fun parseEquipment(r: JSONObject): List<EquipmentItem> = r.optJSONArray("equipment").objects().map { e ->
     EquipmentItem(e.optInt("id"), e.text("name"), e.str("category"), e.str("serial"), e.str("item_condition"), e.text("status"),
-        e.intOrNull("loan_id"), e.str("borrower"), e.intOrNull("borrower_id"), e.str("due_date"), e.optBoolean("overdue"), e.optBoolean("held"))
+        e.intOrNull("loan_id"), e.str("borrower"), e.intOrNull("borrower_id"), e.str("due_date"), e.optBoolean("overdue"), e.optBoolean("held"), e.optBoolean("retired", e.optString("status") == "Retired"))
 }
 
 /** The equipment action lists an item once per open loan: each item once, for choosing one. */
@@ -481,6 +487,9 @@ data class EquipmentDetail(
     val bookValue: Double?, val notes: String?, val maintenance: List<ServiceEntry>,
     /** How many service entries there are in all (4.29.0; the list holds the latest ones). */
     val maintenanceTotal: Int = maintenance.size,
+    /** 4.37.0 (S1): what the status buttons need; statusActions is null from an older server (no buttons). */
+    val onLoan: Boolean = false, val inWorkflow: Boolean = false, val holds: Int = 0,
+    val statusActions: List<String>? = null, val retireText: String = "", val manageable: Boolean = true,
 )
 
 fun parseEquipmentDetail(r: JSONObject): EquipmentDetail? {
@@ -489,7 +498,10 @@ fun parseEquipmentDetail(r: JSONObject): EquipmentDetail? {
         i.str("last_service_date"), i.intOrNull("maintenance_interval_days"), i.numOrNull("value"), i.str("purchase_date"),
         i.intOrNull("useful_life_months"), i.numOrNull("book_value"), i.str("notes"),
         r.optJSONArray("maintenance").objects().map { m -> ServiceEntry(m.str("service_date"), m.text("service_type"), m.str("notes"), m.numOrNull("cost"), m.str("by_name")) })
-        .let { d -> d.copy(maintenanceTotal = listTotal(r, d.maintenance.size, "maintenance_total")) }
+        .let { d -> d.copy(maintenanceTotal = listTotal(r, d.maintenance.size, "maintenance_total"),
+            onLoan = r.optBoolean("on_loan"), inWorkflow = r.optBoolean("in_workflow"), holds = r.optInt("holds"),
+            statusActions = r.optJSONArray("status_actions")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotEmpty() } },
+            retireText = r.optString("retire_text"), manageable = r.optBoolean("manageable", true)) }
 }
 
 /** A service interval typed as whole days from 0 to 3650 (0: no schedule); null when it is not one. */

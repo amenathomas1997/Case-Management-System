@@ -12,8 +12,11 @@ struct ReferralRow: Decodable, Identifiable {
     let incomeBracket: String?
     let quotedFee: String?
     let assignedName: String?
+    /// 4.37.0 (S19): referrals.php's contact line ("Contact overdue since …" / "Contact by …").
+    let contactText: String?
+    let contactOverdue: Bool
 
-    private enum CodingKeys: String, CodingKey { case id, clientName, reason, status, createdAt, counselorName, counselorAgency, referralSource, incomeBracket, quotedFee, assignedName }
+    private enum CodingKeys: String, CodingKey { case id, clientName, reason, status, createdAt, counselorName, counselorAgency, referralSource, incomeBracket, quotedFee, assignedName, contactText, contactOverdue }
     // Tolerant decode: a self-referral (no counselor) or any null field must not blank the
     // whole Referrals list for a VoiceOver user. Only id is required.
     init(from d: Decoder) throws {
@@ -29,6 +32,8 @@ struct ReferralRow: Decodable, Identifiable {
         incomeBracket = try? c.decodeIfPresent(String.self, forKey: .incomeBracket)
         quotedFee = try? c.decodeIfPresent(String.self, forKey: .quotedFee)
         assignedName = try? c.decodeIfPresent(String.self, forKey: .assignedName)
+        contactText = try? c.decodeIfPresent(String.self, forKey: .contactText)
+        contactOverdue = (try? c.decodeIfPresent(Bool.self, forKey: .contactOverdue)) ?? false
     }
 
     var isSelfReferral: Bool { referralSource == "self" }
@@ -43,11 +48,14 @@ struct ReferralsResponse: Decodable {
     /// How many referrals match in all (3.0.12 servers send at most 100 rows); nil from an
     /// older server, which does not say.
     let total: Int?
-    private enum CodingKeys: String, CodingKey { case referrals, total }
+    /// 4.37.0 (S19): referrals.php's heading for the status shown ("Open referrals" and so on).
+    let heading: String?
+    private enum CodingKeys: String, CodingKey { case referrals, total, heading }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         referrals = try c.decode([ReferralRow].self, forKey: .referrals)
         total = try? c.decodeIfPresent(Int.self, forKey: .total)
+        heading = try? c.decodeIfPresent(String.self, forKey: .heading)
     }
 }
 
@@ -200,11 +208,26 @@ struct ReferralsView: View {
     @State private var total: Int?
     @State private var loaded = false
     @State private var error: String?
+    /// 4.37.0 (S19): referrals.php's two filters, Open (New or Reviewed) and All referrals first.
+    @State private var statusFilter = "open"
+    @State private var whoFilter = "all"
+    @State private var heading: String?
 
     var body: some View {
         NavigationStack {
             List {
                 if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
+                Section {
+                    Picker("Status", selection: $statusFilter) {
+                        ForEach(referralStatusFilters, id: \.value) { Text($0.label).tag($0.value) }
+                    }
+                    Picker("Show", selection: $whoFilter) {
+                        ForEach(referralWhoFilters, id: \.value) { Text($0.label).tag($0.value) }
+                    }
+                }
+                if loaded, let heading {
+                    Text(heading).font(.headline).accessibilityAddTraits(.isHeader)
+                }
                 // "Nothing here" only once the list has actually arrived.
                 if !loaded && error == nil {
                     ProgressView("Loading referrals…")
@@ -214,9 +237,8 @@ struct ReferralsView: View {
                 }
                 // The server sends the newest 100 (open ones first): said, so the list is not
                 // taken for all of them.
-                if loaded, let total, total > referrals.count {
-                    Text("Showing \(referrals.count) of \(total) referrals; the rest are on the website's Referrals page.")
-                        .font(.callout).foregroundStyle(Color.secondaryText)
+                if loaded, let total, let cut = referralsCutText(shown: referrals.count, total: total) {
+                    Text(cut).font(.callout).foregroundStyle(Color.secondaryText)
                 }
                 ForEach(referrals) { referral in
                     NavigationLink(value: referral.id) {
@@ -242,6 +264,10 @@ struct ReferralsView: View {
                             }
                             if let assigned = referral.assignedName {
                                 Text("Assigned to \(assigned)").font(.caption).foregroundStyle(Color.brandTeal)
+                            }
+                            if let contact = referral.contactText, !contact.isEmpty {
+                                Text(contact).font(.caption.weight(referral.contactOverdue ? .semibold : .regular))
+                                    .foregroundStyle(referral.contactOverdue ? Color.alertRed : Color.secondaryText)
                             }
                         }
                         .padding(.vertical, 2)
@@ -269,20 +295,48 @@ struct ReferralsView: View {
             }
             .refreshable { await load() }
             .task { await load() }
+            .onChange(of: statusFilter) { _ in Task { await load(announcing: true) } }
+            .onChange(of: whoFilter) { _ in Task { await load(announcing: true) } }
+            .modifier(ReadablePickers(inNavigationStack: true))
         }
     }
 
-    private func load() async {
+    /// `announcing`: a filter changed, so the new count is said once.
+    private func load(announcing: Bool = false) async {
         do {
             error = nil
-            let response: ReferralsResponse = try await api.call("referrals")
+            let response: ReferralsResponse = try await api.call("referrals", query: referralsQuery(status: statusFilter, who: whoFilter))
             referrals = response.referrals
             total = response.total
+            heading = response.heading
             loaded = true
+            if announcing { announce(referralsCountSentence(statusFilter, count: response.total ?? response.referrals.count)) }
         } catch {
             showFormError(error.localizedDescription, in: &self.error)
         }
     }
+}
+
+/// referrals.php's Status and Show choices (4.37.0, S19).
+let referralStatusFilters: [(value: String, label: String)] = [
+    ("open", "Open (New or Reviewed)"), ("converted", "Converted"), ("closed", "Closed without a client"), ("all", "All statuses"),
+]
+let referralWhoFilters: [(value: String, label: String)] = [("all", "All referrals"), ("me", "Assigned to me"), ("unassigned", "Unassigned")]
+
+/// The referrals query for the filters chosen.
+func referralsQuery(status: String, who: String) -> [String: String] {
+    ["status": status, "who": who]
+}
+
+/// referrals.php's line when only the newest are listed, or nil when all are.
+func referralsCutText(shown: Int, total: Int) -> String? {
+    total > shown ? "Showing the newest \(shown) of \(total) matching referrals. Narrow the filters to find older ones." : nil
+}
+
+/// Said once when a filter changes: "4 open referrals."
+func referralsCountSentence(_ status: String, count: Int) -> String {
+    let kind = ["open": "open ", "converted": "converted ", "closed": "closed "][status] ?? ""
+    return "\(count) \(kind)referral\(count == 1 ? "" : "s")."
 }
 
 struct ReferralDetailView: View {
@@ -657,8 +711,10 @@ struct ReferralDetailView: View {
         confirmation = nil
         do {
             error = nil
-            let _: OKResponse = try await api.call("review_referral", body: ["id": referralId])
-            confirmation = "Marked as reviewed."
+            // 4.37.0 (S18): the server's sentence ("Referral marked as reviewed." or "Nothing was
+            // changed: …" when it is no longer New).
+            let reply: MessageReply = try await api.call("review_referral", body: ["id": referralId])
+            confirmation = reply.message ?? "Marked as reviewed."
             await load()
             onChanged()
             busy = false

@@ -51,6 +51,9 @@ fun DocumentsScreen(api: Api, clientId: Int) {
     var assigning by rememberSaveable { mutableStateOf(false) }
     var uploading by rememberSaveable { mutableStateOf(false) }
     var chosen by remember { mutableStateOf<DocumentItem?>(null) }
+    // 4.37.0 (S16): the document being moved to the trash, by its number.
+    var trashingId by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
+    var trashPresses by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     fun share(d: DocumentItem, with: String, on: Boolean) {
         chosen = null; error = null; notice = null
@@ -71,7 +74,7 @@ fun DocumentsScreen(api: Api, clientId: Int) {
     Show(state, "documents and homework") { (docs, hw) ->
         Page {
             NoticeText(notice)
-            ErrorText(error)
+            ErrorText(error, focusKey = trashPresses)
             Heading("Documents (${docs.size})")
             if (api.can("clients")) SecondaryButton("Upload a document") { uploading = true }
             if (docs.isEmpty()) Text("No documents.")
@@ -85,6 +88,8 @@ fun DocumentsScreen(api: Api, clientId: Int) {
                             scope.launch { try { openDocument(api, context, d.id)?.let { error = it } } catch (e: ApiException) { error = e.message } finally { busy = false } }
                         }
                     })
+                // 4.37.0 (S16): its own visible button, outside the row.
+                if (d.canDelete && api.can("clients")) SecondaryButton(deleteButtonLabel(d.title)) { trashingId = d.id }
             }
             val queued = api.ownQueued().filter { it.optString("action") == "complete_homework" }.map { try { JSONObject(it.optString("body")).optInt("id") } catch (e: Exception) { 0 } }.toSet()
             Heading("Homework (${hw.size})")
@@ -153,7 +158,16 @@ fun DocumentsScreen(api: Api, clientId: Int) {
             confirmButton = { TextButton(onClick = { chosen = null }) { Text("Close") } },
         )
     }
-    if (uploading) UploadDocumentDialog(api, clientId, onDone = { m -> uploading = false; notice = m; state.reload() }, onCancel = { uploading = false })
+    state.data?.first?.firstOrNull { trashingId != 0 && it.id == trashingId }?.let { d ->
+        Confirm(trashConfirmTitle(d.title), DOCUMENT_TRASH_TEXT, "Move to trash", {
+            error = null; notice = null
+            scope.launch {
+                try { notice = api.call("delete_document", body = JSONObject().put("id", d.id)).optString("message").ifEmpty { "Document moved to the trash — an administrator can restore it for 30 days." }; state.reload() }
+                catch (e: ApiException) { trashPresses++; error = e.message }
+            }
+        }, { trashingId = 0 }, no = "Keep it")
+    }
+        if (uploading) UploadDocumentDialog(api, clientId, onDone = { m -> uploading = false; notice = m; state.reload() }, onCancel = { uploading = false })
     if (assigning) AssignHomeworkDialog(api, clientId, onDone = { m -> assigning = false; notice = m; state.reload() }, onCancel = { assigning = false })
 }
 

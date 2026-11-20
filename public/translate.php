@@ -34,13 +34,10 @@ $lang = in_array($_POST['lang'] ?? '', TRANSLATE_LANGS, true) ? $_POST['lang'] :
 $other = trim(is_string($_POST['other'] ?? null) ? $_POST['other'] : '');
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['go'])) {
     $target = $lang === 'Other (type below)' ? $other : $lang;
-    $errs = [];
-    if (trim($content) === '') $errs['content'] = 'Paste the text to translate.';
-    elseif (($cLen = mb_strlen($content)) > TRANSLATE_MAX_CHARS) $errs['content'] = 'That is too much text to translate at once: shorten it to 6,000 characters or fewer (it has ' . number_format($cLen) . '), or split it into parts and translate each one.';
-    if ($lang === 'Other (type below)') {
-        if ($other === '') $errs['other'] = 'Type the language to translate into.';
-        elseif (!preg_match('/^[\p{L}\p{M} ()\'’.-]{1,40}$/u', $other)) $errs['other'] = 'The language name can use only letters, spaces, hyphens, apostrophes, periods and parentheses (40 characters maximum).';
-    }
+    // The checks and sentences the app's ai_translate shares (inc/ai.php, 4.37.0); the typed
+    // language's error is on the Other language field here.
+    $errs = translate_input_errors($content, $target);
+    if (isset($errs['language'])) { $errs['other'] = $errs['language']; unset($errs['language']); }
     // One announcement (4.29.0): the summary above the form and each field's own error; no flash as well.
     if ($errs) set_form_errors($errs);
     elseif (!ai_rate_limit((int)$user['id'])) { flash('You have reached the AI usage limit for now. Please wait a few minutes.', 'error'); }

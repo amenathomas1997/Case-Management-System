@@ -201,25 +201,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_assessment'])) {
 if (isset($_GET['report'])) {
     $r = wa_load((int)$_GET['report'], $user);
     if (!$r) { flash('Assessment not found.', 'error'); redirect('accommodations.php'); }
-    $doc = new AccessibleDocument('Job Accommodation Recommendations — ' . $r['client_name']);
-    $doc->paragraph(brand('org'));
-    $doc->properties(array_filter([
-        'Client' => $r['client_name'],
-        'Employer' => $r['employer'] ?? '',
-        'Job title' => $r['job_title'] ?? '',
-        'Worksite' => $r['worksite_location'] ?? '',
-        'Assessment date' => $r['assessment_date'] ? fmt_date($r['assessment_date']) : '',
-        'Assessor' => $r['assessor'] ?? $user['name'],
-    ]));
-    if ($r['job_tasks']) { $doc->heading('Essential job tasks'); $doc->paragraph($r['job_tasks']); }
-    if ($r['barriers']) { $doc->heading('Barriers identified'); $doc->paragraph($r['barriers']); }
-    $doc->heading('Recommended accommodations');
-    $doc->paragraph($r['recommendations'] ?: '[Recommendations to be completed]');
-    $doc->paragraph('Prepared ' . date('F j, Y') . ' by ' . ($r['assessor'] ?? $user['name']) . ' — ' . cfg('name'));
+    // The report the app's worksite_report shares (inc/report_ai.php, 4.37.0).
+    $rep = worksite_report_doc($r, $user);
     audit($user['id'], 'worksite.report', 'worksite_assessment', (int)$r['id']);
-    // Named for the client and the day, so a saved copy is found by name in a file list.
-    $base = trim(preg_replace('/[^A-Za-z0-9]+/', '_', (string)$r['client_name']) ?? '', '_') ?: (string)(int)$r['id'];
-    $doc->download('Job_Accommodation_Recommendations_' . $base . '_' . date('Ymd') . '.html');
+    $rep['doc']->download($rep['file']);
 }
 
 /** A date the browser cannot read (a partly typed one) is sent blank: this marks it

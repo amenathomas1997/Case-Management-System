@@ -237,16 +237,23 @@ fun AlertsScreen(api: Api, nav: NavHostController) {
 @Composable
 fun ReferralsScreen(api: Api, nav: NavHostController) {
     var status by rememberSaveable { mutableStateOf("open") }
-    val state = rememberLoaded(status) { parseReferrals(api.call("referrals", mapOf("status" to status))) }
+    // 4.37.0 (S19): the website's Status and Show filters, and each referral's contact date.
+    var who by rememberSaveable { mutableStateOf("all") }
+    val state = rememberLoaded(status, who) { api.call("referrals", referralsQuery(status, who)) }
     Page {
-        Choice("Show", status, listOf("open" to "Open referrals", "converted" to "Converted to clients", "closed" to "Closed", "all" to "All")) { status = it }
-        Show(state, "referrals") { list ->
-            Heading("Referrals (${list.size})")
+        Choice("Status", status, REFERRAL_STATUSES) { status = it }
+        Choice("Show", who, REFERRAL_WHO) { who = it }
+        Show(state, "referrals") { r ->
+            val list = parseReferrals(r)
+            val total = r.optInt("total", list.size)
+            Announce(referralsCountText(status, list.size), key = "$status|$who|${list.size}")
+            Heading(referralsHeadingText(r.str("heading"), status, list.size))
+            referralsCutText(list.size, total)?.let { Text(it) }
             if (list.isEmpty()) Text("No referrals.")
-            list.forEach { r ->
-                ListRow(listOf(r.clientName, r.status + ", " + whenText(r.createdAt),
-                    listOfNotNull(r.reason, r.counselorAgency, r.assignedName?.let { "assigned to $it" } ?: "unassigned").joinToString(", ")),
-                    onClick = { nav.navigate("referral/${r.id}") })
+            list.forEach { x ->
+                ListRow(listOfNotNull(x.clientName, x.status + ", " + whenText(x.createdAt),
+                    listOfNotNull(x.reason, x.counselorAgency, x.assignedName?.let { "assigned to $it" } ?: "unassigned").joinToString(", "), x.contactText),
+                    onClick = { nav.navigate("referral/${x.id}") })
             }
         }
     }

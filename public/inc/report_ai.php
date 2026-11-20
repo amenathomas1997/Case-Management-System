@@ -51,7 +51,98 @@ function worksite_ai_recommendations(array $wa, array $clientRow, int $actor): a
             . 'From the job tasks and barriers, list specific, reasonable accommodations (assistive technology, software settings, workstation changes, training), '
             . 'one per line with a short reason. Do not name the employee; do not invent facts.',
         $facts, 700, $clientRow, $actor);
-    return ['ok' => $res['ok'], 'text' => $res['ok'] ? trim((string)$res['text']) : '', 'error' => $res['ok'] ? null : $res['error']];
+    // truncated (4.37.0): the apps and the page say an incomplete draft is incomplete.
+    return ['ok' => $res['ok'], 'text' => $res['ok'] ? trim((string)$res['text']) : '', 'error' => $res['ok'] ? null : $res['error'], 'truncated' => !empty($res['truncated'])];
+}
+
+/** The employer's recommendation report for one worksite assessment (4.37.0: moved from
+ *  accommodations.php, shared with the app's worksite_report). $wa is the assessment with
+ *  client_name and assessor; the caller has checked its scope. Returns ['doc', 'title', 'text' (the
+ *  same report as plain text), 'file']. */
+function worksite_report_doc(array $wa, array $user): array {
+    require_once __DIR__ . '/document.php';
+    $title = 'Job Accommodation Recommendations — ' . $wa['client_name'];
+    $doc = new AccessibleDocument($title);
+    $org = brand('org');
+    $doc->paragraph($org);
+    $props = array_filter([
+        'Client' => (string)$wa['client_name'],
+        'Employer' => (string)($wa['employer'] ?? ''),
+        'Job title' => (string)($wa['job_title'] ?? ''),
+        'Worksite' => (string)($wa['worksite_location'] ?? ''),
+        'Assessment date' => !empty($wa['assessment_date']) ? fmt_date($wa['assessment_date']) : '',
+        'Assessor' => (string)($wa['assessor'] ?? $user['name'] ?? ''),
+    ]);
+    $doc->properties($props);
+    $lines = [$title, '', $org, '', implode("\n", array_map(fn($k, $v) => $k . ': ' . $v, array_keys($props), $props))];
+    if (!empty($wa['job_tasks'])) { $doc->heading('Essential job tasks'); $doc->paragraph((string)$wa['job_tasks']); array_push($lines, '', 'Essential job tasks', (string)$wa['job_tasks']); }
+    if (!empty($wa['barriers'])) { $doc->heading('Barriers identified'); $doc->paragraph((string)$wa['barriers']); array_push($lines, '', 'Barriers identified', (string)$wa['barriers']); }
+    $recs = !empty($wa['recommendations']) ? (string)$wa['recommendations'] : '[Recommendations to be completed]';
+    $doc->heading('Recommended accommodations');
+    $doc->paragraph($recs);
+    $prepared = 'Prepared ' . date('F j, Y') . ' by ' . ($wa['assessor'] ?? $user['name'] ?? '') . ' — ' . cfg('name');
+    $doc->paragraph($prepared);
+    array_push($lines, '', 'Recommended accommodations', $recs, '', $prepared);
+    // Named for the client and the day, so a saved copy is found by name in a file list.
+    $base = trim(preg_replace('/[^A-Za-z0-9]+/', '_', (string)$wa['client_name']) ?? '', '_') ?: (string)(int)$wa['id'];
+    return ['doc' => $doc, 'title' => $title, 'text' => implode("\n", $lines), 'file' => 'Job_Accommodation_Recommendations_' . $base . '_' . date('Ymd') . '.html'];
+}
+
+/** The longest start of $text that fits $max characters and ends at a sentence (or, failing that, a
+ *  line or word) end; $text itself when it fits. */
+function text_cut_at_sentence(string $text, int $max): string {
+    if (mb_strlen($text) <= $max) return $text;
+    $cut = mb_substr($text, 0, $max);
+    foreach (['/^(.*[.!?])(?=\s|$)/su', '/^(.*)\n/su', '/^(.*)\s/su'] as $re) {
+        if (preg_match($re, $cut, $m) && mb_strlen(trim($m[1])) > 0) return rtrim($m[1]);
+    }
+    return $cut;
+}
+
+/**
+ * The "Justification of need" for a device funding request (4.37.0, procurement.php, recommend.php and
+ * the apps' ai_draft justification). From the client's disability, latest tech assessment, active
+ * goals and IPE goal, the chosen device and whatever is already written. [CLIENT] and the other
+ * withheld names are put back. Returns ['ok', 'text', 'error', 'truncated'].
+ */
+function device_justification_ai(array $client, string $device, string $category, string $typed, int $uid): array {
+    $cid = (int)$client['id'];
+    $a = db()->prepare('SELECT primary_disability, primary_tech, summary FROM tech_assessments WHERE client_id = ? ORDER BY assessment_date DESC, id DESC LIMIT 1');
+    $a->execute([$cid]);
+    $as = $a->fetch() ?: [];
+    $g = db()->prepare("SELECT sg.specific_goal FROM smart_goals sg JOIN training_tracks t ON t.id = sg.track_id WHERE t.client_id = ? AND sg.status <> 'Achieved' ORDER BY sg.id LIMIT 8");
+    $g->execute([$cid]);
+    $goals = array_values(array_filter(array_map('strval', $g->fetchAll(PDO::FETCH_COLUMN)), fn($x) => trim($x) !== ''));
+    $facts = 'Primary disability / functional limitations: ' . (trim((string)($as['primary_disability'] ?? '')) !== '' ? $as['primary_disability'] : '[not recorded]') . "\n";
+    if (!empty($as['summary'])) $facts .= 'Assessment summary: ' . mb_strimwidth((string)$as['summary'], 0, 600, '…') . "\n";
+    if ($goals) $facts .= "Active goals:\n - " . implode("\n - ", $goals) . "\n";
+    if (trim((string)($client['ipe_goal'] ?? '')) !== '') $facts .= 'Vocational goal (IPE): ' . trim((string)$client['ipe_goal']) . "\n";
+    $facts .= 'Device / technology requested: ' . $device . ($category !== '' ? ' (' . $category . ')' : '') . "\n";
+    if (trim($typed) !== '') $facts .= "Already written (do not repeat it):\n" . trim($typed) . "\n";
+    $res = ai_run('draft',
+        ai_system_base() . ' You help an assistive technology specialist write the "Justification of need" for a funding request to a vocational rehabilitation agency. In one or two short paragraphs, explain why the named device is necessary for the client to reach their vocational goal, tied to the disability, the assessment and the goals given. Do not invent facts, prices or names. Bracketed tags such as [CLIENT] stand for names that were withheld: keep them exactly as written.' . ai_plain_text_rule(),
+        trim($facts), 600, $client, $uid);
+    // asked: the client's facts reached the provider (ai_run() logged the call), so the use is audited.
+    $asked = array_key_exists('usage_id', $res);
+    if (!$res['ok']) return ['ok' => false, 'text' => '', 'error' => $res['error'], 'truncated' => false, 'asked' => $asked];
+    $restore = report_ai_restore_map(['client_name' => (string)($client['name'] ?? ''), 'counselor_name' => (string)($client['counselor_name'] ?? ''), 'cid' => $cid]);
+    return ['ok' => true, 'text' => strtr(trim((string)$res['text']), $restore), 'error' => null, 'truncated' => !empty($res['truncated']), 'asked' => $asked];
+}
+
+/** A draft added to what was typed, as every AI button does: an empty field gets the draft, else it
+ *  goes below the typed text after one line break. */
+function ai_merge_draft(string $typed, string $draft): string {
+    $typed = rtrim($typed);
+    return $typed === '' ? $draft : $typed . "\n" . $draft;
+}
+
+/** device_justification_ai()'s draft merged into the typed text and fitted to the field's 4,000
+ *  characters, cut at a sentence end when it would not fit. Returns ['merged', 'shortened']. */
+function device_justification_fit(array $res, string $typed): array {
+    if (empty($res['ok'])) return ['merged' => $typed, 'shortened' => false];
+    $merged = ai_merge_draft($typed, (string)$res['text']);
+    $fit = text_cut_at_sentence($merged, 4000);
+    return ['merged' => $fit, 'shortened' => $fit !== $merged];
 }
 
 /** An aggregate report's figures as plain lines for report_ai_narrative() (counts and labels only). */

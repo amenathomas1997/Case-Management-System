@@ -53,3 +53,27 @@ function kb_no_match_message(array $terms): string {
 function kb_context_line(array $a): string {
     return "Article: " . $a['title'] . ($a['category'] ? " ({$a['category']})" : '') . "\n" . mb_strimwidth((string)$a['body'], 0, 2500, '…') . "\n\n";
 }
+
+/** The next steps when no article covers a question (kb_ask.php's list, without its link; 4.37.0:
+ *  the apps show them too). */
+const KB_NO_MATCH_STEPS = ['Try fewer or more general words, for example the product name or the task.',
+    'Add an article on the Knowledge page, then ask again.',
+    'Or tick “answer from general knowledge” above and ask again.'];
+
+/** The question's problem, or null: it is required and up to 2,000 characters (refused, never cut). */
+function kb_question_error(string $q): ?string {
+    if ($q === '') return 'Type a question to ask.';
+    if (($qLen = mb_strlen($q)) > 2000) return 'Shorten the question to 2,000 characters or fewer (it has ' . number_format($qLen) . ').';
+    return null;
+}
+
+/** A general-knowledge answer when no article covers the question and the person asked for one,
+ *  clearly marked as not agency procedure (4.37.0: moved from kb_ask.php, shared with the apps' ai_kb
+ *  general). Returns ai_run()'s result. */
+function kb_general_answer(string $q, int $uid): array {
+    return ai_run('kb',
+        ai_system_base() . ' No knowledge-base article covers this question, and the user asked for a general answer. Answer from general knowledge about assistive technology, accessibility and vocational rehabilitation practice, briefly and carefully. '
+            . 'Begin with the sentence "No knowledge-base article covers this, so this answer is general knowledge, not agency procedure." Do not invent agency policies, prices, names or contacts.'
+            . ai_plain_text_rule() . ' Number the steps of a procedure.',
+        "Question: {$q}", 1200, null, $uid);
+}

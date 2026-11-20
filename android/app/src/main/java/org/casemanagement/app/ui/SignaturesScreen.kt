@@ -519,6 +519,10 @@ fun ReleaseRequestScreen(api: Api, nav: NavHostController, clientId: Int) {
     var info by rememberSaveable { mutableStateOf(listOf<String>()) }
     var other by rememberSaveable { mutableStateOf("") }
     var purpose by rememberSaveable { mutableStateOf("") }
+    // 4.37.0 (S15): emailed to sign, or a paper release already signed (its date).
+    var method by rememberSaveable { mutableStateOf(RELEASE_METHOD_EMAIL) }
+    var signedOn by rememberSaveable { mutableStateOf("") }
+    val paper = method == RELEASE_METHOD_PAPER
     // 4.27.0: kept until the server answers, so a retry after a lost reply never emails it twice.
     var requestKey by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -532,10 +536,12 @@ fun ReleaseRequestScreen(api: Api, nav: NavHostController, clientId: Int) {
         Page {
             // 4.30.0: no heading here, as the title bar already says "Release of information".
             val days = ch.validityDays
-            if (days > 0) Text("It is emailed to the person who signs, and lasts $days days once signed.")
+            if (days > 0 && !paper) Text("It is emailed to the person who signs, and lasts $days days once signed.")
+            Choice("How", method, RELEASE_METHODS) { method = it; fieldErrors = emptyMap(); error = null }
+            if (paper) Field("Date signed (paper releases only)", signedOn, { signedOn = it }, hint = "year-month-day", required = true, error = fieldErrors["signed_on"])
             Choice("Who signs", role, listOf("Client" to "The client", "Guardian" to "Their guardian")) { role = it; signerName = null; signerEmail = null }
             Field("Their full name", name, { signerName = it }, required = true, error = fieldErrors["name"])
-            Field("Their email", email, { signerEmail = it }, keyboard = KeyboardType.Email, required = true, error = fieldErrors["email"])
+            Field("Their email", email, { signerEmail = it }, keyboard = KeyboardType.Email, hint = if (paper) "optional" else null, required = !paper, error = fieldErrors["email"])
             Heading("Who receives the information")
             Choice("Kind of recipient", recipientType, listOf("" to "Choose one") + ch.recipientTypes.map { it to it }, error = fieldErrors["type"], required = true) { recipientType = it }
             Field("Recipient name", recipientName, { recipientName = it }, hint = "person or organisation", required = true, error = fieldErrors["recipient"])
@@ -547,11 +553,12 @@ fun ReleaseRequestScreen(api: Api, nav: NavHostController, clientId: Int) {
             Field("Other information", other, { other = it }, hint = "optional", error = fieldErrors["info"])
             Field("Why it is shared", purpose, { purpose = it }, required = true, error = fieldErrors["purpose"])
             ErrorText(error)
-            PrimaryButton("Email the release to sign", busy = busy) {
+            PrimaryButton(if (paper) "Record paper release" else "Email the release to sign", busy = busy) {
                 if (busy) return@PrimaryButton
                 fieldErrors = listOfNotNull(
                     if (name.isBlank()) "name" to "Enter the full name of the person who signs." else null,
-                    if (email.isBlank()) "email" to "Enter the email address of the person who signs." else null,
+                    if (email.isBlank() && !paper) "email" to "Enter the email address of the person who signs." else null,
+                    if (paper && signedOn.isBlank()) "signed_on" to "Enter the date the paper release was signed." else null,
                     if (recipientType.isEmpty()) "type" to "Choose the kind of recipient." else null,
                     if (recipientName.isBlank()) "recipient" to "Enter the recipient's name." else null,
                     if (info.isEmpty() && other.isBlank()) "info" to "Tick at least one kind of information, or describe it under Other information." else null,
@@ -559,8 +566,10 @@ fun ReleaseRequestScreen(api: Api, nav: NavHostController, clientId: Int) {
                 ).toMap()
                 if (fieldErrors.isNotEmpty()) { error = errorSummary(fieldErrors.values); return@PrimaryButton }
                 scope.launchSave({ busy = it }, { error = it }) {
-                    val b = JSONObject().put("client_id", clientId).put("signer_role", role).put("signer_name", name.trim()).put("signer_email", email.trim())
+                    val base = JSONObject().put("client_id", clientId).put("signer_role", role).put("signer_name", name.trim()).put("signer_email", email.trim())
                         .put("recipient_type", recipientType).put("recipient_name", recipientName.trim()).put("purpose", purpose.trim()).put("info", JSONArray(info))
+                    // An emailed release is sent as before (no method), so a 4.36.0 server takes it unchanged.
+                    val b = if (paper) releaseBody(method, signedOn, base) else base
                     if (recipientEmail.isNotBlank()) b.put("recipient_email", recipientEmail.trim())
                     if (other.isNotBlank()) b.put("info_other", other.trim())
                     // The same key only while every field is unchanged (retryKey).
@@ -568,8 +577,11 @@ fun ReleaseRequestScreen(api: Api, nav: NavHostController, clientId: Int) {
                     b.put("idem_key", retryKeyId(requestKey))
                     val r = try { api.call("request_release", body = b).also { requestKey = "" } } catch (e: ApiException) {
                         if (!e.network && !stillProcessing(e)) requestKey = ""
+                        // The server's field errors (signed_on for a paper release) go on their fields.
+                        replyErrors(e.reply).takeIf { it.isNotEmpty() }?.let { m -> fieldErrors = m.mapKeys { (k, _) -> releaseFieldFor(k) }; throw ApiException(errorSummary(fieldErrors.values) ?: e.message ?: "", e.status, reply = e.reply) }
                         throw e
                     }
+                    if (paper) { Flash.pending = r.str("message") ?: "Paper release recorded for ${recipientName.trim()}."; nav.popBackStack(); return@launchSave }
                     // 4.27.0: the email's outcome not known; the server says what to do.
                     Flash.pending = if (r.optBoolean("unknown")) r.str("message") ?: "The release request was kept, but it is not known whether the email was sent. Check with the client before sending it again."
                         else "Release emailed to ${email.trim()} to sign."

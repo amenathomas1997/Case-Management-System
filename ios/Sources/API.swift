@@ -467,7 +467,12 @@ struct ClientRelease: Decodable, Identifiable {
     let signedName: String?
     let expiresOn: String?
     let infoScope: String
-    private enum CodingKeys: String, CodingKey { case id, recipientType, recipientName, status, signedName, expiresOn, infoScope }
+    /// 4.37.0 (S15): client.php's line for the release, whether it can be recorded withdrawn
+    /// (Current or Awaiting signature) and when it was; nil and false from an older server.
+    let text: String?
+    let canWithdraw: Bool
+    let withdrawnAt: String?
+    private enum CodingKeys: String, CodingKey { case id, recipientType, recipientName, status, signedName, expiresOn, infoScope, text, canWithdraw, withdrawnAt }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id)
@@ -477,7 +482,26 @@ struct ClientRelease: Decodable, Identifiable {
         signedName = try? c.decodeIfPresent(String.self, forKey: .signedName)
         expiresOn = try? c.decodeIfPresent(String.self, forKey: .expiresOn)
         infoScope = (try? c.decode(String.self, forKey: .infoScope)) ?? ""
+        text = try? c.decodeIfPresent(String.self, forKey: .text)
+        canWithdraw = (try? c.decodeIfPresent(Bool.self, forKey: .canWithdraw)) ?? false
+        withdrawnAt = try? c.decodeIfPresent(String.self, forKey: .withdrawnAt)
     }
+}
+
+/// The privacy notice as the client page shows it (4.37.0, S15).
+struct ClientPrivacyNotice: Decodable {
+    let givenAt: String?
+    let how: String?
+    let text: String
+}
+
+/// The portal link's state (4.37.0, S17): "active", "expired", "none" or "archived", the
+/// website's line for it, and the confirmation's words for sending a new link.
+struct PortalLinkState: Decodable {
+    let state: String
+    let until: String?
+    let text: String
+    let confirmText: String?
 }
 
 let noteFormats = ["free", "BIRP", "PAIP", "SOAP"]
@@ -537,7 +561,13 @@ struct ClientDetail: Decodable {
     /// After closure (4.35.0): the outcome surveys and the 30, 60 and 90-day follow-up checks,
     /// nil when the website would not show the section (or from an older server).
     var afterClosure: AfterClosureState?
-    private enum CodingKeys: String, CodingKey { case client, notes, tracks, notesTotal, releases, texting, updatedAt, afterClosure, attendance }
+    /// 4.37.0: the privacy notice (S15) and the portal link (S17), beside the client object or
+    /// inside it; nil from an older server, which shows neither.
+    var privacyNotice: ClientPrivacyNotice?
+    var privacyNoticeMethods: [String]?
+    var portalLink: PortalLinkState?
+    private enum CodingKeys: String, CodingKey { case client, notes, tracks, notesTotal, releases, texting, updatedAt, afterClosure, attendance,
+                                                     privacyNotice, privacyNoticeMethods, portalLink }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         var info = try c.decode(ClientInfo.self, forKey: .client)
@@ -553,9 +583,16 @@ struct ClientDetail: Decodable {
         // Sent beside the client object or inside it: either is read.
         if extras.attendance == nil { extras.attendance = try? c.decodeIfPresent(ClientAttendance.self, forKey: .attendance) }
         afterClosure = (try? c.decodeIfPresent(AfterClosureState.self, forKey: .afterClosure)) ?? nil
-        if afterClosure == nil, let inner = try? c.nestedContainer(keyedBy: CodingKeys.self, forKey: .client) {
+        let inner = try? c.nestedContainer(keyedBy: CodingKeys.self, forKey: .client)
+        if afterClosure == nil, let inner {
             afterClosure = (try? inner.decodeIfPresent(AfterClosureState.self, forKey: .afterClosure)) ?? nil
         }
+        privacyNotice = ((try? c.decodeIfPresent(ClientPrivacyNotice.self, forKey: .privacyNotice)) ?? nil)
+            ?? ((try? inner?.decodeIfPresent(ClientPrivacyNotice.self, forKey: .privacyNotice)) ?? nil)
+        privacyNoticeMethods = ((try? c.decodeIfPresent([String].self, forKey: .privacyNoticeMethods)) ?? nil)
+            ?? ((try? inner?.decodeIfPresent([String].self, forKey: .privacyNoticeMethods)) ?? nil)
+        portalLink = ((try? c.decodeIfPresent(PortalLinkState.self, forKey: .portalLink)) ?? nil)
+            ?? ((try? inner?.decodeIfPresent(PortalLinkState.self, forKey: .portalLink)) ?? nil)
     }
 }
 
@@ -1395,6 +1432,27 @@ struct AmendmentResponse: Decodable {
     let counselorEmail: String?
     let letter: String
     let aiNote: String
+    /// 4.37.0 (S13): the requests recorded and their replies, the waiting sentence, the reply
+    /// choices, the default recipient ("Name <email>" when confirmed), today, and the AI draft
+    /// kept apart from an edited letter. All nil from an older server.
+    let history: [AmendmentHistoryRow]?
+    let waitingText: String?
+    let replyStatuses: [String]?
+    let sentToDefault: String?
+    let today: String?
+    let aiDraftText: String?
+}
+
+/// One amendment request and its reply (4.37.0, S13), as amendment_request.php lists them.
+struct AmendmentHistoryRow: Decodable, Identifiable {
+    let id: Int
+    let requestedOn: String?
+    let status: String?
+    let text: String
+    let awaiting: Bool?
+    let needsChange: Bool?
+    /// The track's amendment reason for this approval, when the server sends it.
+    let reasonPrefill: String?
 }
 
 // MARK: - Document previews
@@ -1692,6 +1750,14 @@ final class API: ObservableObject {
         return "The website is version \(server) and this app is \(app). Please update the app to use everything the website offers."
     }
     func aiHas(_ key: String) -> Bool { aiEnabled && aiFeatures.contains(key) }
+    /// The website is this release or newer (4.37.0: screens an older server has no actions for
+    /// are hidden there). False while the version is not known.
+    func serverAtLeast(_ major: Int, _ minor: Int) -> Bool { API.versionAtLeast(serverVersion, major, minor) }
+    nonisolated static func versionAtLeast(_ version: String?, _ major: Int, _ minor: Int) -> Bool {
+        let parts = (version ?? "").split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        guard parts.count >= 2 else { return false }
+        return parts[0] > major || (parts[0] == major && parts[1] >= minor)
+    }
 
     init() {
         // Deleting the app removes its settings but not its Keychain items. A fresh install (no

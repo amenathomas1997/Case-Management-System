@@ -108,17 +108,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (isset($_POST['mark_reviewed'])) {
-        $rv = db()->prepare("UPDATE referrals SET status = 'Reviewed' WHERE id = ? AND status = 'New'");
-        $rv->execute([$id]);
-        if ($rv->rowCount() === 1) {
-            audit($user['id'], 'referral.review', 'referral', $id);
-            flash('Referral marked as reviewed.');
-        } else {
-            // A stale page: someone else reviewed or converted it meanwhile.
-            $cur = db()->prepare('SELECT status FROM referrals WHERE id = ?');
-            $cur->execute([$id]);
-            flash('Nothing was changed: this referral is no longer New (its status is now ' . ($cur->fetchColumn() ?: 'unknown') . ').', 'error');
-        }
+        // Shared with the apps' review_referral (inc/referral_request.php, 4.37.0); a stale page changes nothing.
+        $rev = referral_mark_reviewed($id, (int)$user['id']);
+        flash($rev['message'], $rev['changed'] ? 'success' : 'error');
         redirect('referrals.php?view=' . $id);
     }
 
@@ -292,13 +284,14 @@ $who = $_GET['who'] ?? '';
 // waiting referrals off the list.
 $statusShow = in_array($_GET['status'] ?? '', ['open', 'converted', 'closed', 'all'], true) ? $_GET['status'] : 'open';
 // The open contact task's due date (4.23.0): the agency's deadline to reach the person.
-$sql = "SELECT r.*, u.name AS assigned_name, (SELECT MIN(tk.due_date) FROM tasks tk WHERE tk.auto_key = CONCAT('ref-contact-', r.id) AND tk.status = 'Open') AS contact_due FROM referrals r LEFT JOIN users u ON u.id = r.assigned_to WHERE 1=1";
+// The contact due date and the Show filter are shared with the apps' referrals (inc/referral_request.php, 4.37.0).
+$sql = "SELECT r.*, u.name AS assigned_name, " . referral_contact_due_sql() . " AS contact_due FROM referrals r LEFT JOIN users u ON u.id = r.assigned_to WHERE 1=1";
 $params = [];
 if ($statusShow === 'open') $sql .= " AND r.status IN ('New','Reviewed')";
 elseif ($statusShow === 'converted') $sql .= " AND r.status = 'Converted'";
 elseif ($statusShow === 'closed') $sql .= " AND r.status = 'Closed'";
-if ($who === 'me') { $sql .= ' AND r.assigned_to = ?'; $params[] = $user['id']; }
-elseif ($who === 'unassigned') { $sql .= ' AND r.assigned_to IS NULL'; }
+[$whoSql, $whoParams] = referral_who_sql(is_string($who) ? $who : '', (int)$user['id']);
+$sql .= $whoSql; array_push($params, ...$whoParams);
 if (caseload_scoped()) {
     // Same rule as referral_in_scope(): a converted referral shows only to the client's current instructor.
     $sql .= " AND ((r.status <> 'Converted' AND (r.assigned_to = ? OR r.assigned_to IS NULL))

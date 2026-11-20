@@ -146,8 +146,17 @@ function api_425(string $action, array $input, int $userId): ?array {
                 if ($still->fetchColumn()) return ['ok' => true, 'id' => $seenId, 'repeat' => true];
             }
             $in = array_map(fn($x) => is_scalar($x) ? (string)$x : $x, $input);
-            [$errs, $v] = release_input($in, 'Email');
-            if ($errs) return ['ok' => false, 'error' => implode(' ', $errs), 'fields' => $errs, 'status' => 422];
+            // method (4.37.0): Email (when absent, as before) or Paper, a release signed on paper and
+            // recorded with its date, as client.php's "Record a paper release" (inc/records_privacy.php).
+            $method = ($in['method'] ?? 'Email') === 'Paper' ? 'Paper' : 'Email';
+            if (isset($in['method']) && !in_array($in['method'], ['Email', 'Paper'], true)) return ['ok' => false, 'error' => 'How: choose Email it to sign or Record a paper release.', 'errors' => ['method' => 'How: choose Email it to sign or Record a paper release.'], 'status' => 422];
+            [$errs, $v] = release_input($in, $method);
+            if ($errs) return ['ok' => false, 'error' => implode(' ', $errs), 'fields' => $errs, 'errors' => $errs, 'status' => 422];
+            if ($method === 'Paper') {
+                $relId = release_record_paper($cid, $v, $userId);
+                api_425_idem_keep($idem, $relId);
+                return ['ok' => true, 'id' => $relId, 'method' => 'Paper', 'message' => release_paper_message($v)];
+            }
             // The same request again within two minutes (a retry after a lost reply) is not emailed twice.
             $again = db()->prepare('SELECT id FROM client_releases WHERE client_id = ? AND signer_email = ? AND recipient_name = ? AND created_by = ? AND withdrawn_at IS NULL AND sent_at > DATE_SUB(NOW(), INTERVAL 2 MINUTE) LIMIT 1');
             $again->execute([$cid, $v['signer_email'], $v['recipient_name'], $userId]);

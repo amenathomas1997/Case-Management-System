@@ -8,6 +8,8 @@ struct UploadDocumentSheet: View {
     @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
     let clientId: Int
+    /// The client has a VR counselor (4.37.0): "Share it with their VR counselor…" is offered.
+    var hasCounselor = false
     /// The result to tell the person, said by the client screen once the sheet has gone
     /// (closing the sheet moves VoiceOver focus, which cut off "Document uploaded." said here).
     let onSaved: (String) -> Void
@@ -26,11 +28,18 @@ struct UploadDocumentSheet: View {
     @State private var photoLoad = UUID()
     /// A library photo is being read (an iCloud original can take seconds): shown and said.
     @State private var loadingPhoto = false
+    /// 4.37.0 (S16): client.php's two ticks, sharing the document as it is uploaded.
+    @State private var sharePortal = false
+    @State private var shareCounselor = false
 
-    /// The file types the server accepts (api.php upload_document), checked before anything is
-    /// sent so a refused type is never uploaded in full first.
-    static let allowedExtensions = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "png", "jpg", "jpeg", "heic"]
+    /// The file types the server accepts (api.php upload_document, as client.php: no HEIC since
+    /// 4.37.0), checked before anything is sent so a refused type is never uploaded in full first.
+    static let allowedExtensions = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "png", "jpg", "jpeg"]
     static let importTypes: [UTType] = allowedExtensions.compactMap { UTType(filenameExtension: $0) }
+    /// What the file browser offers here: the accepted types, and iPhone photos saved as HEIC
+    /// files, which are converted to JPEG before they are uploaded (4.37.0, S16).
+    static let pickTypes: [UTType] = importTypes + [.heic, .heif]
+    static let convertedExtensions: Set<String> = ["heic", "heif"]
     /// The server's limit (api.php upload_document, as on the website). The file goes up
     /// base64-encoded inside JSON (a third larger, about 33.3 MB), which the server's request
     /// body limit (post_max_size 36M in public/.user.ini) still fits.
@@ -43,10 +52,15 @@ struct UploadDocumentSheet: View {
                     ForEach(docCategories, id: \.self) { Text($0) }
                 }
                 // Said in words: the portal lists every Resource document for the client.
-                Text(category == "Resource"
-                     ? "This document will be shared on the client's portal."
-                     : "Documents in the Resource category are shared on the client's portal.")
-                    .font(.footnote).foregroundStyle(Color.secondaryText)
+                if category == "Resource" {
+                    Text("This document will be shared on the client's portal.")
+                        .font(.footnote).foregroundStyle(Color.secondaryText)
+                } else {
+                    Toggle("Share it on the client's portal", isOn: $sharePortal)
+                }
+                if hasCounselor {
+                    Toggle("Share it with their VR counselor on the counselor portal", isOn: $shareCounselor)
+                }
                 // The name and the note about leaving it blank stay visible once a title is typed.
                 CaptionedField(label: "Title (optional; the file name is used when blank)", text: $title, prompt: "File name")
 
@@ -119,7 +133,7 @@ struct UploadDocumentSheet: View {
             .fullScreenCover(isPresented: $showingCamera) {
                 CameraCapture { image in
                     supersedePhotoLoad()
-                    if let jpeg = image.jpegData(compressionQuality: 0.7) {
+                    if let jpeg = image.jpegData(compressionQuality: 0.9) {
                         attached(jpeg, as: "scan_\(timestamp()).jpg")
                     } else {
                         pickerError("Could not use that photo. Try taking it again.")
@@ -127,7 +141,7 @@ struct UploadDocumentSheet: View {
                 }
                 .ignoresSafeArea()
             }
-            .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: Self.importTypes) { result in
+            .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: Self.pickTypes) { result in
                 switch result {
                 case .success(let url): Task { await importFile(url) }
                 case .failure: pickerError("Could not open that file.")
@@ -140,8 +154,10 @@ struct UploadDocumentSheet: View {
     /// refused file never stalls the screen (or VoiceOver) and is never uploaded to be refused.
     private func importFile(_ url: URL) async {
         let load = supersedePhotoLoad()
-        guard Self.allowedExtensions.contains(url.pathExtension.lowercased()) else {
-            pickerError("That type of file can't be uploaded. Choose a PDF, Word, Excel, PowerPoint, text, RTF or CSV file, or a PNG, JPEG or HEIC image.")
+        let ext = url.pathExtension.lowercased()
+        let converts = Self.convertedExtensions.contains(ext)
+        guard Self.allowedExtensions.contains(ext) || converts else {
+            pickerError("That file type is not allowed. Use PDF, Office, text, or image files.")
             return
         }
         let accessed = url.startAccessingSecurityScopedResource()
@@ -158,6 +174,22 @@ struct UploadDocumentSheet: View {
         }
         guard !data.isEmpty else {
             pickerError("That file is empty. Choose another.")
+            return
+        }
+        if converts {
+            // A HEIC photo is sent as a JPEG, which the server (and every computer) opens.
+            let jpeg = await Task.detached(priority: .userInitiated) { UIImage(data: data)?.jpegData(compressionQuality: 0.9) }.value
+            guard photoLoad == load else { return }
+            guard let jpeg else {
+                pickerError("This photo is too large for the phone to convert. Save it as a JPEG first, or upload it from the website.")
+                return
+            }
+            guard jpeg.count <= Self.maxBytes else {
+                pickerError("That photo is larger than 25 MB, the most that can be uploaded. Choose a smaller one.")
+                return
+            }
+            let base = (url.lastPathComponent as NSString).deletingPathExtension
+            attached(jpeg, as: Self.uploadName((base.isEmpty ? "photo_\(timestamp())" : base) + ".jpg"))
             return
         }
         attached(data, as: Self.uploadName(url.lastPathComponent))
@@ -198,7 +230,7 @@ struct UploadDocumentSheet: View {
     private func jpegData(from item: PhotosPickerItem) async -> Data? {
         guard let data = try? await item.loadTransferable(type: Data.self) else { return nil }
         return await Task.detached(priority: .userInitiated) {
-            UIImage(data: data)?.jpegData(compressionQuality: 0.7)
+            UIImage(data: data)?.jpegData(compressionQuality: 0.9)
         }.value
     }
 
@@ -239,13 +271,18 @@ struct UploadDocumentSheet: View {
         announce("Uploading document.")
         do {
             // The key follows the request without the file's bytes (the same file has the same size).
-            let key = idem.key(for: ["client_id": clientId, "category": category, "title": title,
-                                     "filename": filename, "size": data.count])
-            let _: OKResponse = try await api.call("upload_document", body: [
+            let share = documentShareFlags(category: category, portal: sharePortal, counselor: hasCounselor && shareCounselor)
+            var keyed: [String: Any] = ["client_id": clientId, "category": category, "title": title,
+                                        "filename": filename, "size": data.count]
+            keyed.merge(share) { $1 }
+            let key = idem.key(for: keyed)
+            var body: [String: Any] = [
                 "client_id": clientId, "category": category,
                 "title": title, "filename": filename,
                 "data_b64": data.base64EncodedString(), "idem_key": key,
-            ])
+            ]
+            body.merge(share) { $1 }
+            let _: OKResponse = try await api.call("upload_document", body: body)
             idem.answered()
             onSaved("Document uploaded.")
             dismiss()
@@ -294,4 +331,9 @@ struct CameraCapture: UIViewControllerRepresentable {
             parent.dismiss()
         }
     }
+}
+
+/// upload_document's 4.37.0 share flags (S16): a Resource is always on the portal.
+func documentShareFlags(category: String, portal: Bool, counselor: Bool) -> [String: Any] {
+    ["share_portal": category == "Resource" || portal, "share_counselor": counselor]
 }

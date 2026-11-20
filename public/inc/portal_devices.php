@@ -118,3 +118,91 @@ function device_request_reopen_status(array $r, int $requestId): string {
     $qc->execute([$requestId]);
     return (int)$qc->fetchColumn() > 0 ? 'Quoting' : 'Requested';
 }
+
+/** Add a delivered device to the loaner inventory, once per request however often the delivery is
+ *  saved (4.37.0: moved from procurement.php, shared with the app's device_request_update deliver).
+ *  Only when asked and the caller has the equipment permission. Runs inside the caller's lock on the
+ *  request. The item's note names the request, not the client: the inventory is visible to staff
+ *  outside the client's caseload. Returns ['state' => 'added'|'already'|null, 'message' (the
+ *  website's confirmation), 'audit' (device.deliver's detail, or null)]. */
+function device_delivery_inventory(int $rid, array $r, bool $wanted, ?string $serial): array {
+    $state = null;
+    if ($wanted && can('equipment')) {
+        $marker = 'From device request #' . $rid;
+        $have = db()->prepare('SELECT id FROM equipment WHERE notes = ? OR notes LIKE ? LIMIT 1');
+        $have->execute([$marker, $marker . ' for %']); // second form: rows written before 3.0.8
+        if (!$have->fetchColumn()) {
+            db()->prepare('INSERT INTO equipment (name, category, serial, item_condition, notes) VALUES (?,?,?,?,?)')
+                ->execute([$r['device_name'], 'Other', $serial !== null && $serial !== '' ? mb_substr($serial, 0, 120) : null, 'New', $marker]);
+            $state = 'added';
+        } else {
+            $state = 'already';
+        }
+    }
+    $message = 'Delivery recorded' . ($state === 'added' ? ' and the device added to the loaner inventory.'
+        : ($state === 'already' ? '. The device was already in the loaner inventory from this request, so it was not added again.'
+        : (can('equipment') ? '. The device was not added to the loaner inventory.' : '.')));
+    return ['state' => $state, 'message' => $message, 'audit' => $state === 'added' ? 'added to the loaner inventory' : null];
+}
+
+/** The note kept when a request is denied or cancelled (procurement.php's reason): what was sent,
+ *  trimmed and cut at 4,000 characters; a field not sent keeps the stored note. Null for none. */
+function device_close_note(mixed $raw, ?string $stored): ?string {
+    // Not sent, or not one value (an array from a crafted post): the stored note is kept, as before.
+    $v = is_string($raw) ? trim($raw) : (string)($stored ?? '');
+    $v = mb_substr($v, 0, 4000);
+    return $v !== '' ? $v : null;
+}
+
+/** A new device request's fields as procurement.php's form checks them (4.37.0: shared with the app's
+ *  add_device_request): the device named (190 characters at most) and the justification no longer
+ *  than 4,000 characters (each line break counted once), both refused, not cut. The client is the
+ *  caller's to check. Returns [errors, values{device_name, category, justification}]. */
+function device_request_input(array $in): array {
+    $name = is_string($in['device_name'] ?? null) ? trim($in['device_name']) : '';
+    $justification = is_string($in['justification'] ?? null) ? trim(str_replace("\r\n", "\n", $in['justification'])) : '';
+    $errors = array_filter([
+        'device_name' => $name === '' ? 'Name the device or technology.' : (mb_strlen($name) > 190 ? 'Device / technology: use 190 characters or fewer (you entered ' . mb_strlen($name) . ').' : null),
+        'justification' => mb_strlen($justification) > 4000 ? 'Justification of need: use 4,000 characters or fewer (you entered ' . number_format(mb_strlen($justification)) . ').' : null,
+    ]);
+    return [$errors, ['device_name' => $name,
+        'category' => in_array($in['category'] ?? '', cms_list_items('device_request_categories'), true) ? (string)$in['category'] : 'Other',
+        'justification' => $justification !== '' ? $justification : null]];
+}
+
+/** The default "Justification of need" when the request has none. */
+const DEVICE_JUSTIFICATION_DEFAULT = 'The recommended technology is necessary for the client to access print and electronic material, complete essential job functions, and achieve the vocational goal identified in their Individualized Plan for Employment (IPE). Without this technology and associated training, the client cannot independently perform the required tasks.';
+
+/** The funding justification letter for one request (4.37.0: moved from procurement.php, shared with
+ *  the app's device_letter). $r is the request with client_name; the caller has checked its scope.
+ *  Returns ['doc' => AccessibleDocument, 'title', 'text' (the same letter as plain text), 'file']. */
+function device_letter_doc(array $r, array $user): array {
+    require_once __DIR__ . '/document.php';
+    $sel = null;
+    if (!empty($r['selected_quote_id'])) {
+        $q = db()->prepare('SELECT * FROM device_request_quotes WHERE id = ? AND request_id = ?');
+        $q->execute([(int)$r['selected_quote_id'], (int)$r['id']]);
+        $sel = $q->fetch() ?: null;
+    }
+    // Titled and named with the client, like the PDF letters, so a saved copy is found by name.
+    $title = 'Assistive Technology Funding Justification — ' . $r['client_name'];
+    $doc = new AccessibleDocument($title);
+    $org = brand('org');
+    $doc->paragraph($org);
+    $props = array_filter([
+        'Client' => (string)$r['client_name'],
+        'Device / technology' => $r['device_name'] . ($r['category'] ? ' (' . $r['category'] . ')' : ''),
+        'Recommended vendor' => $sel ? (string)$sel['vendor'] : '',
+        'Estimated cost' => $sel ? fmt_money((float)$sel['amount']) : '',
+        'Funding source' => (string)($r['funding_source'] ?? ''),
+        'Authorization #' => (string)($r['auth_number'] ?? ''),
+        'Prepared' => date('F j, Y') . ' by ' . ($user['name'] ?? ''),
+    ]);
+    $doc->properties($props);
+    $doc->heading('Justification of need');
+    $just = trim((string)($r['justification'] ?? '')) !== '' ? (string)$r['justification'] : DEVICE_JUSTIFICATION_DEFAULT;
+    $doc->paragraph($just);
+    $text = $title . "\n\n" . $org . "\n\n" . implode("\n", array_map(fn($k, $v) => $k . ': ' . $v, array_keys($props), $props)) . "\n\nJustification of need\n\n" . $just;
+    return ['doc' => $doc, 'title' => $title, 'text' => $text,
+        'file' => 'justification_' . preg_replace('/[^A-Za-z0-9]+/', '_', (string)$r['client_name']) . '_' . date('Ymd') . '.html'];
+}

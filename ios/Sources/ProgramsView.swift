@@ -2,7 +2,9 @@ import SwiftUI
 
 struct CohortRow: Decodable, Identifiable {
     let id: Int; let name: String; let school: String?; let members: Int; let sessions: Int
-    private enum CodingKeys: String, CodingKey { case id, name, school, members, sessions }
+    /// 4.37.0 (S21): the coordinator and dates (nil from an older server).
+    let coordinator: String?; let startDate: String?; let endDate: String?
+    private enum CodingKeys: String, CodingKey { case id, name, school, members, sessions, coordinator, startDate, endDate }
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         id = try c.decode(Int.self, forKey: .id)
@@ -10,13 +12,93 @@ struct CohortRow: Decodable, Identifiable {
         school = try? c.decodeIfPresent(String.self, forKey: .school)
         members = (try? c.decode(Int.self, forKey: .members)) ?? 0
         sessions = (try? c.decode(Int.self, forKey: .sessions)) ?? 0
+        coordinator = try? c.decodeIfPresent(String.self, forKey: .coordinator)
+        startDate = try? c.decodeIfPresent(String.self, forKey: .startDate)
+        endDate = try? c.decodeIfPresent(String.self, forKey: .endDate)
     }
 }
 struct CohortsResponse: Decodable { let cohorts: [CohortRow] }
 struct CohortMember: Decodable, Identifiable { let id: Int; let name: String }
-struct CohortSession: Decodable, Identifiable { let id: Int; let sessionDate: String; let activity: String; let topic: String?; let durationMin: Int; let presentN: Int }
-struct CohortInfo: Decodable { let id: Int; let name: String; let school: String? }
-struct CohortDetailResponse: Decodable { let cohort: CohortInfo; let members: [CohortMember]; let sessions: [CohortSession]; let available: [CohortMember] }
+struct CohortSession: Decodable, Identifiable {
+    let id: Int; let sessionDate: String; let activity: String; let topic: String?; let durationMin: Int; let presentN: Int
+    /// 4.37.0 (S21): programs.php's line for the session and whether it can be deleted.
+    let text: String?; let canDelete: Bool
+    private enum CodingKeys: String, CodingKey { case id, sessionDate, activity, topic, durationMin, presentN, text, canDelete }
+    // Tolerant decode: one odd session row must never blank the cohort screen.
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        sessionDate = (try? c.decode(String.self, forKey: .sessionDate)) ?? ""
+        activity = (try? c.decode(String.self, forKey: .activity)) ?? ""
+        topic = try? c.decodeIfPresent(String.self, forKey: .topic)
+        durationMin = (try? c.decode(Int.self, forKey: .durationMin)) ?? Int((try? c.decode(String.self, forKey: .durationMin)) ?? "") ?? 0
+        presentN = (try? c.decode(Int.self, forKey: .presentN)) ?? Int((try? c.decode(String.self, forKey: .presentN)) ?? "") ?? 0
+        text = try? c.decodeIfPresent(String.self, forKey: .text)
+        canDelete = (try? c.decode(Bool.self, forKey: .canDelete)) ?? ((try? c.decode(Int.self, forKey: .canDelete)).map { $0 != 0 } ?? false)
+    }
+}
+/// The cohort row as the server sends it (its raw columns: dates as text, active as 1 or 0,
+/// read tolerantly).
+struct CohortInfo: Decodable {
+    let id: Int; let name: String; let school: String?
+    let startDate: String?; let endDate: String?
+    private enum CodingKeys: String, CodingKey { case id, name, school, startDate, endDate }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        school = try? c.decodeIfPresent(String.self, forKey: .school)
+        startDate = try? c.decodeIfPresent(String.self, forKey: .startDate)
+        endDate = try? c.decodeIfPresent(String.self, forKey: .endDate)
+    }
+}
+/// The cohort reply. 4.37.0 (S21) sends the coordinator's name, the notes and whether the
+/// cohort is active beside the cohort row (nil from an older server, which offers no archive).
+struct CohortDetailResponse: Decodable {
+    let cohort: CohortInfo; let members: [CohortMember]; let sessions: [CohortSession]; let available: [CohortMember]
+    let sessionsTotal: Int?
+    let coordinatorName: String?; let notes: String?; let active: Bool?
+    private enum CodingKeys: String, CodingKey { case cohort, members, sessions, available, sessionsTotal, coordinatorName, notes, active }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        cohort = try c.decode(CohortInfo.self, forKey: .cohort)
+        members = (try? c.decode([CohortMember].self, forKey: .members)) ?? []
+        sessions = LenientList.decode(CohortSession.self, from: c, forKey: .sessions)
+        available = (try? c.decode([CohortMember].self, forKey: .available)) ?? []
+        sessionsTotal = try? c.decodeIfPresent(Int.self, forKey: .sessionsTotal)
+        coordinatorName = try? c.decodeIfPresent(String.self, forKey: .coordinatorName)
+        notes = try? c.decodeIfPresent(String.self, forKey: .notes)
+        active = (try? c.decodeIfPresent(Bool.self, forKey: .active)) ?? ((try? c.decodeIfPresent(Int.self, forKey: .active)).map { $0 != 0 })
+    }
+}
+/// cohort_choices (4.37.0, S21): the active staff who can coordinate, and the activities.
+struct CohortChoice: Decodable { let id: Int; let name: String }
+struct CohortChoicesReply: Decodable { let coordinators: [CohortChoice]; let activities: [String]? }
+
+/// The cohort's header line: "Coordinator: X", then its dates.
+func cohortHeader(_ d: CohortDetailResponse) -> String? {
+    var parts: [String] = []
+    if let n = d.coordinatorName, !n.isEmpty { parts.append("Coordinator: \(n)") }
+    let start = (d.cohort.startDate ?? "").isEmpty ? nil : formatDate(d.cohort.startDate)
+    let end = (d.cohort.endDate ?? "").isEmpty ? nil : formatDate(d.cohort.endDate)
+    if let start, let end { parts.append("\(start) to \(end)") }
+    else if let start { parts.append("Starts \(start)") }
+    else if let end { parts.append("Ends \(end)") }
+    return parts.isEmpty ? nil : parts.joined(separator: ". ")
+}
+
+/// The delete question for a logged session (4.37.0, S21), naming it.
+func deleteSessionTitle(activity: String, date: String) -> String {
+    "Delete the session \(activity), \(date), and its attendance?"
+}
+
+/// add_cohort's 4.37.0 body (S21): the coordinator (0 = none) only once the choices are known,
+/// so an older server keeps the caller as coordinator.
+func cohortBody(name: String, school: String, coordinatorId: Int?, startDate: String, endDate: String, notes: String) -> [String: Any] {
+    var body: [String: Any] = ["name": name, "school": school, "start_date": startDate, "end_date": endDate, "notes": notes]
+    if let coordinatorId { body["coordinator_id"] = coordinatorId }
+    return body
+}
 
 let preetsActivities = ["Job Exploration Counseling", "Work-Based Learning", "Postsecondary Counseling", "Workplace Readiness", "Self-Advocacy Instruction", "Other"]
 
@@ -29,11 +111,17 @@ struct ProgramsView: View {
     @State private var showNew = false
     /// A sheet's success message, announced once the sheet has gone (see announceAfterDismiss).
     @State private var sheetResult: String?
+    /// 4.37.0 (S21): programs.php's "Show archived" / "Show active cohorts".
+    @State private var show = "active"
     var body: some View {
         List {
             if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
+            Picker("Show", selection: $show) {
+                Text("Active cohorts").tag("active")
+                Text("Archived cohorts").tag("archived")
+            }
             if loaded && rows.isEmpty {
-                Text("No active cohorts.").foregroundStyle(Color.secondaryText)
+                Text(show == "archived" ? "No archived cohorts." : "No active cohorts.").foregroundStyle(Color.secondaryText)
             } else if !loaded && error == nil {
                 ProgressView("Loading cohorts…")
             }
@@ -42,6 +130,9 @@ struct ProgramsView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(c.name).font(.body.weight(.semibold))
                         Text("\(c.members) students · \(c.sessions) sessions\(c.school != nil ? " · \(c.school!)" : "")").font(.caption).foregroundStyle(Color.secondaryText)
+                        if let coordinator = c.coordinator, !coordinator.isEmpty {
+                            Text("Coordinator: \(coordinator)").font(.caption).foregroundStyle(Color.secondaryText)
+                        }
                     }
                 }
             }
@@ -49,15 +140,17 @@ struct ProgramsView: View {
         .navigationTitle("Programs")
         .refreshable { await load() }
         .task { await load() }
+        .onChange(of: show) { _ in Task { await load() } }
+        .modifier(ReadablePickers(inNavigationStack: true))
         .toolbar { ToolbarItem(placement: .primaryAction) { Button { showNew = true } label: { Image(systemName: "plus") }.accessibilityLabel("Add cohort") } }
-        .sheet(isPresented: $showNew, onDismiss: announceSheetResult) { CohortNewSheet { sheetResult = "Cohort created."; Task { await load() } } }
+        .sheet(isPresented: $showNew, onDismiss: announceSheetResult) { CohortNewSheet { message in sheetResult = message; Task { await load() } } }
     }
     private func announceSheetResult() {
         if let message = sheetResult { announceAfterDismiss(message) }
         sheetResult = nil
     }
     private func load() async {
-        do { error = nil; let r: CohortsResponse = try await api.call("cohorts"); rows = r.cohorts; loaded = true }
+        do { error = nil; let r: CohortsResponse = try await api.call("cohorts", query: ["show": show]); rows = r.cohorts; loaded = true }
         catch { showFormError(error.localizedDescription, in: &self.error) }
     }
 }
@@ -77,6 +170,10 @@ struct CohortDetail: View {
     @State private var memberIdem = IdemKey()
     /// A sheet's success message, announced once the sheet has gone (see announceAfterDismiss).
     @State private var sheetResult: String?
+    /// 4.37.0 (S21): the session waiting for "Delete the session …?", and a change being sent.
+    @State private var deletingSession: CohortSession?
+    @State private var changing = false
+    @State private var note: String?
     /// After an add, VoiceOver is put on the new student; after a removal, on the Students
     /// heading (-1), since the row it was on is gone (errorFocus: the error banner, after a failure).
     @AccessibilityFocusState private var focusedMember: Int?
@@ -92,6 +189,13 @@ struct CohortDetail: View {
                         .accessibilityFocused($focusedMember, equals: errorFocus)
                 }
                 if let d = data {
+                    if let note { Text(note).font(.callout.weight(.medium)).foregroundStyle(Color.brandTeal) }
+                    if let header = cohortHeader(d) {
+                        Section {
+                            Text(header)
+                            if let n = d.notes, !n.isEmpty { Text(n).font(.callout) }
+                        }
+                    }
                     Section {
                         ForEach(d.members) { m in
                             HStack {
@@ -145,9 +249,25 @@ struct CohortDetail: View {
                         ForEach(d.sessions) { s in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(s.activity).font(.body.weight(.semibold))
-                                Text("\(formatDate(s.sessionDate)) · \(s.durationMin) min · \(s.presentN) present").font(.caption).foregroundStyle(Color.secondaryText)
+                                Text(s.text ?? "\(formatDate(s.sessionDate)) · \(s.durationMin) min · \(s.presentN) present").font(.caption).foregroundStyle(Color.secondaryText)
                             }
                             .accessibilityElement(children: .combine)
+                            // 4.37.0 (S21): a visible button after the session's one stop.
+                            if s.canDelete {
+                                Button("Delete session: \(s.activity), \(formatDate(s.sessionDate))", role: .destructive) { deletingSession = s }
+                                    .disabled(changing)
+                            }
+                        }
+                        if let total = d.sessionsTotal, total > d.sessions.count {
+                            Text("Showing the newest \(d.sessions.count) sessions. Older ones are on the website's cohort page, where they can be deleted too.")
+                                .font(.callout).foregroundStyle(Color.secondaryText)
+                        }
+                    }
+                    if let active = d.active {
+                        Section {
+                            // No confirmation, as programs.php: either is undone by the other.
+                            Button(active ? "Archive cohort" : "Reactivate cohort") { Task { await setActive(!active) } }
+                                .disabled(changing)
                         }
                     }
                 } else if error == nil { ProgressView() }
@@ -170,7 +290,18 @@ struct CohortDetail: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
         .sheet(isPresented: $logSession, onDismiss: announceSheetResult) {
-            if let d = data { CohortSessionSheet(cohortId: id, members: d.members) { sheetResult = "Session logged."; Task { await load() } } }
+            if let d = data { CohortSessionSheet(cohortId: id, members: d.members) { message in sheetResult = message; Task { await load() } } }
+        }
+        .confirmationDialog(deleteSessionTitle(activity: deletingSession?.activity ?? "", date: formatDate(deletingSession?.sessionDate)),
+                            isPresented: Binding(get: { deletingSession != nil }, set: { if !$0 { deletingSession = nil } }),
+                            titleVisibility: .visible) {
+            Button("Delete session", role: .destructive) {
+                if let s = deletingSession { Task { await deleteSession(s) } }
+                deletingSession = nil
+            }
+            Button("Keep it", role: .cancel) { deletingSession = nil }
+        } message: {
+            Text("Its hours come out of the report.")
         }
         // Taking a student out of the cohort takes a second, deliberate step.
         .confirmationDialog(
@@ -192,6 +323,26 @@ struct CohortDetail: View {
     private func load() async {
         do { error = nil; data = try await api.call("cohort", query: ["id": String(id)]) }
         catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
+    /// delete_cohort_session and set_cohort_active (4.37.0, S21): the server's sentence is shown
+    /// and said once, then the cohort reloads.
+    private func cohortChange(_ action: String, _ body: [String: Any]) async {
+        guard !changing else { return }
+        changing = true; error = nil; note = nil
+        defer { changing = false }
+        do {
+            let r: MessageReply = try await api.call(action, method: "POST", body: body)
+            let message = r.message ?? "Saved."
+            note = message
+            await load()
+            announce(message)
+        } catch { showFormError(error.localizedDescription, in: &self.error) }
+    }
+    private func deleteSession(_ s: CohortSession) async {
+        await cohortChange("delete_cohort_session", ["cohort_id": id, "session_id": s.id])
+    }
+    private func setActive(_ active: Bool) async {
+        await cohortChange("set_cohort_active", ["cohort_id": id, "active": active])
     }
     private func member(_ clientId: Int, name: String, _ op: String) async {
         if op == "add" {
@@ -225,7 +376,9 @@ struct CohortSessionSheet: View {
     /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
     @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
-    let cohortId: Int; let members: [CohortMember]; let onDone: () -> Void
+    let cohortId: Int; let members: [CohortMember]
+    /// Given the server's sentence (4.37.0 adds how to correct a mistake).
+    let onDone: (String) -> Void
     @State private var activity = "Job Exploration Counseling"
     @State private var date = Date(); @State private var durationText = "60"; @State private var topic = ""; @State private var notes = ""
     @State private var present: Set<Int> = []
@@ -287,7 +440,7 @@ struct CohortSessionSheet: View {
         let day = date.formatted(date: .abbreviated, time: .omitted)
         let away = absent.isEmpty ? "" : " Absent: \(absent.joined(separator: ", "))."
         let minutes = duration.map { "\($0) minute\($0 == 1 ? "" : "s")" } ?? "no valid duration"
-        return "Log \(activity) on \(day), \(minutes), \(here) of \(members.count) present?\(away) A logged session cannot be changed from the app."
+        return "Log \(activity) on \(day), \(minutes), \(here) of \(members.count) present?\(away) A logged session cannot be changed; if anything is wrong, delete it under Recent sessions and log it again."
     }
     private func submit() async {
         guard let duration else { showFormError(Self.durationMessage, in: &error); return }
@@ -295,7 +448,10 @@ struct CohortSessionSheet: View {
         // The cohort screen announces the result once this sheet has gone.
         var body: [String: Any] = ["cohort_id": cohortId, "activity": activity, "session_date": APIDate.day(date), "duration_min": duration, "topic": topic, "notes": notes, "present": Array(present).sorted()]
         body["idem_key"] = idem.key(for: body)
-        do { let _: OKResponse = try await api.call("log_cohort_session", body: body); idem.answered(); onDone(); dismiss() }
+        do {
+            let r: MessageReply = try await api.call("log_cohort_session", body: body); idem.answered()
+            onDone(r.message ?? "Session logged. If anything is wrong, delete it under Recent sessions and log it again."); dismiss()
+        }
         catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error, what: "the session"), in: &self.error) }
     }
 }
@@ -305,11 +461,21 @@ struct CohortNewSheet: View {
     /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
     @State private var idem = IdemKey()
     @Environment(\.dismiss) private var dismiss
-    let onDone: () -> Void
+    /// Given the server's sentence ("Cohort created.").
+    let onDone: (String) -> Void
     @State private var name = ""; @State private var school = ""; @State private var busy = false; @State private var error: String?
     @State private var askingDiscard = false
+    /// 4.37.0 (S21), as programs.php's New cohort form: the coordinator (you by default), the
+    /// dates and the notes (owner decision 1).
+    @State private var coordinators: [CohortChoice]?
+    @State private var coordinatorId = 0
+    @State private var hasStart = false
+    @State private var startDate = Date()
+    @State private var hasEnd = false
+    @State private var endDate = Date()
+    @State private var notes = ""
     private var hasChanges: Bool {
-        [name, school].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        [name, school, notes].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } || hasStart || hasEnd
     }
     var body: some View {
         NavigationStack {
@@ -319,6 +485,22 @@ struct CohortNewSheet: View {
                 // Visible names that stay once the fields are filled; the required one says so.
                 CaptionedField(label: "Cohort name (required)", text: $name, errorName: "Cohort name")
                 CaptionedField(label: "School / district", text: $school)
+                if let coordinators {
+                    Picker("Coordinator", selection: $coordinatorId) {
+                        Text("None").tag(0)
+                        ForEach(coordinators, id: \.id) { Text($0.name).tag($0.id) }
+                    }
+                    .errorField("Coordinator")
+                }
+                Toggle("Start date", isOn: $hasStart)
+                if hasStart {
+                    DatePicker("Start", selection: $startDate, displayedComponents: .date).errorField("Start date")
+                }
+                Toggle("End date", isOn: $hasEnd)
+                if hasEnd {
+                    DatePicker("End", selection: $endDate, displayedComponents: .date).errorField("End date")
+                }
+                CaptionedField(label: "Notes (optional)", text: $notes, lines: 2...6, errorName: "Notes")
             }
             .navigationTitle("New cohort").navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -328,21 +510,44 @@ struct CohortNewSheet: View {
                         .disabled(busy)
                 }
                 // Left enabled: a missing name is explained by the error banner, not a dimmed button.
-                ToolbarItem(placement: .confirmationAction) { Button("Create") { Task { await submit() } }.disabled(busy) }
+                ToolbarItem(placement: .confirmationAction) { Button("Create cohort") { Task { await submit() } }.disabled(busy) }
             }
             .discardChangesGuard(hasChanges: hasChanges, busy: busy, question: "Discard this new cohort?",
                                  asking: $askingDiscard) { dismiss() }
+            .task {
+                // An older server has no choices: the cohort is then yours, as before.
+                if coordinators == nil, let r: CohortChoicesReply = try? await api.call("cohort_choices") {
+                    coordinators = r.coordinators
+                    if r.coordinators.contains(where: { $0.id == api.userId }) { coordinatorId = api.userId }
+                }
+            }
         }
     }
     private func submit() async {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            showFormError("Cohort name: enter a name for the cohort.", in: &error); return
+            showFormError("Cohort name is required.", in: &error, field: "Cohort name"); return
+        }
+        if hasStart && hasEnd && Calendar.current.startOfDay(for: endDate) < Calendar.current.startOfDay(for: startDate) {
+            showFormError("The end date cannot be before the start date.", in: &error, field: "End date"); return
+        }
+        if notes.unicodeScalars.count > 2000 {
+            showFormError("Notes: use 2,000 characters or fewer.", in: &error, field: "Notes"); return
         }
         busy = true; error = nil
         // The programs list announces the result once this sheet has gone.
-        var body: [String: Any] = ["name": name, "school": school]
+        var body = cohortBody(name: name, school: school, coordinatorId: coordinators == nil ? nil : coordinatorId,
+                              startDate: hasStart ? APIDate.day(startDate) : "", endDate: hasEnd ? APIDate.day(endDate) : "", notes: notes)
         body["idem_key"] = idem.key(for: body)
-        do { let _: OKResponse = try await api.call("add_cohort", body: body); idem.answered(); onDone(); dismiss() }
-        catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error, what: "the cohort"), in: &self.error) }
+        var refused: [String: String] = [:]
+        do {
+            let r: MessageReply = try await api.call("add_cohort", body: body, refusal: { refused = refusalFields($0) }); idem.answered()
+            onDone(r.message ?? "Cohort created."); dismiss()
+        }
+        catch {
+            idem.failed(error); busy = false
+            let names = ["name": "Cohort name", "coordinator_id": "Coordinator", "start_date": "Start date", "end_date": "End date", "notes": "Notes"]
+            showFormError(IdemKey.message(for: error, what: "the cohort"), in: &self.error,
+                          field: refusedFieldName(refused, order: ["name", "coordinator_id", "start_date", "end_date", "notes"], names: names))
+        }
     }
 }

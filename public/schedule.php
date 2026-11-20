@@ -22,12 +22,7 @@ function schedule_scope_check(int $clientId, array $user): void {
 // schedule_hours(), schedule_logged_candidates(), schedule_auth_hash() and schedule_tell_instructors() are in
 // inc/session_group.php (4.35.0), shared with the app's group booking and attendance.
 
-/** First name + last initial, as the calendar feed shows a client: an emailed
- *  invite ends up in the calendar provider's storage too. */
-function schedule_short_name(string $n): string {
-    $parts = preg_split('/\s+/', trim($n)) ?: [];
-    return count($parts) < 2 ? trim($n) : $parts[0] . ' ' . mb_substr(end($parts), 0, 1) . '.';
-}
+// schedule_short_name() is in inc/meetings.php (4.37.0), shared with voice booking's meeting link.
 
 // schedule_log_description() is in inc/session_changes.php (4.34.0), shared with the app's API and voice.
 
@@ -292,21 +287,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_session'])) {
         // one behind; every session of the series gets its one link (4.10.0).
         $meetWhy = null;
         if ($meetMake !== '') {
-            try {
-                $link = meeting_create($staffId, $meetMake, ($count > 1 ? 'AT Training series: ' : 'AT Training: ') . schedule_short_name((string)$client['name']),
-                    $occurrences[0][0], $occurrences[$count - 1][1], $count > 1, $meetWhy);
-                if ($link !== null) {
-                    db()->prepare('UPDATE scheduled_sessions SET meeting_url = ? WHERE id IN (' . implode(',', $newSessionIds) . ')')->execute([$link]);
-                    // A single meeting expires some weeks after its time (4.32.0); a series' meeting has no fixed time.
-                    if ($count === 1) meeting_note_made_for($newSessionIds, $occurrences[0][0]);
-                    $meetingUrl = $link;
-                    audit($user['id'], 'meeting.create', 'client', $clientId, MEETING_PROVIDERS[$meetMake] . ' link for ' . count($newSessionIds) . ' session(s), in ' . $f['staff']['name'] . "'s account");
-                }
-            } catch (Throwable $me) {
-                // The sessions are booked whatever happens here.
-                error_log('meeting_create: ' . get_class($me) . ' ' . $me->getMessage());
-                $meetWhy = MEETING_PROVIDERS[$meetMake] . ' could not be reached, so the session is booked without a link; add one by moving the session.';
-            }
+            // Shared with voice booking (inc/meetings.php session_make_meeting(), 4.37.0).
+            $made = session_make_meeting($newSessionIds, $meetMake, $staffId, (string)$f['staff']['name'], $clientId, (string)$client['name'],
+                $occurrences[0][0], $occurrences[$count - 1][1], (int)$user['id']);
+            if ($made['ok']) $meetingUrl = $made['url'];
+            else $meetWhy = $made['why'];
         }
         client_session_notice($newSessionIds, 'booked'); // 3.0.41: the client's calendar invite
     } catch (Throwable $e) {

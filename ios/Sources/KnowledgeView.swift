@@ -53,6 +53,10 @@ struct KnowledgeView: View {
     var body: some View {
         List {
             if let error { ErrorBanner(message: error).listRowSeparator(.hidden) }
+            // 4.37.0 (S26): kb.php offers the assistant from the list.
+            if api.aiHas("kb") {
+                NavigationLink { KBAskView() } label: { Label("Ask the knowledge base", systemImage: "book.closed") }
+            }
             if let shownQuery, articles.isEmpty {
                 // The 7:1 secondary-text colour (system secondary is about 3.4:1).
                 Text(shownQuery.isEmpty ? "No articles yet." : "No articles match your search.").foregroundStyle(Color.secondaryText)
@@ -67,7 +71,7 @@ struct KnowledgeView: View {
                         Text(a.title).font(.body.weight(.semibold))
                         HStack(spacing: 6) {
                             if let c = a.category, !c.isEmpty { Text(c).font(.caption).foregroundStyle(Color.secondaryText) }
-                            if a.isPublic { Text("Public").font(.caption2.bold()).foregroundStyle(Color.brandTeal) }
+                            if a.isPublic { Text("Shared with clients").font(.caption2.bold()).foregroundStyle(Color.brandTeal) }
                         }
                     }
                 }
@@ -143,8 +147,9 @@ struct KBDetailView: View {
                 if let a = article {
                     Text(a.title).font(.title2.bold())
                         .accessibilityAddTraits(.isHeader)
-                    HStack(spacing: 6) {
-                        if let c = a.category, !c.isEmpty { Text(c).font(.caption).foregroundStyle(Color.secondaryText) }
+                    // kb.php's line: "<category> · updated <date> · <author>", then "Shared with clients".
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(kbMeta(category: a.category, updated: a.updatedAt, author: a.author)).font(.caption).foregroundStyle(Color.secondaryText)
                         if a.isPublic { Text("Shared with clients").font(.caption.bold()).foregroundStyle(Color.brandTeal) }
                     }
                     .accessibilityElement(children: .combine)
@@ -202,6 +207,8 @@ struct KBDetailView: View {
 }
 
 struct KBEditSheet: View {
+    /// kb.php's editor hint, inside the label (4.37.0, S26).
+    static let bodyLabel = "Article (plain text; blank lines separate paragraphs; start a line with ## for a heading, - for a bullet, 1. for a numbered step; up to 60,000 characters)"
     @EnvironmentObject var api: API
     /// Sent as idem_key (4.28.0), so a retry after a lost reply does not save it twice.
     @State private var idem = IdemKey()
@@ -233,21 +240,25 @@ struct KBEditSheet: View {
                 // Visible names that stay once the fields are filled (as they are when editing).
                 CaptionedField(label: "Title (required)", text: $title, errorName: "Title")
                 CaptionedField(label: "Category", text: $category)
-                Toggle("Publish to client portals", isOn: $isPublic)
-                Section("Content") {
-                    TextEditor(text: $body_).frame(minHeight: 220).accessibilityLabel("Article content")
+                Toggle("Publish to client portals (visible to clients)", isOn: $isPublic)
+                Section {
+                    TextEditor(text: $body_).frame(minHeight: 220).accessibilityLabel(Self.bodyLabel)
+                } header: {
+                    Text(Self.bodyLabel).textCase(nil).accessibilityHidden(true)
                 }
                 if article != nil {
-                    Button("Delete article", role: .destructive) { confirmingDelete = true }.disabled(busy)
+                    Button("Delete permanently", role: .destructive) { confirmingDelete = true }.disabled(busy)
                 }
             }
-            // Deleting cannot be undone, so it takes a second, deliberate step.
-            .confirmationDialog("Delete this article? This cannot be undone.",
+            // Deleting cannot be undone, so it takes a second, deliberate step (kb.php's words).
+            .confirmationDialog("Delete this article permanently?",
                                 isPresented: $confirmingDelete, titleVisibility: .visible) {
-                Button("Delete article", role: .destructive) {
+                Button("Delete permanently", role: .destructive) {
                     if let a = article { Task { await delete(a.id) } }
                 }
                 Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("It does not go to the trash, so this cannot be undone.")
             }
             .navigationTitle(article == nil ? "New article" : "Edit article")
             .navigationBarTitleDisplayMode(.inline)
@@ -383,4 +394,11 @@ struct KBBlocksView: View {
             }
         }
     }
+}
+
+/// kb.php's article line (4.37.0, S26): "<category> · updated <date> · <author>".
+func kbMeta(category: String?, updated: String?, author: String?) -> String {
+    [category.flatMap { $0.isEmpty ? nil : $0 },
+     updated.flatMap { $0.isEmpty ? nil : "updated " + formatDate($0) },
+     author.flatMap { $0.isEmpty ? nil : $0 }].compactMap { $0 }.joined(separator: " · ")
 }

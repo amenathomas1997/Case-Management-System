@@ -23,7 +23,16 @@ struct DeviceRequest: Decodable {
     let authorizedAmount: Double?; let selectedQuoteId: Int?; let poNumber: String?
     let deliveredAt: String?; let trainedAt: String?; let serial: String?
     var authorizedAt: String?; var orderedAt: String?; var warrantyUntil: String?
+    /// The reason given when it was denied or cancelled (4.37.0, S4), shown as "Note: …".
+    var notes: String?
 }
+
+/// device_request_update's reply (4.37.0 adds the server's sentence and, for a close, the note).
+struct DeviceUpdateReply: Decodable { let status: String?; let message: String?; let notes: String? }
+
+/// ai_draft type justification's reply (4.37.0, S5): the text merged as the website does (at
+/// most 4,000 characters), the draft alone, and whether it stopped early or was shortened.
+struct JustificationDraftReply: Decodable { let text: String; let draft: String?; let truncated: Bool?; let shortened: Bool? }
 struct DeviceRequestResponse: Decodable { let request: DeviceRequest; let quotes: [DeviceQuote] }
 
 var deviceCategories: [String] { FormOptions.list("device_request_categories", ["Braille Display", "Screen Reader", "Magnifier / CCTV", "AAC Device", "Tablet / Phone", "Computer", "Hearing / Amplification", "Switch / Access", "Software License", "Other"]) }
@@ -86,6 +95,8 @@ struct DeviceRequestDetail: View {
     @State private var action: DeviceAction?
     @State private var addingQuote = false
     @State private var pendingClose: DeviceClose?
+    /// Deny or cancel, asked in a sheet with the reason (4.37.0, S4).
+    @State private var closing: DeviceClose?
     /// A sheet's success message, announced once the sheet has gone (see announceAfterDismiss).
     @State private var sheetResult: String?
     /// After a Pick, VoiceOver is put on the chosen quote: its Pick button is gone by then.
@@ -110,9 +121,17 @@ struct DeviceRequestDetail: View {
                     if let s = r.serial, !s.isEmpty { LabeledContent("Serial", value: s) }
                     if let d = r.warrantyUntil, !d.isEmpty { LabeledContent("Warranty until", value: formatDate(d)) }
                     if let d = r.trainedAt, !d.isEmpty { LabeledContent("Training completed", value: formatDate(d)) }
+                    if let n = r.notes, !n.isEmpty { Text("Note: \(n)") }
                 }
                 if let j = r.justification, !j.isEmpty {
-                    Section("Justification") { Text(j).font(.callout) }
+                    Section("Justification of need") { Text(j).font(.callout) }
+                }
+                // 4.37.0 (S4): the funding justification letter, as procurement.php's download.
+                Section {
+                    NavigationLink("Justification letter") {
+                        BuiltDocumentView(navigationTitle: "Justification letter", action: "device_letter", query: ["id": String(id)], noun: "letter",
+                                          note: ["Trained", "Denied", "Cancelled"].contains(r.status) ? nil : "Change the justification on the request, then open the letter again.")
+                    }
                 }
                 Section("Quotes") {
                     ForEach(quotes) { q in
@@ -171,8 +190,9 @@ struct DeviceRequestDetail: View {
                         // Closing steps cannot be undone from here (training) or end the request,
                         // so each takes a second, deliberate step.
                         Button("Complete training") { pendingClose = .train }
-                        Button("Deny", role: .destructive) { pendingClose = .deny }
-                        Button("Cancel request", role: .destructive) { pendingClose = .cancel }
+                        // 4.37.0 (S4): denying or cancelling asks for a reason, as procurement.php's form.
+                        Button("Deny", role: .destructive) { closing = .deny }
+                        Button("Cancel request", role: .destructive) { closing = .cancel }
                     }
                 } else if r.status == "Denied" || r.status == "Cancelled" {
                     Section {
@@ -189,7 +209,10 @@ struct DeviceRequestDetail: View {
             DeviceQuoteSheet(requestId: id) { sheetResult = "Quote added."; Task { await load(); onChanged() } }
         }
         .sheet(item: $action, onDismiss: announceSheetResult) { act in
-            if let r = req { DeviceActionSheet(request: r, action: act) { sheetResult = act.savedMessage; Task { await load(); onChanged() } } }
+            if let r = req { DeviceActionSheet(request: r, action: act) { message in sheetResult = message ?? act.savedMessage; Task { await load(); onChanged() } } }
+        }
+        .sheet(item: $closing, onDismiss: announceSheetResult) { close in
+            if let r = req { DeviceCloseSheet(request: r, close: close) { message in sheetResult = message; Task { await load(); onChanged() } } }
         }
         .confirmationDialog(pendingClose?.question ?? "", isPresented: Binding(get: { pendingClose != nil }, set: { if !$0 { pendingClose = nil } }),
                             titleVisibility: .visible) {
@@ -252,8 +275,9 @@ enum DeviceAction: String, Identifiable {
 }
 
 /// The closing steps that are confirmed before they are sent.
-enum DeviceClose {
+enum DeviceClose: String, Identifiable {
     case train, deny, cancel
+    var id: String { rawValue }
     var question: String {
         switch self {
         case .train: return "Mark training complete and close this request? A trained request cannot be reopened."
@@ -288,7 +312,13 @@ enum DeviceClose {
 struct DeviceActionSheet: View {
     @EnvironmentObject var api: API
     @Environment(\.dismiss) private var dismiss
-    let request: DeviceRequest; let action: DeviceAction; let onDone: () -> Void
+    let request: DeviceRequest; let action: DeviceAction
+    /// Given the server's sentence when it sends one (4.37.0: a delivery says whether the device
+    /// was added to the loaner inventory).
+    let onDone: (String?) -> Void
+    /// 4.37.0 (S4): add the delivered device to the loaner inventory (procurement.php's box, off
+    /// by default; offered only with the equipment permission, which the server also requires).
+    @State private var addToInventory = false
     // Filled from the stored request (as the website's forms are), so recording a step again
     // to correct one detail never blanks the others.
     @State private var text1 = ""; @State private var text2 = ""; @State private var amount = ""
@@ -325,6 +355,9 @@ struct DeviceActionSheet: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     DatePicker("Delivered on", selection: $date, displayedComponents: .date)
                     OptionalDayField(title: "Warranty until", text: $warranty)
+                    if api.can("equipment") {
+                        Toggle("Also add to the loaner inventory", isOn: $addToInventory)
+                    }
                 }
             }
             .onAppear {
@@ -371,11 +404,13 @@ struct DeviceActionSheet: View {
         switch action {
         case .authorize: b["op"] = "authorize"; b["funding_source"] = text1; b["auth_number"] = text2; b["authorized_amount"] = amountText; b["authorized_at"] = day
         case .order: b["op"] = "order"; b["po_number"] = text1; b["ordered_at"] = day
-        case .deliver: b["op"] = "deliver"; b["serial"] = text1; b["delivered_at"] = day; b["warranty_until"] = warranty
+        case .deliver:
+            b["op"] = "deliver"; b["serial"] = text1; b["delivered_at"] = day; b["warranty_until"] = warranty
+            b.merge(deviceDeliverExtras(addToInventory: addToInventory, canEquipment: api.can("equipment"))) { $1 }
         }
         // The presenter announces the result once the sheet has gone (a message posted while it
         // is still open is cut off when it closes).
-        do { let _: OKResponse = try await api.call("device_request_update", body: b); onDone(); dismiss() }
+        do { let r: DeviceUpdateReply = try await api.call("device_request_update", body: b); onDone(r.message); dismiss() }
         catch { busy = false; showFormError(error.localizedDescription, in: &self.error) }
     }
 }
@@ -467,6 +502,21 @@ struct DeviceNewSheet: View {
     @State private var deviceName = ""; @State private var category = deviceCategories.contains("Other") ? "Other" : (deviceCategories.first ?? "Other"); @State private var justification = ""
     @State private var busy = false; @State private var error: String?
     @State private var askingDiscard = false
+    /// 4.37.0 (S5): "Draft justification with AI" running, and its notice (incomplete).
+    @State private var drafting = false
+    @State private var draftNotice: String?
+
+    init(onDone: @escaping () -> Void) {
+        self.onDone = onDone
+    }
+
+    /// Started from a device recommendation (4.37.0, S6): the client and the justification are
+    /// filled in; the person picks the device and category and edits the text.
+    init(client: Int, justification: String, onDone: @escaping () -> Void) {
+        self.onDone = onDone
+        _selectedClient = State(initialValue: client)
+        _justification = State(initialValue: justification)
+    }
 
     private var hasChanges: Bool {
         selectedClient != nil || category != "Other"
@@ -481,7 +531,21 @@ struct DeviceNewSheet: View {
                 NewRecordClientPicker(title: "Client (required)", selection: $selectedClient, errorName: "Client")
                 CaptionedField(label: "Device / technology (required)", text: $deviceName, errorName: "Device / technology")
                 Picker("Category", selection: $category) { ForEach(deviceCategories, id: \.self) { Text($0) } }
-                Section("Justification") { TextEditor(text: $justification).frame(minHeight: 80).accessibilityLabel("Justification") }
+                Section("Justification of need") {
+                    TextEditor(text: $justification).frame(minHeight: 80).accessibilityLabel("Justification of need")
+                        .disabled(drafting)
+                        .errorField("Justification of need")
+                    // 4.37.0 (S5): the owner's rule, AI drafts on every staff-written text; the
+                    // draft fills an empty field or goes below what was typed, and is edited before
+                    // the request is created.
+                    if api.aiHas("draft") && selectedClient != nil && !deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Button(drafting ? "Drafting…" : "Draft justification with AI") { Task { await draftJustification() } }
+                            .disabled(drafting || busy)
+                    }
+                    if let draftNotice {
+                        Label(draftNotice, systemImage: "exclamationmark.triangle").font(.callout.weight(.semibold))
+                    }
+                }
             }
             .navigationTitle("New request")
             .navigationBarTitleDisplayMode(.inline)
@@ -503,13 +567,110 @@ struct DeviceNewSheet: View {
         if deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             showFormError("Device / technology: enter the device or technology requested.", in: &error); return
         }
+        if justification.unicodeScalars.count > 4000 {
+            showFormError("Justification of need: use 4,000 characters or fewer (you entered \(websiteCount(justification.unicodeScalars.count))).", in: &error); return
+        }
         busy = true; error = nil
         // The presenter announces the result once the sheet has gone.
         var body: [String: Any] = ["client_id": cid, "device_name": deviceName, "category": category, "justification": justification]
         body["idem_key"] = idem.key(for: body)
-        do { let _: OKResponse = try await api.call("add_device_request", body: body); idem.answered(); onDone(); dismiss() }
+        var refused: [String: String] = [:]
+        do { let _: OKResponse = try await api.call("add_device_request", body: body, refusal: { refused = refusalFields($0) }); idem.answered(); onDone(); dismiss() }
+        catch APIError.server(let message) {
+            idem.answered(); busy = false
+            showFormError(message, in: &self.error, field: refusedFieldName(refused, order: ["client_id", "device_name", "justification"],
+                                                                            names: ["client_id": "Client", "device_name": "Device / technology", "justification": "Justification of need"]))
+        }
         catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error, what: "the device request"), in: &self.error) }
     }
+
+    /// ai_draft type justification (4.37.0, S5). "Drafting…" is said once as it starts and the
+    /// result once; the draft never replaces typed text.
+    private func draftJustification() async {
+        guard let cid = selectedClient, !drafting else { return }
+        drafting = true; error = nil; draftNotice = nil
+        announce("Drafting…")
+        defer { drafting = false }
+        var refused: [String: String] = [:]
+        do {
+            let r: JustificationDraftReply = try await api.call("ai_draft", body: ["type": "justification", "client_id": cid, "device_name": deviceName,
+                                                                                   "category": category, "text": justification],
+                                                                refusal: { refused = refusalFields($0) })
+            // Merged here, below what was typed (never cut or replaced); a text over 4,000
+            // characters is refused when the request is created, as the website.
+            justification = mergeDraft(justification, r.draft ?? r.text)
+            var said = "Justification drafted. Review and edit it before creating the request."
+            if r.truncated == true { draftNotice = aiDraftIncomplete; said += " " + aiDraftIncomplete }
+            if let left = placeholderNotice(justification) { said += " " + left }
+            announce(said)
+        } catch APIError.server(let message) {
+            showFormError(message, in: &self.error, field: refused["device_name"] != nil ? "Device / technology" : nil)
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+        }
+    }
+}
+
+/// device_request_update op=deliver's 4.37.0 key (S4): add_to_inventory, sent only with the
+/// equipment permission (the server reads it only then too).
+func deviceDeliverExtras(addToInventory: Bool, canEquipment: Bool) -> [String: Any] {
+    canEquipment ? ["add_to_inventory": addToInventory] : [:]
+}
+
+/// Deny or cancel a device request with a reason (4.37.0, S4), as procurement.php's "Close this
+/// request as" form: the reason is optional, up to 500 characters, and prefilled with the note
+/// kept on the request.
+struct DeviceCloseSheet: View {
+    @EnvironmentObject var api: API
+    @Environment(\.dismiss) private var dismiss
+    let request: DeviceRequest
+    let close: DeviceClose
+    let onDone: (String) -> Void
+    @State private var reason = ""
+    @State private var filled = false
+    @State private var busy = false
+    @State private var error: String?
+
+    private var to: String { close == .deny ? "Denied" : "Cancelled" }
+
+    var body: some View {
+        NavigationStack {
+            ErrorFocusForm(inNavigationStack: true, error: error) {
+                Section {
+                    CaptionedField(label: "Reason (optional; up to 500 characters)", text: $reason, lines: 2...6, errorName: "Reason")
+                    Text("It is closed until someone reopens it.")
+                }
+                Section {
+                    Button(busy ? "Saving…" : close.button, role: .destructive) { Task { await submit() } }.disabled(busy)
+                    Button("Keep request open") { dismiss() }.disabled(busy)
+                }
+            }
+            .navigationTitle(deviceCloseTitle(device: request.deviceName, to: to))
+            .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(busy)
+            .onAppear { if !filled { filled = true; reason = request.notes ?? "" } }
+        }
+    }
+
+    private func submit() async {
+        if reason.unicodeScalars.count > 500 { showFormError("Reason: use 500 characters or fewer.", in: &error, field: "Reason"); return }
+        busy = true; error = nil
+        var refused: [String: String] = [:]
+        do {
+            let r: DeviceUpdateReply = try await api.call("device_request_update", body: ["id": request.id, "op": "status", "to": to, "notes": reason],
+                                                          refusal: { refused = refusalFields($0) })
+            onDone(r.message ?? "Status updated to \(to).")
+            dismiss()
+        } catch {
+            busy = false
+            showFormError(error.localizedDescription, in: &self.error, field: refused["notes"] != nil ? "Reason" : nil)
+        }
+    }
+}
+
+/// The deny/cancel sheet's title (4.37.0, S4): "Close <device> as denied?"
+func deviceCloseTitle(device: String, to: String) -> String {
+    "Close \(device) as \(to == "Denied" ? "denied" : "cancelled")?"
 }
 
 func money(_ v: Double) -> String {

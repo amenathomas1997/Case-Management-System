@@ -19,14 +19,17 @@
 		1F700718F4ABE8335CE56EE5 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 842E7AD3D382BF326274B64E /* DashboardView.swift */; };
 		2494CFD655886496BDA109D9 /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CBCB74410A5B77EE3251E75 /* WidgetShared.swift */; };
 		26F58DE8619A570C97417CCC /* SignatureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F28B3D387EF471D14C082A8 /* SignatureView.swift */; };
+		27DE9261E67E64D43341273B /* EvalReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F98EE0A0E42FD499514C39B /* EvalReportView.swift */; };
 		2995FFD5E29CCF58513496C0 /* AccessibilityHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48DF2CDE30BF677D9DE50A18 /* AccessibilityHelpers.swift */; };
 		2A6997130AD422793FFC6F9A /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6332C29F9CD5AC9D57A67643 /* SearchView.swift */; };
 		2C7B6F146A563313FDF4E362 /* ProgramsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7950F295125382B6E56AE89 /* ProgramsView.swift */; };
 		3FF1A3FB1D76F04AF48FA99A /* ScheduleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 873CEF57E3B6679838050865 /* ScheduleView.swift */; };
+		424F108A157681F9655471FF /* Parity437.swift in Sources */ = {isa = PBXBuildFile; fileRef = E83D747BF67D9764116F1888 /* Parity437.swift */; };
 		49B31B22B81687F825F8328A /* AccommodationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CDA7806ED82735AF71ADF0F /* AccommodationsView.swift */; };
 		4B37F44328040FF51B38FD7D /* CaseManagementWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = E097E4BAF376B35897035240 /* CaseManagementWidget.swift */; };
 		5C5D8237443CCA27F5EAD949 /* UploadDocumentSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 722B9AF7A6A07CDAD653D9EC /* UploadDocumentSheet.swift */; };
 		668ECCFE37B1E58085650A15 /* LogHoursView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9BAEEE0291AE39227F920E7 /* LogHoursView.swift */; };
+		71FF3E112402467923F637EE /* LettersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58BF175FA6C64FB5E76049C7 /* LettersView.swift */; };
 		76ACB1CFB6398BCA7332A575 /* ClientsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C7B58DE7B95664910542174 /* ClientsView.swift */; };
 		7770AEAFDBDCF45CC2F496D6 /* ReferralsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F451E7BB936748438DB787 /* ReferralsView.swift */; };
 		77F4AE28C98FCDDF62256751 /* EquipmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F937F2B74BC82032F4653330 /* EquipmentView.swift */; };
@@ -124,6 +127,7 @@
 		524577675E3BBB1343F651CE /* PipelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineView.swift; sourceTree = "<group>"; };
 		55A7F19899A487E67EB1DB73 /* ContractsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractsView.swift; sourceTree = "<group>"; };
 		58264357915F454E30818A9E /* LocalNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNotifications.swift; sourceTree = "<group>"; };
+		58BF175FA6C64FB5E76049C7 /* LettersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LettersView.swift; sourceTree = "<group>"; };
 		6332C29F9CD5AC9D57A67643 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		6AEDE781345A6CDD04D9067A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		722B9AF7A6A07CDAD653D9EC /* UploadDocumentSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadDocumentSheet.swift; sourceTree = "<group>"; };
@@ -139,6 +143,7 @@
 		8BE4C2932D30505C1BDCF0FE /* PortalRequestsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortalRequestsView.swift; sourceTree = "<group>"; };
 		8C7B58DE7B95664910542174 /* ClientsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientsView.swift; sourceTree = "<group>"; };
 		8CBCB74410A5B77EE3251E75 /* WidgetShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetShared.swift; sourceTree = "<group>"; };
+		8F98EE0A0E42FD499514C39B /* EvalReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EvalReportView.swift; sourceTree = "<group>"; };
 		94EAD1D597CC1D0B6D01DF5E /* OfflineCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineCache.swift; sourceTree = "<group>"; };
 		99D02BABBBF34687EEC69CF1 /* CounselorsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CounselorsView.swift; sourceTree = "<group>"; };
 		9D1A7986945811FF2413C5C1 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
@@ -156,6 +161,7 @@
 		D7950F295125382B6E56AE89 /* ProgramsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgramsView.swift; sourceTree = "<group>"; };
 		E097E4BAF376B35897035240 /* CaseManagementWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaseManagementWidget.swift; sourceTree = "<group>"; };
 		E3EFF4393CAD0F104D438916 /* TrackDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackDetailView.swift; sourceTree = "<group>"; };
+		E83D747BF67D9764116F1888 /* Parity437.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Parity437.swift; sourceTree = "<group>"; };
 		ECAD1A6DA67437F6DBDC4D61 /* MessagesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesView.swift; sourceTree = "<group>"; };
 		EEAC29BE55792A3F351CA6C1 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		F3455989C7C78DFF2CCDC368 /* CaseManagement.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CaseManagement.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -221,11 +227,13 @@
 				826BC7C581EAC69F398F9C61 /* DocumentsAndHomework.swift */,
 				3F96B0589979EC119DCC1DD5 /* DocumentsToSign.swift */,
 				F937F2B74BC82032F4653330 /* EquipmentView.swift */,
+				8F98EE0A0E42FD499514C39B /* EvalReportView.swift */,
 				272B16858E24A340708ED922 /* FollowupsView.swift */,
 				88E668EDDDEEE829CEE8ADBF /* IncidentsView.swift */,
 				0707E013456314DA1FD1B82C /* InvoicesView.swift */,
 				1A257880BBE2582878982119 /* Keychain.swift */,
 				801A145993CCABD8636947D2 /* KnowledgeView.swift */,
+				58BF175FA6C64FB5E76049C7 /* LettersView.swift */,
 				58264357915F454E30818A9E /* LocalNotifications.swift */,
 				C9BAEEE0291AE39227F920E7 /* LogHoursView.swift */,
 				220C5E95AFCE97C2A76F5698 /* LoginView.swift */,
@@ -233,6 +241,7 @@
 				BC0E9051E4DDC540B9B70A62 /* NotificationsView.swift */,
 				94EAD1D597CC1D0B6D01DF5E /* OfflineCache.swift */,
 				3E6ED5047F4D1838606D64A2 /* OfflineSigning.swift */,
+				E83D747BF67D9764116F1888 /* Parity437.swift */,
 				524577675E3BBB1343F651CE /* PipelineView.swift */,
 				8BE4C2932D30505C1BDCF0FE /* PortalRequestsView.swift */,
 				6AEDE781345A6CDD04D9067A /* PrivacyInfo.xcprivacy */,
@@ -423,11 +432,13 @@
 				A632711C2F503E5AA864D462 /* DocumentsAndHomework.swift in Sources */,
 				12495DCC9ABA56B309EE4C57 /* DocumentsToSign.swift in Sources */,
 				77F4AE28C98FCDDF62256751 /* EquipmentView.swift in Sources */,
+				27DE9261E67E64D43341273B /* EvalReportView.swift in Sources */,
 				8DFF619A5990339A475412F6 /* FollowupsView.swift in Sources */,
 				7C04A11255D11BA62AD7BFE5 /* IncidentsView.swift in Sources */,
 				B53106235DB52A82DB6B413E /* InvoicesView.swift in Sources */,
 				CF8ECECB45C2424A6E10FE42 /* Keychain.swift in Sources */,
 				C53580EA49D5C38CF6D3E101 /* KnowledgeView.swift in Sources */,
+				71FF3E112402467923F637EE /* LettersView.swift in Sources */,
 				DEB3D0C84DECA6888B12E32B /* LocalNotifications.swift in Sources */,
 				668ECCFE37B1E58085650A15 /* LogHoursView.swift in Sources */,
 				E30D848976D1700BE692B0D8 /* LoginView.swift in Sources */,
@@ -435,6 +446,7 @@
 				0612A222E7C702D0B6F6B6C2 /* NotificationsView.swift in Sources */,
 				A565A4B925672D626DBA708D /* OfflineCache.swift in Sources */,
 				FBF8B80ED32F732CDF8392F1 /* OfflineSigning.swift in Sources */,
+				424F108A157681F9655471FF /* Parity437.swift in Sources */,
 				1A6B479B01EA75FF5A8B0B69 /* PipelineView.swift in Sources */,
 				7F1AE868B19628B92ECD14BE /* PortalRequestsView.swift in Sources */,
 				AD524945B2C5FBF9F1F64A7E /* ProcurementView.swift in Sources */,
@@ -498,14 +510,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 67;
+				CURRENT_PROJECT_VERSION = 68;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.36.0;
+				MARKETING_VERSION = 4.37.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -521,14 +533,14 @@
 				CODE_SIGN_ENTITLEMENTS = CaseManagement.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 67;
+				CURRENT_PROJECT_VERSION = 68;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 4.36.0;
+				MARKETING_VERSION = 4.37.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -562,7 +574,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 67;
+				CURRENT_PROJECT_VERSION = 68;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -570,7 +582,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.36.0;
+				MARKETING_VERSION = 4.37.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -738,7 +750,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Widget/CaseManagementWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 67;
+				CURRENT_PROJECT_VERSION = 68;
 				DEVELOPMENT_TEAM = "$(CMS_TEAM)";
 				INFOPLIST_FILE = Widget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -746,7 +758,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.36.0;
+				MARKETING_VERSION = 4.37.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(CMS_BUNDLE_ID).widget";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;

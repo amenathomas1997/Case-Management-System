@@ -39,11 +39,13 @@ fun KnowledgeScreen(api: Api, nav: NavHostController) {
         Field("Search articles", q, { q = it })
         SecondaryButton("Search") { search = q.trim() }
         if (api.can("templates")) SecondaryButton("Write an article") { nav.navigate("kbEdit/0") }
+        // 4.37.0 (S26): asking the knowledge base, from its list (as the website).
+        if (api.aiHas("kb")) SecondaryButton("Ask the knowledge base") { nav.navigate("aiTools?tool=kb") }
         Show(state, "articles") { list ->
             Announce(if (search.isNotEmpty()) "${list.size} ${if (list.size == 1) "article" else "articles"} found." else null)
             Heading("Articles (${list.size})")
-            if (list.isEmpty()) Text("No articles found.")
-            list.forEach { a -> ListRow(listOf(a.optString("title"), listOfNotNull(a.str("category"), if (a.optBoolean("is_public") || a.optInt("is_public") == 1) "public" else null).joinToString(", ")), action = "read it", onClick = { nav.navigate("kb/${a.optInt("id")}") }) }
+            if (list.isEmpty()) Text(kbEmptyText(search.isNotEmpty()))
+            list.forEach { a -> ListRow(listOf(a.optString("title"), listOfNotNull(kbMeta(a.str("category"), a.str("updated_at"), a.str("author")).ifEmpty { null }, if (a.optBoolean("is_public") || a.optInt("is_public") == 1) "Shared with clients" else null).joinToString(", ")), action = "read it", onClick = { nav.navigate("kb/${a.optInt("id")}") }) }
         }
     }
 }
@@ -59,7 +61,9 @@ fun KnowledgeArticleScreen(api: Api, nav: NavHostController, id: Int) {
         Page {
             Heading(a.optString("title"), large = true)
             ErrorText(error)
-            a.str("category")?.let { Text("Category: $it") }
+            // 4.37.0 (S26): the website's meta line, and the iPhone's article rules.
+            kbMeta(a.str("category"), a.str("updated_at"), a.str("author")).ifEmpty { null }?.let { Text(it) }
+            if (a.optBoolean("is_public") || a.optInt("is_public") == 1) Text("Shared with clients")
             MarkdownBlocks(a.optString("body"))
             if (api.can("templates")) {
                 SecondaryButton("Edit the article") { nav.navigate("kbEdit/$id") }
@@ -67,32 +71,33 @@ fun KnowledgeArticleScreen(api: Api, nav: NavHostController, id: Int) {
             }
         }
     }
-    if (deleting) Confirm("Delete this article?", "This cannot be undone.", "Delete article", {
+    if (deleting) Confirm("Delete this article permanently?", KB_DELETE_TEXT, "Delete permanently", {
         scope.launch { try { api.call("delete_kb", body = JSONObject().put("id", id)); Flash.pending = "Article deleted."; nav.popBackStack() } catch (e: ApiException) { error = e.message } }
     }, { deleting = false })
 }
 
 /**
- * Markdown as screen-reader friendly blocks: # lines are headings, -, * and • lines list items.
- * [lang]: the language the text is written in (a translation), marked on every block so TalkBack
- * reads it with that language's voice (4.30.0, owner rule 5).
+ * Markdown as screen-reader friendly blocks: # lines are headings, -, * and • lines list items,
+ * "1." lines numbered steps, and a paragraph's lines read together (4.37.0: the iPhone's kbBlocks
+ * rules). [lang]: the language the text is written in (a translation), marked on every block so
+ * TalkBack reads it with that language's voice (4.30.0, owner rule 5).
  */
 @Composable
 fun MarkdownBlocks(text: String, lang: String? = null) {
-    text.replace("\r", "").split("\n").map { it.trim() }.filter { it.isNotEmpty() && it != "---" }.forEach { line ->
-        val h = Regex("^(#{1,6})\\s+(.*)$").find(line)
-        when {
-            h != null -> Text(
-                inLanguage(h.groupValues[2].replace("**", ""), lang),
+    kbBlocks(text.replace("**", "")).forEach { b ->
+        when (b) {
+            is KbBlock.Heading -> Text(
+                inLanguage(b.text, lang),
                 style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                modifier = androidx.compose.ui.Modifier.padding(top = 12.dp, bottom = 4.dp).semantics { heading() },
+                modifier = Modifier.padding(top = 12.dp, bottom = 4.dp).semantics { heading() },
             )
-            Regex("^[-*•]\\s+").containsMatchIn(line) -> Text(inLanguage("• " + line.replaceFirst(Regex("^[-*•]\\s+"), "").replace("**", ""), lang))
-            else -> Text(inLanguage(line.replace("**", ""), lang), modifier = androidx.compose.ui.Modifier.semantics { })
+            is KbBlock.Paragraph -> Text(inLanguage(b.text, lang), modifier = Modifier.padding(vertical = 4.dp))
+            is KbBlock.Item -> Text(inLanguage("${b.marker} ${b.text}", lang), modifier = Modifier.padding(vertical = 2.dp))
         }
     }
 }
+
 
 @Composable
 fun KnowledgeEditScreen(api: Api, nav: NavHostController, id: Int) {
@@ -109,8 +114,8 @@ fun KnowledgeEditScreen(api: Api, nav: NavHostController, id: Int) {
         Page {
             Field("Title", title, { title = it }, required = true)
             Field("Category", category, { category = it }, hint = "optional")
-            Field("Article", body, { body = it }, hint = "# starts a heading, - a list item", singleLine = false, minLines = 8)
-            Tick("Shown to clients in their portal", public) { public = it }
+            Field("Article", body, { body = it }, hint = KB_EDITOR_HINT, singleLine = false, minLines = 8)
+            Tick(KB_PUBLIC_TICK, public) { public = it }
             ErrorText(error)
             PrimaryButton("Save", busy = busy, missing = if (title.isBlank()) stillNeeded(listOf("Title")) else null) {
                 scope.launchSave({ busy = it }, { error = it }) {

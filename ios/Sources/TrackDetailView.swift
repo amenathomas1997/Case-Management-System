@@ -20,6 +20,11 @@ struct Goal: Decodable, Identifiable {
         targetDate = try? c.decodeIfPresent(String.self, forKey: .targetDate)
         progressPct = try? c.decodeIfPresent(Int.self, forKey: .progressPct)
     }
+    /// A goal known from elsewhere (4.37.0: the progress review's goal list), to record progress on.
+    init(id: Int, specificGoal: String, status: String, progressPct: Int?) {
+        self.id = id; self.specificGoal = specificGoal; self.measurableMetric = ""; self.focusArea = nil
+        self.status = status; self.targetDate = nil; self.progressPct = progressPct
+    }
 }
 
 struct GoalProgressEntry: Decodable, Identifiable {
@@ -823,122 +828,321 @@ struct AmendmentView: View {
     @State private var confirmingRedraft = false
     @State private var error: String?
     @State private var aiBusy = false
-    /// After a failure, VoiceOver is put on the error banner (see the list's onChange).
-    @AccessibilityFocusState private var errorFocused: Bool
-    private static let errorRow = "amendmentError"
+    /// 4.37.0 (S13): the website's separate box. An edited letter is kept; the AI draft is shown
+    /// below it, and can be used as the letter (the person's letter can then be put back).
+    @State private var aiDraftText: String?
+    @State private var letterBeforeDraft: String?
+    /// An AI letter replaced the filled-in one: a reload keeps it.
+    @State private var aiLetterKept = false
+    /// Record the request as sent (amendment_request.php's form).
+    @State private var sentOn = Date()
+    @State private var sentTo = ""
+    @State private var sentToFilled = false
+    @State private var extraHours = ""
+    @State private var extraDollars = ""
+    @State private var asksNewEnd = false
+    @State private var newEnd = Date()
+    @State private var recording = false
+    @State private var recordIdem = IdemKey()
+    @State private var recordNote: String?
+    /// The reply being recorded for each awaiting request: its status, date and note.
+    @State private var replyStatus: [Int: String] = [:]
+    @State private var replyDate: [Int: Date] = [:]
+    @State private var replyNote: [Int: String] = [:]
+    @State private var replying: Int?
+    /// The approved change to enter on the track: the request and the reason to prefill.
+    @State private var enteringChange: AmendmentChange?
+    @State private var reasonPrefills: [Int: String] = [:]
+    @State private var sheetResult: String?
+
+    /// A 4.37.0 server: it keeps an edited letter and sends the AI draft separately, and has the
+    /// request history.
+    private var recordsRequests: Bool { data?.history != nil }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            List {
-                if let error {
-                    ErrorBanner(message: error).listRowSeparator(.hidden)
-                        .id(Self.errorRow)
-                        .accessibilityFocused($errorFocused)
-                }
-                if let d = data {
-                    // When mileage and expenses use the funds up before the hours, the server's run-out
-                    // date and the letter are about funds: the figures here say the same.
-                    let byFunds = d.fundsLimit == true && d.suggestFunds != nil
-                    Section("Burn-down") {
-                        LabeledContent("Hours used", value: String(format: "%.2f of %.2f hours (%d%%)", d.worked, d.authorized, d.pct))
-                        LabeledContent("Hours remaining", value: String(format: "%.2f hours", d.remaining))
-                        if let auth = d.fundsAuthorized, auth > 0, let used = d.fundsUsed, let left = d.fundsRemaining {
-                            LabeledContent("Funds used", value: "\(money(used)) of \(money(auth))" + (d.fundsPct.map { " (\($0)%)" } ?? ""))
-                            LabeledContent("Funds remaining", value: money(left))
-                        }
-                        if byFunds {
-                            Text("The authorized funds, not the hours, are the limit: mileage and expenses are using them up faster, so they run out before the hours do.")
-                                .font(.callout)
-                            if let spend = d.weeklySpend, spend > 0 { LabeledContent("Recent spending", value: "\(money(spend)) per week") }
-                        } else if d.weeklyRate > 0 {
-                            LabeledContent("Recent pace", value: String(format: "%.2f hours per week", d.weeklyRate))
-                        }
-                        if let r = d.runOut { LabeledContent(byFunds ? "Projected run-out of funds" : "Projected run-out of hours", value: r) }
-                        if let e = d.expiration { LabeledContent(d.expired == true ? "Expired on" : "Expires", value: e) }
-                        if d.expired == true { Text("The authorization has already expired, so no run-out date is projected.").font(.callout) }
-                        LabeledContent("Suggested top-up", value: byFunds
-                                       ? "\(money(d.suggestFunds ?? 0)) in additional authorized funds"
-                                       : "\(d.suggestAdd) hours")
+        ErrorFocusForm(inNavigationStack: true, error: error) {
+            if let d = data {
+                // When mileage and expenses use the funds up before the hours, the server's run-out
+                // date and the letter are about funds: the figures here say the same.
+                let byFunds = d.fundsLimit == true && d.suggestFunds != nil
+                Section("Burn-down") {
+                    LabeledContent("Hours used", value: String(format: "%.2f of %.2f hours (%d%%)", d.worked, d.authorized, d.pct))
+                    LabeledContent("Hours remaining", value: String(format: "%.2f hours", d.remaining))
+                    if let auth = d.fundsAuthorized, auth > 0, let used = d.fundsUsed, let left = d.fundsRemaining {
+                        LabeledContent("Funds used", value: "\(money(used)) of \(money(auth))" + (d.fundsPct.map { " (\($0)%)" } ?? ""))
+                        LabeledContent("Funds remaining", value: money(left))
                     }
-                    Section("Amendment request letter") {
-                        if !d.aiNote.isEmpty { Text(d.aiNote).font(.caption).foregroundStyle(Color.secondaryText) }
-                        TextField("Letter", text: $letter, axis: .vertical).lineLimit(8...30)
-                        if api.aiHas("draft") {
-                            // A new draft from the track's facts (the server never sees this text),
-                            // so it replaces the letter: asked first when the person has edited it.
-                            Button {
-                                if letter != serverLetter { confirmingRedraft = true } else { Task { await draftAI() } }
-                            } label: {
-                                Label(aiBusy ? "Drafting…" : "Draft with AI", systemImage: "sparkles")
-                            }.disabled(aiBusy)
-                        }
-                        // Only to a counselor email staff have confirmed: one typed into the public
-                        // referral form may not be the counselor's, and the letter names the client.
-                        if counselorUnconfirmed {
-                            Text("Counselor email not confirmed — confirm it on the client's profile before emailing this letter.")
-                                .font(.callout)
-                        } else if let email = d.counselorEmail, !email.isEmpty {
-                            let subject = "Authorization amendment request — \(d.client)"
-                            if let url = mailtoURL(email, subject: subject, body: letter) {
-                                Link(destination: url) { Label("Email counselor", systemImage: "paperplane") }
-                            }
-                        }
-                        // The letter names the client: the copy stays on this phone (not Handoff),
-                        // is cleared from the clipboard after 10 minutes, and at sign-out.
+                    if byFunds {
+                        Text("The authorized funds, not the hours, are the limit: mileage and expenses are using them up faster, so they run out before the hours do.")
+                            .font(.callout)
+                        if let spend = d.weeklySpend, spend > 0 { LabeledContent("Recent spending", value: "\(money(spend)) per week") }
+                    } else if d.weeklyRate > 0 {
+                        LabeledContent("Recent pace", value: String(format: "%.2f hours per week", d.weeklyRate))
+                    }
+                    if let r = d.runOut { LabeledContent(byFunds ? "Projected run-out of funds" : "Projected run-out of hours", value: r) }
+                    if let e = d.expiration { LabeledContent(d.expired == true ? "Expired on" : "Expires", value: e) }
+                    if d.expired == true { Text("The authorization has already expired, so no run-out date is projected.").font(.callout) }
+                    LabeledContent("Suggested top-up", value: byFunds
+                                   ? "\(money(d.suggestFunds ?? 0)) in additional authorized funds"
+                                   : "\(d.suggestAdd) hours")
+                }
+                Section("Amendment request letter") {
+                    if !d.aiNote.isEmpty { Text(d.aiNote).font(.caption).foregroundStyle(Color.secondaryText) }
+                    TextField("Letter", text: $letter, axis: .vertical).lineLimit(8...30)
+                        .errorField("Letter")
+                    if api.aiHas("draft") {
+                        // A 4.37.0 server keeps an edited letter and sends its draft separately;
+                        // an older one replaces the letter, so an edited one is asked about first.
                         Button {
-                            api.copyProtected(letter)
-                            announce("Letter copied. The copy is cleared from the clipboard in 10 minutes.")
+                            if letter != serverLetter && !recordsRequests { confirmingRedraft = true } else { Task { await draftAI() } }
                         } label: {
-                            Label("Copy letter", systemImage: "doc.on.doc")
-                        }
-                        .disabled(letter.isEmpty)
+                            Label(aiBusy ? "Drafting…" : "Draft with AI", systemImage: "sparkles")
+                        }.disabled(aiBusy)
                     }
-                } else if error == nil { ProgressView() }
-            }
-            // The banner is the list's first row: a failed AI draft, asked for from the letter further
-            // down, would otherwise leave it off screen, where a List never draws it (or says it).
-            // Scrolled into view once it exists, then VoiceOver is put on it.
-            .onChange(of: error) { message in
-                guard let message else { return }
-                claimFormErrorFocus(message)   // VoiceOver is put on the banner, which reads it
-                DispatchQueue.main.async { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { proxy.scrollTo(Self.errorRow, anchor: .top) } }
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 400_000_000)
-                    errorFocused = true
+                    if let restore = letterBeforeDraft {
+                        Button("Restore my letter") {
+                            letter = restore; letterBeforeDraft = nil
+                            announce("Your letter is back.")
+                        }
+                    }
+                    // Only to a counselor email staff have confirmed: one typed into the public
+                    // referral form may not be the counselor's, and the letter names the client.
+                    if counselorUnconfirmed {
+                        Text("Counselor email not confirmed — confirm it on the client's profile before emailing this letter.")
+                            .font(.callout)
+                    } else if let email = d.counselorEmail, !email.isEmpty {
+                        let subject = "Authorization amendment request — \(d.client)"
+                        if let url = mailtoURL(email, subject: subject, body: letter) {
+                            Link(destination: url) { Label("Email counselor", systemImage: "paperplane") }
+                        }
+                    }
+                    // The letter names the client: the copy stays on this phone (not Handoff),
+                    // is cleared from the clipboard after 10 minutes, and at sign-out.
+                    Button {
+                        api.copyProtected(letter)
+                        announce("Letter copied. The copy is cleared from the clipboard in 10 minutes.")
+                    } label: {
+                        Label("Copy letter", systemImage: "doc.on.doc")
+                    }
+                    .disabled(letter.isEmpty)
                 }
-            }
+                if let draft = aiDraftText {
+                    Section("AI draft") {
+                        Text(draft).font(.callout)
+                        Button("Use the AI draft as the letter") {
+                            letterBeforeDraft = letter
+                            letter = draft
+                            aiDraftText = nil
+                            announce("The AI draft is now the letter. Review and edit it before sending.")
+                        }
+                    }
+                }
+                if recordsRequests {
+                    recordSection(d)
+                    historySection(d)
+                }
+            } else if error == nil { ProgressView() }
         }
         .navigationTitle("Burn-down")
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("Replace the letter with a new AI draft? Your edits to it will be lost.",
                             isPresented: $confirmingRedraft, titleVisibility: .visible) {
-            Button("Replace with a new draft", role: .destructive) { Task { await draftAI() } }
+            // Only for an older server (aiDraftText == nil): a 4.37.0 server never replaces an
+            // edited letter, so it is not asked there.
+            if aiDraftText == nil {
+                Button("Replace with a new draft", role: .destructive) { Task { await draftAI() } }
+            }
             Button("Keep my letter", role: .cancel) {}
         }
+        .sheet(item: $enteringChange, onDismiss: {
+            if let sheetResult { announceAfterDismiss(sheetResult) }
+            sheetResult = nil
+            Task { await load() }
+        }) { change in
+            TrackEditSheet(trackId: trackId, clientId: nil, clientName: data?.client ?? "",
+                           amendRequest: change.requestId, reasonPrefill: change.reason) { message, _ in sheetResult = message }
+        }
         .task { await load() }
+    }
+
+    /// "Record the request as sent" (4.37.0, S13), as amendment_request.php.
+    @ViewBuilder private func recordSection(_ d: AmendmentResponse) -> some View {
+        Section("Record the request as sent") {
+            Text("After you send the letter, record it here. It is kept on the track as a case note, and a follow-up task reminds you if no reply comes.")
+            DatePicker("Date sent (required)", selection: $sentOn, in: ...Date(), displayedComponents: .date)
+                .errorField("Date sent")
+            CaptionedField(label: "Sent to", text: $sentTo, errorName: "Sent to")
+            KeyboardCaptionedField(label: "Additional hours requested", text: $extraHours, keyboard: .decimalPad, errorName: "Additional hours requested")
+            KeyboardCaptionedField(label: "Additional dollars requested", text: $extraDollars, keyboard: .decimalPad, errorName: "Additional dollars requested")
+            Toggle("New end date requested", isOn: $asksNewEnd)
+            if asksNewEnd {
+                DatePicker("New end date", selection: $newEnd, displayedComponents: .date)
+                    .errorField("New end date requested")
+            }
+            Button(recording ? "Recording…" : "Record request as sent") { Task { await recordRequest() } }
+                .disabled(recording)
+            if let recordNote { Text(recordNote).font(.callout.weight(.medium)) }
+        }
+    }
+
+    /// "Requests and replies (N)": each request's line, the reply form for one awaiting a reply,
+    /// and "Enter the approved change on the track" for an approval not yet entered.
+    @ViewBuilder private func historySection(_ d: AmendmentResponse) -> some View {
+        let rows = d.history ?? []
+        Section("Requests and replies (\(rows.count))") {
+            if let waiting = d.waitingText, !waiting.isEmpty { Text(waiting).font(.callout) }
+            if rows.isEmpty { Text("No amendment requests recorded yet.").foregroundStyle(Color.secondaryText) }
+            ForEach(rows) { row in
+                Text(row.text)
+                if row.awaiting == true {
+                    Picker("Reply (required)", selection: Binding(get: { replyStatus[row.id] ?? "" }, set: { replyStatus[row.id] = $0 })) {
+                        Text("Choose the reply").tag("")
+                        ForEach(d.replyStatuses ?? ["Approved", "Partly approved", "Denied", "Withdrawn"], id: \.self) { Text($0).tag($0) }
+                    }
+                    .errorField("Reply \(row.id)")
+                    DatePicker("Date of the reply", selection: Binding(get: { replyDate[row.id] ?? Date() }, set: { replyDate[row.id] = $0 }),
+                               in: ...Date(), displayedComponents: .date)
+                        .errorField("Date of the reply \(row.id)")
+                    CaptionedField(label: "Note", text: Binding(get: { replyNote[row.id] ?? "" }, set: { replyNote[row.id] = $0 }))
+                    Button(replying == row.id ? "Recording…" : "Record reply") { Task { await recordReply(row) } }
+                        .disabled(replying != nil)
+                }
+                if row.needsChange == true {
+                    Button("Enter the approved change on the track") {
+                        enteringChange = AmendmentChange(requestId: row.id, reason: reasonPrefills[row.id] ?? row.reasonPrefill ?? amendmentReasonFallback(row))
+                    }
+                }
+            }
+        }
     }
 
     private func show(_ reply: AmendmentReply) {
         data = reply.data; letter = reply.data.letter; serverLetter = reply.data.letter
         counselorUnconfirmed = reply.counselorUnconfirmed
+        if !sentToFilled { sentTo = reply.data.sentToDefault ?? ""; sentToFilled = true }
     }
 
     private func load() async {
         do {
             error = nil
             let reply: AmendmentReply = try await api.call("amendment", query: ["track": String(trackId)])
+            // A reload keeps a letter being edited, and an AI letter that replaced the filled-in
+            // one (the server would send its own wording again).
+            let editing = data != nil && letter != serverLetter
+            let typed = letter, kept = serverLetter
             show(reply)
+            if editing || aiLetterKept { letter = typed; serverLetter = kept }
         } catch { showFormError(error.localizedDescription, in: &self.error) }
     }
+
     private func draftAI() async {
         aiBusy = true; error = nil
+        defer { aiBusy = false }
+        announce("Drafting…")
+        let edited = letter != serverLetter
+        var body: [String: Any] = ["track": trackId, "ai_draft": 1]
+        if edited { body["letter"] = letter }
         do {
-            let reply: AmendmentReply = try await api.call("amendment", body: ["track": trackId, "ai_draft": 1])
-            show(reply)
-            announce(reply.data.aiNote.isEmpty ? "Letter updated." : reply.data.aiNote)
+            let reply: AmendmentReply = try await api.call("amendment", body: body)
+            if edited, let draft = reply.data.aiDraftText, !draft.isEmpty {
+                // The website's separate box: the letter stays as typed.
+                let typed = letter
+                data = reply.data
+                counselorUnconfirmed = reply.counselorUnconfirmed
+                letter = typed
+                aiDraftText = draft
+                announce(reply.data.aiNote.isEmpty ? "Your letter is unchanged. The AI draft is in a separate box below it — review it, and use it only if you want it." : reply.data.aiNote)
+            } else if edited && recordsRequests {
+                // No separate draft came back (the AI failed): the typed letter stays, still
+                // counted as edited, and is never replaced without asking.
+                let typed = letter, kept = serverLetter
+                data = reply.data
+                counselorUnconfirmed = reply.counselorUnconfirmed
+                letter = typed; serverLetter = kept
+                announce(reply.data.aiNote.isEmpty ? "No AI draft was made. Your letter is unchanged." : reply.data.aiNote)
+            } else {
+                show(reply)
+                aiDraftText = nil
+                aiLetterKept = true
+                announce(reply.data.aiNote.isEmpty ? "Letter updated." : reply.data.aiNote)
+            }
         } catch { showFormError(error.localizedDescription, in: &self.error) }
-        aiBusy = false
     }
+
+    private func recordRequest() async {
+        // amendment_request.php's sentence, said here before anything is sent.
+        if Calendar.current.startOfDay(for: sentOn) > Calendar.current.startOfDay(for: Date()) {
+            showFormError("Enter the date the request was sent (today or earlier).", in: &error, field: "Date sent"); return
+        }
+        recording = true; error = nil; recordNote = nil
+        defer { recording = false }
+        var body = amendmentRecordBody(trackId: trackId, requestedOn: APIDate.day(sentOn), sentTo: sentTo, hours: extraHours,
+                                       amount: extraDollars, newEnd: asksNewEnd ? APIDate.day(newEnd) : "", letter: letter)
+        body["idem_key"] = recordIdem.key(for: body)
+        var refused: [String: String] = [:]
+        do {
+            let r: AmendmentRecordReply = try await api.call("record_amendment", method: "POST", body: body, refusal: { refused = refusalFields($0) })
+            recordIdem.answered()
+            let message = r.message ?? "Recorded: amendment requested."
+            recordNote = message
+            extraHours = ""; extraDollars = ""; asksNewEnd = false
+            announce(message)
+            await load()
+        } catch {
+            recordIdem.failed(error)
+            let names = ["requested_on": "Date sent", "sent_to": "Sent to", "hours": "Additional hours requested",
+                         "amount": "Additional dollars requested", "new_end": "New end date requested", "letter": "Letter"]
+            showFormError(IdemKey.message(for: error, what: "the request"), in: &self.error,
+                          field: refusedFieldName(refused, order: ["requested_on", "sent_to", "hours", "amount", "new_end", "letter"], names: names))
+        }
+    }
+
+    private func recordReply(_ row: AmendmentHistoryRow) async {
+        if Calendar.current.startOfDay(for: replyDate[row.id] ?? Date()) > Calendar.current.startOfDay(for: Date()) {
+            showFormError("Enter the date of the reply (today or earlier).", in: &error, field: "Date of the reply \(row.id)"); return
+        }
+        replying = row.id; error = nil
+        defer { replying = nil }
+        var refused: [String: String] = [:]
+        do {
+            let r: AmendmentReplyResult = try await api.call("amendment_reply", method: "POST", body: [
+                "track_id": trackId, "request_id": row.id, "status": replyStatus[row.id] ?? "",
+                "replied_on": APIDate.day(replyDate[row.id] ?? Date()), "note": replyNote[row.id] ?? "",
+            ], refusal: { refused = refusalFields($0) })
+            if let prefill = r.reasonPrefill, !prefill.isEmpty { reasonPrefills[row.id] = prefill }
+            replyStatus[row.id] = nil; replyNote[row.id] = nil; replyDate[row.id] = nil
+            announce(r.message ?? "Reply recorded.")
+            await load()
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error,
+                          field: refusedFieldName(refused, order: ["status", "replied_on"], names: ["status": "Reply \(row.id)", "replied_on": "Date of the reply \(row.id)"]))
+        }
+    }
+}
+
+/// record_amendment's reply.
+struct AmendmentRecordReply: Decodable { let id: Int?; let message: String? }
+
+/// amendment_reply's reply: the website's sentence, and for an approval the reason to prefill.
+struct AmendmentReplyResult: Decodable { let message: String?; let needsChange: Bool?; let reasonPrefill: String?; let requestId: Int? }
+
+/// The approved change being entered on the track, from its request.
+struct AmendmentChange: Identifiable {
+    let requestId: Int
+    let reason: String
+    var id: Int { requestId }
+}
+
+/// record_amendment's body (4.37.0, S13): the letter is the one in the Letter box.
+func amendmentRecordBody(trackId: Int, requestedOn: String, sentTo: String, hours: String, amount: String, newEnd: String, letter: String) -> [String: Any] {
+    ["track_id": trackId, "requested_on": requestedOn, "sent_to": sentTo.trimmingCharacters(in: .whitespacesAndNewlines),
+     "hours": hours.trimmingCharacters(in: .whitespacesAndNewlines), "amount": amount.trimmingCharacters(in: .whitespacesAndNewlines),
+     "new_end": newEnd, "letter": letter]
+}
+
+/// track_edit.php's prefilled reason, for a row the server sent without one.
+func amendmentReasonFallback(_ row: AmendmentHistoryRow) -> String {
+    "VR \((row.status ?? "approved").lowercased()) the amendment requested \(formatDate(row.requestedOn ?? ""))"
 }
 
 /// The amendment reply, with whether its counselor email waits for staff to confirm it: 3.0.21
@@ -1062,9 +1266,13 @@ struct GoalProgressSheet: View {
             // slider (Achieved is always 100%).
             struct Stored: Decodable {
                 let progressPct: Int?
-                private enum CodingKeys: String, CodingKey { case progressPct }
+                /// 4.37.0 (S10): the website's sentence, 'Progress recorded for goal "…": P% (S).'
+                let message: String?
+                private enum CodingKeys: String, CodingKey { case progressPct, message }
                 init(from d: Decoder) throws {
-                    progressPct = try? d.container(keyedBy: CodingKeys.self).decodeIfPresent(Int.self, forKey: .progressPct)
+                    let c = try d.container(keyedBy: CodingKeys.self)
+                    progressPct = try? c.decodeIfPresent(Int.self, forKey: .progressPct)
+                    message = try? c.decodeIfPresent(String.self, forKey: .message)
                 }
             }
             var body: [String: Any] = ["id": goal.id, "status": status, "progress_pct": Int(pct), "note": note, "idem_key": idemKey]
@@ -1076,7 +1284,7 @@ struct GoalProgressSheet: View {
             do {
                 let stored: Stored = try await api.call("update_goal", body: body)
                 // Said by the track screen once this sheet has closed (closing it would cut it off).
-                onDone("Progress recorded — \(stored.progressPct ?? Int(pct))%."); dismiss()
+                onDone(stored.message ?? "Progress recorded — \(stored.progressPct ?? Int(pct))%."); dismiss()
             } catch APIError.network {
                 // No signal (4.8.0): kept on this phone and recorded when it is back online.
                 // What the goal was when this was written, and when, so a newer entry by someone
@@ -1925,6 +2133,10 @@ struct TrackEditSheet: View {
     let trackId: Int?
     let clientId: Int?
     let clientName: String
+    /// Opened from an approved amendment request (4.37.0, S13): sent as amend_request, so the
+    /// change is linked to it, with the amendment reason filled in as track_edit.php does.
+    var amendRequest: Int? = nil
+    var reasonPrefill: String? = nil
     let onSaved: (String, TrackFormValues?) -> Void
 
     @State private var form: TrackFormResponse?
@@ -2195,6 +2407,8 @@ struct TrackEditSheet: View {
             original = fields
             form = r
             restoreDraft()
+            // From an approved amendment request (4.37.0): the reason as track_edit.php fills it.
+            if let reasonPrefill, reason.isEmpty { reason = reasonPrefill }
         } catch { showFormError(error.localizedDescription, in: &loadError) }
     }
 
@@ -2266,6 +2480,7 @@ struct TrackEditSheet: View {
                                    "authorized_hours": hoursText, "hourly_rate": rateText, "mileage_rate": mileageText,
                                    "start_date": startDate, "expiration_date": expirationDate, "rsa_category": rsaCategory]
         if let trackId { body["id"] = trackId; body["amendment_reason"] = reason } else if let clientId { body["client_id"] = clientId }
+        if let amendRequest, trackId != nil { body["amend_request"] = amendRequest }
         // 4.34.0: Who pays and the dollar authorization (blank clears it), on a server that offers them.
         if offersBilling {
             body["billing_mode"] = billingMode

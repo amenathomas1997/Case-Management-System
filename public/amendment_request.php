@@ -176,24 +176,14 @@ if (trim($keptLetter) !== '') $draft = $keptLetter;
 // no client, counselor or staff name leaves the system. (The track title is
 // free text, so with redaction on it is also scrubbed of those names.)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ai_draft']) && ai_feature_enabled('draft')) {
-    $facts = "Facts for an authorization amendment request to a vocational rehabilitation counselor:\n"
-        . "- Service: " . $track['title'] . "\n- Hours authorized: " . fmt_hours($auth) . "\n- Hours used: " . fmt_hours($worked) . " (" . $pct . "%)\n- Hours remaining: " . fmt_hours($remaining) . "\n"
-        . ($fundsLimit ? "- Funds authorized: " . fmt_money($fundsAuth) . "\n- Funds used: " . fmt_money($fundsUsed) . " (" . $fundsPct . "%), including " . fmt_money($otherCosts) . " of mileage and expenses\n- Funds remaining: " . fmt_money($fundsLeft) . "\n"
-            . "- The authorized funds, not the hours, are the limit: they will run out before the hours do.\n" : '')
-        . ($runOut ? "- Projected run-out " . ($fundsLimit ? 'of funds ' : '') . "at current pace: " . $runOut . "\n"
-            : ($outlastsExpiry ? "- At the current pace the authorization period ends before the " . ($fundsLimit ? 'funds' : 'hours') . " are used up\n" : ''))
-        . ($expDate ? ($expired ? "- Authorization already expired on: " : "- Authorization expires: ") . $expDate . "\n" : '')
-        . ($fundsLimit ? "- Requesting about " . fmt_money($suggestFunds) . " in additional authorized funds" : "- Requesting about " . $suggestAdd . " additional hours") . ($expDate ? " and a period extension" : "") . ".\n"
-        . "- Counselor: [COUNSELOR]\n- Prepared by: [STAFF] at " . brand('org') . "\n";
-    $sys = ai_system_base() . ' Write a brief, professional authorization amendment request letter to a vocational rehabilitation counselor. '
-        . 'Use [CLIENT] wherever the individual\'s name belongs, [COUNSELOR] for the counselor\'s name and [STAFF] for the sender\'s name, exactly as written — do not invent names. '
-        . 'Facts only; no promises of outcomes. Keep it under 200 words.';
-    $res = ai_run('draft', $sys, $facts, 600,
-        ['name' => $track['client'], 'counselor_name' => $track['counselor_name'], 'counselor_email' => $track['counselor_email']], (int)$user['id']);
+    // The facts, prompt and name restore are shared with the apps' amendment (inc/amendments.php, 4.37.0).
+    $facts = amendment_ai_facts($track, ['auth' => $auth, 'worked' => $worked, 'pct' => $pct, 'remaining' => $remaining, 'funds_limit' => $fundsLimit,
+        'funds_auth' => $fundsAuth, 'funds_used' => $fundsUsed, 'funds_pct' => $fundsPct, 'other_costs' => $otherCosts, 'funds_left' => $fundsLeft,
+        'run_out' => $runOut, 'outlasts_expiry' => $outlastsExpiry, 'exp_date' => $expDate, 'expired' => $expired, 'suggest_funds' => $suggestFunds, 'suggest_add' => $suggestAdd]);
+    $res = amendment_ai_draft($track, $facts, (string)$user['name'], (int)$user['id']);
     if ($letterEdited) $draft = $postedLetter;
     if ($res['ok']) {
-        $aiText = str_replace(['[CLIENT]', '[COUNSELOR]', '[STAFF]'],
-            [$track['client'], $track['counselor_name'] ?: 'Counselor', $user['name']], $res['text']);
+        $aiText = $res['text'];
         // The flash is focused after the reload, so the outcome is announced once.
         if ($letterEdited) {
             $aiAlt = $aiText;
@@ -310,9 +300,8 @@ page_header('Amendment request', $user, 'clients');
   <h2 id="requests-h">Requests and replies (<?= count($history) ?>)</h2>
   <?php foreach ($history as $a): $aid = (int)$a['id']; ?>
   <h3 id="req-<?= $aid ?>">Requested <?= fmt_date($a['requested_on']) ?>: <?= h($a['status']) ?></h3>
-  <p><?= h(implode(', ', array_filter([$a['hours_requested'] !== null ? fmt_hours((float)$a['hours_requested']) . ' more' : '', $a['amount_requested'] !== null ? fmt_money((float)$a['amount_requested']) . ' more' : '', $a['new_end_date'] ? 'end date ' . fmt_date($a['new_end_date']) : '']))) ?><?= $a['sent_to'] ? ', sent to ' . h($a['sent_to']) : '' ?>.
-    <?= $a['replied_on'] ? ' Reply ' . fmt_date($a['replied_on']) . ($a['reply_note'] ? ': ' . h($a['reply_note']) : '') . '.' : '' ?>
-    <?= $a['amendment_id'] ? ' The approved change is recorded on the track.' : (in_array($a['status'], ['Approved', 'Partly approved'], true) ? ' <a href="track_edit.php?id=' . $trackId . '&amp;amend_request=' . $aid . '#amendment_reason">Enter the approved change on the track</a>.' : '') ?></p>
+  <?php // The row's words are the apps' too (inc/amendments.php, 4.37.0); its heading is the h3 above. ?>
+  <p><?= h(amendment_row_text($a, false)) ?><?= amendment_needs_change($a) ? ' <a href="track_edit.php?id=' . $trackId . '&amp;amend_request=' . $aid . '#amendment_reason">Enter the approved change on the track</a>.' : '' ?></p>
   <?php if ($a['status'] === 'Awaiting reply'): ?>
   <form method="post" action="amendment_request.php?track=<?= $trackId ?>" class="stacked" novalidate><?= csrf_field() ?>
     <input type="hidden" name="track" value="<?= $trackId ?>"><input type="hidden" name="request_id" value="<?= $aid ?>">

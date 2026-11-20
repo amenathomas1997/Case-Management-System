@@ -186,7 +186,7 @@ fun Field(
     label: String, value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier,
     hint: String? = null, error: String? = null, singleLine: Boolean = true, minLines: Int = 1,
     keyboard: KeyboardType = KeyboardType.Text, password: Boolean = false, lang: String? = null,
-    required: Boolean = false, autofill: Fill? = null,
+    required: Boolean = false, autofill: Fill? = null, enabled: Boolean = true,
 ) {
     val spokenLabel = fieldLabelText(label, hint, required)
     val shownLabel = if (required) "$label (required)" else label
@@ -199,7 +199,7 @@ fun Field(
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp).clearAndSetSemantics { },
     )
     OutlinedTextField(
-        value = value, onValueChange = onChange,
+        value = value, onValueChange = onChange, enabled = enabled,
         label = {
             Text(inLanguage(shownLabel, lang), maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.clearAndSetSemantics { text = inLanguage(spokenLabel, lang) })
@@ -298,8 +298,8 @@ fun PrimaryButton(text: String, busy: Boolean = false, enabled: Boolean = true, 
 }
 
 @Composable
-fun SecondaryButton(text: String, modifier: Modifier = Modifier, lang: String? = null, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, modifier = modifier.padding(vertical = 4.dp).heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 16.dp)) { Text(inLanguage(text, lang)) }
+fun SecondaryButton(text: String, modifier: Modifier = Modifier, lang: String? = null, enabled: Boolean = true, onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick, enabled = enabled, modifier = modifier.padding(vertical = 4.dp).heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 16.dp)) { Text(inLanguage(text, lang)) }
 }
 
 /** Asks before something that cannot be undone. [no] names the button that keeps things as they are. */

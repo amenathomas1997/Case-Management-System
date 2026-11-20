@@ -16,7 +16,10 @@ struct EquipmentItem: Decodable, Identifiable {
     /// A reservation holds the item (for any caseload). The client is not named, so the app
     /// can only warn that lending it to someone else moves that hold to the waitlist.
     let held: Bool
-    private enum CodingKeys: String, CodingKey { case id, name, category, serial, itemCondition, status, loanId, loanedAt, dueDate, borrower, borrowerId, overdue, held }
+    /// Retired (4.37.0, S2): listed last under "Not available" when the list is asked with
+    /// include_retired; false from an older server, which leaves retired items out.
+    let retired: Bool
+    private enum CodingKeys: String, CodingKey { case id, name, category, serial, itemCondition, status, loanId, loanedAt, dueDate, borrower, borrowerId, overdue, held, retired }
     // Tolerant decode so one malformed item can't blank the whole Equipment list.
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -33,6 +36,7 @@ struct EquipmentItem: Decodable, Identifiable {
         borrowerId = try? c.decodeIfPresent(Int.self, forKey: .borrowerId)
         overdue = (try? c.decode(Bool.self, forKey: .overdue)) ?? false
         held = (try? c.decode(Bool.self, forKey: .held)) ?? false
+        retired = (try? c.decode(Bool.self, forKey: .retired)) ?? (status == "Retired")
     }
 }
 
@@ -200,7 +204,7 @@ struct EquipmentView: View {
         let item = entry.item
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(item.name).font(.body.weight(.semibold))
+                Text(item.retired ? "\(item.name), retired" : item.name).font(.body.weight(.semibold))
                 Spacer()
                 Text(item.status)
                     .font(.caption.weight(.semibold))
@@ -295,11 +299,13 @@ struct EquipmentView: View {
     /// What VoiceOver reads for an item row: name, status, details, hold and loan, in the
     /// order they are shown.
     private func itemSpokenLabel(_ item: EquipmentItem) -> String {
-        var parts = [item.name, item.status]
+        // A retired item's row ends ", retired" (4.37.0, S2), so its status is not said twice.
+        var parts = item.retired ? [item.name] : [item.name, item.status]
         if let s = item.serial, !s.isEmpty { parts.append("Serial \(s)") }
         if !item.itemCondition.isEmpty { parts.append("Condition: \(item.itemCondition)") }
         if item.held && item.status == "Available" { parts.append("Held by a reservation") }
         if item.borrower != nil { parts.append(loanLine(item)) }
+        if item.retired { parts.append("retired") }
         return parts.filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
@@ -318,7 +324,8 @@ struct EquipmentView: View {
     }
 
     /// The shown items in sections: Overdue, On loan, Available, then any other status (in
-    /// repair, retired and the like) under "Not available". Empty sections are left out.
+    /// repair, retired and the like) under "Not available", retired ones last (4.37.0, S2, as
+    /// equipment.php lists them). Empty sections are left out.
     private var itemGroups: [(title: String, entries: [KeyedEquipmentItem])] {
         var buckets: [[KeyedEquipmentItem]] = [[], [], [], []]
         for entry in shownItems {
@@ -328,6 +335,7 @@ struct EquipmentView: View {
             else if item.status == "Available" { buckets[2].append(entry) }
             else { buckets[3].append(entry) }
         }
+        buckets[3] = buckets[3].filter { !$0.item.retired } + buckets[3].filter { $0.item.retired }
         return zip(["Overdue", "On loan", "Available", "Not available"], buckets)
             .filter { !$0.1.isEmpty }
             .map { (title: $0.0, entries: $0.1) }
@@ -379,7 +387,9 @@ struct EquipmentView: View {
         retrying = retry
         defer { retrying = false }
         do {
-            let response: EquipmentResponse = try await api.call("equipment")
+            // Retired items too (4.37.0, S2), listed last under "Not available"; an older server
+            // ignores the flag and leaves them out.
+            let response: EquipmentResponse = try await api.call("equipment", query: ["include_retired": "1"])
             items = response.equipment
             loaded = true
             error = nil
@@ -562,7 +572,42 @@ struct EquipmentFull: Decodable {
     let status: String; let lastServiceDate: String?; let maintenanceIntervalDays: Int?
     let value: Double?; let purchaseDate: String?; let usefulLifeMonths: Int?; let bookValue: Double?
 }
-struct EquipmentDetailResponse: Decodable { let item: EquipmentFull; let maintenance: [MaintenanceEntry] }
+struct EquipmentDetailResponse: Decodable {
+    let item: EquipmentFull; let maintenance: [MaintenanceEntry]
+    /// 4.37.0 (S1): the status moves the website offers this item ("Available", "Repair",
+    /// "Retired"; none on loan or from Retired), whether it is on loan or in an AT repair or
+    /// reuse workflow, the reservations a retirement cancels and the confirmation's sentence about
+    /// them. All nil from an older server, which offers no status buttons.
+    let onLoan: Bool?
+    let inWorkflow: Bool?
+    let holds: Int?
+    let statusActions: [String]?
+    let retireText: String?
+    let manageable: Bool?
+}
+
+/// set_equipment_status's reply (4.37.0, S1).
+struct EquipmentStatusReply: Decodable { let status: String?; let message: String? }
+
+/// The status buttons for the moves the server offers, in its order (4.37.0, S1).
+func equipmentStatusButtons(_ actions: [String], name: String) -> [(to: String, label: String)] {
+    actions.compactMap { to in
+        switch to {
+        case "Repair": return (to, "Mark in repair")
+        case "Available": return (to, "Back in service")
+        case "Retired": return (to, "Retire \(name)")
+        default: return nil
+        }
+    }
+}
+
+/// The retire confirmation's message: equipment.php's first sentence, then its sentence about
+/// the reservations and waitlist entries (retire_text).
+func equipmentRetireMessage(_ retireText: String?) -> String {
+    let first = "A retired item can no longer be loaned out or reserved. It returns to service only through a Device reuse intake, which records its inspection, sanitizing and data wipe."
+    let more = (retireText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    return more.isEmpty ? first : first + " " + more
+}
 
 var maintenanceTypes: [String] { FormOptions.list("maintenance_types", ["Maintenance", "Calibration", "Repair", "Inspection", "Cleaning", "Other"]) }
 var equipmentCategoriesApp: [String] { FormOptions.list("equipment_categories", ["Braille Display", "Screen Reader License", "Magnifier", "Tablet/Phone", "Computer", "Keyboard/Input", "Audio", "Other"]) }
@@ -598,11 +643,17 @@ struct EquipmentDetailView: View {
     @State private var reserving = false
     /// A sheet's success message, announced once the sheet has gone (see announceAfterDismiss).
     @State private var sheetResult: String?
+    /// 4.37.0 (S1): a status change being sent, the retirement waiting for its confirmation, and
+    /// the last change's result (shown under the buttons and said once).
+    @State private var changingStatus = false
+    @State private var confirmingRetire = false
+    @State private var statusNote: String?
 
     var body: some View {
-        List {
-            if let error {
-                ErrorBanner(message: error).listRowSeparator(.hidden)
+        // The error banner is the form's first row; a refused status change is scrolled into view
+        // and given VoiceOver focus there (see ErrorFocusForm).
+        ErrorFocusForm(inNavigationStack: true, error: error) {
+            if error != nil {
                 // A button as well as pull-to-refresh, which needs a drag.
                 if data == nil {
                     Button { Task { await load() } } label: { Label("Try loading details again", systemImage: "arrow.clockwise") }
@@ -616,6 +667,7 @@ struct EquipmentDetailView: View {
                     if let s = d.item.serial, !s.isEmpty { LabeledContent("Serial", value: s) }
                     if let l = d.item.lastServiceDate { LabeledContent("Last service", value: formatDate(l)) }
                 }
+                statusSection(d)
                 if d.item.value != nil || d.item.bookValue != nil {
                     Section("Asset value") {
                         if let v = d.item.value { LabeledContent("Purchase value", value: String(format: "$%.2f", v)) }
@@ -628,6 +680,10 @@ struct EquipmentDetailView: View {
                         }
                     }
                 }
+                if d.item.status == "Retired" {
+                    // As equipment.php: a retired item has no service schedule.
+                    Section("Maintenance schedule") { Text("Not scheduled (retired)") }
+                } else {
                 Section("Maintenance schedule") {
                     // Any whole number of days, as the website and server accept (a weekly clean,
                     // a yearly calibration), typed rather than stepped in fixed amounts.
@@ -646,9 +702,13 @@ struct EquipmentDetailView: View {
                     }
                     if let intervalNote { Text(intervalNote).font(.callout.weight(.medium)) }
                 }
+                }
                 Section {
                     Button { logging = true } label: { Label("Log a service", systemImage: "wrench.and.screwdriver") }
-                    Button { reserving = true } label: { Label("Reserve for a client", systemImage: "calendar.badge.plus") }
+                    // A retired item cannot be reserved (the server refuses it too).
+                    if d.item.status != "Retired" {
+                        Button { reserving = true } label: { Label("Reserve for a client", systemImage: "calendar.badge.plus") }
+                    }
                 }
                 Section("Service history") {
                     if d.maintenance.isEmpty { Text("No service logged.").foregroundStyle(Color.secondaryText) }
@@ -670,6 +730,58 @@ struct EquipmentDetailView: View {
         .task { await load() }
         .sheet(isPresented: $logging, onDismiss: announceSheetResult) { LogServiceSheet(itemId: itemId) { message in sheetResult = message; Task { await load() } } }
         .sheet(isPresented: $reserving, onDismiss: announceSheetResult) { ReservationSheet(fixedItemId: itemId) { message in sheetResult = message; Task { await load() } } }
+        // Retiring asks first, naming the item, as equipment.php's confirmation page does.
+        .confirmationDialog("Retire \(data?.item.name ?? itemName)?", isPresented: $confirmingRetire, titleVisibility: .visible) {
+            Button("Retire \(data?.item.name ?? itemName)", role: .destructive) { Task { await setStatus("Retired", confirmRetire: true) } }
+            Button("Keep \(data?.item.name ?? itemName) in service", role: .cancel) {}
+        } message: {
+            Text(equipmentRetireMessage(data?.retireText))
+        }
+    }
+
+    /// 4.37.0 (S1): Mark in repair, Back in service and Retire, as the website's status choices.
+    /// Each is its own button (a stop of its own), below the status rows.
+    @ViewBuilder private func statusSection(_ d: EquipmentDetailResponse) -> some View {
+        let buttons = equipmentStatusButtons(d.statusActions ?? [], name: d.item.name)
+        if d.item.status == "Retired" && d.statusActions != nil {
+            Section {
+                Text("This item is retired. Start a Device reuse intake for it in AT services to put it back into service.")
+                if api.can("clients") || api.can("equipment") || api.can("schedule") || api.can("admin") || api.can("billing") {
+                    NavigationLink("Device reuse intake in AT services") { ATReuseModuleView() }
+                }
+            }
+        } else if d.manageable == false {
+            // As equipment.php's row: the status is changed by the staff the item is assigned to.
+            Section { Text("This item is managed by the assigned staff.") }
+        } else if !buttons.isEmpty {
+            Section {
+                ForEach(buttons, id: \.to) { b in
+                    Button(changingStatus ? "Changing status…" : b.label, role: b.to == "Retired" ? .destructive : nil) {
+                        if b.to == "Retired" { confirmingRetire = true } else { Task { await setStatus(b.to, confirmRetire: false) } }
+                    }
+                    .disabled(changingStatus)
+                }
+                if let statusNote { Text(statusNote).font(.callout.weight(.medium)) }
+            }
+        } else if let statusNote {
+            Section { Text(statusNote).font(.callout.weight(.medium)) }
+        }
+    }
+
+    private func setStatus(_ to: String, confirmRetire: Bool) async {
+        guard !changingStatus else { return }
+        changingStatus = true; error = nil; statusNote = nil
+        defer { changingStatus = false }
+        do {
+            let r: EquipmentStatusReply = try await api.call("set_equipment_status", method: "POST",
+                                                             body: ["equipment_id": itemId, "to": to, "confirm_retire": confirmRetire])
+            let message = r.message ?? "Status updated."
+            statusNote = message
+            announce(message)
+            await load()
+        } catch {
+            showFormError(error.localizedDescription, in: &self.error)
+        }
     }
     private func announceSheetResult() {
         if let message = sheetResult { announceAfterDismiss(message) }
@@ -1027,11 +1139,21 @@ struct AddEquipmentSheet: View {
     let onDone: () -> Void
     @State private var name = ""; @State private var category = "Other"; @State private var serial = ""
     @State private var condition = "Good"; @State private var value = ""; @State private var interval = ""; @State private var notes = ""
+    /// 4.37.0 (S3), as equipment.php's add form: the AT Act type ("" = guessed from the category),
+    /// the purchase date when known, and the useful life in months (blank = 36).
+    @State private var atType = ""
+    @State private var knowsPurchaseDate = false
+    @State private var purchaseDate = Date()
+    @State private var usefulLife = ""
     @State private var busy = false; @State private var error: String?
     @State private var askingDiscard = false
     private var hasChanges: Bool {
-        category != "Other" || condition != "Good"
-            || [name, serial, value, interval, notes].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        category != "Other" || condition != "Good" || !atType.isEmpty || knowsPurchaseDate
+            || [name, serial, value, interval, notes, usefulLife].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+    private var purchaseRange: ClosedRange<Date> {
+        let start = Calendar(identifier: .gregorian).date(from: DateComponents(year: 1970, month: 1, day: 1)) ?? .distantPast
+        return start...Date()
     }
     var body: some View {
         NavigationStack {
@@ -1046,6 +1168,18 @@ struct AddEquipmentSheet: View {
                     .autocorrectionDisabled()
                 Picker("Condition", selection: $condition) { ForEach(equipmentConditions, id: \.self) { Text($0) } }
                 KeyboardCaptionedField(label: "Value in USD (digits, like 12.50)", text: $value, keyboard: .decimalPad, errorName: "Value")
+                // 4.37.0 (S3): the website's order after the value.
+                Picker("AT Act type", selection: $atType) {
+                    Text("Guessed from the category").tag("")
+                    ForEach(equipmentATTypes, id: \.self) { Text($0).tag($0) }
+                }
+                Toggle("Purchase date, if known", isOn: $knowsPurchaseDate)
+                if knowsPurchaseDate {
+                    DatePicker("Purchase date", selection: $purchaseDate, in: purchaseRange, displayedComponents: .date)
+                        .errorField("Purchase date")
+                }
+                KeyboardCaptionedField(label: "Useful life in months (optional; 1 to 600, default 36)", text: $usefulLife,
+                                       keyboard: .numberPad, errorName: "Useful life")
                 // Any whole number of days, as on the website; left empty (or 0) for no schedule.
                 KeyboardCaptionedField(label: "Service interval in days (optional)", text: $interval, keyboard: .numberPad)
                     .accessibilityHint("Whole days from 0 to 3650. Leave empty or enter 0 for no service schedule.")
@@ -1076,8 +1210,10 @@ struct AddEquipmentSheet: View {
         else { showFormError(intervalFormatMessage, in: &error); return }
         busy = true; error = nil
         var body: [String: Any] = ["name": name, "category": category, "serial": serial, "condition": condition, "value": valueText, "maintenance_interval_days": intervalDays, "notes": notes]
+        body.merge(equipmentAddExtras(atType: atType, purchaseDate: knowsPurchaseDate ? APIDate.day(purchaseDate) : "", usefulLife: usefulLife)) { $1 }
         body["idem_key"] = idem.key(for: body)
-        do { let _: OKResponse = try await api.call("add_equipment", body: body); idem.answered(); onDone(); dismiss() }
+        var refused: [String: String] = [:]
+        do { let _: OKResponse = try await api.call("add_equipment", body: body, refusal: { refused = refusalFields($0) }); idem.answered(); onDone(); dismiss() }
         // (confirmation + VoiceOver announce, after the sheet has gone, handled by the parent's AddEquipmentSheet closure)
         catch APIError.network {
             // The request may have arrived: it isn't known whether the item was added, and
@@ -1085,6 +1221,29 @@ struct AddEquipmentSheet: View {
             busy = false
             showFormError("The connection dropped before the server answered, so it isn't known whether this item was added. Check the equipment list for “\(name.trimmingCharacters(in: .whitespacesAndNewlines))” before adding it again.", in: &self.error)
         }
+        catch APIError.server(let message) {
+            // Refusals are tied to their fields (4.37.0, S3: the server's equipment_input() messages).
+            idem.answered(); busy = false
+            let names = ["name": "Item name", "value": "Value", "purchase_date": "Purchase date", "useful_life_months": "Useful life"]
+            let order = ["name", "serial", "value", "purchase_date", "useful_life_months", "maintenance_interval_days", "notes"]
+            showFormError(message, in: &self.error, field: refusedFieldName(refused, order: order, names: names))
+        }
         catch { idem.failed(error); busy = false; showFormError(IdemKey.message(for: error), in: &self.error) }
     }
+}
+
+/// The AT Act types (form_options.lists.at_types; the website's ten when an older server sends none).
+var equipmentATTypes: [String] {
+    FormOptions.list("at_types", ["Vision", "Hearing", "Speech communication", "Learning, cognition and developmental",
+                                  "Mobility, seating and positioning", "Daily living", "Environmental adaptations",
+                                  "Vehicle modification and transportation", "Computers and related", "Recreation, sports and leisure"])
+}
+
+/// add_equipment's 4.37.0 keys (S3): the AT type ("" lets the server guess it from the category),
+/// the purchase date ("" when not known) and the useful life, left out when blank (36 then).
+func equipmentAddExtras(atType: String, purchaseDate: String, usefulLife: String) -> [String: Any] {
+    var extras: [String: Any] = ["at_type": atType, "purchase_date": purchaseDate]
+    let life = usefulLife.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !life.isEmpty { extras["useful_life_months"] = life }
+    return extras
 }

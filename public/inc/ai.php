@@ -734,3 +734,20 @@ function ai_system_base(): string {
         . "input's own formatting, write plain text with no Markdown: no # heading marks, no asterisks or underscores for "
         . "emphasis, no tables. Staff read it with screen readers and paste it into case records.";
 }
+
+/**
+ * The translate tool's checks (4.37.0: moved from translate.php, shared with the apps' ai_translate):
+ * the text (required, 6,000 characters at most, refused rather than cut off) and the target language
+ * (typed: required, letters, spaces, hyphens, apostrophes, periods and parentheses only, 40 at most;
+ * the name becomes part of the AI instruction). Returns [field => sentence] with the fields content
+ * and language; empty when it can be sent.
+ */
+function translate_input_errors(string $content, string $lang): array {
+    $errs = [];
+    if (trim($content) === '') $errs['content'] = 'Paste the text to translate.';
+    elseif (($cLen = mb_strlen($content)) > 6000) $errs['content'] = 'That is too much text to translate at once: shorten it to 6,000 characters or fewer (it has ' . number_format($cLen) . '), or split it into parts and translate each one.';
+    $lang = trim($lang);
+    if ($lang === '') $errs['language'] = 'Type the language to translate into.';
+    elseif (!preg_match('/^[\p{L}\p{M} ()\'’.-]{1,40}$/u', $lang)) $errs['language'] = 'The language name can use only letters, spaces, hyphens, apostrophes, periods and parentheses (40 characters maximum).';
+    return $errs;
+}

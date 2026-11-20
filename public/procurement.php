@@ -78,15 +78,14 @@ function dr_load(int $id, array $user): ?array {
 /* ---- Create a request ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_request'])) {
     $cid = (int)($_POST['client_id'] ?? 0);
-    $name = dr_text('device_name');
-    // Browsers send each line break as CRLF; count it once, as the textarea's maxlength does.
-    $justification = trim(str_replace("\r\n", "\n", (string)($_POST['justification'] ?? '')));
-    // Over-long text is refused, not cut: a scripted or app post must not lose part of the justification.
+    // The device and justification as the app's add_device_request checks them (inc/portal_devices.php,
+    // 4.37.0): over-long text is refused, not cut, so no post loses part of the justification.
+    [$dvErrors, $dv] = device_request_input($_POST);
+    $name = $dv['device_name'];
+    $justification = (string)$dv['justification'];
     $reqErrors = array_filter([
         'client_id' => $cid <= 0 ? 'Choose a client.' : (!client_still_on_file($cid) ? 'That client is no longer on file (merged or removed). Choose the client again.' : null),
-        'device_name' => $name === '' ? 'Name the device or technology.' : (mb_strlen($name) > 190 ? 'Device / technology: use 190 characters or fewer (you entered ' . mb_strlen($name) . ').' : null),
-        'justification' => mb_strlen($justification) > 4000 ? 'Justification of need: use 4,000 characters or fewer (you entered ' . number_format(mb_strlen($justification)) . ').' : null,
-    ]);
+    ]) + $dvErrors;
     if ($reqErrors) {
         // The form comes back filled in, with each problem shown on its own field.
         keep_input();
@@ -102,14 +101,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_request'])) {
         redirect('procurement.php?id=' . $firstId);
     }
     db()->prepare('INSERT INTO device_requests (client_id, requested_by, device_name, category, justification, status) VALUES (?,?,?,?,?,?)')
-        ->execute([$cid, $user['id'], $name,
-            in_array($_POST['category'] ?? '', cms_list_items('device_request_categories'), true) ? $_POST['category'] : 'Other',
-            $justification !== '' ? $justification : null, 'Requested']);
+        ->execute([$cid, $user['id'], $name, $dv['category'], $dv['justification'], 'Requested']);
     $rid = (int)db()->lastInsertId();
     web_once_set($reqKey, $rid);
     audit($user['id'], 'device.request', 'device_request', $rid, $name);
     flash('Device request created.');
     redirect('procurement.php?id=' . $rid);
+}
+
+/* ---- AI: draft the justification of need from the client's record (4.37.0). Nothing is saved:
+   the form comes back with the draft in the box, or below what was already typed. ---- */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['draft_justification'])) {
+    $cid = (int)($_POST['client_id'] ?? 0);
+    $device = dr_text('device_name');
+    $typed = trim(str_replace("\r\n", "\n", is_string($_POST['justification'] ?? null) ? $_POST['justification'] : ''));
+    $_POST['add_request'] = '1';   // the new-request form comes back filled in
+    $aiErrors = array_filter([
+        'client_id' => $cid <= 0 || !client_still_on_file($cid) ? 'Choose a client.' : null,
+        'device_name' => $device === '' ? 'Device / technology: enter the device first.' : null,
+    ]);
+    if (!ai_feature_enabled('draft')) { keep_input(); flash('That AI feature is turned off. An administrator can enable it under AI assistant settings.', 'error'); redirect('procurement.php#new-h'); }
+    if ($aiErrors) { keep_input(); keep_field_errors($aiErrors); redirect('procurement.php#new-h'); }
+    scope_check_client_id($cid, $user);
+    $cq = db()->prepare('SELECT * FROM clients WHERE id = ?');
+    $cq->execute([$cid]);
+    $category = in_array($_POST['category'] ?? '', cms_list_items('device_request_categories'), true) ? (string)$_POST['category'] : '';
+    $res = device_justification_ai($cq->fetch() ?: ['id' => $cid], $device, $category, $typed, (int)$user['id']);
+    $res += device_justification_fit($res, $typed);
+    // Recorded only when the client's facts reached the provider (as eval_report.php).
+    if (!empty($res['asked'])) audit($user['id'], 'ai.draft', 'client', $cid, 'device justification' . ($res['ok'] ? '' : ' (AI call failed; nothing drafted)'));
+    if ($res['ok']) {
+        $_POST['justification'] = $res['merged'];
+        $_POST['ai_drafted'] = '1';
+        keep_input();
+        flash('Justification drafted — review and edit it, then create the request.' . ($res['shortened'] ? ' The draft was shortened to fit 4,000 characters.' : '')
+            . (!empty($res['truncated']) ? ' Incomplete: the AI stopped before the end. Review it closely.' : ''));
+    } else {
+        $_POST['ai_drafted'] = '1';
+        keep_input();
+        flash($res['error'], 'error');
+    }
+    redirect('procurement.php#new-h');
 }
 
 /* ---- Actions on one request ---- */
@@ -221,32 +253,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
             $lock->fetchColumn();
             $pdo->prepare("UPDATE device_requests SET delivered_at = ?, serial = ?, warranty_until = ?, status = " . dr_forward_sql('Delivered') . " WHERE id = ?")
                 ->execute([$delivered, mb_substr(dr_text('serial'), 0, 120) ?: null, $warranty, $rid]);
-            // Optionally add the delivered device to the loaner/equipment inventory —
-            // once per request, however many times the form is submitted. The note
-            // names the request, not the client: the inventory is visible to staff
-            // outside the client's caseload. The result is said in the confirmation.
-            $inventory = null;
-            if (!empty($_POST['add_to_inventory']) && can('equipment')) {
-                $marker = 'From device request #' . $rid;
-                $have = $pdo->prepare('SELECT id FROM equipment WHERE notes = ? OR notes LIKE ? LIMIT 1');
-                $have->execute([$marker, $marker . ' for %']); // second form: rows written before this change
-                if (!$have->fetchColumn()) {
-                    $pdo->prepare('INSERT INTO equipment (name, category, serial, item_condition, notes) VALUES (?,?,?,?,?)')
-                        ->execute([$r['device_name'], 'Other', mb_substr(dr_text('serial'), 0, 120) ?: null, 'New', $marker]);
-                    $inventory = 'added';
-                } else {
-                    $inventory = 'already';
-                }
-            }
+            // Optionally add the delivered device to the loaner inventory, once per request
+            // (inc/portal_devices.php, shared with the app's deliver, 4.37.0).
+            $inventory = device_delivery_inventory($rid, $r, !empty($_POST['add_to_inventory']), dr_text('serial'));
             $pdo->commit();
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             throw $e;
         }
-        audit($user['id'], 'device.deliver', 'device_request', $rid, $inventory === 'added' ? 'added to the loaner inventory' : null);
-        flash('Delivery recorded' . ($inventory === 'added' ? ' and the device added to the loaner inventory.'
-            : ($inventory === 'already' ? '. The device was already in the loaner inventory from this request, so it was not added again.'
-            : (can('equipment') ? '. The device was not added to the loaner inventory.' : '.'))));
+        audit($user['id'], 'device.deliver', 'device_request', $rid, $inventory['audit']);
+        flash($inventory['message']);
     } elseif (isset($_POST['record_training'])) {
         // Trained closes the request for good (it cannot be reopened), so it is
         // recorded only after the delivery and with an explicit confirmation, on a
@@ -273,7 +289,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
             // can change those steps while it is closed.
             if ($to === 'Requested') $to = device_request_reopen_status($r, $rid);   // inc/portal_devices.php, shared with the app
             db()->prepare('UPDATE device_requests SET status = ?, notes = ? WHERE id = ?')
-                ->execute([$to, mb_substr(dr_text('notes', (string)($r['notes'] ?? '')), 0, 4000) ?: null, $rid]);
+                ->execute([$to, device_close_note($_POST['notes'] ?? null, $r['notes'] ?? null), $rid]);
             audit($user['id'], 'device.status', 'device_request', $rid, ($isReopen ? 'reopened as ' : '') . $to);
             flash(($isReopen ? 'Request reopened. ' : '') . 'Status updated to ' . $to . '.');
         } else {
@@ -289,28 +305,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rid'])) {
 if (isset($_GET['letter'])) {
     $r = dr_load((int)$_GET['letter'], $user);
     if (!$r) { flash('Request not found.', 'error'); redirect('procurement.php'); }
-    $sel = null;
-    if ($r['selected_quote_id']) {
-        $q = db()->prepare('SELECT * FROM device_request_quotes WHERE id = ? AND request_id = ?');
-        $q->execute([(int)$r['selected_quote_id'], (int)$r['id']]);
-        $sel = $q->fetch();
-    }
-    // Titled and named with the client, like the PDF letters, so a saved copy is found by name.
-    $doc = new AccessibleDocument('Assistive Technology Funding Justification — ' . $r['client_name']);
-    $doc->paragraph(brand('org'));
-    $doc->properties(array_filter([
-        'Client' => $r['client_name'],
-        'Device / technology' => $r['device_name'] . ($r['category'] ? ' (' . $r['category'] . ')' : ''),
-        'Recommended vendor' => $sel ? $sel['vendor'] : '',
-        'Estimated cost' => $sel ? fmt_money((float)$sel['amount']) : '',
-        'Funding source' => $r['funding_source'] ?? '',
-        'Authorization #' => $r['auth_number'] ?? '',
-        'Prepared' => date('F j, Y') . ' by ' . $user['name'],
-    ]));
-    $doc->heading('Justification of need');
-    $doc->paragraph($r['justification'] ?: 'The recommended technology is necessary for the client to access print and electronic material, complete essential job functions, and achieve the vocational goal identified in their Individualized Plan for Employment (IPE). Without this technology and associated training, the client cannot independently perform the required tasks.');
+    // The letter the app's device_letter shares (inc/portal_devices.php, 4.37.0).
+    $letter = device_letter_doc($r, $user);
     audit($user['id'], 'device.letter', 'device_request', (int)$r['id']);
-    $doc->download('justification_' . preg_replace('/[^A-Za-z0-9]+/', '_', (string)$r['client_name']) . '_' . date('Ymd') . '.html');
+    $letter['doc']->download($letter['file']);
 }
 
 /* ================= Detail view ================= */
@@ -576,7 +574,7 @@ page_header('Device purchases', $user, 'procurement');
 </div>
 <?php // The list comes first; the new-request form opens itself after a refused submit. ?>
 <h2 class="visually-hidden">New device request</h2>
-<details class="card mt-1"<?= array_intersect_key(form_errors(), array_flip(['client_id', 'device_name', 'justification'])) !== [] ? ' open' : '' ?>>
+<details class="card mt-1"<?= array_intersect_key(form_errors(), array_flip(['client_id', 'device_name', 'justification'])) !== [] || old_in('ai_drafted') === '1' ? ' open' : '' ?>>
   <summary accesskey="n" id="new-h">New device request</summary>
   <?php // After a rejected submission the form comes back filled in, with each error on its field.
   $oldReq = fn(string $k, string $default = ''): string => old_in('add_request') !== '' ? old_in($k, $default) : $default; ?>
@@ -601,6 +599,9 @@ page_header('Device purchases', $user, 'procurement');
     <div class="field"><label for="justification">Justification of need <span class="hint">Why this device is needed for the vocational goal</span></label>
       <textarea id="justification" name="justification" rows="3" maxlength="4000" <?= field_aria('justification') ?>><?= h($oldReq('justification')) ?></textarea><?= field_error('justification') ?></div>
     <button type="submit" name="add_request" value="1" class="btn btn-primary">Create request</button>
+    <?php // After Create request, so Enter still creates it. The draft fills an empty box, or goes below
+    // what was typed; nothing is saved (4.37.0). ?>
+    <?php if (ai_feature_enabled('draft')): ?><button type="submit" name="draft_justification" value="1" class="btn btn-secondary" formnovalidate>Draft justification with AI</button><?php endif; ?>
   </form>
 </details>
 <?php page_footer();

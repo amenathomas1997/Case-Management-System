@@ -16,16 +16,7 @@ if (!ai_feature_enabled('remediate')) {
     exit;
 }
 
-const REMEDIATE_MODES = [
-    'plain' => 'Plain language (6th–8th grade)',
-    'simplify' => 'Simplify (shorter sentences)',
-    'summary' => 'Summarize',
-    'largeprint' => 'Format for large print / low vision',
-    'alt' => 'Alt text for an image (describe it below)',
-];
-
-// Most pasted text accepted per request (it is sent to the AI provider).
-const REMEDIATE_MAX_CHARS = 20000;
+// REMEDIATE_MODES, the prompts and the checks are shared with the apps' ai_remediate (inc/remediate.php, 4.37.0).
 
 // Optional client target — honor their preferred format. The format is part of
 // the client record, so it needs the same gate as every other client page:
@@ -48,20 +39,9 @@ $mode = in_array($_POST['mode'] ?? '', array_keys(REMEDIATE_MODES), true) ? $_PO
 $content = is_string($_POST['content'] ?? null) ? $_POST['content'] : '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['go'])) {
     // 4.28.0: the error is shown once, on the field and in the summary above the form (no flash too).
-    if (trim($content) === '') { set_form_errors(['content' => 'Paste some content first.']); }
-    elseif (($cLen = mb_strlen($content)) > REMEDIATE_MAX_CHARS) {
-        set_form_errors(['content' => 'Shorten the content to 20,000 characters or fewer (it has ' . number_format($cLen) . '), or split it into smaller parts.']);
-    }
+    if ($remErrs = remediate_errors($content)) { set_form_errors($remErrs); }
     else {
-        $prompts = [
-            'plain' => 'Rewrite the following content in plain language at roughly a 6th–8th grade reading level. Preserve every fact and all meaning; do not add or remove information.',
-            'simplify' => 'Rewrite the following content with shorter sentences and simpler words, keeping all facts and meaning.',
-            'summary' => 'Summarize the following content clearly and faithfully, without adding information.',
-            'largeprint' => 'Reformat the following content for large-print / low-vision reading: short lines, clear headings, and bulleted lists where helpful; no tables. Keep all of the content.',
-            'alt' => 'Write concise, descriptive alt text (one sentence, under 125 characters) for an image described below. Output only the alt text.',
-        ];
-        $sys = ai_system_base() . ' ' . $prompts[$mode];
-        if ($targetFormat !== '' && $mode !== 'alt') $sys .= ' The reader prefers this format: ' . $targetFormat . '.';
+        $sys = remediate_prompt($mode, $targetFormat);
         // Content tool: send as pasted (no client-record redaction). Logged as non-redacted.
         // Over the limit, the page re-renders with the pasted text and client target kept.
         if (!ai_rate_limit((int)$user['id'])) { flash('You have reached the AI usage limit for now. Please wait a few minutes, then press Transform again.', 'error'); }

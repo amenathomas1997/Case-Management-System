@@ -583,8 +583,12 @@ class Api(context: Context) {
      * Uploads a document without holding it in memory: the file (already copied to [file], at most
      * 25 MB) is sent as base64 straight from disk inside the JSON body, with an exact length.
      */
-    suspend fun uploadDocument(clientId: Int, category: String, title: String, filename: String, file: java.io.File, idem: String? = null) {
+    suspend fun uploadDocument(clientId: Int, category: String, title: String, filename: String, file: java.io.File, idem: String? = null,
+                               sharePortal: Boolean = false, shareCounselor: Boolean = false) {
         val fields = JSONObject().put("client_id", clientId).put("category", category).put("title", title).put("filename", filename)
+        // 4.37.0 (S16): shared on upload, as the website's ticks (only when ticked, so an older server sees no change).
+        if (sharePortal) fields.put("share_portal", true)
+        if (shareCounselor) fields.put("share_counselor", true)
         // 4.28.0: a retry after a lost reply carries the same key, so the document is not added twice.
         if (idem != null) fields.put("idem_key", idem)
         postWithFile("upload_document", fields, "data_b64", file, "The document was not uploaded.")
@@ -594,11 +598,24 @@ class Api(context: Context) {
      * Sends [fields] with [file] as base64 under [fileKey], streamed from disk as uploadDocument
      * does (a message with a new file, 4.25.0). Returns the server's answer.
      */
-    suspend fun postWithFile(action: String, fields: JSONObject, fileKey: String, file: java.io.File, failed: String): JSONObject = withContext(Dispatchers.IO) {
-        val sessionToken = token
+    suspend fun postWithFile(action: String, fields: JSONObject, fileKey: String, file: java.io.File, failed: String): JSONObject {
         val head = fields.toString().removeSuffix("}")
         val prefix = head + (if (fields.length() > 0) "," else "") + JSONObject.quote(fileKey) + ":\""
-        val suffix = "\"}"
+        return streamFilePost(action, prefix, file, "\"}", failed)
+    }
+
+    /**
+     * 4.37.0: as [postWithFile], with the file inside an object: {..fields, [key]: {"name": [name], "data": base64}}
+     * (an assessment's attachment), streamed from disk the same way.
+     */
+    suspend fun postWithNestedFile(action: String, fields: JSONObject, key: String, name: String, file: java.io.File, failed: String): JSONObject {
+        val head = fields.toString().removeSuffix("}")
+        val prefix = head + (if (fields.length() > 0) "," else "") + JSONObject.quote(key) + ":{\"name\":" + JSONObject.quote(name) + ",\"data\":\""
+        return streamFilePost(action, prefix, file, "\"}}", failed)
+    }
+
+    private suspend fun streamFilePost(action: String, prefix: String, file: java.io.File, suffix: String, failed: String): JSONObject = withContext(Dispatchers.IO) {
+        val sessionToken = token
         val n = file.length()
         val b64Len = 4 * ((n + 2) / 3)
         val pre = prefix.toByteArray(Charsets.UTF_8); val suf = suffix.toByteArray(Charsets.UTF_8)
@@ -761,6 +778,8 @@ class Api(context: Context) {
 
     private fun clearIdentity(keepQueue: Boolean = true) {
         docsFolder.deleteRecursively()
+        // 4.37.0: client text the app copied goes from the clipboard at sign-out.
+        org.casemanagement.app.ui.ClipGuard.clear()
         endInPerson()
         clearSigning(withKept = !keepQueue)
         perms = emptyList(); permsLoaded = false; scoped = false; aiEnabled = false; aiFeatures = emptyList(); accessHold = emptyList(); serverVersion = null

@@ -670,46 +670,81 @@ struct ATMatchingView: View {
     @State private var expertise = ""
     @State private var languages = ""
     @State private var areas = ""
+    /// 4.37.0 (S22): the week the availability is counted from, as at_services.php's "Week starting".
+    @State private var weekStarting = Date()
     @State private var modality = ""
     @State private var matches: [ATMatch] = []
+    /// The website's count sentence once a search has answered (nil before the first).
+    @State private var countText: String?
     @State private var error: String?
     @State private var busy = false
     var body: some View {
-        Form {
-            if let error { ErrorBanner(message: error) }
-            Section("Client needs (comma-separated)") {
-                // Captions that stay visible once text is typed; each field carries its own name for VoiceOver.
-                ATCaptionedField(label: "Expertise", text: $expertise)
-                ATCaptionedField(label: "Languages / communication", text: $languages)
-                ATCaptionedField(label: "Service areas", text: $areas)
-                Picker("Delivery", selection: $modality) { Text("Any").tag(""); Text("In person").tag("In person"); Text("Remote").tag("Remote") }
-                Button("Find matches") { Task { await search() } }.disabled(busy)
+        ErrorFocusForm(inNavigationStack: true, error: error) {
+            Section("Match instructors") {
+                // The website's labels (at_services.php); each field carries its own name for VoiceOver.
+                ATCaptionedField(label: "Expertise needed", text: $expertise)
+                ATCaptionedField(label: "Language / communication", text: $languages)
+                ATCaptionedField(label: "Service area", text: $areas)
+                DatePicker("Week starting", selection: $weekStarting, displayedComponents: .date)
+                    .errorField("Week starting")
+                Picker("Delivery mode", selection: $modality) { Text("Any").tag(""); Text("In person").tag("In person"); Text("Remote").tag("Remote") }
+                Button(busy ? "Finding matches…" : "Find matches") { Task { await search() } }.disabled(busy)
             }
-            Section("Suggestions for the next 7 days") {
-                ForEach(matches) { match in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(match.name).font(.headline)
-                        Text("Matched: \(match.matched.isEmpty ? "None specified" : match.matched)")
-                        Text("Missing: \(match.missing.isEmpty ? "None" : match.missing)")
-                        Text("Estimated available hours: \(match.availableHours, specifier: "%.1f")")
-                        Text(match.availability)
+            if let countText {
+                Section {
+                    Text(countText).font(.body.weight(.semibold))
+                    ForEach(matches) { match in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(match.name).font(.headline)
+                            Text(atMatchLine(match))
+                            Text(atMatchHoursLine(match))
+                        }
+                        // One element per instructor, so a swipe moves from one match to the next.
+                        .accessibilityElement(children: .combine)
                     }
-                    // One element per instructor, so a swipe moves from one match to the next.
-                    .accessibilityElement(children: .combine)
                 }
             }
         }.navigationTitle("Instructor matching")
-        .modifier(ReadablePickers(inNavigationStack: true))   // choices not cut short at large text sizes
     }
     private func search() async {
         busy = true; error = nil; defer { busy = false }
         do {
-            let r: ATMatchesResponse = try await api.call("at_matches", query: ["expertise": expertise, "languages": languages, "areas": areas, "modality": modality]); matches = r.matches; error = nil
-            announce(matches.isEmpty ? "No instructor matches found." : "\(matches.count) instructor match\(matches.count == 1 ? "" : "es") found.")
+            let r: ATMatchesResponse = try await api.call("at_matches", query: ["expertise": expertise, "languages": languages, "areas": areas,
+                                                                             "date": APIDate.day(weekStarting), "modality": modality])
+            matches = r.matches; error = nil
+            let said = atMatchesCount(matches.count)
+            countText = said
+            announce(said)
         }
-        catch { showFormError(error.localizedDescription, in: &self.error) }
+        catch {
+            let message = error.localizedDescription
+            showFormError(message == "Choose a valid matching date." ? "Week starting: \(message)" : message, in: &self.error)
+        }
     }
 }
+
+/// at_services.php's count sentence for a match search (4.37.0, S22).
+func atMatchesCount(_ n: Int) -> String {
+    n == 0 ? "No available instructor profiles." : "\(n) matching instructor\(n == 1 ? "" : "s")"
+}
+
+/// at_services.php's first line for a match: "Matched: x. Missing: y."
+func atMatchLine(_ m: ATMatch) -> String {
+    "Matched: \(m.matched.isEmpty ? "None specified" : m.matched). Missing: \(m.missing.isEmpty ? "None" : m.missing)."
+}
+
+/// at_services.php's hours line: "<a> estimated hours available of <c> this week. <availability>"
+func atMatchHoursLine(_ m: ATMatch) -> String {
+    let line = "\(atHoursText(m.availableHours)) estimated hours available of \(atHoursText(m.capacityHours)) this week."
+    return m.availability.isEmpty ? line : line + " " + m.availability
+}
+
+/// Hours written as PHP writes a float (12, 12.5): no trailing zeros.
+func atHoursText(_ h: Double) -> String {
+    let rounded = (h * 100).rounded() / 100
+    return rounded == rounded.rounded() ? String(Int(rounded)) : String(format: "%g", rounded)
+}
+
 struct ATProfitabilityView: View {
     @EnvironmentObject var api: API
     @State private var rows: [ATProfit] = []
@@ -882,4 +917,33 @@ struct ATActivitySheet: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: [text], applicationActivities: nil)
     }
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+/// The Device reuse module of AT services (4.37.0, S1: a retired item returns to service only
+/// through a reuse intake). Opens the module when the catalog offers it to this user.
+struct ATReuseModuleView: View {
+    @EnvironmentObject var api: API
+    @State private var module: ATModule?
+    @State private var missing = false
+    @State private var error: String?
+    var body: some View {
+        Group {
+            if let module { ATModuleView(module: module) }
+            else {
+                List {
+                    if let error { ErrorBanner(message: error) }
+                    else if missing { Text("Device reuse is not available to your account. Ask an administrator to start the reuse intake.") }
+                    else { ProgressView("Loading AT services…") }
+                }
+                .navigationTitle("Device reuse")
+            }
+        }
+        .task {
+            do {
+                let r: ATCatalogResponse = try await api.call("at_catalog")
+                module = r.modules.first { $0.id == "reuse" }
+                missing = module == nil
+            } catch { showFormError(error.localizedDescription, in: &self.error) }
+        }
+    }
 }

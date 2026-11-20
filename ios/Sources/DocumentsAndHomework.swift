@@ -14,7 +14,10 @@ struct ClientDocument: Decodable, Identifiable {
     var counselorShared = false
     /// "portal", "counselor" or "staff"; nil when not known.
     var uploadedVia: String?
-    private enum CodingKeys: String, CodingKey { case id, category, title, origName, createdAt, portalShared, counselorShared, uploadedVia }
+    /// The signed-in user may move it to the trash (4.37.0, S16: an authorization, IPE or release
+    /// only an administrator); false from an older server, which offers no delete.
+    var canDelete = false
+    private enum CodingKeys: String, CodingKey { case id, category, title, origName, createdAt, portalShared, counselorShared, uploadedVia, canDelete }
     init(id: Int, category: String = "", title: String, origName: String = "", createdAt: String = "") {
         self.id = id; self.category = category; self.title = title; self.origName = origName; self.createdAt = createdAt
     }
@@ -28,6 +31,7 @@ struct ClientDocument: Decodable, Identifiable {
         portalShared = (try? c.decode(Bool.self, forKey: .portalShared)) ?? ((try? c.decode(Int.self, forKey: .portalShared)) ?? 0 != 0)
         counselorShared = (try? c.decode(Bool.self, forKey: .counselorShared)) ?? ((try? c.decode(Int.self, forKey: .counselorShared)) ?? 0 != 0)
         uploadedVia = try? c.decodeIfPresent(String.self, forKey: .uploadedVia)
+        canDelete = (try? c.decodeIfPresent(Bool.self, forKey: .canDelete)) ?? false
     }
     /// A Resource or a file the client shared is always on their portal (turning it off is not offered).
     var alwaysOnPortal: Bool { category == "Resource" || category == "Shared by client" }
@@ -160,6 +164,9 @@ struct DocumentsSection: View {
     @State private var loaded = false
     @StateObject private var downloader = DocumentDownloader()
     @State private var error: String?
+    /// The document waiting for "Move … to the trash?" (4.37.0, S16), and one being moved.
+    @State private var trashing: ClientDocument?
+    @State private var deleting: Int?
 
     var body: some View {
         Section(loaded ? "Documents (\(documents.count))" : "Documents") {
@@ -205,8 +212,27 @@ struct DocumentsSection: View {
                         .accessibilityInputLabels(["Sharing", "Sharing \(document.title)"])
                         .accessibilityHidden(UIAccessibility.isVoiceOverRunning)
                     }
+                    // 4.37.0 (S16): client.php's delete, to the trash, as a visible button.
+                    if document.canDelete {
+                        Button(role: .destructive) { trashing = document } label: {
+                            Label(deleting == document.id ? "Moving to the trash…" : "Move \(document.title) to the trash", systemImage: "trash")
+                        }
+                        .buttonStyle(.bordered).controlSize(.large)
+                        .disabled(deleting != nil)
+                    }
                 }
             }
+        }
+        .confirmationDialog("Move the document \"\(trashing?.title ?? "")\" to the trash?",
+                            isPresented: Binding(get: { trashing != nil }, set: { if !$0 { trashing = nil } }),
+                            titleVisibility: .visible) {
+            Button("Move to trash", role: .destructive) {
+                if let d = trashing { Task { await moveToTrash(d) } }
+                trashing = nil
+            }
+            Button("Keep it", role: .cancel) { trashing = nil }
+        } message: {
+            Text("An administrator can restore it for 30 days.")
         }
         .task(id: reloadToken) { await load() }
         .quickLookPreview($downloader.previewURL)
@@ -239,6 +265,19 @@ struct DocumentsSection: View {
         }
         Button(document.counselorShared ? "Stop sharing with counselor" : "Share with counselor") {
             Task { await share(document, with: "counselor", on: !document.counselorShared) }
+        }
+    }
+
+    /// delete_document (4.37.0, S16): to the trash, the server's sentence said once.
+    private func moveToTrash(_ document: ClientDocument) async {
+        deleting = document.id; error = nil
+        defer { deleting = nil }
+        do {
+            let r: MessageReply = try await api.call("delete_document", method: "POST", body: ["id": document.id])
+            documents.removeAll { $0.id == document.id }
+            announce(r.message ?? "Document moved to the trash — an administrator can restore it for 30 days.")
+        } catch {
+            showFormError("Could not move \(document.title) to the trash. \(error.localizedDescription)", in: &self.error)
         }
     }
 

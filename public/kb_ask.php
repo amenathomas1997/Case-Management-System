@@ -28,11 +28,9 @@ $noMatch = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ask'])) {
     $terms = kb_search_terms($question);
     $articles = [];
-    if ($question === '') {
-        set_form_errors(['question' => 'Type a question to ask.']);
-    } elseif (($qLen = mb_strlen($question)) > 2000) {
-        // Same limit as the app's knowledge-base question; refused, never cut short.
-        set_form_errors(['question' => 'Shorten the question to 2,000 characters or fewer (it has ' . number_format($qLen) . ').']);
+    // The same checks and sentences as the app's knowledge-base question (inc/kb_search.php, 4.37.0).
+    if (($qErr = kb_question_error($question)) !== null) {
+        set_form_errors(['question' => $qErr]);
     } elseif (!$terms) {
         set_form_errors(['question' => KB_NO_WORDS]);
     } else {
@@ -45,11 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ask'])) {
     }
 
     if (!$articles && $general && $question !== '' && $terms) {
-        $res = ai_run('kb',
-            ai_system_base() . ' No knowledge-base article covers this question, and the user asked for a general answer. Answer from general knowledge about assistive technology, accessibility and vocational rehabilitation practice, briefly and carefully. '
-                . 'Begin with the sentence "No knowledge-base article covers this, so this answer is general knowledge, not agency procedure." Do not invent agency policies, prices, names or contacts.'
-                . ai_plain_text_rule() . ' Number the steps of a procedure.',
-            "Question: {$question}", 1200, null, (int)$user['id']);
+        $res = kb_general_answer($question, (int)$user['id']);   // shared with the apps (4.37.0)
         if ($res['ok']) { $answer = $res['text']; $answerGeneral = true; flash('A general-knowledge answer is ready below, under the heading "Answer".'); }
         else flash($res['error'], 'error');
     }

@@ -1,6 +1,10 @@
 package org.casemanagement.app.ui
 
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,30 +49,65 @@ fun ProcurementScreen(api: Api, nav: NavHostController) {
     if (adding) AddDeviceRequestDialog(api, onDone = { id -> adding = false; nav.navigate("deviceRequest/$id") }, onCancel = { adding = false })
 }
 
+/**
+ * A new device request. 4.37.0: "Justification of need" (the website's label) with "Draft
+ * justification with AI" (S5); a request started from the AI recommendations comes with the client
+ * and the recommendations as the justification (S6).
+ */
 @Composable
-private fun AddDeviceRequestDialog(api: Api, onDone: (Int) -> Unit, onCancel: () -> Unit) {
+internal fun AddDeviceRequestDialog(api: Api, onDone: (Int) -> Unit, onCancel: () -> Unit, initialClientId: Int = 0, initialJustification: String = "") {
     val clients = rememberLoaded(api.userId) { clientChoices(api) }
     val cats = api.formList("device_request_categories", listOf("Other"))
-    var client by rememberSaveable { mutableStateOf("") }
+    var client by rememberSaveable { mutableStateOf(if (initialClientId > 0) initialClientId.toString() else "") }
     var device by rememberSaveable { mutableStateOf("") }
     var cat by rememberSaveable { mutableStateOf(cats.first()) }
-    var why by rememberSaveable { mutableStateOf("") }
+    var why by rememberSaveable { mutableStateOf(initialJustification) }
     var idem by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var errors by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var notice by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var drafting by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     FormDialog("Request a device", "Add", busy, missing = stillNeeded(missingNames("Client" to client.isEmpty(), "Device" to device.isBlank())), onSave = {
-        scope.launchSave({ busy = it }, { error = it }) {
-            // 4.28.0: a retry after a lost reply adds it once (see sendOnce).
-            onDone(api.callOnce("add_device_request", JSONObject().put("client_id", client.toInt()).put("device_name", device.trim()).put("category", cat).put("justification", why.trim()),
-                idem, { idem = it }, "the device request").optInt("id"))
+        if (busy) return@FormDialog
+        busy = true; error = null; errors = emptyMap()
+        scope.launch {
+            try {
+                // 4.28.0: a retry after a lost reply adds it once (see sendOnce).
+                onDone(api.callOnce("add_device_request", JSONObject().put("client_id", client.toInt()).put("device_name", device.trim()).put("category", cat).put("justification", why.trim()),
+                    idem, { idem = it }, "the device request").optInt("id"))
+            } catch (e: ApiException) {
+                errors = replyErrors(e.reply)
+                error = errorSummary(errors.values) ?: e.message
+            } finally { busy = false }
         }
     }, onCancel = onCancel) {
         ErrorText(clients.error, takeFocus = false)
-        Choice("Client", client, listOf("" to "Choose a client") + (clients.data ?: emptyList()).map { it.optInt("id").toString() to it.optString("name") }, required = true) { client = it }
-        Field("Device", device, { device = it }, required = true)
-        Choice("Category", cat, cats.map { it to it }) { cat = it }
-        Field("Why it is needed", why, { why = it }, hint = "optional", singleLine = false)
+        Choice("Client", client, listOf("" to "Choose a client") + (clients.data ?: emptyList()).map { it.optInt("id").toString() to it.optString("name") }, required = true, error = errors["client_id"]) { client = it }
+        Field("Device", device, { device = it }, required = true, error = errors["device_name"])
+        Choice("Category", cat, cats.map { it to it }, error = errors["category"]) { cat = it }
+        Field(JUSTIFICATION_LABEL, why, { why = it; errors = errors - "justification" }, hint = "optional; up to 4,000 characters", singleLine = false, minLines = 4, error = errors["justification"], enabled = !drafting)
+        if (api.aiHas("draft") && client.isNotEmpty() && device.isNotBlank()) {
+            SecondaryButton(if (drafting) "Drafting…" else "Draft justification with AI") {
+                if (drafting) return@SecondaryButton
+                drafting = true; error = null; notice = null
+                val sent = why
+                scope.launch {
+                    try {
+                        val r = api.call("ai_draft", body = justificationBody(client.toInt(), device, cat, sent))
+                        // Text typed while the AI worked is kept, with the draft below it.
+                        why = mergeAfterDraft(sent, why, r.str("text") ?: mergeDraft(sent, r.optString("draft")), r.optString("draft"))
+                        notice = listOfNotNull(justificationNotice(r), placeholderNote(why)).joinToString(" ")
+                    } catch (e: ApiException) {
+                        errors = replyErrors(e.reply)
+                        error = errorSummary(errors.values) ?: e.message
+                    } finally { drafting = false }
+                }
+            }
+            Announce(if (drafting) "Drafting…" else null, key = drafting)
+        }
+        NoticeText(notice)
         ErrorText(error)
     }
 }
@@ -78,7 +117,7 @@ private fun AddDeviceRequestDialog(api: Api, onDone: (Int) -> Unit, onCancel: ()
 fun reopenedWords(r: JSONObject): String = r.str("status")?.let { "Request reopened. Status updated to $it." } ?: "Request reopened."
 
 @Composable
-fun DeviceRequestScreen(api: Api, id: Int) {
+fun DeviceRequestScreen(api: Api, id: Int, nav: NavHostController? = null) {
     val state = rememberLoaded(id) { api.call("device_request", mapOf("id" to id.toString())) }
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -87,11 +126,14 @@ fun DeviceRequestScreen(api: Api, id: Int) {
     // 4.28.0: adding a quote is sent with a retry key, so a lost reply never adds it twice (see sendOnce).
     var quoteKey by rememberSaveable { mutableStateOf("") }
     var reopening by remember { mutableStateOf(false) }
+    // 4.37.0 (S4): deny or cancel with a reason, in a dialog with a field.
+    var closing by rememberSaveable { mutableStateOf("") }
+    // The server's own sentence for the last change (shown as it is, without the status added).
+    var said by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    suspend fun send(body: JSONObject) {
+    suspend fun send(body: JSONObject): JSONObject =
         if (body.optString("op") == "add_quote") api.callOnce("device_request_update", body.put("id", id), quoteKey, { quoteKey = it }, "the quote")
         else api.call("device_request_update", body = body.put("id", id))
-    }
     fun update(body: JSONObject, done: String) {
         error = null
         scope.launch {
@@ -104,7 +146,7 @@ fun DeviceRequestScreen(api: Api, id: Int) {
         val closed = status in CLOSED_REQUEST
         Page {
             Heading(q.optString("device_name") + " for " + q.optString("client_name"), large = true)
-            NoticeText(notice?.let { "$it Status: $status." })
+            NoticeText(said ?: notice?.let { "$it Status: $status." })
             ErrorText(error)
             ListRow(listOf("Status: $status"))
             listOfNotNull(q.str("category")?.let { "Category: $it" }, q.str("justification")?.let { "Why: $it" },
@@ -112,7 +154,9 @@ fun DeviceRequestScreen(api: Api, id: Int) {
                 if (q.isNull("authorized_amount")) null else "Authorized " + money(q.optDouble("authorized_amount", 0.0)) + (q.str("authorized_at")?.let { " on " + dayText(it) } ?: ""),
                 q.str("po_number")?.let { "Order number $it" + (q.str("ordered_at")?.let { d -> ", ordered " + dayText(d) } ?: "") },
                 q.str("delivered_at")?.let { "Delivered " + dayText(it) + (q.str("serial")?.let { s -> ", serial $s" } ?: "") },
-                q.str("trained_at")?.let { "Training completed " + dayText(it) }).forEach { ListRow(listOf(it)) }
+                q.str("trained_at")?.let { "Training completed " + dayText(it) }, q.str("notes")?.let { "Note: $it" }).forEach { ListRow(listOf(it)) }
+            // 4.37.0 (S4): the letter built from the request, as the website downloads it.
+            if (nav != null) SecondaryButton("Justification letter") { nav.navigate("deviceLetter/$id?editable=" + (if (closed) "0" else "1")) }
             val quotes = r.optJSONArray("quotes").objects()
             Heading("Quotes (${quotes.size})")
             quotes.forEach { qq ->
@@ -127,12 +171,12 @@ fun DeviceRequestScreen(api: Api, id: Int) {
                 SecondaryButton((if (q.str("ordered_at") == null) "Record" else "Edit") + " the order") { step = "order" }
                 SecondaryButton((if (q.str("delivered_at") == null) "Record" else "Edit") + " the delivery") { step = "deliver" }
                 SecondaryButton("Complete training") { ask = Triple("Mark training complete and close this request?", "A trained request cannot be reopened.", JSONObject().put("op", "train")) }
-                SecondaryButton("Mark denied") { ask = Triple("Mark this request denied?", "It is closed until someone reopens it.", JSONObject().put("op", "status").put("to", "Denied")) }
-                SecondaryButton("Cancel the request") { ask = Triple("Cancel this request?", "It is closed until someone reopens it.", JSONObject().put("op", "status").put("to", "Cancelled")) }
+                SecondaryButton("Mark denied") { said = null; closing = "Denied" }
+                SecondaryButton("Cancel the request") { said = null; closing = "Cancelled" }
             } else if (status != "Trained") SecondaryButton(if (reopening) "Reopening…" else "Reopen the request") {
                 // 4.34.0: it returns to its furthest step, which the reply names; one press at a time.
                 if (reopening) return@SecondaryButton
-                reopening = true; error = null
+                reopening = true; error = null; said = null
                 scope.launch {
                     try { val r = api.call("device_request_update", body = JSONObject().put("op", "status").put("to", "Requested").put("id", id)); state.reload(); notice = reopenedWords(r) }
                     catch (e: ApiException) { error = e.message } finally { reopening = false }
@@ -141,14 +185,21 @@ fun DeviceRequestScreen(api: Api, id: Int) {
         }
         // 4.29.0: the dialog stays open, with what was typed, until the server took it; a refusal shows inside it.
         if (step.isNotEmpty()) key(dialogKey("device-step", step)) {
-            StepDialog(step, q, send = { b -> send(b) }, onDone = { done -> step = ""; error = null; notice = done; state.reload() }, onCancel = { step = "" })
+            StepDialog(api, step, q, send = { b -> send(b) }, onDone = { done -> step = ""; error = null; said = null; notice = done; state.reload() },
+                onServer = { m -> step = ""; error = null; notice = null; said = m; state.reload() }, onCancel = { step = "" })
+        }
+        if (closing.isNotEmpty()) key(dialogKey("device-close", closing)) {
+            CloseRequestDialog(q.optString("device_name"), closing, q.str("notes") ?: "", send = { b -> send(b) },
+                onDone = { m -> closing = ""; error = null; notice = null; said = m; state.reload() }, onCancel = { closing = "" })
         }
     }
-    ask?.let { (t, m, b) -> Confirm(t, m, "Yes", { update(b, "Done.") }, { ask = null }) }
+    ask?.let { (t, m, b) -> Confirm(t, m, "Yes", { said = null; update(b, "Done.") }, { ask = null }) }
 }
 
 @Composable
-private fun StepDialog(step: String, q: JSONObject, send: suspend (JSONObject) -> Unit, onDone: (String) -> Unit, onCancel: () -> Unit) {
+private fun StepDialog(api: Api, step: String, q: JSONObject, send: suspend (JSONObject) -> JSONObject, onDone: (String) -> Unit, onServer: (String) -> Unit, onCancel: () -> Unit) {
+    // 4.37.0 (S4): a delivery can add the device to the loaner inventory (off to start, as the website).
+    var inventory by rememberSaveable(step) { mutableStateOf(false) }
     val f = remember(step) {
         when (step) {
             "add_quote" -> listOf("vendor" to "Vendor", "amount" to "Amount in dollars", "quote_ref" to "Quote reference, optional", "notes" to "Notes, optional")
@@ -185,19 +236,52 @@ private fun StepDialog(step: String, q: JSONObject, send: suspend (JSONObject) -
         fieldErrors = problems
         if (problems.isNotEmpty()) { error = errorSummary(problems.values); return@FormDialog }
         scope.launchSave({ busy = it }, { error = it }) {
-            try { send(b) } catch (e: ApiException) {
+            val sent = if (step == "deliver") deliverBody(b, inventory, api.can("equipment")) else b
+            val reply = try { send(sent) } catch (e: ApiException) {
                 // A refusal naming a field (a delivery before the order, say) is shown on that field.
                 val errs = e.reply?.optJSONObject("errors")
                 fieldErrors = errs?.keys()?.asSequence()?.associateWith { errs.optString(it) }
                     ?: stepFieldOf(e.message ?: "", f.map { it.first })?.let { mapOf(it to (e.message ?: "")) } ?: emptyMap()
                 throw e
             }
-            onDone(if (step == "add_quote") "Quote added." else "$title saved.")
+            val m = reply.str("message")
+            if (step == "deliver" && m != null) onServer(m) else onDone(if (step == "add_quote") "Quote added." else "$title saved.")
         }
     }, onCancel = onCancel) {
         f.forEach { (k, label) -> Field(label, map[k] ?: "", { v -> values.value = (map + (k to v)).toList() }, keyboard = if (k.endsWith("amount")) KeyboardType.Decimal else KeyboardType.Text, error = fieldErrors[k]) }
+        if (step == "deliver" && api.can("equipment")) Tick(INVENTORY_TICK, inventory) { inventory = it }
         ErrorText(error)
     }
+}
+
+/** 4.37.0 (S4): deny or cancel a request, with the reason (the stored note to start with). */
+@Composable
+private fun CloseRequestDialog(device: String, to: String, stored: String, send: suspend (JSONObject) -> JSONObject, onDone: (String) -> Unit, onCancel: () -> Unit) {
+    var reason by rememberSaveable(to) { mutableStateOf(stored) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var reasonError by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    AlertDialog(
+        onDismissRequest = { if (!busy) onCancel() },
+        title = { Text(closeTitle(device, to), modifier = androidx.compose.ui.Modifier.semantics { heading() }) },
+        text = {
+            androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                Text(CLOSE_REQUEST_TEXT)
+                Field(CLOSE_REASON_LABEL, reason, { reason = it; reasonError = null }, hint = CLOSE_REASON_HINT, singleLine = false, minLines = 2, error = reasonError)
+                ErrorText(error)
+            }
+        },
+        confirmButton = { TextButton(enabled = !busy, onClick = {
+            if (codePointCount(reason.trim()) > 500) { reasonError = CLOSE_REASON_TOO_LONG; error = CLOSE_REASON_TOO_LONG; return@TextButton }
+            busy = true; error = null
+            scope.launch {
+                try { onDone(send(closeBody(to, reason)).str("message") ?: "Status updated to $to.") }
+                catch (e: ApiException) { reasonError = replyErrors(e.reply)["notes"]; error = reasonError ?: e.message } finally { busy = false }
+            }
+        }) { Text(if (busy) "Saving…" else closeYes(to)) } },
+        dismissButton = { TextButton(enabled = !busy, onClick = onCancel) { Text("Keep request open") } },
+    )
 }
 
 /** Which field of a device-request step the server's refusal is about (it names it in words), or null. */
@@ -271,6 +355,7 @@ fun WorksiteScreen(api: Api, nav: NavHostController, id: Int) {
         var notice by remember { mutableStateOf<String?>(null) }
         var error by remember { mutableStateOf<String?>(null) }
         var busy by remember { mutableStateOf(false) }
+        var aiBusy by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         val map = values.value.toMap()
         // Read again after a conflict: what was changed here stays; everything else takes the saved values.
@@ -292,9 +377,30 @@ fun WorksiteScreen(api: Api, nav: NavHostController, id: Int) {
             NoticeText(notice)
             Choice("Status", status, WORKSITE_STATUSES.map { it to it }) { status = it }
             keys.forEach { (k, label) ->
-                Field(label, map[k] ?: "", { v -> values.value = (map + (k to v)).toList() }, singleLine = k !in setOf("job_tasks", "barriers", "recommendations", "outcome"))
+                Field(label, map[k] ?: "", { v -> values.value = (map + (k to v)).toList() }, singleLine = k !in setOf("job_tasks", "barriers", "recommendations", "outcome"), enabled = !(aiBusy && k == "recommendations"))
+                // 4.37.0 (S8): the website's AI draft, below what was typed; nothing is saved until Save.
+                if (k == "recommendations" && api.aiHas("draft")) {
+                    SecondaryButton(if (aiBusy) "Drafting…" else "Draft recommendations with AI") {
+                        if (aiBusy) return@SecondaryButton
+                        aiBusy = true; error = null; notice = null
+                        val sent = map["recommendations"].orEmpty()
+                        scope.launch {
+                            try {
+                                val r = api.call("ai_worksite", body = worksiteAiBody(id, map["job_title"].orEmpty(), map["job_tasks"].orEmpty(), map["barriers"].orEmpty(), sent))
+                                val now = values.value.toMap()["recommendations"].orEmpty()
+                                val merged = mergeAfterDraft(sent, now, r.str("text") ?: mergeDraft(sent, r.optString("draft")), r.optString("draft"))
+                                values.value = (values.value.toMap() + ("recommendations" to merged)).toList()
+                                notice = listOfNotNull(r.str("message") ?: WORKSITE_DRAFTED, if (flag(r, "truncated")) AI_INCOMPLETE else null, placeholderNote(merged)).joinToString(" ")
+                            } catch (e: ApiException) { error = e.message } finally { aiBusy = false }
+                        }
+                    }
+                    Announce(if (aiBusy) "Drafting…" else null, key = aiBusy)
+                }
             }
             ErrorText(error)
+            val unsaved = status != (base.str("status") ?: "") || keys.any { (k, _) -> (map[k] ?: "") != (base.str(k) ?: "") }
+            SecondaryButton("Recommendation report") { nav.navigate("worksiteReport/$id") }
+            if (unsaved) Text(WORKSITE_SAVE_FIRST)
             if (conflict) SecondaryButton("Reload, keeping my changes") { if (!reloading) { reloading = true; notice = null; state.reload() } }
             PrimaryButton("Save", busy = busy) {
                 if (busy) return@PrimaryButton

@@ -9,15 +9,7 @@ csrf_check();
 $user = require_login();
 require_perm('programs');
 
-// The five federally required Pre-ETS activities (Section 113), plus Other.
-const PREETS_ACTIVITIES = [
-    'Job Exploration Counseling',
-    'Work-Based Learning',
-    'Postsecondary Counseling',
-    'Workplace Readiness',
-    'Self-Advocacy Instruction',
-    'Other',
-];
+// PREETS_ACTIVITIES and the cohort rules are shared with the apps (inc/programs.php, 4.37.0).
 
 function cohort_load(int $id): ?array {
     global $user;
@@ -29,25 +21,11 @@ function cohort_load(int $id): ?array {
 
 /* ---- Create a cohort ---- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_cohort'])) {
-    $name = trim(is_string($_POST['name'] ?? null) ? $_POST['name'] : '');
-    // Both dates are optional, but a typed one is checked, never dropped: the same
-    // year range as the app's cohort dates (api_date), 2000 to five years ahead.
-    $maxYear = (int)date('Y') + 5;
-    $startIn = trim(is_string($_POST['start_date'] ?? null) ? $_POST['start_date'] : '');
-    $endIn = trim(is_string($_POST['end_date'] ?? null) ? $_POST['end_date'] : '');
-    $start = valid_date($startIn, 2000, $maxYear);
-    $end = valid_date($endIn, 2000, $maxYear);
-    $errors = [];
-    if ($name === '') $errors['name'] = 'Cohort name is required.';
-    if (input_was_unreadable('start_date') || ($startIn !== '' && $start === null)) $errors['start_date'] = 'Enter the start date as a real date with a year from 2000 to ' . $maxYear . ' (for example 2026-09-15), or leave it blank.';
-    if (input_was_unreadable('end_date') || ($endIn !== '' && $end === null)) $errors['end_date'] = 'Enter the end date as a real date with a year from 2000 to ' . $maxYear . ' (for example 2026-09-15), or leave it blank.';
-    elseif ($start !== null && $end !== null && $end < $start) $errors['end_date'] = 'The end date cannot be before the start date.';
-    $coordinatorId = (int)($_POST['coordinator_id'] ?? 0) ?: null;
-    if ($coordinatorId !== null) {
-        $cu = db()->prepare('SELECT id FROM users WHERE id = ? AND is_active = 1');
-        $cu->execute([$coordinatorId]);
-        if (!$cu->fetchColumn()) $errors['coordinator_id'] = 'Choose an active staff member as the coordinator.';
-    }
+    // Both dates are optional, but a typed one is checked, never dropped; the coordinator is an active
+    // staff member or none; notes are refused over 2,000 characters (inc/programs.php, 4.37.0).
+    $unreadableDates = array_values(array_filter(['start_date', 'end_date'], fn($f) => input_was_unreadable($f)));
+    [$errors, $cv] = cohort_input($_POST + ['coordinator_id' => ''], $unreadableDates);
+    $name = $cv['name'];
     if ($errors) { keep_input(); keep_field_errors($errors); redirect('programs.php'); }
     // The same form sent twice (Enter pressed again while it loads) creates the
     // cohort once; the second answer goes to the cohort the first created.
@@ -57,9 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_cohort'])) {
         redirect('programs.php?id=' . $firstId);
     }
     db()->prepare('INSERT INTO cohorts (name, school, coordinator_id, start_date, end_date, notes) VALUES (?,?,?,?,?,?)')
-        ->execute([mb_substr($name, 0, 190), mb_substr(trim(is_string($_POST['school'] ?? null) ? $_POST['school'] : ''), 0, 190) ?: null,
-            $coordinatorId, $start, $end,
-            mb_substr(trim(is_string($_POST['notes'] ?? null) ? $_POST['notes'] : ''), 0, 2000) ?: null]);
+        ->execute([$cv['name'], $cv['school'], $cv['coordinator_id'], $cv['start_date'], $cv['end_date'], $cv['notes']]);
     // Capture the id before audit() inserts its own row and replaces it.
     $cid = (int)db()->lastInsertId();
     web_once_set($cohortKey, $cid);
@@ -159,36 +135,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cohort_id'])) {
             db()->commit();
         } catch (Throwable $e) { db()->rollBack(); throw $e; }
         audit($user['id'], 'cohort.session', 'cohort', $cid, $activity . ' ' . $date);
-        flash('Session logged with attendance: ' . $activity . ', ' . fmt_date($date) . ', ' . $dur . ' minutes. If anything is wrong, delete it under Recent sessions and log it again.');
+        flash(cohort_session_logged_message($activity, $date, $dur));
     } elseif (isset($_POST['delete_session'])) {
         // A session logged by mistake (wrong activity, date, minutes or attendance)
         // can be taken back: it and its attendance are removed together, and the
         // audit entry keeps what was removed. It can then be logged again correctly.
-        $sid = (int)($_POST['session_id'] ?? 0);
-        db()->beginTransaction();
-        try {
-            $sq = db()->prepare('SELECT id, session_date, activity, duration_min FROM cohort_sessions WHERE id = ? AND cohort_id = ? FOR UPDATE');
-            $sq->execute([$sid, $cid]);
-            $sess = $sq->fetch();
-            if ($sess) {
-                $pq = db()->prepare('SELECT client_id FROM cohort_attendance WHERE session_id = ? AND present = 1 ORDER BY client_id');
-                $pq->execute([$sid]);
-                $presentIds = array_map('intval', $pq->fetchAll(PDO::FETCH_COLUMN));
-                db()->prepare('DELETE FROM cohort_attendance WHERE session_id = ?')->execute([$sid]);
-                db()->prepare('DELETE FROM cohort_sessions WHERE id = ?')->execute([$sid]);
-            }
-            db()->commit();
-        } catch (Throwable $e) {
-            if (db()->inTransaction()) db()->rollBack();
-            throw $e;
-        }
-        if ($sess) {
-            audit($user['id'], 'cohort.session_delete', 'cohort', $cid, 'session #' . $sid . ': ' . $sess['activity'] . ' ' . $sess['session_date'] . ', '
-                . (int)$sess['duration_min'] . ' min; present: ' . ($presentIds ? 'client #' . implode(', #', $presentIds) : 'nobody'));
-            flash('Session deleted: ' . $sess['activity'] . ', ' . fmt_date($sess['session_date']) . '. Its hours are no longer in the report. Log it again below if it took place.');
-        } else {
-            flash('That session was already deleted, so nothing changed.', 'error');
-        }
+        // Shared with the apps' delete_cohort_session (inc/programs.php, 4.37.0).
+        $del = cohort_session_delete($cid, (int)($_POST['session_id'] ?? 0), (int)$user['id']);
+        flash($del['message'], $del['changed'] ? 'success' : 'error');
     } elseif (isset($_POST['archive_cohort'])) {
         // The form posts the state its button named, and the update only changes a
         // cohort not already in that state: a double submit or a stale page can never
@@ -197,14 +151,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cohort_id'])) {
         if ($to === null) {
             flash('Choose whether to archive or reactivate the cohort.', 'error');
         } else {
-            $upd = db()->prepare('UPDATE cohorts SET active = ? WHERE id = ? AND active <> ?');
-            $upd->execute([$to, $cid, $to]);
-            if ($upd->rowCount() === 1) {
-                audit($user['id'], $to ? 'cohort.reactivate' : 'cohort.archive', 'cohort', $cid, $co['name']);
-                flash($to ? 'Cohort reactivated.' : 'Cohort archived.');
-            } else {
-                flash($to ? 'That cohort is already active.' : 'That cohort is already archived.');
-            }
+            // Shared with the apps' set_cohort_active (inc/programs.php, 4.37.0).
+            flash(cohort_set_active($cid, $to === 1, (int)$user['id'])['message']);
         }
     }
     redirect($back);
@@ -441,7 +389,7 @@ page_header((form_errors() ? 'Error — ' : '') . ($showArchived ? 'Programs (ar
   $coordPick = $oldCohort ? (int)old_in('coordinator_id') : (int)$user['id']; ?>
   <form method="post" action="programs.php" class="stacked" novalidate>
     <?= csrf_field() ?><?= web_idem_field() ?>
-    <?= form_error_summary(['name' => '', 'start_date' => '', 'end_date' => '', 'coordinator_id' => 'Coordinator']) ?>
+    <?= form_error_summary(['name' => '', 'start_date' => '', 'end_date' => '', 'coordinator_id' => 'Coordinator', 'notes' => 'Notes'], ['notes' => 'cohort_notes']) ?>
     <p class="muted">Fields marked with an asterisk (<span aria-hidden="true">*</span><span class="visually-hidden">asterisk</span>) are required.</p>
     <div class="grid grid-4">
       <div class="field"><label for="name">Cohort name <?= required_mark() ?></label><input type="text" id="name" name="name" required maxlength="190" placeholder="e.g. Central HS Fall 2026" value="<?= h($oldCohort ? old_in('name') : '') ?>" <?= field_aria('name') ?>><?= field_error('name') ?></div>
@@ -449,7 +397,7 @@ page_header((form_errors() ? 'Error — ' : '') . ($showArchived ? 'Programs (ar
       <div class="field"><label for="coordinator_id">Coordinator</label>
         <select id="coordinator_id" name="coordinator_id" <?= field_aria('coordinator_id') ?>>
           <option value="">— None —</option>
-          <?php foreach (db()->query('SELECT id, name FROM users WHERE is_active = 1 ORDER BY name') as $s): ?>
+          <?php foreach (cohort_coordinator_choices() as $s): // the apps' cohort_choices too (4.37.0) ?>
           <option value="<?= (int)$s['id'] ?>" <?= $coordPick === (int)$s['id'] ? 'selected' : '' ?>><?= h($s['name']) ?></option><?php endforeach; ?>
         </select><?= field_error('coordinator_id') ?></div>
     </div>
@@ -457,6 +405,8 @@ page_header((form_errors() ? 'Error — ' : '') . ($showArchived ? 'Programs (ar
       <div class="field"><label for="start_date">Start</label><input type="date" id="start_date" name="start_date" min="2000-01-01" max="<?= (int)date('Y') + 5 ?>-12-31" value="<?= h($oldCohort ? old_in('start_date') : '') ?>" <?= field_aria('start_date') ?>><?= field_error('start_date') ?></div>
       <div class="field"><label for="end_date">End</label><input type="date" id="end_date" name="end_date" min="2000-01-01" max="<?= (int)date('Y') + 5 ?>-12-31" value="<?= h($oldCohort ? old_in('end_date') : '') ?>" <?= field_aria('end_date') ?>><?= field_error('end_date') ?></div>
     </div>
+    <?php // Notes (owner decision, 4.37.0): up to 2,000 characters, refused when longer, never cut. ?>
+    <div class="field"><label for="cohort_notes">Notes (optional; up to 2,000 characters)</label><textarea id="cohort_notes" name="notes" rows="2" <?= field_aria('notes') ?>><?= h($oldCohort ? old_in('notes') : '') ?></textarea><?= field_error('notes') ?></div>
     <button type="submit" name="add_cohort" value="1" class="btn btn-primary">Create cohort</button>
   </form>
 </section>
