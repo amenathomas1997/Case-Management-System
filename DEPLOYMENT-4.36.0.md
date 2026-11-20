@@ -97,3 +97,16 @@ The new API actions are in inc/api_436.php. The API's own copies for compliance,
   - a bad alert link could crash the app
   - tasks opened from Today now have Back
 - **Both apps:** the order, wording and confirmations were made the same as each other and as the website.
+
+## Published (not deployed)
+
+2026-11-19, after CI passed all three jobs on 3c1c342. The Android job's first attempt stopped before building because GitHub limited the CI machine's downloads; the rerun passed. The GitHub release v4.36.0 (latest, not a pre-release) carries:
+- the install bundle, built from a clean checkout of the tag, including the six new shared files
+- the signed update package: 353 files, verified
+
+**Rehearsed:** installed with the 4.35.0 updater onto a copy of a 4.35.0 site.
+- The signature verified, the plan showed no problems, and the backup was made first.
+- 36 files were replaced or added (the new shared files are present), with no database change.
+- The sign-in page then served 4.36.0.
+
+The live site stays as it is until an administrator installs it with Software update. The 4.36.0 phone apps are built from this tag.
